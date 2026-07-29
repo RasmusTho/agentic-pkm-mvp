@@ -104,14 +104,168 @@ def _cockpit_trust_markup(batch: CkmProjectionBatch, timestamp: str) -> str:
             ("watermark", "watermarks"),
         )
     )
-    return f"""<header class="cockpit-header"><h1>CKM Cockpit</h1><p class="subtitle">Portfolio-first, generated, non-authoritative inspection surface.</p></header>
+    assessments = tuple(batch.assessments_by_capability.values())
+    has_limitations = (
+        len(assessments) != len(batch.capabilities)
+        or any(item.stale_relative_to_evidence for item in assessments)
+        or any(item.assessment.low_confidence for item in assessments)
+        or any(
+            status in {"unassessed", "unsupported"}
+            for item in assessments
+            for status in item.assessment.dimension_status.values()
+        )
+    )
+    trust_state = "limited" if has_limitations else "ready"
+    trust_label = "Usable with limitations" if has_limitations else "Ready to inspect"
+    return f"""<header class="cockpit-header"><h1>CKM Cockpit</h1><p class="subtitle">A local overview of capability evidence, change, and limitations.</p></header>
     <section class="cockpit-trust" aria-labelledby="cockpit-trust-heading">
-      <h2 id="cockpit-trust-heading">Cockpit trust frame</h2>
+    <div class="cockpit-trust cockpit-trust-summary" aria-label="Projection status">
+      <div><p class="eyebrow">Projection status</p><h2 id="cockpit-trust-heading" data-trust-state="{trust_state}">{trust_label}</h2>
       <p>Is this projection fresh and complete enough to inspect?</p>
-      <p>Generated: {_e(timestamp)} · epoch: {_e(identity.epoch)} · state revision: {identity.state_revision} · schema version: {identity.schema_version}</p>
-      <p>Watermarks: {_watermarks(batch.current_watermark_set)}</p>
-      <p>Bounded counts: {count_text}</p>
-      <p>projection-input digest: <code>{_cockpit_digest(batch)}</code></p>
+      <p>{len(batch.capabilities)} capabilities · {len(assessments)} assessed · {counts.get("finding", 0)} evidence findings</p></div>
+      <details class="technical-identity"><summary>Technical generation details</summary><p>Cockpit trust frame</p>
+        <p>Generated: {_e(timestamp)} · epoch: {_e(identity.epoch)} · state revision: {identity.state_revision} · schema version: {identity.schema_version}</p>
+        <p>Watermarks: {_watermarks(batch.current_watermark_set)}</p>
+        <p>Bounded counts: {count_text}</p>
+        <p>projection-input digest: <code>{_cockpit_digest(batch)}</code></p>
+      </details>
+    </div></section>"""
+
+
+def _plain_component_name(value: object) -> str:
+    return str(value).replace("_", " ").replace("-", " ").strip().capitalize()
+
+
+def _owner_change_facts(comparison: Mapping[str, Any] | None) -> tuple[str, ...]:
+    if comparison is None:
+        return ("Change view unavailable; current overview unaffected.",)
+    if _is_o1b_refusal(comparison):
+        code = str(comparison["error"].get("code", "source_unavailable"))
+        if code == "insufficient_retained_samples":
+            return ("No previous comparable observation yet.",)
+        return ("Change view unavailable; current overview unaffected.",)
+    if not _is_o1b_success(comparison):
+        return ("Change view unavailable; current overview unaffected.",)
+
+    facts: list[str] = []
+    for component in comparison.get("components", ()):
+        if not isinstance(component, Mapping):
+            continue
+        label = _plain_component_name(component.get("component", "Observed value"))
+        delta = component.get("numeric_delta")
+        if isinstance(delta, (int, float)) and not isinstance(delta, bool):
+            if delta > 0:
+                description = f"increased by {_e(delta)}"
+            elif delta < 0:
+                description = f"decreased by {_e(abs(delta))}"
+            else:
+                description = "no numeric change"
+        else:
+            description = "changed state; no numeric comparison"
+        facts.append(f"<strong>{_e(label)}</strong>: {description}.")
+        if len(facts) == 5:
+            break
+    return tuple(facts) or ("No comparable component changes were reported.",)
+
+
+def _owner_attention_rows(batch: CkmProjectionBatch) -> tuple[tuple[CkmCapability, tuple[str, ...]], ...]:
+    rows: list[tuple[CkmCapability, tuple[str, ...]]] = []
+    for _, capability in _forest(batch.capabilities):
+        projection = batch.assessments_by_capability.get(capability.id)
+        findings = batch.findings_by_capability.get(capability.id, ())
+        labels: list[str] = []
+        if projection is None:
+            labels.append("Not assessed")
+        else:
+            assessment = projection.assessment
+            if projection.stale_relative_to_evidence:
+                labels.append("Assessment older than evidence")
+            if assessment.low_confidence:
+                labels.append("Limited supporting evidence")
+            unavailable = sum(
+                status in {"unassessed", "unsupported"}
+                for status in assessment.dimension_status.values()
+            )
+            if unavailable:
+                labels.append(f"{unavailable} dimensions not assessed")
+        if findings:
+            labels.append(f"{len(findings)} evidence finding{'s' if len(findings) != 1 else ''}")
+        if labels:
+            rows.append((capability, tuple(labels)))
+    return tuple(rows)
+
+
+def _owner_care_facts(batch: CkmProjectionBatch) -> tuple[str, ...]:
+    projections = tuple(batch.assessments_by_capability.values())
+    stale_count = sum(item.stale_relative_to_evidence for item in projections)
+    unassessed_count = sum(
+        any(
+            status in {"unassessed", "unsupported"}
+            for status in item.assessment.dimension_status.values()
+        )
+        for item in projections
+    )
+    candidate_count = sum(
+        any(float(value) > 0 for value in item.assessment.candidate_shares.values())
+        for item in projections
+    )
+    facts: list[str] = []
+    if stale_count:
+        facts.append(
+            f"{stale_count} assessment{'s are' if stale_count != 1 else ' is'} older than linked evidence."
+        )
+    if unassessed_count:
+        facts.append(
+            f"{unassessed_count} assessed {_capability_noun(unassessed_count)} include dimensions that are not assessed. Missing assessment is not zero."
+        )
+    if candidate_count:
+        facts.append(
+            f"{candidate_count} assessed {_capability_noun(candidate_count)} use candidate evidence. Candidate evidence remains provisional."
+        )
+    if _shared_evidence_pairs(batch.edges_by_capability):
+        facts.append("Some evidence supports more than one capability; technical detail shows where.")
+    return tuple(facts[:3]) or (
+        "No material interpretation caveat is listed for this captured projection.",
+    )
+
+
+def _cockpit_owner_cards_markup(
+    batch: CkmProjectionBatch,
+    comparison: Mapping[str, Any] | None,
+) -> str:
+    change_facts = "".join(
+        f'<li class="owner-change-fact">{fact}</li>'
+        for fact in _owner_change_facts(comparison)
+    )
+    attention = _owner_attention_rows(batch)
+    attention_facts = "".join(
+        f'<li class="owner-attention-fact"><a href="#cap-{_e(capability.id)}"><strong>{_e(capability.name)}</strong></a>'
+        f'<span>{_e(" · ".join(labels))}</span></li>'
+        for capability, labels in attention[:5]
+    )
+    if not attention_facts:
+        attention_facts = (
+            '<li class="owner-attention-fact">No missing, stale, limited, or unassessed evidence states are listed.</li>'
+        )
+    overflow = (
+        f"<p>{len(attention)} capabilities match. Showing five in capability-tree order.</p>"
+        if len(attention) > 5
+        else f"<p>{len(attention)} capabilities match.</p>"
+    )
+    care_facts = "".join(
+        f'<li class="owner-care-fact">{_e(fact)}</li>'
+        for fact in _owner_care_facts(batch)
+    )
+    return f"""<section class="owner-cards" aria-label="Owner overview">
+      <article class="owner-card owner-card-change"><h2>What changed</h2>
+        <p>Changes since the previous observation.</p><ul>{change_facts}</ul>
+      </article>
+      <article class="owner-card owner-card-attention"><h2>Where evidence needs attention</h2>
+        <p>Shown in capability-tree order; descriptive only.</p>{overflow}<ul>{attention_facts}</ul>
+      </article>
+      <article class="owner-card owner-card-care"><h2>Read with care</h2>
+        <ul>{care_facts}</ul>
+      </article>
     </section>"""
 
 
@@ -884,24 +1038,62 @@ def _capability_markup(
     edges: Sequence[CkmEvidenceEdge],
     findings: Sequence[CkmFinding],
     projection: CkmAssessmentProjection | None,
+    cockpit: bool,
 ) -> str:
     confirmed, candidate = _edge_counts(edges)
     assessment = projection.assessment if projection else None
     summary_flags: list[str] = []
     if projection and projection.stale_relative_to_evidence:
-        summary_flags.append('<span class="flag flag-stale">STALE relative to evidence</span>')
+        summary_flags.append(
+            '<span class="flag flag-stale">Assessment older than evidence</span>'
+            if cockpit
+            else '<span class="flag flag-stale">STALE relative to evidence</span>'
+        )
     if assessment and assessment.low_confidence:
-        summary_flags.append('<span class="flag flag-low">LOW CONFIDENCE</span>')
+        summary_flags.append(
+            '<span class="flag flag-low">Limited supporting evidence</span>'
+            if cockpit
+            else '<span class="flag flag-low">LOW CONFIDENCE</span>'
+        )
     if assessment:
         max_candidate_share = max(float(v) for v in assessment.candidate_shares.values())
         if max_candidate_share > 0:
             summary_flags.append(
-                f'<span class="flag flag-candidate">CAND {max_candidate_share:.1%}</span>'
+                '<span class="flag flag-candidate">Candidate evidence</span>'
+                if cockpit
+                else f'<span class="flag flag-candidate">CAND {max_candidate_share:.1%}</span>'
             )
     if findings:
         summary_flags.append(
-            f'<a class="flag gap-link" href="#gaps-{_e(capability.id)}">{len(findings)} gap{"s" if len(findings) != 1 else ""}</a>'
+            (
+                f'<a class="flag gap-link" href="#gaps-{_e(capability.id)}">{len(findings)} evidence finding{"s" if len(findings) != 1 else ""}</a>'
+                if cockpit
+                else f'<a class="flag gap-link" href="#gaps-{_e(capability.id)}">{len(findings)} gap{"s" if len(findings) != 1 else ""}</a>'
+            )
         )
+    if projection is None:
+        summary_status = "Not assessed"
+    elif projection.stale_relative_to_evidence:
+        summary_status = "Assessment needs refresh"
+    elif findings:
+        summary_status = "Evidence gaps recorded"
+    elif assessment and assessment.low_confidence:
+        summary_status = "Limited supporting evidence"
+    else:
+        summary_status = "Evidence available"
+    summary_status_markup = (
+        f'<span class="capability-status">{summary_status}</span>' if cockpit else ""
+    )
+    summary_dimensions = "" if cockpit else _mini_dimensions_markup(assessment)
+    summary_lifecycle = (
+        "" if cockpit else f'<span class="lifecycle">node: {_e(capability.lifecycle)}</span>'
+    )
+    body_technical_summary = (
+        f'<div class="capability-technical-summary">{_mini_dimensions_markup(assessment)}'
+        f'<span class="lifecycle">node: {_e(capability.lifecycle)}</span></div>'
+        if cockpit
+        else ""
+    )
     dimensions = (
         "".join(
             _dimension_markup(
@@ -927,12 +1119,14 @@ def _capability_markup(
       <details class="capability-details">
         <summary class="capability-summary">
           <span class="tree-name">{_e(capability.name)}</span>
+          {summary_status_markup}
           <span class="summary-flags">{"".join(summary_flags)}</span>
-          {_mini_dimensions_markup(assessment)}
-          <span class="lifecycle">node: {_e(capability.lifecycle)}</span>
+          {summary_dimensions}
+          {summary_lifecycle}
         </summary>
         <div class="capability-body">
           <p>{_e(capability.definition)}</p>
+          {body_technical_summary}
           <p class="meta">ID: <code>{_e(capability.id)}</code> · Boundary: <strong>{_e(capability.boundary_ref or '—')}</strong> · Evidence: <strong>{confirmed} confirmed / {candidate} candidate</strong></p>
           {_honesty_markup(assessment, projection)}
           <div class="dimensions">{dimensions}</div>
@@ -984,37 +1178,37 @@ def _cockpit_filter_markup(capability_count: int) -> str:
 
     return f"""<section class="cockpit-filters" aria-labelledby="filters-heading">
       <h2 id="filters-heading">Filters</h2>
-      <p>Filter capability rows only; trust, hazards, comparison, gaps, proposals, and provenance remain visible.</p>
+      <p>Filters change capability rows only. The overview and technical detail stay unchanged.</p>
       <div class="filter-controls cockpit-filter-controls">
-        <label for="filter-search">Search name, definition, public ID, or boundary</label>
-        <input id="filter-search" name="filter-search" type="search" disabled aria-controls="capability-map">
-        <label for="filter-assessment">Assessment freshness</label>
+        <div class="filter-control"><label for="filter-search">Search capability</label>
+        <input id="filter-search" name="filter-search" type="search" disabled aria-controls="capability-map"></div>
+        <div class="filter-control"><label for="filter-assessment">Assessment freshness</label>
         <select id="filter-assessment" name="filter-assessment" disabled aria-controls="capability-map">
           <option value="">Any assessment state</option>
           <option value="available current">Available and current</option>
           <option value="available stale">Available and stale</option>
           <option value="unavailable">Unavailable</option>
-        </select>
-        <label for="filter-confidence">Confidence</label>
+        </select></div>
+        <div class="filter-control"><label for="filter-confidence">Confidence</label>
         <select id="filter-confidence" name="filter-confidence" disabled aria-controls="capability-map">
           <option value="">Any confidence state</option>
           <option value="low">Low confidence</option>
           <option value="standard">Standard confidence</option>
           <option value="unavailable">Confidence unavailable</option>
-        </select>
-        <label for="filter-findings">Findings</label>
+        </select></div>
+        <div class="filter-control"><label for="filter-findings">Findings</label>
         <select id="filter-findings" name="filter-findings" disabled aria-controls="capability-map">
           <option value="">Any finding state</option>
           <option value="present">Findings present</option>
           <option value="absent">No findings</option>
-        </select>
-        <label for="filter-evidence">Evidence lifecycle</label>
+        </select></div>
+        <div class="filter-control"><label for="filter-evidence">Evidence lifecycle</label>
         <select id="filter-evidence" name="filter-evidence" disabled aria-controls="capability-map">
           <option value="">Any evidence lifecycle</option>
           <option value="confirmed">Confirmed evidence present</option>
           <option value="candidate">Candidate evidence present</option>
           <option value="none">No linked evidence</option>
-        </select>
+        </select></div>
       </div>
       <p id="filter-count" aria-live="polite" aria-atomic="true">Showing {capability_count} of {capability_count} capabilities.</p>
       <noscript>Filtering is unavailable; all capability rows are shown.</noscript>
@@ -1077,7 +1271,7 @@ def _cockpit_print_styles() -> str:
       :root { --bg-base:#fff; --bg-surface:#fff; --bg-raised:#fff; --bg-overlay:#f4f4f4; --fg-1:#111; --fg-2:#333; --fg-3:#555; --border:#777; --border-strong:#333; --accent:#111; --agent:#111; --amber:#111; --destructive:#111; --healthy:#111; --unknown:#111; }
       body { background:#fff; color:#111; }
       a { color:#111; text-decoration:underline; }
-      .projection-banner,.cockpit-trust,.cockpit-hazards,.cockpit-comparison,.subsystem-counts-card,.cockpit-filters,.gaps-panel,.cockpit-proposals,.capability,.dimension { background:#fff; border:1px solid #333; }
+      .projection-banner,.cockpit-trust,.owner-card,.supporting-details,.cockpit-hazards,.cockpit-comparison,.subsystem-counts-card,.cockpit-filters,.gaps-panel,.cockpit-proposals,.capability,.dimension { background:#fff; border:1px solid #333; }
       [hidden] { display:block !important; }
       details > :not(summary) { display:block !important; }
       details::details-content { content-visibility:visible !important; }
@@ -1086,11 +1280,11 @@ def _cockpit_print_styles() -> str:
       summary::before { content:none !important; display:none !important; }
       summary::marker { content:"" !important; }
       summary::-webkit-details-marker { display:none !important; }
-      .tree-name,.capability-body,.meta,code,.basis,.citations,.finding-list,.evidence-list,.proposal-draft,.cockpit-trust,.cockpit-comparison,.cockpit-hazards,.cockpit-proposals,.projection-footer { overflow:visible; overflow-wrap:anywhere; word-break:break-word; }
+      .tree-name,.capability-body,.meta,code,.basis,.citations,.finding-list,.evidence-list,.proposal-draft,.cockpit-trust,.owner-card,.cockpit-comparison,.cockpit-hazards,.cockpit-proposals,.projection-footer { overflow:visible; overflow-wrap:anywhere; word-break:break-word; }
       pre,.proposal-draft { white-space:pre-wrap; }
       .summary-flags,.badge,.flag,.lifecycle,.capability-summary,.trust-strip,.subsystem-counts-grid { flex-wrap:wrap; }
       h1,h2,h3,summary { break-after:avoid-page; page-break-after:avoid; }
-      .capability-summary,.dimension-label,.mini-dimensions,.summary-flags,.trust-strip a { break-inside:avoid-page; page-break-inside:avoid; }
+      .owner-card,.capability-summary,.dimension-label,.mini-dimensions,.summary-flags,.trust-strip a { break-inside:avoid-page; page-break-inside:avoid; }
       .capability,.cockpit-comparison,.cockpit-comparison > *,.proposal-draft { break-inside:auto; page-break-inside:auto; }
       .proposal-intro { break-after:avoid-page; page-break-after:avoid; }
       p,li { widows:3; orphans:3; }
@@ -1137,6 +1331,7 @@ def render_overview_html(
                 edges=batch.edges_by_capability.get(capability.id, ()),
                 findings=batch.findings_by_capability.get(capability.id, ()),
                 projection=batch.assessments_by_capability.get(capability.id),
+                cockpit=cockpit is not None,
             )
             for depth, capability in forest
         )
@@ -1162,6 +1357,9 @@ def render_overview_html(
         if cockpit
         else ""
     )
+    cockpit_owner_cards = (
+        _cockpit_owner_cards_markup(batch, cockpit.comparison) if cockpit else ""
+    )
     cockpit_proposals = _cockpit_proposals_markup(batch) if cockpit else ""
     cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""
     cockpit_filters = _cockpit_filter_markup(len(forest)) if cockpit else ""
@@ -1178,6 +1376,22 @@ def render_overview_html(
         else '<header><h1>Development Overview</h1><p class="subtitle">Capability Knowledge Model maturity, trust, and cited drill-down.</p></header>'
     )
     subsystem_counts = _subsystem_counts_markup(forest, batch.edges_by_capability)
+    legend = _legend()
+    dimension_rail = (
+        '<div class="dimension-rail" aria-hidden="true">'
+        + "".join(f"<span>{abbr}</span>" for abbr, _ in DIMENSION_LABELS.values())
+        + "</div>"
+    )
+    gaps_section = (
+        '<section class="gaps-panel" aria-labelledby="gaps-heading">'
+        f'<h2 id="gaps-heading">Current gaps</h2>{cockpit_gap_prompt}<ul>{gap_groups}</ul></section>'
+    )
+    supporting_details = (
+        '<details class="supporting-details"><summary>Technical evidence and interpretation</summary>'
+        f"{cockpit_reserved}{subsystem_counts}{legend}{gaps_section}{cockpit_proposals}</details>"
+        if cockpit
+        else ""
+    )
     footer_identity = (
         f"<br>State identity: epoch {_e(batch.state_identity.epoch)} · revision {batch.state_identity.state_revision} · schema {batch.state_identity.schema_version}<br>projection-input digest: <code>{_cockpit_digest(batch)}</code>"
         if cockpit
@@ -1195,18 +1409,20 @@ def render_overview_html(
     main,footer {{ width:min(74rem,calc(100% - 2rem)); margin:0 auto; }} a {{ color:inherit; }} summary:focus-visible,a:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
     .projection-banner {{ border-left:0.25rem solid var(--amber); background:var(--bg-raised); padding:0.75rem 1rem; color:var(--fg-2); }} header {{ padding:1.75rem 0 0.75rem; }} h1 {{ font:400 1.75rem/1.2 ui-serif,Georgia,serif; }} h2 {{ margin-top:1.5rem; }} .subtitle,.empty,small,.meta {{ color:var(--fg-2); }}
     .trust-strip {{ display:grid; grid-template-columns:repeat(5,1fr); border:1px solid var(--border-strong); background:var(--bg-surface); }} .trust-strip a {{ padding:0.625rem; text-decoration:none; border-right:1px solid var(--border); }}
+    .cockpit-header {{ padding-bottom:0.25rem; }} .cockpit-header h1 {{ margin-bottom:0.25rem; }} .cockpit-trust-summary {{ display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; margin:0.5rem 0 1rem; padding:0.875rem 1rem; border:1px solid var(--border-strong); border-left:0.25rem solid var(--agent); background:var(--bg-surface); }} .cockpit-trust-summary h2,.cockpit-trust-summary p {{ margin:0.15rem 0; }} .eyebrow {{ color:var(--fg-2); font-size:0.75rem; letter-spacing:0.06em; text-transform:uppercase; }} .technical-identity {{ max-width:27rem; color:var(--fg-2); }} .technical-identity summary {{ color:var(--fg-1); }}
+    .owner-cards {{ display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:0.75rem; margin:0.75rem 0; }} .owner-card {{ min-width:0; padding:0.875rem 1rem; border:1px solid var(--border); border-radius:0.375rem; background:var(--bg-surface); }} .owner-card h2 {{ margin:0 0 0.35rem; font-size:1rem; }} .owner-card p {{ margin:0.25rem 0; color:var(--fg-2); }} .owner-card ul {{ list-style:none; margin:0.65rem 0 0; padding:0; }} .owner-card li {{ padding:0.35rem 0; border-top:1px solid var(--border); }} .owner-card-attention {{ border-left:0.2rem solid var(--amber); }} .owner-attention-fact {{ display:flex; justify-content:space-between; gap:0.75rem; }} .owner-attention-fact span {{ color:var(--fg-2); text-align:right; }}
     .linkage-masthead {{ padding:0.75rem; border-left:0.25rem solid var(--agent); background:var(--bg-raised); }} .subsystem-counts-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(22rem,1fr)); gap:0.75rem; }} .subsystem-counts-card {{ border:1px solid var(--border); background:var(--bg-surface); padding:0.75rem; }} .subsystem-counts-card h3 {{ margin:0; }} .subsystem-counts-card ul {{ list-style:none; margin:0.75rem 0 0; padding:0; }} .capability-count {{ display:grid; grid-template-columns:minmax(10rem,1fr) repeat(3,auto); gap:0.5rem 1rem; margin-left:calc(var(--count-depth) * 0.75rem); padding:0.45rem 0; border-top:1px solid var(--border); }} .count-name {{ font-weight:600; }} .secondary {{ color:var(--fg-2); }}
     .legend {{ display:grid; grid-template-columns:2fr 1fr; gap:1rem; margin:1rem 0; padding:0.75rem; border:1px solid var(--border); background:var(--bg-surface); }} .legend ul {{ display:flex; gap:0.5rem 1rem; flex-wrap:wrap; list-style:none; padding:0; margin:0.35rem 0 0; }} .legend-cell {{ display:inline-block; width:1.5rem; height:0.5rem; margin-right:0.3rem; background:var(--agent); }} .legend-cell.starved {{ border:1px dotted var(--amber); background:transparent; }} .legend-cell.unassessed {{ height:auto; background:none; color:var(--fg-3); }}
     .dimension-rail {{ position:sticky; top:0; z-index:2; display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin-left:auto; width:13rem; padding:0.25rem; background:var(--bg-base); color:var(--fg-2); font:0.7rem ui-monospace,monospace; text-align:center; }}
     .capability {{ margin:0.5rem 0 0.5rem calc(var(--depth) * 1.375rem); border:1px solid var(--border); border-left:0.25rem solid var(--unknown); border-radius:0.25rem; background:var(--bg-surface); }}
-    summary {{ cursor:pointer; }} summary::before {{ content:"+"; color:var(--fg-2); font-family:ui-monospace,monospace; }} details[open] > summary::before {{ content:"−"; }} .capability-summary {{ min-height:2.75rem; display:flex; gap:0.5rem; align-items:center; padding:0.625rem 0.75rem; }} .capability-summary:hover {{ background:var(--bg-overlay); }} .tree-name {{ flex:1; font-weight:600; }}
-    .summary-flags {{ display:flex; gap:0.25rem; }} .flag,.badge,.lifecycle {{ border:1px solid var(--border-strong); border-radius:0.1875rem; padding:0.125rem 0.375rem; font:0.7rem ui-monospace,monospace; white-space:nowrap; }} .flag-stale {{ background:var(--amber); color:var(--bg-base); }} .flag-low {{ border-color:var(--amber); color:var(--amber); }} .flag-candidate {{ border-color:var(--agent); color:var(--agent); }} .gap-link {{ color:var(--accent); text-decoration:none; }}
+    summary {{ cursor:pointer; list-style:none; }} summary::-webkit-details-marker {{ display:none; }} summary::before {{ content:"+"; color:var(--fg-2); font-family:ui-monospace,monospace; }} details[open] > summary::before {{ content:"−"; }} .capability-summary {{ min-height:2.75rem; display:flex; gap:0.5rem; align-items:center; padding:0.625rem 0.75rem; }} .capability-summary:hover {{ background:var(--bg-overlay); }} .tree-name {{ flex:1; font-weight:600; }}
+    .capability-status {{ color:var(--fg-2); font-size:0.8rem; }} .summary-flags {{ display:flex; gap:0.25rem; }} .flag,.badge,.lifecycle {{ border:1px solid var(--border-strong); border-radius:0.1875rem; padding:0.125rem 0.375rem; font:0.7rem ui-monospace,monospace; white-space:nowrap; }} .flag-stale {{ background:var(--amber); color:var(--bg-base); }} .flag-low {{ border-color:var(--amber); color:var(--amber); }} .flag-candidate {{ border-color:var(--agent); color:var(--agent); }} .gap-link {{ color:var(--accent); text-decoration:none; }}
     .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-3); text-align:center; line-height:0.55rem; }}
-    .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
+    .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .capability-technical-summary {{ display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
     .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
-    .cockpit-filters {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .filter-controls {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:0.5rem 0.75rem; align-items:end; }} .filter-controls label {{ color:var(--fg-2); }} .filter-controls input,.filter-controls select {{ min-height:2.25rem; border:1px solid var(--border-strong); border-radius:0.1875rem; background:var(--bg-raised); color:var(--fg-1); padding:0.375rem; }} .filter-controls input:focus-visible,.filter-controls select:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }} .filter-controls input:disabled,.filter-controls select:disabled {{ opacity:0.65; }}{cockpit_print_styles}
+    .cockpit-filters {{ margin:0.75rem 0 1rem; padding:0.75rem 1rem; border:1px solid var(--border); background:var(--bg-surface); }} .cockpit-filters h2 {{ margin:0; font-size:1rem; }} .cockpit-filters > p {{ margin:0.25rem 0; color:var(--fg-2); }} .filter-controls {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:0.5rem 0.75rem; align-items:end; }} .filter-control {{ display:flex; flex-direction:column; gap:0.25rem; }} .filter-controls label {{ color:var(--fg-2); }} .filter-controls input,.filter-controls select {{ width:100%; min-height:2.25rem; border:1px solid var(--border-strong); border-radius:0.1875rem; background:var(--bg-raised); color:var(--fg-1); padding:0.375rem; }} .filter-controls input:focus-visible,.filter-controls select:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }} .filter-controls input:disabled,.filter-controls select:disabled {{ opacity:0.65; }} .supporting-details {{ margin:1.5rem 0; border:1px solid var(--border); background:var(--bg-surface); }} .supporting-details > summary {{ padding:0.875rem 1rem; font-weight:600; }} .supporting-details > :not(summary) {{ margin-left:1rem; margin-right:1rem; }}{cockpit_print_styles}
     footer {{ margin-top:1.75rem; padding:1rem 0 2.25rem; border-top:1px solid var(--border); color:var(--fg-2); overflow-wrap:anywhere; }}
-    @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .subsystem-counts-grid {{ grid-template-columns:1fr; }} .capability-count {{ grid-template-columns:1fr; gap:0.15rem; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
+    @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .cockpit-trust-summary {{ display:block; }} .technical-identity {{ margin-top:0.75rem; }} .owner-cards {{ grid-template-columns:1fr; }} .owner-attention-fact {{ display:block; }} .owner-attention-fact span {{ display:block; text-align:left; }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .subsystem-counts-grid {{ grid-template-columns:1fr; }} .capability-count {{ grid-template-columns:1fr; gap:0.15rem; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .capability-status {{ width:100%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
   </style>
 </head>
 <body>
@@ -1214,17 +1430,16 @@ def render_overview_html(
   <main>
     {overview_header}
     {"" if cockpit else _trust_strip(capabilities, assessments, len(all_findings))}
-    {cockpit_reserved}
-    {subsystem_counts}
+    {cockpit_owner_cards}
     {cockpit_filters}
+    {"" if cockpit else subsystem_counts}
     <section aria-labelledby="map-heading">
       <h2 id="map-heading">Capability map</h2>
-      {_legend()}
-      <div class="dimension-rail" aria-hidden="true">{"".join(f"<span>{abbr}</span>" for abbr, _ in DIMENSION_LABELS.values())}</div>
+      {"" if cockpit else legend}
+      {"" if cockpit else dimension_rail}
       {capability_map_open}{cards}</div>
     </section>
-    <section class="gaps-panel" aria-labelledby="gaps-heading"><h2 id="gaps-heading">Current gaps</h2>{cockpit_gap_prompt}<ul>{gap_groups}</ul></section>
-    {cockpit_proposals}
+    {supporting_details if cockpit else gaps_section}
   </main>
   <footer class="projection-footer">
     <strong>Generated projection (BuilderOps CKM). Not source of truth.</strong><br>

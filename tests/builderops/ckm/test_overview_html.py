@@ -785,7 +785,12 @@ def test_cockpit_has_exactly_one_filtering_script_and_default_has_none(
     assert cockpit.count('<h2 id="filters-heading">Filters</h2>') == 1
     assert cockpit.count('id="filters-heading"') == 1
     assert "Unavailable in this framing slice. All capability rows are shown." not in cockpit
-    assert cockpit.index("Comparison") < cockpit.index("Filters") < cockpit.index("Capability map")
+    assert (
+        cockpit.index("Filters")
+        < cockpit.index("Capability map")
+        < cockpit.index("Interpretation hazards")
+        < cockpit.index("Comparison")
+    )
 
 
 def test_cockpit_progressive_enhancement_keeps_full_source_content(
@@ -1012,7 +1017,7 @@ def test_cockpit_filter_controls_are_accessible_and_honest(overview_store: CkmSt
     )
 
     for control_id, label in (
-        ("filter-search", "Search name, definition, public ID, or boundary"),
+        ("filter-search", "Search capability"),
         ("filter-assessment", "Assessment freshness"),
         ("filter-confidence", "Confidence"),
         ("filter-findings", "Findings"),
@@ -1022,7 +1027,7 @@ def test_cockpit_filter_controls_are_accessible_and_honest(overview_store: CkmSt
         assert re.search(rf'id="{control_id}"[^>]* disabled[^>]*aria-controls="capability-map"', rendered)
     assert '<p id="filter-count" aria-live="polite" aria-atomic="true">' in rendered
     assert "No capabilities match the selected filters." in _cockpit_filter_script(rendered)
-    assert "Filter capability rows only; trust, hazards, comparison, gaps, proposals, and provenance remain visible." in rendered
+    assert "Filters change capability rows only. The overview and technical detail stay unchanged." in rendered
 
 
 def test_cockpit_preserves_evidence_profile_count_context(
@@ -1110,10 +1115,13 @@ def test_cockpit_empty_store_keeps_fixed_information_architecture(tmp_path: Path
     assert all(heading in rendered for heading in headings)
     assert (
         rendered.index("Cockpit trust frame")
-        < rendered.index("Interpretation hazards")
-        < rendered.index("Comparison")
+        < rendered.index("What changed")
+        < rendered.index("Where evidence needs attention")
+        < rendered.index("Read with care")
         < rendered.index("Filters")
         < rendered.index("Capability map")
+        < rendered.index("Interpretation hazards")
+        < rendered.index("Comparison")
         < rendered.index("Current gaps")
         < rendered.index("Proposal drafts")
     )
@@ -2776,11 +2784,11 @@ def test_cockpit_print_styles_preserve_text_and_section_integrity(
     assert "text-decoration:underline;" in _print_rule(print_css, "a")
     assert "border:1pxsolid#333;" in _print_rule(
         print_css,
-        ".projection-banner,.cockpit-trust,.cockpit-hazards,.cockpit-comparison,.subsystem-counts-card,.cockpit-filters,.gaps-panel,.cockpit-proposals,.capability,.dimension",
+        ".projection-banner,.cockpit-trust,.owner-card,.supporting-details,.cockpit-hazards,.cockpit-comparison,.subsystem-counts-card,.cockpit-filters,.gaps-panel,.cockpit-proposals,.capability,.dimension",
     )
     wrapping = _print_rule(
         print_css,
-        ".tree-name,.capability-body,.meta,code,.basis,.citations,.finding-list,.evidence-list,.proposal-draft,.cockpit-trust,.cockpit-comparison,.cockpit-hazards,.cockpit-proposals,.projection-footer",
+        ".tree-name,.capability-body,.meta,code,.basis,.citations,.finding-list,.evidence-list,.proposal-draft,.cockpit-trust,.owner-card,.cockpit-comparison,.cockpit-hazards,.cockpit-proposals,.projection-footer",
     )
     assert "overflow:visible;" in wrapping
     assert "overflow-wrap:anywhere;" in wrapping
@@ -2892,3 +2900,143 @@ def test_cockpit_answers_fixed_owner_questions_without_authority(
             authored,
             re.I,
         )
+
+
+def test_cockpit_prioritizes_owner_readable_portfolio_over_raw_detail(
+    overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        generated_at="2026-07-30T08:00:00Z",
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+
+    ordered = (
+        'class="cockpit-trust cockpit-trust-summary"',
+        'class="owner-card owner-card-change"',
+        'class="owner-card owner-card-attention"',
+        'class="owner-card owner-card-care"',
+        'class="cockpit-filters"',
+        'id="map-heading"',
+        'class="supporting-details"',
+    )
+    assert all(marker in rendered for marker in ordered)
+    assert [rendered.index(marker) for marker in ordered] == sorted(
+        rendered.index(marker) for marker in ordered
+    )
+    assert rendered.index('id="map-heading"') < rendered.index("Evidence counts by subsystem")
+    assert rendered.index('id="map-heading"') < rendered.index("Interpretation hazards")
+
+
+def test_cockpit_owner_cards_are_bounded_and_human_readable(
+    overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        generated_at="2026-07-30T08:00:00Z",
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+
+    assert "What changed" in rendered
+    assert "Where evidence needs attention" in rendered
+    assert "Read with care" in rendered
+    assert "Shown in capability-tree order; descriptive only." in rendered
+    assert "Change view unavailable; current overview unaffected." in rendered
+    assert rendered.count('class="owner-change-fact"') <= 5
+    assert rendered.count('class="owner-attention-fact"') <= 5
+    assert rendered.count('class="owner-care-fact"') <= 3
+    cards = rendered.split('<section class="owner-cards"', 1)[1].split("</section>", 1)[0]
+    for technical_value in (
+        "projection-input digest",
+        "state revision",
+        "schema version",
+        "public ID",
+        "numeric delta",
+    ):
+        assert technical_value not in cards
+
+
+def test_cockpit_progressive_disclosure_preserves_audit_detail(
+    overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        generated_at="2026-07-30T08:00:00Z",
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+    summary = rendered.split('<summary class="capability-summary">', 1)[1].split(
+        "</summary>", 1
+    )[0]
+    body = rendered.split('<div class="capability-body">', 1)[1].split("</div>", 1)[0]
+
+    assert "mini-dimensions" not in summary
+    assert "node:" not in summary
+    assert "data-capability-id" not in summary
+    assert "capability-status" in summary
+    assert "mini-dimensions" in body
+    assert "node:" in body
+    assert "ID: <code>" in rendered
+    assert "Citations —" in rendered
+    assert "proposal-draft" in rendered
+
+
+def test_cockpit_owner_copy_preserves_refusal_semantics(
+    overview_store: CkmStore,
+) -> None:
+    batch = overview_store.load_projection_batch()
+    refusal = {
+        "error": {
+            "code": "insufficient_retained_samples",
+            "message": "comparison requires two retained observations",
+            "details": {"observed": 1},
+        }
+    }
+    rendered = render_overview_html(
+        overview_store,
+        generated_at="2026-07-30T08:00:00Z",
+        cockpit=CockpitRenderContext(batch=batch, comparison=refusal),
+    )
+
+    assert "No previous comparable observation yet" in rendered
+    assert 'data-comparison-code="insufficient_retained_samples"' in rendered
+    assert "<code>insufficient_retained_samples</code>" in rendered
+    assert "No older retained row was searched." in rendered
+    assert "Difference between two snapshots. Not a trend, cause, or forecast." in rendered
+
+
+def test_cockpit_owner_readable_layout_preserves_direction_a_and_determinism(
+    overview_store: CkmStore,
+) -> None:
+    batch = overview_store.load_projection_batch()
+    context = CockpitRenderContext(batch=batch)
+    first = render_overview_html(
+        overview_store, generated_at="2026-07-30T08:00:00Z", cockpit=context
+    )
+    second = render_overview_html(
+        overview_store, generated_at="2026-07-30T08:00:00Z", cockpit=context
+    )
+    direction_a = render_overview_html(
+        overview_store, generated_at="2026-07-30T08:00:00Z"
+    )
+
+    assert first == second
+    assert '<section class="owner-cards"' in first
+    assert '<section class="owner-cards"' not in direction_a
+    assert "<script" not in direction_a
+    assert first.count("<script") == 1
+
+
+def test_cockpit_owner_readable_visual_contract(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(
+        overview_store,
+        generated_at="2026-07-30T08:00:00Z",
+        cockpit=CockpitRenderContext(batch=overview_store.load_projection_batch()),
+    )
+
+    assert ".owner-cards { display:grid; grid-template-columns:" in rendered
+    assert "@media (max-width:680px)" in rendered
+    assert ".owner-cards { grid-template-columns:1fr;" in rendered
+    assert '<details class="technical-identity">' in rendered
+    assert '<details class="supporting-details">' in rendered
+    assert "details > :not(summary) { display:block !important; }" in rendered
+    assert 'aria-label="Projection status"' in rendered
