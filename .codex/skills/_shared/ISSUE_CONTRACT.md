@@ -90,18 +90,11 @@ verifiability"); this file is the skill-facing summary.
 - Primary subsystem: <Product SBS subsystem, or Builder System / CES boundary>
 - Secondary subsystem(s): <subsystems or none>
 - Write class: <authority-bearing / mechanical / derived / governance/docs/process / none>
-- Authority impact: <effect or none>
 - Persistence impact: <durable/rebuildable/none>
 - Derived/rebuildable impact: <effect or none>
-- Human knowledge impact: <effect or none>
-- Memory impact: <effect or none>
-- Retrieval/context impact: <effect or none>
-- Sync/deployment impact: <effect or none>
-- External boundary impact: <effect or none>
 - New or changed contract: <contract or none>
 - Owner-doc impact: <none / will-update-in-PR / follow-up-issue>
 - Transition debt impact: <reduces / adds bounded debt / no effect>
-- Fitness rule impact: <strengthens / weakens / follow-up / no effect>
 - Boundary risk: <the one thing that must not cross a boundary because of this change, or none>
 
 ## Constraints

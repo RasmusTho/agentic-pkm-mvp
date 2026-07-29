@@ -76,6 +76,63 @@ def _read_workflow() -> str:
     )
 
 
+def _sbs_impact_warnings(body: str, changed_files: list[str]) -> list[str]:
+    workflow = _read_workflow()
+    checker = workflow.split("// sbs-impact-consistency:start", 1)[1].split(
+        "// sbs-impact-consistency:end", 1
+    )[0]
+    script = (
+        checker
+        + "\nconst body = JSON.parse(process.argv[1]);"
+        + "\nconst changedFiles = JSON.parse(process.argv[2]);"
+        + "\nprocess.stdout.write(JSON.stringify(sbsImpactWarnings(body, changedFiles)));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script, json.dumps(body), json.dumps(changed_files)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def test_sbs_impact_cross_check_warns_for_contradictory_migration_diff() -> None:
+    warnings = _sbs_impact_warnings(
+        "## SBS Impact\n- Persistence impact: none\n- New or changed contract: none\n",
+        ["app/alembic/versions/1234_add_table.py"],
+    )
+
+    assert warnings == [
+        "SBS Impact declares `Persistence impact: none` or `unaffected`, "
+        "but this PR adds an Alembic migration."
+    ]
+
+
+def test_sbs_impact_cross_check_warns_for_contradictory_contract_diff() -> None:
+    warnings = _sbs_impact_warnings(
+        "## SBS Impact\n- Persistence impact: none\n"
+        "- New or changed contract: unaffected\n",
+        ["docs/contracts/NEW_CONTRACT.md"],
+    )
+
+    assert warnings == [
+        "SBS Impact declares `New or changed contract: none` or `unaffected`, "
+        "but this PR changes a contract document."
+    ]
+
+
+def test_sbs_impact_cross_check_is_silent_for_consistent_diff() -> None:
+    warnings = _sbs_impact_warnings(
+        "## SBS Impact\n- Persistence impact: durable schema migration\n"
+        "- New or changed contract: updated\n",
+        ["app/alembic/versions/1234_add_table.py", "docs/contracts/NEW_CONTRACT.md"],
+    )
+
+    assert warnings == []
+
+
 def _js_issue_shape_errors(issue: dict[str, object]) -> list[str]:
     workflow = _read_workflow()
     validator = workflow.split("// issue-shape-validator:start", 1)[1].split(

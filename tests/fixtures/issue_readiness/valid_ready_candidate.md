@@ -11,18 +11,12 @@ Add a local checker script, fixture tests, and readiness workflow reporting.
 - Primary subsystem: Builder System / CES boundary
 - Secondary subsystem(s): none
 - Write class: governance/docs/process
-- Authority impact: strict readiness failure for agent:ready issues
 - Persistence impact: none
 - Derived/rebuildable impact: CI artifact only
-- Human knowledge impact: reduces intake ambiguity
-- Memory impact: none
-- Retrieval/context impact: none
-- Sync/deployment impact: none
-- External boundary impact: GitHub Actions read-only issue event
 - New or changed contract: deterministic readiness report
 - Owner-doc impact: none
 - Transition debt impact: reduces
-- Fitness rule impact: strengthens
+- Boundary risk: none
 
 ## Constraints
 - Do not mutate labels or Project status.

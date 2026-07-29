@@ -20,18 +20,11 @@ Classify Product/Runtime System, Builder System, or boundary work per `docs/arch
 - Primary subsystem:
 - Secondary subsystem(s):
 - Write class:
-- Authority impact:
 - Persistence impact:
 - Derived/rebuildable impact:
-- Human knowledge impact:
-- Memory impact:
-- Retrieval/context impact:
-- Sync/deployment impact:
-- External boundary impact:
 - New or changed contract:
 - Owner-doc impact:
 - Transition debt impact:
-- Fitness rule impact:
 - Boundary risk:
 
 ## Owner-Doc Writeback

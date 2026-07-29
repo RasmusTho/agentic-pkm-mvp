@@ -169,14 +169,10 @@ For Builder System issues and PRs, fill `SBS Impact` as follows:
   behavior, release state, or fitness rules are read or changed.
 - Write class: normally `governance/docs/process`; use a more specific Product write class only when
   Product artifacts or runtime behavior change.
-- Authority impact: state which builder authority path is changed or consumed, and whether any
-  Product/Runtime authority is affected.
-- Memory impact: state that builder learning is separate from runtime/user memory unless the work
-  explicitly changes a Product MEM/HKA contract.
 - Owner-doc impact: update this operating model for Builder System boundary changes; update Product
   owner docs only when Product truth changes.
-- Transition debt and fitness rule impact: record unresolved Builder/Product misclassification or
-  CES-overload risk as transition debt or a candidate fitness rule when the PR discovers it.
+- Transition debt: record unresolved Builder/Product misclassification or CES-overload risk; when a
+  PR discovers a candidate fitness rule, handle it under §11 rather than expanding the impact block.
 
 ### Builder System Artifact And Workflow Map
 
@@ -321,10 +317,9 @@ Run this procedure for any non-trivial change. It produces the SBS impact block 
 5. **Classify persistence vs derivation.** A record is **durable** when losing it loses human meaning or accountability (HKA/GOV/MEM-owned). It is **rebuildable** when it can be regenerated from durable sources (DRI/PDM projections). If a "derived" record is the only source of meaning, it is misclassified — reclassify to HKA/GOV/MEM (fitness rule "No DRI record that is non-rebuildable unless reclassified").
 6. **Decide owner-doc impact.** See §9. → *whether owner docs must be updated*.
 7. **Decide transition-debt impact.** See §10. Every slice either reduces a debt item, adds a bounded one, or states it does not affect debt. → *whether transition debt must be recorded*.
-8. **Decide fitness-rule impact.** See §11. Identify which existing rules apply to the boundary you touched and whether the change strengthens, weakens, or is neutral to enforcement. → *which fitness rules apply*.
-9. **State the boundary risk.** Name the single most important way this change could let something cross a boundary it must not — authority, human-authored content, external egress, persistence, or an enforcement mechanism itself being too strict or too loose — as a concrete must-not (optionally qualified `medium`/`high`/`critical` when the risk is non-trivial), or state `none`. This is not a restatement of another SBS Impact field; it is the reviewer-facing residual risk that would otherwise be silently assumed away. → *what a reviewer must specifically watch for*.
+8. **State the boundary risk.** Name the single most important way this change could let something cross a boundary it must not — authority, human-authored content, external egress, persistence, or an enforcement mechanism itself being too strict or too loose — as a concrete must-not (optionally qualified `medium`/`high`/`critical` when the risk is non-trivial), or state `none`. This is not a restatement of another SBS Impact field; it is the reviewer-facing residual risk that would otherwise be silently assumed away. → *what a reviewer must specifically watch for*.
 
-The result of steps 1–9 is the SBS impact block. For issues it is the `SBS Impact` section of `.github/ISSUE_TEMPLATE/task.yml`; for PRs it is the `## SBS Impact` section of `.github/pull_request_template.md`. All four checked-in copies of the field list (`.codex/skills/_shared/ISSUE_CONTRACT.md`, `.github/ISSUE_TEMPLATE/task.yml`, `.github/pull_request_template.md`, `scripts/pr_body_generator.py :: SBS_FIELDS`) must list the same fields in the same order; `scripts/lint_skills_consistency.py` enforces this.
+The result of steps 1–8 is the SBS impact block. For issues it is the `SBS Impact` section of `.github/ISSUE_TEMPLATE/task.yml`; for PRs it is the `## SBS Impact` section of `.github/pull_request_template.md`. All four checked-in copies of the field list (`.codex/skills/_shared/ISSUE_CONTRACT.md`, `.github/ISSUE_TEMPLATE/task.yml`, `.github/pull_request_template.md`, `scripts/pr_body_generator.py :: SBS_FIELDS`) must list the same fields in the same order; `scripts/lint_skills_consistency.py` enforces this.
 
 ### Subsystem quick reference
 
@@ -356,7 +351,7 @@ An SBS-relevant PR is Done only when:
 - **Contract** is updated or explicitly recorded as unaffected.
 - **Owner-doc impact** is handled per §9 (no change implied / updated in this PR / follow-up issue created and linked) — the PR template owner-doc checklist is filled.
 - **Transition debt** is recorded or resolved: the relevant row in `docs/architecture/SBS_TRANSITION_DEBT.md` is added, updated (containment/status), or the PR states no debt effect.
-- **Fitness rule** impact is handled: an applicable rule in `docs/architecture/SBS_FITNESS_RULES.md` is updated, or a follow-up issue is created to add/strengthen one, or the PR states no fitness effect.
+- **Fitness-rule obligation** is handled: an applicable rule in `docs/architecture/SBS_FITNESS_RULES.md` is updated, or a follow-up issue is created to add/strengthen one, or the PR states no fitness effect.
 - **Validation evidence** is recorded in the PR (lane-appropriate checks per the template; see §12 if a required gate is unavailable).
 - **Delivery receipt** is posted on the linked issue/PR (the merge/closure note that records what landed; see the `verification-and-closure` practice).
 - **Status/roadmap impact** is handled when the change moves a tracked item: update `docs/architecture/SBS_ROADMAP.md` phase status and the `docs/ROADMAP.md` SBS initiative entry when applicable.
