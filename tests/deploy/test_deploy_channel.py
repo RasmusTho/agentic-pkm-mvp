@@ -43,6 +43,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "scripts/lib").mkdir(parents=True)
     (root / "config/deploy").mkdir(parents=True)
     (root / "app/alembic/versions").mkdir(parents=True)
+    (root / "app/instance").mkdir(parents=True)
     (root / "app/ops").mkdir(parents=True)
     (root / "app/release_channels").mkdir(parents=True)
     (root / "config/secrets").mkdir(parents=True)
@@ -65,6 +66,19 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     ):
         destination = root / relative
         shutil.copy2(REPO_ROOT / relative, destination)
+    (root / "app/instance/runtime.py").write_text(
+        '"""Fixture marker for a target with the instance-state preflight."""\n',
+        encoding="utf-8",
+    )
+    shutil.copy2(
+        REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        root / "docker-compose.scalar-rollback.yml",
+    )
+    (root / "ops/scalar-rollback").mkdir(parents=True)
+    shutil.copy2(
+        REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        root / "ops/scalar-rollback/nginx.conf",
+    )
 
     # The deploy harness has no active-vault fixture. Keep that state explicit
     # and process-free so the host-wide writer inventory cannot race a
@@ -77,7 +91,18 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
-    subprocess.run(["git", "add", "scripts"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "scripts",
+            "app/instance/runtime.py",
+            "docker-compose.scalar-rollback.yml",
+            "ops/scalar-rollback/nginx.conf",
+        ],
+        cwd=root,
+        check=True,
+    )
     subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 

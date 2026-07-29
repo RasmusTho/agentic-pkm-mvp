@@ -179,6 +179,7 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer api;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
@@ -278,6 +279,7 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer worker;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
@@ -360,6 +362,7 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer watcher;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
@@ -439,6 +442,7 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer heimdal-capture-watch;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
           [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;

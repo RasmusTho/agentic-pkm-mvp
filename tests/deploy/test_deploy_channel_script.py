@@ -191,6 +191,107 @@ def test_rollback_with_explicit_sha_still_allows_flags(tmp_path: Path) -> None:
     assert not curl_marker.exists()
 
 
+def test_scalar_rollback_uses_guarded_overlay_and_only_safe_services(
+    tmp_path: Path,
+) -> None:
+    base = _compose("docker-compose.yaml")
+    for service in ("api", "worker", "watcher", "heimdal-capture-watch"):
+        command = " ".join(base["services"][service]["command"])
+        assert (
+            "vault-registry.md.scalar-rollback-session.json" in command
+            and "requires the governed scalar overlay" in command
+        )
+
+    root, env, current_sha = _deploy_harness(tmp_path)
+    runtime_marker = root / "app/instance/runtime.py"
+    runtime_marker.unlink()
+    subprocess.run(
+        ["git", "add", "-u", "app/instance/runtime.py"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "previous scalar image"],
+        cwd=root,
+        check=True,
+    )
+    scalar_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    pin_path = _seed_previous_pin(root, current_sha)
+    selected_root = tmp_path / "selected-vault"
+    selected_root.mkdir()
+    htpasswd = tmp_path / "scalar.htpasswd"
+    htpasswd.write_text("operator:hash\n", encoding="utf-8")
+    env.update(
+        {
+            "SCALAR_ROLLBACK_VAULT_BINDING_ID": "binding-explicit",
+            "SCALAR_ROLLBACK_VAULT_ROOT": str(selected_root),
+            "SCALAR_ROLLBACK_HTPASSWD": str(htpasswd),
+        }
+    )
+
+    result = _run_rollback(root, env, scalar_sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"APP_IMAGE_TAG={scalar_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    compose_events = [event for event in events if "docker compose " in event]
+    assert compose_events
+    assert all(
+        "-f " + str(root / "docker-compose.scalar-rollback.yml") in event
+        for event in compose_events
+    )
+    assert any(
+        event.endswith(
+            "stop api worker watcher heimdal-capture-watch companion-ui "
+            "scalar-rollback-gateway"
+        )
+        for event in events
+    )
+    assert any(
+        event.endswith(
+            "up -d --force-recreate scalar-rollback-guard api "
+            "scalar-rollback-gateway"
+        )
+        for event in events
+    )
+    assert not any(
+        "up -d --force-recreate api worker watcher "
+        "heimdal-capture-watch companion-ui" in event
+        for event in events
+    )
+
+
+def test_scalar_rollback_fails_before_mutation_without_explicit_inputs(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    (root / "app/instance/runtime.py").unlink()
+    subprocess.run(
+        ["git", "add", "-u", "app/instance/runtime.py"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "previous scalar image"],
+        cwd=root,
+        check=True,
+    )
+    scalar_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    pin_path = _seed_previous_pin(root, current_sha)
+    before = pin_path.read_bytes()
+
+    result = _run_rollback(root, env, scalar_sha)
+
+    assert result.returncode == 78
+    assert "SCALAR_ROLLBACK_VAULT_BINDING_ID" in result.stderr
+    assert pin_path.read_bytes() == before
+    assert not (tmp_path / "docker-called").exists()
+
+
 def test_app_bind_mount_removed_and_version_authoritative() -> None:
     base = _compose("docker-compose.yaml")
     for service_name in ("api", "worker", "watcher", "companion-ui"):

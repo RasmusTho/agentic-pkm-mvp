@@ -844,6 +844,109 @@ def test_deployment_begin_recovers_partial_authority_creation(
     }
 
 
+def test_deployment_begin_adopts_root_only_claim_from_dead_controller(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    original_write = runtime_module._write_private_json
+
+    def interrupt_public_lease(path, payload):
+        if path == _deployment_lease_path(ownership):
+            raise OSError("injected public lease write interruption")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(
+        runtime_module, "_write_private_json", interrupt_public_lease
+    )
+    with pytest.raises(OSError, match="injected public lease"):
+        _begin_instance_state_deployment(
+            channel="prod",
+            instance_state_root=state,
+            host_global_root=ownership,
+            legacy_path=tmp_path / "legacy.md",
+            controller_pid=999_999_998,
+            controller_start_token=f"linux:{'1' * 64}",
+        )
+    root_lease_path = ownership / "deployment-host-global-lease.json"
+    stranded = json.loads(root_lease_path.read_text(encoding="utf-8"))
+    assert not _deployment_lease_path(ownership).exists()
+
+    monkeypatch.setattr(runtime_module, "_write_private_json", original_write)
+    recovered = _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+        controller_pid=456,
+        controller_start_token=f"linux:{'2' * 64}",
+    )
+
+    public_lease = json.loads(
+        _deployment_lease_path(ownership).read_text(encoding="utf-8")
+    )
+    root_lease = json.loads(root_lease_path.read_text(encoding="utf-8"))
+    assert recovered["deployment_nonce"] == stranded["nonce"]
+    assert public_lease["nonce"] == root_lease["nonce"] == stranded["nonce"]
+    assert recovered["controller"] == public_lease["controller"] == {
+        "pid": 456,
+        "start_token": f"linux:{'2' * 64}",
+    }
+    assert root_lease == runtime_module._compatibility_block_payload(
+        public_lease
+    )
+
+
+def test_deployment_begin_preserves_root_only_claim_from_live_controller(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    original_write = runtime_module._write_private_json
+
+    def interrupt_public_lease(path, payload):
+        if path == _deployment_lease_path(ownership):
+            raise OSError("injected public lease write interruption")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(
+        runtime_module, "_write_private_json", interrupt_public_lease
+    )
+    with pytest.raises(OSError, match="injected public lease"):
+        _begin_instance_state_deployment(
+            channel="prod",
+            instance_state_root=state,
+            host_global_root=ownership,
+            legacy_path=tmp_path / "legacy.md",
+            controller_pid=os.getpid(),
+            controller_start_token=_controller_token(os.getpid()),
+        )
+    root_lease_path = ownership / "deployment-host-global-lease.json"
+    before = root_lease_path.read_bytes()
+    monkeypatch.setattr(runtime_module, "_write_private_json", original_write)
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="compatibility block controller is active",
+    ):
+        _begin_instance_state_deployment(
+            channel="prod",
+            instance_state_root=state,
+            host_global_root=ownership,
+            legacy_path=tmp_path / "legacy.md",
+            controller_pid=456,
+            controller_start_token=f"linux:{'2' * 64}",
+        )
+    assert root_lease_path.read_bytes() == before
+    assert not _deployment_lease_path(ownership).exists()
+
+
 def test_deployment_begin_migrates_a_dead_legacy_claim_without_bypassing_it(
     tmp_path,
 ) -> None:
@@ -1486,7 +1589,7 @@ def test_finalizer_rejects_legacy_digest_only_owner_receipt_before_state_mutatio
     assert {
         path.relative_to(instance_state_root): path.read_bytes()
         for path in instance_state_root.rglob("*")
-        if path.is_file()
+        if path.is_file() and path.name != "bootstrap.lock"
     } == state_before
     assert _deployment_fence_path(host_global_root, "prod").is_file()
     assert not (host_global_root / "ownership-ledger.json").exists()
@@ -3090,6 +3193,7 @@ def test_runtime_preflight_rejects_foreign_channel_host_global_lease_without_mut
 
     assert {path: path.read_bytes() for path in protected_paths} == before
     _deployment_lease_path(host_global_root).unlink()
+    (host_global_root / "deployment-host-global-lease.json").unlink()
     _deployment_fence_path(host_global_root, "dev").unlink()
     assert (
         _preflight_runtime(
@@ -4158,6 +4262,10 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
         "vault-registry.md.last-good.sha256",
     } <= expected["checksums"].keys()
 
+    _clear_test_deployment_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+    )
     for path in layout.root.iterdir():
         if path.is_file():
             path.unlink()

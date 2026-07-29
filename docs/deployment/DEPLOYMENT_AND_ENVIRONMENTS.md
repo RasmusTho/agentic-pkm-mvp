@@ -112,7 +112,11 @@ Supported container rollback into a previous scalar image uses
 `docker-compose.scalar-rollback.yml`: the old API publishes no direct host port, the base
 companion UI is disabled, the real companion picker select/initialize routes are denied, and the
 old API is reachable from the host only through the authenticated gateway. It mounts only the
-selected content root at `/app/selected-vault`. The legacy projection translates only that
+selected content root at `/app/selected-vault`. `deploy_channel.sh rollback` detects a target
+commit that predates `app.instance.runtime`, requires the explicit binding, absolute selected root,
+and gateway credential file before changing the pin, derives the trusted-current and
+previous-image refs from the current/target pins, and then starts only the guard, old API, and
+gateway through that overlay. The legacy projection translates only that
 registration's host path to the container alias and authenticates both the canonical registry
 export and translated projection, so roll-forward restores the original binding identity rather
 than adopting a container path. The ledger validates that alias by its materialized physical-root

@@ -197,6 +197,9 @@ deploy_channel_compose() {
       compose_args+=(-f "${root}/docker-compose.test-vault.yml")
     fi
   fi
+  if [ "${MVR01C_SCALAR_ROLLBACK:-0}" = "1" ]; then
+    compose_args+=(-f "${root}/docker-compose.scalar-rollback.yml")
+  fi
 
   (
     cd "${root}" || exit 1

@@ -1263,6 +1263,7 @@ def _require_matching_compatibility_block(
     lease: Mapping[str, object] | None = None,
     *,
     reconcile_from_previous_phase: bool = False,
+    reconcile_dead_claim_controller: bool = False,
 ) -> dict[str, object]:
     current = (
         _read_deployment_lease(host_global_root)
@@ -1271,6 +1272,32 @@ def _require_matching_compatibility_block(
     )
     root_authority = _read_legacy_deployment_lease(host_global_root)
     expected = _compatibility_block_payload(current)
+    if (
+        root_authority != expected
+        and reconcile_dead_claim_controller
+        and root_authority.get("schema")
+        == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+        and root_authority.get("phase") == expected.get("phase") == "claimed"
+        and all(
+            root_authority.get(key) == expected.get(key)
+            for key in (
+                "channel_id",
+                "nonce",
+                "compatibility_v3_nonce",
+                "legacy_path",
+            )
+        )
+        and root_authority.get("controller") != expected.get("controller")
+        and not _controller_identity_is_live(root_authority.get("controller"))
+    ):
+        # A successor may have adopted the public claim and then died while
+        # replacing the channel fence, before the final root-block refresh.
+        # The shared nonce binds both private artifacts to that same claim.
+        _replace_private_json(
+            _legacy_deployment_lease_path(host_global_root),
+            expected,
+        )
+        root_authority = expected
     if (
         root_authority != expected
         and reconcile_from_previous_phase
@@ -1405,7 +1432,9 @@ def _begin_instance_state_deployment(
                 == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
             ):
                 _require_matching_compatibility_block(
-                    ownership_root, existing_lease
+                    ownership_root,
+                    existing_lease,
+                    reconcile_dead_claim_controller=True,
                 )
         compatibility_resume = (
             root_authority is not None
@@ -1431,11 +1460,23 @@ def _begin_instance_state_deployment(
                 root_authority.get("phase") != "claimed"
                 or root_authority.get("channel_id") != channel
                 or root_authority.get("legacy_path") != str(source)
-                or root_authority.get("controller") != controller
             ):
                 raise InstanceStatePreflightError(
                     "incomplete deployment compatibility block targets another claim"
                 )
+            elif root_authority.get("controller") != controller:
+                if _controller_identity_is_live(root_authority.get("controller")):
+                    raise InstanceStatePreflightError(
+                        "deployment compatibility block controller is active"
+                    )
+                # The root blocker is the first durable write in a new v3
+                # claim. If the controller dies before publishing the public
+                # lease, adopt that authenticated claim in place: preserve its
+                # nonce and continuously occupy the shipped v2 O_EXCL path.
+                root_authority = dict(root_authority) | {
+                    "controller": controller,
+                }
+                _replace_private_json(root_lease_path, root_authority)
         if legacy_lease is not None:
             if (
                 legacy_lease.get("phase") != "claimed"
@@ -1544,9 +1585,13 @@ def _begin_instance_state_deployment(
                 "channel restart fence exists without its host-global lease"
             )
         nonce = (
-            str(root_authority["nonce"])
-            if compatibility_resume and root_authority is not None
-            else uuid4().hex
+            str(existing_lease["nonce"])
+            if existing_lease is not None
+            else (
+                str(root_authority["nonce"])
+                if compatibility_resume and root_authority is not None
+                else uuid4().hex
+            )
         )
         lease: dict[str, object] = {
             "schema": _DEPLOYMENT_LEASE_SCHEMA,
