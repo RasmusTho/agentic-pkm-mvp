@@ -9,7 +9,7 @@ depends_on: [MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed). Sibling extension of the
+State: Authored task specification (child issue #4289, filed 2026-07-29). Sibling extension of the
 delivered Local Secret Provisioning mechanism; **not** a re-filing of HSP-02, which is closed (#3846 /
 PR #4008).
 

@@ -9,7 +9,7 @@ depends_on: [RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed). Closes the interim window
+State: Authored task specification (child issue #4292, filed 2026-07-29). Closes the interim window
 opened by MAS-02. It follows accepted MAS-05 parent validation; the order does not swap.
 
 # Replace CKM Product Routing With Builder Adapter

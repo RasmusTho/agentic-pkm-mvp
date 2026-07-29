@@ -194,7 +194,7 @@ the per-task criteria live in the task files.
       with a provider-returned request id in the persisted turn receipt.
       Verify: redacted operator receipt posted to the parent feature issue, compared against the
       `final_state: provider_error` / `adapter_failure_class: command_exit_nonzero` failure recorded in
-      `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: Context`
+      `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 3.1 What the substrate owns`
 - [ ] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`

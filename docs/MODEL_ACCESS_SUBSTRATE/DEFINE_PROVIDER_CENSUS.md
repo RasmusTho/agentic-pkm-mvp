@@ -9,7 +9,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed). Delivers R4-1, which was
+State: Authored task specification (child issue #4287, filed 2026-07-29). Delivers R4-1, which was
 specified on 2026-07-05 and never decomposed into an issue.
 
 # Define Provider Census
