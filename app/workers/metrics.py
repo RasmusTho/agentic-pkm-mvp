@@ -1,7 +1,7 @@
 """Minimal opt-in Prometheus metrics endpoint for the outbox worker.
 
 Off by default: the /metrics HTTP server only starts when WORKER_METRICS_PORT
-is set to a positive integer port (builder-ops-stability spec Issue 6). The
+is set to a TCP port in the range 1–65535 (builder-ops-stability spec Issue 6). The
 metric objects themselves are always defined so call sites stay unconditional;
 they are only observable once the server is enabled.
 """
@@ -40,7 +40,7 @@ def resolve_worker_metrics_port(environ: Mapping[str, str] | None = None) -> int
     except ValueError:
         logger.warning("Ignoring invalid %s=%r; worker metrics stay off", WORKER_METRICS_PORT_ENV, raw)
         return None
-    if port <= 0:
+    if not 1 <= port <= 65535:
         return None
     return port
 
