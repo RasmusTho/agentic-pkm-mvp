@@ -18,6 +18,10 @@ For the normative embedding identity + rebuild contract, see `docs/EMBEDDINGS.md
 For routing precedence and fabric behavior, see `docs/LLM_ROUTING.md`.
 
 ## Providers (Current)
+
+`docs/settings/models/providers.yaml` is the single source for declared provider identities,
+capabilities, and static allowlist projections. This document describes only the current
+execution status of those declared providers; it does not define another provider set.
 `LLM_PROVIDER` controls chat and is the **fallback** source for the embedding provider.
 The embedding provider is selected by `EMBED_PRIMARY_PROVIDER` (env) when set, otherwise
 `LLM_PROVIDER`; see `docs/EMBEDDINGS.md :: Configuration` for the full precedence and the

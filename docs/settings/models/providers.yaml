@@ -1,0 +1,122 @@
+version: 1
+providers:
+  - id: anthropic
+    kinds: [chat]
+    tier: paid
+    capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+    paid_eligible_task_kinds: []
+    credential_identifiers: [anthropic.api-key]
+    excluded_model_families: []
+    models:
+      - id: claude-fable-5
+        effective_identity: anthropic/claude-fable-5
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+  - id: deepseek
+    kinds: [chat]
+    tier: paid
+    capabilities: {}
+    paid_eligible_task_kinds: []
+    credential_identifiers: [deepseek.api-key]
+    excluded_model_families: []
+    models:
+      - id: deepseek-chat
+        effective_identity: deepseek/deepseek-chat
+        capabilities: {}
+  - id: gemini
+    kinds: [embedding]
+    tier: paid
+    capabilities: {embedding_dimensions: 768}
+    paid_eligible_task_kinds: []
+    credential_identifiers: [gemini.api-key]
+    excluded_model_families: []
+    models:
+      - id: gemini-embedding-001
+        effective_identity: gemini/gemini-embedding-001
+        capabilities: {embedding_dimensions: 768}
+  - id: mock
+    kinds: [chat, embedding]
+    tier: test
+    capabilities: {structured_output: true, system_prompt_channel: true, deterministic_execution: true, embedding_dimensions: 8}
+    paid_eligible_task_kinds: []
+    credential_identifiers: []
+    excluded_model_families: []
+    models:
+      - id: mock-chat
+        effective_identity: mock/mock-chat
+        capabilities: {structured_output: true, system_prompt_channel: true, deterministic_execution: true}
+      - id: mock-embed
+        effective_identity: mock/mock-embed
+        capabilities: {deterministic_execution: true, embedding_dimensions: 8}
+  - id: ollama
+    kinds: [chat, embedding]
+    tier: local
+    capabilities: {structured_output: true, system_prompt_channel: true}
+    paid_eligible_task_kinds: []
+    credential_identifiers: []
+    excluded_model_families: []
+    models:
+      - id: llama3.1:8b
+        effective_identity: ollama/llama3.1:8b
+        capabilities: {structured_output: true, system_prompt_channel: true}
+      - id: nomic-embed-text:latest
+        effective_identity: ollama/nomic-embed-text:latest
+        capabilities: {}
+  - id: openai
+    kinds: [chat]
+    tier: paid
+    capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+    paid_eligible_task_kinds: []
+    credential_identifiers: [openai.api-key]
+    excluded_model_families: []
+    models:
+      - id: gpt-5.6-sol
+        effective_identity: openai/gpt-5.6-sol
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-5.4
+        effective_identity: openai/gpt-5.4
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+projections:
+  - site: app/components/llm/router.py::_KNOWN_PROVIDERS
+    providers: [mock, ollama, openai, deepseek]
+  - site: app/components/embeddings/legacy.py::_SUPPORTED_EMBED_PROVIDERS
+    providers: [mock, ollama, deterministic, gemini]
+  - site: app/llm/embeddings.py::PROVIDER_REGISTRY
+    providers: [mock, ollama, gemini]
+  - site: app/services/llm.py::_DISPATCH_PROVIDERS
+    providers: [mock, ollama, openai, deepseek]
+  - site: app/llm/adapter.py::_DISPATCH_PROVIDERS
+    providers: [mock, ollama, openai, deepseek]
+  - site: app/cli/health.py::_check_llm_providers
+    providers: [mock, ollama]
+  - site: docs/settings/models/registry.yaml::provider
+    providers: [mock, ollama, openai]
+  - site: docs/LLM.md::Providers (Current)
+    providers: [mock, ollama, openai, deepseek]
+known_divergences: []
+runtime_channels:
+  product:
+    dev:
+      frontier: {provider: openai, model: gpt-5.4, requires: [structured_output]}
+    test:
+      frontier: {provider: mock, model: mock-chat, requires: [structured_output, deterministic_execution]}
+    prod:
+      frontier: {provider: openai, model: gpt-5.4, requires: [structured_output]}
+  builder:
+    dev:
+      frontier: {provider: openai, model: gpt-5.6-sol, requires: [structured_output]}
+    test:
+      frontier: {provider: openai, model: gpt-5.6-sol, requires: [structured_output]}
+    prod:
+      frontier: {provider: openai, model: gpt-5.6-sol, requires: [structured_output]}
+  model_inquiry_profiles:
+    dev:
+      - {role: fable, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output, system_prompt_channel]}
+      - {role: gpt_codex, capability_tier: frontier, provider: openai, model: gpt-5.6-sol, credential_identifier: openai.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output]}
+    test:
+      - {role: fable, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output, system_prompt_channel]}
+      - {role: gpt_codex, capability_tier: frontier, provider: openai, model: gpt-5.6-sol, credential_identifier: openai.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output]}
+    prod:
+      - {role: fable, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output, system_prompt_channel]}
+      - {role: gpt_codex, capability_tier: frontier, provider: openai, model: gpt-5.6-sol, credential_identifier: openai.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output]}
+  resolution_groups:
+    - {id: model-inquiry-independent-review, independence: distinct_effective_target}

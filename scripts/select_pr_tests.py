@@ -130,6 +130,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "settings",
         (
+            "app/components/settings/",
             "app/settings/",
             "app/cli/settings_explain.py",
             "app/services/companion_eligibility.py",

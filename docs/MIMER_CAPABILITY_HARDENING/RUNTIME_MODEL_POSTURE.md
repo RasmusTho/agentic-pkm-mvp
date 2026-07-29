@@ -172,8 +172,8 @@ eligibility), so plumbing never front-runs the owner.
 
 ## 5. Slices
 
-1. **R4-1 Provider-surface census.** `providers.yaml` + static census-equality tests across the
-   sites in §2 + docs pointer from `docs/LLM.md`.
+1. **R4-1 Provider-surface census.** Delivered by #4287: `providers.yaml` + static
+   census-equality tests across the sites in §2 + docs pointer from `docs/LLM.md`.
    `Verify:` `tests/settings/test_provider_census.py::test_all_allowlists_match_census` (one test,
    parameterized per site). Deps: none. **Sonnet.**
 2. **R4-2 Anthropic chat provider.** Adapter branch + registry descriptors + census row + health
