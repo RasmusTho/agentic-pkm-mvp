@@ -14,6 +14,7 @@ from typing import Callable, Mapping, Sequence
 
 from app.builderops.ckm.models import (
     MATURITY_DIMENSIONS,
+    UNMEASURABLE_MATURITY_DIMENSIONS,
     CkmArtifact,
     CkmEvidenceEdge,
     CkmValidationError,
@@ -489,9 +490,16 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
             candidate_shares[dimension] = (
                 len(candidates) / len(supporting) if supporting else 0.0
             )
-            dimension_status[dimension] = result.status or (
-                "measured" if result.edges else "missing"
-            )
+            if dimension in UNMEASURABLE_MATURITY_DIMENSIONS:
+                # No deterministic linker can ever populate this dimension
+                # (UNMEASURABLE_MATURITY_DIMENSIONS docstring in models.py);
+                # say so explicitly instead of reporting the ambiguous
+                # "missing" a scorer with zero evidence this run would emit.
+                dimension_status[dimension] = "unsupported"
+            else:
+                dimension_status[dimension] = result.status or (
+                    "measured" if result.edges else "missing"
+                )
             formula_ids[dimension] = _DIMENSION_FORMULA_IDS[dimension]
         assessment = store.append_assessment(
             capability_id=capability.id,
