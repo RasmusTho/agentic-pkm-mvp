@@ -90,10 +90,26 @@ def test_scalar_preflight_adopts_only_an_exact_persisted_session(
     _scalar_preflight(runtime, registration, root, rollback_path)
     session_path = runtime.registry.scalar_rollback_session_path
     original = session_path.read_bytes()
+    original_projection = rollback_path.read_bytes()
 
     _scalar_preflight(runtime, registration, root, rollback_path)
     assert session_path.read_bytes() == original
 
+    rollback_path.unlink()
+    with pytest.raises(RegistryError, match="projection is missing"):
+        _scalar_preflight(runtime, registration, root, rollback_path)
+    assert not rollback_path.exists()
+
+    rollback_path.write_text(
+        "---\nappInstallId: app-test\nknownVaults: {}\n---\n",
+        encoding="utf-8",
+    )
+    rollback_path.chmod(0o600)
+    with pytest.raises(RegistryError, match="escaped the selected binding"):
+        _scalar_preflight(runtime, registration, root, rollback_path)
+
+    rollback_path.write_bytes(original_projection)
+    rollback_path.chmod(0o600)
     document = json.loads(original)
     document["payload"]["legacySelectedPath"] = str(tmp_path / "foreign")
     document["authentication"] = runtime.ledger.authenticate_scalar_rollback_session(

@@ -864,7 +864,25 @@ def _preflight_scalar_rollback_locked(
                 # The old API may already have changed its valid scalar file;
                 # the signed initial digest remains lineage, not a retry-time
                 # immutability assertion.
-                AppLocalSettingsStore(legacy_path).load()
+                if not legacy_path.is_file():
+                    raise RegistryError(
+                        "existing scalar rollback projection is missing"
+                    )
+                legacy = AppLocalSettingsStore(legacy_path).load()
+                if set(legacy.known_vaults) != {target.ref}:
+                    raise RegistryError(
+                        "existing scalar rollback projection escaped the selected binding"
+                    )
+                selected = legacy.known_vaults[target.ref]
+                if (
+                    selected.path != str(selected_root)
+                    or selected.vault_id != target.vault_id
+                    or selected.local_instance_id != target.local_instance_id
+                    or legacy.last_active_vault_ref not in (None, target.ref)
+                ):
+                    raise RegistryError(
+                        "existing scalar rollback projection identity diverged"
+                    )
             else:
                 store.materialize_legacy_rollback(
                     legacy_path,
