@@ -335,6 +335,14 @@ TCD chooses capability *inside* the delivery chain; this section chooses how muc
 - **Delivery depth follows the risk tier.** Single-issue (or issue-free) Tier 1 and Tier 2 PRs take the light path: required CI green plus self-verified `Verify:` targets on the head SHA, then plain merge with `Final-Review-Rounds: 0` — no independent review round, no verified-merge ceremony. The full chain (independent local review gate, `Final-Review-Rounds: 1|2`, verified-merge sequence) applies only to Tier 3 work, multi-issue PRs, and PRs touching a TCD high-risk *surface* (auth / security / data / migration / concurrency / payments / external API). Process outcomes in the escalation-trigger list — a failed attempt, a CI flake, a reviewer nit — escalate capability, never delivery depth.
 - **Right-size default.** Build the most boring solution that satisfies the acceptance criteria. A new gate, receipt, ledger, registry, config surface, abstraction layer, or enterprise-grade pattern (high availability, multi-tenancy, pluggable providers, defense-in-depth beyond the single-operator trust model) requires an explicit demand in the governing contract — never default posture. "A simpler mechanism satisfies the contract" is a valid blocking review finding. A new permanent governance mechanism must name what it replaces or carry an explicit review-by date.
 - **Budget and stop-loss.** A delivery gets 2 CI-repair rounds per failure mechanism (the full path keeps the 2+2 escalated repair budget in `verification-and-closure`). When the budget is spent, stop grinding: ship the smallest passing subset, or hand back a one-paragraph stop report plus a `LearningSignal`. Budgets are never rebound to reset accounting. Light work runs without sub-agent fan-out. Repeated failure on a bounded change usually means the solution is too big — shrink it before escalating capability.
+- **Do not pay twice for irrelevant base drift.** Branch freshness and validation freshness are
+  separate questions. After a proof-complete local SHA is rebased only because `origin/main`
+  advanced, carry expensive review/validation evidence forward when
+  `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Post-validation base-drift evidence reuse`
+  proves the patch byte-identical and the incoming base semantically irrelevant. Relevant source,
+  dependency, contract, configuration, migration, test-selection, or toolchain drift still requires
+  fresh affected-surface proof. Current-head CI and every required final review remain current-SHA
+  gates.
 
 ## Communicating with the owner
 

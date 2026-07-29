@@ -224,8 +224,13 @@ executable order is mandatory and fail-closed:
    execution id. Governance-only changes default to targeted governance/contract tests plus their
    lint/docs checks.
 4. Re-run the branch-truth pre-push gate and the `review_before_ci_gate.py` command above against
-   the still-unchanged SHA. A changed SHA invalidates both the review and validation evidence and
-   restarts this sequence.
+   the publishable SHA. A repair, scope change, conflict resolution, or changed delivery blob
+   invalidates the review and validation evidence and restarts this sequence. A SHA changed only by
+   rebasing over new base commits may carry expensive validation forward through
+   `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Post-validation base-drift evidence reuse`;
+   all eligibility evidence and bounded current-head checks named there are mandatory. The
+   pre-expensive mechanism review may be carried forward only when its reviewed patch is proven
+   byte-identical; any required final review remains current-SHA after publication.
 5. Push only after all four preceding steps pass. Never proceed directly from review to push.
 
 ### Step 5: Push Branch
