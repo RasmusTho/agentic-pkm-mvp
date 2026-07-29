@@ -9,7 +9,7 @@ depends_on: [EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (child issue #4290, filed 2026-07-29). Establishes the ADR-0063
+State: Implemented. Delivered by PR #4360 (issue #4290, 2026-07-29). Establishes the ADR-0063
 kernel in code for the first time; ADR-0063 deliberately chose no package path.
 
 # Promote Adapter Contract To Neutral Kernel
