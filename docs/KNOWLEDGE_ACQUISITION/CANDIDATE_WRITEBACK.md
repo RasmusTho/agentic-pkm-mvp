@@ -23,7 +23,8 @@ pipeline ends here; triage is human territory.
 - Writes the note based on the shipped template with metadata + provenance frontmatter,
   `transcript_available`, owner-authored takeaways/open threads, one explicit
   `Proposals (non-authoritative)` wrapper, and deterministic evidence/lineage — through
-  WriteGuard/governed vault-write mechanics (mechanical durable, non-authority-bearing write).
+  WriteGuard and the candidate-only create-once knowledge helper (mechanical durable,
+  non-authority-bearing write). A durable existing-target probe stays before render and WriteGuard.
 - Composes the delivered `summary@2` result through a pure proposal-section seam. Empty optional
   modules are omitted; a no-proposals marker replaces empty module headings.
 - Parses generated Markdown before assembly and fails closed when visible prose falsely claims the
@@ -113,15 +114,31 @@ boundary visible inside the note: generated prose cannot occupy or impersonate t
 ## Out of Scope
 
 Human review UX; promotion; note updates on re-acquisition; claims, durable extraction or transcript
-storage, new content modules, and the unresolved atomic-create bug tracked separately by #4132.
+storage, new content modules, generic KnowledgePort create semantics, other candidate-family writer
+migration, and network/distributed writer guarantees.
 
 ## Restart / Durability Posture
 
-The note is durable (vault). Candidate assembly state is derived and re-runnable from `raw`; a
-crash between candidate assembly and note write loses nothing durable — replay reproduces the
-candidate, and the write retries idempotently (same note path, same content identity). Once the
-candidate note exists, later attempts return `already_exists` before rendering or writing. The
-entire file — including owner-authored takeaways and open threads — therefore remains byte-identical.
+The note is durable (vault). Candidate assembly state is derived and re-runnable from `raw`; source
+fetch, transcription, normalization, extraction, and rendering run without a vault-global writer
+lock or any publication ownership. A durable, non-mutating probe returns `already_exists` before
+rendering or WriteGuard only after verifying a regular target and fsyncing its existing parent.
+
+For a missing target, WriteGuard authorizes one short target-scoped publication. The candidate
+helper locally creates or observes each vault-relative parent component and fsyncs its containing
+directory, then writes complete immutable UTF-8 bytes to a unique extensionless hidden stage. File
+fsync and one raw-FD close precede descriptor-relative atomic no-replace publication; target-parent
+fsync precedes `written`. A same-target loser removes only its own stage, fsyncs the parent, verifies
+the regular winner, and returns `already_exists`, so an existing or human-edited note remains
+byte-identical.
+
+A failure before rename exposes no partial canonical note. A failed cleanup can leave only that
+invocation's hidden, scanner-inert rebuildable stage; retained `raw` evidence makes retry safe, and
+old remnants are ignored. After rename succeeds, a failed final durability fence emits no success
+but never deletes the complete canonical target; retry completes the durable probe. Parent
+directories created before a later failure remain harmless local preparation. These guarantees are
+for the supported one-user macOS/Linux single-local-filesystem runtime; they add no ordering,
+fairness, network-filesystem claim, global `Sources/` invariant, coordinator, or migration.
 
 ## Related Docs
 

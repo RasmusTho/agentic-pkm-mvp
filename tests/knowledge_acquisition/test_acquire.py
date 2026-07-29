@@ -11,8 +11,10 @@ reachability of the DSN behind it, since these tests inject `conn=` directly).
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -25,6 +27,8 @@ from app.knowledge_acquisition.acquire import (
     acquire_youtube,
     require_configured_database_url,
 )
+from app.knowledge.write_ops import write_note_relative
+from app.knowledge_acquisition.candidate_writeback import Candidate, write_candidate_note
 from app.knowledge_acquisition.extraction_registry import clear_registry
 from app.knowledge_acquisition.extractors import summary_extractor
 from app.knowledge_acquisition.stage_events import (
@@ -150,7 +154,9 @@ _CAPTION_BODY = (
 )
 
 
-def _stub_caption_fetch(monkeypatch, *, info: dict[str, Any] | None = None, body: str = _CAPTION_BODY):
+def _stub_caption_fetch(
+    monkeypatch, *, info: dict[str, Any] | None = None, body: str = _CAPTION_BODY
+):
     monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info or _base_info())
 
     def fake_caption_body(url: str) -> str:
@@ -247,12 +253,14 @@ def test_acquire_youtube_rerun_is_idempotent_dedup_noop(
     assert first.is_new_raw is True
     assert fetch_calls["count"] == 1
 
-    note_path = tmp_path / "vault" / next(
-        s.artifact_path for s in first.stages if s.stage == "candidate"
+    note_path = (
+        tmp_path / "vault" / next(s.artifact_path for s in first.stages if s.stage == "candidate")
     )
     bytes_first = note_path.read_bytes()
 
-    second = acquire_youtube(FAKE_URL, vault_context=vault, write_guard=_allowing_guard(), conn=conn)
+    second = acquire_youtube(
+        FAKE_URL, vault_context=vault, write_guard=_allowing_guard(), conn=conn
+    )
 
     # Caption path re-fetches the (cheap) metadata/caption body every call (the plugin's
     # dedup identity is the caption body's hash), but this proves the DOWNSTREAM pipeline is
@@ -275,7 +283,9 @@ def test_acquire_youtube_rerun_is_idempotent_dedup_noop(
     assert len(completed) == 3  # still exactly 3: normalize + extracted + candidate, deduped
 
 
-def test_acquire_youtube_asr_dedup_skips_reacquisition(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_acquire_youtube_asr_dedup_skips_reacquisition(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The ASR (captionless) path pre-checks dedup BEFORE running ASR — the plugin's own
     `find_raw_record` short-circuit (`youtube_plugin.fetch`). A known captionless item's
     re-run must not re-invoke ASR."""
@@ -291,7 +301,9 @@ def test_acquire_youtube_asr_dedup_skips_reacquisition(monkeypatch: pytest.Monke
             }
         }
 
-    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: _base_info(subtitles={}, automatic_captions={}))
+    monkeypatch.setattr(
+        plugin, "yt_dlp_extract_info", lambda url: _base_info(subtitles={}, automatic_captions={})
+    )
     monkeypatch.setattr(plugin, "transcribe_source", fake_asr)
 
     conn = FakeOutboxConn()
@@ -301,9 +313,101 @@ def test_acquire_youtube_asr_dedup_skips_reacquisition(monkeypatch: pytest.Monke
     assert first.is_new_raw is True
     assert asr_calls["count"] == 1
 
-    second = acquire_youtube(FAKE_URL, vault_context=vault, write_guard=_allowing_guard(), conn=conn)
+    second = acquire_youtube(
+        FAKE_URL, vault_context=vault, write_guard=_allowing_guard(), conn=conn
+    )
     assert second.is_new_raw is False
     assert asr_calls["count"] == 1  # ASR never re-invoked on the dedup hit
+
+
+def test_long_running_transcription_does_not_block_unrelated_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Acquisition owns no writer resource while the real ASR seam is blocked."""
+
+    monkeypatch.setattr(
+        plugin,
+        "yt_dlp_extract_info",
+        lambda _url: _base_info(subtitles={}, automatic_captions={}),
+    )
+    transcription_started = threading.Event()
+    release_transcription = threading.Event()
+
+    def blocking_asr(_item_ref_or_url: str) -> dict[str, Any]:
+        transcription_started.set()
+        if not release_transcription.wait(timeout=10):
+            raise TimeoutError("test did not release real-time transcription")
+        return {
+            "payload": {
+                "text": "ASR transcript after the barrier.",
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 2.0,
+                        "text": "ASR transcript after the barrier.",
+                    }
+                ],
+                "language": "en",
+            }
+        }
+
+    monkeypatch.setattr(plugin, "transcribe_source", blocking_asr)
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    guard = _allowing_guard()
+    conn = FakeOutboxConn()
+    different_candidate = Candidate(
+        content_identity="sha256:different-ready-candidate",
+        source_kind="youtube_url",
+        item_ref="different01",
+        url="https://youtube.com/watch?v=different01",
+        title="Different candidate",
+        creator=None,
+        published=None,
+        acquisition_method="asr",
+        transcript_available=False,
+        extractions=(),
+    )
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        acquisition = executor.submit(
+            acquire_youtube,
+            FAKE_URL,
+            vault_context=vault,
+            write_guard=guard,
+            conn=conn,
+        )
+        assert transcription_started.wait(timeout=3)
+
+        unrelated = executor.submit(
+            write_note_relative,
+            "Inbox/unrelated.md",
+            "unrelated governed write",
+            vault_root=vault_root,
+            action="test.unrelated",
+            write_guard=guard,
+        )
+        different = executor.submit(
+            write_candidate_note,
+            different_candidate,
+            vault_context=vault,
+            write_guard=guard,
+        )
+
+        unrelated.result(timeout=3)
+        different_result = different.result(timeout=3)
+        assert different_result.status == "written"
+        assert (vault_root / "Inbox/unrelated.md").read_text(encoding="utf-8") == (
+            "unrelated governed write"
+        )
+        assert acquisition.done() is False
+
+        release_transcription.set()
+        acquisition_result = acquisition.result(timeout=10)
+
+    assert acquisition_result.ok is True
+    assert any(stage.status == "written" for stage in acquisition_result.stages)
 
 
 def test_acquire_valid_empty_asr_skips_extraction_and_writes_false_candidate(
@@ -454,7 +558,9 @@ def test_acquire_youtube_fetch_failure_is_loud_no_raw_record(
         ),
     )
     assert existing is None
-    assert conn.rows_for(STAGE_DEAD_LETTERED_TOPIC) == []  # no KA-06 stage reached; nothing to dead-letter there
+    assert (
+        conn.rows_for(STAGE_DEAD_LETTERED_TOPIC) == []
+    )  # no KA-06 stage reached; nothing to dead-letter there
 
 
 def test_acquire_youtube_extractor_dead_letter_skips_candidate(

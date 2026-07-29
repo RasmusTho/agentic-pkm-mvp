@@ -82,6 +82,14 @@ It does **not** own:
 - CI pipelines or hosted deployment automation (remains out of scope in this single-user wave);
 - multi-vault hot/cold decomposition in prod (future work; flagged below).
 
+Channel isolation also does not imply a vault-global writer lock. The shipped YouTube candidate
+path performs source fetch, real-time transcription, extraction, and rendering without publication
+ownership; unrelated governed writes and different candidate targets can proceed concurrently.
+Only the final local macOS/Linux create-once step is target-scoped: WriteGuard, invocation-owned
+parent preparation, hidden complete-file stage, atomic no-replace, and a parent durability fence.
+Same-target overlap is first-write-wins with no ordering or fairness guarantee. This mechanism adds
+no process coordinator, global `Sources/` invariant, migration, or network/distributed semantics.
+
 ## Channel model
 
 Three channels map one-to-one onto the existing environment model, but add identity and isolation guarantees.

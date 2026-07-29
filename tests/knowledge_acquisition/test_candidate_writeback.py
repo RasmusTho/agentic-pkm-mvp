@@ -9,7 +9,9 @@ real vault path.
 from __future__ import annotations
 
 from dataclasses import replace
+import errno
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -23,6 +25,7 @@ from app.knowledge_acquisition.candidate_writeback import (
     TRIAGE_STATE_CAPTURED,
     Candidate,
     CandidateWriteResult,
+    CandidateWritebackError,
     assemble_candidate,
     candidate_note_path,
     render_candidate_note,
@@ -137,7 +140,7 @@ def test_write_goes_through_writeguard_callsite(tmp_path: Path) -> None:
     assert (vault_root / result.artifact_path).exists()
 
 
-def test_write_does_not_touch_filesystem_when_guard_denies(tmp_path: Path) -> None:
+def test_writeguard_denial_creates_no_candidate_parent(tmp_path: Path) -> None:
     """No direct filesystem write bypassing the guard: a denial leaves no artifact at all."""
     vault_root = tmp_path / "vault"
     vault = _vault(vault_root)
@@ -148,6 +151,7 @@ def test_write_does_not_touch_filesystem_when_guard_denies(tmp_path: Path) -> No
     assert result.status == "blocked"
     expected_path = candidate_note_path(candidate)
     assert not (vault_root / expected_path).exists()
+    assert not (vault_root / "Sources").exists()
     # Confirm nothing at all landed under the vault root.
     assert list(vault_root.rglob("*.md")) == []
 
@@ -321,22 +325,146 @@ def test_no_existing_artifact_mutation(tmp_path: Path) -> None:
     assert existing_note.stat().st_mtime_ns == existing_mtime_before
 
 
-def test_rerun_same_candidate_is_idempotent_not_duplicated(tmp_path: Path) -> None:
-    """Re-running the same candidate targets the same note path and does not duplicate it
-    (spec: 'the write retries idempotently — same note path, same content identity')."""
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "root_open",
+        "sources_open",
+        "intermediate_open",
+        "final_parent_open",
+        "parent_fsync",
+        "root_close",
+        "sources_close",
+        "intermediate_close",
+        "final_parent_close",
+        "target_stat",
+        "nonregular_target",
+    ],
+)
+def test_rerun_existing_candidate_returns_before_render_and_creates_no_recovery_artifact(
+    fault: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The durable existing-target probe is fail-closed and stays before render/guard."""
+
     vault_root = tmp_path / "vault"
     vault = _vault(vault_root)
     candidate = _assembled_candidate()
+    sources_dir = "Sources/one/two"
+    relative = candidate_note_path(candidate, sources_dir=sources_dir)
+    target = vault_root / relative
 
-    first = write_candidate_note(candidate, vault_context=vault, write_guard=_allowing_guard())
-    assert first.status == "written"
+    if fault == "nonregular_target":
+        target.mkdir(parents=True)
+        expected_bytes: bytes | None = None
+    else:
+        first = write_candidate_note(
+            candidate,
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+            sources_dir=sources_dir,
+        )
+        assert first.status == "written"
+        expected_bytes = target.read_bytes()
 
-    second = write_candidate_note(candidate, vault_context=vault, write_guard=_allowing_guard())
-    assert second.status == "already_exists"
-    assert second.artifact_path == first.artifact_path
+    def forbidden_render(_candidate: Candidate) -> str:
+        raise AssertionError("existing-target probe must return before rendering")
 
-    all_notes = list(vault_root.rglob("*.md"))
-    assert len(all_notes) == 1
+    monkeypatch.setattr(candidate_writeback, "render_candidate_note", forbidden_render)
+    guard = _allowing_guard()
+
+    def forbidden_guard(_action: str) -> None:
+        raise AssertionError("existing-target probe must return before WriteGuard")
+
+    guard.assert_writes_allowed = forbidden_guard  # type: ignore[method-assign]
+    real_open = os.open
+    real_close = os.close
+    real_fsync = os.fsync
+    real_stat = os.stat
+    fd_labels: dict[int, str] = {}
+    fired = 0
+
+    def hit(message: str) -> None:
+        nonlocal fired
+        fired += 1
+        raise OSError(errno.EIO, message)
+
+    def faulting_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        decoded = os.fsdecode(path)
+        label = (
+            "root"
+            if dir_fd is None
+            else {
+                "Sources": "sources",
+                "one": "intermediate",
+                "two": "final_parent",
+            }.get(decoded, decoded)
+        )
+        if fault == f"{label}_open":
+            hit(f"{label} open fault")
+        fd = real_open(path, flags, mode, dir_fd=dir_fd)
+        fd_labels[fd] = label
+        return fd
+
+    def faulting_close(fd: int) -> None:
+        label = fd_labels.pop(fd, "unknown")
+        if fault == f"{label}_close":
+            real_close(fd)
+            hit(f"{label} close fault")
+        real_close(fd)
+
+    def faulting_fsync(fd: int) -> None:
+        if fault == "parent_fsync" and fd_labels.get(fd) == "final_parent":
+            hit("parent fsync fault")
+        real_fsync(fd)
+
+    def faulting_stat(
+        path: str | bytes | int | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        if fault == "target_stat" and path == target.name:
+            hit("target stat fault")
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "open", faulting_open)
+    monkeypatch.setattr(os, "close", faulting_close)
+    monkeypatch.setattr(os, "fsync", faulting_fsync)
+    monkeypatch.setattr(os, "stat", faulting_stat)
+
+    if fault is None:
+        second = write_candidate_note(
+            candidate,
+            vault_context=vault,
+            write_guard=guard,
+            sources_dir=sources_dir,
+        )
+        assert second.status == "already_exists"
+        assert second.artifact_path == relative
+    else:
+        with pytest.raises(CandidateWritebackError):
+            write_candidate_note(
+                candidate,
+                vault_context=vault,
+                write_guard=guard,
+                sources_dir=sources_dir,
+            )
+        if fault != "nonregular_target":
+            assert fired == 1
+
+    if expected_bytes is not None:
+        assert target.read_bytes() == expected_bytes
+    assert list(target.parent.glob(".candidate-stage-*")) == []
+    assert fd_labels == {}
 
 
 def test_composer_preserves_human_authored_band_on_rerun(tmp_path: Path) -> None:
@@ -394,9 +522,7 @@ def test_composer_wraps_proposals_and_omits_absent_modules() -> None:
     assert rendered.count("## Proposals (non-authoritative)") == 1
     assert rendered.count("### Summary") == 1
     assert "## AI summary" not in rendered
-    assert rendered.index("## Owner notes") < rendered.index(
-        "## Proposals (non-authoritative)"
-    )
+    assert rendered.index("## Owner notes") < rendered.index("## Proposals (non-authoritative)")
     assert rendered.index("### Summary") < rendered.index("## Evidence and lineage")
     assert rendered.index("A deterministic test summary.") < rendered.index(
         "## Evidence and lineage"
@@ -450,7 +576,9 @@ def test_blocked_write_is_loud_and_retryable(tmp_path: Path) -> None:
 
     # Not terminal: the same candidate can be retried once writes are allowed again, and it
     # then succeeds normally (no leftover partial state blocked the retry).
-    retried_result = write_candidate_note(candidate, vault_context=vault, write_guard=_allowing_guard())
+    retried_result = write_candidate_note(
+        candidate, vault_context=vault, write_guard=_allowing_guard()
+    )
     assert retried_result.status == "written"
     assert retried_result.artifact_path == expected_path
 
@@ -466,9 +594,11 @@ def test_candidate_is_terminal_only_after_note_materialization(
     def _fail_materialization(*_args, **_kwargs) -> None:
         raise OSError("test materialization failure")
 
-    monkeypatch.setattr(candidate_writeback, "write_note_relative", _fail_materialization)
+    monkeypatch.setattr(candidate_writeback, "create_candidate_note_once", _fail_materialization)
 
-    with pytest.raises(candidate_writeback.CandidateWritebackError, match="materialization failure"):
+    with pytest.raises(
+        candidate_writeback.CandidateWritebackError, match="materialization failure"
+    ):
         write_candidate_note(candidate, vault_context=vault, write_guard=_allowing_guard())
 
     assert not (vault_root / candidate_note_path(candidate)).exists()

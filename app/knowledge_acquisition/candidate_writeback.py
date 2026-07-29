@@ -50,7 +50,10 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import (
+    candidate_note_exists_durable,
+    create_candidate_note_once,
+)
 from app.knowledge_acquisition.extraction_registry import ExtractionResult, run_extractor
 from app.knowledge_acquisition.note_renderer import (
     NoteRenderError,
@@ -150,15 +153,11 @@ def assemble_candidate(
     """
     content_identity = raw_record.get("content_identity")
     if not content_identity or not isinstance(content_identity, str):
-        raise CandidateAssemblyError(
-            "raw_record.content_identity is required and must be a string"
-        )
+        raise CandidateAssemblyError("raw_record.content_identity is required and must be a string")
     source_kind = raw_record.get("source_kind")
     item_ref = raw_record.get("item_ref")
     if not source_kind or not item_ref:
-        raise CandidateAssemblyError(
-            "raw_record.source_kind and item_ref are required"
-        )
+        raise CandidateAssemblyError("raw_record.source_kind and item_ref are required")
 
     metadata = raw_record.get("metadata") or {}
     provenance = raw_record.get("provenance") or {}
@@ -261,9 +260,7 @@ def render_candidate_note(candidate: Candidate) -> str:
                 module_id="summary",
                 title="Summary",
                 content=(
-                    f"**Model confidence (non-authoritative):** {confidence:g}\n"
-                    "\n"
-                    f"{summary}"
+                    f"**Model confidence (non-authoritative):** {confidence:g}\n" "\n" f"{summary}"
                 ),
             )
         )
@@ -305,11 +302,11 @@ def write_candidate_note(
     """The governed vault-write call site: the only place this module touches
     the filesystem.
 
-    `write_guard.assert_writes_allowed(CANDIDATE_WRITE_ACTION)` runs
-    immediately before the write via `write_note_relative` (the same
-    `KnowledgePort`-backed helper `materialize_moment` /
-    `materialize_promoted_memory` use) — WriteGuard is independently
-    authoritative and this stage has no other path to disk.
+    The existing-target probe runs before render and WriteGuard, and mutates
+    nothing. For a missing target, the candidate-only knowledge helper asserts
+    `write_guard.assert_writes_allowed(CANDIDATE_WRITE_ACTION)` before parent
+    preparation or stage creation. Long acquisition and render work therefore
+    owns no publication resource.
 
     A `WritesBlockedError` is caught here and returned as an item-scoped
     `status="blocked"` result: loud (the reason is preserved), never silent,
@@ -323,7 +320,18 @@ def write_candidate_note(
     vault_root = _vault_root(vault_context)
     artifact_path = candidate_note_path(candidate, sources_dir=sources_dir)
 
-    if (vault_root / artifact_path).exists():
+    try:
+        target_exists = candidate_note_exists_durable(
+            artifact_path,
+            vault_root=vault_root,
+        )
+    except Exception as exc:  # noqa: BLE001 - re-raised as the item-scoped error below
+        raise CandidateWritebackError(
+            f"candidate note probe failed for content_identity="
+            f"{candidate.content_identity!r} at {artifact_path!r}: {exc}"
+        ) from exc
+
+    if target_exists:
         return CandidateWriteResult(
             status="already_exists",
             artifact_path=artifact_path,
@@ -339,7 +347,13 @@ def write_candidate_note(
         ) from exc
 
     try:
-        write_guard.assert_writes_allowed(CANDIDATE_WRITE_ACTION)
+        status = create_candidate_note_once(
+            artifact_path,
+            content,
+            vault_root=vault_root,
+            action=CANDIDATE_WRITE_ACTION,
+            write_guard=write_guard,
+        )
     except WritesBlockedError as exc:
         return CandidateWriteResult(
             status="blocked",
@@ -347,9 +361,6 @@ def write_candidate_note(
             content_identity=candidate.content_identity,
             reason=str(exc),
         )
-
-    try:
-        write_note_relative(artifact_path, content, vault_root=vault_root)
     except Exception as exc:  # noqa: BLE001 - re-raised as the item-scoped error below
         raise CandidateWritebackError(
             f"candidate note write failed for content_identity="
@@ -357,7 +368,7 @@ def write_candidate_note(
         ) from exc
 
     return CandidateWriteResult(
-        status="written",
+        status=status,
         artifact_path=artifact_path,
         content_identity=candidate.content_identity,
     )

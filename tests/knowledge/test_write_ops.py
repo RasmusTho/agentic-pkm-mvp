@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import errno
 import hashlib
+import os
 from pathlib import Path
+import re
+import threading
 
 import pytest
 
@@ -10,6 +15,128 @@ from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 from app.write_guard import WriteGuard, WritesBlockedError
+
+
+_STAGE_NAME_RE = re.compile(r"^\.candidate-stage-[0-9a-f]{32}$")
+
+
+class _FdOracle:
+    """Track logical descriptor generations, including reused raw integers."""
+
+    def __init__(self) -> None:
+        self.opened: list[tuple[int, int, str, str]] = []
+        self.close_attempts: list[tuple[int, int, str, str] | None] = []
+        self.duplicates: list[tuple[str, int, int]] = []
+        self.active: dict[int, tuple[int, int, str, str]] = {}
+        self.events: list[tuple[object, ...]] = []
+        self._generation = 0
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        real_open = os.open
+        real_close = os.close
+        real_dup = os.dup
+        real_dup2 = os.dup2
+        real_dup3 = getattr(os, "dup3", None)
+
+        def register_duplicate(
+            operation: str,
+            source_fd: int,
+            duplicate_fd: int,
+        ) -> int:
+            self._generation += 1
+            source = self.active.get(source_fd)
+            kind = f"duplicated_{source[2]}" if source is not None else "duplicated_unknown"
+            path = f"{operation}:{source[3] if source is not None else source_fd}"
+            token = (duplicate_fd, self._generation, kind, path)
+            assert duplicate_fd not in self.active
+            self.active[duplicate_fd] = token
+            self.opened.append(token)
+            self.duplicates.append((operation, source_fd, duplicate_fd))
+            self.events.append((operation, source_fd, duplicate_fd, token))
+            return duplicate_fd
+
+        def traced_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            fd = real_open(path, flags, mode, dir_fd=dir_fd)
+            self._generation += 1
+            raw_path = os.fsdecode(path)
+            kind = (
+                "stage"
+                if raw_path.startswith(".candidate-stage-")
+                else "directory"
+                if flags & getattr(os, "O_DIRECTORY", 0)
+                else "file"
+            )
+            token = (fd, self._generation, kind, raw_path)
+            assert fd not in self.active, f"raw fd {fd} reused while still owned"
+            self.active[fd] = token
+            self.opened.append(token)
+            self.events.append(("open", raw_path, flags, dir_fd, token))
+            return fd
+
+        def traced_close(fd: int) -> None:
+            token = self.active.pop(fd, None)
+            self.close_attempts.append(token)
+            self.events.append(("close", fd, token))
+            real_close(fd)
+
+        def traced_dup(fd: int) -> int:
+            duplicate = real_dup(fd)
+            if fd not in self.active:
+                return duplicate
+            return register_duplicate("dup", fd, duplicate)
+
+        def traced_dup2(fd: int, fd2: int, inheritable: bool = True) -> int:
+            duplicate = real_dup2(fd, fd2, inheritable=inheritable)
+            if fd not in self.active:
+                return duplicate
+            return register_duplicate("dup2", fd, duplicate)
+
+        monkeypatch.setattr(os, "open", traced_open)
+        monkeypatch.setattr(os, "close", traced_close)
+        monkeypatch.setattr(os, "dup", traced_dup)
+        monkeypatch.setattr(os, "dup2", traced_dup2)
+        if real_dup3 is not None:
+
+            def traced_dup3(fd: int, fd2: int, flags: int = 0) -> int:
+                duplicate = real_dup3(fd, fd2, flags)
+                if fd not in self.active:
+                    return duplicate
+                return register_duplicate("dup3", fd, duplicate)
+
+            monkeypatch.setattr(os, "dup3", traced_dup3)
+
+
+def _assert_exact_fd_ownership(
+    opened: list[tuple[int, int, str, str]],
+    close_attempts: list[tuple[int, int, str, str] | None],
+    duplicates: list[tuple[str, int, int]],
+) -> None:
+    assert duplicates == []
+    assert None not in close_attempts
+    assert len(close_attempts) == len(opened)
+    assert sorted(close_attempts) == sorted(opened)
+
+
+def _assert_exact_stage_names(names: list[str]) -> None:
+    assert names
+    assert len(names) == len(set(names))
+    for name in names:
+        assert _STAGE_NAME_RE.fullmatch(name)
+        assert len(name.encode("utf-8")) == 49
+        assert not name.endswith(".md")
+
+
+def _assert_cleanup_fence(events: list[tuple[object, ...]]) -> None:
+    unlink_indexes = [index for index, event in enumerate(events) if event[0] == "unlink"]
+    for unlink_index in unlink_indexes:
+        assert unlink_index + 1 < len(events)
+        assert events[unlink_index + 1][0] == "fsync"
 
 
 def test_default_vault_root_for_path_uses_filesystem_anchor(tmp_path: Path) -> None:
@@ -63,7 +190,9 @@ def test_write_note_from_absolute_resolves_locator_and_port(monkeypatch, tmp_pat
     }
 
 
-def test_write_note_from_absolute_rejects_outside_vault_root_before_writing(monkeypatch, tmp_path: Path) -> None:
+def test_write_note_from_absolute_rejects_outside_vault_root_before_writing(
+    monkeypatch, tmp_path: Path
+) -> None:
     vault = tmp_path / "vault"
     outside = tmp_path / "outside" / "note.md"
     outside.parent.mkdir(parents=True)
@@ -365,3 +494,601 @@ def test_advanced_uri_from_vault_path_outside_root_falls_back_to_name(tmp_path: 
     uri = write_ops.advanced_uri_from_vault_path(other, vault_root=vault)
     assert "obsidian://advanced-uri" in uri
     assert "filepath=outside.md" in uri
+
+
+@pytest.mark.parametrize("existing_components", [0, 1, 2])
+def test_candidate_create_once_owns_durable_parent_chain(
+    existing_components: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    components = ("Sources", "Nested")
+    cursor = vault
+    for component in components[:existing_components]:
+        cursor /= component
+        cursor.mkdir()
+
+    oracle = _FdOracle()
+    oracle.install(monkeypatch)
+    real_mkdir = os.mkdir
+    real_fsync = os.fsync
+
+    def traced_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        oracle.events.append(("mkdir", os.fsdecode(path), dir_fd))
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    def traced_fsync(fd: int) -> None:
+        oracle.events.append(("fsync", fd))
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "mkdir", traced_mkdir)
+    monkeypatch.setattr(os, "fsync", traced_fsync)
+    guard_calls: list[str] = []
+    guard = WriteGuard(lambda: {"state": "healthy"})
+    real_assert = guard.assert_writes_allowed
+
+    def tracked_assert(action: str) -> None:
+        guard_calls.append(action)
+        real_assert(action)
+
+    guard.assert_writes_allowed = tracked_assert  # type: ignore[method-assign]
+
+    result = write_ops.create_candidate_note_once(
+        "Sources/Nested/candidate.md",
+        "complete candidate",
+        vault_root=vault,
+        action="candidate.test",
+        write_guard=guard,
+    )
+
+    assert result == "written"
+    assert guard_calls == ["candidate.test"]
+    assert (vault / "Sources/Nested/candidate.md").read_text(encoding="utf-8") == (
+        "complete candidate"
+    )
+    for component in components:
+        mkdir_index = next(
+            index
+            for index, event in enumerate(oracle.events)
+            if event[0] == "mkdir" and event[1] == component
+        )
+        child_open_index = next(
+            index
+            for index, event in enumerate(oracle.events)
+            if event[0] == "open" and event[1] == component
+        )
+        containing_fd = oracle.events[mkdir_index][2]
+        assert any(
+            event == ("fsync", containing_fd)
+            for event in oracle.events[mkdir_index + 1 : child_open_index]
+        )
+    _assert_exact_fd_ownership(oracle.opened, oracle.close_attempts, oracle.duplicates)
+    assert oracle.active == {}
+    directory_tokens = [token for token in oracle.opened if token[2] == "directory"]
+    assert len(directory_tokens) >= 3
+    for missing in (directory_tokens[0], directory_tokens[-2], directory_tokens[-1]):
+        mutant_closes = [token for token in oracle.close_attempts if token != missing]
+        with pytest.raises(AssertionError):
+            _assert_exact_fd_ownership(oracle.opened, mutant_closes, [])
+
+
+def test_candidate_create_once_publishes_fsynced_raw_stage_without_replace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    parent = vault / "Sources"
+    parent.mkdir(parents=True)
+    oracle = _FdOracle()
+    oracle.install(monkeypatch)
+    real_write = os.write
+    real_fsync = os.fsync
+    real_publish = write_ops._atomic_rename_noreplace_at
+    stage_fds: set[int] = set()
+    file_fsyncs: list[int] = []
+    publish_observations: list[tuple[str, str, bytes]] = []
+
+    def partial_write(fd: int, payload: bytes) -> int:
+        token = oracle.active.get(fd)
+        if token is not None and token[2] == "stage":
+            stage_fds.add(fd)
+            payload = payload[:3]
+        return real_write(fd, payload)
+
+    def traced_fsync(fd: int) -> None:
+        if fd in stage_fds:
+            file_fsyncs.append(fd)
+        real_fsync(fd)
+
+    def traced_publish(
+        source_dir_fd: int,
+        source_name: str,
+        destination_dir_fd: int,
+        destination_name: str,
+    ) -> None:
+        assert source_dir_fd == destination_dir_fd
+        assert not (parent / destination_name).exists()
+        publish_observations.append(
+            (source_name, destination_name, (parent / source_name).read_bytes())
+        )
+        real_publish(
+            source_dir_fd,
+            source_name,
+            destination_dir_fd,
+            destination_name,
+        )
+
+    monkeypatch.setattr(os, "write", partial_write)
+    monkeypatch.setattr(os, "fsync", traced_fsync)
+    monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", traced_publish)
+
+    result = write_ops.create_candidate_note_once(
+        "Sources/candidate.md",
+        "complete candidate",
+        vault_root=vault,
+        action="candidate.test",
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+
+    assert result == "written"
+    assert (parent / "candidate.md").read_bytes() == b"complete candidate"
+    assert publish_observations == [
+        (
+            publish_observations[0][0],
+            "candidate.md",
+            b"complete candidate",
+        )
+    ]
+    stage_names = [token[3] for token in oracle.opened if token[2] == "stage"]
+    _assert_exact_stage_names(stage_names)
+    assert file_fsyncs
+    assert list(parent.glob(".candidate-stage-*")) == []
+    _assert_exact_fd_ownership(oracle.opened, oracle.close_attempts, oracle.duplicates)
+    assert oracle.active == {}
+
+    # The test oracle must reject the false-green trace shapes seen in prior rounds.
+    with pytest.raises(AssertionError):
+        _assert_exact_fd_ownership(
+            oracle.opened,
+            [token for token in oracle.close_attempts if token and token[2] != "stage"],
+            [],
+        )
+    with pytest.raises(AssertionError):
+        _assert_exact_fd_ownership(
+            oracle.opened,
+            [*oracle.close_attempts, oracle.close_attempts[-1]],
+            [],
+        )
+    reused = [(41, 1, "directory", "one"), (41, 2, "directory", "two")]
+    with pytest.raises(AssertionError):
+        _assert_exact_fd_ownership(reused, [reused[0]], [])
+    with pytest.raises(AssertionError):
+        _assert_exact_fd_ownership(
+            oracle.opened,
+            oracle.close_attempts,
+            [("dup", oracle.opened[0][0], 99)],
+        )
+    actual_stage = stage_names[0]
+    target_derived_mutants = [
+        f".candidate-stage-candidate.md-{actual_stage.removeprefix('.candidate-stage-')}",
+        f"{actual_stage}-candidate.md",
+        f".candidate-stage-{actual_stage[-31:]}",
+        f".candidate-stage-{actual_stage[-32:].upper()}",
+    ]
+    for mutant in target_derived_mutants:
+        with pytest.raises(AssertionError):
+            _assert_exact_stage_names([mutant])
+
+    # A maximum-length canonical basename still publishes because the stage is fixed at 49 bytes.
+    name_max = os.pathconf(parent, "PC_NAME_MAX")
+    max_name = ("x" * (name_max - 3)) + ".md"
+    assert len(max_name.encode("ascii")) == name_max
+    assert (
+        write_ops.create_candidate_note_once(
+            f"Sources/{max_name}",
+            "max-name candidate",
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+        == "written"
+    )
+    assert (parent / max_name).read_text(encoding="utf-8") == "max-name candidate"
+
+
+def test_candidate_create_once_crash_boundaries_are_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    parent = vault / "Sources"
+    parent.mkdir(parents=True)
+    relative = "Sources/retry.md"
+    real_publish = write_ops._atomic_rename_noreplace_at
+
+    def fail_before_publish(*_args: object) -> None:
+        raise OSError(errno.EIO, "injected pre-publication failure")
+
+    monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", fail_before_publish)
+    with pytest.raises(OSError, match="pre-publication"):
+        write_ops.create_candidate_note_once(
+            relative,
+            "complete bytes",
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+    assert not (parent / "retry.md").exists()
+    assert list(parent.glob(".candidate-stage-*")) == []
+
+    old_remnant = parent / ".candidate-stage-00000000000000000000000000000000"
+    old_remnant.write_bytes(b"old remnant")
+    monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", real_publish)
+    assert (
+        write_ops.create_candidate_note_once(
+            relative,
+            "complete bytes",
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+        == "written"
+    )
+    assert (parent / "retry.md").read_bytes() == b"complete bytes"
+    assert old_remnant.read_bytes() == b"old remnant"
+
+    renamed = False
+    real_fsync = os.fsync
+
+    def publish_then_mark(*args: object) -> None:
+        nonlocal renamed
+        real_publish(*args)  # type: ignore[arg-type]
+        renamed = True
+
+    def fail_post_rename_fsync(fd: int) -> None:
+        if renamed:
+            raise OSError(errno.EIO, "injected post-rename directory fsync")
+        real_fsync(fd)
+
+    monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", publish_then_mark)
+    monkeypatch.setattr(os, "fsync", fail_post_rename_fsync)
+    with pytest.raises(OSError, match="post-rename"):
+        write_ops.create_candidate_note_once(
+            "Sources/post-rename.md",
+            "durable candidate bytes",
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+    canonical = parent / "post-rename.md"
+    assert canonical.read_bytes() == b"durable candidate bytes"
+    monkeypatch.setattr(os, "fsync", real_fsync)
+    assert write_ops.candidate_note_exists_durable(
+        "Sources/post-rename.md",
+        vault_root=vault,
+    )
+    assert canonical.read_bytes() == b"durable candidate bytes"
+
+
+def test_candidate_create_once_loser_preserves_target_and_cleans_owned_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    parent = vault / "Sources"
+    parent.mkdir(parents=True)
+    target = parent / "winner.md"
+    target.write_bytes(b"human winner")
+    unrelated = parent / ".candidate-stage-11111111111111111111111111111111"
+    unrelated.write_bytes(b"unrelated")
+    unlinked: list[str] = []
+    cleanup_events: list[tuple[object, ...]] = []
+    real_unlink = os.unlink
+    real_fsync = os.fsync
+    real_stat = os.stat
+
+    def traced_unlink(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        unlinked.append(os.fsdecode(path))
+        real_unlink(path, dir_fd=dir_fd)
+        cleanup_events.append(("unlink", os.fsdecode(path), dir_fd))
+
+    def traced_fsync(fd: int) -> None:
+        cleanup_events.append(("fsync", fd))
+        real_fsync(fd)
+
+    def traced_stat(
+        path: str | bytes | int | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        cleanup_events.append(("stat", os.fsdecode(path), dir_fd))
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "unlink", traced_unlink)
+    monkeypatch.setattr(os, "fsync", traced_fsync)
+    monkeypatch.setattr(os, "stat", traced_stat)
+    result = write_ops.create_candidate_note_once(
+        "Sources/winner.md",
+        "loser bytes",
+        vault_root=vault,
+        action="candidate.test",
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+
+    assert result == "already_exists"
+    assert target.read_bytes() == b"human winner"
+    assert unrelated.read_bytes() == b"unrelated"
+    assert len(unlinked) == 1
+    _assert_exact_stage_names(unlinked)
+    assert [path.name for path in parent.glob(".candidate-stage-*")] == [unrelated.name]
+    unlink_index = next(index for index, event in enumerate(cleanup_events) if event[0] == "unlink")
+    _assert_cleanup_fence(cleanup_events[unlink_index:])
+    assert cleanup_events[unlink_index + 2][0] == "stat"
+    with pytest.raises(AssertionError):
+        _assert_cleanup_fence(
+            [event for event in cleanup_events[unlink_index:] if event[0] != "fsync"]
+        )
+    with pytest.raises(AssertionError):
+        _assert_cleanup_fence(
+            [
+                cleanup_events[unlink_index + 1],
+                cleanup_events[unlink_index],
+                *cleanup_events[unlink_index + 2 :],
+            ]
+        )
+
+
+def test_candidate_create_once_real_same_target_race(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    parent = vault / "Sources"
+    parent.mkdir(parents=True)
+    real_publish = write_ops._atomic_rename_noreplace_at
+    both_staged = threading.Barrier(2, timeout=5)
+
+    def synchronized_real_publish(*args: object) -> None:
+        both_staged.wait()
+        real_publish(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops,
+        "_atomic_rename_noreplace_at",
+        synchronized_real_publish,
+    )
+    guard = WriteGuard(lambda: {"state": "healthy"})
+
+    def contender(content: str) -> str:
+        return write_ops.create_candidate_note_once(
+            "Sources/race.md",
+            content,
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=guard,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(contender, "contender one"),
+            executor.submit(contender, "contender two"),
+        ]
+        results = [future.result(timeout=10) for future in futures]
+
+    assert sorted(results) == ["already_exists", "written"]
+    winner = (parent / "race.md").read_text(encoding="utf-8")
+    assert winner in {"contender one", "contender two"}
+    assert list(parent.glob(".candidate-stage-*")) == []
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "parent_mkdir",
+        "parent_fsync",
+        "parent_open",
+        "root_close",
+        "stage_open",
+        "stage_zero_write",
+        "stage_fsync",
+        "stage_close",
+        "publish",
+        "cleanup_unlink",
+        "cleanup_fsync",
+        "winner_stat",
+        "winner_parent_fsync",
+        "final_parent_close",
+    ],
+)
+def test_candidate_create_once_fault_matrix(
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    parent = vault / "Sources"
+    if fault not in {"parent_mkdir", "parent_fsync", "parent_open"}:
+        parent.mkdir()
+    target = parent / "candidate.md"
+    if fault in {"winner_stat", "winner_parent_fsync"}:
+        target.write_bytes(b"winner")
+
+    real_mkdir = os.mkdir
+    real_open = os.open
+    real_write = os.write
+    real_fsync = os.fsync
+    real_close = os.close
+    real_unlink = os.unlink
+    real_stat = os.stat
+    real_publish = write_ops._atomic_rename_noreplace_at
+    stage_fd: int | None = None
+    fd_labels: dict[int, str] = {}
+    close_attempts: dict[str, int] = {}
+    fd_generation = 0
+    fd_tokens: dict[int, tuple[int, int]] = {}
+    opened_tokens: list[tuple[int, int]] = []
+    closed_tokens: list[tuple[int, int]] = []
+    cleanup_events: list[tuple[object, ...]] = []
+    publication_attempted = False
+    unlink_succeeded = False
+    fired = 0
+
+    def hit(message: str) -> None:
+        nonlocal fired
+        fired += 1
+        raise OSError(errno.EIO, message)
+
+    def faulting_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        if fault == "parent_mkdir":
+            hit("parent mkdir fault")
+        real_mkdir(path, mode, dir_fd=dir_fd)
+
+    def faulting_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal fd_generation, stage_fd
+        decoded = os.fsdecode(path)
+        if fault == "parent_open" and decoded == "Sources":
+            hit("parent open fault")
+        if fault == "stage_open" and decoded.startswith(".candidate-stage-"):
+            hit("stage open fault")
+        fd = real_open(path, flags, mode, dir_fd=dir_fd)
+        fd_generation += 1
+        token = (fd, fd_generation)
+        assert fd not in fd_tokens
+        fd_tokens[fd] = token
+        opened_tokens.append(token)
+        fd_labels[fd] = (
+            "root"
+            if dir_fd is None
+            else "final_parent"
+            if decoded == "Sources"
+            else "stage"
+            if decoded.startswith(".candidate-stage-")
+            else decoded
+        )
+        if decoded.startswith(".candidate-stage-"):
+            stage_fd = fd
+        return fd
+
+    def faulting_write(fd: int, payload: bytes) -> int:
+        if fault == "stage_zero_write" and fd == stage_fd:
+            nonlocal_fired[0] += 1
+            return 0
+        return real_write(fd, payload)
+
+    def faulting_fsync(fd: int) -> None:
+        cleanup_events.append(("fsync", fd))
+        if fault == "parent_fsync" and stage_fd is None:
+            hit("parent fsync fault")
+        if fault == "stage_fsync" and fd == stage_fd:
+            hit("stage fsync fault")
+        if fault == "cleanup_fsync" and unlink_succeeded:
+            hit("cleanup fsync fault")
+        if fault == "winner_parent_fsync" and publication_attempted:
+            hit("winner parent fsync fault")
+        real_fsync(fd)
+
+    def faulting_close(fd: int) -> None:
+        token = fd_tokens.pop(fd, None)
+        assert token is not None
+        closed_tokens.append(token)
+        label = fd_labels.pop(fd, "unknown")
+        close_attempts[label] = close_attempts.get(label, 0) + 1
+        if fault == "stage_close" and fd == stage_fd:
+            real_close(fd)
+            hit("stage close fault")
+        if fault == f"{label}_close":
+            real_close(fd)
+            hit(f"{label} close fault")
+        real_close(fd)
+
+    def faulting_publish(*args: object) -> None:
+        nonlocal publication_attempted
+        publication_attempted = True
+        if fault in {"publish", "cleanup_unlink", "cleanup_fsync"}:
+            hit("publication fault")
+        real_publish(*args)  # type: ignore[arg-type]
+
+    def faulting_unlink(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal unlink_succeeded
+        if fault == "cleanup_unlink":
+            hit("cleanup unlink fault")
+        real_unlink(path, dir_fd=dir_fd)
+        unlink_succeeded = True
+        cleanup_events.append(("unlink", os.fsdecode(path), dir_fd))
+
+    def faulting_stat(
+        path: str | bytes | int | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        if fault == "winner_stat" and path == "candidate.md":
+            hit("winner stat fault")
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    nonlocal_fired = [0]
+    monkeypatch.setattr(os, "mkdir", faulting_mkdir)
+    monkeypatch.setattr(os, "open", faulting_open)
+    monkeypatch.setattr(os, "write", faulting_write)
+    monkeypatch.setattr(os, "fsync", faulting_fsync)
+    monkeypatch.setattr(os, "close", faulting_close)
+    monkeypatch.setattr(os, "unlink", faulting_unlink)
+    monkeypatch.setattr(os, "stat", faulting_stat)
+    monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", faulting_publish)
+
+    with pytest.raises((OSError, RuntimeError)):
+        write_ops.create_candidate_note_once(
+            "Sources/candidate.md",
+            "complete candidate",
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+
+    assert fired + nonlocal_fired[0] >= 1
+    assert fd_tokens == {}
+    assert sorted(opened_tokens) == sorted(closed_tokens)
+    if fault in {"root_close", "stage_close", "final_parent_close"}:
+        assert close_attempts[fault.removesuffix("_close")] == 1
+    if target.exists():
+        assert target.read_bytes() in {b"winner", b"complete candidate"}
+    if fault not in {"cleanup_unlink"}:
+        owned = [
+            path
+            for path in parent.glob(".candidate-stage-*")
+            if path.name != ".candidate-stage-11111111111111111111111111111111"
+        ]
+        assert owned == []
+    if fault in {"publish", "cleanup_fsync"}:
+        unlink_index = next(
+            index for index, event in enumerate(cleanup_events) if event[0] == "unlink"
+        )
+        _assert_cleanup_fence(cleanup_events[unlink_index:])
