@@ -462,18 +462,44 @@ def _lifecycle_worktree_paths_for_branch(
     association is what lets a later cleanup run — after the checkout is gone and
     the branch looks like an ordinary local branch — still recognise a
     ``worktree:<path>`` lease as authority over the branch that path held.
+
+    The registry is keyed by path, so reusing a path for a new branch replaces
+    the record that held it. `agent_worktree.register_worktree` carries the
+    displaced binding forward in ``prior_bindings``, and those are read here so
+    the former branch keeps that path's lease authority across the reuse.
+
+    That carry is bounded: ``agent_worktree.MAX_PRIOR_BINDINGS`` (8) most-recent
+    bindings, deduplicated by branch. A branch displaced further back than that
+    from the same canonical path is not returned here and is therefore not
+    preserved by a ``worktree:<path>`` lease, so this is not an unconditional
+    guarantee across unlimited reuse of one path.
     """
     if not branch or lifecycle_records is None:
         return set()
     paths: set[str] = set()
     for key, record in lifecycle_records.items():
-        if not isinstance(record, Mapping) or record.get("branch") != branch:
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("branch") != branch and not _record_previously_bound(
+            record, branch
+        ):
             continue
         paths |= _path_identities(key)
         recorded_path = record.get("path")
         if isinstance(recorded_path, str):
             paths |= _path_identities(recorded_path)
     return paths
+
+
+def _record_previously_bound(record: Mapping[str, Any], branch: str) -> bool:
+    """True when ``record``'s path held ``branch`` before it was re-registered."""
+    prior = record.get("prior_bindings")
+    if not isinstance(prior, list):
+        return False
+    return any(
+        isinstance(entry, Mapping) and entry.get("branch") == branch
+        for entry in prior
+    )
 
 
 def _branch_has_worktree_path_lease(

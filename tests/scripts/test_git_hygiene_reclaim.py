@@ -668,3 +668,153 @@ def test_apply_fails_closed_when_lifecycle_registry_is_absent(
         )
 
     assert "codex/candidate" in git_hygiene._local_branches(repo)
+
+
+def _reregister_path_for_other_branch(
+    repo: Path,
+    *,
+    worktree: Path,
+    registry_path: Path,
+    branch: str,
+) -> None:
+    """A successor agent reuses the same worktree path for a different branch.
+
+    This is the ordinary lifecycle sequence that used to destroy the tombstone:
+    the registry is keyed by path, so registering ``branch`` at ``worktree``
+    overwrote the record that bound the *previous* branch to that path.
+    """
+    subprocess.run(
+        ["git", "branch", branch, "main"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree), branch],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    agent_worktree.register_worktree(
+        repo,
+        worktree=worktree,
+        owner="next-agent",
+        ttl_seconds=100_000,
+        registry_path=registry_path,
+    )
+    subprocess.run(
+        ["git", "worktree", "remove", str(worktree)],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_branch_deletion_fails_closed_when_worktree_path_is_reregistered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Re-registering a tombstoned path must not strip the old branch's protection.
+
+    Pre-fix, ``register_worktree`` replaced the whole record for that path, so the
+    ``codex/candidate`` -> path binding vanished and the second apply deleted the
+    branch with ``git branch -d`` while a ``worktree:<path>`` lease was still
+    active. Runs the real registry, planner, and apply paths.
+    """
+    repo = _init_repo_with_merged_branch(
+        tmp_path, branch="codex/candidate", squash=False
+    )
+    worktree = tmp_path / "candidate-wt"
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree), "codex/candidate"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    registry_path = tmp_path / "agent-worktrees.json"
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    agent_worktree.register_worktree(
+        repo,
+        worktree=worktree,
+        owner="prior-agent",
+        ttl_seconds=1,
+        registry_path=registry_path,
+        now=0.0,
+    )
+    lease = {"resource_id": f"worktree:{worktree.resolve()}", "expires_at": None}
+    monkeypatch.setattr(
+        agent_worktree,
+        "_load_active_lease_snapshot",
+        lambda _path: [] if worktree.exists() else [dict(lease)],
+    )
+
+    first = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={"codex/candidate": {"state": "MERGED"}},
+        lease_path=lease_path,
+    )
+    assert first["ok"] is False
+    assert not worktree.exists()
+    assert "codex/candidate" in git_hygiene._local_branches(repo)
+
+    _reregister_path_for_other_branch(
+        repo,
+        worktree=worktree,
+        registry_path=registry_path,
+        branch="codex/other",
+    )
+
+    second = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={
+            "codex/candidate": {"state": "MERGED"},
+            "codex/other": {"state": "MERGED"},
+        },
+        lease_path=lease_path,
+    )
+
+    assert "codex/candidate" in git_hygiene._local_branches(repo)
+    assert not [
+        action
+        for action in second.get("destructive_actions", [])
+        if action.get("command", [])[:2] == ["git", "branch"]
+    ]
+    assert any(
+        entry.get("name") == "codex/candidate"
+        and entry.get("reason") == "active_worktree_path_lease"
+        for entry in second.get("skipped", [])
+    )
+
+
+def test_remote_branch_deletion_fails_closed_when_worktree_path_is_reregistered(
+    tmp_path,
+) -> None:
+    """The remote-deletion path keeps the same carried path->branch association.
+
+    ``_remote_branch_skip_reason`` resolves the worktree-path lease through the
+    same lifecycle lookup as the local path, so a re-registered path must not
+    strip ``active_worktree_path_lease`` from the remote candidate either.
+    """
+    records = {
+        "/tmp/candidate-wt": {
+            "path": "/tmp/candidate-wt",
+            "branch": "codex/other",
+            "status": "active",
+            "prior_bindings": [{"branch": "codex/candidate", "removed_at": 1.0}],
+        }
+    }
+    active_resources = {"worktree:/tmp/candidate-wt"}
+
+    reason, needs_rescue = git_hygiene._remote_branch_skip_reason(
+        "codex/candidate",
+        current_branch="main",
+        active_resources=active_resources,
+        checked_out={},
+        protected_branches={"main"},
+        pr_states={"codex/candidate": {"state": "MERGED"}},
+        lifecycle_records=records,
+        cwd=tmp_path,
+    )
+
+    assert reason == "active_worktree_path_lease"
+    assert needs_rescue is False
