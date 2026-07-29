@@ -368,7 +368,12 @@ def _source(
     def runner(command: list[str], **_kwargs: object) -> Result:
         endpoint = command[-1]
         endpoints.append(endpoint)
-        if endpoint.endswith("actions/artifacts?per_page=100"):
+        if endpoint.startswith(
+            f"repos/{REPO}/actions/workflows/verification-dispatch-request.yml/runs"
+            "?per_page=100&status=success&created=>="
+        ):
+            return Result(json.dumps({"workflow_runs": [{"id": 123}]}))
+        if endpoint.endswith("actions/runs/123/artifacts?per_page=100"):
             return Result(
                 json.dumps(
                     {
@@ -487,8 +492,12 @@ def test_artifact_source_workflow_matching_metadata_is_accepted() -> None:
     source, endpoints = _source(payload)
 
     assert source.pending_requests(REPO) == [payload]
-    assert endpoints == [
-        f"repos/{REPO}/actions/artifacts?per_page=100",
+    assert endpoints[0].startswith(
+        f"repos/{REPO}/actions/workflows/verification-dispatch-request.yml/runs"
+        "?per_page=100&status=success&created=>="
+    )
+    assert endpoints[1:] == [
+        f"repos/{REPO}/actions/runs/123/artifacts?per_page=100",
         f"repos/{REPO}/actions/runs/123",
         f"repos/{REPO}/actions/artifacts/7/zip",
         f"repos/{REPO}/actions/runs/99",

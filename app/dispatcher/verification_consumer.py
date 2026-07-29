@@ -318,6 +318,16 @@ _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_LISTING_ROWS = 1_000
+# Unlike artifacts (which age out via retention/expiry), workflow-run history
+# accumulates forever, so a plain row cap on "all runs of this workflow" goes
+# stale exactly like the repo-wide artifact listing did (confirmed live: this
+# repository already has 1,000+ successful verification-dispatch-request.yml
+# runs). Discovery instead windows the query by recency (see
+# _VERIFICATION_REQUEST_RUN_LOOKBACK below): the row bound only has to cover
+# runs from that window, which scales with current dispatch *rate*, not with
+# all-time repository history.
+_MAX_VERIFICATION_REQUEST_RUN_ROWS = 1_000
+_VERIFICATION_REQUEST_RUN_LOOKBACK = timedelta(hours=48)
 _MAX_REQUEST_BYTES = 1_000_000
 _MAX_CLOSURE_CANDIDATES = 20
 _MAX_REPOSITORY_CLOSURE_EVENTS = 500
@@ -329,6 +339,7 @@ _VERIFICATION_REQUEST_WORKFLOW_NAME = "Verification Dispatch Request"
 _VERIFICATION_REQUEST_WORKFLOW_PATH = (
     ".github/workflows/verification-dispatch-request.yml"
 )
+_VERIFICATION_REQUEST_WORKFLOW_FILENAME = "verification-dispatch-request.yml"
 _CLOSURE_NODES_QUERY = """
 query($ids:[ID!]!){
   nodes(ids:$ids){
@@ -666,6 +677,47 @@ class GhCliVerificationSource:
                 return rows
         raise RuntimeError("GitHub artifact listing exceeds bounded scan")
 
+    def _verification_dispatch_run_pages(self, endpoint: str) -> list[object]:
+        """Return a bounded, complete listing of verification-request workflow runs.
+
+        Scoped to runs of ``verification-dispatch-request.yml`` instead of the
+        repository-wide artifact listing: the number of runs of one workflow
+        stays small and near-constant, so this scan never grows with the
+        repository's total (unrelated) artifact volume the way the whole-repo
+        listing did. Same fail-loud discipline as ``_artifact_listing_pages``:
+        a scan that cannot prove completeness raises rather than truncating.
+        """
+
+        rows: list[object] = []
+        separator = "&" if "?" in endpoint else "?"
+        for page in range(1, (_MAX_VERIFICATION_REQUEST_RUN_ROWS // 100) + 1):
+            page_endpoint = endpoint if page == 1 else f"{endpoint}{separator}page={page}"
+            payload = self._json(page_endpoint)
+            runs = payload.get("workflow_runs") if isinstance(payload, Mapping) else None
+            total_count = payload.get("total_count") if isinstance(payload, Mapping) else None
+            if (
+                not isinstance(runs, list)
+                or (
+                    total_count is not None
+                    and (
+                        not isinstance(total_count, int)
+                        or isinstance(total_count, bool)
+                        or total_count < len(rows) + len(runs)
+                    )
+                )
+            ):
+                raise RuntimeError("malformed GitHub workflow run listing")
+            rows.extend(runs)
+            if len(rows) > _MAX_VERIFICATION_REQUEST_RUN_ROWS:
+                raise RuntimeError("GitHub workflow run listing exceeds bounded scan")
+            if isinstance(total_count, int) and total_count <= len(rows):
+                return rows
+            if len(runs) < 100:
+                if isinstance(total_count, int) and total_count > len(rows):
+                    raise RuntimeError("GitHub workflow run listing is incomplete")
+                return rows
+        raise RuntimeError("GitHub workflow run listing exceeds bounded scan")
+
     def _artifact_bytes(self, endpoint: str, artifact_id: int) -> bytes:
         if self.runner is not subprocess.run:
             result = self.runner(
@@ -956,18 +1008,18 @@ class GhCliVerificationSource:
         except _InvalidVerificationArtifact:
             raise
 
-    def pending_requests(
-        self, repository: str, *, limit: int = 20
-    ) -> list[dict[str, object]]:
-        if limit <= 0:
-            raise ValueError("artifact request limit must be positive")
-        artifacts = self._artifact_listing_pages(
-            f"repos/{repository}/actions/artifacts?per_page=100"
-        )
-        requests: list[dict[str, object]] = []
-        first_rejection: _InvalidVerificationArtifact | None = None
+    def _extend_requests_from_artifacts(
+        self,
+        repository: str,
+        artifacts: Iterable[object],
+        results: list[dict[str, object]],
+        limit: int,
+        first_rejection: _InvalidVerificationArtifact | None,
+    ) -> _InvalidVerificationArtifact | None:
+        """Authenticate and append artifacts into ``results`` up to ``limit``."""
+
         for artifact in artifacts:
-            if len(requests) >= limit:
+            if len(results) >= limit:
                 break
             if not isinstance(artifact, Mapping):
                 continue
@@ -978,7 +1030,96 @@ class GhCliVerificationSource:
                     first_rejection = exc
                 continue
             if request is not None:
-                requests.append(request)
+                results.append(request)
+        return first_rejection
+
+    def pending_requests(
+        self,
+        repository: str,
+        *,
+        limit: int = 20,
+        pr_number: int | None = None,
+        head_sha: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Discover pending verification-dispatch requests.
+
+        Unscoped (default): enumerate runs of the
+        ``verification-dispatch-request.yml`` workflow created within the
+        last ``_VERIFICATION_REQUEST_RUN_LOOKBACK`` window, and read each
+        run's own (small, run-scoped) artifact listing. This replaced a
+        repository-wide artifact scan that exceeded its bound on every call
+        once the repository held more artifacts than
+        ``_MAX_ARTIFACT_LISTING_ROWS``. The window (not just a row cap) is
+        load-bearing: this workflow fires on every CI Smoke completion, so
+        its all-time run count grows without bound the same way the
+        repository's total artifact count did; only the recency filter keeps
+        the query small regardless of how old the repository or the
+        workflow gets.
+
+        Scoped (additive, optional, keyword-only): when both ``pr_number``
+        and ``head_sha`` are supplied, issue exactly one exact-name query for
+        ``verification-dispatch-<pr_number>-<head_sha>`` and skip enumeration
+        entirely. Existing callers that omit both keep today's unscoped
+        behaviour unchanged; ``limit``'s meaning and the return type are
+        unchanged either way.
+        """
+
+        if limit <= 0:
+            raise ValueError("artifact request limit must be positive")
+        if (pr_number is None) != (head_sha is None):
+            raise ValueError("pr_number and head_sha must be supplied together")
+
+        requests: list[dict[str, object]] = []
+        first_rejection: _InvalidVerificationArtifact | None = None
+
+        if pr_number is not None:
+            if (
+                not isinstance(pr_number, int)
+                or isinstance(pr_number, bool)
+                or pr_number <= 0
+            ):
+                raise ValueError("pr_number must be a positive integer")
+            if (
+                not isinstance(head_sha, str)
+                or re.fullmatch(r"[0-9a-fA-F]{40}", head_sha) is None
+            ):
+                raise ValueError("head_sha must be a 40-character hex commit sha")
+            artifact_name = f"verification-dispatch-{pr_number}-{head_sha}"
+            artifacts = self._artifact_listing_pages(
+                f"repos/{repository}/actions/artifacts"
+                f"?per_page=100&name={artifact_name}"
+            )
+            first_rejection = self._extend_requests_from_artifacts(
+                repository, artifacts, requests, limit, first_rejection
+            )
+        else:
+            cutoff = (
+                datetime.now(timezone.utc) - _VERIFICATION_REQUEST_RUN_LOOKBACK
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            runs = self._verification_dispatch_run_pages(
+                f"repos/{repository}/actions/workflows/"
+                f"{_VERIFICATION_REQUEST_WORKFLOW_FILENAME}/runs"
+                f"?per_page=100&status=success&created=>={cutoff}"
+            )
+            for run in runs:
+                if len(requests) >= limit:
+                    break
+                if not isinstance(run, Mapping):
+                    continue
+                run_id = run.get("id")
+                if (
+                    not isinstance(run_id, int)
+                    or isinstance(run_id, bool)
+                    or run_id <= 0
+                ):
+                    continue
+                artifacts = self._artifact_listing_pages(
+                    f"repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100"
+                )
+                first_rejection = self._extend_requests_from_artifacts(
+                    repository, artifacts, requests, limit, first_rejection
+                )
+
         if not requests and first_rejection is not None:
             raise first_rejection
         return requests
