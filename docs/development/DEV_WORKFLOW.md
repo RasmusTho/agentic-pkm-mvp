@@ -346,6 +346,17 @@ Enforcement surfaces:
   forward on the new record (`prior_bindings`, deduplicated by branch and bounded to the 8 most
   recent) rather than dropping it. Broad `git worktree prune`
   remains report-only. The current checkout is always skipped.
+- Stash cleanup within the same apply run only ever drops a stash it resolved as a
+  `preserve-local-drift`-marked, age-eligible candidate; it never drops by a stale positional
+  index. `stash@{N}` is a position in the stash reflog, not a stable name — worktree paths and
+  branch names do not shift when a sibling is removed, but every drop of an earlier stash renumbers
+  every later one, and (independently) capturing that selector from a `--date`-formatted listing
+  can make it unresolvable to any real reflog position at all. Each candidate is instead identified
+  by its stash commit hash, captured once at plan time; immediately before every drop, `janitor_apply`
+  re-resolves that hash to whichever `stash@{N}` currently holds it and verifies the match. A
+  candidate that cannot be re-resolved, or whose re-resolved entry no longer matches, aborts the
+  remaining stash cleanup for that run with a recorded error rather than dropping a different,
+  non-candidate stash.
 - Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 
