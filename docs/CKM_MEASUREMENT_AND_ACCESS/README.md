@@ -5,7 +5,7 @@ Owner: BuilderOps governance / Capability Knowledge Model
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: this directory for implementation task shape; ADR-0057 for CKM existence and authority posture; canonical fitness registration remains in `docs/architecture/SBS_FITNESS_RULES.md`.
-Last reviewed: 2026-07-22
+Last reviewed: 2026-07-29
 
 # CKM Measurement & Access
 
@@ -176,6 +176,198 @@ implementation/test evidence only: it establishes neither trend nor cadence.
 - **M2 is not filed or Ready.** The accepted question set is limited to compatible sampled changes in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition. Filing still requires a costed smallest implementation, source authority, precise semantics, and verifiable refusal behavior. General bitemporality is not the answer.
 - **O2 is not filed or pre-authorized.** Filters beyond Q2, comparison/timeline product surfaces, drift, prediction, automation, and federation require accepted observation evidence and their normal authority path.
 - Two compatible snapshots are only the mathematical minimum for a delta. They do not prove a cadence, trend, window duration, or minimum evidence count.
+
+## Linker recall baseline
+
+Dated observation, 2026-07-29 (#4259). This is a measurement of the deterministic
+linkers in `app/builderops/ckm/linkers.py`, not a change to them. It exists because
+the 2026-07-28 pipeline run produced 10 855 artifacts, 2 088 evidence edges, and
+10 398 unlinked artifacts, and nothing in the system distinguished "no relationship
+exists" from "the linker could not see the relationship".
+
+### Snapshot under measurement
+
+Store `~/.local/state/builderops/builderops.sqlite3` as of 2026-07-29: 10 855
+artifacts, 31 capabilities, 2 088 confirmed deterministic edges over 457 distinct
+artifacts, 10 398 unlinked artifacts, 28 findings. Read-only throughout; the
+measurement ran against a copy and wrote nothing back.
+
+### Sampling method
+
+- **Frame.** The 10 398 artifacts with no row in `ckm_evidence_edge`.
+- **Stratification.** By `ckm_artifact.source`, the seven ingestion sources:
+  `repo_docs`, `repo_tests`, `repo_source`, `repo_schemas`, `repo_git`,
+  `github_issues`, `github_pull_requests`.
+- **Size.** Equal allocation, 25 per stratum, 175 total. Equal allocation buys
+  per-stratum precision; population figures below are reweighted by stratum size.
+  `repo_schemas` has only 26 unlinked members, so its sample is near-census.
+- **Draw rule (reproducible).** Seed `4259`. Order each stratum ascending by
+  `sha256("4259:" || public_id)` and take the first 25. `public_id` is
+  rebuild-stable and never reused (I-MA3), so the same seed redraws the same
+  sample from any snapshot containing the same artifacts.
+
+### Labelling rule
+
+Each sampled artifact gets exactly one label, applied in this order.
+
+1. **Scope test.** Does the artifact carry evidence about at least one of the 31
+   CKM capabilities? Those capabilities are Product/Runtime SBS boundaries.
+   Material whose entire subject is Builder System — `.codex/**`, `.github/**`,
+   `docs/development/**`, `app/builderops/**`, `app/dispatcher/**`, dependency
+   manifests, lint-only cleanups — is outside the taxonomy. If no capability is
+   named, the label is **A — genuinely unrelated to any capability**.
+2. **Reachability test.** Otherwise, does a rule using *literal string identity
+   only* resolve the artifact to a specific capability, from data already present
+   in the store? No synonym expansion, no topic inference, no reading of natural
+   language meaning. The rule need not exist today; it only has to be
+   implementable deterministically. The qualifying signals are:
+   - **S1** a `changed_paths`/`changed_files` entry that is itself a linked artifact;
+   - **S2** an exact capability name in the artifact text, using the same
+     non-substring-bleed match as `linkers.py :: _name_selectors`;
+   - **S2b** an SBS boundary code whose boundary maps to exactly one capability;
+   - **S3** the artifact lives in a capability seed document's directory;
+   - **S4** a `tests/` → `app/` mirror or import that resolves to a linked source file;
+   - **S5** a cited path that is a seed path or an already-linked artifact.
+
+   Any signal firing gives **B — a deterministic linker could reasonably reach this**.
+3. **Otherwise C — relatable only by semantic judgement**: a relationship exists,
+   but every route to it requires interpreting meaning rather than matching a token.
+
+Two boundary decisions matter and are stated so a later run can repeat them.
+First, a transitive route counts as B only when the intermediate artifact is
+*already linked* — otherwise the route does not terminate at a capability today.
+Second, ambiguous builder-vs-product material was labelled C, not A; A was
+reserved for artifacts with no product-capability subject at all.
+
+### Recall
+
+Recall counts the artifacts the linkers actually reached against the artifacts
+that genuinely carry capability evidence. Two denominators are reported because
+they bracket the honest answer:
+
+- **Recall** = linked / (linked + B̂ + Ĉ) — against everything relatable.
+- **Deterministic recall** = linked / (linked + B̂) — against only what a
+  deterministic mechanism could reach. This is the ceiling for the current design.
+
+By artifact source:
+
+| Source | Linked | Unlinked | B̂ | Ĉ | Â | Recall | Det. recall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `github_issues` | 223 | 1 606 | 118 | 779 | 709 | 19.9% | 65.4% |
+| `github_pull_requests` | 68 | 2 008 | 167 | 1 590 | 251 | 3.7% | 28.9% |
+| `repo_docs` | 50 | 872 | 419 | 349 | 105 | 6.1% | 10.7% |
+| `repo_git` | 0 | 3 871 | 155 | 2 323 | 1 394 | 0.0% | 0.0% |
+| `repo_schemas` | 6 | 26 | 0 | 26 | 0 | 18.8% | 100.0% |
+| `repo_source` | 5 | 805 | 129 | 580 | 97 | 0.7% | 3.7% |
+| `repo_tests` | 105 | 1 210 | 242 | 823 | 145 | 9.0% | 30.3% |
+| **Total** | **457** | **10 398** | **1 229** | **6 470** | **2 699** | **5.6%** | **27.1%** |
+
+By maturity dimension, using the dimension each artifact would carry if linked
+(`linkers.py :: _dimension` plus the `_github_links` state override):
+
+| Dimension | Linked | Unlinked | B̂ | Ĉ | Â | Recall | Det. recall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `architectural_stability` | 24 | 37 | 18 | 15 | 4 | 42.4% | 57.5% |
+| `documentation_quality` | 29 | 494 | 234 | 227 | 33 | 5.9% | 11.0% |
+| `functional_completeness` | 71 | 6 599 | 444 | 4 425 | 1 731 | 1.4% | 13.8% |
+| `integration_completeness` | 57 | 864 | 7 | 493 | 364 | 10.2% | 89.3% |
+| `requirement_coverage` | 171 | 1 194 | 285 | 488 | 421 | 18.1% | 37.5% |
+| `test_completeness` | 105 | 1 210 | 242 | 823 | 145 | 9.0% | 30.3% |
+| **Total** | **457** | **10 398** | **1 229** | **6 470** | **2 699** | **5.6%** | **27.1%** |
+
+Sample label counts, for anyone re-deriving the estimates: `github_issues`
+B=2/C=12/A=11; `github_pull_requests` B=2/C=20/A=3; `repo_docs` B=12/C=10/A=3;
+`repo_git` B=1/C=15/A=9; `repo_schemas` B=0/C=25/A=0; `repo_source` B=4/C=18/A=3;
+`repo_tests` B=5/C=17/A=3. Stratified bootstrap over the label draws (20 000
+resamples, seed 4259) puts recall at 5.6% with a 95% interval of [5.1%, 6.3%]
+and deterministic recall at 27.1% with [20.6%, 37.1%]. Sampling error is not what
+dominates this measurement; the A-versus-C judgement is, and it is bounded — even
+if every C artifact were reclassified as unrelated, recall could not exceed the
+27.1% deterministic ceiling.
+
+### Why recall is this low
+
+Three mechanisms account for nearly all of it, each verified by reading the
+linker source and the store rather than by pattern-matching:
+
+1. **The spec vocabulary and the capability vocabulary are different namespaces.**
+   385 documents under `docs/` declare `parent_capability:` across 69 distinct values.
+   `_spec_links` resolves that value by exact capability name or slug, and exactly
+   one value — `Commitment surfacing` — is in the 31-capability taxonomy. The
+   result is 3 `spec-directory` edges. Because `_github_links` builds its spec
+   lookup from those edges, the entire GitHub issue and PR path collapses onto
+   three spec directories plus the seed paths.
+2. **Commits have no producing linker at all.** Each linker either iterates
+   artifacts filtered to `spec`, `adr`, `test`, `issue`, or `pull_request`, or
+   walks the traceability matrix, whose citation extraction yields only
+   `app|docs|tests|schemas` paths, markdown link targets, `github:issue:<n>`, and
+   `docs/adr/ADR-<n>` prefixes — never a `git:<sha>` reference. Source files are
+   reached only transitively, through `spec-source` and `test-code`. All 3 871
+   commit artifacts are therefore unreachable by construction — 37% of
+   the corpus and the whole of the largest stratum. They are not information-poor:
+   commits carry `changed_paths`, and PRs carry `changed_files`, which no linker
+   reads.
+3. **The failures cascade.** For 19 of 25 sampled unlinked PRs and 16 of 25
+   sampled unlinked issues, a deterministic route to a capability exists but
+   terminates on an artifact that is itself unlinked. With 5 of 810 source files
+   and 3 of 370 specs linked, most transitive joins have nothing to land on.
+
+For scale, the traceability matrix the `matrix` linker reads contributes 18
+numbered rows, and 1 327 of the 2 088 edges come from a single rule,
+`github-ref` seed-path matching.
+
+### Conclusion: are CKM maturity scores trustworthy enough to shape delivery drafts?
+
+**No, not at present, and the two dimensions that still produce findings are the
+two worst-measured ones.** A maturity score is currently a readout of linker
+coverage far more than of system maturity.
+
+All 28 remaining findings come from one detector, `starved_dimension`. Every one
+has the same shape: a dimension scored 0.00–0.20 against `architectural_stability`
+at 1.00, across 14 capabilities × 2 dimensions. That comparison is exactly the
+recall gradient in the table above — `architectural_stability` is the best-covered
+dimension at 42.4% recall, `requirement_coverage` sits at 18.1%, and
+`functional_completeness` at 1.4%. A detector that fires when one dimension is far
+below its siblings will fire on differential linker recall whether or not the
+underlying capability is immature, and that is the most parsimonious reading of
+all 28.
+
+So the findings should not be treated as evidence that these capabilities lack
+functional or requirement coverage. They are evidence that CKM cannot currently
+see the functional and requirement material that exists. The narrower claim they
+do support is sound and worth keeping: for these 14 capabilities, CKM holds
+almost no confirmed source-kind or merged-PR evidence. That is a true statement
+about the evidence graph. It is not a true statement about the system.
+
+Nothing here contradicts I-MA7 or the accepted metric-use decision — maturity
+was never authoritative. It does mean that until recall improves, an aggregate
+maturity value is not even a *useful* advisory input on
+`functional_completeness` or `requirement_coverage`, and delivery drafts should
+not be shaped by it.
+
+### What would count as an improvement
+
+A later run is comparable when it uses seed `4259`, the same seven-stratum
+allocation, and the labelling rule above, and reports both denominators.
+
+- **The headline number is deterministic recall**, currently 27.1%. It is the
+  ceiling reachable without semantic association, so it is what linker work moves.
+- **First target: deterministic recall ≥ 60% and `functional_completeness`
+  recall ≥ 25%.** Reaching either requires closing the three mechanisms above,
+  not tuning thresholds.
+- **A run is not an improvement if overall recall rises while deterministic
+  recall does not** — that would mean edges arrived from somewhere other than the
+  deterministic linkers, and precision would then need its own measurement.
+- **Findings are not a progress metric.** Finding count can fall because recall
+  improved or because a detector was narrowed; only the recall pair distinguishes
+  those.
+- **Re-measure before, not after, acting on a maturity score.** The gap between
+  5.6% and 27.1% is the honest uncertainty in every current CKM maturity claim.
+
+Precision was not measured. This baseline says nothing about whether the 2 088
+existing edges are correct, only about how much is missing. Fixing the linkers is
+out of scope for #4259 by construction — this measurement exists to decide whether
+that repair is warranted, and it is.
 
 ## Capability acceptance criteria
 
