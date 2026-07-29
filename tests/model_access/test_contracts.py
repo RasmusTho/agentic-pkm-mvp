@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import ValidationError
 import pytest
 
-from app.llm_contract import (
+from llm_contract import (
     ModelAccessIntent,
     ModelCapabilities,
     ModelCapabilityRequirements,

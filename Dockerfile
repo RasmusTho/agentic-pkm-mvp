@@ -91,6 +91,14 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # - app/                        the application package (includes app/alembic
 #                               migrations + app/alembic.ini used by
 #                               scripts/run_migrations.sh)
+# - llm_contract/                the neutral, provider-free model access
+#                               contract kernel (issue #4290/MAS-04). It lives
+#                               outside app/ on purpose — app/__init__.py runs
+#                               Product LLM provider enforcement, so importing
+#                               any app.* module would trigger it. Re-exported
+#                               by app/builderops/model_inquiry*.py; without
+#                               this COPY the api/worker/watcher services crash
+#                               at boot with ModuleNotFoundError: llm_contract.
 # - mimer_runtime/              imported directly by app/** (cross_scope, dri, ...)
 # - schemas/                    JSON schemas resolved via REPO_ROOT at runtime
 #                               (app/episodes/schema.py, app/retrieval/envelope.py, ...)
@@ -126,6 +134,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #                               tests/deploy/test_dockerfile_hardening.py derives
 #                               the set from the source imports.
 COPY app/ ./app/
+COPY llm_contract/ ./llm_contract/
 COPY mimer_runtime/ ./mimer_runtime/
 COPY schemas/ ./schemas/
 COPY config/ ./config/

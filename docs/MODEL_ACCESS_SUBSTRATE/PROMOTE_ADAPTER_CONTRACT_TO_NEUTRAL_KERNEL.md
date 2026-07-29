@@ -9,8 +9,10 @@ depends_on: [EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (child issue #4290, filed 2026-07-29). Establishes the ADR-0063
-kernel in code for the first time; ADR-0063 deliberately chose no package path.
+State: Delivered (child issue #4290, PR #4356, top-level package path applied 2026-07-29 per
+change-control correction). Establishes the ADR-0063 kernel in code for the first time, at top-level
+`llm_contract/`; ADR-0063 deliberately chose no package path, and the first reviewed choice
+(`app/llm_contract/`) was corrected after delivery — see "The package path decision" below.
 
 # Promote Adapter Contract To Neutral Kernel
 
@@ -29,20 +31,36 @@ two auth-specific failure classes whose absence is why the reported failure was 
 ## The package path decision
 
 ADR-0063 `:185-186` explicitly declines to choose a package path, and ADR-0064 does not supply one. The
-capability specification chooses **`app/llm_contract/`**, with an `__init__.py` that re-exports only
-neutral names.
+capability specification originally chose `app/llm_contract/`, with an `__init__.py` that re-exports
+only neutral names. That reviewed choice was invalidated by executable evidence surfaced after
+delivery (PR #4356, issue #4290 change-control correction, 2026-07-29T15:31Z): Python initializes
+`app/__init__.py` before any `app.*` child can be imported, and `app/__init__.py` runs Product LLM
+provider enforcement — env reads, module-global mutation, and a `RuntimeError` under
+`LLM_PROVIDER_ENFORCE=1` with no provider configured. A kernel living at `app/llm_contract/` therefore
+could not be imported without first running that enforcement path, which contradicts the kernel's own
+"import causes no environment mutation" invariant and made the neutral package a Product-provider
+dependency in fact, not merely in intent.
 
-`app/ports/` was considered and rejected: `app/ports/__init__.py` already re-exports
-`FilesystemVaultAdapter`, which imports `app.services.inbox` and `app.knowledge.write_ops`. Importing
-anything from `app.ports` therefore executes that chain, which would make `app.builderops` depend on
-Product execution — the exact authority direction this capability exists to correct. Any alternative
-path must satisfy the same three constraints: importable by both `app.builderops` and
+The delivered decision is a **top-level package `llm_contract/`**, outside `app/` entirely, with an
+`__init__.py` that re-exports only neutral names. This is a stronger reading of the same three
+constraints the original decision was built on: importable by both `app.builderops` and
 `app.components.llm` without violating ADR-0013's direction, no transitive import of either runtime's
-policy or execution modules, and registered in `importlinter.ini` `source_modules`.
+policy or execution modules — and now, no transitive import of `app` at all — registered as an
+independent `root_packages` entry (alongside `app`) in `importlinter.ini`, with a dedicated
+`llm-contract-kernel-boundary` forbidden contract (`llm_contract` -> `app`) in addition to the existing
+interaction-protected coverage.
+
+`app/ports/` was considered and rejected, and this rejection stands unchanged: `app/ports/__init__.py`
+already re-exports `FilesystemVaultAdapter`, which imports `app.services.inbox` and
+`app.knowledge.write_ops`. Importing anything from `app.ports` therefore executes that chain, which
+would make `app.builderops` depend on Product execution — the exact authority direction this capability
+exists to correct. `app/ports/` shares the same defect class the corrected decision fixes (importing an
+`app.*` child cannot be side-effect-free), so it was never a live alternative to the top-level path.
 
 ## What this task does
 
-1. Create `app/llm_contract/` containing, and containing only:
+1. Create `llm_contract/` (top-level, outside `app/` — see "The package path decision" above)
+   containing, and containing only:
    - immutable `ModelAccessIntent` with exactly `capability_tier`, `reasoning_effort`,
      `determinism_required`, `output_schema_ref`, `independence`, `fallback_requirement`, and
      `side_effect_class`; it contains no provider, model, credential, endpoint, or adapter id;
@@ -76,14 +94,15 @@ policy or execution modules, and registered in `importlinter.ini` `source_module
    read the kernel vocabulary rather than a second copy of the member list. **Both validations stay**
    — the adapter classifies, the persistence boundary independently re-validates. What is unified is
    the vocabulary, not the validation.
-4. Register `app.llm_contract` in `importlinter.ini` `source_modules` and add an architecture test that
-   the kernel imports nothing from `app.builderops`, `app.components`, `app.services`, `app.llm`, or
-   any store.
+4. Register `llm_contract` as its own `root_packages` entry and `source_modules` member in
+   `importlinter.ini`, with a dedicated forbidden contract (`llm_contract` -> `app`), and add an
+   architecture test that the kernel imports nothing from `app.builderops`, `app.components`,
+   `app.services`, `app.llm`, or any store — nor, transitively, `app` at all.
 
 ## Concretely
 
 ```python
-from app.llm_contract import (
+from llm_contract import (
     ADAPTER_FAILURE_CLASSES,
     FALLBACK_REQUIREMENTS,
     AdapterResult,
@@ -102,7 +121,7 @@ $ pytest -q tests/builderops/test_model_inquiry_adapters.py
 # ... passed, with no assertion changed
 
 $ lint-imports --config importlinter.ini
-# ... app.llm_contract carries no import into either runtime
+# ... llm_contract carries no import into app or either runtime
 ```
 
 ## Why this matters
@@ -119,8 +138,9 @@ session could not reach the credential store. A closed vocabulary that cannot sa
 
 ## Acceptance criteria
 
-- [ ] `app/llm_contract/` exists and imports nothing from `app.builderops`, `app.components`,
-      `app.services`, `app.llm`, or any runtime store, transitively.
+- [ ] `llm_contract/` (top-level, outside `app/`) exists and imports nothing from `app.builderops`,
+      `app.components`, `app.services`, `app.llm`, any runtime store, or `app` itself, transitively —
+      a fresh-process import causes no environment mutation, network egress, or filesystem artifact.
       Verify: `tests/architecture/test_llm_contract_kernel.py::test_kernel_imports_no_runtime_module`
 - [ ] `ModelTurnAdapter`, `AdapterResult`, the failure vocabulary, the five fallback requirement values,
       provider-free intent, capability requirements, resolver/result contracts, and schema-validation
@@ -153,11 +173,12 @@ session could not reach the credential store. A closed vocabulary that cannot sa
       Verify: `tests/builderops/test_model_inquiry_adapters.py::test_provider_enabled_roles_require_distinct_non_mock_attestation`
 - [ ] The existing adapter test file passes with at most import-path edits and no assertion changes.
       Verify: `tests/builderops/test_model_inquiry_adapters.py::test_existing_adapter_contract_regression_suite`
-- [ ] `app.llm_contract` is covered by `importlinter.ini` `source_modules`.
+- [ ] `llm_contract` is covered by `importlinter.ini` `source_modules` (both the interaction-protected
+      contract and the dedicated `llm-contract-kernel-boundary` forbidden contract).
       Verify: `tests/architecture/test_import_boundary.py::test_llm_contract_kernel_is_covered_by_import_boundary`
-- [ ] ADR-0063's kernel is recorded as existing in code, with the chosen package path and the rejected
-      alternative.
-      Verify: `doc writeback at docs/COMPONENTS.md :: app/llm_contract`
+- [ ] ADR-0063's kernel is recorded as existing in code, with the delivered top-level package path and
+      the rejected `app/ports/` alternative.
+      Verify: `doc writeback at docs/COMPONENTS.md :: llm_contract`
 
 ## How to verify (pre-merge)
 

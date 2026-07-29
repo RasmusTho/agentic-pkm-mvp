@@ -41,8 +41,8 @@ After acceptance, this capability reuses:
 
 - canonical JSON and hash conventions from `app/builderops/model_inquiry_contract.py`;
 - provider-free grouped intent/resolution, capability negotiation, `ModelTurnAdapter`, sanitized
-  result/provenance, and the closed failure vocabulary from `app/llm_contract/` and the
-  Builder-owned resolver delivered by #4286;
+  result/provenance, and the closed failure vocabulary from `llm_contract/` (top-level package, outside
+  `app/`) and the Builder-owned resolver delivered by #4286;
 - immutable/no-overwrite artifact and validated-trace patterns from
   `app/builderops/model_inquiry.py`;
 - the generic `BuilderOpsReceipt` envelope and idempotency conventions from

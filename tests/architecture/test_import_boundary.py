@@ -33,6 +33,10 @@ IMPORTLINTER_INI = REPO_ROOT / "importlinter.ini"
 INTERACTION_LAYER = {"api", "chat", "cli", "web"}
 # Migrations dir, not an application package; intentionally excluded from the contract.
 NON_PACKAGE_DIRS = {"alembic"}
+# Top-level leaf packages that live outside app/ (see importlinter.ini's
+# root_packages) but are still covered by the interaction-protected
+# contract's source_modules by their bare name, not an "app." prefix.
+TOP_LEVEL_ROOT_PACKAGES = {"llm_contract"}
 
 
 def _contract_section() -> configparser.SectionProxy:
@@ -74,6 +78,15 @@ def _real_app_packages() -> Set[str]:
             continue
         if (child / "__init__.py").is_file():
             packages.add(child.name)
+    return packages
+
+
+def _real_top_level_packages() -> Set[str]:
+    """Top-level (non-app/) root packages that actually exist in the repo."""
+    packages: Set[str] = set()
+    for name in TOP_LEVEL_ROOT_PACKAGES:
+        if (REPO_ROOT / name / "__init__.py").is_file():
+            packages.add(name)
     return packages
 
 
@@ -201,7 +214,18 @@ def test_interaction_packages_are_the_forbidden_set() -> None:
 def test_source_modules_exclude_interaction_and_resolve() -> None:
     """source_modules must not include interaction packages and must all be real."""
     section = _contract_section()
-    source = {m.removeprefix("app.") for m in _module_list(section["source_modules"])}
+    raw_source = _module_list(section["source_modules"])
+
+    # Top-level root packages (currently just llm_contract) live outside app/
+    # and resolve against the repo root, not against an app/ subdirectory.
+    top_level_source = raw_source & TOP_LEVEL_ROOT_PACKAGES
+    unresolvable_top_level = sorted(top_level_source - _real_top_level_packages())
+    assert not unresolvable_top_level, (
+        "source_modules names a top-level package that does not exist at the "
+        f"repo root: {unresolvable_top_level}"
+    )
+
+    source = {m.removeprefix("app.") for m in raw_source - top_level_source}
     real = _real_app_packages()
 
     leaked_interaction = sorted(source & INTERACTION_LAYER)
@@ -217,7 +241,17 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
 
 def test_llm_contract_kernel_is_covered_by_import_boundary() -> None:
     section = _contract_section()
-    assert "app.llm_contract" in _module_list(section["source_modules"])
+    assert "llm_contract" in _module_list(section["source_modules"])
+
+    # The dedicated, stricter contract added for the 2026-07-29 change-control
+    # correction: the kernel must import no app module at all, not merely stay
+    # out of the interaction layer.
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    kernel_boundary = parser["importlinter:contract:llm-contract-kernel-boundary"]
+    assert kernel_boundary["type"] == "forbidden"
+    assert _module_list(kernel_boundary["source_modules"]) == {"llm_contract"}
+    assert _module_list(kernel_boundary["forbidden_modules"]) == {"app"}
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ on:
   pull_request:
     paths:
       - 'app/**'
+      - 'llm_contract/**'
       - 'importlinter.ini'
       - '.github/workflows/import-linter.yaml'
   workflow_dispatch:

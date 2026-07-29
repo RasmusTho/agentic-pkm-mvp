@@ -105,16 +105,23 @@ Interpretation note:
 - **Vault Browser** — Human-first navigation and orientation surface over the vault. Current shipped behavior is `Vault Browser MLP v0` (read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into Companion workspace). Long-term capability contract (concepts, action modes, MLP-vs-future boundary, non-goals) lives in `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Maturity: MLP (read-only).
 - **LLM router + fabric** — Canonical access layer for chat + embeddings (`app/components/llm/router.py`, `app/components/llm/fabric.py`). High-level modules must use `get_chat_client` / `get_embeddings_client`; routes are reported via `/api/health`. Maturity: Active.
 
-### app/llm_contract
+### llm_contract
 
 - **Neutral LLM Contract Kernel** — Provider-free, side-effect-free contracts shared by the Product
   and Builder model runtimes: the seven-field model-access intent, grouped role resolution,
   capability requirements/results, explicit degradation provenance, schema validation, adapter/result
   protocol, closed failure classes, and ADR-0063's five fallback requirements. The leaf package owns
   no routing policy, mutable registry, credentials, provider/session transport, health receipts, or
-  store. Builder Model Inquiry retains its concrete adapters and re-exports the moved compatibility
-  names from `app.llm_contract`; `app/ports/` remains rejected because importing its package executes
-  Product vault/service dependencies. Maturity: Active contract surface; runtime adoption starts in
+  store. It is a **top-level package (`llm_contract/`), outside `app/`** — not `app/llm_contract/` as
+  first delivered — because Python initializes `app/__init__.py` before any `app.*` child is importable,
+  and `app/__init__.py` runs Product LLM provider enforcement (env reads, module-global mutation, and a
+  `RuntimeError` under `LLM_PROVIDER_ENFORCE=1` with no provider). A kernel nested under `app/` could
+  therefore not be imported without first running that enforcement, breaking the kernel's own
+  no-side-effect invariant; this was corrected via change-control on issue #4290 (2026-07-29) after the
+  first delivery (PR #4356) landed at `app/llm_contract/`. Builder Model Inquiry retains its concrete
+  adapters and re-exports the moved compatibility names from `llm_contract`; `app/ports/` remains
+  rejected because importing its package executes Product vault/service dependencies — the same defect
+  class the top-level relocation fixes. Maturity: Active contract surface; runtime adoption starts in
   later Model Access Substrate slices.
 
 Direction note:

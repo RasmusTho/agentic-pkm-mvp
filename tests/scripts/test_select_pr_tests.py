@@ -105,7 +105,7 @@ def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
 
 
 def test_model_access_kernel_change_selects_contract_and_boundary_coverage() -> None:
-    selection = select_tests(["app/llm_contract/__init__.py"])
+    selection = select_tests(["llm_contract/__init__.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("model_access",)

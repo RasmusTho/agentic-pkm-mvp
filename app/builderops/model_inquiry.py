@@ -21,7 +21,7 @@ from app.builderops.model_inquiry_contract import (
     initial_context_packet,
     model_turn_request_hash,
 )
-from app.llm_contract import ADAPTER_FAILURE_CLASSES
+from llm_contract import ADAPTER_FAILURE_CLASSES
 from app.builderops.model_inquiry_report import render_markdown_report
 from app.builderops.models import (
     BuilderOpsConflictError,

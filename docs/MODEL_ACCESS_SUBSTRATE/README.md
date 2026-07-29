@@ -263,11 +263,16 @@ re-decide it deliberately rather than discover it.
 1. **The neutral kernel has no package path.** ADR-0063 explicitly declines to choose one
    (`:185-186`), ADR-0064 says only that `ModelTurnAdapter` is "promoted to that protocol", and no
    kernel module exists in code today — the five fallback values live only in ADR prose.
-   `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL` chooses **`app/llm_contract/`**: a new package with no
-   existing baggage, importable by both runtimes without dragging a heavy `__init__` behind it.
-   Reusing `app/ports/` was rejected because `app/ports/__init__.py` already re-exports a vault adapter
-   that imports `app.services` and `app.knowledge`, so importing anything from `app.ports` would make
-   `app.builderops` depend on Product execution.
+   `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL` originally chose `app/llm_contract/`, but that choice
+   was invalidated by executable evidence and corrected via change-control on issue #4290
+   (2026-07-29): `app/__init__.py` runs Product LLM provider enforcement before any `app.*` child is
+   importable, so a kernel nested under `app/` cannot itself be side-effect-free. The delivered path is
+   **top-level `llm_contract/`**, outside `app/`, importable by both runtimes without dragging a heavy
+   `__init__` behind it — see `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md :: The package path
+   decision` for the full record. Reusing `app/ports/` remains rejected because
+   `app/ports/__init__.py` already re-exports a vault adapter that imports `app.services` and
+   `app.knowledge`, so importing anything from `app.ports` would make `app.builderops` depend on
+   Product execution — the same defect class the top-level relocation fixes.
 2. **"Repaired" is not defined for the two green-on-absent CI paths.** ADR-0064 requires repair but not
    a mechanism. `EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS` selects the smallest honest Phase 1
    answer: remove both optional checks. A future live-provider CI path needs its own declared

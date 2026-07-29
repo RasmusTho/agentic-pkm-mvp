@@ -56,6 +56,7 @@ jobs:
           filters: |
             heavy_smoke:
               - 'app/**'
+              - 'llm_contract/**'
               - 'tests/**'
               - 'scripts/**'
               - 'config/**'
@@ -293,6 +294,7 @@ jobs:
           filters: |
             docker_smoke:
               - 'app/**'
+              - 'llm_contract/**'
               - 'scripts/**'
               - '.github/workflows/**'
               - 'Dockerfile'
@@ -546,6 +548,7 @@ jobs:
           filters: |
             code:
               - 'app/**'
+              - 'llm_contract/**'
               - 'tests/**'
               - 'scripts/**'
               - 'companion-ui/**'
@@ -628,7 +631,10 @@ jobs:
 
       - name: Run mandatory repo-wide mypy gate
         if: steps.changes.outputs.code == 'true'
-        run: mypy app
+        # llm_contract (issue #4290/MAS-04) is a top-level package outside
+        # app/, added here so the mandatory gate keeps covering it after the
+        # relocation.
+        run: mypy app llm_contract
 
       - name: Run not-pg unit tests
         if: steps.changes.outputs.code == 'true'
@@ -765,6 +771,7 @@ jobs:
           filters: |
             imports:
               - 'app/**'
+              - 'llm_contract/**'
               - 'importlinter.ini'
               - '.github/workflows/ci-smoke.yaml'
             openapi:
