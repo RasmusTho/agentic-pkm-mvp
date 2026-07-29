@@ -11,8 +11,15 @@ from pathlib import Path
 import pytest
 
 from app.builderops.model_inquiry import ModelInquiryService
-from app.builderops.model_inquiry_adapters import AdapterUnavailableError
+from app.builderops.model_inquiry_adapters import CredentialUnavailableError
+from app.builderops.models import BuilderOpsValidationError
 from scripts.start_model_inquiry import preflight_dependencies
+from tests.builderops.inquiry_intent import (
+    census_with_role_targets,
+    intent_env,
+    provisioned_env,
+)
+from tests.governance.stub_provider_api import stub_provider_api
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "start_model_inquiry.sh"
@@ -20,96 +27,52 @@ PYTHON_LAUNCHER = REPO_ROOT / "scripts" / "start_model_inquiry.py"
 SUBSCRIPTION_ADAPTER = REPO_ROOT / "scripts" / "model_inquiry_subscription_adapter.py"
 
 
-def _adapter_script(tmp_path: Path) -> Path:
-    script = tmp_path / "adapter.py"
-    script.write_text(
-        """\
-import json
-import sys
-
-request = json.load(sys.stdin)
-role = sys.argv[1]
-reviewed = request["reviewed_artifact_refs"]
-if reviewed:
-    response = {
-        "schema_version": "builderops.model-turn-response.v1",
-        "stance": "accept",
-        "content": f"{role} accepts the shared artifact",
-        "claims": ["shared contract is coherent"],
-        "risks": [],
-        "blocking_questions": [],
-        "reviewed_artifact_refs": reviewed,
-        "accepted_artifact_hash": request["input_artifacts"][0]["artifact_hash"],
-    }
-else:
-    response = {
-        "schema_version": "builderops.model-turn-response.v1",
-        "stance": "draft",
-        "content": f"{role} independent draft",
-        "claims": [f"{role} claim"],
-        "risks": [],
-        "blocking_questions": [],
-        "reviewed_artifact_refs": [],
-        "accepted_artifact_hash": None,
-    }
-print(json.dumps(response))
-""",
-        encoding="utf-8",
-    )
-    return script
-
-
-def _configured_env(tmp_path: Path) -> dict[str, str]:
+def _configured_env(tmp_path: Path, census: Path) -> dict[str, str]:
+    """Provider-free intent, a declared credential surface, and a stub census."""
     vault = tmp_path / "vault"
-    vault.mkdir()
-    script = _adapter_script(tmp_path)
-    config = {
-        role: {
-            "kind": "command",
-            "role_identity": role,
-            "adapter_id": f"adapter-{role}",
-            "provider": role,
-            "model": f"test-{role}",
-            "argv": [sys.executable, str(script), role],
-        }
-        for role in ("fable", "gpt_codex")
-    }
+    vault.mkdir(exist_ok=True)
     return {
         **os.environ,
         "PATH": "/usr/bin:/bin",
         "BUILDEROPS_PYTHON": sys.executable,
         "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
         "BUILDEROPS_VAULT_ROOT": str(vault),
-        "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(config),
+        "PROVIDER_CENSUS_PATH": str(census),
+        **provisioned_env(tmp_path / "secrets"),
     }
 
 
 def test_local_launcher_runs_common_command(tmp_path: Path) -> None:
-    env = _configured_env(tmp_path)
     marker = tmp_path / "must-not-exist"
     question = f"Keep quotes ' and newlines safe\n$(touch {marker})"
     question_file = tmp_path / "question.md"
     question_file.write_text(question, encoding="utf-8")
-    result = subprocess.run(
-        [
-            str(LAUNCHER),
-            "--question-file",
-            str(question_file),
-            "--max-rounds",
-            "1",
-        ],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with stub_provider_api(tmp_path / "census") as census:
+        env = _configured_env(tmp_path, census)
+        result = subprocess.run(
+            [
+                str(LAUNCHER),
+                "--question-file",
+                str(question_file),
+                "--max-rounds",
+                "1",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["inquiry_id"].startswith("inq_")
     assert payload["final_state"] == "consensus"
     assert payload["terminal_receipt_id"]
+    assert payload["preflight"]["credential_resolution"] == "host-secret-contract"
+    assert {
+        identity["provider"] for identity in payload["preflight"]["adapters"].values()
+    } == {"anthropic", "openai"}
     report = Path(payload["human_readable_report"])
     assert report.is_file()
     assert report.parent.name == payload["inquiry_id"]
@@ -119,50 +82,65 @@ def test_local_launcher_runs_common_command(tmp_path: Path) -> None:
     assert trace["question"]["source_refs"] == [
         {"ref_type": "desktop_skill", "ref": "start-model-inquiry"}
     ]
+    assert all(turn["provider_request_id"] for turn in trace["turns"])
     launcher = PYTHON_LAUNCHER.read_text()
     assert '"builderops",\n                "inquiry",\n                "start"' in launcher
 
 
 def test_local_launcher_emits_terminal_provider_error_json(tmp_path: Path) -> None:
-    env = _configured_env(tmp_path)
-    failing_adapter = tmp_path / "failing_adapter.py"
-    failing_adapter.write_text(
-        "import sys\nprint('credential-sentinel', file=sys.stderr)\nsys.exit(17)\n",
-        encoding="utf-8",
-    )
-    config = json.loads(env["BUILDEROPS_INQUIRY_ADAPTERS_JSON"])
-    config["fable"]["argv"] = [sys.executable, str(failing_adapter)]
-    env["BUILDEROPS_INQUIRY_ADAPTERS_JSON"] = json.dumps(config)
     question_file = tmp_path / "question.md"
     question_file.write_text("Produce a safe failure receipt.", encoding="utf-8")
-
-    result = subprocess.run(
-        [str(LAUNCHER), "--question-file", str(question_file), "--max-rounds", "1"],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with stub_provider_api(tmp_path / "census", failing_roles=("fable",)) as census:
+        env = _configured_env(tmp_path, census)
+        result = subprocess.run(
+            [str(LAUNCHER), "--question-file", str(question_file), "--max-rounds", "1"],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("\n") == 1
     payload = json.loads(result.stdout)
     assert payload["final_state"] == "provider_error"
-    assert payload["inquiry_id"]
-    assert payload["terminal_receipt_id"]
-    assert Path(payload["human_readable_report"]).is_file()
-    assert payload["diagnostic"] == {
-        "adapter_id": "adapter-fable",
-        "adapter_failure_class": "command_exit_nonzero",
-        "adapter_exit_code": 17,
-    }
+    assert payload["diagnostic"]["adapter_failure_class"] == "unexpected_adapter_error"
     rendered = "".join(
         path.read_text(encoding="utf-8")
         for path in (tmp_path / "vault").rglob("*.json")
     )
     assert "credential-sentinel" not in rendered
     assert "credential-sentinel" not in result.stdout
+
+
+def test_launcher_fails_closed_on_an_absent_declared_credential(
+    tmp_path: Path,
+) -> None:
+    """The reported failure class is the credential, never a session or CLI exit."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    question_file = tmp_path / "question.md"
+    question_file.write_text("Fail closed without a declared value.", encoding="utf-8")
+    result = subprocess.run(
+        [str(LAUNCHER), "--question-file", str(question_file), "--max-rounds", "1"],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "BUILDEROPS_PYTHON": sys.executable,
+            "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
+            "BUILDEROPS_VAULT_ROOT": str(vault),
+            **intent_env(),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "anthropic.api-key" in result.stderr
+    assert "ANTHROPIC_API_KEY" not in result.stderr
+    assert not (vault / "model-inquiries").exists()
 
 
 def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:
@@ -307,97 +285,68 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
         check=False,
     )
     assert missing_adapters.returncode == 2
-    assert "explicit adapter not configured" in missing_adapters.stderr
+    assert "inquiry role intent is not configured" in missing_adapters.stderr
     assert not (vault / "model-inquiries").exists()
 
-    config = {
-        role: {
-            "kind": "command",
-            "role_identity": role,
-            "adapter_id": f"adapter-{role}",
-            "provider": role,
-            "model": f"test-{role}",
-            "argv": [f"definitely-missing-{role}"],
-        }
-        for role in ("fable", "gpt_codex")
-    }
-    missing_executable = subprocess.run(
+    missing_credential = subprocess.run(
         [str(LAUNCHER), "Question"],
         cwd=REPO_ROOT,
         env={
             **clean_env,
             "BUILDEROPS_VAULT_ROOT": str(vault),
-            "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(config),
+            **intent_env(),
         },
         capture_output=True,
         text=True,
         check=False,
     )
-    assert missing_executable.returncode == 2
-    assert "local command unavailable" in missing_executable.stderr
+    assert missing_credential.returncode == 2
+    assert "anthropic.api-key" in missing_credential.stderr
     assert not (vault / "model-inquiries").exists()
 
 
-def test_host_role_entrypoints_gate_desktop_preflight(tmp_path: Path) -> None:
+def test_desktop_preflight_resolves_declared_roles_without_a_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preflight needs no host role entrypoint, provider CLI, or session lineage."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    adapter_config = {
-        "fable": {
-            "kind": "command",
-            "role_identity": "fable",
-            "adapter_id": "fable-subscription-cli",
-            "provider": "anthropic-subscription",
-            "model": "configured-fable",
-            "argv": ["fable-subscription-cli"],
-            "environment_allowlist": ["PATH"],
-        },
-        "gpt_codex": {
-            "kind": "command",
-            "role_identity": "gpt_codex",
-            "adapter_id": "codex-subscription-cli",
-            "provider": "openai-subscription",
-            "model": "configured-codex",
-            "argv": ["codex-subscription-cli"],
-            "environment_allowlist": ["PATH"],
-        },
-    }
+    vault = tmp_path / "vault"
+    vault.mkdir()
     env = {
         **os.environ,
         "PATH": str(bin_dir),
         "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
-        "BUILDEROPS_VAULT_ROOT": str(tmp_path / "vault"),
-        "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(adapter_config),
+        "BUILDEROPS_VAULT_ROOT": str(vault),
+        **provisioned_env(tmp_path / "secrets"),
     }
-    (tmp_path / "vault").mkdir()
-    for command in ("claude", "codex", "yggdrasil-model-inquiry"):
-        executable = bin_dir / command
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        executable.chmod(0o700)
 
-    with pytest.raises(AdapterUnavailableError, match="fable-subscription-cli"):
-        preflight_dependencies(env, command_cwd=REPO_ROOT)
-
-    for command in ("fable-subscription-cli", "codex-subscription-cli"):
-        executable = bin_dir / command
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        executable.chmod(0o700)
-    with pytest.raises(AdapterUnavailableError, match="installed-lineage preflight"):
-        preflight_dependencies(env, command_cwd=REPO_ROOT)
-    for command in ("fable-subscription-cli", "codex-subscription-cli"):
-        (bin_dir / command).unlink()
-
-    selected_python = tmp_path / "selected-python"
-    selected_python.symlink_to(Path(sys.executable))
-    env["BUILDEROPS_PYTHON"] = str(selected_python)
-    installed = _run_host_installer(tmp_path, bin_dir, python=selected_python)
-    assert installed.returncode == 0, installed.stderr
     result = preflight_dependencies(env, command_cwd=REPO_ROOT)
 
     assert set(result["adapters"]) == {"fable", "gpt_codex"}
-    assert not (tmp_path / "vault" / "model-inquiries").exists()
-    mismatched_env = {key: value for key, value in env.items() if key != "BUILDEROPS_PYTHON"}
-    with pytest.raises(AdapterUnavailableError, match="installed-lineage preflight"):
-        preflight_dependencies(mismatched_env, command_cwd=REPO_ROOT)
+    assert result["credential_resolution"] == "host-secret-contract"
+    assert {identity["provider"] for identity in result["adapters"].values()} == {
+        "anthropic",
+        "openai",
+    }
+    assert not (vault / "model-inquiries").exists()
+    assert not list(bin_dir.iterdir())
+
+    # A mock policy target is refused rather than silently substituted, and a
+    # declared credential that is absent fails closed instead of degrading.
+    with pytest.raises(CredentialUnavailableError, match="anthropic.api-key"):
+        preflight_dependencies(
+            {key: value for key, value in env.items() if "HOST_SECRET" not in key},
+            command_cwd=REPO_ROOT,
+        )
+    mocked_census = census_with_role_targets(
+        tmp_path / "mock-census",
+        {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
+    )
+    monkeypatch.setenv("PROVIDER_CENSUS_PATH", str(mocked_census))
+    with pytest.raises(BuilderOpsValidationError, match="mock"):
+        preflight_dependencies(env, command_cwd=REPO_ROOT)
 
 
 def _run_host_installer(
@@ -424,39 +373,6 @@ def _run_host_installer(
         text=True,
         check=False,
     )
-
-
-def test_generic_command_adapters_do_not_require_host_entrypoint_lineage(
-    tmp_path: Path,
-) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    config: dict[str, dict[str, object]] = {}
-    for role in ("fable", "gpt_codex"):
-        command = bin_dir / f"generic-{role}"
-        command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        command.chmod(0o700)
-        config[role] = {
-            "kind": "command",
-            "role_identity": role,
-            "adapter_id": f"generic-{role}",
-            "provider": f"provider-{role}",
-            "model": f"model-{role}",
-            "argv": [str(command)],
-        }
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    env = {
-        **os.environ,
-        "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
-        "BUILDEROPS_VAULT_ROOT": str(vault),
-        "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(config),
-    }
-
-    result = preflight_dependencies(env, command_cwd=REPO_ROOT)
-
-    assert set(result["adapters"]) == {"fable", "gpt_codex"}
-    assert not (vault / "model-inquiries").exists()
 
 
 def test_launcher_fails_loud_without_venv_or_override(tmp_path: Path) -> None:

@@ -1,0 +1,27 @@
+{
+  "schema": "builderops.model-inquiry-role-intent.v1",
+  "runtime": "builder",
+  "channel": "dev",
+  "consumer": "builderops-model-inquiry",
+  "resolution_group_id": "model-inquiry-independent-review",
+  "roles": {
+    "fable": {
+      "capability_tier": "frontier",
+      "reasoning_effort": "xhigh",
+      "determinism_required": false,
+      "output_schema_ref": "builderops.model-turn-response.v1",
+      "independence": "distinct_effective_target",
+      "fallback_requirement": "fallback_forbidden",
+      "side_effect_class": "advisory_review"
+    },
+    "gpt_codex": {
+      "capability_tier": "frontier",
+      "reasoning_effort": "xhigh",
+      "determinism_required": false,
+      "output_schema_ref": "builderops.model-turn-response.v1",
+      "independence": "distinct_effective_target",
+      "fallback_requirement": "fallback_forbidden",
+      "side_effect_class": "advisory_review"
+    }
+  }
+}

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,16 +19,13 @@ if str(REPO_ROOT) not in sys.path:
 from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.model_inquiry_adapters import (
     ADAPTER_FAILURE_CLASSES,
+    AdapterExecutionError,
     AdapterUnavailableError,
-    LocalCommandAdapter,
     load_adapters,
     sanitized_adapter_identity,
 )
 from app.builderops.models import BuilderOpsValidationError
-from scripts.install_model_inquiry_host import (
-    HostInstallError,
-    check as check_host_entrypoints,
-)
+from scripts.install_model_inquiry_host import CREDENTIAL_RESOLUTION
 
 WORKFLOW = "fable-gpt-architecture"
 SOURCE_REF = "desktop_skill:start-model-inquiry"
@@ -44,82 +40,23 @@ def preflight_dependencies(
     *,
     command_cwd: Path,
 ) -> dict[str, Any]:
-    """Validate the durable store and explicit adapters without mutation."""
+    """Validate the durable store and the resolved role adapters without mutation.
+
+    Building the adapters is the whole preflight: identities come from the
+    declared census and credentials from the host secret contract, so an absent
+    credential fails here rather than after a model call. No interactive
+    subscription session is probed, required, or discovered.
+    """
     ModelInquiryService.from_env(env)
     adapters = load_adapters(env)
-    subscription_entrypoints = {
-        "fable": "fable-subscription-cli",
-        "gpt_codex": "codex-subscription-cli",
-    }
-    if all(
-        isinstance(adapters.get(role), LocalCommandAdapter)
-        and adapters[role].adapter_id == entrypoint
-        and adapters[role].argv == (entrypoint,)
-        for role, entrypoint in subscription_entrypoints.items()
-    ):
-        path = env.get("PATH", os.defpath)
-        discovered = {
-            role: shutil.which(entrypoint, path=path)
-            for role, entrypoint in subscription_entrypoints.items()
-        }
-        if not all(discovered.values()):
-            missing_role = next(role for role, value in discovered.items() if value is None)
-            adapter = adapters[missing_role]
-            raise AdapterUnavailableError(
-                f"{missing_role}: local command unavailable: {adapter.adapter_id}"
-            )
-        bin_dirs = {
-            str(Path(value).absolute().parent)
-            for value in discovered.values()
-            if value is not None
-        }
-        if len(bin_dirs) != 1:
-            raise AdapterUnavailableError(
-                "subscription role entrypoints do not share one validated host bin directory"
-            )
-        try:
-            selected_python = Path(env.get("BUILDEROPS_PYTHON", sys.executable))
-            host_status = check_host_entrypoints(
-                repo_root=command_cwd,
-                bin_dir=Path(bin_dirs.pop()),
-                python=selected_python,
-                path=path,
-            )
-        except HostInstallError as exc:
-            raise AdapterUnavailableError(
-                "subscription role entrypoints failed installed-lineage preflight"
-            ) from exc
-        if not host_status["ok"]:
-            raise AdapterUnavailableError(
-                "subscription role entrypoints failed installed-lineage preflight"
-            )
-    for role, adapter in adapters.items():
-        if not isinstance(adapter, LocalCommandAdapter):
-            continue
-        executable = adapter.argv[0] if adapter.argv else ""
-        path = (adapter.environment or {}).get("PATH", env.get("PATH", os.defpath))
-        if not _command_available(executable, path=path, cwd=command_cwd):
-            raise AdapterUnavailableError(
-                f"{role}: local command unavailable: {adapter.adapter_id}"
-            )
     return {
         "vault": "available",
+        "credential_resolution": CREDENTIAL_RESOLUTION,
         "adapters": {
             role: sanitized_adapter_identity(adapter)
             for role, adapter in sorted(adapters.items())
         },
     }
-
-
-def _command_available(executable: str, *, path: str, cwd: Path) -> bool:
-    if not executable:
-        return False
-    if os.sep in executable:
-        candidate = Path(executable)
-        if not candidate.is_absolute():
-            candidate = cwd / candidate
-        return candidate.is_file() and os.access(candidate, os.X_OK)
-    return shutil.which(executable, path=path) is not None
 
 
 def launch(
@@ -251,6 +188,9 @@ def _desktop_diagnostic(value: Any) -> dict[str, str | int] | None:
     exit_code = candidate.get("adapter_exit_code")
     if isinstance(exit_code, int) and not isinstance(exit_code, bool) and 1 <= exit_code <= 255:
         result["adapter_exit_code"] = exit_code
+    credential = candidate.get("credential_identity_ref")
+    if isinstance(credential, str) and credential:
+        result["credential_identity_ref"] = credential
     return result
 
 
@@ -276,7 +216,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else args.question
         )
         result = launch(question, max_rounds=args.max_rounds)
-    except (AdapterUnavailableError, BuilderOpsValidationError, LauncherError, OSError) as exc:
+    except (
+        AdapterExecutionError,
+        AdapterUnavailableError,
+        BuilderOpsValidationError,
+        LauncherError,
+        OSError,
+    ) as exc:
         print(f"ERROR: model inquiry preflight/launch failed: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)

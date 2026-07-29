@@ -270,7 +270,7 @@ def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed() -> N
 
     for forbidden_bypass in (
         "BUILDEROPS_VAULT_ROOT",
-        "BUILDEROPS_INQUIRY_ADAPTERS_JSON",
+        "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON",
         "scripts/start_model_inquiry.sh",
         "/etc/ssh/ssh_host_ed25519_key",
         "/etc/ssh/ssh_host_rsa_key",

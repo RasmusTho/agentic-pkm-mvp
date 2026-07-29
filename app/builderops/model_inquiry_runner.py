@@ -5,10 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_access_resolver import BuilderModelAccessResolver
+from app.builderops.model_inquiry import (
+    CREDENTIAL_ATTEMPT_REQUEST_ID,
+    ModelInquiryService,
+)
 from app.builderops.model_inquiry_adapters import (
     AdapterExecutionError,
     AdapterUnavailableError,
+    CredentialUnavailableError,
     ModelTurnAdapter,
     load_adapter_descriptors,
     load_adapters,
@@ -41,16 +46,20 @@ class ModelInquiryRunner:
         adapters: Mapping[str, ModelTurnAdapter] | None = None,
         *,
         env: Mapping[str, str] | None = None,
+        resolver: BuilderModelAccessResolver | None = None,
     ) -> None:
         self.service = service
         self._adapters = dict(adapters) if adapters is not None else None
         self._env = dict(env) if env is not None else None
+        # Builder resolution authority. Injected only so a caller can bind
+        # declared sources explicitly; it is never a provider or credential.
+        self._resolver = resolver
 
     def plan(self, inquiry_id: str, *, max_rounds: int) -> dict[str, Any]:
         _validate_max_rounds(max_rounds)
         trace = self.service.trace(inquiry_id)
         context = _initial_context(trace)
-        descriptors = load_adapter_descriptors(self._env)
+        descriptors = load_adapter_descriptors(self._env, resolver=self._resolver)
         draft_requests = [
             self._request_packet(
                 trace,
@@ -128,7 +137,11 @@ class ModelInquiryRunner:
             if terminal is not None:
                 return self._finalize_terminal(inquiry_id, terminal, replayed=True)
             try:
-                adapters = self._adapters if self._adapters is not None else load_adapters(self._env)
+                adapters = self._adapters if self._adapters is not None else load_adapters(self._env, resolver=self._resolver)
+            except CredentialUnavailableError as exc:
+                # Fail closed before any adapter call. No subscription CLI, no
+                # ambient environment, and no other provider is attempted.
+                return self._credential_failure(inquiry_id, trace, exc)
             except (AdapterUnavailableError, BuilderOpsValidationError):
                 return self._configuration_failure(
                     inquiry_id,
@@ -500,6 +513,32 @@ class ModelInquiryRunner:
         return self._terminate(
             inquiry_id,
             "provider_unavailable",
+            details,
+            self.service.trace(inquiry_id),
+        )
+
+    def _credential_failure(
+        self,
+        inquiry_id: str,
+        trace: Mapping[str, Any],
+        error: CredentialUnavailableError,
+    ) -> dict[str, Any]:
+        request_id = CREDENTIAL_ATTEMPT_REQUEST_ID
+        details = {
+            "adapter_request_id": request_id,
+            "classification": "declared credential unavailable",
+            "diagnostic": sanitized_adapter_failure(error, adapter_id=error.adapter_id),
+        }
+        self.service.commit_provider_attempt_receipt(
+            inquiry_id,
+            adapter_request_id=request_id,
+            outcome="provider_error",
+            details=details,
+            source_refs=list(trace["source_refs"]),
+        )
+        return self._terminate(
+            inquiry_id,
+            "provider_error",
             details,
             self.service.trace(inquiry_id),
         )
