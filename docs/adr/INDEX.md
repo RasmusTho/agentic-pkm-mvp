@@ -61,3 +61,4 @@
 - [ADR-0062: BuilderOps as an ecosystem-wide API-first enabling system (Accepted; amended 2026-07-16, A1-A3)](./ADR-0062-builderops-ecosystem-wide-enabling-system.md)
 - [ADR-0063: Share a neutral LLM contract kernel; keep Product and Builder execution fabrics separate (Accepted 2026-07-17)](./ADR-0063-shared-llm-contract-kernel.md)
 - [ADR-0064: Credential and session resolution is part of the model abstraction; declared API keys are the default programmatic auth path (Accepted 2026-07-27; amended 2026-07-27: CKM sequencing restated after the ADR-0057 A1 orchestration ruling — order does not swap)](./ADR-0064-model-access-substrate.md)
+- [ADR-0065: BuilderOps temporal-intention lifecycle evidence is PostgreSQL-only, opaque-first, and receipt-backed (Accepted 2026-07-29)](./ADR-0065-builderops-temporal-intention-authority.md)
