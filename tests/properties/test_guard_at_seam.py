@@ -228,17 +228,46 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
     assert guard_calls[0].lineno < min(node.lineno for node in mutation_calls)
 
     forbidden_wrapper_names = {
+        "BufferedRandom",
+        "BufferedReader",
+        "BufferedRWPair",
+        "BufferedWriter",
+        "DupFd",
         "FileIO",
+        "TextIOWrapper",
         "dup",
         "dup2",
         "dup3",
+        "fcntl",
         "fdopen",
+        "fromfd",
     }
-    for function in (create, probe):
+
+    def assert_no_fd_aliases(function: ast.FunctionDef) -> None:
         assert not any(isinstance(node, (ast.With, ast.AsyncWith)) for node in ast.walk(function))
         for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
             assert call_name(call) not in forbidden_wrapper_names
             assert not (isinstance(call.func, ast.Name) and call.func.id == "open")
+            if isinstance(call.func, ast.Attribute) and call.func.attr == "open":
+                assert isinstance(call.func.value, ast.Name)
+                assert call.func.value.id == "os"
+
+    for function in (create, probe):
+        assert_no_fd_aliases(function)
+
+    alias_mutants = [
+        "def mutant(fd):\n    os.dup(fd)\n",
+        "def mutant(fd):\n    fcntl.fcntl(fd, fcntl.F_DUPFD, 0)\n",
+        "def mutant(fd):\n    io.FileIO(fd, closefd=False)\n",
+        "def mutant(fd):\n    io.TextIOWrapper(io.FileIO(fd, closefd=False))\n",
+        "def mutant(path):\n    pathlib.Path(path).open()\n",
+    ]
+    for source in alias_mutants:
+        mutant = next(
+            node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)
+        )
+        with pytest.raises(AssertionError):
+            assert_no_fd_aliases(mutant)
 
     call_sites: list[tuple[str, str]] = []
     for path in (repo_root / "app").rglob("*.py"):

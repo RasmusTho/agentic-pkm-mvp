@@ -5,7 +5,6 @@ import errno
 import hashlib
 import os
 from pathlib import Path
-import re
 import threading
 
 import pytest
@@ -15,128 +14,14 @@ from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 from app.write_guard import WriteGuard, WritesBlockedError
-
-
-_STAGE_NAME_RE = re.compile(r"^\.candidate-stage-[0-9a-f]{32}$")
-
-
-class _FdOracle:
-    """Track logical descriptor generations, including reused raw integers."""
-
-    def __init__(self) -> None:
-        self.opened: list[tuple[int, int, str, str]] = []
-        self.close_attempts: list[tuple[int, int, str, str] | None] = []
-        self.duplicates: list[tuple[str, int, int]] = []
-        self.active: dict[int, tuple[int, int, str, str]] = {}
-        self.events: list[tuple[object, ...]] = []
-        self._generation = 0
-
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        real_open = os.open
-        real_close = os.close
-        real_dup = os.dup
-        real_dup2 = os.dup2
-        real_dup3 = getattr(os, "dup3", None)
-
-        def register_duplicate(
-            operation: str,
-            source_fd: int,
-            duplicate_fd: int,
-        ) -> int:
-            self._generation += 1
-            source = self.active.get(source_fd)
-            kind = f"duplicated_{source[2]}" if source is not None else "duplicated_unknown"
-            path = f"{operation}:{source[3] if source is not None else source_fd}"
-            token = (duplicate_fd, self._generation, kind, path)
-            assert duplicate_fd not in self.active
-            self.active[duplicate_fd] = token
-            self.opened.append(token)
-            self.duplicates.append((operation, source_fd, duplicate_fd))
-            self.events.append((operation, source_fd, duplicate_fd, token))
-            return duplicate_fd
-
-        def traced_open(
-            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-            flags: int,
-            mode: int = 0o777,
-            *,
-            dir_fd: int | None = None,
-        ) -> int:
-            fd = real_open(path, flags, mode, dir_fd=dir_fd)
-            self._generation += 1
-            raw_path = os.fsdecode(path)
-            kind = (
-                "stage"
-                if raw_path.startswith(".candidate-stage-")
-                else "directory"
-                if flags & getattr(os, "O_DIRECTORY", 0)
-                else "file"
-            )
-            token = (fd, self._generation, kind, raw_path)
-            assert fd not in self.active, f"raw fd {fd} reused while still owned"
-            self.active[fd] = token
-            self.opened.append(token)
-            self.events.append(("open", raw_path, flags, dir_fd, token))
-            return fd
-
-        def traced_close(fd: int) -> None:
-            token = self.active.pop(fd, None)
-            self.close_attempts.append(token)
-            self.events.append(("close", fd, token))
-            real_close(fd)
-
-        def traced_dup(fd: int) -> int:
-            duplicate = real_dup(fd)
-            if fd not in self.active:
-                return duplicate
-            return register_duplicate("dup", fd, duplicate)
-
-        def traced_dup2(fd: int, fd2: int, inheritable: bool = True) -> int:
-            duplicate = real_dup2(fd, fd2, inheritable=inheritable)
-            if fd not in self.active:
-                return duplicate
-            return register_duplicate("dup2", fd, duplicate)
-
-        monkeypatch.setattr(os, "open", traced_open)
-        monkeypatch.setattr(os, "close", traced_close)
-        monkeypatch.setattr(os, "dup", traced_dup)
-        monkeypatch.setattr(os, "dup2", traced_dup2)
-        if real_dup3 is not None:
-
-            def traced_dup3(fd: int, fd2: int, flags: int = 0) -> int:
-                duplicate = real_dup3(fd, fd2, flags)
-                if fd not in self.active:
-                    return duplicate
-                return register_duplicate("dup3", fd, duplicate)
-
-            monkeypatch.setattr(os, "dup3", traced_dup3)
-
-
-def _assert_exact_fd_ownership(
-    opened: list[tuple[int, int, str, str]],
-    close_attempts: list[tuple[int, int, str, str] | None],
-    duplicates: list[tuple[str, int, int]],
-) -> None:
-    assert duplicates == []
-    assert None not in close_attempts
-    assert len(close_attempts) == len(opened)
-    assert sorted(close_attempts) == sorted(opened)
-
-
-def _assert_exact_stage_names(names: list[str]) -> None:
-    assert names
-    assert len(names) == len(set(names))
-    for name in names:
-        assert _STAGE_NAME_RE.fullmatch(name)
-        assert len(name.encode("utf-8")) == 49
-        assert not name.endswith(".md")
-
-
-def _assert_cleanup_fence(events: list[tuple[object, ...]]) -> None:
-    unlink_indexes = [index for index, event in enumerate(events) if event[0] == "unlink"]
-    for unlink_index in unlink_indexes:
-        assert unlink_index + 1 < len(events)
-        assert events[unlink_index + 1][0] == "fsync"
+from tests.knowledge.candidate_create_oracles import (
+    FdOracle as _FdOracle,
+    assert_cleanup_fence as _assert_cleanup_fence,
+    assert_exact_fd_ownership as _assert_exact_fd_ownership,
+    assert_exact_stage_names as _assert_exact_stage_names,
+    assert_hidden_stage_state,
+    assert_stage_publication_order,
+)
 
 
 def test_default_vault_root_for_path_uses_filesystem_anchor(tmp_path: Path) -> None:
@@ -603,6 +488,7 @@ def test_candidate_create_once_publishes_fsynced_raw_stage_without_replace(
         return real_write(fd, payload)
 
     def traced_fsync(fd: int) -> None:
+        oracle.events.append(("fsync", fd))
         if fd in stage_fds:
             file_fsyncs.append(fd)
         real_fsync(fd)
@@ -615,6 +501,7 @@ def test_candidate_create_once_publishes_fsynced_raw_stage_without_replace(
     ) -> None:
         assert source_dir_fd == destination_dir_fd
         assert not (parent / destination_name).exists()
+        oracle.events.append(("publish", source_name, destination_name))
         publish_observations.append(
             (source_name, destination_name, (parent / source_name).read_bytes())
         )
@@ -650,8 +537,21 @@ def test_candidate_create_once_publishes_fsynced_raw_stage_without_replace(
     _assert_exact_stage_names(stage_names)
     assert file_fsyncs
     assert list(parent.glob(".candidate-stage-*")) == []
+    assert_stage_publication_order(oracle.events)
     _assert_exact_fd_ownership(oracle.opened, oracle.close_attempts, oracle.duplicates)
     assert oracle.active == {}
+
+    premature_publication = list(oracle.events)
+    publish_event = next(event for event in premature_publication if event[0] == "publish")
+    premature_publication.remove(publish_event)
+    stage_open_index = next(
+        index
+        for index, event in enumerate(premature_publication)
+        if event[0] == "open" and isinstance(event[4], tuple) and event[4][2] == "stage"
+    )
+    premature_publication.insert(stage_open_index + 1, publish_event)
+    with pytest.raises(AssertionError):
+        assert_stage_publication_order(premature_publication)
 
     # The test oracle must reject the false-green trace shapes seen in prior rounds.
     with pytest.raises(AssertionError):
@@ -832,7 +732,12 @@ def test_candidate_create_once_loser_preserves_target_and_cleans_owned_stage(
     assert unrelated.read_bytes() == b"unrelated"
     assert len(unlinked) == 1
     _assert_exact_stage_names(unlinked)
-    assert [path.name for path in parent.glob(".candidate-stage-*")] == [unrelated.name]
+    hidden_names = [path.name for path in parent.glob(".candidate-stage-*")]
+    assert_hidden_stage_state(
+        hidden_names,
+        sentinel_name=unrelated.name,
+        expected_owned_count=0,
+    )
     unlink_index = next(index for index, event in enumerate(cleanup_events) if event[0] == "unlink")
     _assert_cleanup_fence(cleanup_events[unlink_index:])
     assert cleanup_events[unlink_index + 2][0] == "stat"
@@ -848,6 +753,24 @@ def test_candidate_create_once_loser_preserves_target_and_cleans_owned_stage(
                 *cleanup_events[unlink_index + 2 :],
             ]
         )
+    with pytest.raises(AssertionError):
+        assert_hidden_stage_state(
+            [*hidden_names, ".candidate-stage-22222222222222222222222222222222"],
+            sentinel_name=unrelated.name,
+            expected_owned_count=0,
+        )
+    with pytest.raises(AssertionError):
+        assert_hidden_stage_state(
+            [],
+            sentinel_name=unrelated.name,
+            expected_owned_count=0,
+        )
+    with pytest.raises(AssertionError):
+        assert_hidden_stage_state(
+            [".candidate-stage-22222222222222222222222222222222"],
+            sentinel_name=unrelated.name,
+            expected_owned_count=0,
+        )
 
 
 def test_candidate_create_once_real_same_target_race(
@@ -857,6 +780,8 @@ def test_candidate_create_once_real_same_target_race(
     vault = tmp_path / "vault"
     parent = vault / "Sources"
     parent.mkdir(parents=True)
+    oracle = _FdOracle()
+    oracle.install(monkeypatch)
     real_publish = write_ops._atomic_rename_noreplace_at
     both_staged = threading.Barrier(2, timeout=5)
 
@@ -891,6 +816,11 @@ def test_candidate_create_once_real_same_target_race(
     winner = (parent / "race.md").read_text(encoding="utf-8")
     assert winner in {"contender one", "contender two"}
     assert list(parent.glob(".candidate-stage-*")) == []
+    _assert_exact_fd_ownership(oracle.opened, oracle.close_attempts, oracle.duplicates)
+    assert oracle.active == {}
+    stage_names = [token[3] for token in oracle.opened if token[2] == "stage"]
+    assert len(stage_names) == 2
+    _assert_exact_stage_names(stage_names)
 
 
 @pytest.mark.parametrize(
@@ -907,8 +837,9 @@ def test_candidate_create_once_real_same_target_race(
         "publish",
         "cleanup_unlink",
         "cleanup_fsync",
+        "loser_unlink",
+        "loser_fsync",
         "winner_stat",
-        "winner_parent_fsync",
         "final_parent_close",
     ],
 )
@@ -920,12 +851,15 @@ def test_candidate_create_once_fault_matrix(
     vault = tmp_path / "vault"
     vault.mkdir()
     parent = vault / "Sources"
-    if fault not in {"parent_mkdir", "parent_fsync", "parent_open"}:
-        parent.mkdir()
+    parent.mkdir()
     target = parent / "candidate.md"
-    if fault in {"winner_stat", "winner_parent_fsync"}:
+    if fault in {"loser_unlink", "loser_fsync", "winner_stat"}:
         target.write_bytes(b"winner")
+    sentinel = parent / ".candidate-stage-11111111111111111111111111111111"
+    sentinel.write_bytes(b"unrelated")
 
+    oracle = _FdOracle()
+    oracle.install(monkeypatch)
     real_mkdir = os.mkdir
     real_open = os.open
     real_write = os.write
@@ -937,18 +871,12 @@ def test_candidate_create_once_fault_matrix(
     stage_fd: int | None = None
     fd_labels: dict[int, str] = {}
     close_attempts: dict[str, int] = {}
-    fd_generation = 0
-    fd_tokens: dict[int, tuple[int, int]] = {}
-    opened_tokens: list[tuple[int, int]] = []
-    closed_tokens: list[tuple[int, int]] = []
     cleanup_events: list[tuple[object, ...]] = []
-    publication_attempted = False
     unlink_succeeded = False
-    fired = 0
+    arms: dict[str, int] = {}
 
-    def hit(message: str) -> None:
-        nonlocal fired
-        fired += 1
+    def hit(arm: str, message: str) -> None:
+        arms[arm] = arms.get(arm, 0) + 1
         raise OSError(errno.EIO, message)
 
     def faulting_mkdir(
@@ -958,7 +886,7 @@ def test_candidate_create_once_fault_matrix(
         dir_fd: int | None = None,
     ) -> None:
         if fault == "parent_mkdir":
-            hit("parent mkdir fault")
+            hit("parent_mkdir", "parent mkdir fault")
         real_mkdir(path, mode, dir_fd=dir_fd)
 
     def faulting_open(
@@ -968,18 +896,13 @@ def test_candidate_create_once_fault_matrix(
         *,
         dir_fd: int | None = None,
     ) -> int:
-        nonlocal fd_generation, stage_fd
+        nonlocal stage_fd
         decoded = os.fsdecode(path)
         if fault == "parent_open" and decoded == "Sources":
-            hit("parent open fault")
+            hit("parent_open", "parent open fault")
         if fault == "stage_open" and decoded.startswith(".candidate-stage-"):
-            hit("stage open fault")
+            hit("stage_open", "stage open fault")
         fd = real_open(path, flags, mode, dir_fd=dir_fd)
-        fd_generation += 1
-        token = (fd, fd_generation)
-        assert fd not in fd_tokens
-        fd_tokens[fd] = token
-        opened_tokens.append(token)
         fd_labels[fd] = (
             "root"
             if dir_fd is None
@@ -995,41 +918,36 @@ def test_candidate_create_once_fault_matrix(
 
     def faulting_write(fd: int, payload: bytes) -> int:
         if fault == "stage_zero_write" and fd == stage_fd:
-            nonlocal_fired[0] += 1
+            arms["stage_zero_write"] = arms.get("stage_zero_write", 0) + 1
             return 0
         return real_write(fd, payload)
 
     def faulting_fsync(fd: int) -> None:
         cleanup_events.append(("fsync", fd))
         if fault == "parent_fsync" and stage_fd is None:
-            hit("parent fsync fault")
+            hit("parent_fsync", "parent fsync fault")
         if fault == "stage_fsync" and fd == stage_fd:
-            hit("stage fsync fault")
+            hit("stage_fsync", "stage fsync fault")
         if fault == "cleanup_fsync" and unlink_succeeded:
-            hit("cleanup fsync fault")
-        if fault == "winner_parent_fsync" and publication_attempted:
-            hit("winner parent fsync fault")
+            hit("cleanup_fsync", "cleanup fsync fault")
+        if fault == "loser_fsync" and unlink_succeeded:
+            hit("loser_fsync", "loser fsync fault")
         real_fsync(fd)
 
     def faulting_close(fd: int) -> None:
-        token = fd_tokens.pop(fd, None)
-        assert token is not None
-        closed_tokens.append(token)
         label = fd_labels.pop(fd, "unknown")
         close_attempts[label] = close_attempts.get(label, 0) + 1
         if fault == "stage_close" and fd == stage_fd:
             real_close(fd)
-            hit("stage close fault")
+            hit("stage_close", "stage close fault")
         if fault == f"{label}_close":
             real_close(fd)
-            hit(f"{label} close fault")
+            hit(fault, f"{label} close fault")
         real_close(fd)
 
     def faulting_publish(*args: object) -> None:
-        nonlocal publication_attempted
-        publication_attempted = True
         if fault in {"publish", "cleanup_unlink", "cleanup_fsync"}:
-            hit("publication fault")
+            hit("publish", "publication fault")
         real_publish(*args)  # type: ignore[arg-type]
 
     def faulting_unlink(
@@ -1039,7 +957,9 @@ def test_candidate_create_once_fault_matrix(
     ) -> None:
         nonlocal unlink_succeeded
         if fault == "cleanup_unlink":
-            hit("cleanup unlink fault")
+            hit("cleanup_unlink", "cleanup unlink fault")
+        if fault == "loser_unlink":
+            hit("loser_unlink", "loser unlink fault")
         real_unlink(path, dir_fd=dir_fd)
         unlink_succeeded = True
         cleanup_events.append(("unlink", os.fsdecode(path), dir_fd))
@@ -1051,10 +971,9 @@ def test_candidate_create_once_fault_matrix(
         follow_symlinks: bool = True,
     ) -> os.stat_result:
         if fault == "winner_stat" and path == "candidate.md":
-            hit("winner stat fault")
+            hit("winner_stat", "winner stat fault")
         return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
 
-    nonlocal_fired = [0]
     monkeypatch.setattr(os, "mkdir", faulting_mkdir)
     monkeypatch.setattr(os, "open", faulting_open)
     monkeypatch.setattr(os, "write", faulting_write)
@@ -1073,21 +992,31 @@ def test_candidate_create_once_fault_matrix(
             write_guard=WriteGuard(lambda: {"state": "healthy"}),
         )
 
-    assert fired + nonlocal_fired[0] >= 1
-    assert fd_tokens == {}
-    assert sorted(opened_tokens) == sorted(closed_tokens)
+    expected_arms = (
+        {"publish": 1, fault: 1} if fault in {"cleanup_unlink", "cleanup_fsync"} else {fault: 1}
+    )
+    assert arms == expected_arms
+    _assert_exact_fd_ownership(oracle.opened, oracle.close_attempts, oracle.duplicates)
+    assert oracle.active == {}
+    assert fd_labels == {}
     if fault in {"root_close", "stage_close", "final_parent_close"}:
         assert close_attempts[fault.removesuffix("_close")] == 1
-    if target.exists():
-        assert target.read_bytes() in {b"winner", b"complete candidate"}
-    if fault not in {"cleanup_unlink"}:
-        owned = [
-            path
-            for path in parent.glob(".candidate-stage-*")
-            if path.name != ".candidate-stage-11111111111111111111111111111111"
-        ]
-        assert owned == []
-    if fault in {"publish", "cleanup_fsync"}:
+
+    if fault == "final_parent_close":
+        assert target.read_bytes() == b"complete candidate"
+    elif fault in {"loser_unlink", "loser_fsync", "winner_stat"}:
+        assert target.read_bytes() == b"winner"
+    else:
+        assert not target.exists()
+
+    hidden_names = [path.name for path in parent.glob(".candidate-stage-*")]
+    assert_hidden_stage_state(
+        hidden_names,
+        sentinel_name=sentinel.name,
+        expected_owned_count=1 if fault in {"cleanup_unlink", "loser_unlink"} else 0,
+    )
+    assert sentinel.read_bytes() == b"unrelated"
+    if unlink_succeeded:
         unlink_index = next(
             index for index, event in enumerate(cleanup_events) if event[0] == "unlink"
         )

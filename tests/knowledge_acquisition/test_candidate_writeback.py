@@ -35,6 +35,10 @@ from app.knowledge_acquisition.extraction_registry import ExtractionResult, clea
 from app.knowledge_acquisition.extractors import summary_extractor
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
+from tests.knowledge.candidate_create_oracles import (
+    FdOracle,
+    assert_exact_fd_ownership,
+)
 
 RAW_RECORD_FIXTURE = {
     "source_kind": "youtube_url",
@@ -379,6 +383,8 @@ def test_rerun_existing_candidate_returns_before_render_and_creates_no_recovery_
         raise AssertionError("existing-target probe must return before WriteGuard")
 
     guard.assert_writes_allowed = forbidden_guard  # type: ignore[method-assign]
+    oracle = FdOracle()
+    oracle.install(monkeypatch)
     real_open = os.open
     real_close = os.close
     real_fsync = os.fsync
@@ -465,6 +471,12 @@ def test_rerun_existing_candidate_returns_before_render_and_creates_no_recovery_
         assert target.read_bytes() == expected_bytes
     assert list(target.parent.glob(".candidate-stage-*")) == []
     assert fd_labels == {}
+    assert_exact_fd_ownership(
+        oracle.opened,
+        oracle.close_attempts,
+        oracle.duplicates,
+    )
+    assert oracle.active == {}
 
 
 def test_composer_preserves_human_authored_band_on_rerun(tmp_path: Path) -> None:
