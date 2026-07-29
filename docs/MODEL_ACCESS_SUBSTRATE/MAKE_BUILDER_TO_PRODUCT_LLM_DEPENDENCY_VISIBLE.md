@@ -2,23 +2,23 @@
 name: Make Builder-To-Product LLM Dependency Visible
 description: Fail importlinter on app.builderops importing app.components.llm, with exactly one named and dated exemption, so the accepted interim authority leak becomes a countdown instead of an invisible violation.
 task_id: MAS-02
-source_anchor: docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8.1 CKM's position in the order has moved — and the interim window must be named
+source_anchor: docs/adr/ADR-0064-model-access-substrate.md :: 8. CKM sequencing — amends ADR-0063
 parent_capability: Model Access Substrate
-prerequisites: []
-depends_on: []
-can_parallelize_with: [DEFINE_PROVIDER_CENSUS.md, EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md, PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
+prerequisites: [MAS-01]
+depends_on: [DEFINE_PROVIDER_CENSUS.md]
+can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed). Delivers condition 2 of
-ADR-0064 §8's interim CKM window.
+State: Authored task specification (future-state; child issue not yet filed). Makes the transition
+debt scheduled by amended ADR-0064 §8 visible before its removal in MAS-06.
 
 # Make Builder-To-Product LLM Dependency Visible
 
 ## Purpose
 
 ADR-0064 §8 accepts, for a bounded window, that CKM keeps routing Builder inference through Product
-policy — the exact authority leakage ADR-0063 rejected Option A to prevent. That acceptance is
-conditional, and one of its two conditions is that the leak must be **visible**. Today it is not:
+policy — the exact authority leakage ADR-0063 rejected Option A to prevent — and explicitly schedules
+an import boundary with one dated exemption. Today it is not visible:
 `importlinter.ini` carries a single `interaction-protected` contract in which `app.builderops` and
 `app.components` sit on the same `source_modules` side, so the import is structurally invisible to the
 gate that exists to catch exactly this class of thing.
@@ -41,7 +41,7 @@ This task converts an invisible violation into a countdown with a date on it.
 4. Correct the stale header comment in `importlinter.ini` lines 6-7, which still claims the gate runs
    non-blocking. It runs blocking in two places:
    `.github/workflows/import-linter.yaml:36-37` and `.github/workflows/ci-smoke.yaml:811-814`.
-5. Record the interim window, its two conditions, and its removal task in
+5. Record the interim window, its amended posture, and its removal task in
    `docs/architecture/SBS_TRANSITION_DEBT.md` so the debt is registered where transition debt lives
    rather than only in an audit snapshot.
 
@@ -75,7 +75,7 @@ Builder System must not import the Product LLM fabric BROKEN
 
 ## Why this matters
 
-ADR-0064 accepted a known authority leak on the explicit understanding that it would be countable. If
+ADR-0064 records a known authority leak and schedules a countable boundary. If
 this contract does not land, the interim window has no end condition, nothing prevents a second Builder
 module from acquiring the same dependency while the window is open, and the removal in MAS-06 has no
 gate proving it actually happened. An accepted risk that nobody can observe is an unaccepted risk.
@@ -96,12 +96,12 @@ forbids a second exemption forbids widening the contract to make an import pass.
       Verify: `tests/architecture/test_import_boundary.py::test_interim_exemption_is_single_named_and_dated`
 - [ ] The existing `interaction-protected` contract and its `source_modules` coverage assertion are
       unchanged and still pass.
-      Verify: `tests/architecture/test_import_boundary.py` (existing coverage assertions, unmodified)
+      Verify: `tests/architecture/test_import_boundary.py::test_interaction_protected_contract_coverage_is_unchanged`
 - [ ] `importlinter.ini`'s header no longer claims the gate is non-blocking.
-      Verify: doc writeback at `importlinter.ini` header comment lines 6-7
-- [ ] The interim window, both ADR-0064 §8 conditions, and the removal task are registered as
+      Verify: `importlinter.ini::header-comment`
+- [ ] The interim window, current amended ADR-0064 §8 posture, and removal task are registered as
       transition debt.
-      Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: model access substrate interim window`
+      Verify: `doc writeback at docs/architecture/SBS_TRANSITION_DEBT.md :: model access substrate interim window`
 
 ## How to verify (pre-merge)
 
@@ -123,23 +123,23 @@ must not be removed before the last import is.
 
 Removing the CKM imports themselves, which is MAS-06. Any other import-boundary contract; ADR-0013's
 fuller per-layer contracts remain the documented refinement they already are. Changing which workflows
-run the linter. Deciding whether CKM may orchestrate, which needs an ADR-0057 amendment.
+run the linter. Changing CKM projection-only authority or adding dispatch/mutation behavior.
 
 ## Related docs
 
-- `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Interim CKM conditions`
+- `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Interim CKM posture`
 - `docs/adr/ADR-0064-model-access-substrate.md :: 8. CKM sequencing — amends ADR-0063`
 - `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8.1`
 - `docs/adr/ADR-0013-code-dependency-direction.md` — governs `importlinter.ini`
-- `docs/adr/ADR-0057-capability-knowledge-model-kvasir.md` — the projection-only lock that condition 1 rests on
+- `docs/adr/ADR-0057-capability-knowledge-model-kvasir.md` — projection-only CKM authority and builder-agent orchestration ruling
 - `importlinter.ini`, `tests/architecture/test_import_boundary.py`
 
 ## Related GitHub issues
 
 One issue. Title shape
 `[Model Access Substrate] make-builder-to-product-llm-dependency-visible: name the interim authority leak`.
-It must state that it delivers condition 2 of ADR-0064 §8 and that MAS-06 removes the exemption it
-creates.
+It must state that it delivers the visibility step scheduled by amended ADR-0064 §8 and that MAS-06
+removes the exemption it creates.
 
 TCD capability recommendation for the implementing agent: **Sonnet / medium reasoning** — one config
 contract, one exemption convention, one architecture test; the shape is already established by the
