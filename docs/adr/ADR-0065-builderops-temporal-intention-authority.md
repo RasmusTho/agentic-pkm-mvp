@@ -1,7 +1,7 @@
 State: Accepted (owner decision, 2026-07-29). Defines the future BuilderOps authority, lifecycle semantics, first-slice content boundary, and delivery gates for temporal-intention evidence. Docs/architecture decision only; no product or runtime behavior changes here.
 Doc role: Decision record (ADR)
 Authority: Authoritative for BuilderOps temporal-intention evidence semantics, canonical-writer sequencing, projection posture, and the content-free first capability slice. Layers on ADR-0010 and ADR-0062 without changing Product/Runtime artifact semantics.
-Owner: BuilderOps governance / Architecture spine (Rasmus)
+Owner: BuilderOps governance / Architecture spine
 Temporal class: Durable decision; supersede through a later ADR when the authority, disposition semantics, or privacy/retention posture changes.
 Source of truth: This ADR plus ADR-0062 and `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`. `docs/audits/BUILDEROPS_TEMPORAL_INTENTION_AUTHORITY_2026-07-29.md` is advisory evidence, not authority.
 
