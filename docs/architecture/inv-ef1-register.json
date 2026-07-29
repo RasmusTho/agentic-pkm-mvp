@@ -422,6 +422,27 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/ENTITY_REVIEW_OPERATION_JOURNAL/COMMIT_OPERATION_AND_OUTBOX_VISIBILITY.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/ENTITY_REVIEW_OPERATION_JOURNAL/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
       "artifact": "docs/ENVIRONMENTS.md",
       "category": "iv",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
