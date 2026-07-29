@@ -109,7 +109,7 @@ export METRICS_ENABLED=1
 uvicorn app.main:app --reload --port 18000
 ```
 
-Optional worker metrics: the outbox worker exposes a Prometheus `/metrics` endpoint (via `prometheus_client`) only when `WORKER_METRICS_PORT` is set to a positive port; it stays off by default. The Prometheus scrape config expects port `9101`:
+Optional worker metrics: the outbox worker exposes a Prometheus `/metrics` endpoint (via `prometheus_client`) only when `WORKER_METRICS_PORT` is set to a valid TCP port from `1` through `65535`; it stays off by default. The Prometheus scrape config expects port `9101`:
 
 ```bash
 WORKER_METRICS_PORT=9101 python -m app.workers.outbox_worker
