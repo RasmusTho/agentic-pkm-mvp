@@ -1,12 +1,12 @@
 ---
 name: Promote Adapter Contract To Neutral Kernel
-description: Move ModelTurnAdapter, the closed failure vocabulary, the five fallback requirement values, and schema-reference validation into a neutral package both runtimes may import, and add the two auth-specific failure classes.
+description: Deliver neutral model intent, resolution, capability, adapter, result, failure, fallback, schema, and provenance contracts both runtimes may import.
 task_id: MAS-04
 source_anchor: docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8. Migration (step 3)
 parent_capability: Model Access Substrate
-prerequisites: []
-depends_on: []
-can_parallelize_with: [DEFINE_PROVIDER_CENSUS.md, MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md, EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md]
+prerequisites: [MAS-03]
+depends_on: [EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md]
+can_parallelize_with: []
 ---
 
 State: Authored task specification (future-state; child issue not yet filed). Establishes the ADR-0063
@@ -43,6 +43,22 @@ policy or execution modules, and registered in `importlinter.ini` `source_module
 ## What this task does
 
 1. Create `app/llm_contract/` containing, and containing only:
+   - immutable `ModelAccessIntent` with exactly `capability_tier`, `reasoning_effort`,
+     `determinism_required`, `output_schema_ref`, `independence`, `fallback_requirement`, and
+     `side_effect_class`; it contains no provider, model, credential, endpoint, or adapter id;
+   - `ModelResolutionRequest`, which combines an intent with a neutral `role_profile` and
+     `resolution_group_id`, plus a batch `resolve_group(...)` protocol. When any request declares
+     `independence=distinct_effective_target`, the resolved batch must contain distinct
+     `(provider, model, effective_identity)` tuples. Role profiles select Builder policy rows; they
+     do not contain provider/model choices;
+   - `ModelCapabilityRequirements` and `ModelCapabilities` for structured output, native tools,
+     system-prompt channel, determinism, and embedding dimension where relevant;
+   - a `ModelAccessResolver` protocol whose singular input is
+     `(ModelResolutionRequest, runtime, channel, consumer)` and whose grouped input is
+     `(requests, runtime, channel, consumer)`. Its validated `ResolvedModelAccess` output carries
+     provider/model/adapter/effective identity, capabilities, credential identity reference,
+     degradation state/reason, resolution-group provenance, and no credential value. The neutral
+     package defines the contract but owns no registry, policy, credential, or provider;
    - the `ModelTurnAdapter` protocol and its `AdapterResult` shape, moved from
      `app/builderops/model_inquiry_adapters.py:72-82`;
    - the closed failure-class vocabulary, moved from `:26-36`, **extended** with
@@ -71,6 +87,8 @@ from app.llm_contract import (
     ADAPTER_FAILURE_CLASSES,
     FALLBACK_REQUIREMENTS,
     AdapterResult,
+    ModelAccessIntent,
+    ModelAccessResolver,
     ModelTurnAdapter,
 )
 
@@ -105,9 +123,19 @@ session could not reach the credential store. A closed vocabulary that cannot sa
       `app.services`, `app.llm`, or any runtime store, transitively.
       Verify: `tests/architecture/test_llm_contract_kernel.py::test_kernel_imports_no_runtime_module`
 - [ ] `ModelTurnAdapter`, `AdapterResult`, the failure vocabulary, the five fallback requirement values,
-      and the schema-validation contract are importable from the kernel, and the five fallback values
-      are exactly ADR-0063's five with no sixth.
+      provider-free intent, capability requirements, resolver/result contracts, and schema-validation
+      contract are importable from the kernel, and the five fallback values are exactly ADR-0063's
+      five with no sixth.
       Verify: `tests/architecture/test_llm_contract_kernel.py::test_kernel_exposes_exactly_the_adr0063_contracts`
+- [ ] `ModelAccessIntent` accepts exactly ADR-0064's seven provider-free fields and rejects provider,
+      model, credential, endpoint, or adapter identifiers.
+      Verify: `tests/model_access/test_contracts.py::test_model_access_intent_is_provider_free_and_closed`
+- [ ] A resolution result cannot claim a provider/model whose capabilities fail the declared
+      requirements, and degradation is always explicit with a reason.
+      Verify: `tests/model_access/test_contracts.py::test_resolved_access_validates_capabilities_and_visible_degradation`
+- [ ] Group resolution enforces `distinct_effective_target` across neutral role profiles and rejects
+      a colliding pair before any adapter call.
+      Verify: `tests/model_access/test_contracts.py::test_group_resolution_enforces_distinct_effective_targets`
 - [ ] `credential_unavailable` and `session_expired` are members of the closed vocabulary.
       Verify: `tests/builderops/test_model_inquiry_adapters.py::test_auth_failure_classes_are_in_the_closed_vocabulary`
 - [ ] A turn classified `credential_unavailable` at the adapter is accepted by the independent
@@ -122,18 +150,18 @@ session could not reach the credential store. A closed vocabulary that cannot sa
 - [ ] The mock/fake/deterministic identity guard and the distinct-adapter-id plus
       distinct-runtime-target-fingerprint guards still fire from the descriptor-loading call site after
       the move.
-      Verify: `tests/builderops/test_model_inquiry_adapters.py::test_provider_enabled_roles_require_distinct_non_mock_attestation` (existing, unmodified)
+      Verify: `tests/builderops/test_model_inquiry_adapters.py::test_provider_enabled_roles_require_distinct_non_mock_attestation`
 - [ ] The existing adapter test file passes with at most import-path edits and no assertion changes.
-      Verify: `tests/builderops/test_model_inquiry_adapters.py` (full file)
+      Verify: `tests/builderops/test_model_inquiry_adapters.py::test_existing_adapter_contract_regression_suite`
 - [ ] `app.llm_contract` is covered by `importlinter.ini` `source_modules`.
-      Verify: `tests/architecture/test_import_boundary.py` (existing coverage assertion, extended)
+      Verify: `tests/architecture/test_import_boundary.py::test_llm_contract_kernel_is_covered_by_import_boundary`
 - [ ] ADR-0063's kernel is recorded as existing in code, with the chosen package path and the rejected
       alternative.
-      Verify: doc writeback at `docs/COMPONENTS.md :: app/llm_contract`
+      Verify: `doc writeback at docs/COMPONENTS.md :: app/llm_contract`
 
 ## How to verify (pre-merge)
 
-- `pytest -q tests/builderops/test_model_inquiry_adapters.py tests/builderops/test_model_inquiry_runner.py tests/builderops/test_model_inquiry_trace.py`
+- `pytest -q tests/model_access/test_contracts.py tests/builderops/test_model_inquiry_adapters.py tests/builderops/test_model_inquiry_runner.py tests/builderops/test_model_inquiry_trace.py`
 - `pytest -q tests/architecture`
 - `pytest -q -m "not pg"` — full unit lane; this relocates a hot-path contract
 - `lint-imports --config importlinter.ini`
@@ -149,9 +177,8 @@ the vocabulary must have one source before MAS-05 emits an auth class.
 
 ## Out of scope
 
-The provider-free intent shape (`capability_tier`, `reasoning_effort`, `determinism_required`,
-`output_schema_ref`, `independence`, `side_effect_class`). ADR-0063's compatibility mappers. The two
-registries, which stay two. Any credential handling — the kernel owns no credential, per ADR-0063
+Concrete resolver implementation and policy. ADR-0063's compatibility mappers. The two registries,
+which stay two. Any credential handling — the kernel owns no credential, per ADR-0063
 `:87-89`; resolution stays in `app/ops/`. Changing any adapter's behaviour, transport, or retry policy.
 Product adoption of the protocol, which is migration step 7.
 
