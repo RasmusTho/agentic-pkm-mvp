@@ -71,6 +71,14 @@ The capability admits exactly three dispositions:
 BuilderOps lifecycle values are not aliases. A correction never rewrites a prior receipt: it appends
 new evidence that names the prior state and decision lineage.
 
+When an allowed expiry or explicit reversal takes effect for the same opaque identity, the canonical
+transaction appends a `disposition_expired` or `disposition_reversed` lifecycle receipt, returns the
+record to the existing BuilderOps `active` lifecycle state, and leaves it with no current
+disposition. `active` and the absence of a current disposition are not fourth disposition values and
+cannot be admitted directly by a client; they are reducer outcomes of a receipt-backed expiry or
+owner-authorized reversal. The prior disposition remains immutable in receipt lineage. A later
+`done`, `ignore`, or `never_show_again` requires a new admitted decision and receipt.
+
 ### D4 — Opaque, registry-backed first record shape
 
 The first capability slice adds one registry-backed BuilderOps record type and an explicit mapping
@@ -79,7 +87,8 @@ to the PostgreSQL authority envelope. Its authoritative transaction must:
 1. atomically create or replay one stable opaque temporal-intention identity under one idempotency
    key;
 2. validate the closed disposition vocabulary and its allowed transition/reversal;
-3. commit guarded state plus an append-only lifecycle receipt;
+3. commit guarded state plus an append-only lifecycle receipt, including the defined
+   `active`/no-current-disposition reducer outcome for an allowed expiry or reversal;
 4. use the existing outbox path for any derived projection work; and
 5. return the original committed identity and receipt lineage on equal replay while rejecting
    conflicting reuse.

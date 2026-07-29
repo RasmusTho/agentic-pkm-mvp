@@ -225,6 +225,9 @@ must:
   Moment, attention, memory, artifact, or UI authority;
 - admit only `done`, `ignore`, and `never_show_again` with the meanings and explicit reversal rules
   in `ADR-0065 :: D3 — Closed disposition vocabulary and explicit reversals`;
+- reduce an allowed expiry or explicit reversal to the existing `active` lifecycle state with no
+  current disposition, while preserving the prior disposition in immutable receipt lineage; this
+  reducer outcome is not a fourth client-admissible disposition;
 - use one stable opaque identity, the existing mandatory BuilderOps authority envelope, one
   idempotency identity, and append-only BuilderOpsReceipt lineage;
 - map explicitly to the ADR-0062 PostgreSQL authority envelope and transaction kernel;
