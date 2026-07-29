@@ -77,9 +77,16 @@ instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + 
 `LABEL_TAXONOMY.md` (canonical labels + narrow `lane:governance` and
 `state:known-defect` exceptions), `LIFECYCLE_TRUTH_MATRIX.md`
 (optional legacy Project projection per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
-`PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations), and `CI_WAIT_CONTRACT.md` (how to wait
-on CI checks — and the optional `--codex` verdict path — via REST without draining the shared API budget). A reference like
+`PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations), `CI_WAIT_CONTRACT.md` (how to wait
+on CI checks — and the optional `--codex` verdict path — via REST without draining the shared API budget),
+and `READ_SCOPE.md` (how much of a cited document to read). A reference like
 `_shared/<FILE>.md :: <section>` resolves there. `_shared/` is not a skill directory.
+
+Read scope: a `FILE :: Section` citation anywhere in this repo's instruction chain means **read that
+section only**; a citation with no `::` is a whole-file read and requires a stated reason at the
+citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the rule that
+`docs/DOCS_INDEX.md` is grep-only and that conditional reads key off the actual diff
+(`git diff --name-only origin/main...HEAD`), not the issue's declared scope.
 
 - `agentic-pkm`
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
