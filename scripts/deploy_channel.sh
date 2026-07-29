@@ -483,6 +483,10 @@ apply_changed_migrations() {
 
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
+  if [ "${scalar_rollback}" = "1" ]; then
+    echo "${reason} (status ${original_status}); retaining the current guard pin and scalar rollback target for a fail-closed retry" >&2
+    return 0
+  fi
   if [ -n "${MIGRATION_RECEIPT_JSON:-}" ]; then
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
@@ -853,14 +857,22 @@ export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
 fi
-if [ -n "${current_sha}" ] && [ "${current_sha}" != "${target_sha}" ]; then
+if [ "${scalar_rollback}" = "1" ]; then
+  # Scalar compatibility mode is not a channel downgrade. Keep the capable
+  # current image pinned as the durable trusted guard and record the old target
+  # in the ordinary rollback anchor, so the same command can resume without an
+  # explicit SHA after a crash or partial container establishment.
+  write_pin "${previous_pin_file}" "${target_sha}"
+elif [ -n "${current_sha}" ] && [ "${current_sha}" != "${target_sha}" ]; then
   # A same-target retry (or same-SHA redeploy) reads current_sha == target_sha
   # because a prior failed attempt already advanced the pin; overwriting the
   # rollback anchor with the failed target would make the true last-known-good
   # SHA unrecoverable through the rollback contract.
   write_pin "${previous_pin_file}" "${current_sha}"
 fi
-write_pin "${pin_file}" "${target_sha}"
+if [ "${scalar_rollback}" != "1" ]; then
+  write_pin "${pin_file}" "${target_sha}"
+fi
 rollback_target_recreated=0
 
 postdeploy_smoke_gate() {

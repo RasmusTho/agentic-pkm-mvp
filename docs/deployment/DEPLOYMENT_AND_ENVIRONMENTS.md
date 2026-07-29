@@ -116,7 +116,10 @@ selected content root at `/app/selected-vault`. `deploy_channel.sh rollback` det
 commit that predates `app.instance.runtime`, requires the explicit binding, absolute selected root,
 and gateway credential file before changing the pin, derives the trusted-current and
 previous-image refs from the current/target pins, and then starts only the guard, old API, and
-gateway through that overlay. The legacy projection translates only that
+gateway through that overlay. Scalar mode keeps the capable current-image pin as its durable guard
+identity and records the old target in the rollback anchor; a failed or restarted establishment
+therefore resumes the guarded mode instead of attempting a session-blocked broad-stack restart.
+The gateway uses the channel's managed restart posture. The legacy projection translates only that
 registration's host path to the container alias and authenticates both the canonical registry
 export and translated projection, so roll-forward restores the original binding identity rather
 than adopting a container path. The ledger validates that alias by its materialized physical-root

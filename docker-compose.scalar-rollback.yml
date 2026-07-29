@@ -107,6 +107,7 @@ services:
 
   scalar-rollback-gateway:
     image: nginx:1.27-alpine
+    restart: unless-stopped
     ports:
       - "${SCALAR_ROLLBACK_BIND_HOST:-127.0.0.1}:${SCALAR_ROLLBACK_PORT:-18000}:8080"
     volumes:

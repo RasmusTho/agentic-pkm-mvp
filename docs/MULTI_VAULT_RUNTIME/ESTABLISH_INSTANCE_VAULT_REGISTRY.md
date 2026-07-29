@@ -213,7 +213,10 @@ This slice promotes the existing seed without changing content-vault authority.
   that denies picker select/initialize mutations, and mounts only the chosen content root at the
   canonical legacy path. The channel rollback wrapper selects that overlay for a target commit
   without `app.instance.runtime`, validates the explicit binding/root/credential inputs before pin
-  mutation, and starts only the guard, old API, and gateway. Startup preflight proves the direct port is absent, the gateway policy is
+  mutation, keeps the capable current image pinned as the durable guard, records the scalar target
+  in the rollback anchor, and starts only the guard, old API, and restart-managed gateway. Failure
+  retains that retryable guarded mode instead of starting the broad stack against an active scalar
+  session. Startup preflight proves the direct port is absent, the gateway policy is
   active, and no broader host vault roots are mounted. A failed guard blocks rollback startup.
   Rollback admission and deployment start serialize on one host-global lock. The old API takes a
   shared runtime-admission lock from a key-free host-global control directory, checks the canonical
