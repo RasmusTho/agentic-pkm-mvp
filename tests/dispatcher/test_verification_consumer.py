@@ -2183,7 +2183,7 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
     def runner(command, **kwargs):
         calls.append(command)
         endpoint = command[-1]
-        if endpoint.endswith("actions/artifacts?per_page=100"):
+        if endpoint.endswith(f"actions/artifacts?per_page=100&name=verification-dispatch-3603-{HEAD}"):
             return Result(
                 json.dumps(
                     {
@@ -2259,7 +2259,9 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
         return Result(json.dumps({"check_runs": GREEN}))
 
     source = GhCliVerificationSource(runner=runner)
-    assert source.pending_requests("RasmusTho/agentic-pkm-mvp") == [artifact_request()]
+    assert source.pending_requests(
+        "RasmusTho/agentic-pkm-mvp", pr_number=3603, head_sha=HEAD
+    ) == [artifact_request()]
     assert source.pull_request("RasmusTho/agentic-pkm-mvp", 3603)["number"] == 3603
     assert source.checks("RasmusTho/agentic-pkm-mvp", HEAD) == GREEN
     assert all(call[:2] == ["gh", "api"] for call in calls)
@@ -3386,7 +3388,9 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
 
     def runner(command, **kwargs):
         calls.append(command)
-        if command[-1].endswith("actions/artifacts?per_page=100"):
+        if command[-1].endswith(
+            f"actions/artifacts?per_page=100&name=verification-dispatch-3603-{HEAD}"
+        ):
             return Result(
                 json.dumps(
                     {
@@ -3458,7 +3462,14 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
     return GhCliVerificationSource(runner=runner), calls
 
 
-def test_pending_requests_discovers_request_beyond_first_artifact_page() -> None:
+def test_artifact_listing_pages_discovers_rows_beyond_first_page() -> None:
+    """``_artifact_listing_pages`` itself is unchanged; unit-test it directly.
+
+    It now backs three call sites (the name-scoped exact-match query and the
+    per-run artifact listing) rather than one repository-wide scan, so its
+    own pagination/fail-loud contract is tested independent of any caller.
+    """
+
     source = GhCliVerificationSource()
     endpoint = f"repos/{REPO}/actions/artifacts?per_page=100"
     calls: list[str] = []
@@ -3475,19 +3486,18 @@ def test_pending_requests_discovers_request_beyond_first_artifact_page() -> None
         raise AssertionError(requested_endpoint)
 
     source._json = read_artifacts  # type: ignore[method-assign]
-    source._request_from_artifact = (  # type: ignore[method-assign]
-        lambda _repository, artifact: {"artifact_id": artifact["id"]}
-        if artifact.get("name") == "request"
-        else None
-    )
 
-    assert source.pending_requests(REPO) == [{"artifact_id": 101}]
+    rows = source._artifact_listing_pages(endpoint)
+    assert rows[-1] == {"id": 101, "name": "request"}
     assert calls == [endpoint, f"{endpoint}&page=2"]
 
 
 def test_pending_requests_ignores_unrelated_artifacts_when_filling_limit() -> None:
     source = GhCliVerificationSource()
-    endpoint = f"repos/{REPO}/actions/artifacts?per_page=100"
+    endpoint = (
+        f"repos/{REPO}/actions/artifacts?per_page=100"
+        f"&name=verification-dispatch-3603-{HEAD}"
+    )
 
     def read_artifacts(requested_endpoint: str) -> object:
         if requested_endpoint == endpoint:
@@ -3512,13 +3522,15 @@ def test_pending_requests_ignores_unrelated_artifacts_when_filling_limit() -> No
         else None
     )
 
-    assert source.pending_requests(REPO, limit=2) == [
+    assert source.pending_requests(
+        REPO, limit=2, pr_number=3603, head_sha=HEAD
+    ) == [
         {"artifact_id": 101},
         {"artifact_id": 102},
     ]
 
 
-def test_pending_requests_distinguishes_truncated_scan_from_empty_result(
+def test_artifact_listing_pages_distinguishes_truncated_scan_from_empty_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = GhCliVerificationSource()
@@ -3530,7 +3542,7 @@ def test_pending_requests_distinguishes_truncated_scan_from_empty_result(
         if requested_endpoint == endpoint
         else pytest.fail(f"unexpected page for empty listing: {requested_endpoint}")
     )
-    assert source.pending_requests(REPO) == []
+    assert source._artifact_listing_pages(endpoint) == []
 
     source._json = (  # type: ignore[method-assign]
         lambda requested_endpoint: {
@@ -3541,10 +3553,10 @@ def test_pending_requests_distinguishes_truncated_scan_from_empty_result(
         else pytest.fail(f"unexpected page beyond bounded scan: {requested_endpoint}")
     )
     with pytest.raises(RuntimeError, match="artifact listing exceeds bounded scan"):
-        source.pending_requests(REPO)
+        source._artifact_listing_pages(endpoint)
 
 
-def test_pending_requests_rejects_short_page_that_contradicts_total_count() -> None:
+def test_artifact_listing_pages_rejects_short_page_that_contradicts_total_count() -> None:
     source = GhCliVerificationSource()
     endpoint = f"repos/{REPO}/actions/artifacts?per_page=100"
 
@@ -3555,7 +3567,246 @@ def test_pending_requests_rejects_short_page_that_contradicts_total_count() -> N
     )
 
     with pytest.raises(RuntimeError, match="artifact listing is incomplete"):
-        source.pending_requests(REPO)
+        source._artifact_listing_pages(endpoint)
+
+
+def test_verification_dispatch_run_pages_distinguishes_truncated_scan_from_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = GhCliVerificationSource()
+    endpoint = (
+        f"repos/{REPO}/actions/workflows/verification-dispatch-request.yml/runs"
+        "?per_page=100&status=success"
+    )
+    monkeypatch.setattr(verification_consumer, "_MAX_VERIFICATION_REQUEST_RUN_ROWS", 100)
+
+    source._json = (  # type: ignore[method-assign]
+        lambda requested_endpoint: {"total_count": 0, "workflow_runs": []}
+        if requested_endpoint == endpoint
+        else pytest.fail(f"unexpected page for empty listing: {requested_endpoint}")
+    )
+    assert source._verification_dispatch_run_pages(endpoint) == []
+
+    source._json = (  # type: ignore[method-assign]
+        lambda requested_endpoint: {
+            "total_count": 101,
+            "workflow_runs": [{"id": index} for index in range(100)],
+        }
+        if requested_endpoint == endpoint
+        else pytest.fail(f"unexpected page beyond bounded scan: {requested_endpoint}")
+    )
+    with pytest.raises(RuntimeError, match="workflow run listing exceeds bounded scan"):
+        source._verification_dispatch_run_pages(endpoint)
+
+
+def test_verification_dispatch_run_pages_rejects_short_page_that_contradicts_total_count() -> None:
+    source = GhCliVerificationSource()
+    endpoint = (
+        f"repos/{REPO}/actions/workflows/verification-dispatch-request.yml/runs"
+        "?per_page=100&status=success"
+    )
+
+    source._json = (  # type: ignore[method-assign]
+        lambda requested_endpoint: {"total_count": 101, "workflow_runs": []}
+        if requested_endpoint == endpoint
+        else pytest.fail(f"unexpected page: {requested_endpoint}")
+    )
+
+    with pytest.raises(RuntimeError, match="workflow run listing is incomplete"):
+        source._verification_dispatch_run_pages(endpoint)
+
+
+def _discovery_source(
+    payload: dict[str, object], *, artifact_expired: bool = False
+) -> tuple[GhCliVerificationSource, list[str]]:
+    """A source stub that answers both discovery paths for the same artifact.
+
+    The unscoped path (workflow-run enumeration -> per-run artifact listing)
+    and the scoped exact-name path both resolve to the same single artifact,
+    so a test can exercise either one and assert on which endpoints were
+    actually called. The repository-wide artifact listing
+    (``repos/{repo}/actions/artifacts?per_page=100`` with no ``name=``) is
+    deliberately unanswered: calling it is exactly the defect this issue
+    fixes, so any code path that still reaches it fails the test loudly.
+    """
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr("verification-dispatch/request.json", json.dumps(payload))
+    artifact_name = f"verification-dispatch-3603-{HEAD}"
+    calls: list[str] = []
+
+    class Result:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self.stdout = stdout
+
+    def artifact_listing() -> dict[str, object]:
+        return {
+            "artifacts": [
+                {
+                    "id": 7,
+                    "name": artifact_name,
+                    "size_in_bytes": len(archive_bytes.getvalue()),
+                    "expired": artifact_expired,
+                    "workflow_run": {
+                        "id": 123,
+                        "repository_id": 456,
+                        "head_repository_id": 456,
+                        "head_sha": "b" * 40,
+                    },
+                }
+            ]
+        }
+
+    def runner(command, **kwargs):
+        endpoint = command[-1]
+        calls.append(endpoint)
+        if endpoint == f"repos/{REPO}/actions/artifacts?per_page=100":
+            raise AssertionError(
+                "discovery must never scan the repository-wide artifact "
+                "listing (that scan is exactly what exceeds "
+                "_MAX_ARTIFACT_LISTING_ROWS in production)"
+            )
+        if endpoint.endswith(
+            "actions/workflows/verification-dispatch-request.yml/runs"
+            "?per_page=100&status=success"
+        ):
+            return Result(json.dumps({"workflow_runs": [{"id": 123}]}))
+        if endpoint.endswith("actions/runs/123/artifacts?per_page=100"):
+            return Result(json.dumps(artifact_listing()))
+        if endpoint == f"repos/{REPO}/actions/artifacts?per_page=100&name={artifact_name}":
+            return Result(json.dumps(artifact_listing()))
+        if endpoint.endswith("artifacts/7/zip"):
+            return Result(archive_bytes.getvalue())
+        if endpoint.endswith("actions/runs/123"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": 123,
+                        "run_attempt": 1,
+                        "name": "Verification Dispatch Request",
+                        "path": ".github/workflows/verification-dispatch-request.yml",
+                        "event": "workflow_run",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": "b" * 40,
+                        "repository": {"id": 456, "full_name": REPO},
+                        "head_repository": {"id": 456, "full_name": REPO},
+                    }
+                )
+            )
+        if endpoint.endswith("actions/runs/99"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": 99,
+                        "run_attempt": 1,
+                        "name": "CI Smoke",
+                        "path": ".github/workflows/ci-smoke.yaml",
+                        "event": "pull_request",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": HEAD,
+                        "repository": {"id": 456, "full_name": REPO},
+                        "head_repository": {"id": 456, "full_name": REPO},
+                    }
+                )
+            )
+        raise AssertionError(f"unexpected GitHub read: {endpoint}")
+
+    return GhCliVerificationSource(runner=runner), calls
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"pr_number": 3603},
+        {"head_sha": HEAD},
+    ],
+)
+def test_pending_requests_rejects_partial_scoped_kwargs(kwargs: dict[str, object]) -> None:
+    source = GhCliVerificationSource()
+    with pytest.raises(ValueError, match="pr_number and head_sha must be supplied together"):
+        source.pending_requests(REPO, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "pr_number,head_sha",
+    [
+        (0, HEAD),
+        (-1, HEAD),
+        (3603, "not-a-sha"),
+        (3603, "a" * 39),
+    ],
+)
+def test_pending_requests_rejects_malformed_scoped_kwargs(
+    pr_number: int, head_sha: str
+) -> None:
+    source = GhCliVerificationSource()
+    with pytest.raises(ValueError):
+        source.pending_requests(REPO, pr_number=pr_number, head_sha=head_sha)
+
+
+def test_pending_requests_succeeds_when_repository_listing_exceeds_bound() -> None:
+    """The production defect this issue fixes.
+
+    The repository holds 16,019 artifacts -- 16x ``_MAX_ARTIFACT_LISTING_ROWS``
+    -- so a scan of the repository-wide artifact listing fails on every call.
+    Discovery must succeed regardless of that total, because it no longer
+    queries the repository-wide listing at all: it enumerates recent runs of
+    ``verification-dispatch-request.yml`` (bounded by run count, not by the
+    repository's unrelated total artifact volume) and reads each run's own
+    small artifact listing.
+    """
+
+    payload = artifact_request()
+    source, calls = _discovery_source(payload)
+
+    assert source.pending_requests(REPO) == [payload]
+    assert f"repos/{REPO}/actions/artifacts?per_page=100" not in calls
+
+
+def test_pending_requests_queries_artifact_by_deterministic_name_for_targeted_pr() -> None:
+    payload = artifact_request()
+    source, calls = _discovery_source(payload)
+
+    assert source.pending_requests(REPO, pr_number=3603, head_sha=HEAD) == [payload]
+    assert calls[0] == (
+        f"repos/{REPO}/actions/artifacts?per_page=100"
+        f"&name=verification-dispatch-3603-{HEAD}"
+    )
+    assert not any("actions/workflows/" in call for call in calls)
+
+
+def test_scoped_discovery_still_rejects_stale_head_requests(tmp_path) -> None:
+    payload = artifact_request()
+    source, _ = _discovery_source(payload)
+    discovered = source.pending_requests(REPO, pr_number=3603, head_sha=HEAD)[0]
+
+    launcher = Launcher()
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        Truth(eligible_pr(head={"ref": "branch", "sha": "b" * 40}), GREEN),
+        Auth(),
+        launcher,
+        "host",
+    ).consume(discovered)
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "stale_head"
+    assert launcher.calls == []
+
+
+def test_scoped_discovery_skips_expired_artifacts() -> None:
+    payload = artifact_request()
+    source, calls = _discovery_source(payload, artifact_expired=True)
+
+    assert source.pending_requests(REPO, pr_number=3603, head_sha=HEAD) == []
+    assert calls[0] == (
+        f"repos/{REPO}/actions/artifacts?per_page=100"
+        f"&name=verification-dispatch-3603-{HEAD}"
+    )
 
 
 def test_pending_request_rejects_oversized_archive_before_buffering(
@@ -3606,7 +3857,9 @@ def test_pending_request_rejects_oversized_archive_before_buffering(
                     }
                 ]
             }
-            if endpoint.endswith("actions/artifacts?per_page=100")
+            if endpoint.endswith(
+                f"actions/artifacts?per_page=100&name=verification-dispatch-3603-{HEAD}"
+            )
             else {
                 "id": 123,
                 "run_attempt": 1,
@@ -3640,7 +3893,9 @@ def test_pending_request_rejects_oversized_archive_before_buffering(
     )
 
     with pytest.raises(ValueError, match="compressed size limit"):
-        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+        source.pending_requests(
+            "RasmusTho/agentic-pkm-mvp", pr_number=3603, head_sha=HEAD
+        )
 
     assert process.terminate_calls == 1
     assert process.wait_calls >= 1
@@ -3671,7 +3926,9 @@ def test_pending_request_rejects_oversized_archive_members() -> None:
                 self.stdout = stdout
 
         def runner(command, **kwargs):
-            if command[-1].endswith("actions/artifacts?per_page=100"):
+            if command[-1].endswith(
+                f"actions/artifacts?per_page=100&name=verification-dispatch-3603-{HEAD}"
+            ):
                 return Result(
                     json.dumps(
                         {
@@ -3719,7 +3976,7 @@ def test_pending_request_rejects_oversized_archive_members() -> None:
 
         with pytest.raises(ValueError, match="too many members|uncompressed size limit"):
             GhCliVerificationSource(runner=runner).pending_requests(
-                "RasmusTho/agentic-pkm-mvp"
+                "RasmusTho/agentic-pkm-mvp", pr_number=3603, head_sha=HEAD
             )
 
 
@@ -3729,7 +3986,9 @@ def test_pending_request_rejects_repository_mismatch() -> None:
     )
 
     with pytest.raises(ValueError, match="artifact repository mismatch"):
-        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+        source.pending_requests(
+            "RasmusTho/agentic-pkm-mvp", pr_number=3603, head_sha=HEAD
+        )
 
     assert len(calls) == 3
 
@@ -3740,7 +3999,9 @@ def test_pending_request_rejects_workflow_run_mismatch() -> None:
     )
 
     with pytest.raises(ValueError, match="artifact workflow-run mismatch"):
-        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+        source.pending_requests(
+            "RasmusTho/agentic-pkm-mvp", pr_number=3603, head_sha=HEAD
+        )
 
     assert len(calls) == 3
 
@@ -3764,7 +4025,9 @@ def test_pending_request_rejects_v1_empty_supporting_closure_authority() -> None
     source, calls = _artifact_source_for_request(payload)
 
     with pytest.raises(ValueError, match="request artifact is malformed"):
-        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+        source.pending_requests(
+            "RasmusTho/agentic-pkm-mvp", pr_number=3603, head_sha=HEAD
+        )
 
     assert len(calls) == 4
 

@@ -526,7 +526,9 @@ def _artifact_source_with_authenticated_runs(
 
     def json_response(endpoint: str) -> object:
         calls.append(endpoint)
-        if endpoint.endswith("actions/artifacts?per_page=100"):
+        if endpoint.endswith(
+            f"actions/artifacts?per_page=100&name=verification-dispatch-3603-{HEAD}"
+        ):
             return {
                 "artifacts": [
                     {
@@ -593,7 +595,7 @@ def test_foreign_artifact_uploader_workflow_is_rejected_before_persistence() -> 
     )
 
     with pytest.raises(ValueError, match="artifact uploader workflow identity"):
-        source.pending_requests(_TRUSTED_REPOSITORY)
+        source.pending_requests(_TRUSTED_REPOSITORY, pr_number=3603, head_sha=HEAD)
 
     assert any(endpoint.endswith("actions/runs/123") for endpoint in calls)
     assert downloads == []
@@ -605,7 +607,7 @@ def test_canonical_artifact_uploader_workflow_is_authenticated() -> None:
         uploader_path=".github/workflows/verification-dispatch-request.yml",
     )
 
-    assert source.pending_requests(_TRUSTED_REPOSITORY) == [request()]
+    assert source.pending_requests(_TRUSTED_REPOSITORY, pr_number=3603, head_sha=HEAD) == [request()]
     assert any(endpoint.endswith("actions/runs/123") for endpoint in calls)
     assert downloads == [7]
 
@@ -620,7 +622,9 @@ def _mixed_artifact_source(
     source = GhCliVerificationSource()
 
     def json_response(endpoint: str) -> object:
-        if endpoint.endswith("actions/artifacts?per_page=100"):
+        if endpoint.endswith(
+            f"actions/artifacts?per_page=100&name=verification-dispatch-3603-{HEAD}"
+        ):
             return {"artifacts": artifacts}
         if endpoint.endswith("actions/runs/123"):
             if fail_uploader_read:
@@ -687,20 +691,20 @@ def _legacy_artifact() -> dict[str, object]:
 def test_valid_artifact_survives_legacy_and_malformed_candidates() -> None:
     source = _mixed_artifact_source([_valid_artifact(), _legacy_artifact()])
 
-    assert source.pending_requests(_TRUSTED_REPOSITORY) == [request()]
+    assert source.pending_requests(_TRUSTED_REPOSITORY, pr_number=3603, head_sha=HEAD) == [request()]
 
 
 def test_invalid_artifact_cannot_deny_service_to_later_valid_candidate() -> None:
     source = _mixed_artifact_source([_legacy_artifact(), _valid_artifact()])
 
-    assert source.pending_requests(_TRUSTED_REPOSITORY) == [request()]
+    assert source.pending_requests(_TRUSTED_REPOSITORY, pr_number=3603, head_sha=HEAD) == [request()]
 
 
 def test_artifact_poll_transport_failure_is_not_silently_skipped() -> None:
     source = _mixed_artifact_source([_valid_artifact()], fail_uploader_read=True)
 
     with pytest.raises(RuntimeError, match="GitHub transport unavailable"):
-        source.pending_requests(_TRUSTED_REPOSITORY)
+        source.pending_requests(_TRUSTED_REPOSITORY, pr_number=3603, head_sha=HEAD)
 
 
 def test_allowlisted_text_projection_preserves_structural_receipt_fields() -> None:
