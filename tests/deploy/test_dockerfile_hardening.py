@@ -246,3 +246,23 @@ def test_docs_settings_runtime_tree_is_reincluded_and_copied() -> None:
         "runtime stage must COPY docs/settings/ (settings registries read at "
         "runtime by app/components/settings/*_loader.py)"
     )
+
+
+def test_episode_stream_registry_is_reincluded_and_copied() -> None:
+    """The default episode stream registry is runtime input, not dev-only docs."""
+    registry = "docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md"
+    patterns = _dockerignore_patterns()
+    assert f"!{registry}" in patterns, (
+        ".dockerignore must re-include the default episode stream registry "
+        "so the runtime stage can copy it"
+    )
+
+    final_stage = _dockerfile_text()[_dockerfile_text().rindex("FROM ") :]
+    assert re.search(
+        rf"^\s*COPY\s+{re.escape(registry)}\s+\./{re.escape(registry)}\s*$",
+        final_stage,
+        flags=re.MULTILINE,
+    ), (
+        "runtime stage must copy the default episode stream registry to its "
+        "existing /app/docs path"
+    )

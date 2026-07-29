@@ -106,6 +106,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 #                               plus app/settings/flows.py + agents.py
 #                               fallbacks and app/agents/panel_agent/wiring.py).
 #                               .dockerignore re-includes it (!docs/settings).
+# - docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md
+#                               the markdown declaration loaded by
+#                               app.episodes.stream_registry at runtime.
 # - companion-ui/companion-app/ the companion_ui package the companion-ui
 #                               service serves (working_dir + PYTHONPATH)
 # - alembic.ini                 root alembic entry (script_location=app/alembic)
@@ -129,6 +132,7 @@ COPY config/ ./config/
 COPY configs/ ./configs/
 COPY vault/ ./vault/
 COPY docs/settings/ ./docs/settings/
+COPY docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md ./docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md
 COPY companion-ui/companion-app/ ./companion-ui/companion-app/
 COPY alembic.ini sitecustomize.py ./
 COPY scripts/start_api.sh scripts/run_migrations.sh \
