@@ -12,7 +12,7 @@ from app.builderops.model_inquiry import (
     _validate_adapter_failure_diagnostic,
 )
 from app.builderops.model_inquiry_adapters import (
-    ADAPTER_CONFIG_ENV,
+    INQUIRY_INTENT_CONFIG_ENV,
     AdapterExecutionError,
     AdapterResult,
     ScriptedAdapter,
@@ -20,6 +20,13 @@ from app.builderops.model_inquiry_adapters import (
 from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION, canonical_hash
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
 from app.builderops.models import BuilderOpsValidationError
+from tests.builderops.inquiry_intent import (
+    DECLARED_TEST_CREDENTIALS,
+    intent_config,
+    intent_env,
+    provisioned_env,
+    resolver_for_targets,
+)
 
 
 def _start(tmp_path: Path, inquiry_id: str) -> tuple[ModelInquiryService, Path]:
@@ -101,9 +108,13 @@ def test_review_turn_uses_persisted_inputs_and_validates_output(tmp_path: Path) 
     assert not any(turn["turn_id"] == "review-000-gpt_codex" for turn in service.trace("inq_runner_review")["turns"])
 
 
-def test_dry_run_is_deterministic_and_side_effect_free(tmp_path: Path) -> None:
+def test_dry_run_performs_no_adapter_call_and_writes_nothing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service, vault = _start(tmp_path, "inq_runner_dry")
     before = {path.relative_to(vault): path.read_bytes() for path in vault.rglob("*") if path.is_file()}
+    posts = _forbid_provider_calls(monkeypatch)
     runner = ModelInquiryRunner(service, env={})
 
     first = runner.run("inq_runner_dry", max_rounds=2, dry_run=True)
@@ -112,6 +123,48 @@ def test_dry_run_is_deterministic_and_side_effect_free(tmp_path: Path) -> None:
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert first["unavailable_roles"] == ["fable", "gpt_codex"]
     assert {path.relative_to(vault): path.read_bytes() for path in vault.rglob("*") if path.is_file()} == before
+
+    # A fully provisioned, resolvable configuration still performs no call and
+    # writes nothing, and a mock identity is still refused as a provider role.
+    provisioned = ModelInquiryRunner(
+        service, env=provisioned_env(tmp_path / "secrets")
+    ).run("inq_runner_dry", max_rounds=2, dry_run=True)
+    assert provisioned["unavailable_roles"] == []
+    assert provisioned["adapter_descriptors"]["fable"]["available"] is True
+
+    mocked = ModelInquiryRunner(
+        service,
+        env=provisioned_env(tmp_path / "secrets"),
+        resolver=resolver_for_targets(
+            tmp_path / "mock-census",
+            {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
+        ),
+    ).run("inq_runner_dry", max_rounds=2, dry_run=True)
+    assert mocked["unavailable_roles"] == ["fable", "gpt_codex"]
+    assert all(
+        "mock" in descriptor["reason"]
+        for descriptor in mocked["adapter_descriptors"].values()
+    )
+    assert not posts
+    assert {path.relative_to(vault): path.read_bytes() for path in vault.rglob("*") if path.is_file()} == before
+    assert "credential" not in json.dumps(provisioned).replace(
+        "credential_identity_ref", ""
+    ).replace("anthropic.api-key", "").replace("openai.api-key", "")
+
+
+def _forbid_provider_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Fail loudly if any code path reaches a provider transport."""
+    calls: list[str] = []
+
+    def refuse(url: str, **_kwargs: Any) -> None:
+        calls.append(url)
+        raise AssertionError(f"unexpected provider call: {url}")
+
+    monkeypatch.setattr(
+        "app.builderops.model_inquiry_adapters.requests.post",
+        refuse,
+    )
+    return calls
 
 
 @dataclass
@@ -285,29 +338,177 @@ def test_adapter_failures_and_bad_config_are_terminal_without_secret_leak(tmp_pa
 
     inquiry_id = "inq_runner_bad_config"
     service, _ = _start(tmp_path, inquiry_id)
-    config = {
-        "fable": {
-            "kind": "command",
-            "role_identity": "fable",
-            "adapter_id": "fable-command",
-            "provider": "fable",
-            "model": "fable-model",
-            "argv": ["/missing/fable"],
-            "timeout_seconds": "not-a-number",
-        },
-        "gpt_codex": {
-            "kind": "command",
-            "role_identity": "gpt_codex",
-            "adapter_id": "codex-command",
-            "provider": "codex",
-            "model": "codex-model",
-            "argv": ["/missing/codex"],
-        },
-    }
+    config = intent_config()
+    config["roles"]["fable"]["capability_tier"] = "economy"
     result = ModelInquiryRunner(
-        service, env={ADAPTER_CONFIG_ENV: json.dumps(config)}
+        service, env={INQUIRY_INTENT_CONFIG_ENV: json.dumps(config)}
     ).run(inquiry_id, max_rounds=1)
     assert result["outcome"] == "provider_unavailable"
+
+
+class _FakeProviderResponse:
+    """Minimal provider transport double; it never carries a credential back."""
+
+    def __init__(self, provider: str, payload: dict[str, Any]) -> None:
+        self.headers = {
+            "request-id" if provider == "anthropic" else "x-request-id": (
+                f"{'req' if provider == 'anthropic' else 'resp'}_{provider}_fixture"
+            )
+        }
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+def _provider_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, Any]]:
+    """Record provider calls and answer them with schema-valid role responses."""
+    calls: list[dict[str, Any]] = []
+
+    def post(url: str, **kwargs: Any) -> _FakeProviderResponse:
+        body = kwargs["json"]
+        headers = kwargs["headers"]
+        calls.append({"url": url, "model": body["model"], "headers": headers})
+        request = json.loads(
+            body["messages"][-1]["content"]
+            if "messages" in body
+            else body["messages"][0]["content"]
+        )
+        if request["phase"] == "draft":
+            text = _response("draft")
+        else:
+            text = _response(
+                "accept",
+                reviewed=list(request["reviewed_artifact_refs"]),
+                accepted_hash=request["input_artifacts"][0]["artifact_hash"],
+            )
+        if "x-api-key" in headers:
+            return _FakeProviderResponse(
+                "anthropic", {"content": [{"type": "text", "text": text}]}
+            )
+        return _FakeProviderResponse(
+            "openai", {"choices": [{"message": {"content": text}}]}
+        )
+
+    monkeypatch.setattr("app.builderops.model_inquiry_adapters.requests.post", post)
+    return calls
+
+
+def test_production_inquiry_resolves_provider_free_intent_through_builder_census(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, vault = _start(tmp_path, "inq_runner_declared")
+    calls = _provider_transport(monkeypatch)
+    env = provisioned_env(tmp_path / "secrets")
+
+    # The caller submits provider-free intent only.
+    submitted = json.dumps(json.loads(env[INQUIRY_INTENT_CONFIG_ENV])).lower()
+    for forbidden in ("anthropic", "openai", "claude", "gpt-5", "api_key", "endpoint"):
+        assert forbidden not in submitted
+
+    result = ModelInquiryRunner(service, env=env).run("inq_runner_declared", max_rounds=1)
+
+    assert result["outcome"] == "consensus"
+    turns = service.trace("inq_runner_declared")["turns"]
+    assert {turn["provider"] for turn in turns} == {"anthropic", "openai"}
+    assert {turn["model"] for turn in turns} == {"claude-fable-5", "gpt-5.6-sol"}
+    assert all(turn["provider_request_id"] for turn in turns)
+    assert {call["url"] for call in calls} == {
+        "https://api.anthropic.com/v1/messages",
+        "https://api.openai.com/v1/chat/completions",
+    }
+    persisted = "".join(
+        path.read_text(encoding="utf-8") for path in vault.rglob("*.json")
+    )
+    for value in DECLARED_TEST_CREDENTIALS.values():
+        assert value not in persisted
+
+
+def test_production_inquiry_resolves_distinct_effective_targets_for_role_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = _start(tmp_path, "inq_runner_distinct")
+    calls = _provider_transport(monkeypatch)
+
+    ModelInquiryRunner(
+        service, env=provisioned_env(tmp_path / "secrets")
+    ).run("inq_runner_distinct", max_rounds=1)
+    turns = service.trace("inq_runner_distinct")["turns"]
+    targets = {(turn["provider"], turn["model"], turn["adapter_id"]) for turn in turns}
+    assert len(targets) == 2
+    assert len({turn["adapter_id"] for turn in turns}) == 2
+
+    collided_service, collided_vault = _start(tmp_path, "inq_runner_collided")
+    calls.clear()
+    collided = ModelInquiryRunner(
+        collided_service,
+        env=provisioned_env(tmp_path / "secrets"),
+        resolver=resolver_for_targets(
+            tmp_path / "collided-census",
+            {
+                "fable": ("anthropic", "claude-fable-5"),
+                "gpt_codex": ("anthropic", "claude-fable-5"),
+            },
+        ),
+    ).run("inq_runner_collided", max_rounds=1)
+
+    assert collided["outcome"] == "provider_unavailable"
+    assert calls == []
+    assert collided_service.trace("inq_runner_collided")["turns"] == []
+    assert not list((collided_vault / "model-inquiries" / "inq_runner_collided" / "turns").glob("*"))
+
+
+def test_absent_credential_fails_closed_as_credential_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, vault = _start(tmp_path, "inq_runner_no_credential")
+    posts = _forbid_provider_calls(monkeypatch)
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(
+        "app.builderops.model_inquiry_adapters.subprocess.Popen",
+        lambda argv, **_kwargs: spawned.append(list(argv)),
+    )
+
+    result = ModelInquiryRunner(service, env=intent_env()).run(
+        "inq_runner_no_credential", max_rounds=1
+    )
+
+    assert result["outcome"] == "provider_error"
+    diagnostic = result["details"]["diagnostic"]
+    assert diagnostic["adapter_failure_class"] == "credential_unavailable"
+    assert diagnostic["credential_identity_ref"] == "anthropic.api-key"
+    assert "adapter_exit_code" not in diagnostic
+    # No fallback: no provider transport, no subscription CLI, no second provider.
+    assert posts == []
+    assert spawned == []
+    assert service.trace("inq_runner_no_credential")["turns"] == []
+
+    # The typed class survives the independent persistence-boundary validation.
+    reloaded = ModelInquiryService(vault).trace("inq_runner_no_credential")
+    attempt = next(
+        receipt
+        for receipt in reloaded["receipts"]
+        if receipt["event_type"] == "inquiry_provider_attempt_terminal"
+    )
+    assert attempt["details"]["diagnostic"] == diagnostic
+
+    # Ambient environment is not a credential source either.
+    ambient_service, _ = _start(tmp_path, "inq_runner_ambient")
+    ambient = ModelInquiryRunner(
+        ambient_service, env={**intent_env(), **DECLARED_TEST_CREDENTIALS}
+    ).run("inq_runner_ambient", max_rounds=1)
+    assert ambient["details"]["diagnostic"]["adapter_failure_class"] == (
+        "credential_unavailable"
+    )
+    assert posts == []
 
 
 def test_auth_failure_class_survives_persistence_revalidation(tmp_path: Path) -> None:

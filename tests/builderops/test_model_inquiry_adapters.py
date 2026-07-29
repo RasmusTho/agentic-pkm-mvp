@@ -13,14 +13,21 @@ import pytest
 
 from app.builderops.model_inquiry_adapters import (
     ADAPTER_FAILURE_CLASSES,
-    ADAPTER_CONFIG_ENV,
+    INQUIRY_INTENT_CONFIG_ENV,
     AdapterExecutionError,
     AdapterResult,
+    CredentialUnavailableError,
+    HttpModelAdapter,
     LocalCommandAdapter,
     ModelTurnAdapter,
     ScriptedAdapter,
     load_adapter_descriptors,
+    load_adapters,
+    sanitized_adapter_failure,
 )
+from app.builderops.models import BuilderOpsValidationError
+from app.ops.host_secret_bootstrap import HOST_SECRET_RUNTIME_ENV_FILE
+from app.ops.host_secret_contract import load_host_secret_contract
 from llm_contract import (
     ADAPTER_FAILURE_CLASSES as KERNEL_ADAPTER_FAILURE_CLASSES,
     AdapterResult as KernelAdapterResult,
@@ -28,6 +35,16 @@ from llm_contract import (
 )
 from app.builderops import model_inquiry_adapters as adapters_module
 from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION
+from tests.builderops.inquiry_intent import (
+    COMMITTED_INTENT_CONFIG,
+    COMMITTED_INTENT_PATH,
+    CONTRACT_PATH,
+    DECLARED_TEST_CREDENTIALS,
+    intent_config,
+    intent_env,
+    resolver_for_targets,
+    runtime_secret_file,
+)
 
 
 def _response() -> dict[str, object]:
@@ -97,6 +114,32 @@ def test_local_command_adapter_is_bounded_and_secret_safe(tmp_path: Path) -> Non
     )
     with pytest.raises(AdapterExecutionError, match="contained an allowed environment value"):
         echo_secret.execute({"request": True})
+
+    # An injected provider credential leaves no value in the classified
+    # diagnostic a receipt is allowed to retain; only the logical identifier.
+    credential_failure = CredentialUnavailableError(
+        adapter_id="anthropic-configured-model",
+        credential_identity_ref="anthropic.api-key",
+    )
+    diagnostic = sanitized_adapter_failure(
+        credential_failure, adapter_id="anthropic-configured-model"
+    )
+    assert diagnostic == {
+        "adapter_id": "anthropic-configured-model",
+        "adapter_failure_class": "credential_unavailable",
+        "credential_identity_ref": "anthropic.api-key",
+    }
+    assert "credential-sentinel" not in json.dumps(diagnostic)
+    http_adapter = HttpModelAdapter(
+        adapter_id="anthropic-configured-model",
+        provider="anthropic",
+        model="configured-model",
+        endpoint="https://api.anthropic.com/v1/messages",
+        api_key="credential-sentinel",
+    )
+    assert "credential-sentinel" not in json.dumps(
+        adapters_module.sanitized_adapter_identity(http_adapter)
+    )
 
 
 def test_local_command_adapter_translates_process_group_permission_error(
@@ -334,22 +377,154 @@ def test_local_command_adapter_maps_subscription_timeout_exit_to_timeout() -> No
     assert raised.value.exit_code == 124
 
 
-def test_provider_enabled_roles_require_distinct_non_mock_attestation() -> None:
-    config = {
-        role: {
-            "kind": "command",
-            "role_identity": role,
-            "adapter_id": f"{role}-adapter",
-            "provider": "mock",
-            "model": "not-fable",
-            "argv": [sys.executable, "-c", "print('{}')"],
+def test_provider_enabled_roles_require_distinct_non_mock_attestation(
+    tmp_path: Path,
+) -> None:
+    mock_resolver = resolver_for_targets(
+        tmp_path / "mock",
+        {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
+    )
+    mocked = load_adapter_descriptors(intent_env(), resolver=mock_resolver)
+    assert [item["available"] for item in mocked.values()] == [False, False]
+    assert all("mock" in item["reason"] for item in mocked.values())
+
+    collided_resolver = resolver_for_targets(
+        tmp_path / "collided",
+        {
+            "fable": ("anthropic", "claude-fable-5"),
+            "gpt_codex": ("anthropic", "claude-fable-5"),
+        },
+    )
+    collided = load_adapter_descriptors(intent_env(), resolver=collided_resolver)
+    assert [item["available"] for item in collided.values()] == [False, False]
+    assert all("distinct_effective_target" in item["reason"] for item in collided.values())
+    with pytest.raises(BuilderOpsValidationError, match="distinct_effective_target"):
+        load_adapters(intent_env(), resolver=collided_resolver)
+
+    resolved = load_adapter_descriptors(intent_env())
+    assert resolved["fable"]["adapter_id"] != resolved["gpt_codex"]["adapter_id"]
+    assert (
+        resolved["fable"]["target_fingerprint"]
+        != resolved["gpt_codex"]["target_fingerprint"]
+    )
+
+
+def test_role_credentials_resolve_through_the_host_secret_contract(
+    tmp_path: Path,
+) -> None:
+    contract = load_host_secret_contract(CONTRACT_PATH)
+    descriptors = load_adapter_descriptors(intent_env())
+    for role in ("fable", "gpt_codex"):
+        assert contract.required_secrets_for_role(
+            consumer="builderops-model-inquiry", role=role
+        ) == (descriptors[role]["credential_identity_ref"],)
+
+    secret_file = runtime_secret_file(tmp_path)
+    adapters = load_adapters(
+        {**intent_env(), HOST_SECRET_RUNTIME_ENV_FILE: str(secret_file)}
+    )
+    assert set(adapters) == {"fable", "gpt_codex"}
+    for role, binding in (("fable", "ANTHROPIC_API_KEY"), ("gpt_codex", "OPENAI_API_KEY")):
+        adapter = adapters[role]
+        assert isinstance(adapter, HttpModelAdapter)
+        assert adapter.api_key == DECLARED_TEST_CREDENTIALS[binding]
+
+    # The same values in ambient process environment are not a credential source.
+    with pytest.raises(CredentialUnavailableError) as ambient:
+        load_adapters({**intent_env(), **DECLARED_TEST_CREDENTIALS})
+    assert ambient.value.credential_identity_ref == "anthropic.api-key"
+    assert ambient.value.failure_class == "credential_unavailable"
+
+    # A malformed declared value fails closed rather than reaching a provider.
+    malformed = runtime_secret_file(
+        tmp_path / "malformed",
+        {"ANTHROPIC_API_KEY": "short", "OPENAI_API_KEY": "short"},
+    )
+    with pytest.raises(CredentialUnavailableError) as invalid:
+        load_adapters({**intent_env(), HOST_SECRET_RUNTIME_ENV_FILE: str(malformed)})
+    assert invalid.value.credential_identity_ref == "anthropic.api-key"
+
+    # Caller configuration may not name a credential, its environment binding,
+    # a provider, a model, or a transport target.
+    for forbidden in ("api_key_env", "provider", "model", "endpoint", "argv"):
+        payload = intent_config()
+        payload["roles"]["fable"][forbidden] = "declared-elsewhere"
+        with pytest.raises(BuilderOpsValidationError):
+            load_adapter_descriptors(
+                {INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)}
+            )
+
+
+def test_committed_inquiry_intent_config_is_provider_free_and_value_free() -> None:
+    raw = COMMITTED_INTENT_PATH.read_text(encoding="utf-8")
+    lowered = raw.lower()
+    for forbidden in (
+        "anthropic",
+        "openai",
+        "claude",
+        "gpt-",
+        "api_key",
+        "api-key",
+        "apikey",
+        "endpoint",
+        "http",
+        "_env",
+        "keychain",
+        "/users/",
+        "ssh",
+        "localhost",
+        "argv",
+        "command",
+    ):
+        assert forbidden not in lowered, forbidden
+    assert set(COMMITTED_INTENT_CONFIG["roles"]) == {"fable", "gpt_codex"}
+    for intent in COMMITTED_INTENT_CONFIG["roles"].values():
+        assert set(intent) == {
+            "capability_tier",
+            "reasoning_effort",
+            "determinism_required",
+            "output_schema_ref",
+            "independence",
+            "fallback_requirement",
+            "side_effect_class",
         }
-        for role in ("fable", "gpt_codex")
-    }
-    descriptors = load_adapter_descriptors({ADAPTER_CONFIG_ENV: json.dumps(config)})
-    assert descriptors["fable"]["available"] is False
-    assert descriptors["gpt_codex"]["available"] is False
-    assert all("mock" in item["reason"] for item in descriptors.values())
+        assert intent["independence"] == "distinct_effective_target"
+        assert intent["fallback_requirement"] == "fallback_forbidden"
+
+    # It validates through the production resolver path and yields the declared
+    # census targets, which the committed document itself never names.
+    descriptors = load_adapter_descriptors(intent_env())
+    assert [descriptors[role]["available"] for role in ("fable", "gpt_codex")] == [
+        True,
+        True,
+    ]
+    assert descriptors["fable"]["provider"] != descriptors["gpt_codex"]["provider"]
+    assert all(
+        descriptor["credential_identity_ref"].endswith(".api-key")
+        for descriptor in descriptors.values()
+    )
+
+
+def test_expired_interactive_session_is_not_a_generic_command_failure() -> None:
+    adapter = LocalCommandAdapter(
+        adapter_id="interactive-session",
+        provider="fable",
+        model="configured-specialist",
+        argv=(
+            sys.executable,
+            "-c",
+            f"import sys; sys.exit({adapters_module.SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE})",
+        ),
+        timeout_seconds=5,
+    )
+
+    with pytest.raises(AdapterExecutionError) as raised:
+        adapter.execute({"request": True})
+
+    assert raised.value.failure_class == "session_expired"
+    assert raised.value.exit_code == (
+        adapters_module.SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE
+    )
 
 
 def test_auth_failure_classes_are_in_the_closed_vocabulary() -> None:

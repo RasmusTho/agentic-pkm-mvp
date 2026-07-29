@@ -44,10 +44,10 @@ def _install(bin_dir: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _init_adapter_checkout(root: Path) -> Path:
-    adapter = root / "scripts" / "model_inquiry_subscription_adapter.py"
+    adapter = root / "scripts" / host_installer.VERSIONED_ADAPTER_NAME
     adapter.parent.mkdir(parents=True)
     adapter.write_bytes(
-        (REPO_ROOT / "scripts" / "model_inquiry_subscription_adapter.py").read_bytes()
+        (REPO_ROOT / "scripts" / host_installer.VERSIONED_ADAPTER_NAME).read_bytes()
     )
     return adapter
 
@@ -64,20 +64,20 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
     first_payload = json.loads(first.stdout)
     second_payload = json.loads(second.stdout)
     assert first_payload["roles"] == {
-        "fable": {"entrypoint": "fable-subscription-cli", "status": "installed"},
+        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "installed"},
         "gpt_codex": {
-            "entrypoint": "codex-subscription-cli",
+            "entrypoint": "codex-model-inquiry-role",
             "status": "installed",
         },
     }
     assert second_payload["roles"] == {
-        "fable": {"entrypoint": "fable-subscription-cli", "status": "unchanged"},
+        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
         "gpt_codex": {
-            "entrypoint": "codex-subscription-cli",
+            "entrypoint": "codex-model-inquiry-role",
             "status": "unchanged",
         },
     }
-    for name in ("fable-subscription-cli", "codex-subscription-cli"):
+    for name in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
         path = bin_dir / name
         assert path.is_file()
         assert path.stat().st_mode & 0o777 == 0o700
@@ -86,7 +86,7 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
 def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    conflicting = bin_dir / "fable-subscription-cli"
+    conflicting = bin_dir / "fable-model-inquiry-role"
     conflicting.write_text("unrelated host command\n", encoding="utf-8")
     conflicting.chmod(0o700)
 
@@ -95,7 +95,7 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
     assert conflict.returncode == 2
     assert "conflicting entrypoint" in conflict.stderr
     assert conflicting.read_text(encoding="utf-8") == "unrelated host command\n"
-    assert not (bin_dir / "codex-subscription-cli").exists()
+    assert not (bin_dir / "codex-model-inquiry-role").exists()
 
     real_bin = tmp_path / "real-bin"
     real_bin.mkdir()
@@ -121,13 +121,13 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
     symlink_target_bin.mkdir()
     unrelated = tmp_path / "unrelated-command"
     unrelated.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    (symlink_target_bin / "fable-subscription-cli").symlink_to(unrelated)
+    (symlink_target_bin / "fable-model-inquiry-role").symlink_to(unrelated)
     symlink_target = _install(symlink_target_bin)
 
     assert symlink_target.returncode == 2
     assert "conflicting entrypoint" in symlink_target.stderr
-    assert (symlink_target_bin / "fable-subscription-cli").is_symlink()
-    assert not (symlink_target_bin / "codex-subscription-cli").exists()
+    assert (symlink_target_bin / "fable-model-inquiry-role").is_symlink()
+    assert not (symlink_target_bin / "codex-model-inquiry-role").exists()
 
     missing_checkout = _run_installer(
         "install",
@@ -192,7 +192,7 @@ def test_installer_does_not_require_git_on_host(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert (bin_dir / "fable-subscription-cli").is_file()
+    assert (bin_dir / "fable-model-inquiry-role").is_file()
 
 
 def test_new_bin_directory_is_durably_linked_from_parent(
@@ -392,20 +392,20 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
     assert result.returncode == 0, result.stderr
 
     expected = {
-        "fable-subscription-cli": "fable",
-        "codex-subscription-cli": "gpt_codex",
+        "fable-model-inquiry-role": "fable",
+        "codex-model-inquiry-role": "gpt_codex",
     }
-    adapter = str((REPO_ROOT / "scripts" / "model_inquiry_subscription_adapter.py").resolve())
+    adapter = str((REPO_ROOT / "scripts" / host_installer.VERSIONED_ADAPTER_NAME).resolve())
     adapter_sha256 = hashlib.sha256(Path(adapter).read_bytes()).hexdigest()
     assert host_installer.VERSIONED_ADAPTER_SHA256 == adapter_sha256
     python = str(Path(sys.executable))
     for name, role in expected.items():
         content = (bin_dir / name).read_text(encoding="utf-8")
-        assert f"INQUIRY_ROLE={role}" in content
+        assert f"--role {role}" in content
         assert adapter in content
         assert f"adapter-sha256={adapter_sha256}" in content
         assert python in content
-        assert "BUILDEROPS_INQUIRY_ADAPTERS_JSON" not in content
+        assert "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON" not in content
         assert "TOKEN" not in content
         assert "KEY" not in content
 
@@ -432,7 +432,7 @@ def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stderr
-    for entrypoint in ("fable-subscription-cli", "codex-subscription-cli"):
+    for entrypoint in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
         content = (bin_dir / entrypoint).read_text(encoding="utf-8")
         assert str(selected_python) in content
         executed = subprocess.run([str(bin_dir / entrypoint)], check=False)
@@ -475,16 +475,14 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
         },
         "roles": {
             "fable": {
-                "entrypoint": "fable-subscription-cli",
+                "entrypoint": "fable-model-inquiry-role",
                 "entrypoint_status": "available",
-                "provider_command": "claude",
-                "provider_status": "available",
+                "credential_resolution": "host-secret-contract",
             },
             "gpt_codex": {
-                "entrypoint": "codex-subscription-cli",
+                "entrypoint": "codex-model-inquiry-role",
                 "entrypoint_status": "available",
-                "provider_command": "codex",
-                "provider_status": "available",
+                "credential_resolution": "host-secret-contract",
             },
         },
     }
@@ -518,10 +516,9 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
     assert missing_from_path.returncode == 1
     missing_payload = json.loads(missing_from_path.stdout)
     assert missing_payload["roles"]["fable"] == {
-        "entrypoint": "fable-subscription-cli",
+        "entrypoint": "fable-model-inquiry-role",
         "entrypoint_status": "unavailable",
-        "provider_command": "claude",
-        "provider_status": "available",
+        "credential_resolution": "host-secret-contract",
     }
     assert missing_payload["roles"]["gpt_codex"]["entrypoint_status"] == "unavailable"
 
@@ -534,7 +531,7 @@ def test_partial_install_is_retained_for_exact_retry(
     real_install = host_installer._install_no_overwrite
 
     def fail_second_role(directory_fd: int, name: str, content: str) -> bool:
-        if name == "codex-subscription-cli":
+        if name == "codex-model-inquiry-role":
             raise host_installer.HostInstallError("injected second-role failure")
         return real_install(directory_fd, name, content)
 
@@ -546,16 +543,16 @@ def test_partial_install_is_retained_for_exact_retry(
             python=Path(sys.executable),
         )
 
-    assert (bin_dir / "fable-subscription-cli").is_file()
-    assert not (bin_dir / "codex-subscription-cli").exists()
+    assert (bin_dir / "fable-model-inquiry-role").is_file()
+    assert not (bin_dir / "codex-model-inquiry-role").exists()
     monkeypatch.undo()
 
     retry = _install(bin_dir)
     assert retry.returncode == 0, retry.stderr
     assert json.loads(retry.stdout)["roles"] == {
-        "fable": {"entrypoint": "fable-subscription-cli", "status": "unchanged"},
+        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
         "gpt_codex": {
-            "entrypoint": "codex-subscription-cli",
+            "entrypoint": "codex-model-inquiry-role",
             "status": "installed",
         },
     }
@@ -620,9 +617,9 @@ def test_concurrent_exact_writer_produces_truthful_unchanged_receipt(
     )
 
     assert receipt["roles"] == {
-        "fable": {"entrypoint": "fable-subscription-cli", "status": "unchanged"},
+        "fable": {"entrypoint": "fable-model-inquiry-role", "status": "unchanged"},
         "gpt_codex": {
-            "entrypoint": "codex-subscription-cli",
+            "entrypoint": "codex-model-inquiry-role",
             "status": "unchanged",
         },
     }
@@ -636,7 +633,7 @@ def test_concurrent_conflicting_writer_fails_closed(
     real_install = host_installer._install_no_overwrite
 
     def conflicting_writer_wins(directory_fd: int, name: str, content: str) -> bool:
-        if name == "fable-subscription-cli":
+        if name == "fable-model-inquiry-role":
             fd = os.open(
                 name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -661,10 +658,10 @@ def test_concurrent_conflicting_writer_fails_closed(
             python=Path(sys.executable),
         )
 
-    assert (bin_dir / "fable-subscription-cli").read_text(encoding="utf-8") == (
+    assert (bin_dir / "fable-model-inquiry-role").read_text(encoding="utf-8") == (
         "unrelated concurrent command\n"
     )
-    assert not (bin_dir / "codex-subscription-cli").exists()
+    assert not (bin_dir / "codex-model-inquiry-role").exists()
 
 
 def test_install_rejects_bin_directory_replacement(
@@ -698,8 +695,8 @@ def test_install_rejects_bin_directory_replacement(
 
     assert replaced
     assert not list(bin_dir.iterdir())
-    assert (detached_bin / "fable-subscription-cli").is_file()
-    assert (detached_bin / "codex-subscription-cli").is_file()
+    assert (detached_bin / "fable-model-inquiry-role").is_file()
+    assert (detached_bin / "codex-model-inquiry-role").is_file()
 
 
 def test_check_rejects_bin_directory_replacement_during_path_discovery(
@@ -719,8 +716,8 @@ def test_check_rejects_bin_directory_replacement_during_path_discovery(
             bin_dir.rename(detached_bin)
             bin_dir.mkdir()
             for name in (
-                "fable-subscription-cli",
-                "codex-subscription-cli",
+                "fable-model-inquiry-role",
+                "codex-model-inquiry-role",
                 "claude",
                 "codex",
                 "yggdrasil-model-inquiry",
@@ -740,8 +737,8 @@ def test_check_rejects_bin_directory_replacement_during_path_discovery(
         )
 
     assert replaced
-    assert (detached_bin / "fable-subscription-cli").is_file()
-    assert (bin_dir / "fable-subscription-cli").read_text(encoding="utf-8") == (
+    assert (detached_bin / "fable-model-inquiry-role").is_file()
+    assert (bin_dir / "fable-model-inquiry-role").read_text(encoding="utf-8") == (
         "#!/bin/sh\nexit 0\n"
     )
 
@@ -803,10 +800,10 @@ def test_install_revalidates_all_wrappers_before_success(
         name: str,
         content: str,
     ) -> bool:
-        if name == "codex-subscription-cli":
-            os.unlink("fable-subscription-cli", dir_fd=directory_fd)
+        if name == "codex-model-inquiry-role":
+            os.unlink("fable-model-inquiry-role", dir_fd=directory_fd)
             fd = os.open(
-                "fable-subscription-cli",
+                "fable-model-inquiry-role",
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
                 0o700,
                 dir_fd=directory_fd,
@@ -832,7 +829,7 @@ def test_install_revalidates_all_wrappers_before_success(
             python=Path(sys.executable),
         )
 
-    assert (bin_dir / "fable-subscription-cli").read_text(encoding="utf-8") == (
+    assert (bin_dir / "fable-model-inquiry-role").read_text(encoding="utf-8") == (
         "unrelated replacement\n"
     )
 
@@ -860,9 +857,9 @@ def test_check_revalidates_earlier_wrapper_after_later_discovery(
         path: str | None = None,
     ) -> str | None:
         nonlocal replaced
-        if command == "codex-subscription-cli" and not replaced:
+        if command == "codex-model-inquiry-role" and not replaced:
             replaced = True
-            fable = bin_dir / "fable-subscription-cli"
+            fable = bin_dir / "fable-model-inquiry-role"
             fable.unlink()
             fable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             fable.chmod(0o700)
@@ -923,3 +920,70 @@ def test_check_rejects_bin_replacement_during_launcher_discovery(
 
     assert replaced
     assert not list(bin_dir.iterdir())
+
+
+def test_headless_entrypoints_do_not_require_subscription_session(
+    tmp_path: Path,
+) -> None:
+    """The installer's own installation path must produce credential-resolving roles."""
+    bin_dir = tmp_path / "bin"
+    installed = _install(bin_dir)
+    assert installed.returncode == 0, installed.stderr
+
+    installer_source = INSTALLER.read_text(encoding="utf-8")
+    assert "model_inquiry_subscription_adapter" not in installer_source
+    assert host_installer.VERSIONED_ADAPTER_NAME == "model_inquiry_role_adapter.py"
+    assert all(
+        not hasattr(spec, "provider_command") for spec in host_installer.ROLE_SPECS
+    )
+
+    adapter_source = (
+        REPO_ROOT / "scripts" / host_installer.VERSIONED_ADAPTER_NAME
+    ).read_text(encoding="utf-8")
+    assert "host secret contract" in " ".join(adapter_source.split())
+    # It resolves a declared credential; it launches no CLI and no session.
+    assert "model_inquiry_subscription_adapter" not in adapter_source
+    assert "subprocess" not in adapter_source
+    assert "shutil.which" not in adapter_source
+    for wrapper_name in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
+        content = (bin_dir / wrapper_name).read_text(encoding="utf-8")
+        assert host_installer.VERSIONED_ADAPTER_NAME in content
+        assert "credential-resolution=host-secret-contract" in content
+        exec_line = next(
+            line for line in content.splitlines() if line.startswith("exec ")
+        )
+        executed = shlex.split(exec_line)[1:]
+        assert Path(executed[1]).name == host_installer.VERSIONED_ADAPTER_NAME
+        assert executed[2] == "--role"
+        assert not any(
+            Path(argument).name in {"claude", "codex"} for argument in executed
+        )
+        assert "subscription" not in " ".join(
+            Path(argument).name for argument in executed
+        )
+
+    payload = json.loads(installed.stdout)
+    assert "provider_command" not in json.dumps(payload)
+
+    # The installed entrypoint fails closed on the declared credential and never
+    # looks for an interactive session: no provider CLI exists on this PATH.
+    intent = (
+        REPO_ROOT / "config" / "builderops" / "model_inquiry_role_intent.example.json"
+    ).read_text(encoding="utf-8")
+    executed = subprocess.run(
+        [str(bin_dir / "fable-model-inquiry-role")],
+        input=json.dumps({"phase": "draft", "system_prompt": "x"}),
+        env={
+            "PATH": str(bin_dir),
+            "HOME": str(tmp_path),
+            "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON": intent,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert executed.returncode == 1, executed.stderr
+    assert "anthropic.api-key" in executed.stderr
+    assert "ANTHROPIC_API_KEY" not in executed.stderr
+    assert executed.stdout == ""

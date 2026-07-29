@@ -17,68 +17,64 @@ Make model interaction executable without relying on copy-paste or desktop-windo
 
 ## What This Task Does
 
-Define one structured response contract and adapter boundary. Support configured OpenAI/Anthropic
-API adapters or explicitly configured local commands. Run independent drafts before cross-review,
-limit adversarial rounds, and persist provider request IDs and output hashes.
+Define one structured response contract and adapter boundary. Resolve both role adapters through the
+declared Model Access substrate, run independent drafts before cross-review, limit adversarial
+rounds, and persist provider request IDs and output hashes.
 
 The implementation uses a BuilderOps-only adapter boundary; it does not reuse Product/Runtime LLM
 routing because that surface returns text without the required provider envelope and may select a
-mock fallback. Role adapters are configured explicitly through the machine-local
-`BUILDEROPS_INQUIRY_ADAPTERS_JSON` environment value. The shared vault stores only sanitized
-identity, request IDs, hashes, structured output, and classified receipts.
+mock fallback. Since MAS-05 (ADR-0064), **the caller declares intent and resolves nothing itself**:
 
-Each role configuration must explicitly set matching `role_identity`, a non-mock provider, and a
-distinct adapter ID plus runtime-target fingerprint. This is operator attestation, not proof that a
-remote model is genuinely Fable; parent acceptance must retain provider-returned request evidence.
-Example shape (credentials stay in the separately named local environment variable):
+- The caller supplies `BUILDEROPS_INQUIRY_ROLE_INTENT_JSON`, a value-free document carrying the seven
+  neutral intent fields per role, the role independence requirement, and channel/consumer references.
+  It carries no provider, model, endpoint, credential value, environment-variable name, or host
+  identifier. The committed example is
+  `config/builderops/model_inquiry_role_intent.example.json`.
+- The Builder resolver (`app/builderops/model_access_resolver.py`) applies Builder policy, selects
+  provider, model, effective identity, and API endpoint from the exact declared provider census
+  (`docs/settings/models/providers.yaml`), verifies the census-required capabilities, and verifies
+  distinct effective targets for the `model-inquiry-independent-review` group through the neutral
+  kernel before any model call.
+- **Credentials are resolved through the host secret contract, not through a machine-local
+  environment value.** The resolver maps each role to its declared logical identifier
+  (`anthropic.api-key`, `gpt_codex` → `openai.api-key`) via
+  `config/secrets/host_secret_contract.json`, and reads the value only from the mode-0600 runtime
+  surface that `app/ops/host_secret_bootstrap.py` materializes. No role adapter reads a provider key
+  from adapter configuration or from ambient process environment.
+- A declared credential that is absent or malformed produces the typed `credential_unavailable`
+  failure class, fails the run closed before any adapter call, names only the logical identifier, and
+  never falls back to a subscription CLI, ambient environment, or another provider. An expired
+  session on the still-permitted interactive command path produces `session_expired`. Neither
+  collapses into `command_exit_nonzero`.
 
-```json
-{
-  "fable": {
-    "kind": "anthropic",
-    "role_identity": "fable",
-    "adapter_id": "fable-primary",
-    "provider": "anthropic",
-    "model": "configured-fable-model",
-    "endpoint": "https://api.anthropic.com/v1/messages",
-    "api_key_env": "LOCAL_FABLE_API_KEY"
-  },
-  "gpt_codex": {
-    "kind": "openai",
-    "role_identity": "gpt_codex",
-    "adapter_id": "gpt-primary",
-    "provider": "openai",
-    "model": "configured-gpt-model",
-    "endpoint": "https://api.openai.com/v1/chat/completions",
-    "api_key_env": "LOCAL_OPENAI_API_KEY"
-  }
-}
-```
+Role identity remains attested: each role resolves to a distinct `adapter_id` and a distinct
+runtime-target fingerprint, and a mock, fake, or deterministic identity is refused as a
+provider-enabled role. This is declared policy, not proof that a remote model is genuinely Fable;
+parent acceptance must retain provider-returned request evidence. The shared vault stores only
+sanitized identity, request IDs, hashes, structured output, and classified receipts.
 
-A configured remote subscription host may provide local command adapters for both roles. Its
-versioned profile uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 1200-second
-inner command deadline, and a 1500-second host adapter deadline. Credentials, subscription sessions,
-and host-specific executable paths remain outside Git. It never substitutes Codex, Claude,
-Anthropic, OpenAI, mock, or the deterministic dry-run planner for a missing Fable role.
+`scripts/model_inquiry_subscription_adapter.py` remains for interactive, human-driven use. Its
+versioned profile uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 1200-second inner
+command deadline, and a 1500-second host adapter deadline. It is not reachable from any headless
+entrypoint: the inquiry-role intent surface cannot select a command transport, and the host installer
+does not install it.
 
 ## Host role-entrypoint lifecycle
 
-The repository owns the two stable command names consumed by that profile:
-`fable-subscription-cli` and `codex-subscription-cli`. Run
-`scripts/install_model_inquiry_host.py install` to create owner-only executable wrappers in an
-explicit host bin directory. Each wrapper binds exactly one role to the versioned
-`scripts/model_inquiry_subscription_adapter.py`; an exact reinstall is a no-op, while a symlink,
-unsafe directory, or unrelated existing command fails closed without overwriting it.
+The repository owns the two stable headless command names: `fable-model-inquiry-role` and
+`codex-model-inquiry-role`. Run `scripts/install_model_inquiry_host.py install` to create owner-only
+executable wrappers in an explicit host bin directory. Each wrapper binds exactly one role to the
+versioned `scripts/model_inquiry_role_adapter.py`, which resolves a declared credential rather than
+an interactive session; an exact reinstall is a no-op, while a symlink, unsafe directory, or
+unrelated existing command fails closed without overwriting it.
 
 The companion `check` operation is read-only. It reports only whether both installed entrypoints
 match the adapter digest committed into the installer in its own operator-authoritative checkout
 and Python interpreter, whether the launch `PATH` resolves both names to those exact files, and
-whether the underlying `claude`, `codex`, and host launcher commands are discoverable. Host-time
-validation does not invoke Git; an adapter change and its installer digest update are one repo
-change. The recognized
-subscription profile runs the same lineage check during desktop preflight; arbitrary same-name
-executables cannot make it healthy. The check does not run either provider, inspect subscription
-state, reveal paths, or create inquiry artifacts.
+whether the host launcher command is discoverable. It probes no provider CLI, because no headless
+entrypoint depends on one. Host-time validation does not invoke Git; an adapter change and its
+installer digest update are one repo change. The check does not run either provider, inspect
+subscription state, reveal paths, or create inquiry artifacts.
 
 ## Concretely
 
@@ -123,12 +119,13 @@ receipt file. Provider-enabled execution serializes one runner per inquiry on th
 valid turn before any successor, and derives restart progress from deterministic turn IDs plus
 terminal receipts.
 
-Local commands receive canonical JSON on stdin with `shell=False`, an explicit environment
-allowlist, a timeout, and an incremental output ceiling. Stderr is discarded rather than persisted.
-On a command failure, receipts may retain only the allowlisted adapter ID, diagnostic class, and
-numeric exit code when present. HTTP and command adapters reject output containing a configured
-credential value. Raw provider errors, headers, argv, inherited environment, and credentials never
-enter receipts or trace.
+Local commands on the interactive path receive canonical JSON on stdin with `shell=False`, an
+explicit environment allowlist, a timeout, and an incremental output ceiling. Stderr is discarded
+rather than persisted. On a failure, receipts may retain only the allowlisted adapter ID, diagnostic
+class, the numeric exit code when present, and — for `credential_unavailable` — the declared logical
+credential identifier. HTTP and command adapters reject output containing a configured credential
+value. Raw provider errors, headers, argv, inherited environment, and credential values never enter
+receipts or trace.
 
 ## Out of Scope
 

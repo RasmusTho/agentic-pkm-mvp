@@ -16,19 +16,75 @@ from typing import Any, Mapping, Never
 
 import requests  # type: ignore[import-untyped]  # third-party lib ships no type stubs
 
+from app.builderops.model_access_resolver import (
+    BuilderModelAccessResolver,
+    DeclaredCredentialUnavailableError,
+    ModelAccessResolutionError,
+)
 from app.builderops.model_inquiry_contract import canonical_hash, canonical_json
 from app.builderops.models import BuilderOpsValidationError
 from llm_contract import (
     ADAPTER_FAILURE_CLASSES,
     AdapterResult,
+    ModelAccessIntent,
+    ModelResolutionRequest,
     ModelTurnAdapter,
+    ResolvedModelAccess,
     validate_adapter_failure_class,
 )
 
-ADAPTER_CONFIG_ENV = "BUILDEROPS_INQUIRY_ADAPTERS_JSON"
+INQUIRY_INTENT_CONFIG_ENV = "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON"
+INQUIRY_INTENT_SCHEMA = "builderops.model-inquiry-role-intent.v1"
 ROLE_NAMES = ("fable", "gpt_codex")
 SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
+SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE = 125
 CLEANUP_TIMEOUT_SECONDS = 2.0
+HTTP_ADAPTER_KIND = "http"
+
+# Conventional exit codes the still-permitted interactive command path uses to
+# report the real cause. Without them an expired session and a genuine command
+# failure collapse into one indistinguishable class.
+_LOCAL_COMMAND_FAILURE_CLASSES = {
+    SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE: "command_timeout",
+    SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE: "session_expired",
+}
+
+# The intent surface is provider-free by construction: any key that could carry
+# a provider, model, transport target, credential value, environment-variable
+# name, or host reference is refused before resolution runs.
+FORBIDDEN_INTENT_KEYS = frozenset(
+    {
+        "adapter_id",
+        "api_key",
+        "api_key_env",
+        "argv",
+        "command",
+        "credential",
+        "credential_value",
+        "endpoint",
+        "environment_allowlist",
+        "host",
+        "hostname",
+        "kind",
+        "model",
+        "provider",
+        "url",
+    }
+)
+_INTENT_FIELDS = frozenset(
+    {
+        "capability_tier",
+        "reasoning_effort",
+        "determinism_required",
+        "output_schema_ref",
+        "independence",
+        "fallback_requirement",
+        "side_effect_class",
+    }
+)
+_CONFIG_FIELDS = frozenset({"schema", "runtime", "channel", "consumer", "resolution_group_id", "roles"})
+
+
 class AdapterUnavailableError(RuntimeError):
     pass
 
@@ -50,6 +106,18 @@ class AdapterExecutionError(RuntimeError):
             if isinstance(exit_code, int) and not isinstance(exit_code, bool) and 1 <= exit_code <= 255
             else None
         )
+
+
+class CredentialUnavailableError(AdapterExecutionError):
+    """A declared credential is absent or unusable; it names only the logical id."""
+
+    def __init__(self, *, adapter_id: str, credential_identity_ref: str) -> None:
+        super().__init__(
+            f"declared credential unavailable: {credential_identity_ref}",
+            failure_class="credential_unavailable",
+        )
+        self.adapter_id = adapter_id
+        self.credential_identity_ref = credential_identity_ref
 
 
 @dataclass
@@ -119,10 +187,8 @@ class LocalCommandAdapter:
         if process.returncode != 0:
             raise AdapterExecutionError(
                 f"local command failed with exit {process.returncode}: {self.adapter_id}",
-                failure_class=(
-                    "command_timeout"
-                    if process.returncode == SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE
-                    else "command_exit_nonzero"
+                failure_class=_LOCAL_COMMAND_FAILURE_CLASSES.get(
+                    process.returncode, "command_exit_nonzero"
                 ),
                 exit_code=process.returncode,
             )
@@ -248,51 +314,168 @@ class HttpModelAdapter:
         return AdapterResult(text, str(request_id) if request_id else None)
 
 
-def load_adapter_descriptors(env: Mapping[str, str] | None = None) -> dict[str, dict[str, Any]]:
+@dataclass(frozen=True)
+class InquiryRoleIntentConfig:
+    """One parsed, provider-free inquiry-role intent configuration."""
+
+    runtime: str
+    channel: str
+    consumer: str
+    resolution_group_id: str
+    requests: tuple[ModelResolutionRequest, ...]
+
+
+def load_inquiry_intent(
+    env: Mapping[str, str] | None = None,
+) -> InquiryRoleIntentConfig | None:
+    """Parse the value-free inquiry-role intent configuration, or return None.
+
+    The configuration declares only the seven neutral intent fields per role,
+    the role independence requirement, and channel/consumer references. Provider,
+    model, transport target, credential value, environment-variable name, and
+    host references are structurally refused here, before any resolution runs.
+    """
     source = dict(os.environ if env is None else env)
-    raw = source.get(ADAPTER_CONFIG_ENV, "").strip()
+    raw = source.get(INQUIRY_INTENT_CONFIG_ENV, "").strip()
     if not raw:
-        return {
-            role: {"role": role, "available": False, "reason": "explicit adapter not configured"}
-            for role in ROLE_NAMES
-        }
+        return None
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise BuilderOpsValidationError(f"{ADAPTER_CONFIG_ENV} must be valid JSON") from exc
+        raise BuilderOpsValidationError(
+            f"{INQUIRY_INTENT_CONFIG_ENV} must be valid JSON"
+        ) from exc
+    return parse_inquiry_intent(payload)
+
+
+def parse_inquiry_intent(payload: Any) -> InquiryRoleIntentConfig:
+    """Validate one inquiry-role intent document into neutral resolution requests."""
     if not isinstance(payload, dict):
-        raise BuilderOpsValidationError(f"{ADAPTER_CONFIG_ENV} must be a JSON object")
+        raise BuilderOpsValidationError(
+            f"{INQUIRY_INTENT_CONFIG_ENV} must be a JSON object"
+        )
+    _reject_forbidden_intent_keys(payload)
+    if set(payload) != _CONFIG_FIELDS:
+        raise BuilderOpsValidationError("inquiry role intent fields are invalid")
+    if payload["schema"] != INQUIRY_INTENT_SCHEMA:
+        raise BuilderOpsValidationError("inquiry role intent schema is unsupported")
+    roles = payload["roles"]
+    if not isinstance(roles, dict) or set(roles) != set(ROLE_NAMES):
+        raise BuilderOpsValidationError(
+            "inquiry role intent must declare exactly the independent review roles"
+        )
+    group_id = str(payload["resolution_group_id"])
+    requests: list[ModelResolutionRequest] = []
+    for role in ROLE_NAMES:
+        intent_payload = roles[role]
+        if not isinstance(intent_payload, dict) or set(intent_payload) != _INTENT_FIELDS:
+            raise BuilderOpsValidationError(
+                f"inquiry role intent for {role} must declare exactly the neutral fields"
+            )
+        try:
+            intent = ModelAccessIntent(**intent_payload)
+            requests.append(
+                ModelResolutionRequest(
+                    intent=intent,
+                    role_profile=role,
+                    resolution_group_id=group_id,
+                )
+            )
+        except ValueError as exc:
+            raise BuilderOpsValidationError(
+                f"inquiry role intent for {role} is not a valid neutral intent"
+            ) from exc
+    return InquiryRoleIntentConfig(
+        runtime=str(payload["runtime"]),
+        channel=str(payload["channel"]),
+        consumer=str(payload["consumer"]),
+        resolution_group_id=group_id,
+        requests=tuple(requests),
+    )
+
+
+def _reject_forbidden_intent_keys(value: Any) -> None:
+    if isinstance(value, Mapping):
+        forbidden = sorted(FORBIDDEN_INTENT_KEYS.intersection(str(key).lower() for key in value))
+        if forbidden:
+            raise BuilderOpsValidationError(
+                "inquiry role intent must not declare provider, model, transport, "
+                f"credential, or host fields: {', '.join(forbidden)}"
+            )
+        for nested in value.values():
+            _reject_forbidden_intent_keys(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _reject_forbidden_intent_keys(nested)
+
+
+def resolve_inquiry_roles(
+    env: Mapping[str, str] | None = None,
+    *,
+    resolver: BuilderModelAccessResolver | None = None,
+) -> tuple[BuilderModelAccessResolver, dict[str, ResolvedModelAccess]]:
+    """Resolve both inquiry roles as one group through Builder census policy."""
+    source = dict(os.environ if env is None else env)
+    config = load_inquiry_intent(source)
+    if config is None:
+        raise AdapterUnavailableError("inquiry role intent is not configured")
+    selected = resolver or BuilderModelAccessResolver.from_declared_sources(env=source)
+    resolutions = selected.resolve_group(
+        config.requests,
+        runtime=config.runtime,
+        channel=config.channel,
+        consumer=config.consumer,
+    )
+    return selected, {
+        resolution.request.role_profile: resolution for resolution in resolutions
+    }
+
+
+def load_adapter_descriptors(
+    env: Mapping[str, str] | None = None,
+    *,
+    resolver: BuilderModelAccessResolver | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Project the resolved role targets into sanitized, value-free descriptors."""
+    source = dict(os.environ if env is None else env)
+    try:
+        selected, resolutions = resolve_inquiry_roles(source, resolver=resolver)
+    except AdapterUnavailableError:
+        return {
+            role: {"role": role, "available": False, "reason": "inquiry role intent not configured"}
+            for role in ROLE_NAMES
+        }
+    except ModelAccessResolutionError as exc:
+        return {
+            role: {"role": role, "available": False, "reason": str(exc)}
+            for role in ROLE_NAMES
+        }
     descriptors: dict[str, dict[str, Any]] = {}
     for role in ROLE_NAMES:
-        config = payload.get(role)
-        if not isinstance(config, dict):
-            descriptors[role] = {
-                "role": role,
-                "available": False,
-                "reason": "explicit adapter not configured",
-            }
+        resolution = resolutions[role]
+        try:
+            endpoint = selected.endpoint_for(resolution)
+        except ModelAccessResolutionError as exc:
+            descriptors[role] = {"role": role, "available": False, "reason": str(exc)}
             continue
-        kind = str(config.get("kind", "")).strip().lower()
         descriptors[role] = {
             "role": role,
-            "available": kind in {"command", "openai", "anthropic"},
-            "role_identity": str(config.get("role_identity", "")).strip(),
-            "kind": kind,
-            "adapter_id": str(config.get("adapter_id", "")).strip(),
-            "provider": str(config.get("provider", "")).strip(),
-            "model": str(config.get("model", "")).strip(),
+            "available": True,
+            "role_identity": resolution.request.role_profile,
+            "kind": HTTP_ADAPTER_KIND,
+            "adapter_id": resolution.adapter_id,
+            "provider": resolution.provider,
+            "model": resolution.model,
+            "credential_identity_ref": resolution.credential_identity_ref,
             "target_fingerprint": canonical_hash(
                 {
-                    "kind": kind,
-                    "provider": str(config.get("provider", "")).strip(),
-                    "model": str(config.get("model", "")).strip(),
-                    "target": config.get("argv") if kind == "command" else config.get("endpoint"),
+                    "kind": HTTP_ADAPTER_KIND,
+                    "provider": resolution.provider,
+                    "model": resolution.model,
+                    "target": endpoint,
                 }
             ),
         }
-        if not all(descriptors[role].get(key) for key in ("adapter_id", "provider", "model")):
-            descriptors[role]["available"] = False
-            descriptors[role]["reason"] = "adapter identity is incomplete"
         if descriptors[role]["role_identity"] != role:
             descriptors[role]["available"] = False
             descriptors[role]["reason"] = f"role_identity must explicitly attest {role}"
@@ -320,53 +503,43 @@ def load_adapter_descriptors(env: Mapping[str, str] | None = None) -> dict[str, 
     return descriptors
 
 
-def load_adapters(env: Mapping[str, str] | None = None) -> dict[str, ModelTurnAdapter]:
+def load_adapters(
+    env: Mapping[str, str] | None = None,
+    *,
+    resolver: BuilderModelAccessResolver | None = None,
+) -> dict[str, ModelTurnAdapter]:
+    """Build provider-API adapters with credentials injected at descriptor load.
+
+    Every identity is a resolver output and every credential is resolved through
+    the host secret contract. No provider key is read from caller configuration
+    or ambient process environment, and no missing credential falls back to a
+    subscription CLI, another provider, or a mock identity.
+    """
     source = dict(os.environ if env is None else env)
-    descriptors = load_adapter_descriptors(source)
-    raw = source.get(ADAPTER_CONFIG_ENV, "").strip()
-    payload = json.loads(raw) if raw else {}
+    selected, resolutions = resolve_inquiry_roles(source, resolver=resolver)
+    descriptors = load_adapter_descriptors(source, resolver=selected)
     adapters: dict[str, ModelTurnAdapter] = {}
     for role in ROLE_NAMES:
         descriptor = descriptors[role]
         if not descriptor.get("available"):
-            raise AdapterUnavailableError(f"{role}: {descriptor.get('reason', 'adapter unavailable')}")
-        config = payload[role]
-        common = {
-            "adapter_id": descriptor["adapter_id"],
-            "provider": descriptor["provider"],
-            "model": descriptor["model"],
-        }
-        kind = descriptor["kind"]
-        if kind == "command":
-            argv = config.get("argv")
-            if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
-                raise BuilderOpsValidationError(f"{role} command argv must be a list of strings")
-            allow_names = config.get("environment_allowlist", [])
-            if not isinstance(allow_names, list) or not all(
-                isinstance(item, str) for item in allow_names
-            ):
-                raise BuilderOpsValidationError(f"{role} environment_allowlist is invalid")
-            adapters[role] = LocalCommandAdapter(
-                **common,
-                argv=tuple(argv),
-                timeout_seconds=_positive_float(config.get("timeout_seconds", 60), role, "timeout_seconds"),
-                max_output_bytes=_positive_int(
-                    config.get("max_output_bytes", 1_000_000), role, "max_output_bytes"
-                ),
-                environment={name: source[name] for name in allow_names if name in source},
+            raise AdapterUnavailableError(
+                f"{role}: {descriptor.get('reason', 'adapter unavailable')}"
             )
-        else:
-            key_env = str(config.get("api_key_env", "")).strip()
-            endpoint = str(config.get("endpoint", "")).strip()
-            api_key = source.get(key_env, "") if key_env else ""
-            if not endpoint or not api_key:
-                raise AdapterUnavailableError(f"{role}: HTTP endpoint or API key unavailable")
-            adapters[role] = HttpModelAdapter(
-                **common,
-                endpoint=endpoint,
-                api_key=api_key,
-                timeout_seconds=_positive_float(config.get("timeout_seconds", 60), role, "timeout_seconds"),
-            )
+        resolution = resolutions[role]
+        try:
+            api_key = selected.credential_value(resolution)
+        except DeclaredCredentialUnavailableError as exc:
+            raise CredentialUnavailableError(
+                adapter_id=resolution.adapter_id,
+                credential_identity_ref=exc.credential_identity_ref,
+            ) from None
+        adapters[role] = HttpModelAdapter(
+            adapter_id=resolution.adapter_id,
+            provider=resolution.provider,
+            model=resolution.model,
+            endpoint=selected.endpoint_for(resolution),
+            api_key=api_key,
+        )
     return adapters
 
 
@@ -391,29 +564,11 @@ def sanitized_adapter_failure(error: Exception, *, adapter_id: str) -> dict[str,
     }
     if exit_code is not None:
         result["adapter_exit_code"] = exit_code
+    if isinstance(error, CredentialUnavailableError):
+        # The logical identifier only. It is declared, value-free data from the
+        # host secret contract and is the whole point of this failure class.
+        result["credential_identity_ref"] = error.credential_identity_ref
     return result
-
-
-def _positive_float(value: Any, role: str, field: str) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise BuilderOpsValidationError(f"{role} {field} must be numeric") from exc
-    if parsed <= 0:
-        raise BuilderOpsValidationError(f"{role} {field} must be positive")
-    return parsed
-
-
-def _positive_int(value: Any, role: str, field: str) -> int:
-    if isinstance(value, bool):
-        raise BuilderOpsValidationError(f"{role} {field} must be an integer")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise BuilderOpsValidationError(f"{role} {field} must be an integer") from exc
-    if parsed <= 0:
-        raise BuilderOpsValidationError(f"{role} {field} must be positive")
-    return parsed
 
 
 def _read_bounded_process_output(
@@ -647,12 +802,15 @@ def adapter_request_id(request: Mapping[str, Any]) -> str:
 
 
 __all__ = [
-    "ADAPTER_CONFIG_ENV",
     "ADAPTER_FAILURE_CLASSES",
+    "INQUIRY_INTENT_CONFIG_ENV",
+    "INQUIRY_INTENT_SCHEMA",
     "AdapterExecutionError",
     "AdapterResult",
     "AdapterUnavailableError",
+    "CredentialUnavailableError",
     "HttpModelAdapter",
+    "InquiryRoleIntentConfig",
     "LocalCommandAdapter",
     "ModelTurnAdapter",
     "ScriptedAdapter",
@@ -660,5 +818,8 @@ __all__ = [
     "sanitized_adapter_failure",
     "load_adapter_descriptors",
     "load_adapters",
+    "load_inquiry_intent",
+    "parse_inquiry_intent",
+    "resolve_inquiry_roles",
     "sanitized_adapter_identity",
 ]

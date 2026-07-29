@@ -10,6 +10,11 @@ from app.builderops.models import BuilderOpsValidationError, normalize_record
 from app.builderops.model_inquiry_adapters import ScriptedAdapter
 from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION, canonical_hash
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
+from tests.builderops.inquiry_intent import (
+    DECLARED_TEST_CREDENTIALS,
+    intent_env,
+    provisioned_env,
+)
 
 
 def test_trace_links_question_turns_and_synthesis(tmp_path: Path) -> None:
@@ -542,3 +547,129 @@ def test_trace_rejects_forged_canonical_run_terminal_receipt(tmp_path: Path) -> 
     )
     with pytest.raises(BuilderOpsValidationError, match="details do not match"):
         failure_service.trace("inq_test_false_failure")
+
+
+def test_trace_never_contains_credential_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resolved credential never reaches a durable turn, receipt, or report."""
+    vault = tmp_path / "shared-vault"
+    vault.mkdir()
+    source_refs = [{"ref_type": "github_issue", "ref": "#4291"}]
+    service = ModelInquiryService(vault)
+    service.start(
+        question="Prove credential material stays out of durable state",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_credential_trace",
+        source_refs=source_refs,
+    )
+
+    def post(url: str, **kwargs: object) -> object:
+        headers = kwargs["headers"]
+        assert isinstance(headers, dict)
+        # The credential reaches the transport and nothing else.
+        assert any(
+            value in DECLARED_TEST_CREDENTIALS.values()
+            for value in headers.values()
+            if isinstance(value, str)
+        ) or any(
+            credential in str(value)
+            for credential in DECLARED_TEST_CREDENTIALS.values()
+            for value in headers.values()
+        )
+        body = kwargs["json"]
+        assert isinstance(body, dict)
+        request = json.loads(body["messages"][-1]["content"])
+        if request["phase"] == "draft":
+            text = _credential_trace_response("draft")
+        else:
+            text = _credential_trace_response(
+                "accept",
+                reviewed=list(request["reviewed_artifact_refs"]),
+                accepted_hash=request["input_artifacts"][0]["artifact_hash"],
+            )
+        if "x-api-key" in headers:
+            return _CredentialTraceResponse(
+                {"content": [{"type": "text", "text": text}]},
+                {"request-id": "req_anthropic_fixture"},
+            )
+        return _CredentialTraceResponse(
+            {"choices": [{"message": {"content": text}}]},
+            {"x-request-id": "resp_openai_fixture"},
+        )
+
+    monkeypatch.setattr("app.builderops.model_inquiry_adapters.requests.post", post)
+    result = ModelInquiryRunner(
+        service, env=provisioned_env(tmp_path / "secrets")
+    ).run("inq_test_credential_trace", max_rounds=1)
+    assert result["outcome"] == "consensus"
+
+    trace = ModelInquiryService(vault).trace("inq_test_credential_trace")
+    serialized = json.dumps(trace, sort_keys=True)
+    durable = "".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in vault.rglob("*")
+        if path.is_file()
+    )
+    for credential in DECLARED_TEST_CREDENTIALS.values():
+        assert credential not in serialized
+        assert credential not in durable
+    for binding in DECLARED_TEST_CREDENTIALS:
+        assert binding not in serialized
+    assert all(turn["provider_request_id"] for turn in trace["turns"])
+
+    # The credential-unavailable diagnostic keeps the logical identifier only.
+    (tmp_path / "absent-vault").mkdir()
+    absent_service = ModelInquiryService(tmp_path / "absent-vault")
+    absent_service.start(
+        question="Fail closed without a declared value",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_credential_absent",
+        source_refs=source_refs,
+    )
+    absent = ModelInquiryRunner(absent_service, env=intent_env()).run(
+        "inq_test_credential_absent", max_rounds=1
+    )
+    absent_trace = ModelInquiryService(tmp_path / "absent-vault").trace(
+        "inq_test_credential_absent"
+    )
+    assert absent["details"]["diagnostic"]["credential_identity_ref"] == (
+        "anthropic.api-key"
+    )
+    absent_serialized = json.dumps(absent_trace, sort_keys=True)
+    for credential in DECLARED_TEST_CREDENTIALS.values():
+        assert credential not in absent_serialized
+    assert "ANTHROPIC_API_KEY" not in absent_serialized
+
+
+class _CredentialTraceResponse:
+    def __init__(self, payload: dict[str, object], headers: dict[str, str]) -> None:
+        self._payload = payload
+        self.headers = headers
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
+def _credential_trace_response(
+    stance: str,
+    *,
+    reviewed: list[str] | None = None,
+    accepted_hash: str | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": RESPONSE_SCHEMA_VERSION,
+            "stance": stance,
+            "content": f"{stance} content",
+            "claims": ["bounded claim"],
+            "risks": [],
+            "blocking_questions": [],
+            "reviewed_artifact_refs": reviewed or [],
+            "accepted_artifact_hash": accepted_hash,
+        }
+    )
