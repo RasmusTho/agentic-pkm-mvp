@@ -26,6 +26,19 @@ def test_wheel_excludes_tests():
         )
 
 
+def test_neutral_llm_contract_is_packaged():
+    """The top-level shared contract leaf must ship with the application wheel."""
+    data = _load_pyproject()
+    includes = (
+        data.get("tool", {})
+        .get("setuptools", {})
+        .get("packages", {})
+        .get("find", {})
+        .get("include", [])
+    )
+    assert "llm_contract*" in includes
+
+
 def test_core_runtime_deps_declared():
     """Core runtime packages must be declared in [project].dependencies."""
     data = _load_pyproject()

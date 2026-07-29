@@ -105,7 +105,7 @@ def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
 
 
 def test_model_access_kernel_change_selects_contract_and_boundary_coverage() -> None:
-    selection = select_tests(["app/llm_contract/__init__.py"])
+    selection = select_tests(["llm_contract/__init__.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("model_access",)
@@ -215,14 +215,6 @@ def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
         assert focused_selection.unowned_paths == ()
         assert "tests/cli/test_settings_explain_cli.py" in focused_selection.targets
         assert "tests/services/test_companion_eligibility.py" in focused_selection.targets
-
-
-def test_application_package_initializer_change_selects_full_suite() -> None:
-    selection = select_tests(["app/__init__.py"])
-
-    assert selection.full_suite is True
-    assert selection.unowned_paths == ()
-    assert selection.reason == "shared CI/test/runtime configuration changed"
 
 
 def test_settings_adapter_cannot_mask_unknown_runtime_path() -> None:
@@ -910,10 +902,6 @@ def test_llm_runtime_configuration_change_selects_llm_coverage() -> None:
     assert selection.full_suite is False
     assert selection.subsystems == ("llm_eval",)
     assert "tests/llm" in selection.targets
-    assert (
-        "tests/architecture/test_llm_provider_enforcement_inventory.py"
-        in selection.targets
-    )
 
 
 def test_embedding_router_identity_change_selects_complete_llm_coverage() -> None:

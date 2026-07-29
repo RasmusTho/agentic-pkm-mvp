@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.components.llm.fabric import get_chat_client
 from app.components.llm.router import LLMRouteError, LLMRouter, LLMTaskIntent
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 
@@ -55,28 +54,6 @@ def test_enforced_provider_uses_compatible_fallback(clean_llm_env, cloud_primary
         assert route.model == "llama3.1:8b", f"{task_kind}: model was {route.model}"
         # The specific cross-provider route that caused the false-green UAT.
         assert not (route.provider == "ollama" and route.model == "gpt-4.1-mini")
-
-
-def test_canonical_fabric_requires_provider_when_enforcement_is_enabled(
-    clean_llm_env,
-) -> None:
-    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
-    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
-
-    with pytest.raises(LLMRouteError, match="LLM_PROVIDER is required"):
-        get_chat_client(LLMTaskIntent(task_kind="ask"))
-
-
-def test_forced_provider_cannot_bypass_missing_enforced_provider(
-    clean_llm_env,
-) -> None:
-    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
-    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
-    clean_llm_env.setenv("LLM_FORCE_PROVIDER", "mock")
-    clean_llm_env.setenv("LLM_FORCE_MODEL", "mock-chat")
-
-    with pytest.raises(LLMRouteError, match="LLM_PROVIDER is required"):
-        get_chat_client(LLMTaskIntent(task_kind="ask"))
 
 
 def test_no_compatible_route_fails_loud(clean_llm_env, cloud_primary_routing) -> None:

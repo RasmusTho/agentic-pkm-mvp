@@ -21,7 +21,7 @@ from app.builderops.model_inquiry_adapters import (
     ScriptedAdapter,
     load_adapter_descriptors,
 )
-from app.llm_contract import (
+from llm_contract import (
     ADAPTER_FAILURE_CLASSES as KERNEL_ADAPTER_FAILURE_CLASSES,
     AdapterResult as KernelAdapterResult,
     ModelTurnAdapter as KernelModelTurnAdapter,

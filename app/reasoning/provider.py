@@ -9,7 +9,6 @@ from uuid import UUID
 
 from app.components.llm.fabric import LLMBackendTimeout, LLMTaskIntent, get_chat_client
 from app.components.llm.router import LLMRoute
-from app.config.llm import ensure_provider
 from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
@@ -134,6 +133,7 @@ OllamaReasoner = OllamaDeliberationAgent
 
 def get_deliberation_agent() -> BaseDeliberationAgent:
     backend = os.getenv("REASONING_PROVIDER", "").strip().lower()
+    llm_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
     ci = os.getenv("CI", "") == "1"
 
     if backend in {"mock", "golden"} or (ci and backend == ""):
@@ -143,7 +143,7 @@ def get_deliberation_agent() -> BaseDeliberationAgent:
         backend = "llm"
 
     if backend in {"llm", "ollama"}:
-        if _execution_provider(backend) == "mock":
+        if llm_provider == "mock":
             return MockDeliberationAgent()
         return OllamaDeliberationAgent()
 
@@ -176,12 +176,6 @@ def _reasoning_backend() -> str:
     if backend == "":
         return "llm"
     return backend
-
-
-def _execution_provider(backend: str) -> str:
-    if backend == "mock":
-        return "mock"
-    return ensure_provider()
 
 
 def _simple_preview(text: str, limit: int = 120) -> str:
@@ -422,7 +416,8 @@ def run_reasoning(
             if text:
                 context_lines.append(f"- {oid}: {_simple_preview(text, 180)}")
         backend = _reasoning_backend()
-        provider = _execution_provider(backend)
+        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
+        provider = "mock" if provider in {"", "fake"} else provider
         if backend == "mock" or provider == "mock":
             result = {
                 "plan": f"MOCK_PLAN: {goal}",
@@ -483,7 +478,8 @@ def run_reasoning(
         )
     if mode == ReasoningMode.ASK_ANSWER:
         backend = _reasoning_backend()
-        provider = _execution_provider(backend)
+        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
+        provider = "mock" if provider in {"", "fake"} else provider
         is_mock_provider = provider == "mock"
         if not question:
             return ReasoningRun(

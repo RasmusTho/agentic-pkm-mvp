@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 
 import requests
 
-from app.config.llm import ensure_provider
 from app.llm.trace import log_llm_call
 from app.settings.env_defaults import env_float
 
@@ -337,7 +336,7 @@ def call_llm(
         except Exception:
             return {}
 
-    provider = ensure_provider(provider_override)
+    provider = _normalize_provider(provider_override) or _normalize_provider(os.getenv("LLM_PROVIDER")) or "mock"
     model = _normalize_model(model_override) or _default_model()
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
     system = pack.get("system", "")

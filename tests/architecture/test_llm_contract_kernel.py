@@ -6,16 +6,17 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 import urllib.request
 
 import pytest
 
-import app.llm_contract as kernel
-from app.llm_contract import SchemaValidationError, validate_schema_payload
+import llm_contract as kernel
+from llm_contract import SchemaValidationError, validate_schema_payload
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-KERNEL_ROOT = REPO_ROOT / "app" / "llm_contract"
+KERNEL_ROOT = REPO_ROOT / "llm_contract"
 
 
 def test_kernel_imports_no_runtime_module(tmp_path: Path) -> None:
@@ -38,13 +39,28 @@ def test_kernel_imports_no_runtime_module(tmp_path: Path) -> None:
     code = """
 import json
 import os
+import socket
 import sys
+import urllib.request
+
+sys.path.append(sys.argv[1])
+egress_attempts = []
+
+def block_egress(*args, **kwargs):
+    egress_attempts.append(repr(args))
+    raise AssertionError("neutral-kernel import attempted network egress")
+
+socket.socket.connect = block_egress
+socket.socket.connect_ex = block_egress
+socket.socket.sendto = block_egress
+socket.create_connection = block_egress
+urllib.request.urlopen = block_egress
 
 before = dict(os.environ)
 before_app_modules = {
     name for name in sys.modules if name == "app" or name.startswith("app.")
 }
-import app.llm_contract
+import llm_contract
 after = dict(os.environ)
 new_app_modules = {
     name
@@ -52,14 +68,22 @@ new_app_modules = {
     if (name == "app" or name.startswith("app.")) and name not in before_app_modules
 }
 print(json.dumps({
+    "preexisting_app_modules": sorted(before_app_modules),
     "env_unchanged": before == after,
-    "kernel_loaded": "app.llm_contract" in sys.modules,
+    "kernel_loaded": "llm_contract" in sys.modules,
     "provider_config_loaded": "app.config.llm" in sys.modules,
-    "unexpected_app_modules": sorted(new_app_modules - {"app", "app.llm_contract"}),
+    "unexpected_app_modules": sorted(new_app_modules),
+    "egress_attempts": egress_attempts,
 }))
 """
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            code,
+            sysconfig.get_paths()["purelib"],
+        ],
         cwd=tmp_path,
         env=env,
         check=False,
@@ -70,10 +94,12 @@ print(json.dumps({
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert json.loads(result.stdout) == {
+        "preexisting_app_modules": [],
         "env_unchanged": True,
         "kernel_loaded": True,
         "provider_config_loaded": False,
         "unexpected_app_modules": [],
+        "egress_attempts": [],
     }
     assert list(tmp_path.iterdir()) == []
 

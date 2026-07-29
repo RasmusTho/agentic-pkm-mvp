@@ -31,7 +31,6 @@ FULL_SUITE_REASONS = (
 FULL_SUITE_EXACT = {
     # Shared CLI registration and path resolution affect many runtime
     # subsystems. Never narrow their coverage to a single feature owner.
-    "app/__init__.py",
     "app/cli/__init__.py",
     "app/config/paths.py",
     "conftest.py",
@@ -145,7 +144,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "model_access",
         (
-            "app/llm_contract/",
+            "llm_contract/",
             "tests/model_access/",
             "tests/architecture/test_llm_contract_kernel.py",
         ),
@@ -487,7 +486,6 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "docs/eval/",
             "tests/components/embeddings/",
             "tests/components/llm/",
-            "tests/architecture/test_llm_provider_enforcement_inventory.py",
             "tests/index/test_identity_migration.py",
             "tests/llm/",
             "tests/eval/",
@@ -498,7 +496,6 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "tests/components/embeddings",
             "tests/components/llm",
-            "tests/architecture/test_llm_provider_enforcement_inventory.py",
             "tests/index/test_identity_migration.py",
             "tests/llm",
             "tests/eval",

@@ -7,7 +7,6 @@ from typing import Any, Iterable
 
 from app.components.embeddings import EmbeddingIdentity, resolve_embedding_identity
 from app.components.settings.models_loader import load_models
-from app.config.llm import ensure_provider
 from app.settings.models import LLMRoutingSettings
 from app.settings.runtime import get_settings_bundle
 
@@ -134,11 +133,6 @@ def _is_shipped_default_embedding_target(
 class LLMRouter:
     def __init__(self) -> None:
         self._llm_provider_env = os.getenv("LLM_PROVIDER") if "LLM_PROVIDER" in os.environ else None
-        if _provider_enforced():
-            try:
-                ensure_provider(os.getenv("LLM_FORCE_PROVIDER"))
-            except RuntimeError as exc:
-                raise LLMRouteError(str(exc)) from exc
         provider, degraded, reason = _resolve_provider(self._llm_provider_env)
         self._default_provider = provider
         self._default_degraded = degraded

@@ -18,7 +18,7 @@ import requests  # type: ignore[import-untyped]  # third-party lib ships no type
 
 from app.builderops.model_inquiry_contract import canonical_hash, canonical_json
 from app.builderops.models import BuilderOpsValidationError
-from app.llm_contract import (
+from llm_contract import (
     ADAPTER_FAILURE_CLASSES,
     AdapterResult,
     ModelTurnAdapter,

@@ -105,7 +105,7 @@ Interpretation note:
 - **Vault Browser** — Human-first navigation and orientation surface over the vault. Current shipped behavior is `Vault Browser MLP v0` (read-only Markdown enumeration with deterministic title/path filtering, active-vault identity, empty/error/identity-unavailable states, and note selection into Companion workspace). Long-term capability contract (concepts, action modes, MLP-vs-future boundary, non-goals) lives in `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Maturity: MLP (read-only).
 - **LLM router + fabric** — Canonical access layer for chat + embeddings (`app/components/llm/router.py`, `app/components/llm/fabric.py`). High-level modules must use `get_chat_client` / `get_embeddings_client`; routes are reported via `/api/health`. Maturity: Active.
 
-### app/llm_contract
+### llm_contract
 
 - **Neutral LLM Contract Kernel** — Provider-free, side-effect-free contracts shared by the Product
   and Builder model runtimes: the seven-field model-access intent, grouped role resolution,
@@ -116,9 +116,11 @@ Interpretation note:
   configuration. Its JSON Schema validator permits only same-document fragment references, uses a
   no-retrieval registry, and normalizes invalid payloads and unresolvable references to
   `SchemaValidationError`. Builder Model Inquiry retains its concrete adapters and re-exports the
-  moved compatibility names from `app.llm_contract`; `app/ports/` remains rejected because importing
-  its package executes Product vault/service dependencies. Maturity: Active contract surface;
-  runtime adoption starts in later Model Access Substrate slices.
+  moved compatibility names from `llm_contract`. The kernel lives outside the `app` package because
+  importing any `app.*` child first executes `app/__init__.py`, which resolves Product provider
+  configuration; `app/ports/` is additionally rejected because its initializer executes Product
+  vault/service dependencies. Maturity: Active contract surface; runtime adoption starts in later
+  Model Access Substrate slices.
 
 Direction note:
 - ASK remains a valid current runtime surface,
