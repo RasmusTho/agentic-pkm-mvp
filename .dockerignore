@@ -35,6 +35,10 @@ docs
 # app/settings/agents.py, app/config/paths.py), and panel-action wiring
 # (app/agents/panel_agent/wiring.py). Re-include so the runtime COPY sees it.
 !docs/settings
+# The episode registry declaration is loaded at runtime by
+# app.episodes.stream_registry; keep this single asset available without
+# widening the image to the ERE documentation tree.
+!docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md
 ops
 *.md
 .github
