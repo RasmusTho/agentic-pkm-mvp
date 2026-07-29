@@ -1054,6 +1054,21 @@ def test_builder_system_change_selects_its_own_regression_tests() -> None:
     assert "tests/architecture/test_builderops_store_boundary.py" in selection.targets
 
 
+def test_subprocess_pythonpath_helper_change_selects_builder_system_regressions() -> None:
+    helper_path = "tests/helpers/subprocess_pythonpath.py"
+    regression_path = "tests/helpers/test_subprocess_pythonpath.py"
+
+    selection = select_tests([helper_path, regression_path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("builder_system",)
+    assert selection.unowned_paths == ()
+    assert "tests/builderops" in selection.targets
+    assert "tests/governance" in selection.targets
+    assert helper_path in selection.targets
+    assert regression_path in selection.targets
+
+
 def test_runtime_start_harness_change_selects_ops_deploy_regressions() -> None:
     selection = select_tests(
         [
