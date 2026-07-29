@@ -4,9 +4,9 @@ description: Add model-provider identifiers to the delivered host secret contrac
 task_id: MAS-03
 source_anchor: docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8. Migration (step 2)
 parent_capability: Model Access Substrate
-prerequisites: []
-depends_on: []
-can_parallelize_with: [DEFINE_PROVIDER_CENSUS.md, MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md, PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
+prerequisites: [MAS-02]
+depends_on: [MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md]
+can_parallelize_with: []
 ---
 
 State: Authored task specification (future-state; child issue not yet filed). Sibling extension of the
@@ -32,19 +32,22 @@ absent, because they are exactly the fail-closed violation this contract exists 
 
 Both children of parent #3843 are delivered: HSP-01 as #3845 / PR #3888, and **HSP-02 as #3846 /
 PR #4008, closed 2026-07-20**. This task therefore has no prerequisite inside #3843 and must not
-re-specify the bootstrap. `docs/LOCAL_SECRET_PROVISIONING/README.md :: Task order` and
-`docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md:72` both still describe HSP-02 as open; the README is
-a live spec surface and is corrected by this task, while the audit is a dated snapshot and is left
-alone.
+re-specify the bootstrap. PR #4190 already corrected
+`docs/LOCAL_SECRET_PROVISIONING/README.md :: Task order`; the dated audit remains a historical
+snapshot. This task updates only the newly expanded model-provider scope.
 
 #3843 stays open on its own two acceptance gates — a redacted dev-channel deploy receipt and the
 `docs/SECURITY.md` promotion. **This task does not close #3843** and must not claim to.
 
 ## What this task does
 
-1. Declare model-provider secret identifiers in `config/secrets/host_secret_contract.json` for the
-   headless Builder consumers, channel-scoped across `dev`, `test`, and `prod`. No value and no host
-   path enters that file.
+1. Declare exactly these value-free entries in `config/secrets/host_secret_contract.json`, each for
+   channels `dev`, `test`, and `prod` and consumer `builderops-model-inquiry`:
+   - logical secret `openai.api-key`, child binding `OPENAI_API_KEY`, kind `api-key`;
+   - logical secret `anthropic.api-key`, child binding `ANTHROPIC_API_KEY`, kind `api-key`.
+   The `gpt_codex` inquiry role requires `openai.api-key`; the `fable` role requires
+   `anthropic.api-key`. No value or host path enters the file. CKM/design-agent consumers receive no
+   grant in this task.
 2. Replace `_INITIAL_CHANNELS`, `_INITIAL_CONSUMER`, and `_INITIAL_SECRET`
    (`app/ops/host_secret_contract.py:16-18`) with declared data plus a **strict identifier grammar**.
    The v1 loader's anti-smuggling property — "any other identifier-bearing string is rejected rather
@@ -57,12 +60,14 @@ alone.
 4. Make value-shape validation per secret **kind** rather than per secret name. `_validate_secret`
    (`app/ops/host_secret_bootstrap.py:119`) recognizes only `heimdal.raw-store-key` and returns `False`
    for everything else, which is the correct fail-closed default and must stay the default. Add an
-   `api-key` kind with its own shape rule; an identifier of unknown kind still fails closed.
+   `api-key` kind whose value must equal its trimmed form, be 20–512 printable non-whitespace
+   characters, and contain no control character, NUL, CR, or LF. Provider-specific prefixes are not
+   required because key formats change; an identifier of unknown kind still fails closed.
 5. Extend the existing INV-HSP-1/2/3 tests to a model-provider secret, rather than writing a parallel
    test file.
 6. Repair the two green-on-absent CI paths (below).
-7. Write back `docs/LOCAL_SECRET_PROVISIONING/README.md`: correct the stale HSP-02 row, remove the
-   now-superseded "runtime model-provider enablement" exclusion at `:105`, and state that
+7. Write back `docs/LOCAL_SECRET_PROVISIONING/README.md`: remove the now-superseded "runtime
+   model-provider enablement" exclusion and state that
    model-provider identifiers are governed by ADR-0064 through this capability.
 
 ### The two CI paths, and why they belong here
@@ -79,27 +84,17 @@ and make its absence visible. CI is one of the four bindings the audit names for
 | `.github/workflows/ci-smoke.yaml:505-528` | `panel-llm-e2e` / `Detect live-LLM CI configuration` | `PANEL_AGENT_LLM_E2E_CI`, `LLM_PROVIDER`, `OPENAI_API_KEY` | every later step is gated on `enabled == 'true'`; unconfigured means nothing runs and the job reports success |
 | `.github/workflows/architecture-ci.yaml:108-117` | `docs-guard` / `Detect Codex secret`, `Maybe install Codex CLI`, `Maybe run Codex guard` | `CODEX_API_KEY` | steps vanish silently when the secret is absent; the step also writes the secret into `$GITHUB_ENV` |
 
-**The rule this task applies:** each path is either made **fail-closed** on an absent declared
-credential, or **removed**. Neither may be left reporting success while unconfigured. ADR-0064 requires
-repair without naming a mechanism, so the choice is made here and must be recorded per workflow with
-its reason.
-
-The recommended resolution, which the implementer may revise only with a stated reason:
+**The rule this task applies:** remove both optional paths. Neither may remain as a conditional
+green-on-absent provider check. Reintroducing live provider CI requires a later bounded issue with a
+declared credential backend and explicit cost/egress posture.
 
 - **`architecture-ci.yaml` `docs-guard` — remove the Codex path.** The whole workflow is
   `workflow_dispatch`-only, so it never runs in normal CI at all; `codex run docs-guardian` has no
   counterpart in this repository's toolchain; and writing a credential into `$GITHUB_ENV` is the kind
   of disclosure surface INV-HSP-1 exists to prevent. Removal is the honest repair, and it needs no
   Actions secret.
-- **`ci-smoke.yaml` `panel-llm-e2e` — declare the credential and fail closed, or convert the job to an
-  explicit `workflow_dispatch` entry point.** Leaving it as a scheduled/push job that silently
-  no-ops is the state ADR-0064 forbids.
-
-**Entry condition, owner-dependent:** if the implementer makes any path required, the corresponding
-GitHub Actions secret must be provisioned before the PR merges, or main goes red on the first run. That
-provisioning is an owner action, not an agent action. The issue must carry it as an explicit entry
-condition, and the slice stays `agent:blocked` until either the secret is provisioned or the
-removal-only resolution is chosen.
+- **`ci-smoke.yaml` `panel-llm-e2e` — remove the optional live-provider job.** It is not a required
+  gate and its current green-on-absent result is false evidence.
 
 ## Concretely
 
@@ -137,6 +132,9 @@ workflows green-on-absent would leave the decision undelivered.
 - [ ] Model-provider identifiers are declared in `config/secrets/host_secret_contract.json` and resolve
       as data, with no channel, consumer, or secret name hardcoded in `app/ops/host_secret_contract.py`.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_provider_identifiers_are_declared_data`
+- [ ] The exact OpenAI and Anthropic identifiers, child bindings, `api-key` validator, channel set,
+      consumer, and two-role requirements match this specification.
+      Verify: `tests/ops/test_host_secret_contract.py::test_model_inquiry_secret_contract_is_exact_and_value_free`
 - [ ] A declared identifier whose Keychain value is absent or malformed fails the consuming process
       closed, before it starts, naming only the logical identifier and never the value.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
@@ -144,7 +142,7 @@ workflows green-on-absent would leave the decision undelivered.
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_unknown_secret_kind_still_fails_closed`
 - [ ] The anti-smuggling property survives the move to data: a value-shaped string in an identifier
       field is rejected, and the existing contract tests pass without relaxation.
-      Verify: `tests/ops/test_host_secret_contract.py::test_contract_rejects_value_bearing_identifier_field` (existing, unmodified)
+      Verify: `tests/ops/test_host_secret_contract.py::test_contract_rejects_value_bearing_identifier_field`
       Verify: `tests/ops/test_host_secret_contract.py::test_identifier_grammar_rejects_out_of_grammar_names`
 - [ ] `dev`, `test`, and `prod` resolve distinct Keychain accounts for the same model-provider
       identifier, and a `dev` request cannot resolve a `prod` item.
@@ -159,11 +157,10 @@ workflows green-on-absent would leave the decision undelivered.
       model-provider credential while reporting success when that credential is absent.
       Verify: `tests/ops/test_ci_smoke_workflow.py::test_no_workflow_step_is_green_on_absent_provider_secret`
 - [ ] The resolution chosen for each of the two workflows is recorded with its reason.
-      Verify: doc writeback at `docs/MODEL_ACCESS_SUBSTRATE/EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md :: The two CI paths, and why they belong here`
-- [ ] `docs/LOCAL_SECRET_PROVISIONING/README.md` states HSP-02 as delivered and no longer excludes
-      runtime model-provider enablement.
-      Verify: doc writeback at `docs/LOCAL_SECRET_PROVISIONING/README.md :: Task order` and
-      `docs/LOCAL_SECRET_PROVISIONING/README.md :: Out of scope`
+      Verify: `doc writeback at docs/MODEL_ACCESS_SUBSTRATE/EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md :: The two CI paths, and why they belong here`
+- [ ] `docs/LOCAL_SECRET_PROVISIONING/README.md` no longer excludes runtime model-provider enablement
+      and records ADR-0064 scope without changing the already-correct HSP-02 delivery row.
+      Verify: `doc writeback at docs/LOCAL_SECRET_PROVISIONING/README.md :: Out of scope`
 
 ## How to verify (pre-merge)
 
@@ -204,8 +201,9 @@ census, which is MAS-01.
 
 One issue, filed as a **sibling** of #3843's delivered children rather than a new child of #3843. Its
 `Context` must state that HSP-01 (#3845) and HSP-02 (#3846) are delivered, that this task does not
-close #3843, and that filing anything named "HSP-02" would duplicate closed #3846. It carries the
-owner-provisioning entry condition and starts `agent:blocked` until that condition is resolved.
+close #3843, and that filing anything named "HSP-02" would duplicate closed #3846. No credential
+value provisioning is required to merge this declaration-only slice; live values are a MAS-05 parent
+acceptance prerequisite.
 
 TCD capability recommendation for the implementing agent: **Opus / xhigh reasoning** — credential and
 auth surface plus CI gating, where a wrong direction is expensive and a silent weakening of a

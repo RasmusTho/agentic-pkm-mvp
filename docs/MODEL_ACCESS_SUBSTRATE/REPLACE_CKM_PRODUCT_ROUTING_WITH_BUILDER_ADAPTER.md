@@ -4,14 +4,13 @@ description: Replace FabricSemanticAssociator with a Builder-side adapter so CKM
 task_id: MAS-06
 source_anchor: docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8. Migration (step 5)
 parent_capability: Model Access Substrate
-prerequisites: [MAS-03, MAS-04]
-depends_on: [EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md, PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
-can_parallelize_with: [RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md]
+prerequisites: [MAS-05]
+depends_on: [RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md]
+can_parallelize_with: []
 ---
 
 State: Authored task specification (future-state; child issue not yet filed). Closes the interim window
-opened by MAS-02. Its position relative to MAS-05 is a preference, not a dependency — see the swap
-condition below.
+opened by MAS-02. It follows accepted MAS-05 parent validation; the order does not swap.
 
 # Replace CKM Product Routing With Builder Adapter
 
@@ -25,28 +24,23 @@ candidate the router appends. That is the authority leakage ADR-0063 rejected it
 and `importlinter.ini` did not catch it because `app.builderops` and `app.components` sit on the same
 side of the only existing contract.
 
-ADR-0064 §8 **amends ADR-0063's sequencing**: CKM migrates as early as its dependencies allow, requiring
-only credential resolution and the adapter contract — not a complete Builder Capability Runtime. An
-orchestrator that can silently resolve to a mock route cannot be an orchestrator.
+ADR-0064 §8 **amends ADR-0063's sequencing**: CKM migrates after Model Inquiry proves the substrate,
+requiring credential resolution and the neutral intent/resolver/adapter contracts — not a complete
+Builder Capability Runtime.
 
-## Position in the order, and the swap
+## Position in the order
 
-MAS-05 and MAS-06 share an identical prerequisite set and declare each other in
-`can_parallelize_with`. The stated preference is MAS-05 first, because model inquiry is the smaller,
-already-adapter-shaped consumer that proves the substrate cheaply.
-
-**The swap trigger is condition 1 of ADR-0064 §8**: if CKM orchestration must begin before MAS-05
-lands, this task is promoted ahead of it. No specification edit is needed to express that. While the
-window is open — that is, while any `app.builderops -> app.components.llm` exemption exists — CKM must
-not orchestrate; ADR-0057's projection-only lock is the governing statement and remains unamended by
-this capability.
+The amended ADR-0064 §8 keeps Model Inquiry first and CKM migration at step 5. This issue remains
+blocked until `model_access_substrate.provider_enabled_noninteractive_inquiry.v1` is accepted on the
+parent. A builder agent may read CKM evidence during the window; CKM itself remains projection-only.
 
 ## What this task does
 
 1. Add a Builder-side associator implementing the existing `SemanticAssociator` protocol
-   (`app/builderops/ckm/semantic.py:104`) on top of the kernel `ModelTurnAdapter`, with its credential
-   resolved through the host secret contract and its request declaring
-   `fallback_forbidden`.
+   (`app/builderops/ckm/semantic.py:104`) on top of the MAS-05 Builder resolver and kernel
+   `ModelTurnAdapter`. It submits provider-free `ModelAccessIntent`, declares
+   `fallback_forbidden`, and receives provider/model/capability/credential provenance only as a
+   resolved result.
 2. Remove `FabricSemanticAssociator` and both Product imports from `app/builderops/ckm/semantic.py`:
    `app.components.llm.fabric` (`LLMTaskIntent`, `get_chat_client`) and `app.components.llm.constrained`
    (`ConstrainedCompletionError`, `register_schema`, `validate_payload`). The schema-reference and
@@ -56,7 +50,8 @@ this capability.
    import, so the contract is never made to pass by widening and never fails on main in between.
 4. Preserve every existing CKM semantic behaviour: candidate-only inferred edges, the confidence floor,
    confirmation-receipt integrity across rebuild, skip-on-unavailable, and the structured-output failure
-   mapping. The thirteen tests in `tests/builderops/ckm/test_semantic.py` are the regression contract.
+   mapping. A degraded result is skipped with a visible reason and writes zero edges. The existing
+   tests in `tests/builderops/ckm/test_semantic.py` are the regression contract.
 5. Update `docs/CAPABILITY_KNOWLEDGE_MODEL/SEMANTIC_EVIDENCE_ASSOCIATION.md` so it describes a
    Builder-side model path rather than the routed Product chat fabric.
 
@@ -98,6 +93,9 @@ live; this task is the only thing that removes it.
 - [ ] CKM semantic association resolves its model through the kernel adapter with a contract-resolved
       credential, and `FabricSemanticAssociator` no longer exists.
       Verify: `tests/builderops/ckm/test_semantic.py::test_semantic_association_resolves_through_builder_adapter`
+- [ ] The production CKM call site submits no provider/model and resolves exclusively through the
+      Builder runtime/channel census mapping.
+      Verify: `tests/builderops/ckm/test_semantic.py::test_semantic_production_call_uses_provider_free_builder_resolver`
 - [ ] A Product policy fallback cannot execute the Builder semantic-association task, asserted on the
       production association path rather than on the guard in isolation.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`
@@ -110,22 +108,24 @@ live; this task is the only thing that removes it.
       Verify: `tests/builderops/ckm/test_semantic.py::test_mock_identity_is_refused_before_route_selection`
 - [ ] An absent or unusable declared credential makes association skip cleanly, with a visible reason,
       and never silently produces proposals from another path.
-      Verify: `tests/builderops/ckm/test_semantic.py::test_llm_unavailable_skips_cleanly` (existing, unmodified)
+      Verify: `tests/builderops/ckm/test_semantic.py::test_llm_unavailable_skips_cleanly`
       Verify: `tests/builderops/ckm/test_semantic.py::test_credential_unavailable_skips_with_visible_reason`
+- [ ] A non-mock degraded result is visible and writes zero semantic edges.
+      Verify: `tests/builderops/ckm/test_semantic.py::test_degraded_builder_route_writes_zero_edges_with_visible_reason`
 - [ ] No `app.builderops` module imports `app.components.llm`, and the `importlinter` contract passes
       with **zero** exemptions.
       Verify: `tests/architecture/test_import_boundary.py::test_builder_does_not_import_product_llm_without_exemption`
       — the same test MAS-02 introduced, now asserting the exemption list is empty.
 - [ ] Every existing CKM semantic behaviour is preserved: candidate labelling, confidence floor,
       confirmation-receipt integrity across rebuild, tombstoning, and demotion on material change.
-      Verify: `tests/builderops/ckm/test_semantic.py` (all thirteen existing tests, unmodified)
+      Verify: `tests/builderops/ckm/test_semantic.py::test_existing_semantic_contract_regression_suite`
 - [ ] INV-CKM-1 (provenance everywhere) still holds: every inferred edge records the provider and model
       that produced it, now sourced from the Builder adapter.
-      Verify: `tests/builderops/ckm/test_semantic.py::test_inferred_edges_fenced_via_store_write_path` (existing, unmodified)
+      Verify: `tests/builderops/ckm/test_semantic.py::test_inferred_edges_fenced_via_store_write_path`
 - [ ] The interim window is recorded as closed.
-      Verify: doc writeback at `docs/architecture/SBS_TRANSITION_DEBT.md :: model access substrate interim window`
+      Verify: `doc writeback at docs/architecture/SBS_TRANSITION_DEBT.md :: model access substrate interim window`
 - [ ] The CKM specification describes a Builder-side model path.
-      Verify: doc writeback at `docs/CAPABILITY_KNOWLEDGE_MODEL/SEMANTIC_EVIDENCE_ASSOCIATION.md :: What This Task Does`
+      Verify: `doc writeback at docs/CAPABILITY_KNOWLEDGE_MODEL/SEMANTIC_EVIDENCE_ASSOCIATION.md :: What This Task Does`
 
 ## How to verify (pre-merge)
 
@@ -140,22 +140,20 @@ live; this task is the only thing that removes it.
 ## Cross-task invariants preserved
 
 INV-MAS-2 (credentials only through the contract), INV-MAS-3 (one vocabulary, two validators),
-INV-MAS-5 (no silent substitution — this is the task where "no mock route" becomes structural rather
+INV-MAS-1 (provider-free intent), INV-MAS-5 (no silent substitution — this is the task where "no mock route" becomes structural rather
 than a post-hoc check), and INV-MAS-7, which this task discharges by removing the only exemption. Seam C
-is closed here: exemption removal and import removal are one atomic change. Seam D holds until this task
-merges: while the exemption exists, no CKM path may initiate delivery.
+is closed here: exemption removal and import removal are one atomic change. Seam D closes only when
+the production import and exemption disappear together.
 
 ## Out of scope
 
-Whether CKM may orchestrate at all. ADR-0057 locks CKM projection-only with a candidate lifecycle and
-human confirmation; orchestration exceeds that scope and requires its own ADR amendment, which this task
-neither requests nor presumes. Changing the CKM object model, the maturity engine, projections, or any
-other CKM surface. The deterministic linkers, which need no model. Migration steps 6 and 7. Any change to
-Product routing, which keeps its current behaviour for its own callers.
+CKM dispatch, mutation, ranking, gating, prioritization, or decision authority. Changing the CKM
+object model, maturity engine, projections, or any other CKM surface. Deterministic linkers, migration
+steps 6 and 7, and Product routing remain unchanged.
 
 ## Related docs
 
-- `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Interim CKM conditions`, Seams C and D
+- `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Interim CKM posture`, Seams C and D
 - `docs/adr/ADR-0064-model-access-substrate.md :: 8. CKM sequencing — amends ADR-0063`
 - `docs/adr/ADR-0063-shared-llm-contract-kernel.md :: Separate runtime authority`
 - `docs/adr/ADR-0057-capability-knowledge-model-kvasir.md` — projection-only lock, candidate lifecycle
@@ -167,10 +165,10 @@ Product routing, which keeps its current behaviour for its own callers.
 
 One issue. Title shape
 `[Model Access Substrate] replace-ckm-product-routing-with-builder-adapter: end the interim authority leak`.
-Its `Context` must state that ADR-0064 §8 amends ADR-0063's CKM sequencing, that this task removes the
-exemption MAS-02 created, that its order relative to MAS-05 is a preference with a named swap trigger,
-and that it does not decide whether CKM may orchestrate. It stays `agent:blocked` until MAS-03 and
-MAS-04 merge.
+Its `Context` must state that amended ADR-0064 §8 keeps this after the accepted MAS-05 receipt, that
+the task removes the MAS-02 exemption, and that CKM remains projection-only. It stays
+`agent:blocked` until the parent records
+`model_access_substrate.provider_enabled_noninteractive_inquiry.v1`.
 
 TCD capability recommendation for the implementing agent: **Opus / high reasoning** — authority-boundary
 work with a negative-proof requirement and a thirteen-test regression contract; the defect mode is a

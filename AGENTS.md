@@ -7,13 +7,43 @@ It does not apply to runtime/system agents that exist inside the product. Runtim
 
 ## Reading order
 
-1. Read this file first.
-2. Use `.codex/skills/README.md` to identify the repo-local skill path that matches the task.
-3. Use `docs/DOCS_INDEX.md` to identify the owner document for the area you are touching.
-4. Read the owner document before editing code or nearby docs.
-5. Use `docs/development/DEV_WORKFLOW.md` for the working loop and validation expectations.
-6. Use `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md` for maintenance rules, rationale, and compatibility-entrypoint policy.
-7. Before producing implementation guidance or touching code, apply `docs/development/AGENT_OPERATING_PROTOCOL.md` to classify the task, identify artifact class and channel risk, and confirm stop conditions are clear.
+Citations in this file follow `.codex/skills/_shared/READ_SCOPE.md`: a `FILE :: Section` citation
+means **read that section only**, a citation with no `::` is a whole-file read and states why, and a
+citation under a condition is read only when the condition holds. Conditions key off the actual diff
+(`git diff --name-only origin/main...HEAD`), not the issue's declared scope.
+
+Required at session entry, before the task type is known:
+
+1. This file's `Reading order`, `Repo-local skill routing`, `Required rules`,
+   `Total Cost of Development` (any agent choosing its own capability), and
+   `Proportional delivery` sections. Read the remaining sections of this file only under the
+   conditions below.
+2. `.codex/skills/README.md :: Skill routing` to identify the repo-local skill path that matches the
+   task, then load that skill. The skill states what else it needs.
+
+Read on condition, not by default:
+
+3. `docs/DOCS_INDEX.md` — **grep-only**. It is ~250 KB / 700 rows; `grep` it for the work area to
+   locate the owner document. Never read it whole. Then read the owner document itself before
+   editing code or nearby docs.
+4. `docs/development/DEV_WORKFLOW.md :: Validation baseline` before running or reporting validation,
+   and `:: Working loop` when the loop itself is unclear. Other sections of that file are
+   reference material for the workflows that own them.
+5. `AGENTS.md :: Change classification` when the change touches a current-state doc, roadmap, or
+   status surface.
+6. `AGENTS.md :: Docs authoring lane` or `:: Governance lane` when the work will be published without
+   a governing Issue; `AGENTS.md :: GitHub delivery governance` when publishing an issue-backed PR.
+7. `AGENTS.md :: Communicating with the owner` before writing a report or escalation to the owner,
+   and `:: Specialist subagent roles` before dispatching subagents.
+8. `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md :: Maintenance rules` and
+   `:: Canonical entrypoints` (compatibility-entrypoint policy) when the diff changes an
+   instruction artifact (`AGENTS.md`, `CLAUDE.md`, `.codex/AGENTS.md`, `.codex/skills/**`). Note the
+   `Maintenance rules` requirement that a change to canonical entrypoints, reading order, or doc
+   roles updates `docs/DOCS_INDEX.md` in the same change.
+9. `docs/development/AGENT_OPERATING_PROTOCOL.md :: Required pre-implementation checks`,
+   `:: Behavioral rules`, and `:: Stop conditions` before producing implementation guidance or
+   touching code, when the loaded skill does not already inline that classification step.
+   `issue-to-code` inlines all three.
 
 ## Repo-local skill routing
 
@@ -410,6 +440,14 @@ Builder-agent rules:
 - Batch project-field GraphQL mutations into one bounded pass near workflow completion, rather than interleaving repeated mutations throughout intake.
 
 ## Dispatcher policy
+
+**Superseded as an operational procedure — do not read this section to perform a pickup.**
+`scripts/issue_pickup_claim.sh`, driven by
+`.codex/skills/issue-to-code/SKILL.md :: Dispatcher Integration`, is the only claim entrypoint, and
+it supersedes every hand-run `dispatcher next` / `dispatcher claim` / `gh issue edit` sequence.
+Reconstructing that handshake by hand is forbidden, so reading a procedure for it makes an agent
+more likely to be wrong, not less. What remains below is the authority statement the wrapper
+implements — read it only when reasoning about dispatcher authority, never to execute a claim.
 
 The dispatcher is an optional collision guard for issue pickup, not lifecycle authority.
 

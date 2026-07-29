@@ -6,7 +6,7 @@ source_anchor: docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md :: 2. Pr
 parent_capability: Model Access Substrate
 prerequisites: []
 depends_on: []
-can_parallelize_with: [MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md, EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md, PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
+can_parallelize_with: []
 ---
 
 State: Authored task specification (future-state; child issue not yet filed). Delivers R4-1, which was
@@ -26,9 +26,12 @@ row plus a secret declaration" true instead of aspirational.
 
 1. Add `docs/settings/models/providers.yaml` following the **existing** `docs/settings/models/`
    registry-plus-descriptor convention already used by `registry.yaml` and the eight model descriptor
-   files. Per RUNTIME_MODEL_POSTURE §2, each provider row carries: provider id, kind coverage
-   (`chat` / `embedding`), tier (`local` | `paid` | `test`), the `paid_eligible_task_kinds` policy
-   hook, required environment/credential identifiers, and excluded model families.
+   files. Per RUNTIME_MODEL_POSTURE §2 and ADR-0064 §3, each provider row carries: provider id, kind
+   coverage (`chat` / `embedding`), tier (`local` | `paid` | `test`), supported capability flags
+   (structured output, native tools, system-prompt channel, deterministic execution, and embedding
+   dimension where applicable), the `paid_eligible_task_kinds` policy hook, required logical
+   credential identifiers, excluded model families, and per-runtime/channel
+   `capability_tier -> model` mappings. Product and Builder mappings are separate declarations.
 2. Add a loader beside `app/components/settings/models_loader.py`, modelled on its
    `load_model_registry` / `load_models` pair: Pydantic models with `extra="forbid"`, a
    `DEFAULT_PROVIDER_CENSUS_PATH` constant, and the same environment-override convention as
@@ -39,7 +42,21 @@ row plus a secret declaration" true instead of aspirational.
 4. Add a `known_divergences` block to the census. Each entry names the site, the divergent members, a
    date, and a linked GitHub issue. An **undeclared** divergence fails the test; a declared entry
    missing either the date or the issue link also fails.
-5. Write back `docs/LLM.md :: Providers (Current)` so it points at the census as the single source
+5. Validate that each tier mapping references a declared provider/model with the capabilities
+   required by that mapping. Resolution policy remains owned by the named runtime; the census only
+   makes the selectable set and capabilities explicit.
+6. Declare the exact Phase 1 Builder Model Inquiry resolution profiles for every `dev`, `test`, and
+   `prod` channel:
+   - role profile `fable`, tier `frontier`, resolves to provider `anthropic`, model ref
+     `claude-fable-5`, logical credential `anthropic.api-key`, and requires structured output plus a
+     system-prompt channel;
+   - role profile `gpt_codex`, tier `frontier`, resolves to provider `openai`, model ref
+     `gpt-5.6-sol`, logical credential `openai.api-key`, and requires structured output.
+   Both profiles belong to one `model-inquiry-independent-review` resolution group whose
+   `independence=distinct_effective_target`; the pair must resolve to distinct
+   `(provider, model, effective_identity)` tuples. These mappings are Builder policy data, not caller
+   provider choices. Product mappings remain separate and unchanged.
+7. Write back `docs/LLM.md :: Providers (Current)` so it points at the census as the single source
    rather than restating the set in prose.
 
 ### Sites the equality test must cover
@@ -59,10 +76,8 @@ The two ladder sites have no named constant. This task extracts one per ladder �
 existing literal set into a module constant the ladder then reads — so the census test compares sets
 rather than parsing control flow. That extraction is behaviour-preserving by construction.
 
-`app/llm/adapter.py` has no importer anywhere in `app/`. The task may either extract its constant like
-the other ladder or delete the module after proving zero importers; both are behaviour-preserving and
-either satisfies the census criterion. Deleting is the cheaper honest outcome and needs no follow-up
-issue.
+`app/llm/adapter.py` remains in place. Extract its constant like the other ladder; deletion is a
+separate cleanup because tests and architecture/docs surfaces still reference the module.
 
 ### Sites the test must deliberately **not** cover
 
@@ -71,8 +86,8 @@ Naming these prevents a well-meaning implementer from forcing unrelated sets int
 - `app/reasoning/provider.py:139,145` and `app/planner/provider.py:343,350` — `{"mock","golden"}` and
   `{"llm","ollama"}` are reasoning **backend** names, not provider identities.
 - `app/builderops/epic_run_context_budget.py:268` — `{"luna","terra","sol"}` is a capability **tier**
-  set. Mapping tiers to providers is the provider-free intent work, which no step of this migration
-  delivers (see the capability README, under-determination 4).
+  vocabulary, not a provider allowlist. Its values are used by the Builder mapping but are not forced
+  to equal a provider projection.
 - `app/builderops/model_inquiry_adapters.py:329` — `{"mock","fake","deterministic"}` is the Builder
   mock-identity **rejection** set, not an allowlist of servable providers.
 
@@ -81,7 +96,7 @@ Naming these prevents a well-meaning implementer from forcing unrelated sets int
 ```
 $ python -c "from app.components.settings.providers_loader import load_provider_census; \
              print(sorted(p.id for p in load_provider_census().providers))"
-['deepseek', 'gemini', 'mock', 'ollama', 'openai']
+['anthropic', 'deepseek', 'gemini', 'mock', 'ollama', 'openai']
 
 $ pytest -q tests/settings/test_provider_census.py
 # ... passed
@@ -120,6 +135,13 @@ cannot tell whether it is consistent.
       Verify: `tests/settings/test_provider_census.py::test_ladder_sites_dispatch_through_the_named_constant`
 - [ ] No hot path acquires a runtime dependency on reading the census YAML.
       Verify: `tests/settings/test_provider_census.py::test_hot_paths_do_not_load_the_census_at_runtime`
+- [ ] Every runtime/channel capability-tier mapping resolves to a declared provider/model whose
+      capability flags satisfy the mapping, while Product and Builder mappings remain separate.
+      Verify: `tests/settings/test_provider_census.py::test_runtime_channel_tier_mappings_reference_capable_declared_models`
+- [ ] The exact two Builder inquiry role profiles exist for all three channels, use the declared
+      Anthropic/OpenAI model and credential refs above, and the independent-review group resolves to
+      distinct effective targets without caller provider/model fields.
+      Verify: `tests/settings/test_provider_census.py::test_model_inquiry_role_profiles_are_exact_distinct_and_provider_free`
 - [ ] `docs/LLM.md` names the census as the single provider source instead of restating the set.
       Verify: doc writeback at `docs/LLM.md :: Providers (Current)`
 - [ ] `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` records R4-1 as delivered by this task.
@@ -143,11 +165,13 @@ tested rather than trusted.
 
 ## Out of scope
 
-Adding the `anthropic` provider (R4-2). The `egress_posture` stage field and the budget circuit breaker
+Product Anthropic routing enablement (R4-2). This task declares Anthropic for Builder execution
+without adding it to Product chat execution. The `egress_posture` stage field and the budget circuit breaker
 (R4-3) — the census is their declared home, but this task ships neither. The Fable-exclusion probe
 (R4-4). Correcting the embedding-provider divergences themselves; they are declared here and fixed by
-#4178 and #4181. The capability-tier vocabulary and the provider-free intent shape. Any credential
-value or Keychain identifier, which belongs to `EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS`.
+#4178 and #4181. The neutral intent/resolver contracts, which are MAS-04; this task supplies only
+their data. Any credential value or Keychain identifier, which belongs to
+`EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS`. Deleting `app/llm/adapter.py`.
 
 ## Related docs
 

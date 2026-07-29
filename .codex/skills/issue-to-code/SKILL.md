@@ -11,10 +11,24 @@ You are a builder agent implementing GitHub backlog work in a repo-first, docs-a
 
 Your governing rule:
 Only execute bounded implementation work from a GitHub Issue that is the canonical task contract.
-After PR creation or publish, route normal PRs to `docs/development/PR_HOT_PATH.md`.
+After PR creation or publish, route normal PRs to `docs/development/PR_HOT_PATH.md :: Mandatory Hot-Path Gates` and `:: PR Body Preparation`; the rest of that file is merge-time material owned by `verification-and-closure`.
 Route only triggered cases to `docs/development/PR_ESCALATION_PATHS.md` or the heavier `pr-integration` path.
 If the slice is the final child slice, route parent closure to `docs/development/PARENT_ISSUE_CLOSURE.md` after merge.
 Bounded direct repair PRs may proceed without a governing Issue when the PR body supplies the full contract via a complete Direct Repair block.
+
+## Read scope for this skill
+
+Citations here follow `.codex/skills/_shared/READ_SCOPE.md`. A `FILE :: Section` citation means
+**read that section only**; a citation with no `::` is a whole-file read and states its reason; a
+citation under a stated condition is read only when the condition holds. Conditions key off the
+**actual diff** (`git diff --name-only origin/main...HEAD`), not the issue's declared `Scope`,
+because the diff is what the pre-merge gates judge.
+
+This skill inlines the rules a normal slice needs from
+`docs/architecture/SBS_OPERATING_MODEL.md :: Classification Procedure` and
+`docs/development/AGENT_OPERATING_PROTOCOL.md :: Behavioral rules`, so a normal slice does not read
+either parent document. Read the parent section only when the inlined rule is genuinely
+insufficient for the case in front of you.
 
 ## Pre-implementation classification check
 
@@ -31,11 +45,17 @@ Before claiming an Issue or producing any implementation, answer the following. 
   issue/PR templates, GitHub governance, CI/fitness rails, release/promotion workflows,
   BuilderOps records/projections, delivery receipts, TCD policy, or builder-agent workflow docs.
   Route through the Builder System boundary and artifact map in
-  `docs/architecture/SBS_OPERATING_MODEL.md`.
+  `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Artifact And Workflow Map`, and fill
+  the PR's `SBS Impact` per
+  `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System SBS Impact Guidance`.
 - Boundary work changes how Builder machinery affects Product/Runtime truth, such as owner-doc
   writeback, issue/PR classification, release promotion, architecture fitness enforcement, Product
   SBS contract updates, or BuilderOps promotion into repo artifacts. Route through both the Builder
   System model and the affected Product/Runtime owner docs.
+
+Tie-breaker (inlined from `docs/architecture/SBS_OPERATING_MODEL.md :: Classification Procedure`, the
+one rule in that section this skill does not otherwise reproduce): if the classification is still
+unclear, choose the stricter boundary route and name both owner surfaces in the Issue/PR.
 
 Do not treat Builder System records, projections, skills, prompts, or delivery learning as
 runtime/user memory or Human Knowledge Artifacts unless a Product/Runtime authority path explicitly
@@ -68,7 +88,17 @@ promotes them.
 - Product/Runtime vs Builder System vs boundary classification cannot be stated from the issue and
   source anchors, or from the PR Direct Repair block for bounded direct-repair work.
 
-Apply `docs/development/AGENT_OPERATING_PROTOCOL.md` for the full classification reference.
+**LLM-mediated mutation rule** (inlined from
+`docs/development/AGENT_OPERATING_PROTOCOL.md :: Behavioral rules`, the one rule in that document
+this skill does not otherwise reproduce): do not propose or implement LLM-mediated mutation without
+governance, receipts, and human authority. Any change that routes through a language model and
+results in vault writes, memory promotion, outbox emission, or watcher action must carry an explicit
+trust tier, a write guard, a provenance receipt, and a human-first review path. Do not shortcut this
+for performance or convenience.
+
+The classification tables above reproduce what a normal slice needs. Read
+`docs/development/AGENT_OPERATING_PROTOCOL.md :: Required pre-implementation checks` and
+`:: Stop conditions` only when a field above is unresolvable from the Issue and its source anchors.
 
 ## Canonical workflow
 
@@ -242,16 +272,31 @@ scope; it never adds steps to the implementation hot path.
 
 - Read the full Issue first.
 - For a bounded direct repair PR, treat the PR body as the contract and validate the Direct Repair block directly instead of requiring a governing Issue.
-- Read the owner docs and source docs referenced by `Source Anchors` before editing code. For
-  Product/Runtime System work this includes the relevant SBS/Product owner docs; for Builder System
-  work touching `.codex/skills/**`, issue/PR governance, CI, release workflows, BuilderOps, learning,
-  or TCD, include `docs/architecture/SBS_OPERATING_MODEL.md` and `.codex/skills/README.md`.
+- Read the owner docs and source docs referenced by `Source Anchors` before editing code. Locate the
+  owner document by grepping `docs/DOCS_INDEX.md` for the work area — it is a ~250 KB routing table
+  and is grep-only, never a whole-file read. For Product/Runtime System work this includes the
+  relevant SBS/Product owner docs. For Builder System work, add these reads **only when the actual
+  diff (`git diff --name-only origin/main...HEAD`) touches the matching paths**, not because the
+  Issue's `Scope` mentions them:
+  - `.codex/skills/**` changed → `.codex/skills/README.md :: Skill routing` and
+    `:: Cross-cutting invariant: acceptance verifiability`
+  - `.github/ISSUE_TEMPLATE/**`, `.github/pull_request_template.md`, or issue/PR governance changed →
+    `.codex/skills/_shared/ISSUE_CONTRACT.md`
+  - `.github/workflows/**` changed → `docs/development/PR_HOT_PATH.md :: Governance Lane vs Direct
+    Repair for Workflow Files` (the lane allowlist is file-set-keyed, so only a real workflow-file
+    diff needs it)
+  - CI/fitness rails, release/promotion workflows, BuilderOps records/projections, delivery receipts,
+    learning/retrospective workflows, or TCD policy changed →
+    `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Artifact And Workflow Map` (and
+    `:: Builder Learning, Evaluation, And TCD Governance Loop` for learning or TCD surfaces)
+  - `AGENTS.md`, `CLAUDE.md`, `.codex/AGENTS.md`, or `.codex/skills/**` changed →
+    `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md :: Maintenance rules`
 - Stay strictly within Issue scope.
 - Do not expand scope without updating the Issue contract first.
 - Preserve architecture boundaries and event/outbox compatibility where relevant.
 - Update docs in the same change if behavior, contracts, or architecture change.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
-- Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery.
+- Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Risk tiers`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery. Read `:: Delivery budgets and stop-loss` only when a repair budget is actually in play.
 - Route model family, reasoning effort, and escalation/de-escalation per `AGENTS.md :: Total Cost of Development`. The risk tier above, plus the artifact class, environment/channel risk, and stop conditions from the pre-implementation classification check, are the routing inputs — do not restate the policy here.
 - For a `type:bug` Issue dispatched from a larger bug set, also apply `AGENTS.md :: Transition-period
   bug-delivery policy`: own one end-to-end Codex task/session and isolated worktree, normally Terra
@@ -363,8 +408,8 @@ When continuing through anchor drift:
     Re-run the same gate before pushing (`.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure`, pre-push). If the gate fails at pre-push: stop, switch to the correct worktree, relocate the commit if needed, and re-run both phases.
 
 16. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
-17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md` through `pr-integration` only as needed.
-18. If any hot-path trigger applies, read `docs/development/PR_ESCALATION_PATHS.md` and use the relevant escalation procedure.
+17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md :: Mandatory Hot-Path Gates` through `pr-integration` only as needed. Read `:: Escalation Triggers` to decide whether a trigger applies; read `:: CI Status Handling` only once CI is attached and a check is failing or stuck.
+18. If any hot-path trigger applies, read the matching procedure section in `docs/development/PR_ESCALATION_PATHS.md` (whole-file read only when the trigger is unclassified) and use it.
 19. **Execute Action: Request Review** only when review is explicitly requested.
 20. If the slice merges and this is not the final child slice, keep the parent issue open for later acceptance.
 21. If this is the final child slice, route post-merge parent closure through `docs/development/PARENT_ISSUE_CLOSURE.md`.
@@ -389,7 +434,7 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 
 ## Output format
 
-Lead with the human summary; include later sections only when they have content, scaled to the tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`). For Tier 1, the summary plus a receipt line is enough.
+Lead with the human summary; include later sections only when they have content, scaled to the tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Output formats`). For Tier 1, the summary plus a receipt line is enough.
 
 1. Summary For The Human (2–4 sentences: what was done, what remains, what needs a decision)
 2. Selected Issue and Selection Rationale

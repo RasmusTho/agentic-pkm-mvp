@@ -1,22 +1,23 @@
-State: **Pre-filing draft. No GitHub issue exists for this capability.** Issue creation is deliberately
-held behind a review gate; this file becomes the live-hub contract only once a parent issue is filed,
-at which point its header records the live number and lifecycle state.
-Doc role: Parent feature issue contract (validation hub, unfiled)
+State: Filed as live validation hub #4286 (`agent:blocked`) on 2026-07-29. Children #4287–#4292 form
+the strict serial execution chain. GitHub holds the live acceptance ledger; this file is its
+repo-governed contract.
+Doc role: Parent feature issue contract (live validation hub #4286)
 Authority: Owns the capability-level validation-hub contract and the acceptance ledger. Subordinate to
 `docs/MODEL_ACCESS_SUBSTRATE/README.md` for task shape and to `docs/adr/ADR-0064-model-access-substrate.md`
 for the decision.
 Owner: Architecture spine / LLM boundary
-Temporal class: snapshot (pre-filing draft)
+Temporal class: active delivery contract
 Review cadence: event-driven (filing, each child merge, capability acceptance)
 Source of truth: `docs/MODEL_ACCESS_SUBSTRATE/README.md`
-Last reviewed: 2026-07-27
+Last reviewed: 2026-07-29
 
 # Parent feature issue — Model Access Substrate (steps 1-5)
 
-Intended title: `feature: model access substrate — credential and session resolution as part of the model abstraction`
+Live issue: [#4286](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4286),
+`feature: model access substrate — Phase 1 declared headless model access`.
 
-Intended labels at filing: `type:feature`, `agent:blocked`, `prio:high`. The parent is a validation hub,
-never a pickup issue.
+Live labels: `type:feature`, `agent:blocked`, `prio:high`. The parent is a validation hub, never a
+pickup issue.
 
 ---
 
@@ -67,9 +68,8 @@ is never picked up directly.
 
 ## Constraints
 
-The nine fixed constraints in `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Fixed constraints` apply to
-every child and are not restated here. The two ADR-0064 §8 interim CKM conditions apply for the whole
-delivery window.
+The nine fixed constraints in `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Fixed constraints` and the
+amended interim CKM posture apply to every child. The order does not swap.
 
 ## Acceptance Criteria
 
@@ -84,13 +84,18 @@ These are the capability-level criteria. Per-task criteria live in the task spec
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
 - [ ] No headless entrypoint depends on an interactive subscription CLI session.
       Verify: `tests/governance/test_model_inquiry_host_install.py::test_headless_entrypoints_do_not_require_subscription_session`
+- [ ] The production inquiry caller submits provider-free intent and resolves provider/model through
+      the Builder runtime/channel census mapping after capability checks.
+      Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_provider_free_intent_through_builder_census`
+- [ ] The two neutral inquiry roles resolve as one independent group to distinct effective targets,
+      and a colliding mapping is refused before provider execution.
+      Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_distinct_effective_targets_for_role_group`
 - [ ] A model inquiry completes over a fresh non-interactive session on the configured inquiry host,
       with a provider-returned request id in the persisted turn receipt.
-      Verify: redacted operator receipt on this issue, compared against the `command_exit_nonzero`
-      failure recorded in `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: Context`
+      Verify: `runtime receipt: model_access_substrate.provider_enabled_noninteractive_inquiry.v1`
 - [ ] The hand-built per-provider TLS bridge and its version-pinned CLI symlink dependency are retired
-      on the configured inquiry host.
-      Verify: redacted operator receipt on this issue
+      recoverably on the configured inquiry host after the provider-enabled path is accepted.
+      Verify: `runtime receipt: model_access_substrate.legacy_subscription_bridge_retirement.v1`
 - [ ] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`
@@ -100,9 +105,9 @@ These are the capability-level criteria. Per-task criteria live in the task spec
 - [ ] No CI workflow step reports success while its declared model-provider credential is absent.
       Verify: `tests/ops/test_ci_smoke_workflow.py::test_no_workflow_step_is_green_on_absent_provider_secret`
 - [ ] Owner docs describe the delivered mechanism rather than the pre-ADR-0064 exclusions.
-      Verify: doc writeback at `docs/LLM.md :: Providers (Current)`,
-      `docs/LOCAL_SECRET_PROVISIONING/README.md :: Out of scope`, and
-      `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md :: 5. Slices`
+      Verify: `doc writeback at docs/LLM.md :: Providers (Current)`
+      Verify: `doc writeback at docs/LOCAL_SECRET_PROVISIONING/README.md :: Out of scope`
+      Verify: `doc writeback at docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md :: 5. Slices`
 
 ## Implementation Tasks
 
@@ -111,14 +116,14 @@ Specification directory: `docs/MODEL_ACCESS_SUBSTRATE/`
 | Order | Task specification | ID | Prerequisite |
 | --- | --- | --- | --- |
 | 1 | `DEFINE_PROVIDER_CENSUS.md` | MAS-01 | — |
-| 2 | `MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md` | MAS-02 | — |
-| 3 | `EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md` | MAS-03 | — |
-| 4 | `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md` | MAS-04 | — |
-| 5 | `RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md` | MAS-05 | MAS-03, MAS-04 |
-| 6 | `REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md` | MAS-06 | MAS-03, MAS-04 |
+| 2 | `MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md` | MAS-02 | MAS-01 |
+| 3 | `EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md` | MAS-03 | MAS-02 |
+| 4 | `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md` | MAS-04 | MAS-03 |
+| 5 | `RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md` | MAS-05 | MAS-04 |
+| 6 | `REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md` | MAS-06 | accepted MAS-05 parent receipt |
 
-MAS-01 through MAS-04 are mutually independent. MAS-05 and MAS-06 are mutually independent; their order
-is a preference with a named swap trigger (`README.md :: Interim CKM conditions`).
+The chain is serial. MAS-06 remains blocked until the MAS-05 implementation merges and
+`model_access_substrate.provider_enabled_noninteractive_inquiry.v1` is accepted on this parent.
 
 ## Verification Path
 
@@ -136,8 +141,8 @@ per-provider bridge on the configured inquiry host. Neither receipt may contain 
 host identifier.
 
 Owner-doc promotion triggers only after every acceptance criterion above is satisfied: one PR updating
-`docs/SECURITY.md` and `docs/LLM.md` to describe the delivered mechanism. Until then owner docs stay
-stable while evidence accumulates.
+`docs/LLM.md` and the capability owner docs named by the child specs. `docs/SECURITY.md` remains owned
+by #3843 and is not touched here. Until then owner docs stay stable while evidence accumulates.
 
 On closure, three local surfaces are reconciled together: this file's header and state, the capability
 `README.md` state line, and the `README.md` relationship-to-GitHub-issues section.
@@ -145,8 +150,8 @@ On closure, three local surfaces are reconciled together: this file's header and
 ## Out of Scope
 
 Migration steps 6 and 7. Consolidating the six Product-side LLM abstractions. R4-2, R4-3, and R4-4. The
-brokered-session backend. Whether CKM may orchestrate, which requires an ADR-0057 amendment. Closing
-#3843 or discharging its two remaining acceptance gates.
+brokered-session backend. CKM dispatch, mutation, ranking, or gating authority. Closing #3843 or
+discharging its two remaining acceptance gates.
 
 ## Suggested Validation
 
