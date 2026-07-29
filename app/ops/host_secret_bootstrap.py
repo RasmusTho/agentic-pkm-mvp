@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+import ctypes
 import os
 from pathlib import Path
 import re
@@ -67,6 +68,8 @@ def _temporary_signal_handlers(handler: SignalHandler) -> Iterator[None]:
 
 
 def _security_keychain_lookup(service: str, account: str) -> str:
+    if account.endswith(".api-key"):
+        return _security_framework_keychain_lookup(service, account)
     try:
         result = subprocess.run(
             [
@@ -98,6 +101,63 @@ def _security_keychain_lookup(service: str, account: str) -> str:
         if value.endswith("\r"):
             value = value[:-1]
     return value
+
+
+def _security_framework_keychain_lookup(service: str, account: str) -> str:
+    """Read exact Keychain bytes so validation sees control characters."""
+    try:
+        framework = ctypes.CDLL(
+            "/System/Library/Frameworks/Security.framework/Security"
+        )
+        find_password = framework.SecKeychainFindGenericPassword
+        find_password.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_void_p,
+        ]
+        find_password.restype = ctypes.c_int32
+        free_content = framework.SecKeychainItemFreeContent
+        free_content.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        free_content.restype = ctypes.c_int32
+
+        service_bytes = service.encode("utf-8")
+        account_bytes = account.encode("utf-8")
+        password_length = ctypes.c_uint32()
+        password_data = ctypes.c_void_p()
+        status = find_password(
+            None,
+            len(service_bytes),
+            service_bytes,
+            len(account_bytes),
+            account_bytes,
+            ctypes.byref(password_length),
+            ctypes.byref(password_data),
+            None,
+        )
+        if status != 0 or password_data.value is None:
+            raise HostSecretBootstrapError(
+                "host secret bootstrap failed for declared consumer"
+            )
+        try:
+            raw_value = ctypes.string_at(password_data, password_length.value)
+        finally:
+            free_status = free_content(None, password_data)
+            if free_status != 0:
+                raise HostSecretBootstrapError(
+                    "host secret bootstrap failed for declared consumer"
+                )
+        return raw_value.decode("utf-8", errors="strict")
+    except HostSecretBootstrapError:
+        raise
+    except Exception as exc:
+        raise HostSecretBootstrapError(
+            "host secret bootstrap failed for declared consumer"
+        ) from exc
 
 
 def _declared_secrets(

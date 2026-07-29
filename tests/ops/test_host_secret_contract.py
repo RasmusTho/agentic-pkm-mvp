@@ -230,11 +230,16 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     ("surface", "value"),
     [
         ("channel", "x" * 20),
+        ("channel", "secretmaterial"),
         ("consumer", "secret-material"),
+        ("consumer", "actual-secret-material"),
+        ("consumer", "sk-proj-secretmaterial"),
         ("logical_id", ("x" * 20) + ".api-key"),
+        ("logical_id", "actualsecret.api-key"),
         ("child_binding", "X" * 32),
         ("kind", "x" * 20),
         ("role", "x" * 20),
+        ("role", "actual_secret"),
     ],
 )
 def test_identifier_grammar_rejects_out_of_grammar_names(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+import ctypes
 import os
 from pathlib import Path
 import signal
@@ -136,29 +137,22 @@ def test_missing_model_provider_secret_fails_consumer_closed(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_default_keychain_transport_preserves_malformed_trailing_newline(
+def test_default_keychain_lookup_preserves_malformed_control_character(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launched = False
-
-    def security_run(
-        _command: list[str],
-        **_kwargs: object,
-    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            args=["security"],
-            returncode=0,
-            stdout=_OPENAI_KEY + "\n\n",
-            stderr="",
-        )
 
     def runner(_command: list[str], _env: dict[str, str]) -> int:
         nonlocal launched
         launched = True
         return 0
 
-    monkeypatch.setattr(host_secret_bootstrap.subprocess, "run", security_run)
+    monkeypatch.setattr(
+        host_secret_bootstrap,
+        "_security_framework_keychain_lookup",
+        lambda _service, _account: _OPENAI_KEY + "\r",
+    )
 
     with pytest.raises(HostSecretBootstrapError):
         run_with_host_secrets(
@@ -171,6 +165,51 @@ def test_default_keychain_transport_preserves_malformed_trailing_newline(
 
     assert not launched
     assert list(tmp_path.iterdir()) == []
+
+
+def test_security_framework_lookup_returns_exact_keychain_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = (_OPENAI_KEY + "\r\n").encode()
+    backing_buffer = ctypes.create_string_buffer(payload)
+
+    class FakeFunction:
+        def __init__(self, callback: object) -> None:
+            self.callback = callback
+            self.argtypes: object = None
+            self.restype: object = None
+
+        def __call__(self, *args: object) -> int:
+            return self.callback(*args)  # type: ignore[operator, no-any-return]
+
+    def find_password(
+        _keychain: object,
+        _service_length: object,
+        _service: object,
+        _account_length: object,
+        _account: object,
+        password_length: object,
+        password_data: object,
+        _item: object,
+    ) -> int:
+        password_length._obj.value = len(payload)  # type: ignore[attr-defined]
+        password_data._obj.value = ctypes.addressof(backing_buffer)  # type: ignore[attr-defined]
+        return 0
+
+    class FakeFramework:
+        SecKeychainFindGenericPassword = FakeFunction(find_password)
+        SecKeychainItemFreeContent = FakeFunction(lambda _attrs, _data: 0)
+
+    monkeypatch.setattr(
+        host_secret_bootstrap.ctypes,
+        "CDLL",
+        lambda _path: FakeFramework(),
+    )
+
+    assert host_secret_bootstrap._security_framework_keychain_lookup(
+        "service",
+        "dev:builderops-model-inquiry:openai.api-key",
+    ) == _OPENAI_KEY + "\r\n"
 
 
 def test_unknown_secret_kind_still_fails_closed(tmp_path: Path) -> None:
