@@ -26,6 +26,16 @@ from scripts import git_hygiene
 REGISTRY_SCHEMA = "agentic-pkm.agent-worktree-registry.v1"
 DEFAULT_TTL_SECONDS = 4 * 60 * 60
 GENERATION_MARKER = "agent-worktree-generation"
+# Bounds the path->branch history carried across worktree-path reuse, trading a
+# bounded record size against completeness. No reuse count can guarantee every
+# live lease is covered -- lease liveness is time-bound, and `expires_at: None`
+# never expires -- so this is a pragmatic depth, not a proof. A branch displaced
+# more than this many reuses back from the same canonical path loses its
+# `worktree:<path>` preservation; the blast radius is the same bounded one this
+# carry exists to fix (a merged branch ref deleted early, recoverable from the
+# remote), and this repo randomizes worktree paths, so repeated reuse of one
+# canonical path is not the normal shape.
+MAX_PRIOR_BINDINGS = 8
 
 
 class WorktreeLifecycleError(RuntimeError):
@@ -199,6 +209,50 @@ def _mark_generation_removed(record: dict[str, Any], *, removed_at: float) -> No
     record["removed_at"] = removed_at
     record.pop("removal_pending_at", None)
     record.pop("removal_pending_from_status", None)
+
+
+def _carried_prior_bindings(
+    existing: Any,
+    *,
+    new_branch: str | None,
+    timestamp: float,
+) -> list[dict[str, Any]]:
+    """Path->branch bindings this path held before the incoming registration.
+
+    The registry is keyed by path, so re-registering a path replaces whatever
+    record it held — including a removal tombstone. Dropping that record would
+    strip the former branch's ``worktree:<path>`` lease authority and let cleanup
+    reclassify it as an ordinary local branch, which is exactly the guarantee
+    `git_hygiene._lifecycle_worktree_paths_for_branch` depends on. Carrying the
+    displaced binding forward keeps that association durable across path reuse.
+
+    Bindings are deduplicated by branch, most-recent-first, and bounded by
+    ``MAX_PRIOR_BINDINGS`` so a heavily reused path cannot grow the registry
+    without limit.
+    """
+    if not isinstance(existing, dict):
+        return []
+    carried: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _append(branch: object, removed_at: object) -> None:
+        if not isinstance(branch, str) or not branch or branch == new_branch:
+            return
+        if branch in seen:
+            return
+        seen.add(branch)
+        stamp = removed_at if isinstance(removed_at, (int, float)) else timestamp
+        if isinstance(stamp, bool) or not math.isfinite(stamp):
+            stamp = timestamp
+        carried.append({"branch": branch, "removed_at": float(stamp)})
+
+    _append(existing.get("branch"), existing.get("removed_at"))
+    prior = existing.get("prior_bindings")
+    if isinstance(prior, list):
+        for entry in prior:
+            if isinstance(entry, dict):
+                _append(entry.get("branch"), entry.get("removed_at"))
+    return carried[:MAX_PRIOR_BINDINGS]
 
 
 def _restore_pending_generation(record: dict[str, Any]) -> None:
@@ -442,6 +496,9 @@ def register_worktree(
         if existing_active_for_other_owner:
             raise WorktreeLifecycleError("worktree has an active lifecycle owner")
         generation = _worktree_generation(cwd, canonical, create=True)
+        prior_bindings = _carried_prior_bindings(
+            existing, new_branch=branch, timestamp=timestamp
+        )
         record = {
             "path": str(canonical),
             "branch": branch,
@@ -452,6 +509,8 @@ def register_worktree(
             "heartbeat_at": timestamp,
             "expires_at": timestamp + ttl_seconds,
         }
+        if prior_bindings:
+            record["prior_bindings"] = prior_bindings
         worktrees[str(canonical)] = record
         return dict(record)
 

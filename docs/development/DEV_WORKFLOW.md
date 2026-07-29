@@ -337,9 +337,14 @@ Enforcement surfaces:
   generation before branch deletion; restart reconciliation completes only a pending transition
   and never infers removal from an ordinary missing lifecycle record. Branch deletion after a
   removal revalidates both the `worktree:<path>` and the `branch:<branch>` lease identity
-  immediately before the irreversible delete and fails closed if either is claimed. The removal
-  tombstone keeps the path→branch association, so a later cleanup run still binds the branch to its
-  former worktree path and preserves it while that path lease is active. Broad `git worktree prune`
+  immediately before the irreversible delete and fails closed if either is claimed. That
+  revalidation reads a foreign lease file it cannot lock, so it is a check-then-act guard, not
+  mutual exclusion: a lease that first becomes active between that read and the delete is not seen.
+  The removal tombstone keeps the path→branch association, so a later cleanup run still binds the
+  branch to its former worktree path and preserves it while that path lease is active. The registry
+  is keyed by path, so re-registering that path for a new branch carries the displaced binding
+  forward on the new record (`prior_bindings`, deduplicated by branch and bounded to the 8 most
+  recent) rather than dropping it. Broad `git worktree prune`
   remains report-only. The current checkout is always skipped.
 - Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
