@@ -12,10 +12,19 @@ from unittest.mock import Mock
 import pytest
 
 from app.builderops.model_inquiry_adapters import (
+    ADAPTER_FAILURE_CLASSES,
     ADAPTER_CONFIG_ENV,
     AdapterExecutionError,
+    AdapterResult,
     LocalCommandAdapter,
+    ModelTurnAdapter,
+    ScriptedAdapter,
     load_adapter_descriptors,
+)
+from app.llm_contract import (
+    ADAPTER_FAILURE_CLASSES as KERNEL_ADAPTER_FAILURE_CLASSES,
+    AdapterResult as KernelAdapterResult,
+    ModelTurnAdapter as KernelModelTurnAdapter,
 )
 from app.builderops import model_inquiry_adapters as adapters_module
 from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION
@@ -341,3 +350,26 @@ def test_provider_enabled_roles_require_distinct_non_mock_attestation() -> None:
     assert descriptors["fable"]["available"] is False
     assert descriptors["gpt_codex"]["available"] is False
     assert all("mock" in item["reason"] for item in descriptors.values())
+
+
+def test_auth_failure_classes_are_in_the_closed_vocabulary() -> None:
+    assert ADAPTER_FAILURE_CLASSES is KERNEL_ADAPTER_FAILURE_CLASSES
+    assert {"credential_unavailable", "session_expired"} <= ADAPTER_FAILURE_CLASSES
+
+
+def test_existing_adapter_contract_regression_suite() -> None:
+    assert AdapterResult is KernelAdapterResult
+    assert ModelTurnAdapter is KernelModelTurnAdapter
+
+    adapter = ScriptedAdapter(
+        adapter_id="compatibility-adapter",
+        provider="fixture",
+        model="fixture-model",
+        responses=[json.dumps(_response())],
+        calls=[],
+    )
+    result = adapter.execute({"request": "unchanged"})
+
+    assert isinstance(result, AdapterResult)
+    assert result.provider_request_id == "scripted-compatibility-adapter-0"
+    assert adapter.calls == [{"request": "unchanged"}]
