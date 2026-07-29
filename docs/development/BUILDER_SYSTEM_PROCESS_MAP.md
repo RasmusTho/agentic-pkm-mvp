@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-07-28
+Last reviewed: 2026-07-29
 
 # Builder System Process Map
 
@@ -664,13 +664,13 @@ review gate rather than the Codex verdict path
 integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local hook
 documentation only [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50].
 
-No patch/merge authority should be enabled until branch protection and required guardrails are documented and enforced. Main is currently unprotected by read-only API output, and repo auto-merge is disabled.
+No patch/merge authority should be enabled until branch protection and required guardrails are documented and enforced. `main` now enforces one required status check (`Unit tests (not pg)`) but no review or contract check, and repo auto-merge is disabled.
 
 ## 13. Branch Protection And Merge Guardrails
 
 Current observed state:
 
-- `main` is the default branch and is not protected: `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` returned HTTP 404 `Branch not protected`.
+- `main` is the default branch and is protected by a single required status check: `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on 2026-07-29 returned `contexts=["Unit tests (not pg)"]`, `strict=false`, `enforce_admins=true`, `required_pull_request_reviews=null`. (The same call returned HTTP 404 `Branch not protected` on 2026-07-08; protection was added between those observations — see `docs/development/GITHUB_GOVERNANCE_SETUP.md :: Governance receipts`.)
 - `stable` is protected with strict required checks `smoke`, `smoke-docker`, and `pr-contract`; required approving review count is 0 and CODEOWNERS review is not required by branch protection.
 - Repository auto-merge is disabled: `allow_auto_merge=false`.
 - CODEOWNERS exists and names Rasmus for prod-critical files, promotion skills, and migrations [`.github/CODEOWNERS`:1-9].
@@ -678,13 +678,13 @@ Current observed state:
 
 Required target state before autonomous merge is safe:
 
-- Protect `main` or make the autonomous target a protected branch.
-- Require the actual checks used by the Builder System (`pr-contract`, CI/smoke/import-linter as appropriate).
+- ~~Protect `main` or make the autonomous target a protected branch.~~ Done: `main` is protected (verified 2026-07-29).
+- Require the actual checks used by the Builder System (`pr-contract`, CI/smoke/import-linter as appropriate). Partially done: `main` requires `Unit tests (not pg)` only; `pr-contract`, `smoke`, `smoke-docker`, and import-linter still run without being required on `main`.
 - Decide whether CODEOWNERS review is required for prod-critical paths; current `stable` branch protection does not require it.
 - Keep auto-merge disabled until evidence pack, review gate, and closure gate are deterministic enough to audit.
 - Limit autonomous-merge eligibility to docs-only/governance Tier 1 or low-risk code after guardrails are enforced; prod/stable, migrations, release, vault/HKA/MEM authority, and external-facing irreversible changes remain human/operator exception paths [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35], [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
 
-Conclusion: autonomous merge to `main` is currently not platform-safe. Skills require CI and review gates even when a branch is unprotected [`.codex/skills/verification-and-closure/SKILL.md`:95-115], but platform protection does not enforce those gates on `main`.
+Conclusion: autonomous merge to `main` is not yet fully platform-safe. Platform protection now blocks a merge while `Unit tests (not pg)` is red, but it does not enforce `pr-contract`, smoke, import-linter, or any review requirement; those remain skill-enforced [`.codex/skills/verification-and-closure/SKILL.md`:95-115].
 
 ## 14. Human Exception Model
 
