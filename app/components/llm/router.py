@@ -133,6 +133,10 @@ def _is_shipped_default_embedding_target(
 class LLMRouter:
     def __init__(self) -> None:
         self._llm_provider_env = os.getenv("LLM_PROVIDER") if "LLM_PROVIDER" in os.environ else None
+        if _provider_enforced() and not _normalize_provider(self._llm_provider_env):
+            raise LLMRouteError(
+                "LLM_PROVIDER is required when LLM_PROVIDER_ENFORCE=1"
+            )
         provider, degraded, reason = _resolve_provider(self._llm_provider_env)
         self._default_provider = provider
         self._default_degraded = degraded
