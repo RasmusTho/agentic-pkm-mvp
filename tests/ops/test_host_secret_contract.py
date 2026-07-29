@@ -144,7 +144,7 @@ def test_contract_rejects_duplicate_json_key_that_hides_secret_material(tmp_path
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("channels", ["dev", "secret value"]), ("consumer", "secret value")],
+    [("channels", ["dev", "secret-value"]), ("consumer", "secret-value")],
 )
 def test_contract_rejects_unknown_channel_or_consumer(
     tmp_path: Path, field: str, value: str | list[str]
@@ -196,18 +196,27 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "kind": "api-key",
         },
     ]
-    model_consumer = next(
-        item for item in payload["consumers"] if item["consumer"] == "builderops-model-inquiry"
-    )
-    assert model_consumer == {
-        "consumer": "builderops-model-inquiry",
-        "channels": ["dev", "test", "prod"],
-        "secrets": ["openai.api-key", "anthropic.api-key"],
-        "role_requirements": {
-            "gpt_codex": ["openai.api-key"],
-            "fable": ["anthropic.api-key"],
+    assert payload["consumers"] == [
+        {
+            "consumer": "heimdal-capture-watch",
+            "channels": ["dev", "test", "prod"],
+            "secrets": ["heimdal.raw-store-key"],
+            "role_requirements": {},
         },
-    }
+        {
+            "consumer": "builderops-model-inquiry",
+            "channels": ["dev", "test", "prod"],
+            "secrets": ["openai.api-key", "anthropic.api-key"],
+            "role_requirements": {
+                "gpt_codex": ["openai.api-key"],
+                "fable": ["anthropic.api-key"],
+            },
+        },
+    ]
+    assert all(
+        "ckm" not in item["consumer"] and "design" not in item["consumer"]
+        for item in payload["consumers"]
+    )
     assert contract.required_secrets_for_role(
         consumer="builderops-model-inquiry", role="gpt_codex"
     ) == ("openai.api-key",)
@@ -218,23 +227,34 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("surface", "value"),
     [
-        ("child_binding", "HEIMDAL RAW KEY"),
-        ("logical_id", ("valid." * 30) + "identifier"),
+        ("channel", "x" * 20),
+        ("consumer", "secret-material"),
+        ("logical_id", ("x" * 20) + ".api-key"),
+        ("child_binding", "X" * 32),
+        ("kind", "x" * 20),
+        ("role", "x" * 20),
     ],
 )
 def test_identifier_grammar_rejects_out_of_grammar_names(
     tmp_path: Path,
-    field: str,
+    surface: str,
     value: str,
 ) -> None:
     payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
-    payload["secrets"][0][field] = value
+    if surface == "channel":
+        payload["channels"][0] = value
+    elif surface == "consumer":
+        payload["consumers"][0]["consumer"] = value
+    elif surface == "role":
+        payload["consumers"][1]["role_requirements"][value] = ["openai.api-key"]
+    else:
+        payload["secrets"][0][surface] = value
     contract_path = tmp_path / "host_secret_contract.json"
     contract_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="invalid host secret identifier"):
+    with pytest.raises(ValueError, match="invalid host secret"):
         load_host_secret_contract(contract_path)
 
 

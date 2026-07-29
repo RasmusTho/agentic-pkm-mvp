@@ -24,14 +24,16 @@ _SECRET_FIELDS = frozenset({"logical_id", "child_binding", "kind"})
 _CONSUMER_FIELDS = frozenset({"consumer", "channels", "secrets", "role_requirements"})
 _KEYCHAIN_ACCOUNT_TEMPLATE = "{channel}:{consumer}:{secret}"
 _KEYCHAIN_SERVICE = "yggdrasil.host-secrets"
-_CHANNEL_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
-_CONSUMER_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_CHANNEL_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}$")
+_CONSUMER_PATTERN = re.compile(
+    r"^[a-z][a-z0-9]{0,15}(?:-[a-z][a-z0-9]{0,15}){2,3}$"
+)
 _LOGICAL_SECRET_PATTERN = re.compile(
-    r"^[a-z][a-z0-9-]{0,31}(?:\.[a-z][a-z0-9-]{0,31})+$"
+    r"^[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}$"
 )
 _CHILD_BINDING_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
-_KIND_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
-_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_KIND_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,15}$")
+_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 _IDENTIFIER_MAX_LENGTH = 128
 
 
@@ -115,6 +117,10 @@ def _validated_unique_string_list(
     return tuple(value)
 
 
+def _expected_child_binding(logical_id: str) -> str:
+    return logical_id.replace(".", "_").replace("-", "_").upper()
+
+
 def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretContract:
     payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
     if not isinstance(payload, dict) or set(payload) != _CONTRACT_FIELDS:
@@ -146,6 +152,8 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
             not _is_identifier(logical_id, _LOGICAL_SECRET_PATTERN)
             or not _is_identifier(child_binding, _CHILD_BINDING_PATTERN)
             or not _is_identifier(kind, _KIND_PATTERN)
+            or logical_id.rsplit(".", maxsplit=1)[1] != kind
+            or child_binding != _expected_child_binding(logical_id)
         ):
             raise ValueError("invalid host secret identifier")
         secret_definitions.append((logical_id, child_binding, kind))

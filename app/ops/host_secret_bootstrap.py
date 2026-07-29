@@ -92,7 +92,12 @@ def _security_keychain_lookup(service: str, account: str) -> str:
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         )
-    return result.stdout.rstrip("\r\n")
+    value = result.stdout
+    if value.endswith("\n"):
+        value = value[:-1]
+        if value.endswith("\r"):
+            value = value[:-1]
+    return value
 
 
 def _declared_secrets(

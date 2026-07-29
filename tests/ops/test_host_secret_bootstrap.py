@@ -136,6 +136,43 @@ def test_missing_model_provider_secret_fails_consumer_closed(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_default_keychain_transport_preserves_malformed_trailing_newline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched = False
+
+    def security_run(
+        _command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["security"],
+            returncode=0,
+            stdout=_OPENAI_KEY + "\n\n",
+            stderr="",
+        )
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    monkeypatch.setattr(host_secret_bootstrap.subprocess, "run", security_run)
+
+    with pytest.raises(HostSecretBootstrapError):
+        run_with_host_secrets(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            command=["never-start"],
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    assert not launched
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_unknown_secret_kind_still_fails_closed(tmp_path: Path) -> None:
     contract = host_secret_bootstrap.load_host_secret_contract()
     unknown_kind_contract = host_secret_bootstrap.HostSecretContract(

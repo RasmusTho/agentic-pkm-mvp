@@ -103,7 +103,7 @@ Read-only GitHub evidence used:
 | continuous improvement / reevaluation loop | partially_implemented | `docs/development/DELIVERY_FEEDBACK_LOOP.md`, `capture-learning`, `learning-retrospective`, BuilderOps records/projections, PR evidence packs, CI failure context artifacts, CKM/Kvasir specs | Close the loop from evidence and delivery learning back into workflow changes, fitness rules, transition debt, issues, or discard/supersession receipts | LearningSignals, TCD signals, evidence packs, review findings, CKM maturity/gap projections, transition-debt and fitness outcomes | Applied governance edits, `already_satisfied` outcomes, bounded issues, PromotionIntents, fitness/debt updates, discard/supersession receipts | BuilderOps + GitHub/PR by explicit promotion or issue path only | [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220], [docs/architecture/SBS_OPERATING_MODEL.md:194-261], [docs/CAPABILITY_KNOWLEDGE_MODEL/README.md:1-80] |
 | local hooks | documented_only | `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` found | Local session guardrails | Local tool events | Hook decisions | None | [`.claude/hooks/README.md`:1-50], `find .claude ... -> hooks README only` |
 | GitHub event automations | partially_implemented | `.github/workflows/**` | Validate issues/PRs, project status, docs watchdog, CI | GitHub events | Checks/comments/status projections | Actions token/PAT | [`.github/workflows/issue-pr-governance.yml`:3-12], [`.github/workflows/project-status-reconcile.yml`:3-23] |
-| Codex Action integration | partially_implemented | `architecture-ci` optional `codex run docs-guardian`; Codex verdict resolver retained | Docs guard/autofix and optional verdict read | Workflow dispatch, PR bot surfaces | Fixes/verdict | CI with secret, agent read | [`.github/workflows/architecture-ci.yaml`:108-118], [`.codex/skills/verification-and-closure/SKILL.md`:165-192] |
+| Codex Action integration | partially_implemented | Codex verdict resolver retained; the optional credential-gated `architecture-ci` docs-guardian path was removed by MAS-03 | Optional verdict read | PR bot surfaces | Verdict | Agent read | [`.codex/skills/verification-and-closure/SKILL.md`:165-192] |
 | Claude Action integration | missing | Claude compatibility docs and local hook documentation only | GitHub-driven Claude agent tasks | N/A | N/A | None | [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50] |
 | human exception router | implicit | `agent:needs-human`, review-gate fallback, this doc packet | Route authority exceptions | Ambiguity/failure | Human Exception packet | Human decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 
@@ -656,10 +656,11 @@ Evidence: workflow triggers are observed in `.github/workflows/issue-pr-governan
 | continuous improvement evaluator | cadence/epic close/projection refresh | signal classifier and closure-router | LearningSignals, evidence packs, review findings, TCD signals, CKM projections | gh read/comment, BuilderOps records, docs/governance PRs, issue creation through normal contract | product/runtime mutation, silent owner-doc writes, unreviewed promotion | terminal outcome ledger and bounded follow-up issues/PRs | over-promoting noisy signals | artifact-only report, then governance-lane PR/issue creation |
 | human exception packet generator | stop condition/blocker | packet compiler | failures, tried actions, evidence | gh comment/issue label with confirmation | autonomous merge/production action | Human Exception packet | over-escalation | comment-only |
 
-Codex Action integration is partially present as an optional docs-guardian autofix inside
-`architecture-ci` when `CODEX_API_KEY` exists [`.github/workflows/architecture-ci.yaml`:31-38].
-Light-path PRs have no independent review gate; full-path PRs use the local review gate rather than
-the Codex verdict path [`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action
+Codex Action integration retains the optional verdict reader, but MAS-03 removed the ungoverned
+credential-gated docs-guardian path from `architecture-ci`; deterministic `adr_index.py` and
+`docs_guard.py` remain. Light-path PRs have no independent review gate; full-path PRs use the local
+review gate rather than the Codex verdict path
+[`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action
 integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local hook
 documentation only [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50].
 
