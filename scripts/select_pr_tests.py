@@ -51,6 +51,9 @@ FULL_SUITE_PREFIXES = (
 DOCS_TARGETS = (
     "tests/docs",
     "tests/architecture",
+    # test_review_before_ci_gate.py reads docs/TESTING.md content directly
+    # (#4281); a docs/**-only PR must run it, not only tests/architecture.
+    "tests/ops/test_review_before_ci_gate.py",
 )
 
 DOCS_ONLY_EXCLUDED_EXACT = {
@@ -63,6 +66,17 @@ GOVERNANCE_TARGETS = (
     "tests/governance",
     "tests/scripts",
     "tests/ops/test_ci_workflow.py",
+    # AGENTS.md and .codex/** route through the governance-only branch (their
+    # prefixes are checked before docs-only), but the tests that actually
+    # assert on their content live in tests/architecture
+    # (test_agent_skill_entrypoints.py, test_pr_hot_path_governance.py) and
+    # tests/ops/test_review_before_ci_gate.py (reads AGENTS.md,
+    # .codex/skills/verify-promotion/SKILL.md, and
+    # .github/pull_request_template.md). Without these, extending the
+    # ci-smoke.yaml paths-filter alone would run pytest but still miss the
+    # covering assertions for AGENTS.md/.codex/** changes (#4281).
+    "tests/architecture",
+    "tests/ops/test_review_before_ci_gate.py",
 )
 
 E2E_TARGETS = {
@@ -735,7 +749,10 @@ def _is_docs_only(paths: tuple[str, ...]) -> bool:
     non_test = _non_test_signal(paths, DOCS_TARGETS)
     return bool(non_test) and all(
         path not in DOCS_ONLY_EXCLUDED_EXACT
-        and (path.startswith("docs/") or path in {"README.md", "AGENTS.md"})
+        # CLAUDE.md is the Claude compatibility entrypoint documented alongside
+        # AGENTS.md (#4281); it must resolve here so a CLAUDE.md-only PR routes
+        # to tests/architecture instead of falling through to unowned/full-suite.
+        and (path.startswith("docs/") or path in {"README.md", "AGENTS.md", "CLAUDE.md"})
         for path in non_test
     )
 
