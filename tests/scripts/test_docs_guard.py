@@ -88,6 +88,74 @@ def test_governance_enforcement_with_development_writeback_passes(
     assert "Docs guard: OK" in result.stdout
 
 
+def _origin_backed_repo(tmp_path: Path) -> Path:
+    """A work tree whose base branch exists only as `origin/main`.
+
+    Mirrors the pull_request shape on GitHub Actions: GITHUB_BASE_REF is the
+    bare branch name, and actions/checkout leaves no local branch by that name.
+    """
+
+    upstream = _guard_repo(tmp_path)
+    _run(["git", "branch", "-M", "main"], upstream)
+
+    work = tmp_path / "work"
+    _run(["git", "clone", str(upstream), str(work)], tmp_path)
+    _run(["git", "config", "user.email", "guard@example.test"], work)
+    _run(["git", "config", "user.name", "Docs Guard Test"], work)
+    _run(["git", "checkout", "-b", "feature"], work)
+    # Leave only the remote-tracking ref for the base branch.
+    _run(["git", "branch", "-D", "main"], work)
+    return work
+
+
+def _guard_result_with_base(repo: Path, base: str) -> subprocess.CompletedProcess[str]:
+    environment = {**os.environ, "GITHUB_BASE_REF": base}
+    return subprocess.run(
+        [sys.executable, "scripts/docs_guard.py"],
+        cwd=repo,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_bare_branch_base_ref_resolves_to_the_remote_tracking_ref(tmp_path: Path) -> None:
+    # On pull_request events GITHUB_BASE_REF is "main", not "origin/main". With
+    # no local `main`, the three-dot diff had no merge base to resolve, so the
+    # guard could not run on the PR path at all.
+    repo = _origin_backed_repo(tmp_path)
+    (repo / "app").mkdir()
+    (repo / "app/runtime.py").write_text("changed = True\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "app-only"], repo)
+
+    result = _guard_result_with_base(repo, "main")
+
+    # The guard saw the real diff (an app/** change with no docs writeback)
+    # rather than dying on an unresolvable ref or diffing HEAD against itself.
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "app/** changed but no docs" in result.stdout
+
+
+def test_empty_base_ref_falls_back_to_origin_main_instead_of_an_empty_diff(
+    tmp_path: Path,
+) -> None:
+    # GitHub Actions defines GITHUB_BASE_REF as "" on non-pull_request events.
+    # Reading it with a `.get` default produced "", and `git diff ...HEAD`
+    # treats an empty left side as HEAD -- so the guard diffed HEAD against
+    # itself and reported OK on any changeset.
+    repo = _origin_backed_repo(tmp_path)
+    (repo / "app").mkdir()
+    (repo / "app/runtime.py").write_text("changed = True\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "app-only"], repo)
+
+    result = _guard_result_with_base(repo, "")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "app/** changed but no docs" in result.stdout
+
+
 def test_select_pr_tests_requires_its_specific_paired_doc(tmp_path: Path) -> None:
     repo = _guard_repo(tmp_path)
     (repo / "scripts/select_pr_tests.py").write_text("# governance\n", encoding="utf-8")

@@ -69,6 +69,21 @@ jobs:
               - 'Dockerfile'
               - 'docker-compose*.yaml'
               - 'docker-compose*.yml'
+            # Agent-contract and doc surfaces. Deliberately NOT folded into
+            # heavy_smoke: every step heavy_smoke gates is runtime-code-only
+            # (tests/smoke, test_indexer, test_fs_watcher, the import/port/vault
+            # contracts, the Quality Wave UAT harness) and none of them read
+            # AGENTS.md, .codex/**, or docs/**, so widening heavy_smoke would buy
+            # a docs typo ~20 minutes of irrelevant runtime tests and no coverage
+            # (AGENTS.md :: Total Cost of Development). The governance and
+            # architecture suites that DO assert on these paths are selected by
+            # scripts/select_pr_tests.py in the `Unit tests (not pg)` job; this
+            # filter exists for the docs guard below, which had no PR home.
+            governance_docs:
+              - 'AGENTS.md'
+              - 'CLAUDE.md'
+              - '.codex/**'
+              - 'docs/**'
             panel_llm_e2e:
               - 'app/agents/panel_agent/**'
               - 'app/agents/panel/**'
@@ -151,6 +166,26 @@ jobs:
       # intentionally unconditional so governance-only PRs retain coverage.
       - name: Skills consistency lint
         run: python3 scripts/lint_skills_consistency.py
+
+      # Companion to the unconditional skills lint above. scripts/docs_guard.py
+      # had no PR-triggered home at all: its only caller is architecture-ci.yaml,
+      # which has been workflow_dispatch-only since #3892, so the docs-pairing
+      # and temporal-owner-doc rules never ran on any pull request.
+      #
+      # Scoped to governance/docs-only PRs on purpose. The guard's first two
+      # rules fire on app/**, scripts/**, and config/** changes, so running it
+      # unconditionally would newly fail a large class of ordinary runtime PRs —
+      # a separate decision from closing this coverage gap, and one that would
+      # redden the queue rather than protect it. `heavy_smoke != 'true'` is the
+      # exact complement: it already enumerates that runtime surface, so this
+      # step can only fire on the docs/governance-only shape the guard was
+      # written for, leaving every runtime PR's behavior untouched.
+      - name: Docs guard (governance/docs-only PRs)
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.changes.outputs.governance_docs == 'true'
+          && steps.changes.outputs.heavy_smoke != 'true'
+        run: python3 scripts/docs_guard.py
 
       - name: Doc integrity
         run: |
