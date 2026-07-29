@@ -9,7 +9,7 @@ depends_on: [DEFINE_PROVIDER_CENSUS.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed). Makes the transition
+State: Authored task specification (child issue #4288, filed 2026-07-29). Makes the transition
 debt scheduled by amended ADR-0064 §8 visible before its removal in MAS-06.
 
 # Make Builder-To-Product LLM Dependency Visible

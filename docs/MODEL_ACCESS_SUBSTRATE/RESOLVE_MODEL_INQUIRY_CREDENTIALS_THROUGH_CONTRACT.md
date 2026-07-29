@@ -9,7 +9,7 @@ depends_on: [PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (future-state; child issue not yet filed). **This is the first task
+State: Authored task specification (child issue #4291, filed 2026-07-29). **This is the first task
 in the capability that changes runtime behaviour.**
 
 # Resolve Model Inquiry Credentials Through Contract
