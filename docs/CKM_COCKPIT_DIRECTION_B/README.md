@@ -1,4 +1,4 @@
-State: ACCEPTED/DELIVERED CKM Cockpit Direction B foundation with an owner-readable portfolio amendment accepted on 2026-07-30 and pending implementation. Owner Gate A authorized the bounded design on 2026-07-24; Evidence Profile, children #4081–#4086, completion #4222, and parent #4080 are closed. Independent parent acceptance and closure were recorded on 2026-07-28. Direction A remains the script-free default; Direction B is the supported opt-in `ckm overview --cockpit` mode.
+State: ACCEPTED/DELIVERED CKM Cockpit Direction B foundation with the owner-readable portfolio amendment implemented by #4395 on 2026-07-30. Owner Gate A authorized the bounded design on 2026-07-24; Evidence Profile, children #4081–#4086, completion #4222, and parent #4080 are closed. Independent parent acceptance and closure were recorded on 2026-07-28. Direction A remains the script-free default; Direction B is the supported opt-in `ckm overview --cockpit` mode.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the target-state Direction B cockpit boundary, task decomposition, interaction-safety invariants, and acceptance path. Subordinate to ADR-0057, the delivered CKM MVP and Measurement & Access contracts, the ratified CKM Evidence Profile Phase 1 contract, and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
@@ -152,20 +152,20 @@ visually compete with the three owner cards.
 
 ### Owner-readable amendment acceptance
 
-- [ ] The first viewport follows the handoff hierarchy and presents the trust summary, three compact
+- [x] The first viewport follows the handoff hierarchy and presents the trust summary, three compact
   owner cards, filters, and the beginning of the collapsed capability overview without a raw-detail
   section intervening.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_prioritizes_owner_readable_portfolio_over_raw_detail`
-- [ ] Each owner card obeys its bounded information budget, uses plain-language state copy, and
+- [x] Each owner card obeys its bounded information budget, uses plain-language state copy, and
   exposes overflow or technical identity only through disclosure.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_owner_cards_are_bounded_and_human_readable`
-- [ ] Collapsed capability rows omit raw metrics and identifiers while expanded source content
+- [x] Collapsed capability rows omit raw metrics and identifiers while expanded source content
   preserves the complete vector, evidence, findings, comparison slice, and proposal draft.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_progressive_disclosure_preserves_audit_detail`
-- [ ] Comparison-unavailable, stale, incomplete, empty, and source-unavailable states have concise
+- [x] Comparison-unavailable, stale, incomplete, empty, and source-unavailable states have concise
   owner wording without weakening the existing typed refusal or deterministic rendering contracts.
   Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_owner_copy_preserves_refusal_semantics`
-- [ ] A generated real-store artifact is visually checked at desktop, narrow viewport, 200% zoom,
+- [x] A generated real-store artifact is visually checked at desktop, narrow viewport, 200% zoom,
   JavaScript-off, and print/PDF against the Claude Design portfolio/detail hierarchy.
   Verify: durable screenshots plus a manual visual receipt on the governing implementation Issue
 
