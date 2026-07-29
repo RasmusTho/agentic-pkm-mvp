@@ -20,9 +20,6 @@ from app.ops.host_secret_contract import HostSecretContract, load_host_secret_co
 
 
 HOST_SECRET_RUNTIME_ENV_FILE = "HOST_SECRET_RUNTIME_ENV_FILE"
-_SECRET_ENV_NAMES = {
-    "heimdal.raw-store-key": "HEIMDAL_RAW_STORE_KEY",
-}
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _CHILD_WAIT_POLL_SECONDS = 0.1
 _CHILD_TERMINATION_GRACE_SECONDS = 5.0
@@ -116,10 +113,26 @@ def _declared_secrets(
     return secrets
 
 
-def _validate_secret(secret: str, value: str) -> bool:
-    if secret == "heimdal.raw-store-key":
+def _validate_secret(kind: str, value: str) -> bool:
+    if kind == "raw-store-key":
         return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
+    if kind == "api-key":
+        return (
+            value == value.strip()
+            and 20 <= len(value) <= 512
+            and all(char.isprintable() and not char.isspace() for char in value)
+        )
     return False
+
+
+def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:
+    if kind == "api-key":
+        return HostSecretBootstrapError(
+            f"host secret bootstrap failed for declared secret: {secret}"
+        )
+    return HostSecretBootstrapError(
+        "host secret bootstrap failed for declared consumer"
+    )
 
 
 def _resolve_consumer_environment(
@@ -136,21 +149,19 @@ def _resolve_consumer_environment(
             channel=channel,
             consumer=consumer,
         ):
-            env_name = _SECRET_ENV_NAMES.get(secret)
-            if env_name is None:
-                raise HostSecretBootstrapError(
-                    "host secret bootstrap failed for declared consumer"
-                )
+            env_name = contract.binding_for(secret)
+            kind = contract.kind_for(secret)
             account = contract.keychain_account(
                 channel=channel,
                 consumer=consumer,
                 secret=secret,
             )
-            value = keychain_lookup(contract.keychain_service, account)
-            if not _validate_secret(secret, value):
-                raise HostSecretBootstrapError(
-                    "host secret bootstrap failed for declared consumer"
-                )
+            try:
+                value = keychain_lookup(contract.keychain_service, account)
+            except Exception as exc:
+                raise _secret_failure(secret=secret, kind=kind) from exc
+            if not _validate_secret(kind, value):
+                raise _secret_failure(secret=secret, kind=kind)
             resolved[env_name] = value
     except HostSecretBootstrapError:
         raise
@@ -337,15 +348,21 @@ def run_with_host_secrets(
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         )
+    try:
+        selected_contract = contract or load_host_secret_contract()
+    except Exception as exc:
+        raise HostSecretBootstrapError(
+            "host secret bootstrap failed for declared consumer"
+        ) from exc
     with materialize_consumer_environment(
         channel=channel,
         consumer=consumer,
         keychain_lookup=keychain_lookup,
-        contract=contract,
+        contract=selected_contract,
         directory=directory,
     ) as env_file:
         child_env = dict(os.environ)
-        for env_name in _SECRET_ENV_NAMES.values():
+        for env_name in selected_contract.child_bindings:
             child_env.pop(env_name, None)
         child_env[HOST_SECRET_RUNTIME_ENV_FILE] = str(env_file)
         return runner(selected_command, child_env)
@@ -378,9 +395,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 128 + exc.signum
-    except HostSecretBootstrapError:
+    except HostSecretBootstrapError as exc:
         print(
-            "host secret bootstrap failed for declared consumer; "
+            f"{exc}; "
             "verify the declared Keychain item and non-interactive access",
             file=sys.stderr,
         )

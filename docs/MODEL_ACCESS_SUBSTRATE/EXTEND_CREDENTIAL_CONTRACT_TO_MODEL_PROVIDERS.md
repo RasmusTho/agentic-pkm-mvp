@@ -100,12 +100,18 @@ declared credential backend and explicit cost/egress posture.
 
 ```
 $ python -m app.ops.host_secret_bootstrap --channel dev --consumer builderops-model-inquiry -- \
-    python -c "import os; print('OPENAI_API_KEY' in os.environ)"
-True
+    python -c "import os; print('HOST_SECRET_RUNTIME_ENV_FILE' in os.environ, \
+    'OPENAI_API_KEY' not in os.environ, 'ANTHROPIC_API_KEY' not in os.environ)"
+True True True
 
-# with the Keychain item absent:
+# The mode-0600 file named by HOST_SECRET_RUNTIME_ENV_FILE contains only the
+# declared OPENAI_API_KEY and ANTHROPIC_API_KEY bindings. MAS-05 owns bounded
+# in-process consumption of that file; the bootstrap never copies either
+# value into the child's ambient environment.
+
+# with the Anthropic item present but the OpenAI item absent:
 $ python -m app.ops.host_secret_bootstrap --channel dev --consumer builderops-model-inquiry -- true
-host secret bootstrap failed for declared consumer: openai.api-key
+host secret bootstrap failed for declared secret: openai.api-key
 $ echo $?
 1
 

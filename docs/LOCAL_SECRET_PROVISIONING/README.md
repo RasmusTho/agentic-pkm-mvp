@@ -41,21 +41,27 @@ ingress transport only; it is never a secret store or raw-audio archive.
 5. **No cloud secret service now.** 1Password Developer/CLI is a future migration option only when
    sharing/rotation across hosts or CI makes it worthwhile. It is not a prerequisite for v1.
 
-### Initial identifier contract
+### Declared identifier contract
 
-The only initial logical identifier is `heimdal.raw-store-key`. It is declared separately for the
-`dev`, `test`, and `prod` `heimdal-capture-watch` consumers in
-`config/secrets/host_secret_contract.json`; no value or host path is stored in that file. The v1
-Keychain service is pinned to the stable non-secret namespace `yggdrasil.host-secrets`, and its
-account is derived by percent-encoding each `{channel}:{consumer}:{secret}` component before
-colon-joining the declared
-tuple, so distinct tuples cannot collide and each channel resolves a distinct item.
-The v1 loader accepts only those three channels, that consumer, and the named logical identifier;
-any other identifier-bearing string is rejected rather than treated as a potential secret value.
+The value-free contract declares `heimdal.raw-store-key`, `openai.api-key`, and
+`anthropic.api-key`, their child bindings, and their validation kinds. The raw-store key is granted
+to `heimdal-capture-watch`; both model-provider identifiers are granted only to
+`builderops-model-inquiry`, with exact `fable` and `gpt_codex` role requirements. Every grant is
+declared for `dev`, `test`, and `prod` in `config/secrets/host_secret_contract.json`; no value or
+host path is stored in that file. This is the ADR-0064 declared-API-key scope. It declares the
+credential boundary but does not authorize provider selection, calls, CKM access, or fallback.
+
+The v1 Keychain service is pinned to the stable non-secret namespace
+`yggdrasil.host-secrets`, and its account is derived by percent-encoding each
+`{channel}:{consumer}:{secret}` component before colon-joining the declared tuple, so distinct
+tuples cannot collide and each channel resolves a distinct item. The loader accepts only
+grammar-valid, contract-declared identifiers; any other identifier-bearing string is rejected
+rather than treated as potential secret material.
 Contract JSON must use unique object keys; a duplicate declaration fails closed rather than allowing a
 value to be hidden behind a later canonical field.
-HSP-02 is the only future component permitted to resolve that declaration into a process-local
-environment variable.
+The delivered HSP-02 bootstrap resolves each consumer's allowlist into a temporary mode-0600 file.
+The child receives only `HOST_SECRET_RUNTIME_ENV_FILE`; declared secret bindings are never copied
+into its ambient environment.
 
 ## Task order
 
@@ -101,8 +107,9 @@ did not regress capture-watch health. Acceptance is that receipt plus an owner-d
 ## Out of scope
 
 Cloud secret managers, 1Password installation, CI secret migration, automatic key rotation, generic
-configuration management, secret discovery, and runtime model-provider enablement. The latter is
-separately governed by `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md`.
+configuration management, secret discovery, provider calls, model routing, CKM grants, and
+credential provisioning. Runtime consumers and provider execution remain separately governed by
+ADR-0064 and the Model Access Substrate task chain.
 
 ## Related sources
 

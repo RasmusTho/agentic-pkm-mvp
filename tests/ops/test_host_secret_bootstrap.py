@@ -23,6 +23,8 @@ from app.ops.host_secret_bootstrap import (
 
 
 _RAW_KEY = "a" * 64
+_OPENAI_KEY = "openai-key-" + ("o" * 32)
+_ANTHROPIC_KEY = "anthropic-key-" + ("a" * 32)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -92,6 +94,138 @@ def test_missing_or_malformed_secret_fails_closed(
     assert str(error.value) == "host secret bootstrap failed for declared consumer"
     if secret_fragment:
         assert secret_fragment not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "missing_or_malformed",
+    [None, "", "short", "contains whitespace", "x" * 513, "x" * 20 + "\n"],
+)
+def test_missing_model_provider_secret_fails_consumer_closed(
+    tmp_path: Path,
+    missing_or_malformed: str | None,
+) -> None:
+    launched = False
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":anthropic.api-key"):
+            return _ANTHROPIC_KEY
+        if missing_or_malformed is None:
+            raise OSError("keychain item is absent")
+        return missing_or_malformed
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        run_with_host_secrets(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            command=["never-start"],
+            keychain_lookup=lookup,
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    assert not launched
+    assert "openai.api-key" in str(error.value)
+    if missing_or_malformed:
+        assert missing_or_malformed not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_unknown_secret_kind_still_fails_closed(tmp_path: Path) -> None:
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    unknown_kind_contract = host_secret_bootstrap.HostSecretContract(
+        keychain_service=contract.keychain_service,
+        keychain_account_template=contract.keychain_account_template,
+        allowed=contract.allowed,
+        secret_definitions=tuple(
+            (logical_id, binding, "unknown-kind" if logical_id == "openai.api-key" else kind)
+            for logical_id, binding, kind in contract.secret_definitions
+        ),
+        role_requirements=contract.role_requirements,
+    )
+
+    with pytest.raises(
+        HostSecretBootstrapError,
+        match="host secret bootstrap failed for declared consumer",
+    ):
+        run_with_host_secrets(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            command=["never-start"],
+            keychain_lookup=lambda _service, account: (
+                _OPENAI_KEY if account.endswith(":openai.api-key") else _ANTHROPIC_KEY
+            ),
+            runner=lambda _command, _env: 0,
+            contract=unknown_kind_contract,
+            directory=tmp_path,
+        )
+
+
+def test_model_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
+    requested_accounts: list[str] = []
+
+    def lookup(_service: str, account: str) -> str:
+        requested_accounts.append(account)
+        if account.endswith(":openai.api-key"):
+            return _OPENAI_KEY
+        if account.endswith(":anthropic.api-key"):
+            return _ANTHROPIC_KEY
+        pytest.fail(f"unexpected account lookup: {account}")
+
+    observed_path: Path | None = None
+
+    def runner(_command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        observed_path = Path(env["HOST_SECRET_RUNTIME_ENV_FILE"])
+        assert set(env).isdisjoint({"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HEIMDAL_RAW_STORE_KEY"})
+        assert observed_path.read_text(encoding="utf-8") == (
+            f"ANTHROPIC_API_KEY={_ANTHROPIC_KEY}\n"
+            f"OPENAI_API_KEY={_OPENAI_KEY}\n"
+        )
+        return 0
+
+    assert (
+        run_with_host_secrets(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            command=["consumer"],
+            keychain_lookup=lookup,
+            runner=runner,
+            directory=tmp_path,
+        )
+        == 0
+    )
+    assert requested_accounts == [
+        "dev:builderops-model-inquiry:anthropic.api-key",
+        "dev:builderops-model-inquiry:openai.api-key",
+    ]
+    assert observed_path is not None and not observed_path.exists()
+
+
+def test_model_provider_secret_is_never_disclosed(tmp_path: Path) -> None:
+    leaked_value = "model-provider-secret-" + ("z" * 32)
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":anthropic.api-key"):
+            return _ANTHROPIC_KEY
+        raise OSError(f"lookup denied for {leaked_value}")
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        run_with_host_secrets(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            command=["never-start"],
+            keychain_lookup=lookup,
+            directory=tmp_path,
+        )
+
+    assert leaked_value not in str(error.value)
+    assert "openai.api-key" in str(error.value)
     assert list(tmp_path.iterdir()) == []
 
 

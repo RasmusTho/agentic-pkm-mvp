@@ -74,17 +74,12 @@ def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:
     assert "--depth=1" not in job
 
 
-def test_panel_llm_e2e_runs_only_after_merge() -> None:
+def test_optional_panel_llm_e2e_job_is_absent() -> None:
     workflow = _smoke_text()
 
-    assert "panel_llm_e2e:" in workflow
-    assert "if: github.event_name != 'pull_request'" in workflow
-    assert "'app/agents/panel_agent/**'" in workflow
-    assert "'app/agents/panel/**'" in workflow
-    assert "'tests/agents/panel_agent/**'" in workflow
-    assert "'tests/agents/test_panel*.py'" in workflow
-    assert "id: live-llm" in workflow
-    assert "steps.live-llm.outputs.enabled == 'true'" in workflow
+    assert "panel_llm_e2e:" not in workflow
+    assert "id: live-llm" not in workflow
+    assert "steps.live-llm.outputs.enabled" not in workflow
 
 
 def test_smoke_docker_runs_for_stable_targeting_pull_requests() -> None:

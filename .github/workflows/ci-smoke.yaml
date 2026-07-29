@@ -18,8 +18,6 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    outputs:
-      panel_llm_e2e: ${{ steps.changes.outputs.panel_llm_e2e }}
     env:
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: memory
@@ -69,21 +67,6 @@ jobs:
               - 'Dockerfile'
               - 'docker-compose*.yaml'
               - 'docker-compose*.yml'
-            panel_llm_e2e:
-              - 'app/agents/panel_agent/**'
-              - 'app/agents/panel/**'
-              - 'app/panel/**'
-              - 'app/promotion/**'
-              - 'app/llm/**'
-              - 'app/services/llm.py'
-              - 'app/config/llm.py'
-              - 'tests/panel/**'
-              - 'tests/agents/panel_agent/**'
-              - 'tests/agents/test_panel*.py'
-              - 'tests/promotion/**'
-              - 'tests/e2e/test_panel_llm_e2e.py'
-              - '.github/workflows/ci-smoke.yaml'
-
       - name: Install system deps (ffmpeg, ripgrep)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         run: |
@@ -497,56 +480,6 @@ jobs:
         if: github.event_name == 'pull_request' && github.base_ref != 'stable'
         run: |
           echo "Docker smoke is skipped only for ordinary pull requests."
-
-  panel-llm-e2e:
-    runs-on: ubuntu-latest
-    needs: [smoke, smoke-docker]
-    if: github.event_name != 'pull_request'
-    env:
-      PYTHONPATH: ${{ github.workspace }}
-      STORE_BACKEND: memory
-      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-      PANEL_AGENT_DECIDER: llm
-      PANEL_AGENT_LLM_E2E: "1"
-      PANEL_AGENT_LLM_E2E_CI: ${{ secrets.PANEL_AGENT_LLM_E2E_CI }}
-      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-    steps:
-      - name: Detect live-LLM CI configuration
-        id: live-llm
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${PANEL_AGENT_LLM_E2E_CI:-}" = "true" ] && \
-             [ -n "${LLM_PROVIDER:-}" ] && \
-             [ -n "${OPENAI_API_KEY:-}" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Live PanelAgent LLM E2E is not configured; no dependencies or tests will run."
-          fi
-
-      - name: Checkout
-        if: steps.live-llm.outputs.enabled == 'true'
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        if: steps.live-llm.outputs.enabled == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install Python deps
-        if: steps.live-llm.outputs.enabled == 'true'
-        run: |
-          python -m pip install -U pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
-
-      - name: Run PanelAgent LLM E2E
-        if: steps.live-llm.outputs.enabled == 'true'
-        run: pytest -q tests/e2e/test_panel_llm_e2e.py -m "panel_llm_e2e"
 
   pr-unit-tests-not-pg:
     name: Unit tests (not pg)
