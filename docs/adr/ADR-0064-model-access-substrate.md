@@ -144,8 +144,12 @@ restated on the correct grounds:
 - **The order does not swap.** The CKM migration stays at step 5 of the migration table in
   `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8. Migration` (that table is current; only its
   §8.1 narrative is superseded). Orchestration selects work from
-  gap detection, which consumes `confirmed` material only (`app/builderops/ckm/gaps.py`), so an
-  orchestrator is not fed unconfirmed inference. The mock route is separately and already handled:
+  gap detection, and an authenticated approval boundary stands between a CKM-shaped draft and any
+  handoff: #4163 puts automatic prioritization from CKM scores out of scope and #4169 approves exact
+  request/preview hashes. (**Corrected 2026-07-28:** this previously said gap detection "consumes
+  `confirmed` material only". It does not — `starved_dimension` thresholds on maturity scores that
+  blend candidate edges. The approval boundary carries the argument, not the detector.) The mock
+  route is separately and already handled:
   it is rejected before any provider call and the run writes zero edges
   (`app/builderops/ckm/semantic.py`; `tests/builderops/ckm/test_semantic.py::test_llm_unavailable_skips_cleanly`).
 - **What the leak actually risks is the evidence graph, not the orchestrator — and specifically the
