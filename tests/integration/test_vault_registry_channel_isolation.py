@@ -1033,6 +1033,7 @@ def test_key_rotation_rejects_unbound_or_forged_owner_receipt_without_mutation(
         stale_receipt = owner_inventory.read_bytes()
         _deployment_fence_path(runtime.ledger.root, "dev").unlink()
         _deployment_lease_path(runtime.ledger.root).unlink()
+        (runtime.ledger.root / "deployment-host-global-lease.json").unlink()
         (runtime.ledger.root / "deployment-quiescence-proof.json").unlink()
         proof, owner_inventory = _rotation_authority(
             runtime,

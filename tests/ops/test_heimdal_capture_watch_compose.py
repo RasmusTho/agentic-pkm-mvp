@@ -140,8 +140,19 @@ def test_deploy_script_recreates_the_new_service() -> None:
 
     assert pull_lines, "deploy script must pull channel service images"
     assert runtime_recreate_lines, "deploy script must recreate runtime services"
-    for line in [*pull_lines, *runtime_recreate_lines]:
+    ordinary_lines = [
+        line
+        for line in [*pull_lines, *runtime_recreate_lines]
+        if "scalar-rollback-guard" not in line
+    ]
+    for line in ordinary_lines:
         assert _SERVICE in line, line
+    scalar_lines = [
+        line for line in [*pull_lines, *runtime_recreate_lines]
+        if "scalar-rollback-guard" in line
+    ]
+    assert scalar_lines
+    assert all(_SERVICE not in line for line in scalar_lines)
 
 
 def test_deploy_script_health_gates_the_new_service() -> None:
