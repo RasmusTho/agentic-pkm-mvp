@@ -29,7 +29,20 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    `evidence` (system-owned, bounded, **append-only** list: `{artifact_ref, source_stream, matched_at,
    confidence_class, provenance_ref, quoted_span}`), `last_matched_at` / `last_refreshed_at`
    (system-owned bounded timestamps). Prose-mirror-of-schema section in this capability's README,
-   consistent with `docs/architecture/*` contract style.
+   consistent with `docs/architecture/*` contract style. `date-time` is the only `format` keyword in
+   the schema. The production validation seam checks every non-null `format: date-time` value against
+   a repo-local RFC 3339 grammar — four-digit proleptic Gregorian dates and numeric offsets through
+   ±23:59 — before guarded note writes and when notes are parsed for projection rebuild; enforcement
+   does not depend on optional host checker registration. **Leap-second policy (shipped):** a `:60`
+   second is accepted only when the offset-adjusted UTC instant is `23:59:60` on a date listed in the
+   hand-maintained announced leap-second table `app/standing_questions/question_store.py ::
+   ANNOUNCED_LEAP_SECOND_UTC_DATES` (the 27 IERS-announced leap seconds, 1972-06-30 through
+   2016-12-31; reviewed 2026-07-28). A legal *position* is not sufficient: every other `:60` value —
+   including a syntactically well-formed June 30 / December 31 `23:59:60` where no leap second was
+   announced — is rejected, never coerced. The table is deliberately offline (no network lookup at
+   validation time) and requires manual maintenance when IERS announces a new leap second; until it is
+   updated, a newly announced leap second would be rejected. The seam therefore enforces this
+   documented, dated subset — not general RFC 3339 leap-second conformance.
 2. **Ownership split, enforced not just documented** (`docs/FRONTMATTER.md :: Ownership: human vs
    system`): `text` and `status` are human-owned — the store's write path refuses any engine-authored
    mutation of these two fields at the seam, full stop, regardless of caller. `evidence`,
@@ -47,7 +60,21 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
 4. **Projection**: a rebuildable PG `standing_questions` projection (Alembic migration, forward-only,
    following the `decisions`/`episodes` projection precedent at `app/jobs/decisions_projection.py`) —
    vault notes are the SoR; the projection exists for query (open-question list, evidence-trail
-   lookups, pending-candidate lookups) and must fully rebuild from vault (DRI discipline).
+   lookups, pending-candidate lookups) and must fully rebuild from vault (DRI discipline). At this
+   boundary only, the projector converts the three values bound to Postgres `TIMESTAMPTZ` columns
+   (`created_at`, `last_matched_at`, `last_refreshed_at`) to UTC literals Postgres will store,
+   including its `BC` notation for RFC 3339 year `0000`. **The conversion preserves the instant
+   except at two documented boundaries (shipped):** (a) an announced leap second is folded onto the
+   following minute — Postgres has no `:60` representation, so a vault-canonical
+   `2016-12-31T23:59:60Z` is stored as `2017-01-01 00:00:00+00`, one second later, on all 27
+   announced dates; and (b) fractional seconds past the microsecond `TIMESTAMPTZ` resolves to are
+   truncated, never rounded, since RFC 3339's `time-secfrac` is unbounded. Both folds happen in the
+   projector, not in Postgres: forwarding a `:60` literal or an over-long fraction to the server is a
+   hard error that aborts the whole TRUNCATE+replay rebuild, so bounding them here is what keeps the
+   projection rebuildable for every value the write seam accepts. Both are query-surface
+   approximations, not a loss of canonical truth — the vault's canonical RFC 3339 strings remain
+   unchanged and the projection fully rebuilds from them; `evidence[].matched_at` remains unchanged
+   inside JSON rather than being adapted as a database timestamp.
 5. **Id minting**: `question_id = sq-<uuid>`, distinct namespace from `ep-*` (episodes) and any other
    entity id space in the vault — the store rejects a caller-supplied id that does not match the
    `sq-` prefix.

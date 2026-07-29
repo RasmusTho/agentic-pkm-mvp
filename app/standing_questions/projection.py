@@ -18,7 +18,11 @@ from typing import Any
 from jsonschema import ValidationError
 
 from app.db.db import conn_rw
-from app.standing_questions.question_store import QUESTION_DIRECTORY, parse_question_note
+from app.standing_questions.question_store import (
+    QUESTION_DIRECTORY,
+    parse_question_note,
+    parse_rfc3339_datetime,
+)
 from app.vault.manager import iter_vault_markdown_files
 
 STANDING_QUESTIONS_TABLE = "standing_questions"
@@ -80,6 +84,74 @@ def iter_question_notes(vault_root: Path | str) -> list[tuple[str, dict[str, Any
     return notes
 
 
+#: PostgreSQL stores ``TIMESTAMPTZ`` at microsecond resolution, so the adapter emits at
+#: most this many fractional digits. RFC 3339's ``time-secfrac`` is unbounded and the
+#: vault keeps every digit; digits below a microsecond carry no queryable information and
+#: an over-long literal is rejected outright by the server (``MAXDATELEN`` is 128).
+_POSTGRES_FRACTIONAL_DIGITS = 6
+
+
+def _postgres_timestamptz_value(value: str | None) -> str | None:
+    """Adapt a schema-valid RFC 3339 value to a literal PostgreSQL will store.
+
+    The vault remains canonical and retains ``value`` byte-for-byte. This adapter is
+    the only place PostgreSQL's timestamp grammar is allowed to matter, so it must
+    emit a literal the server accepts for *every* value the write seam admits -- a
+    rejected literal aborts the whole TRUNCATE+replay transaction and would leave the
+    projection unrebuildable until a human edited the vault note.
+
+    PostgreSQL 16 rejects valid RFC 3339 offsets at and above 16 hours and does not
+    accept year ``0000`` directly, so the query-only projection receives a normalized
+    UTC literal, with astronomical year zero rendered as PostgreSQL ``0001 BC``.
+
+    Two boundaries are lossy, by construction and on purpose:
+
+    * **Leap seconds fold.** PostgreSQL has no ``:60`` representation; it accepts the
+      literal only with a zero fraction and silently folds it to the following minute,
+      and rejects it outright with a nonzero fraction. Rather than depend on that
+      asymmetry, this adapter folds every ``:60`` itself, so ``2016-12-31T23:59:60Z``
+      is stored as ``2017-01-01 00:00:00+00`` -- one second later than the canonical
+      vault string, on all 27 announced leap-second dates.
+    * **Sub-microsecond digits truncate.** ``time-secfrac`` is unbounded in RFC 3339;
+      ``TIMESTAMPTZ`` resolves to microseconds. Digits past
+      ``_POSTGRES_FRACTIONAL_DIGITS`` are truncated (never rounded, so no carry can
+      ripple back into the seconds field) instead of being handed to the server.
+
+    Both are query-surface approximations of a rebuildable projection, never a change
+    to vault truth: the note keeps its exact RFC 3339 string and the projection rebuilds
+    from it.
+
+    Leap seconds reach this adapter only on the announced UTC dates admitted by
+    ``question_store.ANNOUNCED_LEAP_SECOND_UTC_DATES``: the same
+    :func:`parse_rfc3339_datetime` boundary decides write validation and projection,
+    so the two seams cannot drift apart. Anything the write seam rejects raises here
+    rather than being coerced into a PostgreSQL instant.
+    """
+    if value is None:
+        return None
+    timestamp = parse_rfc3339_datetime(value)
+    if timestamp is None:
+        raise ValueError(f"projection received an invalid RFC 3339 timestamp: {value!r}")
+    # A leap second is folded onto the following minute here rather than left for the
+    # server: PostgreSQL accepts ":60" only with a zero fraction, so forwarding it would
+    # make a fractional announced leap second a hard, permanent rebuild failure.
+    is_leap_second = timestamp.second == 60
+    second = 0 if is_leap_second else timestamp.second
+    year, month, day, hour, minute = timestamp.utc_date_and_minute(
+        minute_delta=1 if is_leap_second else 0
+    )
+    fraction = timestamp.fraction[: _POSTGRES_FRACTIONAL_DIGITS + 1]
+    era = ""
+    if year <= 0:
+        year = 1 - year
+        era = " BC"
+    return (
+        f"{year:04d}-{month:02d}-{day:02d} "
+        f"{hour:02d}:{minute:02d}:{second:02d}"
+        f"{fraction}+00{era}"
+    )
+
+
 def _replace_projection_rows(notes: list[tuple[str, dict[str, Any]]]) -> None:
     """Replace every derived row from vault-canonical Question notes in one transaction.
 
@@ -104,13 +176,13 @@ def _replace_projection_rows(notes: list[tuple[str, dict[str, Any]]]) -> None:
                         note["scope"],
                         note["text"],
                         note["status"],
-                        note["created_at"],
+                        _postgres_timestamptz_value(note["created_at"]),
                         note["registered_via"],
                         note.get("standing_answer_ref"),
                         note.get("candidate_answer_ref"),
                         json.dumps(note["evidence"]),
-                        note.get("last_matched_at"),
-                        note.get("last_refreshed_at"),
+                        _postgres_timestamptz_value(note.get("last_matched_at")),
+                        _postgres_timestamptz_value(note.get("last_refreshed_at")),
                         source_path,
                     ),
                 )
