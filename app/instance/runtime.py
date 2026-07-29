@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -1403,13 +1404,11 @@ def _controller_identity_is_live(controller: object) -> bool:
             "existing deployment controller identity cannot be verified"
         ) from exc
     try:
-        from scripts.instance_state_writer_inventory import (
-            InventoryError,
-            controller_token,
+        inventory = importlib.import_module(
+            "scripts.instance_state_writer_inventory"
         )
-
-        return controller_token(pid) == str(controller["start_token"])
-    except (InventoryError, OSError) as exc:
+        return inventory.controller_token(pid) == str(controller["start_token"])
+    except (OSError, RuntimeError) as exc:
         raise InstanceStatePreflightError(
             "existing deployment controller identity cannot be verified"
         ) from exc
