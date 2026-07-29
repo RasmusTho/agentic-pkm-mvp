@@ -69,17 +69,17 @@ def test_missing_verify_reports_exact_item_guidance() -> None:
     assert "acceptance criteria without verify markers" in report.repair_guidance[-1]
 
 
-def test_ready_issue_rejects_missing_verify_file_path() -> None:
+def test_ready_issue_accepts_new_behavioral_verify_test_file() -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
     body = body.replace(
         "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
-        "tests/scripts/test_missing_verify_path.py::test_missing_path",
+        "tests/scripts/test_new_readiness_case.py::test_new_readiness_case",
     )
 
     report = classify_issue_body(body, labels=["agent:ready"])
 
-    assert report.readiness_classification == "missing_verify_file_paths"
-    assert any("tests/scripts/test_missing_verify_path.py" in item for item in report.repair_guidance)
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
 
 
 def test_ready_issue_rejects_missing_root_level_verify_file_path() -> None:
@@ -93,6 +93,22 @@ def test_ready_issue_rejects_missing_root_level_verify_file_path() -> None:
 
     assert report.readiness_classification == "missing_verify_file_paths"
     assert report.acceptance_criteria.missing_verify_file_paths == ["pyproject.tmol"]
+
+
+def test_ready_issue_rejects_missing_non_behavioral_verify_file_path() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "doc writeback at `docs/missing-readiness-guidance.md :: verify-rule`",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+    assert report.acceptance_criteria.missing_verify_file_paths == [
+        "docs/missing-readiness-guidance.md"
+    ]
+    assert "non-test file-based" in report.repair_guidance[0]
 
 
 def test_ready_issue_accepts_existing_verify_file_path() -> None:

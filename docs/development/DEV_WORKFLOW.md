@@ -296,6 +296,9 @@ Form:
 Rules:
 
 - Behavioral ACs point to a concrete test (existing or to-be-added) by file and test name.
+- Ready-label validation permits a behavioral `tests/...py::test_name` target to name a new test
+  file that the builder will add. Other file-based `Verify:` targets must resolve to existing
+  repository files.
 - Enforcement ACs — behavioral ACs asserting a guard, gate, or invariant holds on the live runtime path — must point to a test that exercises the production call site, not the guard function in isolation. "Module exists and is unit-tested" does not discharge an enforcement AC; "invoked on the runtime path and asserted there" does.
 - Non-behavioral ACs point to a concrete observable target: doc writeback path plus anchor, roadmap diff, or runtime receipt.
 - If an AC cannot carry a resolvable `Verify:` target, refine or split it before marking the Issue `agent:ready`.
