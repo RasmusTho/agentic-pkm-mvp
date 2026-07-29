@@ -39,9 +39,9 @@ row plus a secret declaration" true instead of aspirational.
    gain no runtime YAML dependency.
 3. Add `tests/settings/test_provider_census.py` with one parameterized test asserting every allowlist
    site equals its declared census projection, and failing with the drifted site named.
-4. Add a `known_divergences` block to the census. Each entry names the site, the divergent members, a
-   date, and a linked GitHub issue. An **undeclared** divergence fails the test; a declared entry
-   missing either the date or the issue link also fails.
+4. Keep `known_divergences` empty while the live projections are equal. Any future exception must
+   name the site, divergent members, a date, and a linked GitHub issue; an undeclared divergence
+   fails the test.
 5. Validate that each tier mapping references a declared provider/model with the capabilities
    required by that mapping. Resolution policy remains owned by the named runtime; the census only
    makes the selectable set and capabilities explicit.
@@ -64,7 +64,7 @@ row plus a secret declaration" true instead of aspirational.
 | Site | Symbol | Current members |
 | --- | --- | --- |
 | `app/components/llm/router.py:42` | `_KNOWN_PROVIDERS` | `mock`, `ollama`, `openai`, `deepseek` |
-| `app/components/embeddings/legacy.py:21` | `_SUPPORTED_EMBED_PROVIDERS` | `mock`, `ollama`, `openai`, `deepseek`, `deterministic`, `gemini` |
+| `app/components/embeddings/legacy.py:21` | `_SUPPORTED_EMBED_PROVIDERS` | `mock`, `ollama`, `deterministic`, `gemini` |
 | `app/llm/embeddings.py:377-381` | `PROVIDER_REGISTRY` (keys) | `mock`, `ollama`, `gemini` |
 | `app/services/llm.py:346-463` | unnamed `if/elif` ladder | `mock`, `ollama`, `openai`, `deepseek` |
 | `app/llm/adapter.py:41-95` | unnamed `if/elif` ladder | `mock`, `ollama`, `openai`, `deepseek` |
@@ -110,11 +110,10 @@ FAILED tests/settings/test_provider_census.py::test_all_allowlists_match_census[
 
 ## Why this matters
 
-Adding `anthropic` naively means editing string sets in at least five places and missing a sixth. That
-is not hypothetical: `_SUPPORTED_EMBED_PROVIDERS` already accepts `openai` and `deepseek` for which
-`PROVIDER_REGISTRY` has no adapter, so a valid-looking configuration raises at runtime rather than at
-config time. Without this test, every later task in this capability adds providers into a surface that
-cannot tell whether it is consistent.
+Adding `anthropic` naively means editing string sets in at least five places and missing a sixth.
+PR #4243 derives the executable embedding set from registered adapters plus the deterministic
+short-circuit. Without this test, every later task in this capability could still add providers into
+a surface that cannot tell whether it is consistent.
 
 ## Acceptance criteria
 
@@ -127,9 +126,9 @@ cannot tell whether it is consistent.
 - [ ] A divergence that is not declared in `known_divergences` fails the test; a declared divergence
       missing a date or a linked issue also fails.
       Verify: `tests/settings/test_provider_census.py::test_undeclared_or_unlinked_divergence_fails`
-- [ ] The known divergences shipped with this task are exactly the embedding-provider gaps already
-      filed as #4178 and #4181, each carrying its issue link and the date it was declared.
-      Verify: `tests/settings/test_provider_census.py::test_declared_divergences_match_filed_issues`
+- [ ] The shipped census has no declared divergence: PR #4243 made the live embedding projection
+      executable and #4181 is a separate Settings-default defect, not an allowlist divergence.
+      Verify: `tests/settings/test_provider_census.py::test_census_ships_no_stale_known_divergences`
 - [ ] The extracted ladder constants are read by their ladders rather than duplicated beside them, so
       the census assertion covers the code path that actually dispatches.
       Verify: `tests/settings/test_provider_census.py::test_ladder_sites_dispatch_through_the_named_constant`
@@ -160,16 +159,16 @@ cannot tell whether it is consistent.
 ## Cross-task invariants preserved
 
 INV-MAS-1 (one provider set), INV-MAS-6 (additive and behaviour-preserving), INV-MAS-7 is not touched.
-Seam E is this task's own seam: the declared-divergence mechanism is the only escape hatch, and it is
-tested rather than trusted.
+Seam E is this task's own seam: any future declared-divergence mechanism is the only escape hatch,
+and it is tested rather than trusted. This delivery ships no exception.
 
 ## Out of scope
 
 Product Anthropic routing enablement (R4-2). This task declares Anthropic for Builder execution
 without adding it to Product chat execution. The `egress_posture` stage field and the budget circuit breaker
 (R4-3) — the census is their declared home, but this task ships neither. The Fable-exclusion probe
-(R4-4). Correcting the embedding-provider divergences themselves; they are declared here and fixed by
-#4178 and #4181. The neutral intent/resolver contracts, which are MAS-04; this task supplies only
+(R4-4). Correcting any later embedding-provider defects. The neutral intent/resolver contracts,
+which are MAS-04; this task supplies only
 their data. Any credential value or Keychain identifier, which belongs to
 `EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS`. Deleting `app/llm/adapter.py`.
 
@@ -184,8 +183,8 @@ their data. Any credential value or Keychain identifier, which belongs to
 ## Related GitHub issues
 
 One issue. Title shape `[Model Access Substrate] define-provider-census: one provider set, enforced`.
-It must state that it delivers R4-1 from `RUNTIME_MODEL_POSTURE.md §5` and must link #4178 and #4181 as
-the issues backing the declared divergences. It must not absorb R4-2, R4-3, or R4-4.
+It must state that it delivers R4-1 from `RUNTIME_MODEL_POSTURE.md §5`. It must not absorb R4-2,
+R4-3, or R4-4.
 
 TCD capability recommendation for the implementing agent: **Sonnet / high reasoning** — many sites and a
 new loader, but each edit is mechanical and the test is the verifier; high rather than medium because

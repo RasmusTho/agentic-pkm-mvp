@@ -13,6 +13,9 @@ import requests
 from app.llm.trace import log_llm_call
 from app.settings.env_defaults import env_float
 
+
+_DISPATCH_PROVIDERS = frozenset({"mock", "ollama", "openai", "deepseek"})
+
 _DEFAULT_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 _DEFAULT_BASE_DELAY = float(os.getenv("LLM_BASE_DELAY", "0.1"))
 
@@ -343,6 +346,11 @@ def call_llm(
     response_payload: dict[str, Any] = {}
     kind_lower = (kind or "").lower()
 
+    if provider not in _DISPATCH_PROVIDERS:
+        raise LLMError(
+            f"unsupported LLM provider {provider!r}; deterministic stub responses are "
+            "confined to provider == 'mock'"
+        )
     if provider == "mock":
         mock_override = os.getenv("LLM_MOCK_RESPONSE")
         use_override = False
@@ -456,13 +464,6 @@ def call_llm(
                 f"deepseek provider call failed (model={model}); refusing to substitute a "
                 f"deterministic response: {exc}"
             ) from exc
-    else:
-        # Unknown/real provider: deterministic responses require provider == "mock".
-        raise LLMError(
-            f"unsupported LLM provider {provider!r}; deterministic stub responses are "
-            "confined to provider == 'mock'"
-        )
-
     log_llm_call(
         provider=provider or "unknown",
         model=str(model),

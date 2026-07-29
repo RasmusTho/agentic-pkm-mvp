@@ -11,6 +11,9 @@ from app.llm.trace import log_llm_call
 from app.settings.env_defaults import env_float
 
 
+_DISPATCH_PROVIDERS = frozenset({"mock", "ollama", "openai", "deepseek"})
+
+
 def _prov() -> str:
     return get_provider()
 
@@ -38,6 +41,8 @@ def generate(
     m = _rmodel() if reasoning else _model()
     raw_response: Dict[str, Any] | Any = {}
 
+    if p not in _DISPATCH_PROVIDERS:
+        raise ValueError("unsupported provider")
     if p == "mock":
         mock = os.getenv("LLM_MOCK_RESPONSE", "UNSURE")
         content = str(mock)
@@ -91,9 +96,6 @@ def generate(
         r.raise_for_status()
         raw_response = r.json()
         content = raw_response["choices"][0]["message"]["content"]
-    else:
-        raise ValueError("unsupported provider")
-
     log_llm_call(
         provider=p,
         model=m,
