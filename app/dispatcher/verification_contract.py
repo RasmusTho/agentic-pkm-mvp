@@ -61,6 +61,108 @@ def resolve_final_review_rounds(body: object) -> int | None:
     return int(matches[0])
 
 
+# --- pr-contract gate twins (issue #4272) -----------------------------------
+#
+# The two functions below are a distinct concern from resolve_final_review_rounds
+# above: that function resolves how many verified-merge review rounds the
+# full-path ceremony needs (1 or 2; 0 has no ceremony, so it resolves to None
+# there on purpose). The `pr-contract` CI gate instead only checks the PR
+# body's *shape* \u2014 exactly one Final-Review-Rounds declaration with a value of
+# 0, 1, or 2 \u2014 regardless of which path that value selects. These twins mirror
+# the workflow's own JS 1:1 (the `// final-review-rounds:start`/`:end` and
+# `// builderops-routing:start`/`:end` marker-delimited blocks in
+# .github/workflows/issue-pr-governance.yml), proven by
+# tests/governance/test_issue_pr_governance.py
+# ::test_final_review_rounds_check_executes_via_canonical_implementation and
+# ::test_builderops_routing_stub_detection_matches_workflow_js, following the
+# same marker-extraction parity pattern as
+# ::test_javascript_and_python_authority_grammar_are_identical.
+
+PR_CONTRACT_FINAL_REVIEW_ROUNDS_ALL_LINES_PATTERN = re.compile(
+    r"^Final-Review-Rounds:[ \t]*.*$", re.MULTILINE
+)
+PR_CONTRACT_FINAL_REVIEW_ROUNDS_VALID_LINE_PATTERN = re.compile(
+    r"^Final-Review-Rounds:[ \t]*[012][ \t]*$", re.MULTILINE
+)
+TIER1_LANE_PATTERN = re.compile(
+    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b", re.IGNORECASE | re.MULTILINE
+)
+BUILDEROPS_ROUTING_SECTION_PATTERN = re.compile(
+    r"(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*",
+    re.IGNORECASE,
+)
+BUILDEROPS_ROUTING_RECORDS_PATTERN = re.compile(
+    r"(?:^|\n)\s*-\s*Records/projections/receipts:\s*(.*?)\s*(?:\n|$)",
+    re.IGNORECASE,
+)
+BUILDEROPS_ROUTING_REASON_PATTERN = re.compile(
+    r"(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)", re.IGNORECASE
+)
+BUILDEROPS_ROUTING_PLACEHOLDER_PATTERN = re.compile(r"^<.*>$")
+
+
+@dataclass(frozen=True)
+class PrContractFinalReviewRounds:
+    declared_count: int
+    valid_count: int
+    satisfied: bool
+
+
+def resolve_pr_contract_final_review_rounds(body: object) -> PrContractFinalReviewRounds:
+    """Shape-check twin of the `pr-contract` gate's Final-Review-Rounds assertion.
+
+    Unlike :func:`resolve_final_review_rounds`, this accepts a value of ``0``
+    (the light-delivery-path declaration) and only asserts shape, never
+    ceremony-round semantics.
+    """
+    text = body if isinstance(body, str) else ""
+    declared = PR_CONTRACT_FINAL_REVIEW_ROUNDS_ALL_LINES_PATTERN.findall(text)
+    valid = PR_CONTRACT_FINAL_REVIEW_ROUNDS_VALID_LINE_PATTERN.findall(text)
+    return PrContractFinalReviewRounds(
+        declared_count=len(declared),
+        valid_count=len(valid),
+        satisfied=len(declared) == 1 and len(valid) == 1,
+    )
+
+
+@dataclass(frozen=True)
+class BuilderOpsRoutingStatus:
+    is_tier1_lane: bool
+    has_section: bool
+    has_builderops_routing: bool
+    satisfied: bool
+
+
+def resolve_builderops_routing_status(
+    body: object, *, has_issue_authority: bool
+) -> BuilderOpsRoutingStatus:
+    """Twin of the `pr-contract` gate's `## BuilderOps Routing` filled-vs-stub check."""
+    text = body if isinstance(body, str) else ""
+    is_tier1_lane = TIER1_LANE_PATTERN.search(text) is not None
+    section_match = BUILDEROPS_ROUTING_SECTION_PATTERN.search(text)
+    section = section_match.group(0) if section_match else ""
+
+    def _has_concrete_value(pattern: re.Pattern[str]) -> bool:
+        match = pattern.search(section)
+        if not match:
+            return False
+        value = match.group(1).strip()
+        return len(value) > 0 and BUILDEROPS_ROUTING_PLACEHOLDER_PATTERN.match(value) is None
+
+    has_builderops_routing = bool(section) and _has_concrete_value(
+        BUILDEROPS_ROUTING_RECORDS_PATTERN
+    ) and _has_concrete_value(BUILDEROPS_ROUTING_REASON_PATTERN)
+    satisfied = has_builderops_routing or (
+        is_tier1_lane and not has_issue_authority and not section
+    )
+    return BuilderOpsRoutingStatus(
+        is_tier1_lane=is_tier1_lane,
+        has_section=bool(section),
+        has_builderops_routing=has_builderops_routing,
+        satisfied=satisfied,
+    )
+
+
 GOVERNING_ISSUE_LINE_PATTERN = re.compile(
     rf"(?m)^[ \t]*{_GOVERNING_KEYWORD}[ \t]*:.*$"
 )

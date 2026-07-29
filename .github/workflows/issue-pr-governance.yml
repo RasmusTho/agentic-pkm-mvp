@@ -259,32 +259,73 @@ jobs:
             for (const warning of sbsImpactWarnings(body, changedFiles)) {
               core.warning(warning);
             }
-            const finalReviewRoundLines = body.match(
-              /^Final-Review-Rounds:[ \t]*.*$/gm
-            ) || [];
-            const validFinalReviewRoundLines = body.match(
-              /^Final-Review-Rounds:[ \t]*[012][ \t]*$/gm
-            ) || [];
-            if (
-              finalReviewRoundLines.length !== 1 ||
-              validFinalReviewRoundLines.length !== 1
-            ) {
+            // final-review-rounds:start
+            // Canonical Final-Review-Rounds shape check. Kept as a pure function (like
+            // classifyIssueAuthority below) so a marker-extraction parity test can prove
+            // this agrees with app/dispatcher/verification_contract.py without re-typing
+            // the rule in a third place. See tests/governance/test_issue_pr_governance.py
+            // :: test_final_review_rounds_check_executes_via_canonical_implementation.
+            const resolveFinalReviewRounds = (candidateBody) => {
+              const finalReviewRoundLines = candidateBody.match(
+                /^Final-Review-Rounds:[ \t]*.*$/gm
+              ) || [];
+              const validFinalReviewRoundLines = candidateBody.match(
+                /^Final-Review-Rounds:[ \t]*[012][ \t]*$/gm
+              ) || [];
+              return {
+                declaredCount: finalReviewRoundLines.length,
+                validCount: validFinalReviewRoundLines.length,
+                satisfied:
+                  finalReviewRoundLines.length === 1 &&
+                  validFinalReviewRoundLines.length === 1,
+              };
+            };
+            // final-review-rounds:end
+            const finalReviewRounds = resolveFinalReviewRounds(body);
+            if (!finalReviewRounds.satisfied) {
               core.setFailed(
                 "PR body must contain exactly one `Final-Review-Rounds: 0` (light delivery path per docs/development/GOVERNANCE_PROPORTIONALITY.md), `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` declaration."
               );
               return;
             }
+            // builderops-routing:start
             // BuilderOps routing is mandatory delivery traceability for Tier 2+ PRs.
             // It records the BuilderOps objects/projections/receipts created, or an explicit "none" reason.
             // Tier 1 (docs/development/GOVERNANCE_PROPORTIONALITY.md): PRs declaring the
             // docs-authoring or governance lane may omit the section entirely when nothing
             // was routed — absence means "none". A present-but-unfilled section still fails.
-            const tier1LanePattern = /^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b/im;
-            const isTier1Lane = tier1LanePattern.test(body);
-            // Anchored to line start so an inline mention of the section name in prose
-            // (e.g. a change list describing this very check) is not mistaken for the section.
-            const builderOpsRoutingMatch = body.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
-            const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
+            // Kept as a pure function (candidateBody + the already-classified
+            // hasIssueAuthority flag in) so a marker-extraction parity test can prove this
+            // agrees with app/dispatcher/verification_contract.py::resolve_builderops_routing_status.
+            const resolveBuilderOpsRouting = (candidateBody, hasIssueAuthority) => {
+              const tier1LanePattern = /^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b/im;
+              const isTier1Lane = tier1LanePattern.test(candidateBody);
+              // Anchored to line start so an inline mention of the section name in prose
+              // (e.g. a change list describing this very check) is not mistaken for the section.
+              const builderOpsRoutingMatch = candidateBody.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
+              const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
+              const hasConcreteBuilderOpsValue = (pattern) => {
+                const match = builderOpsRoutingSection.match(pattern);
+                if (!match) {
+                  return false;
+                }
+                const value = match[1].trim();
+                return value.length > 0 && !/^<.*>$/.test(value);
+              };
+              const hasBuilderOpsRouting =
+                Boolean(builderOpsRoutingSection) &&
+                hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*(.*?)\s*(?:\n|$)/i) &&
+                hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)/i);
+              const satisfied =
+                hasBuilderOpsRouting || (isTier1Lane && !hasIssueAuthority && !builderOpsRoutingSection);
+              return {
+                isTier1Lane,
+                hasSection: Boolean(builderOpsRoutingSection),
+                hasBuilderOpsRouting,
+                satisfied,
+              };
+            };
+            // builderops-routing:end
             // authority-classifier:start
             const classifyIssueAuthority = (candidateBody) => {
               const hasUnsupportedLineSeparator = /\r(?!\n)|[\u2028\u2029]/.test(candidateBody);
@@ -567,21 +608,8 @@ jobs:
               core.setFailed("Closing keywords belong only in the authenticated PR-body authority contract; commit-message closing references are forbidden because GitHub can apply them outside the persisted closing set.");
               return;
             }
-            const hasConcreteBuilderOpsValue = (pattern) => {
-              const match = builderOpsRoutingSection.match(pattern);
-              if (!match) {
-                return false;
-              }
-              const value = match[1].trim();
-              return value.length > 0 && !/^<.*>$/.test(value);
-            };
-            const hasBuilderOpsRouting =
-              Boolean(builderOpsRoutingSection) &&
-              hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*(.*?)\s*(?:\n|$)/i) &&
-              hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)/i);
-            const builderOpsRoutingSatisfied =
-              hasBuilderOpsRouting || (isTier1Lane && !hasIssueAuthority && !builderOpsRoutingSection);
-            if (!builderOpsRoutingSatisfied) {
+            const builderOpsRouting = resolveBuilderOpsRouting(body, hasIssueAuthority);
+            if (!builderOpsRouting.satisfied) {
               core.setFailed("PR body must include `## BuilderOps Routing` with concrete `Records/projections/receipts:` and `Reason:` lines. Tier 1 docs-authoring/governance-lane PRs may omit the section entirely when nothing was routed (absence = none); an unfilled template section is still rejected.");
               return;
             }

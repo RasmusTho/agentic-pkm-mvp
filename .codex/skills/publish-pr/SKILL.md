@@ -252,13 +252,17 @@ Any overlap with your staged file set => STOP: keep the earlier compliant PR, cl
 ### Step 6: Create or Update PR
 
 Execute based on lane classification. Every template below defaults to the light path with the
-required `Final-Review-Rounds: 0` line (the `pr-contract` gate rejects a body with zero or more than
-one match of `/^Final-Review-Rounds:[ \t]*[012][ \t]*$/`). Raise it to `1` or `2` only when
-`AGENTS.md :: Proportional delivery` selects the full path. The templates also carry concrete
-`## BuilderOps Routing` defaults instead of `<...>` placeholders
-(the gate rejects any routing value matching `^<.*>$`). The `none` / reason defaults shown match what
-`scripts/pr_body_generator.py` emits (`_builderops_section`) — replace them with the actual
-records/projections/receipts and reason whenever BuilderOps material was in fact routed.
+required `Final-Review-Rounds: 0` line and concrete `## BuilderOps Routing` defaults instead of
+`<...>` placeholders. Raise `Final-Review-Rounds` to `1` or `2` only when
+`AGENTS.md :: Proportional delivery` selects the full path. The exact shape both fields must satisfy
+is the canonical `app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds`
+and `::resolve_builderops_routing_status` (kept in proven parity with the `pr-contract` gate's own JS
+by `tests/governance/test_issue_pr_governance.py
+::test_final_review_rounds_check_executes_via_canonical_implementation` and
+`::test_builderops_routing_stub_detection_matches_workflow_js`) — do not re-derive the rule from this
+prose. The `none` / reason defaults shown match what `scripts/pr_body_generator.py` emits
+(`_builderops_section`) — replace them with the actual records/projections/receipts and reason
+whenever BuilderOps material was in fact routed.
 
 **Implementation Lane (Fixes an Issue):**
 ```bash
@@ -392,6 +396,11 @@ Pre-push PR-body contract gate:
   (`docs/development/GOVERNANCE_PROPORTIONALITY.md`); never leave the section present but unfilled,
   and never leave a `<...>` placeholder in a value the gate reads (`Records/projections/receipts:`
   or `Reason:`).
+- The exact shape both checks above enforce is not restated here — it is the canonical
+  `app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds` and
+  `::resolve_builderops_routing_status`, proven identical to the `pr-contract` gate's own JS by
+  `tests/governance/test_issue_pr_governance.py`. CI remains the enforcement point; this is a manual
+  pre-push read, not a substitute for it.
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
 
@@ -404,7 +413,9 @@ review-repair need. Otherwise hand the published PR directly to `verification-an
 
 ## PR body requirements
 
-Every lane, with no exception:
+Every lane, with no exception (canonical shape:
+`app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds` and
+`::resolve_builderops_routing_status`, not restated here):
 
 - include exactly one `Final-Review-Rounds: 0`, `1`, or `2` line (`0` = light delivery path)
 - include a `## BuilderOps Routing` section with concrete `Records/projections/receipts:` and

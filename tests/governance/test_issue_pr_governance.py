@@ -15,36 +15,78 @@ from app.dispatcher.verification_contract import (
     IssueAuthority,
     MAX_CLOSING_ISSUES,
     neutralize_closing_issue_references,
+    resolve_builderops_routing_status,
     resolve_issue_authority,
     resolve_issue_contract,
     resolve_neutralized_issue_authority,
+    resolve_pr_contract_final_review_rounds,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_BUILDEROPS_ROUTING_REGEX = re.compile(
-    r"(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*",
-    re.IGNORECASE,
-)
-_BUILDEROPS_ROUTING_FIELDS = (
-    re.compile(
-        r"(?:^|\n)\s*-\s*Records/projections/receipts:\s*(.*?)\s*(?:\n|$)",
-        re.IGNORECASE,
-    ),
-    re.compile(r"(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)", re.IGNORECASE),
-)
+# The `_BUILDEROPS_ROUTING_REGEX`/`_BUILDEROPS_ROUTING_FIELDS`/`_TIER1_LANE_REGEX`
+# duplicate copies formerly declared here (issue #4272) are retired in favor of
+# the canonical `app.dispatcher.verification_contract` twins imported above,
+# proven against the workflow's own JS by
+# `test_final_review_rounds_check_executes_via_canonical_implementation` and
+# `test_builderops_routing_stub_detection_matches_workflow_js` below.
 
 
-def test_pr_contract_requires_one_bounded_final_review_declaration() -> None:
-    workflow = (
-        REPO_ROOT / ".github/workflows/issue-pr-governance.yml"
-    ).read_text(encoding="utf-8")
+def test_final_review_rounds_check_executes_via_canonical_implementation() -> None:
+    """Behavioral parity test replacing the former source-text tripwire.
 
-    assert "finalReviewRoundLines.length !== 1" in workflow
-    assert "validFinalReviewRoundLines.length !== 1" in workflow
-    assert "Final-Review-Rounds: 1` or `Final-Review-Rounds: 2" in workflow
-    # Light delivery path (AGENTS.md :: Proportional delivery) declares rounds 0.
-    assert r"Final-Review-Rounds:[ \t]*[012][ \t]*$" in workflow
+    Exercises `resolve_pr_contract_final_review_rounds` (the canonical Python
+    twin of the `pr-contract` gate's `// final-review-rounds:start`/`:end`
+    JS block) against the same JS via marker-extraction, mirroring
+    `test_javascript_and_python_authority_grammar_are_identical`.
+    """
+    fixture_bodies = [
+        "Final-Review-Rounds: 0\n",
+        "Final-Review-Rounds: 1\n",
+        "Final-Review-Rounds: 2\n",
+        "Final-Review-Rounds: 3\n",
+        "no declaration here\n",
+        "Final-Review-Rounds: 0\nFinal-Review-Rounds: 1\n",
+        "Final-Review-Rounds:0\n",
+        "Final-Review-Rounds:  2  \n",
+        "prose mentioning Final-Review-Rounds: 1 mid-line\n",
+    ]
+    for body in fixture_bodies:
+        js_result = _js_final_review_rounds(body)
+        py_result = resolve_pr_contract_final_review_rounds(body)
+        assert js_result["satisfied"] == py_result.satisfied, body
+        assert js_result["declaredCount"] == py_result.declared_count, body
+        assert js_result["validCount"] == py_result.valid_count, body
+
+
+def test_builderops_routing_stub_detection_matches_workflow_js() -> None:
+    """Behavioral parity test for the `## BuilderOps Routing` filled-vs-stub check.
+
+    Exercises `resolve_builderops_routing_status` (the canonical Python twin of
+    the `pr-contract` gate's `// builderops-routing:start`/`:end` JS block)
+    against the same JS via marker-extraction.
+    """
+    fixture_cases = [
+        ("## BuilderOps Routing\n- Records/projections/receipts: none\n- Reason: nothing routed\n", True),
+        ("## BuilderOps Routing\n- Records/projections/receipts: <...>\n- Reason: <...>\n", True),
+        ("## BuilderOps Routing\n", True),
+        ("", True),
+        ("- [x] Governance lane\n", False),
+        ("- [x] Docs authoring lane\n", True),
+        (
+            "- [x] Governance lane\n## BuilderOps Routing\n"
+            "- Records/projections/receipts: x\n- Reason: y\n",
+            True,
+        ),
+    ]
+    for body, has_issue_authority in fixture_cases:
+        js_result = _js_builderops_routing(body, has_issue_authority)
+        py_result = resolve_builderops_routing_status(
+            body, has_issue_authority=has_issue_authority
+        )
+        assert js_result["satisfied"] == py_result.satisfied, (body, has_issue_authority)
+        assert js_result["isTier1Lane"] == py_result.is_tier1_lane, (body, has_issue_authority)
+        assert js_result["hasSection"] == py_result.has_section, (body, has_issue_authority)
 
 
 def test_pr_contract_trigger_excludes_review_requested_and_cancels_stale_runs() -> None:
@@ -62,12 +104,6 @@ def test_pr_contract_trigger_excludes_review_requested_and_cancels_stale_runs() 
     concurrency_block = pr_contract_job[: pr_contract_job.index("runs-on:")]
     assert "group: pr-contract-${{ github.event.pull_request.number }}" in concurrency_block
     assert "cancel-in-progress: true" in concurrency_block
-
-
-_TIER1_LANE_REGEX = re.compile(
-    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
-    re.IGNORECASE | re.MULTILINE,
-)
 
 
 def _read_workflow() -> str:
@@ -257,6 +293,61 @@ def _verified_merge_body_digest(body: str) -> str:
     return hashlib.sha256(canonical_body.encode()).hexdigest()
 
 
+def _js_final_review_rounds(body: str) -> dict[str, object]:
+    """Marker-extraction twin runner for `// final-review-rounds:start`/`:end`.
+
+    Mirrors `_js_issue_authority` below: extract the workflow's own pure JS
+    function and run it under Node so the parity assertion exercises the
+    literal CI code, not a hand-copied re-transcription of it.
+    """
+    workflow = _read_workflow()
+    block = workflow.split("// final-review-rounds:start", 1)[1].split(
+        "// final-review-rounds:end", 1
+    )[0]
+    script = (
+        block
+        + "\nconst candidate = JSON.parse(process.argv[1]);"
+        + "\nprocess.stdout.write(JSON.stringify(resolveFinalReviewRounds(candidate)));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script, json.dumps(body)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def _js_builderops_routing(body: str, has_issue_authority: bool) -> dict[str, object]:
+    """Marker-extraction twin runner for `// builderops-routing:start`/`:end`."""
+    workflow = _read_workflow()
+    block = workflow.split("// builderops-routing:start", 1)[1].split(
+        "// builderops-routing:end", 1
+    )[0]
+    script = (
+        block
+        + "\nconst inputs = JSON.parse(process.argv[1]);"
+        + "\nprocess.stdout.write(JSON.stringify("
+        + "resolveBuilderOpsRouting(inputs.body, inputs.hasIssueAuthority)));"
+    )
+    completed = subprocess.run(
+        [
+            "node",
+            "-e",
+            script,
+            json.dumps({"body": body, "hasIssueAuthority": has_issue_authority}),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
 def _js_issue_authority(body: str) -> dict[str, object]:
     workflow = _read_workflow()
     classifier = workflow.split("// authority-classifier:start", 1)[1].split(
@@ -435,29 +526,18 @@ def test_companion_design_audit_handoff_declares_guidance_not_sot() -> None:
     assert "durable design source-of-truth" not in lowered
 
 
-def _has_builderops_routing(body: str) -> bool:
-    match = _BUILDEROPS_ROUTING_REGEX.search(body)
-    if not match:
-        return False
-    section = match.group(0)
-    for pattern in _BUILDEROPS_ROUTING_FIELDS:
-        field = pattern.search(section)
-        if not field:
-            return False
-        value = field.group(1).strip()
-        if not value or re.fullmatch(r"<.*>", value):
-            return False
-    return True
-
-
 def _builderops_routing_satisfied(body: str) -> bool:
-    if _has_builderops_routing(body):
-        return True
-    return (
-        _TIER1_LANE_REGEX.search(body) is not None
-        and not _js_issue_authority(body)["hasIssueAuthority"]
-        and _BUILDEROPS_ROUTING_REGEX.search(body) is None
-    )
+    """Test oracle delegating to the canonical implementation (issue #4272).
+
+    Previously this reimplemented the `## BuilderOps Routing` filled-vs-stub
+    regex a fourth time; it now calls `resolve_builderops_routing_status`
+    directly so this test file cannot silently drift from the workflow's own
+    JS (proven by `test_builderops_routing_stub_detection_matches_workflow_js`).
+    """
+    has_issue_authority = bool(_js_issue_authority(body)["hasIssueAuthority"])
+    return resolve_builderops_routing_status(
+        body, has_issue_authority=has_issue_authority
+    ).satisfied
 
 
 def _governing_issue_identity_satisfied(body: str) -> bool:
@@ -1126,8 +1206,12 @@ def test_workflow_checks_issue_link_before_allowing_tier1_builderops_omission() 
     assert "// authority-classifier:start" in text
     assert "const issueAuthority = classifyIssueAuthority(body);" in text
     assert "isTier1Lane && !hasIssueAuthority && !builderOpsRoutingSection" in text
+    # resolveBuilderOpsRouting is a pure function (defined ahead of body-execution
+    # order, see // builderops-routing:start/:end); the ordering invariant that
+    # matters is the *call site* using the already-classified hasIssueAuthority,
+    # not the function definition.
     assert text.index("const issueAuthority = classifyIssueAuthority(body);") < text.index(
-        "const builderOpsRoutingSatisfied ="
+        "const builderOpsRouting = resolveBuilderOpsRouting(body, hasIssueAuthority);"
     )
 
 
