@@ -2,21 +2,34 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
 
 import pytest
 import yaml
 
+import app.instance.ownership_ledger as ownership_ledger_module
+import app.instance.runtime as runtime_module
 from app.instance._storage_boundary import CapabilityNotReadyError
+from app.instance.filesystem_identity import FilesystemRootIdentity
 from app.instance.ownership_ledger import LedgerError, LedgerKeyError
 from app.instance.instance_state import InstanceStateLayout
-from app.instance.runtime import InstanceRegistryRuntime, _preflight_scalar_rollback
+from app.instance.runtime import (
+    InstanceRegistryRuntime,
+    _finish_instance_state_deployment,
+    _preflight_scalar_rollback,
+)
 from app.instance.scalar_rollback_guard import (
+    _ComposeLoader,
     preflight_scalar_rollback_guard,
     require_native_scalar_launcher,
 )
 from app.instance.vault_registry import AppLocalSettingsStore, RegistryError
 from app.vault.manager import VaultManager
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+from tests.helpers.mvr01c_authority import (
+    establish_authority_window,
+    finish_authority_window,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,9 +50,13 @@ def _runtime(tmp_path):
         rollback_vault_binding_id=registration.vault_binding_id,
         selected_root=root,
     )
+    proof, inventory = establish_authority_window(runtime, tmp_path)
     runtime.activate_authority(
         guard_receipt=receipt,
+        inventory_path=inventory,
+        quiescence_proof=proof,
     )
+    finish_authority_window(runtime, tmp_path, proof, inventory)
     return runtime, registration, root
 
 
@@ -58,7 +75,10 @@ def _scalar_preflight(runtime, registration, root, rollback_path) -> None:
     )
 
 
-def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
+def test_rollback_gateway_and_mounts_enforce_selected_binding(
+    tmp_path,
+    monkeypatch,
+) -> None:
     runtime, registration, root = _runtime(tmp_path)
 
     receipt = preflight_scalar_rollback_guard(
@@ -140,6 +160,32 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
     compose = yaml.safe_load(
         (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
     )
+    rollback_compose = yaml.load(
+        (REPO_ROOT / "docker-compose.scalar-rollback.yml").read_text(
+            encoding="utf-8"
+        ),
+        Loader=_ComposeLoader,
+    )
+    guard_ownership_mount = next(
+        mount
+        for mount in rollback_compose["services"]["scalar-rollback-guard"][
+            "volumes"
+        ]
+        if isinstance(mount, dict)
+        and mount.get("target") == "/app/instance-ownership"
+    )
+    assert guard_ownership_mount["read_only"] is False
+    assert all(
+        not (
+            isinstance(mount, dict)
+            and mount.get("target") == "/app/instance-ownership"
+        )
+        and not (
+            isinstance(mount, str)
+            and "/app/instance-ownership" in mount
+        )
+        for mount in rollback_compose["services"]["api"]["volumes"]
+    )
     for producer in ("api", "worker", "watcher", "heimdal-capture-watch"):
         environment = compose["services"][producer]["environment"]
         rendered = (
@@ -157,7 +203,40 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
         assert rendered["INSTANCE_OWNERSHIP_ROOT"] == "/app/instance-ownership"
 
     selected_mount = tmp_path / "selected-mount"
-    selected_mount.symlink_to(root, target_is_directory=True)
+    selected_mount.mkdir()
+    selected_identity = ownership_ledger_module.resolve_filesystem_root_identity(
+        root
+    )
+    original_resolve = ownership_ledger_module.resolve_filesystem_root_identity
+    original_material = ownership_ledger_module._identity_material
+
+    def bind_aware_resolve(value):
+        if Path(value) == selected_mount:
+            return FilesystemRootIdentity(
+                str(selected_mount),
+                selected_identity.device,
+                selected_identity.inode,
+            )
+        return original_resolve(value)
+
+    def bind_aware_material(value):
+        if Path(value) == selected_mount:
+            return (
+                f"inode:{selected_identity.device}:{selected_identity.inode}",
+                ("inode:container-parent:alias",),
+            )
+        return original_material(value)
+
+    monkeypatch.setattr(
+        ownership_ledger_module,
+        "resolve_filesystem_root_identity",
+        bind_aware_resolve,
+    )
+    monkeypatch.setattr(
+        ownership_ledger_module,
+        "_identity_material",
+        bind_aware_material,
+    )
     rollback_path = tmp_path / "rollback" / "app-local.md"
     _scalar_preflight(runtime, registration, selected_mount, rollback_path)
     projected = AppLocalSettingsStore(rollback_path).load()
@@ -302,6 +381,7 @@ def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
         vault_root=selected_root,
         watcher_vault_path=selected_root,
     )
+    proof, inventory = establish_authority_window(runtime, tmp_path)
     runtime.ledger.reserve(
         channel_id="prod",
         vault_binding_id="pending-binding",
@@ -318,7 +398,127 @@ def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
                 native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
                 rollback_vault_binding_id=registration.vault_binding_id,
                 selected_root=selected_root,
-            )
+            ),
+            inventory_path=inventory,
+            quiescence_proof=proof,
         )
 
     assert runtime.registry.load().authority == "dormant"
+
+
+def test_authority_cutover_requires_stopped_window_at_core_boundary(
+    tmp_path,
+) -> None:
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),
+        tmp_path / "host-global",
+    )
+    selected_root = tmp_path / "selected"
+    selected_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=selected_root,
+        watcher_vault_path=selected_root,
+    )
+    receipt = preflight_scalar_rollback_guard(
+        compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+        rollback_vault_binding_id=registration.vault_binding_id,
+        selected_root=selected_root,
+    )
+
+    with pytest.raises(TypeError, match="inventory_path.*quiescence_proof"):
+        runtime.activate_authority(guard_receipt=receipt)  # type: ignore[call-arg]
+
+    assert runtime.registry.load().authority == "dormant"
+
+
+def test_authority_cutover_serializes_against_deployment_finish(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),
+        tmp_path / "host-global",
+    )
+    selected_root = tmp_path / "selected"
+    selected_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=selected_root,
+        watcher_vault_path=selected_root,
+    )
+    proof, inventory = establish_authority_window(runtime, tmp_path)
+    receipt = preflight_scalar_rollback_guard(
+        compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+        rollback_vault_binding_id=registration.vault_binding_id,
+        selected_root=selected_root,
+    )
+    entered_cutover = threading.Event()
+    release_cutover = threading.Event()
+    entered_finish = threading.Event()
+    failures: list[BaseException] = []
+    original_bind = runtime_module._bind_legacy_owner_inventory_to_proof
+
+    def held_bind(**kwargs):
+        entered_cutover.set()
+        assert release_cutover.wait(timeout=5)
+        return original_bind(**kwargs)
+
+    def observed_finish(**kwargs):
+        del kwargs
+        entered_finish.set()
+        return {}
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_bind_legacy_owner_inventory_to_proof",
+        held_bind,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_finish_instance_state_deployment_locked",
+        observed_finish,
+    )
+
+    def activate() -> None:
+        try:
+            runtime.activate_authority(
+                guard_receipt=receipt,
+                inventory_path=inventory,
+                quiescence_proof=proof,
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    def finish() -> None:
+        try:
+            _finish_instance_state_deployment(
+                channel="prod",
+                instance_state_root=runtime.layout.root.parent,
+                host_global_root=runtime.ledger.root,
+                legacy_path=tmp_path / "missing-legacy.md",
+                inventory_path=inventory,
+                backup_root=tmp_path / "backup",
+                restore_root=None,
+                quiescence_proof=proof,
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    cutover_thread = threading.Thread(target=activate)
+    finish_thread = threading.Thread(target=finish)
+    cutover_thread.start()
+    assert entered_cutover.wait(timeout=5)
+    finish_thread.start()
+    assert not entered_finish.wait(timeout=0.1)
+    release_cutover.set()
+    cutover_thread.join(timeout=5)
+    finish_thread.join(timeout=5)
+
+    assert not cutover_thread.is_alive()
+    assert not finish_thread.is_alive()
+    assert failures == []
+    assert entered_finish.is_set()
+    assert runtime.registry.load().authority == "active"

@@ -102,6 +102,11 @@ The cutover runs before deployment finalization clears the host-global lease/res
 requires the same bound quiescence proof, drained-owner inventory, producer-transition lock, and
 exact active ownership coverage. Pending ownership or an unmatched selected-root filesystem
 identity therefore blocks the authority revision.
+Deployment finalization takes that same producer-transition lock before it can clear the proof,
+lease, or fence, so it cannot race past the authority commit. Newly unsealed registration
+producers reuse a unique pending reservation for the same physical root and recover a
+registry-committed pending lease on retry; crashes on either side of the registry commit do not
+mint a second binding or strand ownership.
 
 Supported container rollback into a previous scalar image uses
 `docker-compose.scalar-rollback.yml`: the old API publishes no direct host port, the base
@@ -110,10 +115,13 @@ old API is reachable from the host only through the authenticated gateway. It mo
 selected content root at `/app/selected-vault`. The legacy projection translates only that
 registration's host path to the container alias and authenticates both the canonical registry
 export and translated projection, so roll-forward restores the original binding identity rather
-than adopting a container path. A current guard image revalidates the host-mounted base, overlay,
+than adopting a container path. The ledger validates that alias by its materialized physical-root
+fingerprint while separately authenticating the sealed host path and ancestor lineage; container
+ancestor names are never treated as host authority. A current guard image revalidates the host-mounted base, overlay,
 and nginx bytes that Docker actually activates (not image-local copies), materializes the exact
 legacy projection, and installs a host-key-authenticated scalar session before the old API starts. That
-durable session excludes
+trusted one-shot guard alone receives writable ownership state so it can take the shared lock and
+sign the session; the previous-image API receives no ownership/key mount. The durable session excludes
 current registry writers for the lifetime of the old image; the old image receives neither the
 host key nor a writable registry mount. Native rollback currently fails closed: the root-owned
 `scripts/scalar_rollback_native.sh` launcher never starts an old image until an authenticated

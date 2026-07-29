@@ -8,7 +8,9 @@ services:
       - type: bind
         source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
         target: /app/instance-ownership
-        read_only: true
+        # Trusted current-image guard signs the fork and takes the shared ledger
+        # lock. The previous-image API still receives no ownership/key mount.
+        read_only: false
         bind:
           create_host_path: false
       - "scalar-rollback-legacy:/app/scalar-rollback"

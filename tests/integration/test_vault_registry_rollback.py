@@ -109,8 +109,24 @@ def _active_runtime(tmp_path):
     root = tmp_path / "one"
     root.mkdir()
     first = runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, inventory, _ = _deployment_authority(
+        runtime,
+        tmp_path / "missing-legacy.md",
+    )
     runtime.activate_authority(
         guard_receipt=_guard_receipt(first.vault_binding_id, root),
+        inventory_path=inventory,
+        quiescence_proof=proof,
+    )
+    _finish_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        inventory_path=inventory,
+        backup_root=tmp_path / "authority-backup",
+        restore_root=None,
+        quiescence_proof=proof,
     )
     return runtime, first
 
@@ -309,10 +325,16 @@ def test_01c_unseals_second_registration_only_with_complete_rollback_floor(
     first_root.mkdir()
     first = runtime.bootstrap_env_binding(vault_root=first_root, watcher_vault_path=first_root)
     before = runtime.layout.registry_path.read_bytes()
+    proof, inventory, _ = _deployment_authority(
+        runtime,
+        tmp_path / "missing-legacy.md",
+    )
 
     with pytest.raises(RegistryError, match="injected partial"):
         runtime.activate_authority(
             guard_receipt=_guard_receipt(first.vault_binding_id, first_root),
+            inventory_path=inventory,
+            quiescence_proof=proof,
             inject_failure_before_commit=True,
         )
     assert runtime.layout.registry_path.read_bytes() == before
@@ -321,6 +343,8 @@ def test_01c_unseals_second_registration_only_with_complete_rollback_floor(
 
     runtime.activate_authority(
         guard_receipt=_guard_receipt(first.vault_binding_id, first_root),
+        inventory_path=inventory,
+        quiescence_proof=proof,
     )
     for producer in ("picker", "api", "cli", "import", "bootstrap", "direct-service"):
         root = tmp_path / producer
@@ -353,6 +377,64 @@ def test_01c_unseals_second_registration_only_with_complete_rollback_floor(
         item.path == str(nested)
         for item in runtime.registry.load().registrations.values()
     )
+
+
+def test_production_registration_retries_reserve_only_crash(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, _ = _active_runtime(tmp_path)
+    root = tmp_path / "reserve-crash"
+    root.mkdir()
+    original_register = runtime.registry.register
+
+    def fail_after_reserve(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("injected crash after ownership reserve")
+
+    monkeypatch.setattr(runtime.registry, "register", fail_after_reserve)
+    with pytest.raises(RuntimeError, match="after ownership reserve"):
+        runtime.production_register(root, producer="picker")
+    pending = [
+        lease
+        for lease in runtime.ledger.load().leases.values()
+        if lease.state == "pending"
+    ]
+    assert len(pending) == 1
+
+    monkeypatch.setattr(runtime.registry, "register", original_register)
+    registered = runtime.production_register(root, producer="picker")
+    assert registered.vault_binding_id == pending[0].vault_binding_id
+    assert runtime.ledger.active_owner(registered.vault_binding_id) is not None
+
+
+def test_production_registration_retries_registry_commit_crash(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, _ = _active_runtime(tmp_path)
+    root = tmp_path / "registry-commit-crash"
+    root.mkdir()
+    original_activate = runtime.ledger.activate
+
+    def fail_after_registry_commit(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("injected crash after registry commit")
+
+    monkeypatch.setattr(runtime.ledger, "activate", fail_after_registry_commit)
+    with pytest.raises(RuntimeError, match="after registry commit"):
+        runtime.production_register(root, producer="picker")
+    committed = next(
+        registration
+        for registration in runtime.registry.load().registrations.values()
+        if registration.path == str(root)
+    )
+    assert runtime.ledger.load().leases[committed.vault_binding_id].state == "pending"
+
+    monkeypatch.setattr(runtime.ledger, "activate", original_activate)
+    retried = runtime.production_register(root, producer="picker")
+    assert retried == committed
+    assert runtime.ledger.active_owner(committed.vault_binding_id) is not None
 
 
 def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
@@ -469,4 +551,43 @@ def test_roll_forward_recovers_crash_after_registry_generation_write(
 
     merged = runtime.merge_previous_scalar_image(rollback_path)
     assert merged.revision == before.revision + 1
+    assert not runtime.registry.scalar_rollback_session_path.exists()
+
+
+def test_roll_forward_recovers_committed_journal_before_cleanup(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, registration = _active_runtime(tmp_path)
+    rollback_path = tmp_path / "rollback-committed" / "app-local.md"
+    _start_scalar_runtime(
+        runtime,
+        registration,
+        Path(registration.path),
+        rollback_path,
+    )
+    before = runtime.registry.load()
+    original_clear = runtime.registry._clear_transaction_journal
+    calls = 0
+
+    def fail_first_cleanup():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("injected crash before committed journal cleanup")
+        original_clear()
+
+    monkeypatch.setattr(
+        runtime.registry,
+        "_clear_transaction_journal",
+        fail_first_cleanup,
+    )
+    merged = runtime.merge_previous_scalar_image(rollback_path)
+    assert merged.revision == before.revision + 1
+    assert runtime.registry.transaction_path.is_file()
+    assert not runtime.registry.scalar_rollback_session_path.exists()
+
+    recovered = runtime.registry.load()
+    assert recovered.revision == merged.revision
+    assert not runtime.registry.transaction_path.exists()
     assert not runtime.registry.scalar_rollback_session_path.exists()

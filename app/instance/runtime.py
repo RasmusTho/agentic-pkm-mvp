@@ -53,6 +53,25 @@ from app.instance.vault_registry import (
 )
 
 
+@contextmanager
+def _producer_transition_locked(layout: InstanceStateLayout) -> Iterator[None]:
+    """Serialize registry producer transitions and deployment finalization."""
+
+    lock_path = layout.root / "bootstrap.lock"
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 class InstanceRegistryRuntime:
     """MVR-01B mechanical runtime; production authority remains legacy scalar."""
 
@@ -145,7 +164,20 @@ class InstanceRegistryRuntime:
                 producer="bootstrap",
                 current=current,
             )
-        registration = self._new_registration(Path(root_identity.canonical_path))
+        pending = (
+            self.ledger.pending_registration(
+                channel_id=self.layout.channel_id,
+                root=Path(root_identity.canonical_path),
+            )
+            if self.ledger.path.is_file() and self.ledger.key_path.is_file()
+            else None
+        )
+        registration = self._new_registration(
+            Path(root_identity.canonical_path),
+            vault_binding_id=(
+                pending.vault_binding_id if pending is not None else None
+            ),
+        )
         self.ledger.reserve(
             channel_id=self.layout.channel_id,
             vault_binding_id=registration.vault_binding_id,
@@ -175,19 +207,8 @@ class InstanceRegistryRuntime:
 
     @contextmanager
     def _bootstrap_locked(self) -> Iterator[None]:
-        lock_path = self.layout.root / "bootstrap.lock"
-        descriptor = os.open(
-            lock_path,
-            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "a+b", closefd=True) as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with _producer_transition_locked(self.layout):
+            yield
 
     def prepare_nested_registration(self, child_root: Path) -> VaultRegistration:
         del child_root
@@ -225,7 +246,30 @@ class InstanceRegistryRuntime:
         if producer not in {"picker", "api", "cli", "import", "bootstrap", "direct-service"}:
             raise RegistryError("unknown registry producer")
         self.registry.require_no_scalar_rollback_session()
-        registration = self._new_registration(path)
+        root_identity = resolve_filesystem_root_identity(path)
+        canonical_root = Path(root_identity.canonical_path)
+        for existing in current.registrations.values():
+            if same_filesystem_root(
+                resolve_filesystem_root_identity(existing.path),
+                root_identity,
+            ):
+                self.ledger.recover_or_require_active(
+                    existing.vault_binding_id,
+                    channel_id=self.layout.channel_id,
+                    root=canonical_root,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
+                return existing
+        pending = self.ledger.pending_registration(
+            channel_id=self.layout.channel_id,
+            root=canonical_root,
+        )
+        registration = self._new_registration(
+            canonical_root,
+            vault_binding_id=(
+                pending.vault_binding_id if pending is not None else None
+            ),
+        )
         validate_registry_disjoint_from_content(
             self.layout.registry_path,
             [Path(item.path) for item in current.registrations.values()]
@@ -253,6 +297,8 @@ class InstanceRegistryRuntime:
         self,
         *,
         guard_receipt: ScalarRollbackGuardReceipt,
+        inventory_path: Path,
+        quiescence_proof: DeploymentQuiescenceProof,
         inject_failure_before_commit: bool = False,
     ) -> RegistrySnapshot:
         """Install all rollback guards in one durable registry activation."""
@@ -260,6 +306,13 @@ class InstanceRegistryRuntime:
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
         with self._bootstrap_locked():
+            bound_proof = _bind_legacy_owner_inventory_to_proof(
+                inventory_path=inventory_path,
+                quiescence_proof=quiescence_proof,
+                channel=self.layout.channel_id,
+                host_global_root=self.ledger.root,
+            )
+            bound_proof.require_valid(channel_id=self.layout.channel_id)
             guard_receipt.revalidate()
             current = self.registry.load()
             target_id = guard_receipt.rollback_vault_binding_id
@@ -512,10 +565,15 @@ class InstanceRegistryRuntime:
         )
         return updated
 
-    def _new_registration(self, root: Path) -> VaultRegistration:
+    def _new_registration(
+        self,
+        root: Path,
+        *,
+        vault_binding_id: str | None = None,
+    ) -> VaultRegistration:
         vault_id, local_instance_id = _read_vault_identity(root)
         identity = resolve_filesystem_root_identity(root)
-        binding_id = f"binding-{uuid4()}"
+        binding_id = vault_binding_id or f"binding-{uuid4()}"
         return VaultRegistration(
             vault_binding_id=binding_id,
             ref=f"path:{identity.canonical_path}",
@@ -778,21 +836,10 @@ def _activate_mvr01c_authority(
     compose_overlay: Path,
     gateway_config: Path,
     native_launcher: Path,
-    inventory_path: Path | None = None,
-    quiescence_proof_path: Path | None = None,
+    inventory_path: Path,
+    quiescence_proof_path: Path,
 ) -> int:
-    if (inventory_path is None) != (quiescence_proof_path is None):
-        raise InstanceStatePreflightError(
-            "authority cutover requires complete stopped-window proof"
-        )
-    if inventory_path is not None and quiescence_proof_path is not None:
-        proof = _load_deployment_quiescence_proof(quiescence_proof_path)
-        _bind_legacy_owner_inventory_to_proof(
-            inventory_path=inventory_path,
-            quiescence_proof=proof,
-            channel=channel,
-            host_global_root=host_global_root,
-        )
+    proof = _load_deployment_quiescence_proof(quiescence_proof_path)
     runtime = InstanceRegistryRuntime.for_paths(
         InstanceStateLayout.for_channel(instance_state_root, channel),
         host_global_root,
@@ -806,7 +853,11 @@ def _activate_mvr01c_authority(
         rollback_vault_binding_id=rollback_vault_binding_id,
         selected_root=selected_root,
     )
-    activated = runtime.activate_authority(guard_receipt=receipt)
+    activated = runtime.activate_authority(
+        guard_receipt=receipt,
+        inventory_path=inventory_path,
+        quiescence_proof=proof,
+    )
     print(
         json.dumps(
             {
@@ -1374,6 +1425,35 @@ def _load_legacy_owner_inventory(
 
 
 def _finish_instance_state_deployment(
+    *,
+    channel: str,
+    instance_state_root: Path,
+    host_global_root: Path,
+    legacy_path: Path,
+    inventory_path: Path,
+    backup_root: Path,
+    restore_root: Path | None,
+    quiescence_proof: DeploymentQuiescenceProof | None,
+) -> dict[str, object]:
+    """Serialize finalization against authority and other producer transitions."""
+
+    state_mount = _assert_mount_root(instance_state_root, "instance-state")
+    layout = InstanceStateLayout.for_channel(state_mount, channel)
+    layout.require_existing()
+    with _producer_transition_locked(layout):
+        return _finish_instance_state_deployment_locked(
+            channel=channel,
+            instance_state_root=state_mount,
+            host_global_root=host_global_root,
+            legacy_path=legacy_path,
+            inventory_path=inventory_path,
+            backup_root=backup_root,
+            restore_root=restore_root,
+            quiescence_proof=quiescence_proof,
+        )
+
+
+def _finish_instance_state_deployment_locked(
     *,
     channel: str,
     instance_state_root: Path,

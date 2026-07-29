@@ -219,14 +219,41 @@ class OwnershipLedger:
                 )
             for binding_id, root in registrations.items():
                 lease = channel_leases[binding_id]
-                if root is not None and not self._matches_complete_root_identity(
-                    lease,
-                    root,
-                    key,
+                if not self._has_complete_self_identity(lease, key):
+                    raise LedgerError(
+                        "scalar rollback registration ownership is inconsistent"
+                    )
+                if root is not None and not self._matches_materialized_root(
+                    lease, root, key
                 ):
                     raise LedgerError(
                         "scalar rollback registration ownership is inconsistent"
                     )
+
+    def pending_registration(
+        self,
+        *,
+        channel_id: str,
+        root: Path,
+    ) -> OwnershipLease | None:
+        """Return the unique prepared registration for a physical root, if any."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            matches = [
+                lease
+                for lease in current.leases.values()
+                if lease.channel_id == channel_id
+                and lease.state == "pending"
+                and self._matches_complete_root_identity(lease, root, key)
+            ]
+            if len(matches) > 1:
+                raise LedgerError(
+                    "multiple pending ownership reservations match one registration root"
+                )
+            return matches[0] if matches else None
 
     def resolve_live_owner_bindings(
         self,
@@ -966,6 +993,23 @@ class OwnershipLedger:
             lease.root_fingerprint == expected.root_fingerprint
             and lease.ancestor_fingerprints == expected.ancestor_fingerprints
             and sealed_root == Path(root).expanduser().resolve(strict=False)
+        )
+
+    def _matches_materialized_root(
+        self,
+        lease: OwnershipLease,
+        root: Path,
+        key: _KeyMaterial,
+    ) -> bool:
+        """Match a bind-mounted alias by physical root without trusting its path."""
+
+        identity = resolve_filesystem_root_identity(root)
+        if not identity.materialized:
+            return False
+        primary, _ = _identity_material(root)
+        return hmac.compare_digest(
+            lease.root_fingerprint,
+            _fingerprint(primary, key.secret),
         )
 
     def _has_complete_self_identity(

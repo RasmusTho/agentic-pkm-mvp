@@ -22,6 +22,10 @@ from app.instance.vault_registry import (
 )
 from app.vault.markdown_settings import MarkdownSettingsStore
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+from tests.helpers.mvr01c_authority import (
+    establish_authority_window,
+    finish_authority_window,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -88,7 +92,13 @@ def test_parent_registry_acceptance(tmp_path) -> None:
         rollback_vault_binding_id=first.vault_binding_id,
         selected_root=first_root,
     )
-    activated = runtime.activate_authority(guard_receipt=receipt)
+    proof, inventory = establish_authority_window(runtime, tmp_path)
+    activated = runtime.activate_authority(
+        guard_receipt=receipt,
+        inventory_path=inventory,
+        quiescence_proof=proof,
+    )
+    finish_authority_window(runtime, tmp_path, proof, inventory)
     assert activated.authority == "active"
     assert activated.extensions["futureTopLevel"] == {"preserved": True}
 
