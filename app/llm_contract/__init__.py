@@ -21,6 +21,8 @@ from pydantic import (
     StringConstraints,
     model_validator,
 )
+from referencing import Registry
+from referencing.exceptions import Unresolvable as _UnresolvableSchemaReference
 
 
 NonEmptyString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -222,16 +224,38 @@ class SchemaValidator(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
+def _validate_local_schema_references(schema_ref: str, value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if key in {"$ref", "$dynamicRef"} and (
+                not isinstance(nested, str) or not nested.startswith("#")
+            ):
+                raise SchemaValidationError(
+                    schema_ref=schema_ref,
+                    reason=(
+                        f"non-local {key} is forbidden; "
+                        "only same-document fragment references are allowed"
+                    ),
+                )
+            _validate_local_schema_references(schema_ref, nested)
+    elif isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        for nested in value:
+            _validate_local_schema_references(schema_ref, nested)
+
+
 def validate_schema_payload(
     schema_ref: str,
     schema: Mapping[str, Any],
     payload: Any,
 ) -> dict[str, Any]:
-    """Validate an object against caller-supplied JSON Schema without a registry."""
+    """Validate an object against a self-contained caller-supplied JSON Schema."""
 
     if not schema_ref.strip():
         raise SchemaValidationError(schema_ref=schema_ref, reason="schema_ref is empty")
     normalized_schema = dict(schema)
+    _validate_local_schema_references(schema_ref, normalized_schema)
     try:
         Draft202012Validator.check_schema(normalized_schema)
     except _JsonSchemaError as exc:
@@ -246,11 +270,19 @@ def validate_schema_payload(
         )
     normalized_payload = dict(payload)
     try:
-        Draft202012Validator(normalized_schema).validate(normalized_payload)
+        Draft202012Validator(
+            normalized_schema,
+            registry=Registry(),
+        ).validate(normalized_payload)
     except _JsonSchemaViolation as exc:
         raise SchemaValidationError(
             schema_ref=schema_ref,
             reason=f"schema violation: {exc.message}",
+        ) from exc
+    except _UnresolvableSchemaReference as exc:
+        raise SchemaValidationError(
+            schema_ref=schema_ref,
+            reason=f"unresolvable local schema reference: {exc}",
         ) from exc
     return normalized_payload
 

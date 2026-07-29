@@ -217,6 +217,14 @@ def test_settings_facade_and_shared_adapters_have_safe_owners() -> None:
         assert "tests/services/test_companion_eligibility.py" in focused_selection.targets
 
 
+def test_application_package_initializer_change_selects_full_suite() -> None:
+    selection = select_tests(["app/__init__.py"])
+
+    assert selection.full_suite is True
+    assert selection.unowned_paths == ()
+    assert selection.reason == "shared CI/test/runtime configuration changed"
+
+
 def test_settings_adapter_cannot_mask_unknown_runtime_path() -> None:
     selection = select_tests(
         [

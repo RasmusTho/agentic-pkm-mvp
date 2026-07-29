@@ -31,6 +31,7 @@ FULL_SUITE_REASONS = (
 FULL_SUITE_EXACT = {
     # Shared CLI registration and path resolution affect many runtime
     # subsystems. Never narrow their coverage to a single feature owner.
+    "app/__init__.py",
     "app/cli/__init__.py",
     "app/config/paths.py",
     "conftest.py",

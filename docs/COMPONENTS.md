@@ -112,10 +112,13 @@ Interpretation note:
   capability requirements/results, explicit degradation provenance, schema validation, adapter/result
   protocol, closed failure classes, and ADR-0063's five fallback requirements. The leaf package owns
   no routing policy, mutable registry, credentials, provider/session transport, health receipts, or
-  store. Builder Model Inquiry retains its concrete adapters and re-exports the moved compatibility
-  names from `app.llm_contract`; `app/ports/` remains rejected because importing its package executes
-  Product vault/service dependencies. Maturity: Active contract surface; runtime adoption starts in
-  later Model Access Substrate slices.
+  store. Importing it loads no Product or Builder runtime module and does not resolve provider
+  configuration. Its JSON Schema validator permits only same-document fragment references, uses a
+  no-retrieval registry, and normalizes invalid payloads and unresolvable references to
+  `SchemaValidationError`. Builder Model Inquiry retains its concrete adapters and re-exports the
+  moved compatibility names from `app.llm_contract`; `app/ports/` remains rejected because importing
+  its package executes Product vault/service dependencies. Maturity: Active contract surface;
+  runtime adoption starts in later Model Access Substrate slices.
 
 Direction note:
 - ASK remains a valid current runtime surface,
