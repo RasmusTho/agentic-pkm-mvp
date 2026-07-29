@@ -1,5 +1,5 @@
-State: Pre-filing draft (authored 2026-07-29). This header is updated with the live issue number in the same pass that files the parent feature issue on GitHub.
-Doc role: Parent feature issue draft (feature-breakdown lane)
+State: Filed 2026-07-29 as live parent validation hub [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383) (`agent:blocked`). GitHub issue #4383 is now the authoritative backlog and validation surface; this file records the authored contract, and the live issue body carries the child table with filed numbers.
+Doc role: Parent feature issue contract (feature-breakdown lane)
 
 # Parent feature issue — Cross-Device Capture & Live Meeting
 
@@ -129,9 +129,22 @@ vertical.
 
 ---
 
-## Relationship to child issues (recorded at filing time)
+## Relationship to child issues (recorded at filing, 2026-07-29)
 
-Hub children: CDLM-01/02/06/07/08/10. Bifrost children (in `RasmusTho/bifrost`):
-CDLM-03/04/05/09. Only CDLM-01 files as `agent:ready`; every other child and this parent file as
-`agent:blocked` with their named prerequisites. Child issue numbers are recorded here by the
-filing pass.
+| Order | ID | Issue | Initial label |
+| --- | --- | --- | --- |
+| 1 | CDLM-01 | hub [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384) | `agent:ready` |
+| 2 | CDLM-02 | hub [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385) | `agent:blocked` |
+| 3 | CDLM-03 | [bifrost#57](https://github.com/RasmusTho/bifrost/issues/57) | `agent:blocked` |
+| 4 | CDLM-04 | [bifrost#58](https://github.com/RasmusTho/bifrost/issues/58) | `agent:blocked` |
+| 5 | CDLM-05 | [bifrost#59](https://github.com/RasmusTho/bifrost/issues/59) | `agent:blocked` |
+| 6 | CDLM-06 | hub [#4386](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386) | `agent:blocked` |
+| 7 | CDLM-07 | hub [#4387](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4387) | `agent:blocked` |
+| 8 | CDLM-08 | hub [#4388](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4388) | `agent:blocked` |
+| 9 | CDLM-09 | [bifrost#60](https://github.com/RasmusTho/bifrost/issues/60) | `agent:blocked` |
+| 10 | CDLM-10 | hub [#4389](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4389) | `agent:blocked` |
+
+The parent (#4383) is `agent:blocked` as a validation hub, never a pickup issue. Only CDLM-01 was
+filed `agent:ready`, after strict readiness validation passed on its body
+(`scripts/validate_issue_readiness.py` → `ready_candidate`; `scripts/validate_source_anchors.py`
+→ pass). Every other child is `agent:blocked` on its named prerequisite's acceptance receipt.

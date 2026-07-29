@@ -1,4 +1,4 @@
-State: Filed target-state specification (authored 2026-07-29; parent feature issue and child slices not yet filed — this header is updated in the same pass that files them). No runtime behavior described here is implemented until a child PR delivers it.
+State: Filed target-state specification (authored 2026-07-29). Parent validation hub #4383 (`agent:blocked`); children hub #4384–#4389 and bifrost #57–#60 filed 2026-07-29; only CDLM-01 (#4384) is `agent:ready`. No runtime behavior described here is implemented until a child PR delivers it.
 Doc role: Specification directory (feature-breakdown lane)
 Authority: Owns the bounded implementation order, cross-task durability/authority invariants, and acceptance path for the first Bifrost product vertical: durable cross-device capture ingress plus live meeting analysis. Subordinate to `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` (ingestion organ, hub-side ASR, Topology C), `docs/adr/ADR-0060-capture-posture-b-full-voice-identity.md` (posture target and consent classes), `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` / `docs/adr/ADR-0056-mimer-client-contract-and-transports.md` / `docs/contracts/MIMER_CLIENT_CONTRACT.md` (transports, writer discipline, Sources zone), and the entity-review authority boundary in `docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md`. ADRs win on conflict.
 Owner: Product/Runtime — Heimdal ingestion + Mimer meeting cognition + Bifrost client surfaces
@@ -177,7 +177,11 @@ receipts are recorded on the parent issue.
   receipt-gated retention, stated honestly.
 - **bifrost#21 (HCAP-09 UAT)** remains later validation work and is blocked on this vertical's
   foundation (its body carries the 2026-07-29 product-priority reconciliation); its journeys will
-  compose with the outbox and receipt states once CDLM-03/05 land.
+  compose with the outbox and receipt states once CDLM-03/05 land. Its label was corrected
+  `agent:ready` → `agent:blocked` on 2026-07-29, naming bifrost#57/#59 and hub #4389 as blockers.
+- **HCAP-08 (#3191) is not absorbed.** That issue keeps proving the Model-1 watched-folder round
+  trip; CDLM-10 (#4389) proves the receipt-gated outbox lane. The boundary is recorded as a
+  comment on #3191 so neither re-proves the other's lane.
 - **EXP-1 / Model-2 trigger.** The owner's product-priority directive resolves the Model-2 build
   trigger for session/segment transfer (see Transport ruling above). EXP-1's memo-latency
   observation in HCAP-08 remains informative, no longer gating.
@@ -200,11 +204,20 @@ The parent feature issue can be closed when all of the following hold:
 
 ## Relationship to GitHub issues
 
-- **Parent / validation hub:** filed in the hub repo by the same pass that lands this directory;
-  starts `agent:blocked` (validation hub, never a pickup issue). The header above is updated with
-  the live issue number in that pass.
-- **Hub children:** CDLM-01/02/06/07/08/10 as hub-repo issues; **Bifrost children:**
-  CDLM-03/04/05/09 as `RasmusTho/bifrost` issues (same split as B3).
+- **Parent / validation hub:** [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383),
+  filed 2026-07-29 with `agent:blocked` — a validation hub, never a pickup issue. It carries the
+  live child table, the capability acceptance ledger, and the G-CI execution gate.
+- **Hub children:** CDLM-01 [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384)
+  (`agent:ready`), CDLM-02 [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385),
+  CDLM-06 [#4386](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386),
+  CDLM-07 [#4387](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4387),
+  CDLM-08 [#4388](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4388),
+  CDLM-10 [#4389](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4389).
+- **Bifrost children:** CDLM-03 [bifrost#57](https://github.com/RasmusTho/bifrost/issues/57),
+  CDLM-04 [bifrost#58](https://github.com/RasmusTho/bifrost/issues/58),
+  CDLM-05 [bifrost#59](https://github.com/RasmusTho/bifrost/issues/59),
+  CDLM-09 [bifrost#60](https://github.com/RasmusTho/bifrost/issues/60) (same repo split as B3).
+  Every child except CDLM-01 is `agent:blocked` on its named prerequisite's acceptance receipt.
 - **Adjacent, not owned here:** #4362 (capture-watch env delivery bug) and #4369 (locate the
   legacy recording path — owner-gated) repair the Model-1 floor; bifrost#52 (CI runs the wrong
   scheme and masks xcodebuild failures) is an execution gate below; #3026/B3 remains the audio
