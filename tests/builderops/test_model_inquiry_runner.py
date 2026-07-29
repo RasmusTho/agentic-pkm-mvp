@@ -578,6 +578,15 @@ def test_credential_failure_identity_is_enforced_iff_at_persistence_boundary() -
             "credential_identity_ref": "anthropic.api-key",
         }
     )
+    with pytest.raises(BuilderOpsValidationError, match="exact typed field set"):
+        _validate_adapter_failure_diagnostic(
+            {
+                "adapter_id": "fixture-adapter",
+                "adapter_failure_class": "credential_unavailable",
+                "credential_identity_ref": "anthropic.api-key",
+                "adapter_exit_code": 1,
+            }
+        )
 
 
 @dataclass

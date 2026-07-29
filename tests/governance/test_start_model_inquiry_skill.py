@@ -113,6 +113,63 @@ def test_local_launcher_emits_terminal_provider_error_json(
     assert "credential-sentinel" not in json.dumps(payload)
 
 
+def _typed_credential_terminal() -> dict[str, object]:
+    return {
+        "schema": "builderops.model-inquiry-desktop-launch.v1",
+        "inquiry_id": "inq_typed",
+        "final_state": "provider_error",
+        "terminal_receipt_id": "receipt_typed",
+        "human_readable_report": "/safe/report.md",
+        "preflight": {"vault": "available"},
+        "diagnostic": {
+            "adapter_id": "anthropic-claude-fable-5",
+            "adapter_failure_class": "credential_unavailable",
+            "credential_identity_ref": "anthropic.api-key",
+        },
+    }
+
+
+def test_desktop_terminal_classifier_accepts_only_exact_typed_credential_failure() -> None:
+    valid = _typed_credential_terminal()
+    serialized = json.dumps(valid)
+
+    assert start_model_inquiry._launcher_exit_code(valid) == 1
+    assert start_model_inquiry.is_valid_desktop_terminal_response(1, serialized)
+    assert not start_model_inquiry.is_valid_desktop_terminal_response(0, serialized)
+    assert not start_model_inquiry.is_valid_desktop_terminal_response(2, serialized)
+    assert not start_model_inquiry.is_valid_desktop_terminal_response(1, "{not-json")
+
+    invalid_payloads: list[dict[str, object]] = []
+    for missing_field in ("adapter_id", "credential_identity_ref"):
+        candidate = json.loads(serialized)
+        del candidate["diagnostic"][missing_field]
+        invalid_payloads.append(candidate)
+    for bad_adapter_id in ("", "/tmp/adapter", "adapter secret"):
+        candidate = json.loads(serialized)
+        candidate["diagnostic"]["adapter_id"] = bad_adapter_id
+        invalid_payloads.append(candidate)
+    for bad_credential_ref in ("", "/tmp/key", "credential-sentinel", "ANTHROPIC_API_KEY"):
+        candidate = json.loads(serialized)
+        candidate["diagnostic"]["credential_identity_ref"] = bad_credential_ref
+        invalid_payloads.append(candidate)
+    extra_diagnostic = json.loads(serialized)
+    extra_diagnostic["diagnostic"]["adapter_exit_code"] = 1
+    invalid_payloads.append(extra_diagnostic)
+    wrong_final_state = json.loads(serialized)
+    wrong_final_state["final_state"] = "consensus"
+    invalid_payloads.append(wrong_final_state)
+    extra_top_level = json.loads(serialized)
+    extra_top_level["unexpected"] = "field"
+    invalid_payloads.append(extra_top_level)
+
+    for invalid in invalid_payloads:
+        assert start_model_inquiry._launcher_exit_code(invalid) == 2
+        assert not start_model_inquiry.is_valid_desktop_terminal_response(
+            1,
+            json.dumps(invalid),
+        )
+
+
 def test_launcher_fails_closed_on_an_absent_declared_credential(
     tmp_path: Path,
 ) -> None:
@@ -176,7 +233,7 @@ else:
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 1, result.stderr
     payload = json.loads(result.stdout)
     assert payload["final_state"] == "provider_error"
     assert payload["diagnostic"] == {
@@ -277,6 +334,8 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "Do not register remote lock release until the launch outcome is known",
             "Do not release the remote lock after an ambiguous launcher outcome",
             "high-reasoning profile",
+            "exit status 1",
+            "credential_unavailable",
         ):
             assert contract_field in skill
         for required_boundary in (

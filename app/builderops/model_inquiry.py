@@ -2093,6 +2093,14 @@ def _validate_adapter_failure_diagnostic(value: Any) -> None:
         raise BuilderOpsValidationError(
             "credential_unavailable and credential_identity_ref must appear together"
         )
+    if failure_class == "credential_unavailable" and set(value) != {
+        "adapter_id",
+        "adapter_failure_class",
+        "credential_identity_ref",
+    }:
+        raise BuilderOpsValidationError(
+            "credential_unavailable diagnostic must use the exact typed field set"
+        )
     if optional_exit_code in value:
         exit_code = value[optional_exit_code]
         if (
@@ -2101,6 +2109,11 @@ def _validate_adapter_failure_diagnostic(value: Any) -> None:
             or not 1 <= exit_code <= 255
         ):
             raise BuilderOpsValidationError("invalid adapter exit code")
+
+
+def validate_adapter_failure_diagnostic(value: Any) -> None:
+    """Validate the persisted closed diagnostic contract at another boundary."""
+    _validate_adapter_failure_diagnostic(value)
 
 
 def _fsync_directory(path: Path) -> None:

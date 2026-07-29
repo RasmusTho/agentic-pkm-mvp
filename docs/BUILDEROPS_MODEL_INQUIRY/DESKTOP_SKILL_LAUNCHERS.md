@@ -56,8 +56,14 @@ skill packages neither provision nor access credential values. If that bootstrap
 validate a declared API credential, the fixed Model Inquiry launcher passes only the logical
 credential identifier to the runner. The runner then persists a terminal
 `provider_error`/`credential_unavailable` receipt before any adapter can run; no credential value,
-provider request, subscription command, or alternate provider participates in that handoff. A
-failed copy or launcher command,
+provider request, subscription command, or alternate provider participates in that handoff. The
+launcher returns that complete receipt JSON with exit status 1. Desktop skills accept only that
+exact status together with `final_state=provider_error`, a `credential_unavailable` diagnostic, and
+all required receipt fields as a valid terminal failure. The diagnostic has the exact persisted
+field set (`adapter_id`, `adapter_failure_class`, `credential_identity_ref`), validates the safe
+adapter ID and declared logical-secret grammars, and permits no extra field or adapter exit code.
+The exit-1 top-level object likewise uses only the declared desktop-launch schema fields. Only then
+do callers release single-flight staging, report the failure, and stop. A failed copy or any other launcher error,
 empty stdout, malformed/non-object JSON, or absent/empty response field fails loudly: report the
 error and stop. Do not retry, inspect the vault for a substitute response, or fall back to an
 in-chat inquiry.
@@ -70,18 +76,18 @@ boundary and cannot overwrite another inquiry's question.
 
 After lock acquisition, local temporary-file cleanup is a registered `finally` action. The remote
 or proven-local staged question and lock are released only when staging failed before the launcher
-attempt began, or when the launcher returned exit zero and exactly one non-empty JSON object with
-non-empty string values for `inquiry_id`, `final_state`, `terminal_receipt_id`, and
-`human_readable_report`. A transport or launcher failure, empty stdout, malformed/non-object JSON,
-or invalid required field after launch begins is ambiguous: the launcher may have created durable
-artifacts, so both routes leave the shared lock and staged question in place, report the error, and
-do not retry or infer completion. A valid terminal response and a pre-launch failure use the same
-route by which the lock was acquired for cleanup; cleanup failure is reported without masking the
-original outcome. Codex deletes its dynamic caller-temp file and any allowed proven-local fixed
-staging file through exact-target `apply_patch` deletion, never a shell `rm -f`; it removes the
-empty fixed lock directory only after staging deletion succeeded or the staged path was absent.
-Launcher status and JSON are captured and validated before cleanup, so a cleanup failure is reported
-separately and cannot erase or reclassify the launcher outcome.
+attempt began, when the launcher returned exit zero with one valid terminal JSON object, or when it
+returned exit status 1 with the exact typed `credential_unavailable` terminal JSON contract above.
+Any other transport or launcher failure, empty stdout, malformed/non-object JSON, or invalid required
+field after launch begins is ambiguous: the launcher may have created durable artifacts, so both
+routes leave the shared lock and staged question in place, report the error, and do not retry or
+infer completion. A valid terminal response and a pre-launch failure use the same route by which the
+lock was acquired for cleanup; cleanup failure is reported without masking the original outcome.
+Codex deletes its dynamic caller-temp file and any allowed proven-local fixed staging file through
+exact-target `apply_patch` deletion, never a shell `rm -f`; it removes the empty fixed lock directory
+only after staging deletion succeeded or the staged path was absent. Launcher status and JSON are
+captured and validated before cleanup, so a cleanup failure is reported separately and cannot erase
+or reclassify the launcher outcome.
 
 The SSH host must expose both durable role entrypoints before its launcher is considered ready.
 They are installed and checked with the repository-owned

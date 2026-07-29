@@ -19,6 +19,7 @@ from app.builderops.model_inquiry_adapters import (
     CredentialUnavailableError,
     HttpModelAdapter,
     LocalCommandAdapter,
+    MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS,
     ModelTurnAdapter,
     ScriptedAdapter,
     load_adapter_descriptors,
@@ -641,3 +642,18 @@ def test_existing_adapter_contract_regression_suite() -> None:
     assert isinstance(result, AdapterResult)
     assert result.provider_request_id == "scripted-compatibility-adapter-0"
     assert adapter.calls == [{"request": "unchanged"}]
+
+
+def test_production_http_adapters_use_extended_xhigh_deadline(
+    tmp_path: Path,
+) -> None:
+    adapters = load_adapters(provisioned_env(tmp_path / "secrets"))
+
+    assert set(adapters) == {"fable", "gpt_codex"}
+    assert all(isinstance(adapter, HttpModelAdapter) for adapter in adapters.values())
+    assert {
+        adapter.timeout_seconds
+        for adapter in adapters.values()
+        if isinstance(adapter, HttpModelAdapter)
+    } == {MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS}
+    assert MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS == 1200.0

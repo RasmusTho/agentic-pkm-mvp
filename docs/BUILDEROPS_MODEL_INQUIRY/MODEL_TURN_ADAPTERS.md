@@ -59,13 +59,21 @@ mock fallback. Since MAS-05 (ADR-0064), **the caller declares intent and resolve
   value-free failure handoff: if Keychain resolution fails before the runner starts, the bootstrap
   removes every credential surface and passes only that logical identifier so the runner can create
   the same durable typed terminal receipt. Other host-secret consumers retain the strict default in
-  which bootstrap failure does not launch the child.
+  which bootstrap failure does not launch the child. The canonical launcher emits the completed
+  receipt JSON with exit status 1; desktop callers recognize that exact typed terminal combination,
+  including the persisted diagnostic's exact three-field set and identifier grammars, release
+  single-flight staging, report the failure, and stop. Incomplete, extended, path-/secret-shaped,
+  malformed, or wrong-status forms remain ambiguous and preserve staging.
 
 Role identity remains attested: each role resolves to a distinct `adapter_id` and a distinct
 runtime-target fingerprint, and a mock, fake, or deterministic identity is refused as a
 provider-enabled role. This is declared policy, not proof that a remote model is genuinely Fable;
 parent acceptance must retain provider-returned request evidence. The shared vault stores only
 sanitized identity, request IDs, hashes, structured output, and classified receipts.
+
+Production `HttpModelAdapter` instances use a 1200-second per-role request deadline for the required
+`xhigh` turns. `load_adapters` binds that Builder-owned deadline explicitly for both roles, so the
+generic 60-second HTTP posture cannot truncate a production inquiry turn.
 
 `scripts/model_inquiry_subscription_adapter.py` remains for interactive, human-driven use. Its
 versioned profile uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 1200-second inner

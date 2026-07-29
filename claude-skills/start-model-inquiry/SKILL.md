@@ -49,10 +49,21 @@ exclusive remote lock exactly once:
 
    - Release the remote staging path with that same command only after the launcher returns one
      non-empty, valid JSON response containing `inquiry_id`, `final_state`,
-     `terminal_receipt_id`, and `human_readable_report`.
-   - If the launcher returns a nonzero status, empty stdout, malformed JSON, or a missing response
-     field, delete only the local temporary file. Do not release the remote lock or staged question,
-     because the remote launcher may still be running.
+     `terminal_receipt_id`, and `human_readable_report` and either:
+     - exit status zero; or
+     - exit status 1, `final_state` equal to `provider_error`, and a `diagnostic` object with
+       exactly `adapter_id`, `adapter_failure_class`, and `credential_identity_ref`, with no extra
+       fields. Require `adapter_failure_class=credential_unavailable`,
+       `adapter_id` matching `[A-Za-z0-9][A-Za-z0-9_.-]*`, and `credential_identity_ref` matching
+       `[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}`. The exit-1 object must contain exactly
+       `schema`, `inquiry_id`, `final_state`, `terminal_receipt_id`, `human_readable_report`,
+       `preflight`, and `diagnostic`, with
+       `schema=builderops.model-inquiry-desktop-launch.v1`.
+     The exit-status-1 form is a valid durable terminal failure; release staging, report it, and
+     stop.
+   - For any other nonzero status, empty stdout, malformed JSON, or missing response field, delete
+     only the local temporary file. Do not release the remote lock or staged question, because the
+     remote launcher may still be running.
 
 5. Always delete the local temporary question file through the registered `finally` action. Do not
    delete durable inquiry artifacts. If an allowed remote release fails, report the error and do not
@@ -68,8 +79,9 @@ The fixed remote launcher invokes the repository-owned host-secret bootstrap bef
 starts. That bootstrap resolves the declared Anthropic and OpenAI logical identifiers from the host
 Keychain into a temporary owner-only runtime file, and removes it after the child terminates. This
 desktop skill must never provision, inspect, copy, print, or replace those values. If declared
-credential resolution is unavailable, preserve the established ambiguous-launcher failure handling
-below; do not fall back to a subscription session or another provider.
+credential resolution is unavailable, accept only the exit-status-1 typed terminal contract above,
+release staging through the valid-terminal path, report the durable failure, and stop. Do not fall
+back to a subscription session or another provider.
 
 The configured remote launcher owns the high-reasoning profile and extended per-role deadline for
 both independent roles. Do not lower or override that profile from the desktop skill, and do not
@@ -81,9 +93,11 @@ move its model or adapter configuration into the local workspace.
   original failure. Include any cleanup failure without masking the original error.
 - Treat every launcher SSH failure as ambiguous. Delete only the local temporary file, report the
   error, and stop.
-- Treat exit code zero with empty stdout, malformed JSON, or any missing required response field as
-  an ambiguous launcher failure. Delete only the local temporary file, report the observed output,
-  and stop.
+- Treat any nonzero status other than the exact exit-status-1 typed `credential_unavailable`
+  terminal contract, exit zero carrying a `credential_unavailable` diagnostic, or any status with
+  empty stdout, malformed JSON, an incomplete/extended diagnostic, or a missing required response
+  field, as an ambiguous launcher failure. Delete only the local temporary file, report the observed
+  output, and stop.
 - Do not release the remote lock after an ambiguous launcher outcome. A later operator can decide
   whether the remote launcher completed; do not make that decision from this skill.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on

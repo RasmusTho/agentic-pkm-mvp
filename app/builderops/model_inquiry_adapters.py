@@ -41,6 +41,7 @@ SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
 SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE = 125
 CLEANUP_TIMEOUT_SECONDS = 2.0
 HTTP_ADAPTER_KIND = "http"
+MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS = 1200.0
 
 # Conventional exit codes the still-permitted interactive command path uses to
 # report the real cause. Without them an expired session and a genuine command
@@ -217,7 +218,7 @@ class HttpModelAdapter:
     endpoint: str
     api_key: str
     intent: ModelAccessIntent
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -571,6 +572,7 @@ def load_adapters(
             endpoint=selected.endpoint_for(resolution),
             api_key=api_key,
             intent=resolution.request.intent,
+            timeout_seconds=MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS,
         )
     return adapters
 
