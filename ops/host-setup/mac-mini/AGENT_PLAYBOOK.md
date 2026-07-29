@@ -48,9 +48,11 @@ Work top to bottom; stop and report if a step fails.
 
 ## BuilderOps Model Inquiry host entrypoints
 
-The Model Inquiry launcher expects two stable host commands:
-`fable-subscription-cli` and `codex-subscription-cli`. Install them as durable,
-owner-only wrappers bound to the current repository checkout:
+The Model Inquiry host owns two stable headless role commands:
+`fable-model-inquiry-role` and `codex-model-inquiry-role`. They resolve declared
+credentials through the host secret contract and require no interactive
+subscription session. Install them as durable, owner-only wrappers bound to the
+current repository checkout:
 
 ```bash
 repo_root="$(git rev-parse --show-toplevel)"
@@ -81,10 +83,12 @@ python3 "$repo_root/scripts/install_model_inquiry_host.py" check \
 
 The check succeeds only when both wrappers match the selected checkout and
 interpreter, the current `PATH` resolves both role names to those exact wrapper
-files, and the underlying `claude`, `codex`, and `yggdrasil-model-inquiry`
-commands are discoverable. It does not invoke either provider or inspect
-authentication. If the host needs a GUI-session proxy for subscription access,
-configure that separately outside Git and rerun the check afterward.
+files, and `yggdrasil-model-inquiry` is discoverable. It probes no provider CLI,
+because no headless entrypoint depends on one, and it does not invoke a provider
+or inspect authentication. Provider access instead requires the declared
+`anthropic.api-key` and `openai.api-key` Keychain items for the consumer
+`builderops-model-inquiry`; a missing value fails a run closed as
+`credential_unavailable` naming only that logical identifier.
 
 After a reboot or checkout promotion, run the same `check` command through the
 actual non-interactive transport:
