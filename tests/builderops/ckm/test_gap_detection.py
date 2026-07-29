@@ -106,6 +106,7 @@ def _assessment(
     citations: dict[str, list[dict[str, object]]],
     *,
     asserted_at: str,
+    dimension_status: dict[str, str] | None = None,
 ) -> None:
     artifacts = {artifact.id: artifact for artifact in store.list_artifacts()}
     edges = store.list_evidence_edges_for_capability(capability_id)
@@ -113,6 +114,7 @@ def _assessment(
         capability_id=capability_id,
         scores=scores,
         citations=citations,
+        dimension_status=dimension_status,
         aggregate=min(scores.values()),
         watermark_set={"fixture": "one"},
         edge_fingerprint=assessment_fingerprint(
@@ -121,6 +123,12 @@ def _assessment(
         asserted_at=asserted_at,
         valid_from=asserted_at,
     )
+
+
+def _status_map(default: str = "measured", **overrides: str) -> dict[str, str]:
+    statuses = {dimension: default for dimension in MATURITY_DIMENSIONS}
+    statuses.update(overrides)
+    return statuses
 
 
 def _score_map(default: float, **overrides: float) -> dict[str, float]:
@@ -560,3 +568,105 @@ def test_watermark_only_lag_appends_fresh_measurements(store: CkmStore) -> None:
         )
         for finding in store.list_findings()
     )
+
+
+def test_unmeasured_dimension_emits_no_starved_finding(store: CkmStore) -> None:
+    """A dimension CKM never measured must not read as a system gap (issue #4257).
+
+    The weak dimension scores 0.0 with no citations, which is exactly the shape
+    ``assess.py`` produces for a dimension no linker ever populated. Two healthy
+    siblings are genuinely measured, so starved_dimension would fire if the
+    detector ignored ``dimension_status`` — it must not.
+    """
+
+    capability = _capability(store, "Unmeasured weak dimension")
+    scores = _score_map(0.9, operational_readiness=0.0)
+    citations = {dimension: [] for dimension in MATURITY_DIMENSIONS}
+    statuses = _status_map("measured", operational_readiness="unassessed")
+    _assessment(
+        store,
+        capability.id,
+        scores,
+        citations,
+        asserted_at="2026-07-29T09:00:00Z",
+        dimension_status=statuses,
+    )
+
+    result = detect_gaps(store)
+
+    assert result.starved_dimensions == 0
+    assert result.findings == 0
+    assert store.list_findings() == []
+
+
+def test_unmeasured_dimension_does_not_trigger_claim_exceeds_evidence(
+    store: CkmStore,
+) -> None:
+    """A delivered-state claim cannot outrun evidence CKM never checked (#4257)."""
+
+    capability = _capability(store, "Unmeasured claim tension")
+    claim_artifact, claim_edge = _edge(
+        store,
+        capability.id,
+        source_ref="docs/UNMEASURED_CLAIM.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+        payload_summary="Unmeasured claim tension — State: delivered",
+    )
+    citations = {dimension: [] for dimension in MATURITY_DIMENSIONS}
+    citations["documentation_quality"] = [_citation(claim_artifact, claim_edge)]
+    scores = _score_map(0.9, functional_completeness=0.0)
+    statuses = _status_map("measured", functional_completeness="missing")
+    _assessment(
+        store,
+        capability.id,
+        scores,
+        citations,
+        asserted_at="2026-07-29T09:01:00Z",
+        dimension_status=statuses,
+    )
+
+    result = detect_gaps(store)
+
+    assert result.claim_exceeds_evidence == 0
+    assert result.findings == 0
+    assert store.list_findings() == []
+
+
+def test_healthy_sibling_must_be_measured(store: CkmStore) -> None:
+    """A starved-dimension comparison needs a genuinely *measured* healthy sibling.
+
+    ``healthy_sibling_count`` defaults to 2. Five of the six candidate siblings
+    score above the healthy floor but were never actually measured; only one
+    sibling is both healthy and measured. Pre-fix, the detector counted every
+    high-scoring sibling regardless of status and would have emitted a finding;
+    post-fix, only one qualifying sibling remains — below the required count —
+    so no starved_dimension finding should be emitted.
+    """
+
+    capability = _capability(store, "Sibling status gate")
+    scores = _score_map(0.9, test_completeness=0.2)
+    citations = {dimension: [] for dimension in MATURITY_DIMENSIONS}
+    statuses = _status_map(
+        "unassessed",
+        test_completeness="measured",
+        functional_completeness="measured",
+    )
+    _assessment(
+        store,
+        capability.id,
+        scores,
+        citations,
+        asserted_at="2026-07-29T09:02:00Z",
+        dimension_status=statuses,
+    )
+
+    result = detect_gaps(
+        store,
+        config=GapDetectionConfig(floor=0.5, healthy_floor=0.75, healthy_sibling_count=2),
+    )
+
+    assert result.starved_dimensions == 0
+    assert result.findings == 0
+    assert store.list_findings() == []
