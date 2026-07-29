@@ -130,6 +130,54 @@ class OwnershipLedger:
             key = self._load_or_create_key_locked(allow_create=False)
             return self._load_or_create_ledger_locked(key, allow_create=False)
 
+    def authenticate_scalar_rollback_session(
+        self,
+        payload: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Authenticate rollback lineage with the host key unavailable to the old image."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            self._load_or_create_ledger_locked(key, allow_create=False)
+            encoded = json.dumps(
+                dict(payload),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            return {
+                "keyId": key.key_id,
+                "keyGeneration": key.generation,
+                "hmacSha256": hmac.new(key.secret, encoded, hashlib.sha256).hexdigest(),
+            }
+
+    def verify_scalar_rollback_session(
+        self,
+        payload: Mapping[str, object],
+        authentication: Mapping[str, object],
+    ) -> None:
+        """Fail when a rollback fork receipt is forged or bound to another key."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            self._load_or_create_ledger_locked(key, allow_create=False)
+            encoded = json.dumps(
+                dict(payload),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            expected = hmac.new(key.secret, encoded, hashlib.sha256).hexdigest()
+            if (
+                authentication.get("keyId") != key.key_id
+                or authentication.get("keyGeneration") != key.generation
+                or not hmac.compare_digest(
+                    str(authentication.get("hmacSha256") or ""),
+                    expected,
+                )
+            ):
+                raise LedgerKeyError("scalar rollback session authentication failed")
+
     def resolve_live_owner_bindings(
         self,
         owners: Sequence[LegacyOwner],

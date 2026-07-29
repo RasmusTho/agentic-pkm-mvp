@@ -4,7 +4,7 @@ services:
     image: ${SCALAR_ROLLBACK_GUARD_IMAGE:?current guard image is required}
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
-      - "instance-state:/app/instance-state:ro"
+      - "instance-state:/app/instance-state"
       - type: bind
         source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
         target: /app/instance-ownership
@@ -12,6 +12,12 @@ services:
         bind:
           create_host_path: false
       - "scalar-rollback-legacy:/app/scalar-rollback"
+      - type: bind
+        source: ${SCALAR_ROLLBACK_VAULT_ROOT:?validated selected root is required}
+        target: /app/selected-vault
+        read_only: true
+        bind:
+          create_host_path: false
     command:
       - python
       - -m
@@ -25,6 +31,14 @@ services:
       - ${SCALAR_ROLLBACK_VAULT_BINDING_ID:?explicit rollback binding is required}
       - --legacy-path
       - /app/scalar-rollback/app-local.md
+      - --selected-root
+      - /app/selected-vault
+      - --compose-overlay
+      - /app/docker-compose.scalar-rollback.yml
+      - --gateway-config
+      - /app/ops/scalar-rollback/nginx.conf
+      - --native-launcher
+      - /app/scripts/scalar_rollback_native.sh
     restart: "no"
 
   api:
@@ -35,19 +49,11 @@ services:
       - -c
       - >-
         test "$${INSTANCE_STATE_LEGACY_ROLLBACK}" = 1 &&
-        test ! -e /app/instance-ownership/deployment-host-global-lease.json &&
-        for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json;
-        do test ! -e "$${deployment_fence}" || exit 75; done &&
+        test -f /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json &&
         exec bash /app/scripts/start_api.sh
     volumes: !override
       - "runtime-tmp:/app/tmp"
       - "instance-state:/app/instance-state:ro"
-      - type: bind
-        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
-        target: /app/instance-ownership
-        read_only: true
-        bind:
-          create_host_path: false
       - "scalar-rollback-legacy:/app/scalar-rollback"
       - type: bind
         source: ${SCALAR_ROLLBACK_VAULT_ROOT:?validated selected root is required}

@@ -190,8 +190,18 @@ class InstanceRegistryRuntime:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def prepare_nested_registration(self, child_root: Path) -> VaultRegistration:
-        del child_root
-        raise CapabilityNotReadyError("MVR-01C authority cutover seals second registration")
+        with self._bootstrap_locked():
+            current = self.registry.load()
+            if current.authority != REGISTRY_AUTHORITY_ACTIVE:
+                raise CapabilityNotReadyError(
+                    "MVR-01C authority cutover seals second registration"
+                )
+            return self._register_active_locked(
+                child_root,
+                producer="picker",
+                current=current,
+                allow_same_channel_nested=True,
+            )
 
     def production_register(self, path: Path, *, producer: str) -> VaultRegistration:
         if producer not in {"picker", "api", "cli", "import", "bootstrap", "direct-service"}:
@@ -210,11 +220,13 @@ class InstanceRegistryRuntime:
         *,
         producer: str,
         current: RegistrySnapshot,
+        allow_same_channel_nested: bool = False,
     ) -> VaultRegistration:
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
         if producer not in {"picker", "api", "cli", "import", "bootstrap", "direct-service"}:
             raise RegistryError("unknown registry producer")
+        self.registry.require_no_scalar_rollback_session()
         registration = self._new_registration(path)
         validate_registry_disjoint_from_content(
             self.layout.registry_path,
@@ -225,7 +237,7 @@ class InstanceRegistryRuntime:
             channel_id=self.layout.channel_id,
             vault_binding_id=registration.vault_binding_id,
             root=Path(registration.path),
-            allow_same_channel_nested=False,
+            allow_same_channel_nested=allow_same_channel_nested,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         self.registry.register(
@@ -249,7 +261,7 @@ class InstanceRegistryRuntime:
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
-        guard_receipt.require_valid()
+        guard_receipt.revalidate()
         current = self.registry.load()
         target_id = guard_receipt.rollback_vault_binding_id
         target = current.registrations.get(target_id or "")
@@ -294,14 +306,17 @@ class InstanceRegistryRuntime:
     def production_read(self) -> AppLocalSettings:
         current = self.registry.load()
         if current.authority == REGISTRY_AUTHORITY_ACTIVE:
-            return AppLocalSettingsStore(self.registry.rollback_export_path).load()
+            return self.registry.app_local_view()
         return AppLocalSettingsStore(self._legacy_path).load()
 
     def merge_previous_scalar_image(self, legacy_path: Path) -> RegistrySnapshot:
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
+        payload, authentication = self.registry.load_scalar_rollback_session()
+        self.ledger.verify_scalar_rollback_session(payload, authentication)
         return self.registry.merge_scalar_rollback(
             legacy_path,
+            session_payload=payload,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
 
@@ -562,6 +577,7 @@ def _preflight_runtime(
         host_global_root,
         initialize_layout=False,
     )
+    runtime.registry.require_no_scalar_rollback_session()
     _require_runtime_floor(runtime.registry.load(), scalar_runtime=False)
     ledger = runtime.ledger.require_existing()
     if not ledger.legacy_bootstrap_complete:
@@ -611,7 +627,13 @@ def _preflight_scalar_rollback(
     host_global_root: Path,
     rollback_vault_binding_id: str,
     legacy_path: Path,
+    selected_root: Path,
+    compose_overlay: Path,
+    gateway_config: Path,
+    native_launcher: Path,
 ) -> int:
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
     if not host_global_root.is_dir():
         raise RegistryError("host-global ownership mount is missing")
     if _deployment_lease_path(host_global_root).exists() or any(
@@ -619,12 +641,69 @@ def _preflight_scalar_rollback(
     ):
         raise RegistryError("scalar rollback is blocked by a deployment lease or restart fence")
     store = VaultRegistryStore(registry_path)
-    snapshot = store.load()
-    _require_runtime_floor(snapshot, scalar_runtime=True)
-    store.materialize_legacy_rollback(
-        legacy_path,
-        rollback_vault_binding_id=rollback_vault_binding_id,
+    producer_lock = registry_path.parent / "bootstrap.lock"
+    descriptor = os.open(
+        producer_lock,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
     )
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            snapshot = store.load()
+            _require_runtime_floor(snapshot, scalar_runtime=True)
+            floor = snapshot.extensions.get("scalarRollback")
+            if not isinstance(floor, dict):
+                raise RegistryError("active registry scalar rollback floor is invalid")
+            guard_receipt = preflight_scalar_rollback_guard(
+                compose_overlay=compose_overlay,
+                gateway_config=gateway_config,
+                native_launcher=native_launcher,
+                rollback_vault_binding_id=rollback_vault_binding_id,
+                selected_root=selected_root,
+            )
+            if (
+                guard_receipt.compose_policy_sha256
+                != floor.get("composePolicySha256")
+                or guard_receipt.gateway_policy_sha256
+                != floor.get("gatewayPolicySha256")
+                or guard_receipt.native_launcher_sha256
+                != floor.get("nativeLauncherSha256")
+            ):
+                raise RegistryError(
+                    "scalar rollback policy does not match the activated floor"
+                )
+            store.materialize_legacy_rollback(
+                legacy_path,
+                rollback_vault_binding_id=rollback_vault_binding_id,
+            )
+            projection_sha256 = hashlib.sha256(legacy_path.read_bytes()).hexdigest()
+            floors = snapshot.extensions.get("runtimeFloors") or {}
+            if not isinstance(floors, dict):
+                raise RegistryError("runtime floors are invalid")
+            payload: dict[str, object] = {
+                "schema": "agentic-pkm.scalar-roll-forward-lineage.v1",
+                "registrySchema": snapshot.schema,
+                "forkRegistryRevision": snapshot.revision,
+                "rollbackVaultBindingId": rollback_vault_binding_id,
+                "minimumRuntimeSchema": floors.get("minimumRuntimeSchema"),
+                "initialExportSha256": projection_sha256,
+                "composePolicySha256": guard_receipt.compose_policy_sha256,
+                "gatewayPolicySha256": guard_receipt.gateway_policy_sha256,
+                "nativeLauncherSha256": guard_receipt.native_launcher_sha256,
+            }
+            ledger = OwnershipLedger(host_global_root)
+            authentication = ledger.authenticate_scalar_rollback_session(payload)
+            guard_receipt.revalidate()
+            store.install_scalar_rollback_session(
+                payload=payload,
+                authentication=authentication,
+                expected_revision=snapshot.revision,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     print(
         json.dumps(
             {
@@ -1299,6 +1378,10 @@ def main(argv: list[str] | None = None) -> int:
     scalar.add_argument("--host-global-root", type=Path, required=True)
     scalar.add_argument("--rollback-vault-binding-id", required=True)
     scalar.add_argument("--legacy-path", type=Path, required=True)
+    scalar.add_argument("--selected-root", type=Path, required=True)
+    scalar.add_argument("--compose-overlay", type=Path, required=True)
+    scalar.add_argument("--gateway-config", type=Path, required=True)
+    scalar.add_argument("--native-launcher", type=Path, required=True)
     activate = subparsers.add_parser("authority-cutover")
     activate.add_argument("--channel", required=True)
     activate.add_argument("--instance-state-root", type=Path, required=True)
@@ -1344,6 +1427,10 @@ def main(argv: list[str] | None = None) -> int:
             host_global_root=args.host_global_root,
             rollback_vault_binding_id=args.rollback_vault_binding_id,
             legacy_path=args.legacy_path,
+            selected_root=args.selected_root,
+            compose_overlay=args.compose_overlay,
+            gateway_config=args.gateway_config,
+            native_launcher=args.native_launcher,
         )
     if args.command == "authority-cutover":
         return _activate_mvr01c_authority(

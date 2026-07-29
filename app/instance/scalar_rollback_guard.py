@@ -9,10 +9,54 @@ import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+
 from app.instance._storage_boundary import CapabilityNotReadyError, RegistryError
 
 
 _GUARD_RECEIPT_AUTHORITY = object()
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_CANONICAL_COMPOSE_OVERLAY = _REPO_ROOT / "docker-compose.scalar-rollback.yml"
+_CANONICAL_GATEWAY_CONFIG = _REPO_ROOT / "ops/scalar-rollback/nginx.conf"
+_CANONICAL_NATIVE_LAUNCHER = _REPO_ROOT / "scripts/scalar_rollback_native.sh"
+_GATEWAY_POLICY = """server {
+    listen 8080;
+    auth_basic "scalar rollback";
+    auth_basic_user_file /run/secrets/scalar-rollback.htpasswd;
+
+    location = /api/vault/select {
+        return 403;
+    }
+
+    location = /api/vault/initialize {
+        return 403;
+    }
+
+    location / {
+        proxy_pass http://api:8000;
+        proxy_set_header Authorization "";
+        proxy_set_header X-Scalar-Rollback-Gateway "authenticated";
+    }
+}
+"""
+
+
+class _ComposeLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_override(loader: _ComposeLoader, node: yaml.Node) -> object:
+    if isinstance(node, SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    if isinstance(node, MappingNode):
+        return loader.construct_mapping(node, deep=True)
+    if isinstance(node, ScalarNode):
+        return loader.construct_scalar(node)
+    raise RegistryError("scalar rollback compose override is invalid")
+
+
+_ComposeLoader.add_constructor("!override", _construct_override)
 
 
 @dataclass(frozen=True)
@@ -27,11 +71,34 @@ class ScalarRollbackGuardReceipt:
     compose_policy_sha256: str
     gateway_policy_sha256: str
     native_launcher_sha256: str
+    compose_overlay: Path
+    gateway_config: Path
+    native_launcher: Path
     _authority: object = field(repr=False)
 
     def require_valid(self) -> None:
         if self._authority is not _GUARD_RECEIPT_AUTHORITY:
             raise CapabilityNotReadyError("authenticated scalar rollback guard receipt is required")
+
+    def revalidate(self) -> None:
+        self.require_valid()
+        current = preflight_scalar_rollback_guard(
+            compose_overlay=self.compose_overlay,
+            gateway_config=self.gateway_config,
+            native_launcher=self.native_launcher,
+            rollback_vault_binding_id=self.rollback_vault_binding_id,
+            selected_root=self.selected_root,
+        )
+        if (
+            current.compose_policy_sha256 != self.compose_policy_sha256
+            or current.gateway_policy_sha256 != self.gateway_policy_sha256
+            or current.native_launcher_sha256 != self.native_launcher_sha256
+            or current.selected_root != self.selected_root
+            or current.rollback_vault_binding_id != self.rollback_vault_binding_id
+        ):
+            raise CapabilityNotReadyError(
+                "scalar rollback policy changed after preflight"
+            )
 
 
 def preflight_scalar_rollback_guard(
@@ -48,39 +115,41 @@ def preflight_scalar_rollback_guard(
     root = selected_root.expanduser().resolve(strict=True)
     if not binding_id or not root.is_dir():
         raise RegistryError("one existing scalar rollback binding/root is required")
-    compose = compose_overlay.read_text(encoding="utf-8")
-    gateway = gateway_config.read_text(encoding="utf-8")
-    required_compose = (
-        "SCALAR_ROLLBACK_PREVIOUS_IMAGE:?",
-        "SCALAR_ROLLBACK_GUARD_IMAGE:?",
-        "SCALAR_ROLLBACK_VAULT_ROOT:?",
-        "SCALAR_ROLLBACK_VAULT_BINDING_ID:?",
-        "ports: !override []",
-        "scalar-rollback-guard",
-        "condition: service_completed_successfully",
-        "scalar-rollback-gateway",
-        "/app/selected-vault",
-        "depends_on: !override",
-    )
-    if any(item not in compose for item in required_compose):
-        raise RegistryError("scalar rollback compose guard is incomplete")
-    if "/Users:/Users" in compose or "/Volumes:/Volumes" in compose:
-        raise RegistryError("scalar rollback overlay exposes a broad host content root")
-    required_gateway = (
-        "auth_basic",
-        "auth_basic_user_file",
-        "proxy_pass http://api:8000",
-        "return 403",
-        "/api/vault/select",
-        "/api/vault/initialize",
-    )
-    if any(item not in gateway for item in required_gateway):
+    compose_path = compose_overlay.resolve(strict=True)
+    gateway_path = gateway_config.resolve(strict=True)
+    launcher_path = native_launcher.resolve(strict=True)
+    if (
+        compose_path != _CANONICAL_COMPOSE_OVERLAY.resolve(strict=True)
+        or gateway_path != _CANONICAL_GATEWAY_CONFIG.resolve(strict=True)
+        or launcher_path != _CANONICAL_NATIVE_LAUNCHER.resolve(strict=True)
+    ):
+        raise RegistryError("canonical scalar rollback policy files are required")
+    compose = compose_path.read_text(encoding="utf-8")
+    gateway = gateway_path.read_text(encoding="utf-8")
+    try:
+        model = yaml.load(compose, Loader=_ComposeLoader)
+    except yaml.YAMLError as exc:
+        raise RegistryError("scalar rollback compose guard is invalid") from exc
+    _validate_compose_model(model)
+    if gateway != _GATEWAY_POLICY:
         raise RegistryError("authenticated mutation-filtering gateway policy is incomplete")
-    if not native_launcher.is_file():
+    if not launcher_path.is_file():
         raise RegistryError("native scalar rollback launcher is missing")
-    mode = native_launcher.stat().st_mode
+    mode = launcher_path.stat().st_mode
     if mode & 0o022:
         raise RegistryError("native scalar rollback launcher is group/world writable")
+    try:
+        require_native_scalar_launcher(
+            launcher=launcher_path,
+            selected_root=root,
+        )
+    except CapabilityNotReadyError:
+        # Unsupported native rollback is an accepted fail-closed posture.
+        pass
+    else:
+        raise RegistryError(
+            "native scalar rollback unexpectedly lacks an authenticated mutation filter stop"
+        )
     return ScalarRollbackGuardReceipt(
         rollback_vault_binding_id=binding_id,
         selected_root=root,
@@ -91,9 +160,86 @@ def preflight_scalar_rollback_guard(
         native_guard_fail_closed=True,
         compose_policy_sha256=hashlib.sha256(compose.encode("utf-8")).hexdigest(),
         gateway_policy_sha256=hashlib.sha256(gateway.encode("utf-8")).hexdigest(),
-        native_launcher_sha256=hashlib.sha256(native_launcher.read_bytes()).hexdigest(),
+        native_launcher_sha256=hashlib.sha256(launcher_path.read_bytes()).hexdigest(),
+        compose_overlay=compose_path,
+        gateway_config=gateway_path,
+        native_launcher=launcher_path,
         _authority=_GUARD_RECEIPT_AUTHORITY,
     )
+
+
+def _validate_compose_model(model: object) -> None:
+    if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
+        raise RegistryError("scalar rollback compose guard is incomplete")
+    services = model["services"]
+    required = {
+        "scalar-rollback-guard",
+        "api",
+        "scalar-rollback-gateway",
+        "worker",
+        "watcher",
+        "heimdal-capture-watch",
+    }
+    if set(services) != required:
+        raise RegistryError("scalar rollback overlay service set is invalid")
+    api = services["api"]
+    guard = services["scalar-rollback-guard"]
+    gateway = services["scalar-rollback-gateway"]
+    if not all(isinstance(value, dict) for value in (api, guard, gateway)):
+        raise RegistryError("scalar rollback service definitions are invalid")
+    if api.get("ports") != [] or set((api.get("depends_on") or {})) != {
+        "scalar-rollback-guard"
+    }:
+        raise RegistryError("scalar rollback API has a bypass port or dependency")
+    api_targets = _volume_targets(api.get("volumes"))
+    if api_targets != {
+        "/app/tmp",
+        "/app/instance-state",
+        "/app/scalar-rollback",
+        "/app/selected-vault",
+    }:
+        raise RegistryError("scalar rollback API mount set is not selected-binding-only")
+    guard_targets = _volume_targets(guard.get("volumes"))
+    if guard_targets != {
+        "/app/instance-state",
+        "/app/instance-ownership",
+        "/app/scalar-rollback",
+        "/app/selected-vault",
+    }:
+        raise RegistryError("scalar rollback guard mount set is invalid")
+    gateway_targets = _volume_targets(gateway.get("volumes"))
+    if gateway_targets != {
+        "/etc/nginx/conf.d/default.conf",
+        "/run/secrets/scalar-rollback.htpasswd",
+    }:
+        raise RegistryError("scalar rollback gateway mount set is invalid")
+    ports = gateway.get("ports")
+    if not isinstance(ports, list) or len(ports) != 1 or "127.0.0.1" not in str(ports[0]):
+        raise RegistryError("scalar rollback gateway must expose one loopback port")
+    for name in ("worker", "watcher", "heimdal-capture-watch"):
+        if services[name] != {"profiles": ["scalar-rollback-disabled"]}:
+            raise RegistryError("scalar rollback background producer is not disabled")
+    if "scalar-rollback-session.json" not in str(api.get("command")):
+        raise RegistryError("scalar rollback API does not require the durable session")
+
+
+def _volume_targets(value: object) -> set[str]:
+    if not isinstance(value, list):
+        raise RegistryError("scalar rollback volumes must be a list")
+    targets: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            parts = item.split(":")
+            if len(parts) < 2:
+                raise RegistryError("scalar rollback volume is invalid")
+            targets.add(parts[1])
+        elif isinstance(item, dict) and isinstance(item.get("target"), str):
+            targets.add(item["target"])
+        else:
+            raise RegistryError("scalar rollback volume is invalid")
+    if len(targets) != len(value):
+        raise RegistryError("scalar rollback volume targets are ambiguous")
+    return targets
 
 
 def require_native_scalar_launcher(
@@ -116,12 +262,19 @@ def require_native_scalar_launcher(
             "native scalar rollback requires a root-owned selected-binding launcher"
         )
     if Path("/usr/bin/sandbox-exec").is_file():
-        return "sandbox-exec"
+        sandbox = "sandbox-exec"
+    else:
+        sandbox = ""
     for candidate in (Path("/usr/bin/bwrap"), Path("/bin/bwrap")):
         if candidate.is_file() and stat.S_ISREG(candidate.stat().st_mode):
-            return "bwrap"
+            sandbox = "bwrap"
+            break
+    if not sandbox:
+        raise CapabilityNotReadyError(
+            "native scalar rollback sandbox posture is unavailable; refusing startup"
+        )
     raise CapabilityNotReadyError(
-        "native scalar rollback sandbox posture is unavailable; refusing startup"
+        "native scalar rollback authenticated mutation filter is unavailable; refusing startup"
     )
 
 

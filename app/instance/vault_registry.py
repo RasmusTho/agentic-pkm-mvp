@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping, Protocol
 from uuid import uuid4
 
 import yaml
@@ -31,6 +31,9 @@ from app.instance.filesystem_identity import (
     same_filesystem_root,
 )
 from app.receipts.settings_write import emit_settings_write_receipts_for_changes
+
+if TYPE_CHECKING:
+    from app.instance.runtime import InstanceRegistryRuntime
 
 
 CURRENT_REGISTRY_SCHEMA = "agentic-pkm.instance-vault-registry.v1"
@@ -173,12 +176,26 @@ class VaultRegistryStore:
         self.snapshot_checksum_path = path.with_suffix(path.suffix + ".last-good.sha256")
         self.rollback_export_path = path.with_suffix(path.suffix + ".legacy-export")
         self.transaction_path = path.with_suffix(path.suffix + ".transaction")
+        self.scalar_rollback_session_path = path.with_suffix(
+            path.suffix + ".scalar-rollback-session.json"
+        )
 
     def load(self) -> RegistrySnapshot:
         with self._locked():
             if not self.path.exists():
                 return self._restore_or_initialize_missing_locked()
             return self._read_current_locked(recover=True)
+
+    def require_no_scalar_rollback_session(self) -> None:
+        """Fail current-runtime startup while an authenticated old image is live."""
+
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+
+    def app_local_view(self) -> AppLocalSettings:
+        """Return the complete compatibility view without scalar projection loss."""
+
+        return _app_local_from_registry(self.load())
 
     def capture_backup_artifacts(self) -> dict[str, bytes]:
         """Capture the complete registry generation while holding its writer lock."""
@@ -230,6 +247,7 @@ class VaultRegistryStore:
         _require_storage_mutation_capability(_capability)
         self._validate_registration(registration)
         with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
             current = (
                 self._read_current_locked(recover=True)
                 if self.path.exists()
@@ -267,6 +285,7 @@ class VaultRegistryStore:
         _require_storage_mutation_capability(_capability)
         self._validate_registration(registration)
         with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
             existing = current.registrations.get(registration.vault_binding_id)
@@ -284,6 +303,70 @@ class VaultRegistryStore:
             self._write_locked(updated)
             return updated
 
+    def remember_registration(
+        self,
+        vault_binding_id: str,
+        item: KnownVaultRef,
+        *,
+        make_active: bool,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Route the live picker/app-local compatibility seam through active registry truth."""
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            if current.authority != REGISTRY_AUTHORITY_ACTIVE:
+                raise CapabilityNotReadyError("active registry authority is required")
+            registration = current.registrations.get(vault_binding_id)
+            if registration is None:
+                raise RegistryError("remembered vault binding is not registered")
+            if (
+                item.ref != registration.ref
+                or Path(item.path).expanduser().resolve(strict=True)
+                != Path(registration.path).expanduser().resolve(strict=True)
+                or item.vault_id not in (None, registration.vault_id)
+                or item.local_instance_id not in (None, registration.local_instance_id)
+            ):
+                raise RegistryError("remembered vault identity does not match active registration")
+            registrations = copy.deepcopy(current.registrations)
+            registrations[vault_binding_id] = VaultRegistration(
+                vault_binding_id=registration.vault_binding_id,
+                ref=registration.ref,
+                path=registration.path,
+                vault_id=registration.vault_id,
+                local_instance_id=registration.local_instance_id,
+                vault_name=item.vault_name,
+                last_opened_at=item.last_opened_at,
+                extensions=copy.deepcopy(registration.extensions),
+            )
+            next_revision = current.revision + 1
+            extensions = copy.deepcopy(current.extensions)
+            floor = extensions.get("scalarRollback")
+            if not isinstance(floor, dict):
+                raise RegistryError("active registry scalar rollback floor is invalid")
+            extensions["scalarRollback"] = {
+                **floor,
+                "forkRegistryRevision": next_revision,
+            }
+            updated = RegistrySnapshot(
+                schema=current.schema,
+                authority=current.authority,
+                revision=next_revision,
+                app_install_id=current.app_install_id,
+                last_active_vault_ref=(
+                    registration.ref if make_active else current.last_active_vault_ref
+                ),
+                registrations=registrations,
+                removal_tombstones=copy.deepcopy(current.removal_tombstones),
+                transfer_lineage=copy.deepcopy(current.transfer_lineage),
+                settings_rebind=copy.deepcopy(current.settings_rebind),
+                extensions=extensions,
+            )
+            self._write_locked(updated)
+            return updated
+
     def remove_registration(
         self,
         vault_binding_id: str,
@@ -295,6 +378,7 @@ class VaultRegistryStore:
 
         _require_storage_mutation_capability(_capability)
         with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
             if vault_binding_id not in current.registrations:
@@ -319,6 +403,7 @@ class VaultRegistryStore:
 
         _require_storage_mutation_capability(_capability)
         with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
             validated: dict[str, VaultRegistration] = {}
@@ -427,6 +512,7 @@ class VaultRegistryStore:
         _require_storage_mutation_capability(_capability)
         target_binding_id = _optional_str(proof.rollback_vault_binding_id)
         with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
             if current.authority == REGISTRY_AUTHORITY_ACTIVE:
@@ -483,6 +569,7 @@ class VaultRegistryStore:
         """Transform the latest scalar-representable revision for a previous image."""
 
         with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
             current = self._read_current_locked(recover=True)
             selected = _optional_str(rollback_vault_binding_id)
             floor = current.extensions.get("scalarRollback")
@@ -502,29 +589,84 @@ class VaultRegistryStore:
                 raise RegistryError("latest-revision legacy rollback export is missing or stale")
             target = Path(target_path)
             _atomic_private_write(target, payload)
-            lineage_path = target.with_suffix(target.suffix + ".mvr-lineage.json")
+        return AppLocalSettingsStore(Path(target_path)).load()
+
+    def install_scalar_rollback_session(
+        self,
+        *,
+        payload: Mapping[str, object],
+        authentication: Mapping[str, object],
+        expected_revision: int,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> None:
+        """Durably exclude current writers for the authenticated scalar runtime."""
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            floor = current.extensions.get("scalarRollback")
+            if (
+                current.authority != REGISTRY_AUTHORITY_ACTIVE
+                or not isinstance(floor, dict)
+                or payload.get("schema") != ROLL_FORWARD_LINEAGE_SCHEMA
+                or payload.get("registrySchema") != current.schema
+                or payload.get("forkRegistryRevision") != current.revision
+                or payload.get("rollbackVaultBindingId")
+                != floor.get("targetVaultBindingId")
+                or payload.get("minimumRuntimeSchema")
+                != (current.extensions.get("runtimeFloors") or {}).get(
+                    "minimumRuntimeSchema"
+                )
+                or payload.get("composePolicySha256")
+                != floor.get("composePolicySha256")
+                or payload.get("gatewayPolicySha256")
+                != floor.get("gatewayPolicySha256")
+                or payload.get("nativeLauncherSha256")
+                != floor.get("nativeLauncherSha256")
+            ):
+                raise RegistryError("scalar rollback session does not match current authority")
+            document = {
+                "payload": copy.deepcopy(dict(payload)),
+                "authentication": copy.deepcopy(dict(authentication)),
+            }
             _atomic_private_write(
-                lineage_path,
+                self.scalar_rollback_session_path,
                 (
-                    json.dumps(
-                        {
-                            "schema": ROLL_FORWARD_LINEAGE_SCHEMA,
-                            "registrySchema": current.schema,
-                            "forkRegistryRevision": current.revision,
-                            "rollbackVaultBindingId": selected,
-                            "initialExportSha256": hashlib.sha256(payload).hexdigest(),
-                        },
-                        sort_keys=True,
-                    )
+                    json.dumps(document, sort_keys=True, separators=(",", ":"))
                     + "\n"
                 ).encode("utf-8"),
             )
-        return AppLocalSettingsStore(Path(target_path)).load()
+
+    def load_scalar_rollback_session(
+        self,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        with self._locked():
+            try:
+                _assert_private(self.scalar_rollback_session_path, directory=False)
+                document = json.loads(
+                    self.scalar_rollback_session_path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise RegistryError(
+                    "authenticated scalar rollback session is missing or invalid"
+                ) from exc
+            if (
+                not isinstance(document, dict)
+                or not isinstance(document.get("payload"), dict)
+                or not isinstance(document.get("authentication"), dict)
+            ):
+                raise RegistryError(
+                    "authenticated scalar rollback session is missing or invalid"
+                )
+            return dict(document["payload"]), dict(document["authentication"])
 
     def merge_scalar_rollback(
         self,
         source_path: Path,
         *,
+        session_payload: Mapping[str, object],
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Import one validated scalar rollback fork as the next registry revision."""
@@ -532,14 +674,6 @@ class VaultRegistryStore:
         _require_storage_mutation_capability(_capability)
         source = Path(source_path)
         legacy = AppLocalSettingsStore(source).load()
-        lineage_path = source.with_suffix(source.suffix + ".mvr-lineage.json")
-        try:
-            _assert_private(lineage_path, directory=False)
-            lineage_receipt = json.loads(lineage_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise RegistryError("scalar rollback lineage receipt is missing or invalid") from exc
-        if not isinstance(lineage_receipt, dict):
-            raise RegistryError("scalar rollback lineage receipt is missing or invalid")
         with self._locked():
             current = self._read_current_locked(recover=True)
             floor = current.extensions.get("scalarRollback")
@@ -556,11 +690,11 @@ class VaultRegistryStore:
             if target is None:
                 raise RegistryError("scalar rollback target is no longer registered")
             if (
-                lineage_receipt.get("schema") != ROLL_FORWARD_LINEAGE_SCHEMA
-                or lineage_receipt.get("registrySchema") != current.schema
-                or lineage_receipt.get("forkRegistryRevision")
+                session_payload.get("schema") != ROLL_FORWARD_LINEAGE_SCHEMA
+                or session_payload.get("registrySchema") != current.schema
+                or session_payload.get("forkRegistryRevision")
                 != floor.get("forkRegistryRevision")
-                or lineage_receipt.get("rollbackVaultBindingId") != target_id
+                or session_payload.get("rollbackVaultBindingId") != target_id
                 or current.revision != floor.get("forkRegistryRevision")
             ):
                 raise RegistryError("scalar rollback lineage is stale, ambiguous, or divergent")
@@ -617,6 +751,8 @@ class VaultRegistryStore:
                 extensions=extensions,
             )
             self._write_locked(merged)
+            self.scalar_rollback_session_path.unlink()
+            _fsync_directory(self.scalar_rollback_session_path.parent)
             return merged
 
     def _empty_snapshot(self) -> RegistrySnapshot:
@@ -970,6 +1106,13 @@ class VaultRegistryStore:
         self.transaction_path.unlink(missing_ok=True)
         _fsync_directory(self.transaction_path.parent)
 
+    def _assert_no_scalar_rollback_session_locked(self) -> None:
+        if self.scalar_rollback_session_path.exists():
+            _assert_private(self.scalar_rollback_session_path, directory=False)
+            raise CapabilityNotReadyError(
+                "authenticated scalar rollback session blocks current registry writers"
+            )
+
     def _ensure_rollback_export_locked(self) -> None:
         if not self.path.exists():
             return
@@ -1024,7 +1167,11 @@ class VaultRegistryStore:
             "schema": APP_LOCAL_SCHEMA,
             "scope": "app-local",
             "appInstallId": snapshot.app_install_id,
-            "lastActiveVaultRef": snapshot.last_active_vault_ref,
+            "lastActiveVaultRef": (
+                snapshot.registrations[selected_binding_id].ref
+                if selected_binding_id is not None
+                else snapshot.last_active_vault_ref
+            ),
             "knownVaults": known,
             "mvrRegistrySchema": snapshot.schema,
             "mvrRegistryRevision": snapshot.revision,
@@ -1615,10 +1762,29 @@ class AppLocalSettings:
     known_vaults: dict[str, KnownVaultRef] = field(default_factory=dict)
 
 
+def _app_local_from_registry(snapshot: RegistrySnapshot) -> AppLocalSettings:
+    return AppLocalSettings(
+        app_install_id=snapshot.app_install_id,
+        last_active_vault_ref=snapshot.last_active_vault_ref,
+        known_vaults={
+            item.ref: KnownVaultRef(
+                ref=item.ref,
+                path=item.path,
+                vault_id=item.vault_id,
+                vault_name=item.vault_name,
+                local_instance_id=item.local_instance_id,
+                last_opened_at=item.last_opened_at,
+            )
+            for item in snapshot.registrations.values()
+        },
+    )
+
+
 class AppLocalSettingsStore:
     """Legacy scalar authority retained until the MVR-01B/01C cutover."""
 
     def __init__(self, path: Path | None = None, markdown_store: _MarkdownStore | None = None) -> None:
+        self._authority_aware = path is None
         self.path = path or default_app_local_settings_path()
         if markdown_store is None:
             from app.vault.markdown_settings import MarkdownSettingsStore
@@ -1627,6 +1793,9 @@ class AppLocalSettingsStore:
         self.markdown_store = markdown_store
 
     def load(self) -> AppLocalSettings:
+        runtime = self._active_registry_runtime()
+        if runtime is not None:
+            return _app_local_from_registry(runtime.registry.load())
         if not self.path.exists():
             settings = AppLocalSettings(app_install_id=f"app-{uuid4()}")
             self.save(settings)
@@ -1657,6 +1826,16 @@ class AppLocalSettingsStore:
         )
 
     def save(self, settings: AppLocalSettings) -> None:
+        runtime = self._active_registry_runtime()
+        if runtime is not None:
+            for item in settings.known_vaults.values():
+                self._upsert_active(runtime, item, make_active=False)
+            if settings.last_active_vault_ref is not None:
+                active = settings.known_vaults.get(settings.last_active_vault_ref)
+                if active is None:
+                    raise RegistryError("active app-local reference is not registered")
+                self._upsert_active(runtime, active, make_active=True)
+            return
         known = {
             ref: {
                 "path": item.path,
@@ -1699,12 +1878,73 @@ class AppLocalSettingsStore:
         )
 
     def upsert_known_vault(self, item: KnownVaultRef, *, make_active: bool = True) -> AppLocalSettings:
+        runtime = self._active_registry_runtime()
+        if runtime is not None:
+            self._upsert_active(runtime, item, make_active=make_active)
+            return _app_local_from_registry(runtime.registry.load())
         settings = self.load()
         settings.known_vaults[item.ref] = item
         if make_active:
             settings.last_active_vault_ref = item.ref
         self.save(settings)
         return settings
+
+    def _active_registry_runtime(self) -> InstanceRegistryRuntime | None:
+        if not self._authority_aware:
+            return None
+        registry_value = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+        ownership_value = os.getenv("INSTANCE_OWNERSHIP_ROOT", "").strip()
+        if not registry_value or not ownership_value:
+            return None
+        registry_path = Path(registry_value).expanduser().resolve(strict=False)
+        if not registry_path.is_file():
+            return None
+        snapshot = VaultRegistryStore(registry_path).load()
+        if snapshot.authority != REGISTRY_AUTHORITY_ACTIVE:
+            return None
+        from app.instance.instance_state import InstanceStateLayout
+        from app.instance.ownership_ledger import OwnershipLedger
+        from app.instance.runtime import InstanceRegistryRuntime
+
+        return InstanceRegistryRuntime(
+            InstanceStateLayout(
+                root=registry_path.parent,
+                channel_id=os.getenv("PKM_ENVIRONMENT", "dev"),
+                registry_path=registry_path,
+            ),
+            OwnershipLedger(Path(ownership_value).expanduser().resolve(strict=False)),
+            initialize_layout=False,
+        )
+
+    def _upsert_active(
+        self,
+        runtime: InstanceRegistryRuntime,
+        item: KnownVaultRef,
+        *,
+        make_active: bool,
+    ) -> None:
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        snapshot = runtime.registry.load()
+        matches = [
+            registration
+            for registration in snapshot.registrations.values()
+            if Path(registration.path).expanduser().resolve(strict=True)
+            == Path(item.path).expanduser().resolve(strict=True)
+        ]
+        if len(matches) > 1:
+            raise RegistryError("active registry path identity is ambiguous")
+        registration = (
+            matches[0]
+            if matches
+            else runtime.production_register(Path(item.path), producer="picker")
+        )
+        runtime.registry.remember_registration(
+            registration.vault_binding_id,
+            item,
+            make_active=make_active,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
 
     def backup_corrupt_and_reset(self) -> Path | None:
         if not self.path.exists():

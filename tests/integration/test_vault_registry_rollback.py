@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.instance.instance_state import InstanceStateLayout
-from app.instance.runtime import InstanceRegistryRuntime
+from app.instance.runtime import InstanceRegistryRuntime, _preflight_scalar_rollback
 from app.instance.scalar_rollback_guard import preflight_scalar_rollback_guard
 from app.instance.vault_registry import (
     AppLocalSettingsStore,
@@ -13,6 +13,7 @@ from app.instance.vault_registry import (
     KnownVaultRef,
     RegistryError,
 )
+from app.vault.manager import VaultManager
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -113,22 +114,41 @@ def _guard_receipt(binding_id, root):
     )
 
 
+def _start_scalar_runtime(runtime, registration, root, rollback_path) -> None:
+    _preflight_scalar_rollback(
+        registry_path=runtime.layout.registry_path,
+        host_global_root=runtime.ledger.root,
+        rollback_vault_binding_id=registration.vault_binding_id,
+        legacy_path=rollback_path,
+        selected_root=root,
+        compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+    )
+
+
 def test_previous_image_reads_latest_post_migration_registry_state(tmp_path) -> None:
     runtime, first = _active_runtime(tmp_path)
     rollback_path = tmp_path / "previous-image" / "app-local.md"
 
-    projected = runtime.registry.materialize_legacy_rollback(
+    _start_scalar_runtime(
+        runtime,
+        first,
+        Path(first.path),
         rollback_path,
-        rollback_vault_binding_id=first.vault_binding_id,
     )
+    projected = AppLocalSettingsStore(rollback_path).load()
 
     assert set(projected.known_vaults) == {first.ref}
     assert projected.last_active_vault_ref == first.ref
+    runtime.merge_previous_scalar_image(rollback_path)
     runtime.registry.rollback_export_path.write_text("stale", encoding="utf-8")
     with pytest.raises(RegistryError, match="missing or stale"):
-        runtime.registry.materialize_legacy_rollback(
+        _start_scalar_runtime(
+            runtime,
+            first,
+            Path(first.path),
             rollback_path,
-            rollback_vault_binding_id=first.vault_binding_id,
         )
 
 
@@ -158,7 +178,10 @@ def test_multi_binding_rollback_requires_one_safe_explicit_target(tmp_path) -> N
     }
 
 
-def test_01c_unseals_second_registration_only_with_complete_rollback_floor(tmp_path) -> None:
+def test_01c_unseals_second_registration_only_with_complete_rollback_floor(
+    tmp_path,
+    monkeypatch,
+) -> None:
     runtime = InstanceRegistryRuntime.for_paths(
         InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),
         tmp_path / "host-global",
@@ -185,13 +208,37 @@ def test_01c_unseals_second_registration_only_with_complete_rollback_floor(tmp_p
         root.mkdir()
         assert runtime.production_register(root, producer=producer).path == str(root)
 
+    picker_root = tmp_path / "actual-picker"
+    picker_root.mkdir()
+    monkeypatch.setenv(
+        "INSTANCE_VAULT_REGISTRY_PATH",
+        str(runtime.layout.registry_path),
+    )
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+    context = VaultManager().select_vault(picker_root)
+    assert context.status == "uninitialized"
+    active = runtime.registry.load()
+    assert active.last_active_vault_ref == f"path:{picker_root}"
+    assert any(item.path == str(picker_root) for item in active.registrations.values())
+    assert (
+        AppLocalSettingsStore().load().last_active_vault_ref
+        == f"path:{picker_root}"
+    )
+
+    nested = first_root / "nested"
+    nested.mkdir()
+    assert runtime.prepare_nested_registration(nested).path == str(nested)
+
 
 def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
     runtime, first = _active_runtime(tmp_path)
     rollback_path = tmp_path / "rollback" / "app-local.md"
-    runtime.registry.materialize_legacy_rollback(
+    _start_scalar_runtime(
+        runtime,
+        first,
+        Path(first.path),
         rollback_path,
-        rollback_vault_binding_id=first.vault_binding_id,
     )
     rollback = AppLocalSettingsStore(rollback_path)
     settings = rollback.load()
@@ -211,16 +258,21 @@ def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
     assert merged.registrations[first.vault_binding_id].vault_name == "Renamed during rollback"
     assert merged.extensions["scalarRollForwardLineage"][-1]["mergedRegistryRevision"] == merged.revision
 
-    divergent = tmp_path / "rollback" / "divergent.md"
-    divergent.write_bytes(rollback_path.read_bytes())
-    divergent_lineage = divergent.with_suffix(divergent.suffix + ".mvr-lineage.json")
-    divergent_lineage.write_bytes(
-        rollback_path.with_suffix(rollback_path.suffix + ".mvr-lineage.json")
-        .read_bytes()
-        .replace(b'"forkRegistryRevision": 2', b'"forkRegistryRevision": 1')
+    divergent = tmp_path / "rollback-divergent" / "app-local.md"
+    _start_scalar_runtime(
+        runtime,
+        first,
+        Path(first.path),
+        divergent,
     )
-    divergent_lineage.chmod(0o600)
+    divergent_store = AppLocalSettingsStore(divergent)
+    divergent_settings = divergent_store.load()
+    divergent_settings.known_vaults["path:/outside"] = KnownVaultRef(
+        ref="path:/outside",
+        path="/outside",
+    )
+    divergent_store.save(divergent_settings)
     before = runtime.layout.registry_path.read_bytes()
-    with pytest.raises(RegistryError, match="stale, ambiguous, or divergent"):
+    with pytest.raises(RegistryError, match="escaped the selected binding"):
         runtime.merge_previous_scalar_image(divergent)
     assert runtime.layout.registry_path.read_bytes() == before

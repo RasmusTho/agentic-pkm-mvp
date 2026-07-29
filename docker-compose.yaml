@@ -179,6 +179,8 @@ services:
         exec bash /app/scripts/start_api.sh
     environment:
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
+      INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
@@ -275,6 +277,8 @@ services:
         exec python -m app.workers.outbox_worker
     environment:
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
+      INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
@@ -354,6 +358,8 @@ services:
         exec python -m app.cli watcher run
     environment:
       - INSTANCE_STATE_LEGACY_ROLLBACK=${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      - INSTANCE_VAULT_REGISTRY_PATH=/app/instance-state/agentic-pkm/vault-registry.md
+      - INSTANCE_OWNERSHIP_ROOT=/app/instance-ownership
       - DESIGN_HANDOFF_APP_LOCAL_SETTINGS=${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
       - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
@@ -430,6 +436,8 @@ services:
         exec python -m app.cli heimdal capture-watch
     environment:
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
+      INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
     extra_hosts:
       - "host.docker.internal:host-gateway"
