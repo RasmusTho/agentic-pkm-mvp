@@ -331,9 +331,9 @@ def _gh_source(
     def runner(command: list[str], **_kwargs: object) -> Result:
         endpoint = command[-1]
         endpoints.append(endpoint)
-        if endpoint.endswith(
-            "actions/workflows/verification-dispatch-request.yml/runs"
-            "?per_page=100&status=success"
+        if endpoint.startswith(
+            f"repos/{REPO}/actions/workflows/verification-dispatch-request.yml/runs"
+            "?per_page=100&status=success&created=>="
         ):
             return Result(json.dumps({"workflow_runs": [{"id": PRODUCER_RUN_ID}]}))
         if endpoint.endswith(f"actions/runs/{PRODUCER_RUN_ID}/artifacts?per_page=100"):
@@ -403,9 +403,11 @@ def test_gh_source_authenticates_producer_before_reading_request_json() -> None:
     source, endpoints = _gh_source(payload)
 
     assert source.pending_requests(REPO) == [payload]
-    assert endpoints == [
+    assert endpoints[0].startswith(
         f"repos/{REPO}/actions/workflows/verification-dispatch-request.yml/runs"
-        "?per_page=100&status=success",
+        "?per_page=100&status=success&created=>="
+    )
+    assert endpoints[1:] == [
         f"repos/{REPO}/actions/runs/{PRODUCER_RUN_ID}/artifacts?per_page=100",
         f"repos/{REPO}/actions/runs/{PRODUCER_RUN_ID}",
         f"repos/{REPO}/actions/artifacts/7/zip",

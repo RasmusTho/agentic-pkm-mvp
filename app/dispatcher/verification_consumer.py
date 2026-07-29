@@ -318,7 +318,16 @@ _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_LISTING_ROWS = 1_000
-_MAX_VERIFICATION_REQUEST_RUN_ROWS = 200
+# Unlike artifacts (which age out via retention/expiry), workflow-run history
+# accumulates forever, so a plain row cap on "all runs of this workflow" goes
+# stale exactly like the repo-wide artifact listing did (confirmed live: this
+# repository already has 1,000+ successful verification-dispatch-request.yml
+# runs). Discovery instead windows the query by recency (see
+# _VERIFICATION_REQUEST_RUN_LOOKBACK below): the row bound only has to cover
+# runs from that window, which scales with current dispatch *rate*, not with
+# all-time repository history.
+_MAX_VERIFICATION_REQUEST_RUN_ROWS = 1_000
+_VERIFICATION_REQUEST_RUN_LOOKBACK = timedelta(hours=48)
 _MAX_REQUEST_BYTES = 1_000_000
 _MAX_CLOSURE_CANDIDATES = 20
 _MAX_REPOSITORY_CLOSURE_EVENTS = 500
@@ -1034,13 +1043,18 @@ class GhCliVerificationSource:
     ) -> list[dict[str, object]]:
         """Discover pending verification-dispatch requests.
 
-        Unscoped (default): enumerate recent runs of the
-        ``verification-dispatch-request.yml`` workflow — bounded by the
-        number of relevant runs, not by the repository's total artifact
-        count — and read each run's own (small, run-scoped) artifact
-        listing. This replaced a repository-wide artifact scan that exceeded
-        its bound on every call once the repository held more artifacts than
-        ``_MAX_ARTIFACT_LISTING_ROWS``.
+        Unscoped (default): enumerate runs of the
+        ``verification-dispatch-request.yml`` workflow created within the
+        last ``_VERIFICATION_REQUEST_RUN_LOOKBACK`` window, and read each
+        run's own (small, run-scoped) artifact listing. This replaced a
+        repository-wide artifact scan that exceeded its bound on every call
+        once the repository held more artifacts than
+        ``_MAX_ARTIFACT_LISTING_ROWS``. The window (not just a row cap) is
+        load-bearing: this workflow fires on every CI Smoke completion, so
+        its all-time run count grows without bound the same way the
+        repository's total artifact count did; only the recency filter keeps
+        the query small regardless of how old the repository or the
+        workflow gets.
 
         Scoped (additive, optional, keyword-only): when both ``pr_number``
         and ``head_sha`` are supplied, issue exactly one exact-name query for
@@ -1079,10 +1093,13 @@ class GhCliVerificationSource:
                 repository, artifacts, requests, limit, first_rejection
             )
         else:
+            cutoff = (
+                datetime.now(timezone.utc) - _VERIFICATION_REQUEST_RUN_LOOKBACK
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
             runs = self._verification_dispatch_run_pages(
                 f"repos/{repository}/actions/workflows/"
                 f"{_VERIFICATION_REQUEST_WORKFLOW_FILENAME}/runs"
-                "?per_page=100&status=success"
+                f"?per_page=100&status=success&created=>={cutoff}"
             )
             for run in runs:
                 if len(requests) >= limit:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -3668,9 +3668,9 @@ def _discovery_source(
                 "listing (that scan is exactly what exceeds "
                 "_MAX_ARTIFACT_LISTING_ROWS in production)"
             )
-        if endpoint.endswith(
-            "actions/workflows/verification-dispatch-request.yml/runs"
-            "?per_page=100&status=success"
+        if endpoint.startswith(
+            f"repos/{REPO}/actions/workflows/verification-dispatch-request.yml/runs"
+            "?per_page=100&status=success&created=>="
         ):
             return Result(json.dumps({"workflow_runs": [{"id": 123}]}))
         if endpoint.endswith("actions/runs/123/artifacts?per_page=100"):
@@ -7504,4 +7504,54 @@ def test_redacted_failure_replay_remains_deduplicated(tmp_path) -> None:
     assert private not in json.dumps(
         {"attempts": state.attempts(first.run_id), "terminal": first.terminal_receipt},
         sort_keys=True,
+    )
+
+
+def test_unscoped_discovery_window_is_recent_not_merely_present() -> None:
+    """The recency cutoff must be live, not decorative.
+
+    The other discovery tests assert that the endpoint carries a
+    ``created=>=`` filter, which a cutoff of ``1970-01-01`` would satisfy
+    while doing nothing at all -- and a window that filters nothing puts the
+    scan straight back on the unbounded path this issue exists to close.
+    Assert the value, not just the parameter's presence.
+    """
+
+    payload = artifact_request()
+    source, calls = _discovery_source(payload)
+    before = datetime.now(timezone.utc)
+
+    assert source.pending_requests(REPO) == [payload]
+
+    run_queries = [
+        call
+        for call in calls
+        if "actions/workflows/verification-dispatch-request.yml/runs" in call
+    ]
+    assert run_queries, "unscoped discovery must enumerate the workflow's runs"
+
+    match = re.search(r"created=>=([0-9T:\-]+Z)", run_queries[0])
+    assert match, f"no recency cutoff in {run_queries[0]}"
+    cutoff = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+
+    # The ceiling is deliberately independent of
+    # ``_VERIFICATION_REQUEST_RUN_LOOKBACK``. Asserting the cutoff against the
+    # module's own constant is circular: widening the constant would widen the
+    # assertion with it and the test would keep passing while the window
+    # stopped bounding anything. This is the exact failure mode that let
+    # PR #4241 discharge every acceptance criterion with the mechanism dead.
+    max_useful_window = timedelta(days=7)
+    lookback = verification_consumer._VERIFICATION_REQUEST_RUN_LOOKBACK
+
+    assert cutoff <= before, "cutoff must not be in the future"
+    assert before - cutoff <= max_useful_window, (
+        f"cutoff {cutoff.isoformat()} is more than {max_useful_window} old; "
+        "this workflow fires on every CI Smoke completion, so a window that "
+        "wide stops bounding the scan and reopens the unbounded path"
+    )
+    assert before - cutoff <= lookback + timedelta(minutes=1), (
+        f"cutoff {cutoff.isoformat()} does not match the declared "
+        f"{lookback} lookback"
     )
