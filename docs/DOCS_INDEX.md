@@ -27,7 +27,7 @@ First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to lo
 
 | Work area | First-read docs |
 | --- | --- |
-| Builder-agent workflow | `AGENTS.md` → `.codex/skills/README.md` → `docs/architecture/SBS_OPERATING_MODEL.md` (Builder System boundary) → `docs/development/AGENT_OPERATING_PROTOCOL.md` |
+| Builder-agent workflow | `AGENTS.md :: Reading order` (the scoped session-entry list; do not read `AGENTS.md` whole) → `.codex/skills/README.md :: Skill routing` → the matching skill, which names any further section reads. `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification` and `docs/development/AGENT_OPERATING_PROTOCOL.md :: Behavioral rules` are inlined in `issue-to-code`; read them directly only outside that skill. Read scope: `.codex/skills/_shared/READ_SCOPE.md` |
 | Agent-facing flows / direct agent workspaces | `docs/AGENT-FLOWS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
 | Human-flow to SBS allocation / verification mapping | `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`, then `docs/architecture/SBS_OPERATING_MODEL.md` and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` |
 | Runtime agents | `docs/AGENTS.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` |
