@@ -13,6 +13,39 @@ def _write_legacy(path, frontmatter) -> None:
     MarkdownSettingsStore().write_frontmatter(path, frontmatter, body="# Legacy app-local settings\n")
 
 
+def test_parent_registry_acceptance(tmp_path) -> None:
+    """The MVR-01 parent composes migration, durability, and rollback authority."""
+
+    path = tmp_path / "app-local.md"
+    _write_legacy(
+        path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-parent-acceptance",
+            "lastActiveVaultRef": "path:/vault/a",
+            "knownVaults": {
+                "path:/vault/a": {
+                    "path": "/vault/a",
+                    "vaultId": "vault-a",
+                    "localInstanceId": "clone-a",
+                    "futureRegistration": {"preserved": True},
+                }
+            },
+            "futureTopLevel": {"preserved": True},
+        },
+    )
+    migrated = VaultRegistryStore(path).load_or_migrate()
+
+    assert migrated.revision == 1
+    assert migrated.authority == "dormant"
+    assert migrated.extensions["futureTopLevel"] == {"preserved": True}
+    assert next(iter(migrated.registrations.values())).extensions["futureRegistration"] == {
+        "preserved": True
+    }
+    assert path.with_suffix(path.suffix + ".legacy-export").is_file()
+    assert path.with_suffix(path.suffix + ".last-good").is_file()
+
+
 def test_legacy_app_local_state_migrates_losslessly(tmp_path) -> None:
     legacy_directory = tmp_path / "legacy-app-data"
     legacy_directory.mkdir(mode=0o755)

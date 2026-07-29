@@ -93,12 +93,22 @@ start only when neither the host-global lease nor any channel restart fence exis
 always run the full authenticated runtime preflight; module absence outside explicit rollback fails
 closed.
 
-This 01B recovery boundary also includes canonical-root overlap rejection and dormant recoverable
-lifecycle lineage. It deliberately leaves `authority: dormant`: the production picker continues to
-read and write the legacy scalar app-local payload, second-registration and lifecycle producers
-remain sealed, and the independently durable legacy source must not be retired. MVR-01C alone owns
-the guarded rollback gateway and authority cutover; the presence of the 01B volume or prepared
-registry is never evidence that cutover has occurred.
+MVR-01C cuts registry authority over only by committing one complete rollback floor into the same
+locked registry generation. That generation names one validated scalar rollback binding, refreshes
+the current legacy projection, records the roll-forward fork revision, and proves both the
+authenticated mutation-filtering gateway and the deny-by-default native guard. A partial or missing
+proof leaves `authority: dormant` and every registration producer sealed.
+
+Supported container rollback into a previous scalar image uses
+`docker-compose.scalar-rollback.yml`: the old API publishes no direct host port, is reachable only
+through the authenticated gateway, cannot call picker select/initialize routes, and mounts only the
+selected content root at `/app/selected-vault`. A current guard image materializes the exact legacy
+projection before the old API starts. Native rollback is supported only through the root-owned
+`scripts/scalar_rollback_native.sh` launcher with an available filesystem sandbox; otherwise it
+fails closed. A binding-keyed `minimumRuntimeSchema` floor blocks scalar API/worker startup before
+database or queue work. On roll-forward, the private fork receipt and unchanged registry revision
+must agree before rollback-period metadata and last-active state become the next registry revision;
+divergence preserves both sides without recreate.
 
 ### Target
 
