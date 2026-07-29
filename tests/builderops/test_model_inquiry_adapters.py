@@ -31,6 +31,7 @@ from app.ops.host_secret_contract import load_host_secret_contract
 from llm_contract import (
     ADAPTER_FAILURE_CLASSES as KERNEL_ADAPTER_FAILURE_CLASSES,
     AdapterResult as KernelAdapterResult,
+    ModelAccessIntent,
     ModelTurnAdapter as KernelModelTurnAdapter,
 )
 from app.builderops import model_inquiry_adapters as adapters_module
@@ -40,8 +41,10 @@ from tests.builderops.inquiry_intent import (
     COMMITTED_INTENT_PATH,
     CONTRACT_PATH,
     DECLARED_TEST_CREDENTIALS,
+    census_with_role_targets,
     intent_config,
     intent_env,
+    provisioned_env,
     resolver_for_targets,
     runtime_secret_file,
 )
@@ -136,6 +139,7 @@ def test_local_command_adapter_is_bounded_and_secret_safe(tmp_path: Path) -> Non
         model="configured-model",
         endpoint="https://api.anthropic.com/v1/messages",
         api_key="credential-sentinel",
+        intent=ModelAccessIntent(**COMMITTED_INTENT_CONFIG["roles"]["fable"]),
     )
     assert "credential-sentinel" not in json.dumps(
         adapters_module.sanitized_adapter_identity(http_adapter)
@@ -453,6 +457,95 @@ def test_role_credentials_resolve_through_the_host_secret_contract(
             load_adapter_descriptors(
                 {INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)}
             )
+
+
+def test_provider_payloads_preserve_declared_xhigh_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posted: list[dict[str, object]] = []
+
+    class Response:
+        headers = {"x-request-id": "request-safe", "request-id": "request-safe"}
+
+        def __init__(self, *, anthropic: bool) -> None:
+            self.anthropic = anthropic
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            response = json.dumps(_response())
+            if self.anthropic:
+                return {"id": "req-safe", "content": [{"type": "text", "text": response}]}
+            return {"id": "resp-safe", "choices": [{"message": {"content": response}}]}
+
+    def post(_endpoint: str, **kwargs: object) -> Response:
+        body = kwargs["json"]
+        assert isinstance(body, dict)
+        posted.append(body)
+        return Response(anthropic="output_config" in body)
+
+    monkeypatch.setattr(adapters_module.requests, "post", post)
+    adapters = load_adapters(provisioned_env(tmp_path))
+    request = {"system_prompt": "bounded", "phase": "draft"}
+
+    adapters["fable"].execute(request)
+    adapters["gpt_codex"].execute(request)
+
+    anthropic = next(body for body in posted if "output_config" in body)
+    openai = next(body for body in posted if "reasoning_effort" in body)
+    assert anthropic["output_config"] == {"effort": "xhigh"}
+    assert openai["reasoning_effort"] == "xhigh"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("reasoning_effort", "minimal", "xhigh"),
+        ("determinism_required", True, "deterministic"),
+        ("output_schema_ref", "builderops.unrelated.v1", "response schema"),
+        ("side_effect_class", "irreversible_external_write", "advisory"),
+    ],
+)
+def test_unsupported_model_inquiry_intent_is_refused_before_adapter_creation(
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    payload = intent_config()
+    payload["roles"]["fable"][field] = value
+
+    descriptors = load_adapter_descriptors(
+        {INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)}
+    )
+
+    assert not descriptors["fable"]["available"]
+    assert reason in descriptors["fable"]["reason"]
+
+
+def test_production_resolver_ignores_ambient_census_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambient = census_with_role_targets(
+        tmp_path,
+        {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
+    )
+    monkeypatch.setenv("PROVIDER_CENSUS_PATH", str(ambient))
+
+    production = load_adapter_descriptors(intent_env())
+    assert production["fable"]["provider"] == "anthropic"
+    assert production["gpt_codex"]["provider"] == "openai"
+
+    # Tests retain an explicit dependency-injection seam; ambient state is
+    # never that seam.
+    injected = resolver_for_targets(
+        tmp_path / "explicit",
+        {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
+    )
+    refused = load_adapter_descriptors(intent_env(), resolver=injected)
+    assert all(not descriptor["available"] for descriptor in refused.values())
 
 
 def test_committed_inquiry_intent_config_is_provider_free_and_value_free() -> None:

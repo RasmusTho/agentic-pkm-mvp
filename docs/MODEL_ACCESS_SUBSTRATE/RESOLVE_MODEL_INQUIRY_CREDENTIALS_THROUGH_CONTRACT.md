@@ -9,9 +9,11 @@ depends_on: [PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
 can_parallelize_with: []
 ---
 
-State: Implemented. Delivered by PR #4368 (issue #4291, 2026-07-29). The live provider run and
-legacy-bridge retirement remain parent validation on #4286. **This is the first task in the
-capability that changes runtime behaviour.**
+State: Repair in progress on reopened issue #4291. PR #4368 merged an implementation on 2026-07-29,
+but its exact SHA was already rejected by the required independent review; that delivery claim and
+its parent handoff are superseded until every protected repair item, full non-PG proof, and two clean
+final reviews are complete. The live provider run and legacy-bridge retirement remain parent
+validation on #4286. **This is the first task in the capability that changes runtime behaviour.**
 
 # Resolve Model Inquiry Credentials Through Contract
 

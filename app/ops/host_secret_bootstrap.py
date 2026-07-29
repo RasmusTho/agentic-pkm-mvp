@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -215,9 +216,8 @@ def load_runtime_secret_values(
     raw_path = str(source.get(HOST_SECRET_RUNTIME_ENV_FILE, "")).strip()
     if not raw_path:
         return {}
-    try:
-        content = Path(raw_path).read_text(encoding="utf-8")
-    except OSError:
+    content = _read_runtime_secret_file(Path(raw_path))
+    if content is None:
         return {}
     values: dict[str, str] = {}
     for line in content.splitlines():
@@ -226,6 +226,47 @@ def load_runtime_secret_values(
             continue
         values[name.strip()] = value
     return values
+
+
+def _read_runtime_secret_file(path: Path) -> str | None:
+    """Read one bootstrap-owned surface without following its final component."""
+    if not path.is_absolute():
+        return None
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        # A hostile FIFO must reach the descriptor-bound regular-file check
+        # instead of blocking forever while waiting for a writer.
+        flags |= os.O_NONBLOCK
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+        ):
+            return None
+        chunks: list[bytes] = []
+        total = 0
+        while chunk := os.read(descriptor, 65536):
+            total += len(chunk)
+            if total > 65536:
+                return None
+            chunks.append(chunk)
+        try:
+            return b"".join(chunks).decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return None
+    finally:
+        os.close(descriptor)
 
 
 def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:

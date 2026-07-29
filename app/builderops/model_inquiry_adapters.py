@@ -215,11 +215,24 @@ class HttpModelAdapter:
     model: str
     endpoint: str
     api_key: str
+    intent: ModelAccessIntent
     timeout_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
             raise BuilderOpsValidationError("HTTP adapter timeout_seconds must be positive")
+        if self.intent.reasoning_effort != "xhigh":
+            raise BuilderOpsValidationError("HTTP adapter requires xhigh reasoning effort")
+        if self.intent.determinism_required:
+            raise BuilderOpsValidationError(
+                "HTTP adapter refuses deterministic Model Inquiry execution"
+            )
+        if self.intent.output_schema_ref != "builderops.model-turn-response.v1":
+            raise BuilderOpsValidationError(
+                "HTTP adapter requires the declared Model Inquiry response schema"
+            )
+        if self.intent.side_effect_class != "advisory_review":
+            raise BuilderOpsValidationError("HTTP adapter permits advisory review only")
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
         if not self.endpoint or not self.api_key:
@@ -243,6 +256,7 @@ class HttpModelAdapter:
                         {"role": "user", "content": canonical_json(request)},
                     ],
                     "response_format": {"type": "json_object"},
+                    "reasoning_effort": self.intent.reasoning_effort,
                 },
                 timeout=self.timeout_seconds,
             )
@@ -282,6 +296,7 @@ class HttpModelAdapter:
                     "max_tokens": 4096,
                     "system": str(request["system_prompt"]),
                     "messages": [{"role": "user", "content": canonical_json(request)}],
+                    "output_config": {"effort": self.intent.reasoning_effort},
                 },
                 timeout=self.timeout_seconds,
             )
@@ -539,6 +554,7 @@ def load_adapters(
             model=resolution.model,
             endpoint=selected.endpoint_for(resolution),
             api_key=api_key,
+            intent=resolution.request.intent,
         )
     return adapters
 

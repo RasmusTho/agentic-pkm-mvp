@@ -35,12 +35,22 @@ mock fallback. Since MAS-05 (ADR-0064), **the caller declares intent and resolve
   (`docs/settings/models/providers.yaml`), verifies the census-required capabilities, and verifies
   distinct effective targets for the `model-inquiry-independent-review` group through the neutral
   kernel before any model call.
+- The resolver enforces every neutral intent field for this capability: the census-selected
+  `frontier` tier, exact `xhigh` reasoning effort, non-deterministic execution, the
+  `builderops.model-turn-response.v1` output schema, distinct-effective-target independence,
+  forbidden fallback, and advisory-review-only side effects. Unsupported intent is refused before
+  adapter creation. The provider adapter carries that validated intent forward and sends explicit
+  `xhigh` effort in both provider request shapes.
 - **Credentials are resolved through the host secret contract, not through a machine-local
   environment value.** The resolver maps each role to its declared logical identifier
   (`anthropic.api-key`, `gpt_codex` → `openai.api-key`) via
   `config/secrets/host_secret_contract.json`, and reads the value only from the mode-0600 runtime
   surface that `app/ops/host_secret_bootstrap.py` materializes. No role adapter reads a provider key
   from adapter configuration or from ambient process environment.
+- The fixed desktop launcher and installed role wrappers invoke
+  `run_with_host_secrets(channel="dev", consumer="builderops-model-inquiry", ...)` before the
+  provider path starts. The consumer accepts only an absolute, owner-owned, single-link regular file
+  with exact mode `0600`, opened without following its final path component.
 - A declared credential that is absent or malformed produces the typed `credential_unavailable`
   failure class, fails the run closed before any adapter call, names only the logical identifier, and
   never falls back to a subscription CLI, ambient environment, or another provider. An expired
@@ -64,9 +74,9 @@ does not install it.
 The repository owns the two stable headless command names: `fable-model-inquiry-role` and
 `codex-model-inquiry-role`. Run `scripts/install_model_inquiry_host.py install` to create owner-only
 executable wrappers in an explicit host bin directory. Each wrapper binds exactly one role to the
-versioned `scripts/model_inquiry_role_adapter.py`, which resolves a declared credential rather than
-an interactive session; an exact reinstall is a no-op, while a symlink, unsafe directory, or
-unrelated existing command fails closed without overwriting it.
+versioned `scripts/model_inquiry_role_adapter.py` through the host-secret bootstrap, which resolves a
+declared credential rather than an interactive session; an exact reinstall is a no-op, while a
+symlink, unsafe directory, or unrelated existing command fails closed without overwriting it.
 
 The companion `check` operation is read-only. It reports only whether both installed entrypoints
 match the adapter digest committed into the installer in its own operator-authoritative checkout

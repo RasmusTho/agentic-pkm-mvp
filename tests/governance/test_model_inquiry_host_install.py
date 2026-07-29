@@ -953,8 +953,17 @@ def test_headless_entrypoints_do_not_require_subscription_session(
             line for line in content.splitlines() if line.startswith("exec ")
         )
         executed = shlex.split(exec_line)[1:]
-        assert Path(executed[1]).name == host_installer.VERSIONED_ADAPTER_NAME
-        assert executed[2] == "--role"
+        assert executed[1:8] == [
+            "-m",
+            "app.ops.host_secret_bootstrap",
+            "--channel",
+            "dev",
+            "--consumer",
+            "builderops-model-inquiry",
+            "--",
+        ]
+        assert Path(executed[9]).name == host_installer.VERSIONED_ADAPTER_NAME
+        assert executed[10] == "--role"
         assert not any(
             Path(argument).name in {"claude", "codex"} for argument in executed
         )
@@ -983,7 +992,7 @@ def test_headless_entrypoints_do_not_require_subscription_session(
         check=False,
     )
 
-    assert executed.returncode == 1, executed.stderr
+    assert executed.returncode == 78, executed.stderr
     assert "anthropic.api-key" in executed.stderr
     assert "ANTHROPIC_API_KEY" not in executed.stderr
     assert executed.stdout == ""

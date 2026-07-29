@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.model_inquiry_adapters import (
     ADAPTER_FAILURE_CLASSES,
     AdapterExecutionError,
@@ -39,6 +40,7 @@ def preflight_dependencies(
     env: Mapping[str, str],
     *,
     command_cwd: Path,
+    resolver: BuilderModelAccessResolver | None = None,
 ) -> dict[str, Any]:
     """Validate the durable store and the resolved role adapters without mutation.
 
@@ -48,7 +50,7 @@ def preflight_dependencies(
     subscription session is probed, required, or discovered.
     """
     ModelInquiryService.from_env(env)
-    adapters = load_adapters(env)
+    adapters = load_adapters(env, resolver=resolver)
     return {
         "vault": "available",
         "credential_resolution": CREDENTIAL_RESOLUTION,

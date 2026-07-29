@@ -199,7 +199,12 @@ def _read_yaml(path: Path) -> dict[str, object]:
 
 def load_provider_census(path: Path | None = None) -> ProviderCensus:
     raw_path = os.getenv("PROVIDER_CENSUS_PATH")
-    census_path = Path(raw_path) if raw_path else (path or DEFAULT_PROVIDER_CENSUS_PATH)
+    # An explicit path is an authority-bearing dependency injection seam.  It
+    # must win over ambient process state; otherwise a caller can replace a
+    # resolver's pinned census (including provider endpoints) after the
+    # resolver has selected its trusted source.  Callers that intentionally
+    # retain the legacy environment-configured settings path omit ``path``.
+    census_path = path or (Path(raw_path) if raw_path else DEFAULT_PROVIDER_CENSUS_PATH)
     try:
         return ProviderCensus(**_read_yaml(census_path))
     except ValidationError as exc:

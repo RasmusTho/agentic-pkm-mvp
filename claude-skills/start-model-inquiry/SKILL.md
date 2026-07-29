@@ -1,6 +1,6 @@
 ---
 name: start-model-inquiry
-description: Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured remote host through its subscription-authenticated launcher when a development question needs independent model review before ticket creation.
+description: Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured remote host through its declared-credential launcher when a development question needs independent model review before ticket creation.
 ---
 
 # Start Model Inquiry
@@ -59,15 +59,17 @@ exclusive remote lock exactly once:
    start another inquiry. Return the verified `inquiry_id`, `final_state`,
    `terminal_receipt_id`, and `human_readable_report` exactly as returned.
 
-The configured remote host owns the existing Claude and Codex subscription sessions, BuilderOps configuration,
-and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host alias, and
-the remote launcher is host-specific operator configuration outside Git.
+The configured remote host owns BuilderOps configuration, durable inquiry artifacts, and the
+host-local values declared by the repository's host-secret contract. `Tailscale_macmini` is an
+operator-configured SSH host alias, and the remote launcher is host-specific operator configuration
+outside Git.
 
-On the configured host, the Fable command may be mediated by a host-local, GUI-session proxy so a
-non-interactive SSH launch does not need direct login-keychain access. This is an internal remote-host
-authentication path, not a desktop-skill capability: do not configure it, read or copy its credentials
-or certificates, invoke it directly, or substitute a different provider path. If that host path is
-unavailable, preserve the established ambiguous-launcher failure handling below.
+The fixed remote launcher invokes the repository-owned host-secret bootstrap before Model Inquiry
+starts. That bootstrap resolves the declared Anthropic and OpenAI logical identifiers from the host
+Keychain into a temporary owner-only runtime file, and removes it after the child terminates. This
+desktop skill must never provision, inspect, copy, print, or replace those values. If declared
+credential resolution is unavailable, preserve the established ambiguous-launcher failure handling
+below; do not fall back to a subscription session or another provider.
 
 The configured remote launcher owns the high-reasoning profile and extended per-role deadline for
 both independent roles. Do not lower or override that profile from the desktop skill, and do not
@@ -94,9 +96,9 @@ move its model or adapter configuration into the local workspace.
 ## Boundaries
 
 - Do not run local BuilderOps, Python, Codex, or Claude commands for this inquiry.
-- Do not install dependencies, run vault-init, configure adapters, or use API keys.
-- Do not configure, inspect, copy, or print remote-host proxy credentials, certificates, or endpoints.
+- Do not install dependencies, run vault-init, configure adapters, or provision API keys.
+- Do not configure, inspect, copy, or print host-secret values or provider endpoints.
 - Do not create a GitHub Issue; use the separate promotion path after a ready receipt exists.
 - Do not automate clicks, keystrokes, windows, tabs, or another desktop app.
 - Do not write model transcripts to Companion UI or a human knowledge vault.
-- Do not print subscription, adapter, or credential configuration while diagnosing a failure.
+- Do not print adapter or credential configuration while diagnosing a failure.

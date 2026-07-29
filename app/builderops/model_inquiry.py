@@ -2089,6 +2089,10 @@ def _validate_adapter_failure_diagnostic(value: Any) -> None:
         # provider secret, or host path can satisfy it.
         if not isinstance(credential, str) or not CREDENTIAL_IDENTITY_RE.fullmatch(credential):
             raise BuilderOpsValidationError("invalid credential identity reference")
+    if (failure_class == "credential_unavailable") != (optional_credential in value):
+        raise BuilderOpsValidationError(
+            "credential_unavailable and credential_identity_ref must appear together"
+        )
     if optional_exit_code in value:
         exit_code = value[optional_exit_code]
         if (

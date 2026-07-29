@@ -15,10 +15,12 @@ import pytest
 
 import app.ops.host_secret_bootstrap as host_secret_bootstrap
 from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_RUNTIME_ENV_FILE,
     HostSecretBootstrapError,
     HostSecretBootstrapTerminated,
     KeychainLookup,
     materialize_consumer_environment,
+    load_runtime_secret_values,
     run_with_host_secrets,
 )
 
@@ -335,6 +337,68 @@ def test_runtime_secret_file_is_mode_0600_and_cleaned_up(
     assert result == return_code
     assert observed_path is not None
     assert not observed_path.exists()
+
+
+def test_runtime_secret_reader_rejects_unsafe_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secure = tmp_path / "secure.env"
+    secure.write_text("OPENAI_API_KEY=" + _OPENAI_KEY + "\n", encoding="utf-8")
+    secure.chmod(0o600)
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(secure)}
+    ) == {"OPENAI_API_KEY": _OPENAI_KEY}
+
+    world_readable = tmp_path / "world-readable.env"
+    world_readable.write_text(secure.read_text(encoding="utf-8"), encoding="utf-8")
+    world_readable.chmod(0o644)
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(world_readable)}
+    ) == {}
+
+    symlink = tmp_path / "symlink.env"
+    symlink.symlink_to(secure)
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(symlink)}
+    ) == {}
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(tmp_path)}
+    ) == {}
+
+    real_uid = os.geteuid()
+    monkeypatch.setattr(
+        host_secret_bootstrap.os,
+        "geteuid",
+        lambda: real_uid + 1,
+    )
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(secure)}
+    ) == {}
+
+
+def test_runtime_secret_reader_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    fifo = tmp_path / "runtime-secret.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    probe = (
+        "import json,sys; "
+        "from app.ops.host_secret_bootstrap import "
+        "HOST_SECRET_RUNTIME_ENV_FILE,load_runtime_secret_values; "
+        "print(json.dumps(load_runtime_secret_values("
+        "{HOST_SECRET_RUNTIME_ENV_FILE: sys.argv[1]}), sort_keys=True))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(fifo)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=2,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "{}"
 
 
 def test_sigterm_forwards_to_consumer_and_cleans_runtime_secret_file(

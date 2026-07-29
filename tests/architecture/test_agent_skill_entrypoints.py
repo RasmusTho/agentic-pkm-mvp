@@ -264,7 +264,7 @@ def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed() -> N
         "| Valid terminal response | Preserve the response, then run the fixed remote release command. | Preserve the response, then run the fixed proven-local release procedure. |",
         "| Ambiguous launcher outcome after step 5 starts | Preserve the remote staging file and lock. | Preserve the local staging file and lock. |",
         "a cleanup failure must not replace or reclassify the captured launcher outcome.",
-        "The proven-local route may invoke only the fixed subscription-authenticated host launcher.",
+        "The proven-local route may invoke only the fixed declared-credential host launcher.",
     ):
         assert local_contract in normalized_skill
 

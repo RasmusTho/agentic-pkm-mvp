@@ -232,7 +232,10 @@ def _wrapper_content(
         f"# adapter-sha256={adapter_sha256}\n"
         f"# credential-resolution={CREDENTIAL_RESOLUTION}\n"
         "set -eu\n"
-        f"exec {shlex.quote(str(python))} {shlex.quote(str(adapter))} "
+        f"cd {shlex.quote(str(adapter.parents[1]))}\n"
+        f"exec {shlex.quote(str(python))} -m app.ops.host_secret_bootstrap "
+        "--channel dev --consumer builderops-model-inquiry -- "
+        f"{shlex.quote(str(python))} {shlex.quote(str(adapter))} "
         f"--role {shlex.quote(role)}\n"
     )
 

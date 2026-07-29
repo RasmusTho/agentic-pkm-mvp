@@ -26,12 +26,13 @@ write the question verbatim to a mode-`0600` local Markdown file. Remote callers
 ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
 ```
 
-The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and the existing
-Claude and Codex subscription sessions. Its launcher settings, credentials, and executable paths
-are host-specific operator configuration and stay outside Git; the portable subscription adapter
-profile is versioned with the BuilderOps command. That profile gives both roles `xhigh` reasoning
-effort and a bounded extended deadline. Neither skill rebuilds that environment, configures
-providers, or reimplements orchestration in prompt prose.
+The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and the
+host-local values declared by the repository's host-secret contract. Its launcher settings,
+credential values, and executable paths are host-specific operator configuration and stay outside
+Git. The launcher invokes `app.ops.host_secret_bootstrap` for the `builderops-model-inquiry`
+consumer before Model Inquiry starts; the bootstrap materializes one owner-only runtime file and
+removes it after the child terminates. Neither desktop skill rebuilds that environment, configures
+providers, handles credential values, or reimplements orchestration in prompt prose.
 
 The repo-local Codex skill also supports a caller already running on the configured inquiry host. Before
 any connection attempt or lock mutation, it expands the fixed `Tailscale_macmini` alias with
@@ -48,13 +49,13 @@ route copies to the same fixed staging file and directly invokes only:
 "$HOME/.local/bin/yggdrasil-model-inquiry" --question-file /tmp/model-inquiry-question.md
 ```
 
-The operator machine needs the `Tailscale_macmini` SSH alias. The remote host may internally mediate
-the Fable command through a GUI-session proxy so the SSH child does not directly depend on
-login-keychain access. That authentication path is host-specific operator configuration outside Git;
-desktop skill packages neither configure it nor access its credentials, certificates, or endpoint.
-A failed copy or launcher command, empty stdout, malformed/non-object JSON, or absent/empty response
-field fails loudly: report the error and stop. Do not retry, inspect the vault for a substitute
-response, or fall back to an in-chat inquiry.
+The operator machine needs the `Tailscale_macmini` SSH alias. On the remote host, declared Anthropic
+and OpenAI API-key identities resolve through the host-secret bootstrap and Keychain contract; no
+headless route uses the legacy GUI-session proxy or an interactive subscription session. Desktop
+skill packages neither provision nor access credential values. A failed copy or launcher command,
+empty stdout, malformed/non-object JSON, or absent/empty response field fails loudly: report the
+error and stop. Do not retry, inspect the vault for a substitute response, or fall back to an
+in-chat inquiry.
 
 The established host command has one fixed `/tmp/model-inquiry-question.md` input path. Before
 copying the question, both packages acquire `/tmp/yggdrasil-model-inquiry.lock` atomically: through
@@ -81,8 +82,8 @@ The SSH host must expose both durable role entrypoints before its launcher is co
 They are installed and checked with the repository-owned
 `scripts/install_model_inquiry_host.py` routine documented in the host agent playbook. This
 stabilizes the versioned command boundary across shell and reboot changes without moving provider
-credentials or subscription configuration into Git. The routine deliberately does not create a
-GUI-session proxy or alter authentication; those remain explicit host-operator setup when needed.
+credential values into Git. Each installed wrapper enters the same `run_with_host_secrets` boundary
+before executing the versioned provider-API adapter; it never launches a subscription CLI.
 
 ## Concretely
 
@@ -100,7 +101,7 @@ other.
 - [x] Both desktop skill packages preserve the exact remote-host bridge command and report its
   inquiry receipt fields. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
-- [x] Both packages reject local BuilderOps setup, provider configuration, API keys, and
+- [x] Both packages reject local BuilderOps setup, provider configuration, credential provisioning, and
   desktop-control automation. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages fail loudly for a copy/SSH failure, empty stdout, malformed JSON, or an absent
@@ -138,7 +139,7 @@ the operator. Generated archives are release artifacts and remain outside Git so
 - automating clicks or keystrokes in the other desktop app;
 - storing model transcripts in Companion UI or a human knowledge vault.
 - installing Python, BuilderOps, Codex, or Claude on the local machine;
-- changing authenticated subscription sessions or local desktop configuration.
+- provisioning or inspecting declared host-secret values.
 
 ## Related Docs
 

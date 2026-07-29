@@ -161,6 +161,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "model_access",
         (
             "llm_contract/",
+            "app/builderops/model_access_resolver.py",
             "tests/model_access/",
             "tests/architecture/test_llm_contract_kernel.py",
         ),
