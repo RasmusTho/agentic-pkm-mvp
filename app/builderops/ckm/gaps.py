@@ -218,6 +218,10 @@ def detect_gaps(
             continue
         scores = assessment.scores
         for dimension in MATURITY_DIMENSIONS:
+            if assessment.dimension_status.get(dimension) != "measured":
+                # CKM never measured this dimension (missing/unassessed/unsupported); a
+                # starved_dimension finding would blame the instrument gap on the system.
+                continue
             score = float(scores[dimension])
             if score >= resolved.floor:
                 continue
@@ -226,6 +230,7 @@ def detect_gaps(
                     sibling
                     for sibling in MATURITY_DIMENSIONS
                     if sibling != dimension
+                    and assessment.dimension_status.get(sibling) == "measured"
                     and float(scores[sibling]) >= resolved.healthy_floor
                 ),
                 key=lambda sibling: (-float(scores[sibling]), sibling),
@@ -344,6 +349,9 @@ def detect_gaps(
         if claim is None or assessment is None:
             continue
         for dimension in ("functional_completeness", "test_completeness"):
+            if assessment.dimension_status.get(dimension) != "measured":
+                # Unmeasured dimensions cannot outrun a claim CKM never checked against.
+                continue
             if float(assessment.scores[dimension]) < resolved.floor:
                 claim_groups.setdefault((edge.capability_id, dimension), []).append(
                     (artifact, edge, claim)
