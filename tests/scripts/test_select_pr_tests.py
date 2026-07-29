@@ -910,6 +910,10 @@ def test_llm_runtime_configuration_change_selects_llm_coverage() -> None:
     assert selection.full_suite is False
     assert selection.subsystems == ("llm_eval",)
     assert "tests/llm" in selection.targets
+    assert (
+        "tests/architecture/test_llm_provider_enforcement_inventory.py"
+        in selection.targets
+    )
 
 
 def test_embedding_router_identity_change_selects_complete_llm_coverage() -> None:

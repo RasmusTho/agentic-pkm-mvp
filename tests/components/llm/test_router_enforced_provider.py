@@ -67,6 +67,18 @@ def test_canonical_fabric_requires_provider_when_enforcement_is_enabled(
         get_chat_client(LLMTaskIntent(task_kind="ask"))
 
 
+def test_forced_provider_cannot_bypass_missing_enforced_provider(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
+    clean_llm_env.setenv("LLM_FORCE_PROVIDER", "mock")
+    clean_llm_env.setenv("LLM_FORCE_MODEL", "mock-chat")
+
+    with pytest.raises(LLMRouteError, match="LLM_PROVIDER is required"):
+        get_chat_client(LLMTaskIntent(task_kind="ask"))
+
+
 def test_no_compatible_route_fails_loud(clean_llm_env, cloud_primary_routing) -> None:
     """When the enforced provider serves none of the route candidates, the
     router fails loud instead of emitting a cross-provider route (#2109).

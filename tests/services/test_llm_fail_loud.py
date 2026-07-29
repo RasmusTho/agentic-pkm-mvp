@@ -45,6 +45,66 @@ class _HangingBackend:
         self._stop.wait(timeout=5.0)
 
 
+def test_direct_call_requires_provider_when_enforcement_is_enabled(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
+
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER is required"):
+        call_llm(
+            "direct-enforced-call",
+            {"system": "system", "user": "user"},
+            kind="ask.answer",
+        )
+
+
+def test_direct_call_override_cannot_bypass_missing_enforced_provider(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
+
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER is required"):
+        call_llm(
+            "explicit-mock-call",
+            {"system": "system", "user": "user"},
+            provider_override="mock",
+            kind="ask.answer",
+        )
+
+
+def test_direct_call_rejects_override_conflicting_with_enforced_provider(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("LLM_PROVIDER", "ollama")
+    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
+
+    with pytest.raises(RuntimeError, match="provider override conflicts"):
+        call_llm(
+            "conflicting-provider-call",
+            {"system": "system", "user": "user"},
+            provider_override="mock",
+            kind="ask.answer",
+        )
+
+
+def test_direct_call_accepts_override_matching_enforced_provider(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("LLM_PROVIDER", "mock")
+    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
+
+    result = call_llm(
+        "matching-provider-call",
+        {"system": "system", "user": "user"},
+        provider_override="mock",
+        kind="ask.answer",
+    )
+
+    assert result == _deterministic_llm_response()
+
+
 def test_ollama_provider_error_does_not_return_canned_response(monkeypatch, clean_llm_env) -> None:
     """A real-provider (ollama) HTTP error/timeout must propagate, never resolve
     to the canned deterministic blob.

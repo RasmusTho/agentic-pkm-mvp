@@ -155,6 +155,21 @@ def test_reflection_session_uses_existing_chat_surface(tmp_path: Path) -> None:
     assert conversation.session.log_path.is_relative_to(root / ".chats")
 
 
+def test_default_reflection_path_requires_provider_when_enforcement_is_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, context, note = _vault(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER_ENFORCE", "1")
+
+    service = ReflectionConversationService(vault_root=root, now_fn=lambda: NOW)
+
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER is required"):
+        service.start(note_path=note, day_context=bundle)
+
+
 def test_real_provider_receives_day_context_and_transcript_in_user_messages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

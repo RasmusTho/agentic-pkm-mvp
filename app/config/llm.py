@@ -36,18 +36,35 @@ def _log_provider_info(provider: str) -> None:
     )
 
 
-def ensure_provider() -> str:
+def ensure_provider(provider_override: str | None = None) -> str:
+    """Resolve a provider at an execution seam and preserve enforced fail-loud.
+
+    Enforcement requires an ambient Product provider and forbids an override
+    from changing that identity. Outside enforcement, an explicit resolved
+    override remains authoritative for its call.
+    """
+
     global _ACTIVE_PROVIDER
-    candidate = _normalize_provider(os.getenv("LLM_PROVIDER"))
+    ambient_provider = _normalize_provider(os.getenv("LLM_PROVIDER"))
+    override_provider = _normalize_provider(provider_override)
     enforce = _env_flag("LLM_PROVIDER_ENFORCE", default=False)
 
-    if candidate is None:
-        if enforce:
-            raise RuntimeError(
-                "LLM_PROVIDER is required when LLM_PROVIDER_ENFORCE=1; "
-                "export LLM_PROVIDER=ollama (plus any model/endpoint vars) or LLM_PROVIDER=mock for deterministic runs."
-            )
-        candidate = "mock"
+    if enforce and ambient_provider is None:
+        raise RuntimeError(
+            "LLM_PROVIDER is required when LLM_PROVIDER_ENFORCE=1; "
+            "export LLM_PROVIDER=ollama (plus any model/endpoint vars) or LLM_PROVIDER=mock for deterministic runs."
+        )
+    if (
+        enforce
+        and override_provider is not None
+        and override_provider != ambient_provider
+    ):
+        raise RuntimeError(
+            "provider override conflicts with LLM_PROVIDER_ENFORCE=1 "
+            f"(enforced={ambient_provider!r}, override={override_provider!r})"
+        )
+
+    candidate = override_provider or ambient_provider or "mock"
 
     if _ACTIVE_PROVIDER == candidate:
         return _ACTIVE_PROVIDER

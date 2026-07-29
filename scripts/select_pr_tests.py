@@ -487,6 +487,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "docs/eval/",
             "tests/components/embeddings/",
             "tests/components/llm/",
+            "tests/architecture/test_llm_provider_enforcement_inventory.py",
             "tests/index/test_identity_migration.py",
             "tests/llm/",
             "tests/eval/",
@@ -497,6 +498,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "tests/components/embeddings",
             "tests/components/llm",
+            "tests/architecture/test_llm_provider_enforcement_inventory.py",
             "tests/index/test_identity_migration.py",
             "tests/llm",
             "tests/eval",

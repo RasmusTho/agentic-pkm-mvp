@@ -33,6 +33,21 @@ def _llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CI", raising=False)
 
 
+@pytest.mark.parametrize("mode", [ReasoningMode.PLANNING, ReasoningMode.ASK_ANSWER])
+def test_default_reasoning_execution_requires_provider_when_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: ReasoningMode,
+) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER_ENFORCE", "1")
+    monkeypatch.setenv("REASONING_PROVIDER", "llm")
+    monkeypatch.delenv("CI", raising=False)
+
+    with pytest.raises(RuntimeError, match="LLM_PROVIDER is required"):
+        run_reasoning(mode, [], question="Ship the thing")
+
+
 def test_planning_mode_returns_structured_plan_on_mock_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
