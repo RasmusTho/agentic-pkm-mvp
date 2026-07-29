@@ -54,6 +54,17 @@ DOCS_TARGETS = (
     # test_review_before_ci_gate.py reads docs/TESTING.md content directly
     # (#4281); a docs/**-only PR must run it, not only tests/architecture.
     "tests/ops/test_review_before_ci_gate.py",
+    # tests/governance/** asserts on docs/** content that routes through THIS
+    # branch, not the governance one: only docs/development/** matches
+    # _is_governance_only's prefixes, so edits to docs/AGENT_ISSUE_DISPATCHER.md,
+    # docs/ARCHITECTURE.md, docs/architecture/SBS_OPERATING_MODEL.md,
+    # docs/STATUS.md, docs/ROADMAP.md, docs/DESIGN_HANDOFF_GOVERNANCE.md,
+    # docs/adr/**, or docs/testing/invariant-tests.md landed here and never ran
+    # test_project_pickup_deprecation.py, test_codex_agents_contract.py,
+    # test_known_defects_registry.py, test_issue_pr_governance.py, or
+    # test_vault_multiwriter_frontmatter.py — the suites that read those exact
+    # files — while the required check still reported success.
+    "tests/governance",
 )
 
 DOCS_ONLY_EXCLUDED_EXACT = {

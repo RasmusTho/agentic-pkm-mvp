@@ -149,6 +149,89 @@ def test_unit_test_lane_covers_agent_contract_and_doc_paths() -> None:
     assert cheap_selection.subsystems == ("docs",)
 
 
+def _smoke_job_text() -> str:
+    workflow = _smoke_text()
+    return workflow[workflow.index("  smoke:") : workflow.index("  smoke-docker:")]
+
+
+def test_docs_only_lane_runs_the_governance_suite_that_asserts_on_docs() -> None:
+    # Companion gap to #4281 on the docs side. Only `docs/development/**` matches
+    # `_is_governance_only`'s prefixes, so every other governance-relevant doc
+    # routed to the docs branch -- whose targets omitted `tests/governance`
+    # entirely. Editing any of these files could therefore break the governance
+    # test that reads it while the required check stayed green.
+    docs_read_by_governance_tests = (
+        # test_project_pickup_deprecation.py, test_autonomous_escalation_contract.py
+        "docs/AGENT_ISSUE_DISPATCHER.md",
+        # test_project_pickup_deprecation.py
+        "docs/ARCHITECTURE.md",
+        # test_codex_agents_contract.py
+        "docs/architecture/SBS_OPERATING_MODEL.md",
+        # test_known_defects_registry.py
+        "docs/STATUS.md",
+        "docs/ROADMAP.md",
+        # test_issue_pr_governance.py
+        "docs/DESIGN_HANDOFF_GOVERNANCE.md",
+        # test_vault_multiwriter_frontmatter.py
+        "docs/adr/ADR-0055-vault-multiwriter-consistency-model.md",
+        "docs/testing/invariant-tests.md",
+    )
+    for changed_file in docs_read_by_governance_tests:
+        selection = select_tests([changed_file])
+        assert selection.full_suite is False, (
+            f"{changed_file} must stay on a scoped lane, not the full suite"
+        )
+        assert "tests/governance" in selection.targets, (
+            f"{changed_file} is read directly by a tests/governance module but "
+            "did not select tests/governance; a change to it could break that "
+            "test with a green required check"
+        )
+
+
+def test_docs_guard_runs_on_the_pr_path_for_governance_and_doc_changes() -> None:
+    # scripts/docs_guard.py's only caller was architecture-ci.yaml, which is
+    # workflow_dispatch-only (#3892) -- so the guard ran on no pull request at
+    # all. The smoke job now runs it for the governance/docs-only shape.
+    job = _smoke_job_text()
+    assert "scripts/docs_guard.py" in job, (
+        "scripts/docs_guard.py has no PR-triggered caller; architecture-ci.yaml "
+        "is workflow_dispatch-only"
+    )
+
+    # The filter it is gated on must cover the same four path classes as the
+    # required check's `code` filter, or the two gates drift apart.
+    filters = job[job.index("filters: |") : job.index("- name: Install system deps")]
+    governance_docs = filters[filters.index("governance_docs:") :]
+    for expected in PREVIOUSLY_EXCLUDED_GLOBS:
+        assert f"- '{expected}'" in governance_docs, (
+            f"governance_docs filter is missing {expected!r}"
+        )
+
+    # Scope guard: the step must stay off the runtime surface. docs_guard's
+    # app/**-vs-docs and temporal-owner rules fire on app/**, scripts/**, and
+    # config/** changes, so an unscoped step would newly fail ordinary runtime
+    # PRs -- a different change from closing the docs-side coverage gap.
+    guard_step = job[job.index("- name: Docs guard") :]
+    guard_step = guard_step[: guard_step.index("- name: Doc integrity")]
+    assert "steps.changes.outputs.governance_docs == 'true'" in guard_step
+    assert "steps.changes.outputs.heavy_smoke != 'true'" in guard_step
+
+
+def test_heavy_smoke_stays_off_the_docs_surface() -> None:
+    # The inverse assertion: heavy_smoke must NOT be widened to the doc surface.
+    # Every step it gates is runtime-code-only, so including docs/** there would
+    # cost a docs typo the full runtime smoke while adding no assertion that
+    # reads the changed file (AGENTS.md :: Total Cost of Development). The
+    # coverage those paths need comes from the selector and the guard above.
+    job = _smoke_job_text()
+    heavy = job[job.index("heavy_smoke:") : job.index("governance_docs:")]
+    for docs_glob in ("docs/**", "AGENTS.md", "CLAUDE.md", ".codex/**"):
+        assert f"- '{docs_glob}'" not in heavy, (
+            f"heavy_smoke must not include {docs_glob!r}: it gates only "
+            "runtime-code test slices, none of which read that surface"
+        )
+
+
 def test_pr_4275_shaped_diff_now_selects_architecture_and_ci_gate_coverage() -> None:
     # Live reproduction named in #4281: PR #4275 (head d9c098f0e) changed only
     # .codex/AGENTS.md, .codex/skills/README.md, .codex/skills/_shared/READ_SCOPE.md,
