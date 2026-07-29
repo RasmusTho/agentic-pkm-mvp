@@ -1106,6 +1106,55 @@ def test_quiescence_proof_rejects_pre_admitted_scalar_runtime(
     proof.require_valid(channel_id="prod")
 
 
+def test_quiescence_proof_preserves_a_late_live_legacy_claim(
+    tmp_path,
+) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+        controller_pid=456,
+        controller_start_token=f"linux:{'2' * 64}",
+    )
+    current_lease_bytes = _deployment_lease_path(ownership).read_bytes()
+    fence_path = _deployment_fence_path(ownership, "prod")
+    fence_bytes = fence_path.read_bytes()
+    legacy_lease = ownership / "deployment-host-global-lease.json"
+    legacy_lease.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-lease.v2",
+                "channel_id": "prod",
+                "nonce": "late-live-v2",
+                "phase": "claimed",
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": _controller_token(os.getpid()),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    legacy_lease.chmod(0o600)
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="legacy host-global deployment lease remains active",
+    ):
+        _prove_empty_quiescence(
+            channel="prod",
+            host_global_root=ownership,
+        )
+    assert legacy_lease.is_file()
+    assert _deployment_lease_path(ownership).read_bytes() == current_lease_bytes
+    assert fence_path.read_bytes() == fence_bytes
+
+
 def test_quiescence_proof_recovers_publication_after_proved_lease(
     tmp_path,
     monkeypatch,
@@ -1529,6 +1578,69 @@ def test_deployment_finish_recovers_interrupted_authority_cleanup(
     assert receipt["restart_fence_cleared"] is True
     assert not _deployment_lease_path(runtime.ledger.root).exists()
     assert not _deployment_fence_path(runtime.ledger.root, "prod").exists()
+
+
+def test_deployment_finish_preserves_a_late_live_legacy_claim(
+    tmp_path,
+) -> None:
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "state", "prod"),
+        tmp_path / "ownership",
+    )
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    proof, inventory = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=_current_registry_owners(runtime),
+    )
+    current_lease_bytes = _deployment_lease_path(
+        runtime.ledger.root
+    ).read_bytes()
+    fence_path = _deployment_fence_path(runtime.ledger.root, "prod")
+    fence_bytes = fence_path.read_bytes()
+    legacy_lease = (
+        runtime.ledger.root / "deployment-host-global-lease.json"
+    )
+    legacy_lease.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-lease.v2",
+                "channel_id": "prod",
+                "nonce": "late-live-v2",
+                "phase": "claimed",
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": _controller_token(os.getpid()),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    legacy_lease.chmod(0o600)
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="legacy host-global deployment lease remains active",
+    ):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=inventory,
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+    assert legacy_lease.is_file()
+    assert (
+        _deployment_lease_path(runtime.ledger.root).read_bytes()
+        == current_lease_bytes
+    )
+    assert fence_path.read_bytes() == fence_bytes
 
 
 def test_restore_rejects_missing_durable_quiescence_proof_before_writes(tmp_path) -> None:

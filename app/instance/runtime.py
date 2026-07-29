@@ -1210,6 +1210,15 @@ def _read_legacy_deployment_lease(
         ) from exc
 
 
+def _require_no_legacy_deployment_lease(host_global_root: Path) -> None:
+    legacy_path = _legacy_deployment_lease_path(host_global_root)
+    if legacy_path.exists():
+        _read_legacy_deployment_lease(host_global_root)
+        raise InstanceStatePreflightError(
+            "legacy host-global deployment lease remains active"
+        )
+
+
 def _controller_identity_is_live(controller: object) -> bool:
     if not isinstance(controller, dict):
         return False
@@ -1433,6 +1442,7 @@ def _prove_instance_state_quiescence(
     root = _assert_mount_root(host_global_root, "host-global")
     lease_path = _deployment_lease_path(root)
     try:
+        _require_no_legacy_deployment_lease(root)
         lease = _read_deployment_lease(root)
         inventory_file = Path(inventory_path)
         inventory_metadata = inventory_file.lstat()
@@ -1487,6 +1497,7 @@ def _prove_instance_state_quiescence(
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise InstanceStatePreflightError("complete two-pass host-wide quiescence inventory is required") from exc
     with _scalar_rollback_runtime_quiescent(root):
+        _require_no_legacy_deployment_lease(root)
         lease = _read_deployment_lease(root)
         if (
             any(
@@ -1823,6 +1834,7 @@ def _complete_instance_state_deployment_cleanup(
     """Complete the durable cleanup phase and return its stored receipt."""
 
     ownership_root = Path(host_global_root).expanduser().resolve(strict=False)
+    _require_no_legacy_deployment_lease(ownership_root)
     lease = _read_deployment_lease(ownership_root)
     result = lease.get("result")
     channel = lease.get("channel_id")
@@ -1835,11 +1847,11 @@ def _complete_instance_state_deployment_cleanup(
     ):
         raise InstanceStatePreflightError(
             "valid deployment cleanup receipt is required"
-        )
+    )
     _deployment_fence_path(ownership_root, channel).unlink(missing_ok=True)
     (ownership_root / "deployment-quiescence-proof.json").unlink(missing_ok=True)
-    _legacy_deployment_lease_path(ownership_root).unlink(missing_ok=True)
     _fsync_directory(ownership_root)
+    _require_no_legacy_deployment_lease(ownership_root)
     _deployment_lease_path(ownership_root).unlink(missing_ok=True)
     _fsync_directory(_deployment_public_root(ownership_root))
     return dict(result)
@@ -1862,6 +1874,7 @@ def _finish_instance_state_deployment_locked(
 
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
+    _require_no_legacy_deployment_lease(ownership_root)
     if _deployment_lease_path(ownership_root).exists():
         active_lease = _read_deployment_lease(ownership_root)
         if active_lease.get("phase") == "cleanup":
@@ -1969,6 +1982,7 @@ def _finish_instance_state_deployment_locked(
         "restart_fence_cleared": True,
     }
     lease_path = _deployment_lease_path(ownership_root)
+    _require_no_legacy_deployment_lease(ownership_root)
     lease = _read_deployment_lease(ownership_root)
     if (
         lease.get("channel_id") != channel
