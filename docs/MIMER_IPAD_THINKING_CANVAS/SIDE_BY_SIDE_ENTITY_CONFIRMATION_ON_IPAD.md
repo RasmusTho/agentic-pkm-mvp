@@ -1,6 +1,6 @@
 ---
 name: Side-By-Side Entity Confirmation On iPad
-description: JE on the iPad canvas — a pending entity mention beside its candidate entities' context, merge/reject recorded as reversible appended decisions with provenance.
+description: JE on the iPad canvas — a pending entity mention beside candidate context, with proposal-bound approval/reject/undo signals and Hub-owned merge execution.
 task_id: MIPAD-03
 source_anchor: docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md :: §2 Platform footprint
 parent_capability: Mimer iPad Thinking Canvas
@@ -19,9 +19,10 @@ Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
 
 The design-of-record calls side-by-side entity confirmation "the single biggest iPad win": the
 score-banded candidate compare is cramped on a phone. B1's `EntityConfirmLensView` (A17) already
-implements the JE mechanism end-to-end on iPhone — read `pending` from
-`_heimdal/entities/review.md`, append to `decisions`, hub applies and clears. This task widens
-that same mechanism into a comparison surface; it does not change the note contract.
+implements the JE review surface end-to-end on iPhone — read `pending` from
+`_heimdal/entities/review.md`, record a proposal-bound review signal, and let the Hub canonicalize,
+apply, record, and clear it. This task widens that surface; it does not give the client
+merge-execution authority.
 
 ## What This Task Does
 
@@ -33,13 +34,12 @@ that same mechanism into a comparison surface; it does not change the note contr
   resolve and render the candidate's entity note from the Mimer-owned register
   (`_heimdal/entities/…`, read-only; when a candidate note does not exist as a file, render the
   bare ID with an explicit "no note yet" state, never a crash or a hidden row).
-- **Actions:** Merge (into a chosen candidate — selection required when more than one candidate,
-  replacing B1's first-candidate default on this surface), Reject, and **Undo** (a compensating
-  decision appended for the same `queue_entry_id`, per INV-B2-4). All three go through
-  `fileStore.readModifyWrite(HeimdalPaths.entityReview)` + `EntityReviewNote.addDecision` — the
-  identical seam B1 uses, now coordinated + provenance-tagged by bifrost#4/#5.
-- The client never mutates `pending`, never edits or deletes prior `decisions` entries, and never
-  writes the entity register notes themselves (Mimer-organ-owned, ADR-0049 §2).
+- **Actions:** Approve the displayed merge proposal into a chosen candidate (selection required when
+  more than one candidate), Reject, and **Undo** a still-unapplied approval. These are
+  proposal-bound review signals through the coordinated/provenance-tagged review seam; the Hub,
+  not the client signal, canonicalizes an approval into a merge operation.
+- The client never mutates `pending`, never edits or deletes prior review history, never writes the
+  entity register notes, and never owns merge execution (Mimer-organ-owned, ADR-0049 §2).
 
 ## Undo boundary
 
@@ -57,20 +57,21 @@ reversal.
 
 ## Concretely
 
-iPad simulator with a fixture vault: `_heimdal/entities/review.md` containing one pending entry
+iPad simulator with a fixture vault: `_heimdal/entities/review.md` containing one pending proposal
 with two candidates → detail shows mention left, two candidate cards right → tapping a candidate
-then **Merge** appends `{queue_entry_id, action: merge, from, into, decided_at}` to `decisions`
-(file diff shows exactly one appended array entry plus provenance update) → **Undo**, before hub
-application, appends `{queue_entry_id, action: undo, decided_at}`; `pending` is untouched by the
-client in both cases and the hub fold preserves it as undecided.
+then **Approve** records one proposal-bound approval with the selected candidate and provenance →
+the Hub canonicalizes that approval into the sole merge operation and later publishes the durable
+outcome → **Undo**, before Hub application, records a compensating undo for the same proposal.
+`pending` is untouched by the client in every case; the Hub fold preserves a compensated proposal as
+undecided.
 
 ## Why This Matters
 
 Entity merges are identity decisions over the knowledge base — a wrong or lost decision corrupts
-the register the whole system resolves against. Reversible append-only decisions with provenance
-are what make a fat-finger on a tablet recoverable instead of destructive. This satisfies #3024's
-"reversible" acceptance at the decision layer; materializing register redirects from decisions
-stays hub-side.
+the register the whole system resolves against. Proposal-bound, reversible review signals make a
+fat-finger on a tablet recoverable while keeping canonical execution and durable outcomes in the
+Hub. This satisfies #3024's "reversible" acceptance at the review layer; materializing register
+redirects stays Hub-side.
 
 ## Acceptance Criteria
 
@@ -78,20 +79,20 @@ stays hub-side.
   missing-candidate-note state. `Verify:` bifrost
   `Yggdrasil/YggdrasilTests/EntityCompareModelTests.swift::testCandidateResolutionIncludingMissingNotes`
   (new; view-model level with a fixture store).
-- [ ] Merge with an explicitly selected candidate appends exactly one decision entry via
-  `readModifyWrite`; `pending` and prior `decisions` are byte-identical after the write except the
-  append. `Verify:` bifrost
-  `Yggdrasil/YggdrasilTests/EntityDecisionWriteTests.swift::testMergeAppendsSingleDecisionWithoutTouchingHistory`
+- [ ] Approving an explicitly selected candidate records exactly one proposal-bound review signal;
+  `pending` and prior history are byte-identical after the write except the append, and the signal
+  is not presented as a merge command. `Verify:` bifrost
+  `Yggdrasil/YggdrasilTests/EntityDecisionWriteTests.swift::testApprovalAppendsSingleProposalBoundSignalWithoutTouchingHistory`
   (new; asserts through the store's public API on a temp vault).
 - [ ] Undo appends a compensating decision for the same `queue_entry_id` and the UI reflects the
   entry as un-decided locally. `Verify:` bifrost
   `EntityDecisionWriteTests.swift::testUndoAppendsCompensatingDecision` (new).
-- [ ] Decisions carry the provenance behavior from bifrost#5 (block present/updated on the write).
-  `Verify:` bifrost `EntityDecisionWriteTests.swift::testDecisionWriteCarriesProvenance` (new;
-  enforcement AC — asserts provenance is applied on the real `readModifyWrite` path used by the
-  Merge action, not a helper in isolation).
-- [ ] iPad journey test covers queue → compare → merge → undo. `Verify:` bifrost
-  `Yggdrasil/YggdrasilUITests/MimerCanvasUITests.swift::testEntityCompareMergeUndoJourney` (new,
+- [ ] Review signals carry the provenance behavior from bifrost#5 (block present/updated on the
+  write). `Verify:` bifrost `EntityDecisionWriteTests.swift::testApprovalWriteCarriesProvenance`
+  (new; enforcement AC — asserts provenance on the real approval path, not a helper in isolation).
+- [ ] iPad journey test covers queue → compare → approve → undo and displays the Hub-owned durable
+  outcome after refresh. `Verify:` bifrost
+  `Yggdrasil/YggdrasilUITests/MimerCanvasUITests.swift::testEntityCompareApproveUndoAndHubOutcomeJourney` (new,
   iPad destination).
 
 ## How to Verify (Pre-Merge)
@@ -99,11 +100,14 @@ stays hub-side.
 - bifrost CI green (both destinations) including the five named tests; `swiftlint --strict` clean.
 - Pre-merge gate check recorded in the PR body: hub #3129/#3131/#3132 and bifrost#4/#5 all show
   `state: MERGED/CLOSED` (INV-B2-5).
+- The Hub operation-journal parent #4349 is accepted through EROJ-01 → EROJ-03 and publishes the
+  proposal/approval contract before this client implementation is resumed.
 
 ## Out of Scope
 
 - Applying decisions / clearing pending / writing register redirect notes (hub-side Mimer organ).
-- Any change to the `_heimdal/entities/review.md` schema (owned by hub #3131's published schema).
+- Any Hub operation-journal, proposal/approval schema, or register-execution implementation
+  (owned by #4349's EROJ chain).
 - Drag-drop and annotation (MIPAD-04).
 
 ## Related Docs
@@ -116,7 +120,8 @@ stays hub-side.
 ## Related GitHub Issues
 
 One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:blocked` — names its gate
-list explicitly: MIPAD-02 issue + hub #3129/#3131/#3132 + bifrost#4/#5), linking hub #3024 and
+list explicitly: MIPAD-02 issue + hub #3129/#3131/#3132 + bifrost#4/#5 + accepted hub #4349 EROJ
+chain), linking hub #3024 and
 this spec file. TCD hint: Sonnet / high effort — data-plus-UI slice whose write discipline must be
 exactly right; escalate to Opus only if the review-note schema from #3131 lands materially
 different from the shipped `HeimdalNotes` shapes.
