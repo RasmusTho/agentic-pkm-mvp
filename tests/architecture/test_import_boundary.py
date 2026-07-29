@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import configparser
+from datetime import date
 import importlib
 from pathlib import Path
 from typing import Set
@@ -52,6 +53,12 @@ def _instance_storage_capability_contract_section() -> configparser.SectionProxy
     return parser["importlinter:contract:instance-storage-capability-protected"]
 
 
+def _builder_llm_authority_contract_section() -> configparser.SectionProxy:
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    return parser["importlinter:contract:builder-llm-authority"]
+
+
 def _module_list(raw: str) -> Set[str]:
     # configparser drops full-line "#" comments inside multiline values, so the
     # surviving lines are real module names.
@@ -80,6 +87,27 @@ def _imported_modules(path: Path) -> Set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module)
     return modules
+
+
+def _builder_to_product_llm_imports() -> Set[tuple[str, str]]:
+    """Return static Builder imports of the Product LLM package by source module."""
+    imports: Set[tuple[str, str]] = set()
+    for path in (APP_ROOT / "builderops").rglob("*.py"):
+        relative = path.relative_to(APP_ROOT).with_suffix("")
+        module_parts = relative.parts[:-1] if relative.name == "__init__" else relative.parts
+        source_module = ".".join(("app", *module_parts))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules = (alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules = (node.module,)
+            else:
+                continue
+            for imported_module in imported_modules:
+                if imported_module.startswith("app.components.llm"):
+                    imports.add((source_module, imported_module))
+    return imports
 
 
 def _is_direct_dynamic_import_call(node: ast.Call) -> bool:
@@ -185,6 +213,73 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
     assert not unresolvable, (
         f"source_modules names packages that do not exist under app/: {unresolvable}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MAS-02 — the interim Builder -> Product LLM authority leak is one, visible,
+# and time-boxed until MAS-06 replaces CKM's Product routing.
+# ---------------------------------------------------------------------------
+
+
+def test_builder_does_not_import_product_llm_without_exemption() -> None:
+    """Only the two configured MAS-06 imports may cross the Builder/LLM boundary."""
+    contract = _builder_llm_authority_contract_section()
+    assert contract["type"] == "forbidden"
+    assert _module_list(contract["source_modules"]) == {"app.builderops"}
+    assert _module_list(contract["forbidden_modules"]) == {"app.components.llm"}
+
+    # Both PR workflows invoke this same config, so this proves the production
+    # CI gate rather than a test-local reimplementation of the contract.
+    for workflow in (".github/workflows/import-linter.yaml", ".github/workflows/ci-smoke.yaml"):
+        assert "lint-imports --config importlinter.ini" in (REPO_ROOT / workflow).read_text(
+            encoding="utf-8"
+        )
+
+    assert _builder_to_product_llm_imports() == {
+        ("app.builderops.ckm.semantic", "app.components.llm.constrained"),
+        ("app.builderops.ckm.semantic", "app.components.llm.fabric"),
+    }
+
+
+def test_interim_exemption_is_single_named_and_dated() -> None:
+    """Only MAS-06 may carry the one dated CKM authority-leak exception."""
+    raw = IMPORTLINTER_INI.read_text(encoding="utf-8")
+    section = raw.split("[importlinter:contract:builder-llm-authority]", maxsplit=1)[1]
+    section = section.split("[importlinter:contract:", maxsplit=1)[0]
+
+    assert section.count("ignore_imports =") == 1
+    assert "MAS-06" in section
+    granted_date = "2026-07-27"
+    assert granted_date in section
+    assert date.fromisoformat(granted_date) == date(2026, 7, 27)
+
+    contract = _builder_llm_authority_contract_section()
+    assert _module_list(contract["ignore_imports"]) == {
+        "app.builderops.ckm.semantic -> app.components.llm.constrained",
+        "app.builderops.ckm.semantic -> app.components.llm.fabric",
+    }
+
+
+def test_importlinter_header_states_blocking_gate_posture() -> None:
+    """The config header describes the two workflows that block on this gate."""
+    header = IMPORTLINTER_INI.read_text(encoding="utf-8").split("[importlinter]", maxsplit=1)[0]
+    assert "Run BLOCKING" in header
+    assert ".github/workflows/import-linter.yaml" in header
+    assert ".github/workflows/ci-smoke.yaml" in header
+    assert "non-blocking" not in header.lower()
+
+
+def test_interaction_protected_contract_coverage_is_unchanged() -> None:
+    """MAS-02 adds a separate contract without weakening the existing one."""
+    section = _contract_section()
+    assert section["type"] == "forbidden"
+    assert _module_list(section["source_modules"])
+    assert _module_list(section["forbidden_modules"]) == {
+        "app.api",
+        "app.chat",
+        "app.cli",
+        "app.web",
+    }
 
 
 def test_instance_storage_mutation_import_contract_is_complete() -> None:
