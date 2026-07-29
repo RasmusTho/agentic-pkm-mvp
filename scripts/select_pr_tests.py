@@ -142,6 +142,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # BuilderOps store-access inventory fitness. Keep this exact file
             # owned without widening builder_system to all architecture tests.
             "tests/architecture/test_builderops_store_boundary.py",
+            # Isolated subprocess import wiring is a Builder test-harness
+            # contract; own both the helper and its focused regression without
+            # widening this subsystem to all helpers.
+            "tests/helpers/subprocess_pythonpath.py",
+            "tests/helpers/test_subprocess_pythonpath.py",
             "docs/builderops/",
             "importlinter.ini",
         ),
