@@ -1,11 +1,11 @@
-State: ACCEPTED/DELIVERED CKM Cockpit Direction B specification and delivery history. Owner Gate A authorized the bounded design on 2026-07-24; Evidence Profile, children #4081–#4086, completion #4222, and parent #4080 are closed. Independent parent acceptance and closure were recorded on 2026-07-28. Direction A remains the script-free default; Direction B is the supported opt-in `ckm overview --cockpit` mode.
+State: ACCEPTED/DELIVERED CKM Cockpit Direction B foundation with an owner-readable portfolio amendment accepted on 2026-07-30 and pending implementation. Owner Gate A authorized the bounded design on 2026-07-24; Evidence Profile, children #4081–#4086, completion #4222, and parent #4080 are closed. Independent parent acceptance and closure were recorded on 2026-07-28. Direction A remains the script-free default; Direction B is the supported opt-in `ckm overview --cockpit` mode.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the target-state Direction B cockpit boundary, task decomposition, interaction-safety invariants, and acceptance path. Subordinate to ADR-0057, the delivered CKM MVP and Measurement & Access contracts, the ratified CKM Evidence Profile Phase 1 contract, and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
 Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: this directory for Direction B implementation-task shape; ADR-0057 for CKM authority posture; `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` for the delivered presentation contract being amended; `docs/CKM_MEASUREMENT_AND_ACCESS/README.md` for retained-observation semantics.
-Last reviewed: 2026-07-28
+Last reviewed: 2026-07-30
 
 # CKM Cockpit Direction B
 
@@ -63,6 +63,112 @@ input. The prototype HTML and generated `support.js` are not production dependen
 be copied. This merged specification, current owner contracts, and the live Issue/PR chain are
 authoritative when design prose and repo truth differ.
 
+On 2026-07-30 the owner rejected the delivered portfolio page as a cockpit because its raw
+measurement, evidence, and hazard detail created information overload. The owner directed the
+implementation to follow the Claude Design handoff for visual hierarchy and interaction decisions,
+while allowing the repo-owned measurement semantics to differ. This is an owner-authorized
+presentation correction, not a new CKM authority class or measurement redesign.
+
+## Owner-readable portfolio amendment (CKM-DB-OWNER-READABLE)
+
+The cockpit start page is a decision-overview surface for one owner. Its first screen must make four
+things understandable without requiring the owner to learn CKM field names:
+
+1. whether the projection is usable now;
+2. where the available evidence shows progress or change;
+3. where evidence is missing, stale, incomplete, or otherwise needs attention;
+4. which caveats materially limit the overview.
+
+“Progress” means a descriptive change in retained CKM evidence or assessment coverage. It never
+means product quality, delivery velocity, priority, causal improvement, or a CKM-authored judgment.
+When no compatible comparison exists, the cockpit says that no change view is available and still
+renders the current overview.
+
+### Portfolio information budget
+
+The portfolio start page follows the Claude Design handoff's hierarchy:
+
+1. one short non-authority banner;
+2. one human-readable trust summary, with technical generation identity behind disclosure;
+3. three compact cards in one responsive grid:
+   - **What changed** — at most five plain-language comparison facts;
+   - **Where evidence needs attention** — at most five capability or portfolio facts, selected
+     without an authoritative rank and ordered deterministically;
+   - **Read with care** — at most three material caveats;
+4. compact filters;
+5. a collapsed capability overview;
+6. optional detail, provenance, legend, current gaps, proposal drafts, and raw evidence.
+
+No portfolio card may contain a raw digest, public ID, database/schema term, command line, full
+watermark set, citation list, proposal body, seven-dimension vector, or unbounded findings list.
+Those values remain available in the generated artifact through native disclosure or capability
+detail so auditability is preserved.
+
+The “Where evidence needs attention” card is not a leaderboard. If more than five capabilities
+match, the card reports the total and shows the first five in stable capability-tree order with an
+explicit “not ranked” label and a disclosure to all matching rows. Color may reinforce a state but
+must never be its only label.
+
+### Human-readable vocabulary
+
+Level-zero copy uses owner language first. Internal codes may appear only in expanded technical
+detail.
+
+| Internal state | Portfolio wording |
+| --- | --- |
+| complete, fresh projection | Ready to inspect |
+| usable projection with stale or missing assessment evidence | Usable with limitations |
+| capture refused or incomplete | Overview unavailable |
+| compatible retained pair | Changes since the previous observation |
+| `insufficient_retained_samples` | No previous comparable observation yet |
+| incompatible or unavailable comparison input | Change view unavailable; current overview unaffected |
+| evidence gap | Evidence missing |
+| stale assessment | Assessment older than its evidence |
+| low confidence | Limited supporting evidence |
+| unassessed | Not assessed |
+
+Typed codes, exact timestamps, digests, watermarks, and recovery commands remain in the expanded
+technical details and deterministic source HTML. Refusal states stay explicit and fail closed; only
+their first-line explanation is translated into owner language.
+
+### Portfolio versus capability detail
+
+Each collapsed capability row shows:
+
+- the capability name;
+- one short descriptive status sentence;
+- zero or more text labels for changed, stale, missing-evidence, limited-evidence, or not-assessed
+  states;
+- a disclosure control for the existing measurement vector and evidence.
+
+The collapsed row does not show the seven-cell metric matrix, raw scalar values, maturity-like
+bands, public IDs, node-state fields, citation counts, or proposal drafts. Expanded capability
+detail retains the complete deterministic evidence and measurement content required by
+`INV-DB-7`.
+
+The existing subsystem evidence-count section, full interpretation-hazard list, current-gaps list,
+proposal drafts, legend, and provenance footer are supporting detail. They must not precede or
+visually compete with the three owner cards.
+
+### Owner-readable amendment acceptance
+
+- [ ] The first viewport follows the handoff hierarchy and presents the trust summary, three compact
+  owner cards, filters, and the beginning of the collapsed capability overview without a raw-detail
+  section intervening.
+  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_prioritizes_owner_readable_portfolio_over_raw_detail`
+- [ ] Each owner card obeys its bounded information budget, uses plain-language state copy, and
+  exposes overflow or technical identity only through disclosure.
+  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_owner_cards_are_bounded_and_human_readable`
+- [ ] Collapsed capability rows omit raw metrics and identifiers while expanded source content
+  preserves the complete vector, evidence, findings, comparison slice, and proposal draft.
+  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_progressive_disclosure_preserves_audit_detail`
+- [ ] Comparison-unavailable, stale, incomplete, empty, and source-unavailable states have concise
+  owner wording without weakening the existing typed refusal or deterministic rendering contracts.
+  Verify: `tests/builderops/ckm/test_overview_html.py::test_cockpit_owner_copy_preserves_refusal_semantics`
+- [ ] A generated real-store artifact is visually checked at desktop, narrow viewport, 200% zoom,
+  JavaScript-off, and print/PDF against the Claude Design portfolio/detail hierarchy.
+  Verify: durable screenshots plus a manual visual receipt on the governing implementation Issue
+
 ## Live reconciliation ledger
 
 | Claude decision | Current source anchor | Resolution | Reason |
@@ -81,18 +187,18 @@ authoritative when design prose and repo truth differ.
 
 ## Information architecture
 
-The output order is fixed:
+The output order is fixed. The owner-readable amendment supersedes the earlier placement of
+unbounded hazards, gaps, proposals, and raw capability measurements on the portfolio level:
 
 1. projection/non-authority banner;
-2. cockpit header and generation identity;
-3. trust strip with freshness, completeness, state identity, and sorted watermarks;
-4. interpretation-hazard block;
-5. pairwise comparison result or typed refusal;
-6. disabled-by-default filter controls and disclosure count;
-7. capability map using the post-Evidence-Profile vector/tri-state/count semantics;
-8. unfiltered current-gaps panel;
-9. inert proposal drafts;
-10. provenance footer with generation time, state identity, digest, and sorted watermarks.
+2. cockpit header and human-readable trust summary;
+3. bounded “What changed”, “Where evidence needs attention”, and “Read with care” cards;
+4. disabled-by-default filter controls and disclosure count;
+5. collapsed capability overview;
+6. disclosed capability measurements and evidence;
+7. supporting interpretation hazards and unfiltered current gaps;
+8. inert proposal drafts;
+9. technical provenance with generation time, state identity, digest, and sorted watermarks.
 
 Capability detail order remains the deterministic `_forest` order: case-folded capability name and
 stable ID within each parent, with damaged cycles/orphans rendered as additional roots. Findings,
