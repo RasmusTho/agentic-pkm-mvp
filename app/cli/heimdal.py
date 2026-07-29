@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import click
 
+from app.heimdal.archive_capacity import build_archive_capacity_report
 from app.heimdal.capture_runtime import (
     CaptureRuntimeConfig,
     CaptureRuntimeConfigError,
@@ -67,6 +69,25 @@ def capture_watch(once: bool, max_ticks: int | None) -> None:
         click.echo("heimdal capture-watch: stopped via keyboard interrupt")
         return
     click.echo(f"heimdal capture-watch: stopped after {ticks} ticks")
+
+
+@heimdal_group.command(
+    name="capacity",
+    help="Emit the aggregate-only Heimdal raw-evidence capacity receipt (HAR-01).",
+)
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    required=True,
+    help="Vault containing _heimdal/settings.md with retention_window_days.",
+)
+def capacity(vault_root: Path) -> None:
+    """Expose the redacted capacity health/receipt surface to operators."""
+    try:
+        receipt = build_archive_capacity_report(vault_root).as_dict()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(receipt, ensure_ascii=False))
 
 
 __all__ = ["heimdal_group"]

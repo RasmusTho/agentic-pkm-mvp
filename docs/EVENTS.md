@@ -466,6 +466,27 @@ Contract:
   consent-revocation-triggered deletion runtime; cryptographic erasure of
   published event content.
 
+## Heimdal aggregate capacity report (HAR-01 — delivered #3847)
+
+`app.heimdal.archive_capacity` builds a rebuildable, aggregate-only capacity
+receipt over the encrypted raw store. Operators emit the redacted receipt with
+`python -m app.cli heimdal capacity --vault-root <vault>`; it is a health
+surface, not a raw-read path or a persisted source of record.
+
+Contract:
+
+- **Metadata-only query.** The capacity query reads only `ingested_at` and the
+  encrypted byte length. It never materializes raw paths, content identities,
+  payloads, nonces, or ciphertext for reporting.
+- **Honest tier projection.** Aggregate counts and encrypted-byte totals are
+  partitioned into the first seven hot days, archive-eligible records inside
+  the configured retention bound, and expired records. The bound comes from
+  `_heimdal/settings.md`; a missing or invalid `retention_window_days` fails
+  loud instead of inventing a forecast.
+- **No archive lifecycle claim.** This slice measures capacity only. It does
+  not mount storage, move audio, alter retention, or make the planned local
+  cold tier a supported capability; those remain parent acceptance work.
+
 ## Heimdal capture-note + receipt / J0 (delivered #3035)
 
 `app/heimdal/capture_note.py` (#3035, Epic #3019 slice A15; ratified by

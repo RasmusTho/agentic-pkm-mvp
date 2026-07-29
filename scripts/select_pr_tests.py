@@ -339,7 +339,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "heimdal",
-        ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
+        (
+            "app/heimdal/",
+            # The Heimdal runtime has a dedicated CLI command module. Keep it
+            # on the Heimdal suite rather than failing CI selection as an
+            # unowned app/ path.
+            "app/cli/heimdal.py",
+            "tests/heimdal/",
+            "docs/HEIMDAL/",
+            "docs/HEIMDAL_CAPTURE_CLIENT/",
+        ),
         ("tests/heimdal",),
     ),
     (

@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-15
+Last reviewed: 2026-07-29
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-07-15
 # Operations Playbook
 
@@ -34,6 +34,16 @@ CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
+
+### Heimdal raw-store capacity receipt
+
+Use `python -m app.cli heimdal capacity --vault-root <vault>` to inspect an
+aggregate-only capacity receipt for Heimdal's encrypted raw store. The command
+reports counts and encrypted-byte totals for the first seven hot days,
+archive-eligible records within the configured retention bound, and expired
+records. It requires `_heimdal/settings.md` to declare a valid
+`retention_window_days`; missing policy fails loud. It neither reads raw
+payloads nor performs archive, retention, or storage lifecycle work.
 
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).

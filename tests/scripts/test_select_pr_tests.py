@@ -624,6 +624,16 @@ def test_heimdal_capture_adapter_change_has_a_ci_owner() -> None:
     assert "tests/heimdal/test_capture_adapter.py" in selection.targets
 
 
+def test_heimdal_cli_change_has_a_ci_owner() -> None:
+    """The dedicated Heimdal CLI must select its subsystem suite in PR CI."""
+    selection = select_tests(["app/cli/heimdal.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("heimdal",)
+    assert selection.unowned_paths == ()
+    assert "tests/heimdal" in selection.targets
+
+
 def test_shared_panel_watcher_e2e_file_is_deferred_to_post_merge() -> None:
     selection = select_tests(["tests/e2e/test_panel_watcher_e2e.py"])
 
