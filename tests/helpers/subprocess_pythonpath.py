@@ -25,9 +25,15 @@ of its own, and put THAT private directory on PYTHONPATH. First proven at
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Iterable
 
 
-def isolated_app_pythonpath(private_dir: Path, repo_root: Path) -> str:
+def isolated_app_pythonpath(
+    private_dir: Path,
+    repo_root: Path,
+    *,
+    optional_packages: Iterable[str] = (),
+) -> str:
     """Return a ``PYTHONPATH`` value exposing only ``app/`` and ``scripts/``
     from *repo_root*.
 
@@ -37,14 +43,18 @@ def isolated_app_pythonpath(private_dir: Path, repo_root: Path) -> str:
     ``PYTHONPATH``. ``scripts/`` is included because ``app`` modules import
     from it directly (e.g. ``app.builderops.model_inquiry_promotion`` imports
     ``scripts.validate_issue_readiness``); omitting it would trade one
-    ``ModuleNotFoundError`` for another.
+    ``ModuleNotFoundError`` for another. Callers can also declare optional
+    top-level packages; each is linked only when its source directory exists.
 
     Never pass *repo_root* itself as (or on) a subprocess ``PYTHONPATH`` --
     see the module docstring for why.
     """
     private_dir.mkdir(parents=True, exist_ok=True)
-    for package in ("app", "scripts"):
+    for package in ("app", "scripts", *optional_packages):
+        source = repo_root / package
+        if package not in {"app", "scripts"} and not source.is_dir():
+            continue
         link = private_dir / package
         if not link.exists():
-            link.symlink_to(repo_root / package)
+            link.symlink_to(source)
     return str(private_dir)
