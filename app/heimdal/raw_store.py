@@ -184,6 +184,19 @@ class RawRecord:
     sequence: int
 
 
+@dataclass(frozen=True)
+class RawRecordCapacityMetadata:
+    """The only raw-record fields capacity reporting may read.
+
+    This intentionally excludes identifiers, paths, provenance, payloads, and
+    ciphertext.  It keeps the HAR-01 aggregate report from materializing raw
+    evidence merely to count encrypted storage bytes.
+    """
+
+    ingested_at: datetime
+    encrypted_bytes: int
+
+
 class _MemoryRawStore:
     """In-process append-only store. Test/dev backend; volatile by design."""
 
@@ -219,6 +232,16 @@ class _MemoryRawStore:
     def all_rows(self) -> List[RawRecord]:
         with self._lock:
             return list(self._rows)
+
+    def capacity_metadata(self) -> List[RawRecordCapacityMetadata]:
+        with self._lock:
+            return [
+                RawRecordCapacityMetadata(
+                    ingested_at=row.ingested_at,
+                    encrypted_bytes=len(row.ciphertext),
+                )
+                for row in self._rows
+            ]
 
     def get_by_content_identity(self, content_identity: str) -> Optional[RawRecord]:
         with self._lock:
@@ -445,6 +468,22 @@ class _PgRawStore:
         finally:
             conn.close()
 
+    def capacity_metadata(self) -> List[RawRecordCapacityMetadata]:
+        """Query aggregate-report metadata without selecting sensitive row fields."""
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT ingested_at, octet_length(ciphertext) FROM {_TABLE} ORDER BY sequence ASC"
+            )
+            return [
+                RawRecordCapacityMetadata(ingested_at=row[0], encrypted_bytes=int(row[1]))
+                for row in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+
     def get_by_content_identity(self, content_identity: str) -> Optional[RawRecord]:
         conn = _pg_connect()
         try:
@@ -554,6 +593,11 @@ def all_raw_records() -> List[RawRecord]:
     return _backend().all_rows()
 
 
+def all_raw_record_capacity_metadata() -> List[RawRecordCapacityMetadata]:
+    """Return only ingest time and encrypted byte count for HAR-01 reporting."""
+    return _backend().capacity_metadata()
+
+
 def hard_delete_raw_record(record_id: str) -> bool:
     """Governed exception to append-only (D-RETENTION, Charter FIXED #7).
 
@@ -579,9 +623,11 @@ def hard_delete_raw_record(record_id: str) -> bool:
 __all__ = [
     "AppendOnlyViolationError",
     "RawRecord",
+    "RawRecordCapacityMetadata",
     "RawStoreKeyMissingError",
     "RawStoreSchemaMissingError",
     "all_raw_records",
+    "all_raw_record_capacity_metadata",
     "decrypt_raw_bytes",
     "encrypt_raw_bytes",
     "get_raw_record_by_content_identity",
