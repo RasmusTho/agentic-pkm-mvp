@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import time
 from contextlib import nullcontext
 
 import pytest
@@ -2248,3 +2249,99 @@ def test_cli_without_require_flag_zero_even_if_in_shared_root(
     exit_code = git_hygiene.main(["--cwd", str(tmp_path), "preflight"])
 
     assert exit_code == 0, "Expected zero exit when flag is absent (library default is off)"
+
+
+def test_janitor_apply_stash_drop_targets_survive_index_shift(tmp_path) -> None:
+    """Regression for #4333: a stale positional stash index must never cause
+    ``janitor_apply`` to drop a stash that was not itself a candidate.
+
+    Real ``git stash`` state, newest to oldest after four ``git stash push``
+    calls:
+
+        stash@{0} B  (candidate: preserve-local-drift marker)
+        stash@{1} X  (non-candidate, interleaved between the two candidates)
+        stash@{2} A  (candidate: preserve-local-drift marker)
+        stash@{3} Y  (non-candidate, sits below A)
+
+    ``build_janitor_plan`` captures A's positional selector as ``stash@{2}``
+    when the plan is built. Dropping B first (``stash@{0}``) shifts every
+    entry below it up by one, so the stale ``stash@{2}`` now names Y, not A.
+    The unfixed loop in ``janitor_apply`` drops B, then blindly drops
+    whatever now sits at ``stash@{2}``: Y is destroyed as collateral damage
+    and A survives untouched -- exactly the incident's signature (a marked
+    candidate survives while an unrelated, unmarked entry is destroyed). The
+    fix must re-resolve each candidate's stable commit identity immediately
+    before dropping it, so both real candidates (A, B) are dropped and both
+    non-candidates (X, Y) survive.
+    """
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(remote)], check=True)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--initial-branch=main", str(repo)], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "file.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=repo, check=True)
+
+    def push_stash(content: str, message: str) -> str:
+        (repo / "file.txt").write_text(content, encoding="utf-8")
+        subprocess.run(["git", "stash", "push", "-m", message], cwd=repo, check=True)
+        return subprocess.run(
+            ["git", "rev-parse", "stash@{0}"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    sha_y = push_stash("y\n", "unrelated Y (oldest, becomes collateral target)")
+    sha_a = push_stash("a\n", "preserve-local-drift A")
+    sha_x = push_stash("x\n", "unrelated X (interleaved non-candidate)")
+    sha_b = push_stash("b\n", "preserve-local-drift B")
+
+    # Let real wall-clock time move past the pushes above so stale_after_days=0
+    # reliably makes every entry's committer epoch compare as "old".
+    time.sleep(1.1)
+
+    def current_shas() -> set[str]:
+        listing = subprocess.run(
+            ["git", "stash", "list", "--format=%H"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        return set(listing)
+
+    assert current_shas() == {sha_y, sha_a, sha_x, sha_b}
+
+    report = git_hygiene.janitor_apply(
+        repo,
+        active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
+        lifecycle_records={},
+        pr_states={},
+        stale_after_days=0,
+    )
+
+    after = current_shas()
+
+    # Exactly the two marked candidates were dropped ...
+    assert sha_b not in after, "B (marked, index 0) should have been dropped"
+    assert sha_a not in after, (
+        "A (marked, index 2 at plan time) should have been dropped -- if this "
+        "fails, A survived because the drop loop is still using a stale "
+        "positional index instead of re-resolving A's identity"
+    )
+    # ... and both non-candidates survive untouched.
+    assert sha_x in after, "X (unmarked, between the two candidates) must survive"
+    assert sha_y in after, (
+        "Y (unmarked, below A) must survive -- if this fails, Y was destroyed "
+        "as collateral damage by a stale stash@{2} that shifted onto it after "
+        "B's drop, reproducing the #4333 incident"
+    )
+    assert after == {sha_x, sha_y}
+    assert report["ok"] is True, report["errors"]
