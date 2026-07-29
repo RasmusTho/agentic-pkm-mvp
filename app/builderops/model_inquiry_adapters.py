@@ -12,30 +12,23 @@ import tempfile
 import time
 from ctypes import CDLL, Structure, byref, c_char, c_int32, c_uint32, c_uint64, sizeof
 from dataclasses import dataclass
-from typing import Any, Mapping, Never, Protocol
+from typing import Any, Mapping, Never
 
 import requests  # type: ignore[import-untyped]  # third-party lib ships no type stubs
 
 from app.builderops.model_inquiry_contract import canonical_hash, canonical_json
 from app.builderops.models import BuilderOpsValidationError
+from llm_contract import (
+    ADAPTER_FAILURE_CLASSES,
+    AdapterResult,
+    ModelTurnAdapter,
+    validate_adapter_failure_class,
+)
 
 ADAPTER_CONFIG_ENV = "BUILDEROPS_INQUIRY_ADAPTERS_JSON"
 ROLE_NAMES = ("fable", "gpt_codex")
 SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
 CLEANUP_TIMEOUT_SECONDS = 2.0
-ADAPTER_FAILURE_CLASSES = frozenset(
-    {
-        "command_exit_nonzero",
-        "command_timeout",
-        "stdout_empty",
-        "stdout_oversize",
-        "stdout_unavailable",
-        "output_contains_allowed_environment",
-        "unexpected_adapter_error",
-    }
-)
-
-
 class AdapterUnavailableError(RuntimeError):
     pass
 
@@ -51,35 +44,12 @@ class AdapterExecutionError(RuntimeError):
         exit_code: int | None = None,
     ) -> None:
         super().__init__(message)
-        self.failure_class = (
-            failure_class
-            if failure_class in ADAPTER_FAILURE_CLASSES
-            else "unexpected_adapter_error"
-        )
+        self.failure_class = validate_adapter_failure_class(failure_class)
         self.exit_code = (
             exit_code
             if isinstance(exit_code, int) and not isinstance(exit_code, bool) and 1 <= exit_code <= 255
             else None
         )
-
-
-@dataclass(frozen=True)
-class AdapterResult:
-    response_text: str
-    provider_request_id: str | None = None
-
-
-class ModelTurnAdapter(Protocol):
-    @property
-    def adapter_id(self) -> str: ...
-
-    @property
-    def provider(self) -> str: ...
-
-    @property
-    def model(self) -> str: ...
-
-    def execute(self, request: Mapping[str, Any]) -> AdapterResult: ...
 
 
 @dataclass

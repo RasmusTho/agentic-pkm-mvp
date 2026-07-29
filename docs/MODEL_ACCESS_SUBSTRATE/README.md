@@ -263,7 +263,7 @@ re-decide it deliberately rather than discover it.
 1. **The neutral kernel has no package path.** ADR-0063 explicitly declines to choose one
    (`:185-186`), ADR-0064 says only that `ModelTurnAdapter` is "promoted to that protocol", and no
    kernel module exists in code today — the five fallback values live only in ADR prose.
-   `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL` chooses **`app/llm_contract/`**: a new package with no
+   `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL` chooses top-level **`llm_contract/`**: a new package with no
    existing baggage, importable by both runtimes without dragging a heavy `__init__` behind it.
    Reusing `app/ports/` was rejected because `app/ports/__init__.py` already re-exports a vault adapter
    that imports `app.services` and `app.knowledge`, so importing anything from `app.ports` would make

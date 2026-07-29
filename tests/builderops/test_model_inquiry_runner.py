@@ -7,7 +7,10 @@ from typing import Any, Mapping
 
 import pytest
 
-from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_inquiry import (
+    ModelInquiryService,
+    _validate_adapter_failure_diagnostic,
+)
 from app.builderops.model_inquiry_adapters import (
     ADAPTER_CONFIG_ENV,
     AdapterExecutionError,
@@ -138,11 +141,12 @@ class FailingAdapter:
     adapter_id: str = "failing"
     provider: str = "fixture"
     model: str = "fixture"
+    failure_class: str = "command_exit_nonzero"
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
         raise AdapterExecutionError(
             "classified fixture failure",
-            failure_class="command_exit_nonzero",
+            failure_class=self.failure_class,
             exit_code=17,
         )
 
@@ -304,6 +308,44 @@ def test_adapter_failures_and_bad_config_are_terminal_without_secret_leak(tmp_pa
         service, env={ADAPTER_CONFIG_ENV: json.dumps(config)}
     ).run(inquiry_id, max_rounds=1)
     assert result["outcome"] == "provider_unavailable"
+
+
+def test_auth_failure_class_survives_persistence_revalidation(tmp_path: Path) -> None:
+    service, vault = _start(tmp_path, "inq_runner_auth_failure")
+    result = ModelInquiryRunner(
+        service,
+        {
+            "fable": FailingAdapter(failure_class="credential_unavailable"),
+            "gpt_codex": _scripted("gpt_codex", [_response("draft")]),
+        },
+    ).run("inq_runner_auth_failure", max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert result["details"]["diagnostic"]["adapter_failure_class"] == "credential_unavailable"
+
+    reloaded_trace = ModelInquiryService(vault).trace("inq_runner_auth_failure")
+    terminal = next(
+        receipt
+        for receipt in reloaded_trace["receipts"]
+        if receipt["event_type"] == "inquiry_provider_attempt_terminal"
+    )
+    assert terminal["details"]["diagnostic"]["adapter_failure_class"] == "credential_unavailable"
+
+
+def test_unknown_failure_class_is_rejected_at_both_validators() -> None:
+    with pytest.raises(ValueError, match="unknown adapter failure class"):
+        AdapterExecutionError(
+            "unknown classification",
+            failure_class="provider_magic_failure",
+        )
+
+    with pytest.raises(BuilderOpsValidationError, match="invalid adapter failure class"):
+        _validate_adapter_failure_diagnostic(
+            {
+                "adapter_id": "fixture-adapter",
+                "adapter_failure_class": "provider_magic_failure",
+            }
+        )
 
 
 @dataclass

@@ -158,6 +158,21 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "model_access",
+        (
+            "llm_contract/",
+            "tests/model_access/",
+            "tests/architecture/test_llm_contract_kernel.py",
+        ),
+        (
+            "tests/model_access",
+            "tests/builderops/test_model_inquiry_adapters.py",
+            "tests/builderops/test_model_inquiry_runner.py",
+            "tests/architecture/test_llm_contract_kernel.py",
+            "tests/architecture/test_import_boundary.py",
+        ),
+    ),
+    (
         "settings",
         (
             "app/components/settings/",

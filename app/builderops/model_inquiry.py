@@ -15,13 +15,13 @@ from typing import Any, cast
 from uuid import uuid4
 
 from app.builderops.config import load_paths
-from app.builderops.model_inquiry_adapters import ADAPTER_FAILURE_CLASSES
 from app.builderops.model_inquiry_contract import (
     canonical_hash,
     github_issue_url_matches,
     initial_context_packet,
     model_turn_request_hash,
 )
+from llm_contract import ADAPTER_FAILURE_CLASSES
 from app.builderops.model_inquiry_report import render_markdown_report
 from app.builderops.models import (
     BuilderOpsConflictError,
