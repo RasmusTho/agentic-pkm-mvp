@@ -438,6 +438,28 @@ def test_candidate_create_once_owns_durable_parent_chain(
     assert (vault / "Sources/Nested/candidate.md").read_text(encoding="utf-8") == (
         "complete candidate"
     )
+
+    def assert_parent_chain_fences(events: list[tuple[object, ...]]) -> None:
+        for component in components:
+            mkdir_index = next(
+                index
+                for index, event in enumerate(events)
+                if event[0] == "mkdir" and event[1] == component
+            )
+            child_open_index = next(
+                index
+                for index, event in enumerate(events)
+                if event[0] == "open" and event[1] == component
+            )
+            containing_fd = events[mkdir_index][2]
+            matching_fsyncs = [
+                index
+                for index, event in enumerate(events)
+                if event == ("fsync", containing_fd) and mkdir_index < index < child_open_index
+            ]
+            assert len(matching_fsyncs) == 1
+
+    assert_parent_chain_fences(oracle.events)
     for component in components:
         mkdir_index = next(
             index
@@ -450,10 +472,14 @@ def test_candidate_create_once_owns_durable_parent_chain(
             if event[0] == "open" and event[1] == component
         )
         containing_fd = oracle.events[mkdir_index][2]
-        assert any(
-            event == ("fsync", containing_fd)
-            for event in oracle.events[mkdir_index + 1 : child_open_index]
+        fsync_index = next(
+            index
+            for index, event in enumerate(oracle.events)
+            if event == ("fsync", containing_fd) and mkdir_index < index < child_open_index
         )
+        missing_fence = [event for index, event in enumerate(oracle.events) if index != fsync_index]
+        with pytest.raises(AssertionError):
+            assert_parent_chain_fences(missing_fence)
     _assert_exact_fd_ownership(oracle.opened, oracle.close_attempts, oracle.duplicates)
     assert oracle.active == {}
     directory_tokens = [token for token in oracle.opened if token[2] == "directory"]
@@ -834,6 +860,7 @@ def _assert_candidate_fault_outcome(outcome: object) -> None:
         "parent_fsync",
         "parent_open",
         "root_close",
+        "intermediate_close",
         "stage_open",
         "stage_zero_write",
         "stage_fsync",
@@ -856,8 +883,8 @@ def test_candidate_create_once_fault_matrix(
 ) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
-    parent = vault / "Sources"
-    parent.mkdir()
+    parent = vault / "Sources/Nested"
+    parent.mkdir(parents=True)
     target = parent / "candidate.md"
     if fault in {"loser_unlink", "loser_fsync", "winner_stat"}:
         target.write_bytes(b"winner")
@@ -915,8 +942,10 @@ def test_candidate_create_once_fault_matrix(
         fd_labels[fd] = (
             "root"
             if dir_fd is None
-            else "final_parent"
+            else "intermediate"
             if decoded == "Sources"
+            else "final_parent"
+            if decoded == "Nested"
             else "stage"
             if decoded.startswith(".candidate-stage-")
             else decoded
@@ -1001,7 +1030,7 @@ def test_candidate_create_once_fault_matrix(
     outcome: object
     try:
         outcome = write_ops.create_candidate_note_once(
-            "Sources/candidate.md",
+            "Sources/Nested/candidate.md",
             "complete candidate",
             vault_root=vault,
             action="candidate.test",
@@ -1018,7 +1047,12 @@ def test_candidate_create_once_fault_matrix(
     _assert_exact_fd_ownership(oracle.opened, oracle.close_attempts, oracle.duplicates)
     assert oracle.active == {}
     assert fd_labels == {}
-    if fault in {"root_close", "stage_close", "final_parent_close"}:
+    if fault in {
+        "root_close",
+        "intermediate_close",
+        "stage_close",
+        "final_parent_close",
+    }:
         assert close_attempts[fault.removesuffix("_close")] == 1
 
     if fault in {"final_parent_close", "post_rename_fsync"}:
