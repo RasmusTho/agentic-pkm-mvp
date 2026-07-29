@@ -26,6 +26,13 @@ Deterministic, stdlib-only, read-only. Catches the defect classes found by the
    `.github/workflows/issue-pr-governance.yml` and the Python
    `REQUIRED_SECTIONS` tuple in `scripts/validate_issue_readiness.py` hold the
    same section names in the same order (regression guard for #4188).
+10. The `pr-contract` gate's marker-delimited `Final-Review-Rounds` /
+    `BuilderOps Routing` JS regex literals in
+    `.github/workflows/issue-pr-governance.yml` (`// final-review-rounds:start`/
+    `:end` and `// builderops-routing:start`/`:end`) hold the same regex source
+    text as their canonical Python twins in
+    `app/dispatcher/verification_contract.py` (regression guard for #4272 — the
+    canonical implementation must not silently drift from the gate it mirrors).
 
 Exit 0 with no output when clean; exit 1 with one error per line otherwise.
 
@@ -386,6 +393,117 @@ def check_required_sections_consistent(repo_root: Path) -> list[str]:
     return errors
 
 
+def _strip_js_line_comments(text: str) -> str:
+    return "\n".join(re.sub(r"//.*$", "", line) for line in text.splitlines())
+
+
+_JS_REGEX_LITERAL_RE = re.compile(r"/((?:\\.|[^/\\\n])*)/[a-z]*")
+
+
+def _extract_js_regex_literals(block: str) -> list[str]:
+    """Extract regex-literal source text (unescaped `\\/` -> `/`), in order.
+
+    Comments are stripped first so a `/`-containing path or URL in prose
+    (e.g. `app/dispatcher/...`) is never mistaken for a regex literal.
+    """
+    stripped = _strip_js_line_comments(block)
+    return [
+        match.group(1).replace("\\/", "/")
+        for match in _JS_REGEX_LITERAL_RE.finditer(stripped)
+    ]
+
+
+def _extract_python_regex_pattern(text: str, name: str) -> str | None:
+    match = re.search(
+        re.escape(name) + r"\s*=\s*re\.compile\(\s*\n?\s*r\"([^\"]*)\"", text
+    )
+    return match.group(1) if match else None
+
+
+# Order matters: this is the exact order the corresponding regex literals
+# appear in the workflow's `// final-review-rounds:start`/`:end` and
+# `// builderops-routing:start`/`:end` marker blocks.
+_PR_CONTRACT_FINAL_REVIEW_ROUNDS_PY_NAMES = (
+    "PR_CONTRACT_FINAL_REVIEW_ROUNDS_ALL_LINES_PATTERN",
+    "PR_CONTRACT_FINAL_REVIEW_ROUNDS_VALID_LINE_PATTERN",
+)
+_PR_CONTRACT_BUILDEROPS_ROUTING_PY_NAMES = (
+    "TIER1_LANE_PATTERN",
+    "BUILDEROPS_ROUTING_SECTION_PATTERN",
+    "BUILDEROPS_ROUTING_PLACEHOLDER_PATTERN",
+    "BUILDEROPS_ROUTING_RECORDS_PATTERN",
+    "BUILDEROPS_ROUTING_REASON_PATTERN",
+)
+
+
+def _check_pr_contract_marker_block(
+    workflow_text: str,
+    contract_text: str,
+    start_marker: str,
+    end_marker: str,
+    py_names: tuple[str, ...],
+    workflow_rel: str,
+    contract_rel: str,
+) -> list[str]:
+    if start_marker not in workflow_text or end_marker not in workflow_text:
+        return [f"{workflow_rel}: missing `{start_marker}`/`{end_marker}` marker pair"]
+    block = workflow_text.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    js_literals = _extract_js_regex_literals(block)
+    if len(js_literals) != len(py_names):
+        return [
+            f"{workflow_rel}: expected {len(py_names)} regex literal(s) between "
+            f"`{start_marker}` and `{end_marker}`, found {len(js_literals)}"
+        ]
+    errors: list[str] = []
+    for name, js_pattern in zip(py_names, js_literals):
+        py_pattern = _extract_python_regex_pattern(contract_text, name)
+        if py_pattern is None:
+            errors.append(f"{contract_rel}: could not locate regex constant `{name}`")
+            continue
+        if py_pattern != js_pattern:
+            errors.append(
+                f"{contract_rel}::{name} pattern ({py_pattern!r}) does not match "
+                f"{workflow_rel} regex between `{start_marker}`/`{end_marker}` ({js_pattern!r})"
+            )
+    return errors
+
+
+def check_pr_contract_validator_matches_workflow(repo_root: Path) -> list[str]:
+    """Check 10: pr-contract regex twins agree with the workflow's own JS.
+
+    Tolerates a missing source file (synthetic test trees) by skipping the
+    check entirely, the same way checks 8 and 9 do.
+    """
+    workflow_path = repo_root / ".github" / "workflows" / "issue-pr-governance.yml"
+    contract_path = repo_root / "app" / "dispatcher" / "verification_contract.py"
+    if not workflow_path.is_file() or not contract_path.is_file():
+        return []
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+    contract_text = contract_path.read_text(encoding="utf-8")
+    workflow_rel = ".github/workflows/issue-pr-governance.yml"
+    contract_rel = "app/dispatcher/verification_contract.py"
+    errors: list[str] = []
+    errors += _check_pr_contract_marker_block(
+        workflow_text,
+        contract_text,
+        "// final-review-rounds:start",
+        "// final-review-rounds:end",
+        _PR_CONTRACT_FINAL_REVIEW_ROUNDS_PY_NAMES,
+        workflow_rel,
+        contract_rel,
+    )
+    errors += _check_pr_contract_marker_block(
+        workflow_text,
+        contract_text,
+        "// builderops-routing:start",
+        "// builderops-routing:end",
+        _PR_CONTRACT_BUILDEROPS_ROUTING_PY_NAMES,
+        workflow_rel,
+        contract_rel,
+    )
+    return errors
+
+
 def run_lint(repo_root: Path) -> list[str]:
     skills_root = repo_root / ".codex" / "skills"
     if not skills_root.is_dir():
@@ -399,6 +517,7 @@ def run_lint(repo_root: Path) -> list[str]:
     errors += check_feature_breakdown_docs_index(skills_root)
     errors += check_sbs_impact_fields_consistent(repo_root)
     errors += check_required_sections_consistent(repo_root)
+    errors += check_pr_contract_validator_matches_workflow(repo_root)
     return errors
 
 

@@ -276,6 +276,56 @@ def test_required_sections_lint_fails_when_one_copy_edited_alone(tmp_path: Path)
     assert any("required-sections lists diverge" in e for e in errors), errors
 
 
+def test_pr_contract_validator_matches_workflow_on_real_repo() -> None:
+    """The canonical Python twins must agree with the workflow's JS (issue #4272)."""
+    errors = run_lint(REPO_ROOT)
+    pr_contract_errors = [e for e in errors if "verification_contract.py" in e]
+    assert pr_contract_errors == [], pr_contract_errors
+
+
+def test_lint_fails_when_pr_contract_validator_diverges_from_workflow(tmp_path: Path) -> None:
+    """Editing exactly one side of a pr-contract regex twin must fail the lint.
+
+    Mirrors `test_required_sections_lint_fails_when_one_copy_edited_alone`:
+    seed both real files verbatim (baseline passes), then drift only the
+    Python side and confirm the lint catches it.
+    """
+    root = _seed_tree(tmp_path)
+
+    workflow = REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
+    contract = REPO_ROOT / "app" / "dispatcher" / "verification_contract.py"
+
+    dest_workflows = root / ".github" / "workflows"
+    dest_workflows.mkdir(parents=True, exist_ok=True)
+    (dest_workflows / "issue-pr-governance.yml").write_text(
+        workflow.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    dest_app = root / "app" / "dispatcher"
+    dest_app.mkdir(parents=True, exist_ok=True)
+    (dest_app / "verification_contract.py").write_text(
+        contract.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    baseline_errors = run_lint(root)
+    assert not any("verification_contract.py" in e for e in baseline_errors), baseline_errors
+
+    # Drift the Python Final-Review-Rounds valid-line pattern alone: loosen
+    # `[012]` to `[0-9]` as if someone widened the rule on only one side.
+    drifted = contract.read_text(encoding="utf-8").replace(
+        r'r"^Final-Review-Rounds:[ \t]*[012][ \t]*$"',
+        r'r"^Final-Review-Rounds:[ \t]*[0-9][ \t]*$"',
+    )
+    assert drifted != contract.read_text(encoding="utf-8"), "fixture swap did not apply"
+    (dest_app / "verification_contract.py").write_text(drifted, encoding="utf-8")
+
+    errors = run_lint(root)
+    assert any(
+        "PR_CONTRACT_FINAL_REVIEW_ROUNDS_VALID_LINE_PATTERN" in e
+        and "does not match" in e
+        for e in errors
+    ), errors
+
+
 def test_planned_marker_allows_unknown_reference(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     skills_root = root / ".codex" / "skills"

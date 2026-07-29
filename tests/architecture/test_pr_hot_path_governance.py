@@ -121,12 +121,12 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
 
     for fragment in (
         "const directRepairSectionMatch = body.match(/## Direct Repair",
-        "const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing",
+        "const builderOpsRoutingMatch = candidateBody.match(/(?:^|\\n)## BuilderOps Routing",
         "const hasBuilderOpsRouting =",
         "const tier1LanePattern =",
         "const classifyIssueAuthority =",
         "const hasIssueAuthority =",
-        "const builderOpsRoutingSatisfied =",
+        "const builderOpsRouting = resolveBuilderOpsRouting(body, hasIssueAuthority);",
         "PR body must include `## BuilderOps Routing`",
         "const isDirectRepair =",
         "if (isDirectRepair) {",
@@ -140,7 +140,11 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
     assert text.index("const directRepairSectionMatch = body.match(/## Direct Repair") < text.index(
         "const docsAuthoringPattern ="
     )
-    assert text.index("const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing") < text.index(
+    # resolveBuilderOpsRouting (issue #4272) is a pure function defined ahead of
+    # classifyIssueAuthority; the ordering invariant that matters is unchanged:
+    # the BuilderOps Routing section-matching logic is defined before the
+    # authority classifier.
+    assert text.index("const builderOpsRoutingMatch = candidateBody.match(/(?:^|\\n)## BuilderOps Routing") < text.index(
         "const classifyIssueAuthority ="
     )
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
