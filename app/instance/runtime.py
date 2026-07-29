@@ -609,6 +609,25 @@ class InstanceRegistryRuntime:
         )
 
 
+def _load_active_registry_runtime(
+    *,
+    registry_path: Path,
+    ownership_root: Path,
+    channel: str,
+) -> InstanceRegistryRuntime:
+    """Construct an existing active runtime inside the protected storage boundary."""
+
+    return InstanceRegistryRuntime(
+        InstanceStateLayout(
+            root=registry_path.parent,
+            channel_id=channel,
+            registry_path=registry_path,
+        ),
+        OwnershipLedger(ownership_root),
+        initialize_layout=False,
+    )
+
+
 def _read_vault_identity(root: Path) -> tuple[str | None, str | None]:
     def frontmatter(path: Path) -> dict[str, object]:
         if not path.is_file():

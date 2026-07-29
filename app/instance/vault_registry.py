@@ -1992,18 +1992,12 @@ class AppLocalSettingsStore:
         snapshot = VaultRegistryStore(registry_path).load()
         if snapshot.authority != REGISTRY_AUTHORITY_ACTIVE:
             return None
-        from app.instance.instance_state import InstanceStateLayout
-        from app.instance.ownership_ledger import OwnershipLedger
-        from app.instance.runtime import InstanceRegistryRuntime
+        from app.instance.runtime import _load_active_registry_runtime
 
-        return InstanceRegistryRuntime(
-            InstanceStateLayout(
-                root=registry_path.parent,
-                channel_id=os.getenv("PKM_ENVIRONMENT", "dev"),
-                registry_path=registry_path,
-            ),
-            OwnershipLedger(Path(ownership_value).expanduser().resolve(strict=False)),
-            initialize_layout=False,
+        return _load_active_registry_runtime(
+            registry_path=registry_path,
+            ownership_root=Path(ownership_value).expanduser().resolve(strict=False),
+            channel=os.getenv("PKM_ENVIRONMENT", "dev"),
         )
 
     def _upsert_active(

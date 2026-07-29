@@ -12,7 +12,7 @@ from pathlib import Path
 import yaml
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
-from app.instance._storage_boundary import CapabilityNotReadyError, RegistryError
+from app.instance.vault_registry import CapabilityNotReadyError, RegistryError
 
 
 _GUARD_RECEIPT_AUTHORITY = object()
