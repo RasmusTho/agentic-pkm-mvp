@@ -63,7 +63,11 @@ def _write_cutover_ack(
 def _run_implicit_cli(*, cwd: Path, home: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["HOME"] = str(home)
-    env["PYTHONPATH"] = isolated_app_pythonpath(cwd.parent / "_pythonpath", REPO_ROOT)
+    env["PYTHONPATH"] = isolated_app_pythonpath(
+        cwd.parent / "_pythonpath",
+        REPO_ROOT,
+        optional_packages=("llm_contract",),
+    )
     for key in ("BUILDEROPS_DB_PATH", "BUILDEROPS_STATE_DIR", "BUILDEROPS_VAULT_ROOT"):
         env.pop(key, None)
     return subprocess.run(

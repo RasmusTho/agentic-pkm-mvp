@@ -1,8 +1,11 @@
-"""Strict, tooling-only loader for the declared model-provider census.
+"""Strict loader for the declared model-provider census.
 
-The running Product and Builder paths deliberately retain their compiled local
-provider sets.  This module is an authoring and verification surface, not a
-runtime routing dependency.
+The running Product paths deliberately retain their compiled local provider
+sets, so for Product this module remains an authoring and verification surface
+rather than a routing dependency.  The Builder Model Access resolver
+(`app/builderops/model_access_resolver.py`, ADR-0064 / MAS-05) is the one
+runtime consumer: it selects provider, model, effective identity, and the
+declared credential identifier from these exact mappings.
 """
 
 from __future__ import annotations
@@ -43,6 +46,10 @@ class ProviderEntry(BaseModel):
     kinds: set[Literal["chat", "embedding"]] = Field(min_length=1)
     tier: Literal["local", "paid", "test"]
     capabilities: ProviderCapabilities
+    # Declared provider API endpoint. It is provider-owned census data, never
+    # caller configuration; a runtime resolver reads it and no caller may supply
+    # or override it.
+    api_endpoint: str | None = None
     paid_eligible_task_kinds: list[str] = Field(default_factory=list)
     credential_identifiers: list[str] = Field(default_factory=list)
     excluded_model_families: list[str] = Field(default_factory=list)

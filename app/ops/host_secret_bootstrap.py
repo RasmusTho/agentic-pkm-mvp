@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 import ctypes
 import os
@@ -188,6 +188,44 @@ def _validate_secret(kind: str, value: str) -> bool:
             and all(char.isprintable() and not char.isspace() for char in value)
         )
     return False
+
+
+def validate_secret_value(kind: str, value: str) -> bool:
+    """Return whether *value* satisfies the declared validation kind.
+
+    Public so a declared consumer can fail closed on a malformed value using the
+    same rule the bootstrap applies, without duplicating the grammar.
+    """
+    return _validate_secret(kind, value)
+
+
+def load_runtime_secret_values(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Read the declared bindings this process received from the bootstrap.
+
+    The bootstrap never copies declared bindings into the ambient environment;
+    it materializes one mode-0600 file and names it in
+    ``HOST_SECRET_RUNTIME_ENV_FILE``. This reader is therefore the contract
+    path for a consumer, and it never falls back to ambient environment. An
+    absent or unreadable surface returns no values so the caller fails closed
+    while naming only its logical identifier.
+    """
+    source = os.environ if env is None else env
+    raw_path = str(source.get(HOST_SECRET_RUNTIME_ENV_FILE, "")).strip()
+    if not raw_path:
+        return {}
+    try:
+        content = Path(raw_path).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    values: dict[str, str] = {}
+    for line in content.splitlines():
+        name, separator, value = line.partition("=")
+        if not separator or not name.strip():
+            continue
+        values[name.strip()] = value
+    return values
 
 
 def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:

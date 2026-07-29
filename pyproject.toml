@@ -92,7 +92,7 @@ browser = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["app*", "llm_contract*"]
 
 [tool.setuptools.package-data]
 "app.settings" = ["*.yaml"]

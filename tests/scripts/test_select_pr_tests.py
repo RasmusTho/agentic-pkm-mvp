@@ -104,6 +104,19 @@ def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:
     assert path in selection.targets
 
 
+def test_model_access_kernel_change_selects_contract_and_boundary_coverage() -> None:
+    selection = select_tests(["llm_contract/__init__.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("model_access",)
+    assert selection.unowned_paths == ()
+    assert "tests/model_access" in selection.targets
+    assert "tests/builderops/test_model_inquiry_adapters.py" in selection.targets
+    assert "tests/builderops/test_model_inquiry_runner.py" in selection.targets
+    assert "tests/architecture/test_llm_contract_kernel.py" in selection.targets
+    assert "tests/architecture/test_import_boundary.py" in selection.targets
+
+
 def test_deploy_pin_file_selects_ops_deploy() -> None:
     selection = select_tests(["config/deploy/dev.env"])
 

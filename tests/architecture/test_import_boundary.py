@@ -59,6 +59,12 @@ def _builder_llm_authority_contract_section() -> configparser.SectionProxy:
     return parser["importlinter:contract:builder-llm-authority"]
 
 
+def _neutral_llm_contract_section() -> configparser.SectionProxy:
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    return parser["importlinter:contract:neutral-llm-contract-kernel"]
+
+
 def _module_list(raw: str) -> Set[str]:
     # configparser drops full-line "#" comments inside multiline values, so the
     # surviving lines are real module names.
@@ -213,6 +219,12 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
     assert not unresolvable, (
         f"source_modules names packages that do not exist under app/: {unresolvable}"
     )
+
+
+def test_llm_contract_kernel_is_covered_by_import_boundary() -> None:
+    section = _neutral_llm_contract_section()
+    assert _module_list(section["source_modules"]) == {"llm_contract"}
+    assert _module_list(section["forbidden_modules"]) == {"app"}
 
 
 # ---------------------------------------------------------------------------

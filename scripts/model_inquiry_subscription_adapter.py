@@ -16,6 +16,20 @@ from typing import Any, Mapping
 # with the host wrapper's larger 1500-second bound.
 COMMAND_TIMEOUT_SECONDS = 1200
 TIMEOUT_EXIT_CODE = 124
+# An expired interactive session is not a generic command failure. The parent
+# LocalCommandAdapter maps this conventional code to the session_expired
+# diagnostic class so the two never collapse into command_exit_nonzero.
+SESSION_EXPIRED_EXIT_CODE = 125
+SESSION_EXPIRED_MARKERS = (
+    "please run /login",
+    "please log in",
+    "not logged in",
+    "session expired",
+    "session has expired",
+    "authentication required",
+    "unauthorized",
+    "invalid credentials",
+)
 FABLE_MODEL = "claude-fable-5"
 CODEX_MODEL = "gpt-5.6-sol"
 
@@ -92,8 +106,16 @@ def run_role(request: Mapping[str, Any], role: str) -> dict[str, Any]:
         # code to its closed, receipt-safe command_timeout diagnostic class.
         raise SystemExit(TIMEOUT_EXIT_CODE) from exc
     if result.returncode:
+        if _is_expired_session(result.stderr) or _is_expired_session(result.stdout):
+            raise SystemExit(SESSION_EXPIRED_EXIT_CODE)
         raise SystemExit(result.returncode)
     return _response_from_text(result.stdout)
+
+
+def _is_expired_session(text: str) -> bool:
+    """Classify an interactive session failure without echoing provider output."""
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in SESSION_EXPIRED_MARKERS)
 
 
 def _response_from_text(text: str) -> dict[str, Any]:

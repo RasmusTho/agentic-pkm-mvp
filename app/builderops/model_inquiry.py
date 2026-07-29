@@ -15,13 +15,13 @@ from typing import Any, cast
 from uuid import uuid4
 
 from app.builderops.config import load_paths
-from app.builderops.model_inquiry_adapters import ADAPTER_FAILURE_CLASSES
 from app.builderops.model_inquiry_contract import (
     canonical_hash,
     github_issue_url_matches,
     initial_context_packet,
     model_turn_request_hash,
 )
+from llm_contract import ADAPTER_FAILURE_CLASSES
 from app.builderops.model_inquiry_report import render_markdown_report
 from app.builderops.models import (
     BuilderOpsConflictError,
@@ -44,6 +44,9 @@ SYNTHESIS_SCHEMA = "builderops.model-inquiry-synthesis.v1"
 READINESS_SCHEMA = "builderops.model-inquiry-readiness.v1"
 PROMOTION_INTENT_SCHEMA = "builderops.model-inquiry-promotion-intent.v1"
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+# Mirrors the declared logical-secret grammar in app/ops/host_secret_contract.py.
+CREDENTIAL_IDENTITY_RE = re.compile(r"[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}\Z")
+CREDENTIAL_ATTEMPT_REQUEST_ID = "adapter_req_credential"
 READINESS_OUTCOMES = frozenset({"issue_ready", "needs_input", "not_ready"})
 TERMINAL_TURN_OUTCOMES = frozenset({"accepted", "completed", "failed", "not_ready", "refused"})
 RUN_TERMINAL_OUTCOMES = frozenset(
@@ -2013,6 +2016,23 @@ def _validate_provider_attempt_receipt(
         ):
             raise BuilderOpsValidationError("invalid configuration attempt receipt")
         return
+    if request_id == CREDENTIAL_ATTEMPT_REQUEST_ID:
+        # A declared credential that is absent or unusable fails closed before a
+        # request packet exists, so this reserved attempt carries the classified
+        # diagnostic and the logical identifier instead of turn hashes.
+        if (
+            outcome != "provider_error"
+            or set(details) != {"adapter_request_id", "classification", "diagnostic"}
+            or details.get("classification") != "declared credential unavailable"
+        ):
+            raise BuilderOpsValidationError("invalid credential attempt receipt")
+        _validate_adapter_failure_diagnostic(details["diagnostic"])
+        diagnostic = cast(Mapping[str, Any], details["diagnostic"])
+        if diagnostic.get("adapter_failure_class") != "credential_unavailable" or not diagnostic.get(
+            "credential_identity_ref"
+        ):
+            raise BuilderOpsValidationError("invalid credential attempt receipt")
+        return
     expected_classifications = {
         "provider_refused": "provider returned explicit refusal",
         "malformed_output": "provider output failed strict response validation",
@@ -2052,12 +2072,23 @@ def _validate_adapter_failure_diagnostic(value: Any) -> None:
         raise BuilderOpsValidationError("adapter failure diagnostic must be an object")
     expected_fields = {"adapter_id", "adapter_failure_class"}
     optional_exit_code = "adapter_exit_code"
-    if set(value) not in (expected_fields, { *expected_fields, optional_exit_code }):
+    optional_credential = "credential_identity_ref"
+    if not expected_fields <= set(value) or not set(value) <= {
+        *expected_fields,
+        optional_exit_code,
+        optional_credential,
+    }:
         raise BuilderOpsValidationError("invalid adapter failure diagnostic fields")
     _safe_id(str(value.get("adapter_id", "")), "adapter failure adapter_id")
     failure_class = value.get("adapter_failure_class")
     if not isinstance(failure_class, str) or failure_class not in ADAPTER_FAILURE_CLASSES:
         raise BuilderOpsValidationError("invalid adapter failure class")
+    if optional_credential in value:
+        credential = value[optional_credential]
+        # Declared logical identifier grammar only: no value, environment name,
+        # provider secret, or host path can satisfy it.
+        if not isinstance(credential, str) or not CREDENTIAL_IDENTITY_RE.fullmatch(credential):
+            raise BuilderOpsValidationError("invalid credential identity reference")
     if optional_exit_code in value:
         exit_code = value[optional_exit_code]
         if (

@@ -21,19 +21,24 @@ from typing import Sequence
 SCHEMA_INSTALL = "builderops.model-inquiry-host-install.v1"
 SCHEMA_CHECK = "builderops.model-inquiry-host-check.v1"
 TRUSTED_REPO_ROOT = Path(__file__).resolve().parents[1]
-VERSIONED_ADAPTER_SHA256 = "3d037cded9ba4905c42cbccd0b660dcf2f4f70ea44d55704209e50cb510dbc0b"
+# The installed headless role entrypoints bind to the provider-API role adapter.
+# The interactive subscription adapter is deliberately not installable from here:
+# no headless entrypoint may depend on an interactive subscription session
+# (ADR-0064 §4).
+VERSIONED_ADAPTER_NAME = "model_inquiry_role_adapter.py"
+VERSIONED_ADAPTER_SHA256 = "51510b1e8095f322ec410cf073bdb534b5e8a690e18cfa34c82eff91222aae77"
+CREDENTIAL_RESOLUTION = "host-secret-contract"
 
 
 @dataclass(frozen=True)
 class RoleSpec:
     role: str
     entrypoint: str
-    provider_command: str
 
 
 ROLE_SPECS = (
-    RoleSpec("fable", "fable-subscription-cli", "claude"),
-    RoleSpec("gpt_codex", "codex-subscription-cli", "codex"),
+    RoleSpec("fable", "fable-model-inquiry-role"),
+    RoleSpec("gpt_codex", "codex-model-inquiry-role"),
 )
 
 
@@ -167,18 +172,18 @@ def _resolve_repo_root(path: Path) -> Checkout:
         try:
             adapter_bytes, adapter_details = _read_regular_file_at(
                 scripts_fd,
-                "model_inquiry_subscription_adapter.py",
-                label="versioned subscription adapter",
+                VERSIONED_ADAPTER_NAME,
+                label="versioned role adapter",
             )
         finally:
             os.close(scripts_fd)
         adapter_sha256 = hashlib.sha256(adapter_bytes).hexdigest()
         if adapter_sha256 != VERSIONED_ADAPTER_SHA256:
             raise HostInstallError(
-                "versioned subscription adapter must match the installer digest"
+                "versioned role adapter must match the installer digest"
             )
         _assert_directory_identity(resolved, root_identity, label="repo root")
-        adapter = resolved / "scripts" / "model_inquiry_subscription_adapter.py"
+        adapter = resolved / "scripts" / VERSIONED_ADAPTER_NAME
         return Checkout(
             resolved,
             adapter,
@@ -225,9 +230,10 @@ def _wrapper_content(
     return (
         "#!/bin/sh\n"
         f"# adapter-sha256={adapter_sha256}\n"
+        f"# credential-resolution={CREDENTIAL_RESOLUTION}\n"
         "set -eu\n"
-        f"INQUIRY_ROLE={shlex.quote(role)} "
-        f"exec {shlex.quote(str(python))} {shlex.quote(str(adapter))}\n"
+        f"exec {shlex.quote(str(python))} {shlex.quote(str(adapter))} "
+        f"--role {shlex.quote(role)}\n"
     )
 
 
@@ -248,8 +254,8 @@ def _assert_adapter_identity(checkout: Checkout) -> None:
         try:
             adapter_bytes, adapter_details = _read_regular_file_at(
                 scripts_fd,
-                "model_inquiry_subscription_adapter.py",
-                label="versioned subscription adapter",
+                VERSIONED_ADAPTER_NAME,
+                label="versioned role adapter",
             )
         finally:
             os.close(scripts_fd)
@@ -259,7 +265,7 @@ def _assert_adapter_identity(checkout: Checkout) -> None:
         (adapter_details.st_dev, adapter_details.st_ino) != checkout.adapter_identity
         or hashlib.sha256(adapter_bytes).hexdigest() != checkout.adapter_sha256
     ):
-        raise HostInstallError("versioned subscription adapter identity changed")
+        raise HostInstallError("versioned role adapter identity changed")
 
 
 def _assert_checkout_authority(checkout: Checkout) -> None:
@@ -472,16 +478,13 @@ def check(
                 and path_matches
                 and _entrypoint_matches(directory_fd, spec.entrypoint, content)
             )
-            provider_available = (
-                shutil.which(spec.provider_command, path=command_path) is not None
-            )
-            role_ok = entrypoint_available and provider_available
-            ok = ok and role_ok
+            # No provider CLI is probed: a headless role entrypoint resolves a
+            # declared credential and never an interactive session.
+            ok = ok and entrypoint_available
             roles[spec.role] = {
                 "entrypoint": spec.entrypoint,
                 "entrypoint_status": "available" if entrypoint_available else "unavailable",
-                "provider_command": spec.provider_command,
-                "provider_status": "available" if provider_available else "unavailable",
+                "credential_resolution": CREDENTIAL_RESOLUTION,
             }
         launcher_available = (
             shutil.which("yggdrasil-model-inquiry", path=command_path) is not None
