@@ -20,6 +20,10 @@ queue entry is removed only after a fresh transaction can observe that commit.
 
 ## What This Task Does
 
+- Treat the Bifrost/iPad record as an approval, rejection, or permitted pre-application undo for a
+  displayed proposal, never as the canonical merge command. The Hub validates that it is bound to
+  the pending proposal, creates the operation row, and is the only writer that executes
+  `EntityRegister.merge` or records a merge outcome.
 - Add one migration-owned `entity_review_operations` table and a narrow
   `app/heimdal/entity_review_operation_journal.py` store. The row binds:
   active vault identity; deterministic `operation_id`; `queue_entry_id`; decision-list position;
@@ -65,6 +69,10 @@ moving entity authority into the database.
 - [ ] The operation identity is deterministic across retries and binds the active vault, queue entry,
       decision position and digest, and original entity pair; a changed digest fails closed.
       Verify: `tests/heimdal/test_entity_review_operation_journal.py::test_operation_identity_binds_exact_human_decision`
+- [ ] A Bifrost/iPad approval bound to a displayed proposal is accepted only as review input; the
+      Hub canonicalizes it into the operation before any register mutation, and a client record alone
+      cannot be replayed as a merge command.
+      Verify: `tests/heimdal/test_entity_confirm.py::test_client_approval_is_canonicalized_by_hub_before_merge_execution`
 - [ ] The initial journal row commits before the first register note effect.
       Verify: `tests/heimdal/test_entity_review_operation_journal.py::test_operation_claim_commits_before_first_register_effect`
 - [ ] The event-committed journal state and exactly one matching outbox event commit atomically, with
@@ -101,6 +109,7 @@ moving entity authority into the database.
   (EROJ-03).
 - A generic journal/saga API, worker, event bus, graph, second outbox, or UI.
 - Changing the human decision vocabulary or making automatic identity decisions.
+- Client-side merge execution, register mutation, or a client-owned canonical merge command.
 
 ## Restart / Durability Posture
 

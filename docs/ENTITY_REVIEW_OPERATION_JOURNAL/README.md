@@ -41,9 +41,11 @@ the journal, lineage fields, or complement identities are shipped.
   outbox remains the canonical event queue; GOV/HKA — governed writes and client surfaces retain
   their existing authority boundaries.
 
-The journal never decides that two entities are the same. It records which already-human-authored
-decision is being applied, which deterministic register effects belong to it, and whether its event
-is committed and externally visible. `entities/review.md` remains the human decision history;
+The journal never decides that two entities are the same. A Bifrost/iPad action is a proposal-bound
+approval, rejection, or permitted pre-application undo; the Hub alone canonicalizes an approval
+into a merge operation, mutates the register, and records the durable outcome. The journal records
+that Hub execution, which deterministic register effects belong to it, and whether its event is
+committed and externally visible. `entities/review.md` remains the human decision history;
 `_heimdal/register/*.md` remains canonical identity truth; Postgres state remains operational and
 rebuildable, not cognition.
 
@@ -51,7 +53,7 @@ rebuildable, not cognition.
 
 | Order | Task | Outcome |
 | --- | --- | --- |
-| 1 | [COMMIT_OPERATION_AND_OUTBOX_VISIBILITY.md](COMMIT_OPERATION_AND_OUTBOX_VISIBILITY.md) (EROJ-01) | Bind each applied merge to a durable operation, atomically commit the operation/event evidence, and require visibility from a fresh transaction before clearing `pending`. |
+| 1 | [COMMIT_OPERATION_AND_OUTBOX_VISIBILITY.md](COMMIT_OPERATION_AND_OUTBOX_VISIBILITY.md) (EROJ-01) | Canonicalize a proposal-bound client approval in the Hub, bind its merge to a durable operation, atomically commit operation/event evidence, and require fresh visibility before clearing `pending`. |
 | 2 | [PRESERVE_TARGET_EVOLUTION_LINEAGE.md](PRESERVE_TARGET_EVOLUTION_LINEAGE.md) (EROJ-02) | Preserve the original decision pair across later governed target merge/split evolution and recover its one original event without graph-only inference. |
 | 3 | [GUARANTEE_GLOBALLY_UNIQUE_SPLIT_COMPLEMENTS.md](GUARANTEE_GLOBALLY_UNIQUE_SPLIT_COMPLEMENTS.md) (EROJ-03) | Give every source-redirect/target-complement pair one globally unique identity and make repeated split recovery deterministic and fail-loud. |
 
@@ -69,9 +71,12 @@ recorded. No work in this chain is safe to parallelize.
 
 ## Cross-Task Invariants / Interaction Safety
 
-- **INV-EROJ-1 — authority does not move.** A journal row may reference a human-authored decision and
-  markdown effects; it may not create, amend, rank, or reinterpret the decision. Entity notes remain
-  canonical. Outbox rows and journal rows are operational evidence only.
+- **INV-EROJ-1 — authority does not move.** A client may submit approval, rejection, or permitted
+  pre-application undo for a displayed proposal, but the Hub alone canonicalizes an approval into
+  an executable merge operation, mutates the register, and records the outcome. A journal row may
+  reference that review signal and markdown effects; it may not create, amend, rank, or reinterpret
+  the decision. Entity notes remain canonical. Outbox rows and journal rows are operational evidence
+  only.
 - **INV-EROJ-2 — one immutable operation identity.** The active vault identity, queue entry id,
   decision-list position, canonical digest of the exact decision mapping, original `from_id`, and
   original `into_id` determine one operation id. A retry reuses it. A different decision mapping or
@@ -122,6 +127,9 @@ recorded. No work in this chain is safe to parallelize.
 - [ ] A caller-owned transaction cannot make an uncommitted operation/event authorize queue clear;
       the retry commits exactly one visible merge event.
       Verify: `tests/heimdal/test_entity_review_operation_journal.py::test_caller_transaction_rollback_cannot_clear_pending_or_hide_merge_event`
+- [ ] A client approval for a displayed proposal is canonicalized by the Hub before any register
+      mutation; no client record is itself treated as a merge command.
+      Verify: `tests/heimdal/test_entity_confirm.py::test_client_approval_is_canonicalized_by_hub_before_merge_execution`
 - [ ] A register effect followed by target evolution still recovers exactly one event containing the
       original human-decided pair.
       Verify: `tests/heimdal/test_entity_review_operation_journal.py::test_eventless_merge_then_target_merge_backfills_original_event`

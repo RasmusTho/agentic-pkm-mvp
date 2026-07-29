@@ -177,6 +177,16 @@ This is a v1 convention owned by this contract: advisory to the runtime today (o
 
 Per ADR-0055 item 5, Bifrost uses Apple's coordinated-access APIs — `NSFileCoordinator` / `UIDocument` — for vault files, not plain `FileManager` I/O. This preserves offline-first operation while cooperating with iCloud's coordination layer; it does not replace the hub's stale-detection or conflict-artifact responsibilities.
 
+### Entity-review approval boundary (target-state; not shipped)
+
+The planned entity-review operation-journal contract in
+`docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md` narrows Bifrost's entity-review role further: an
+iPad action may record a proposal-bound approval, rejection, or permitted pre-application undo for
+a displayed Hub proposal, but it is never the canonical merge command. The Hub alone canonicalizes
+an approval into an operation, executes every register merge, and records the durable outcome. This
+paragraph describes the pending EROJ delivery contract only; it does not claim the transport or
+runtime behavior is implemented.
+
 ## 6. Concurrent-writer safety model
 
 This is the load-bearing section. The writer set over one iCloud-synced vault is now: the Mac runtime, the human in Obsidian, Bifrost shells, and external app agents — plus iCloud sync as a transport that can materialize conflicts as files.

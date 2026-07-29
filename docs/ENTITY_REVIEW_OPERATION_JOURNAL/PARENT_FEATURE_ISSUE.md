@@ -29,9 +29,11 @@ bounded contracts. This parent is their validation hub, not a pickup issue.
 
 ## Scope
 
-Deliver one narrow operation journal for entity-review merge application, preserve the original
-decision pair through target evolution, and give split complements globally unique identities with
-deterministic recovery. Keep human decisions and markdown entity notes authoritative.
+Deliver one narrow operation journal for Hub-owned entity-review merge application, preserve the
+original decision pair through target evolution, and give split complements globally unique
+identities with deterministic recovery. Keep human decisions and markdown entity notes authoritative.
+The iPad is a proposal projection and approval/review surface; it never initiates or owns merge
+execution.
 
 ## Source Anchors
 
@@ -56,6 +58,8 @@ deterministic recovery. Keep human decisions and markdown entity notes authorita
 - Preserve INV-EROJ-1 through INV-EROJ-9 and every partial-failure outcome in the specification.
 - Clear `pending` only after a fresh database transaction observes the terminal journal row and
   matching committed outbox event.
+- Treat any Bifrost/iPad action as a proposal-bound review signal. Only the Hub may canonicalize it
+  into a merge operation, mutate the register, and durably record the outcome.
 - Keep the original human-decided `{from_id, into_id}` immutable across later lineage evolution.
 - Add every invariant, producer, existing-resource compatibility path, and fixture in the same child.
 - Add no generic saga, graph, queue, service, event-store, or UI abstraction.
