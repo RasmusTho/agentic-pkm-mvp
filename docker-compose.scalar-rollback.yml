@@ -99,6 +99,8 @@ services:
       INSTANCE_STATE_LEGACY_ROLLBACK: "1"
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: /app/scalar-rollback/app-local.md
       VAULT_ROOT: /app/selected-vault
+      VAULT_ROOT_DEV: /app/selected-vault
+      VAULT_ROOT_TEST: /app/selected-vault
       WATCHER_VAULT_PATH: /app/selected-vault
       API_HEALTHCHECK_URL: http://127.0.0.1:8000/readyz
     depends_on: !override
@@ -109,7 +111,7 @@ services:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
-      - "${SCALAR_ROLLBACK_BIND_HOST:-127.0.0.1}:${SCALAR_ROLLBACK_PORT:-18000}:8080"
+      - "127.0.0.1:${SCALAR_ROLLBACK_PORT:-18000}:8080"
     volumes:
       - "./ops/scalar-rollback/nginx.conf:/etc/nginx/conf.d/default.conf:ro"
       - type: bind

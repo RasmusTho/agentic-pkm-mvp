@@ -127,6 +127,12 @@ if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MA
   exit 24
 fi
 case "$*" in
+  *"ps -aq"*"com.docker.compose.service=scalar-rollback-gateway"*)
+    [ "${{FAKE_SCALAR_CONTAINERS:-0}}" = "1" ] && printf '%s\\n' fake-scalar-gateway
+    ;;
+  *"ps -aq"*"com.docker.compose.service=scalar-rollback-guard"*)
+    [ "${{FAKE_SCALAR_CONTAINERS:-0}}" = "1" ] && printf '%s\\n' fake-scalar-guard
+    ;;
   *" ps -q "*) printf '%s\\n' fake-capture-watch ;;
   inspect*) printf '%s\\n' "${{FAKE_CAPTURE_WATCH_STATUS:-healthy}}" ;;
 esac
@@ -139,6 +145,15 @@ exit 0
 set -eu
 printf 'curl %s\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
 case "$*" in
+  *"--user "*":definitely-invalid"*)
+    printf '%s' "${FAKE_SCALAR_GATEWAY_HTTP_STATUS:-401}"
+    ;;
+  *"--netrc-file "*)
+    if [ "${FAKE_SCALAR_GATEWAY_AUTH:-pass}" = "fail" ]; then
+      exit 22
+    fi
+    printf '{"ok":true}\n'
+    ;;
   *"/version"*)
     if [ "${FAKE_VERSION_CURL:-pass}" = "fail" ]; then
       echo 'fake version curl diagnostic' >&2

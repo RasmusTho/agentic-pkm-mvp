@@ -25,6 +25,7 @@ def _render_deploy_compose(
     channel: str,
     explicit_vault: bool,
     selected_vault: Path | None = None,
+    scalar_rollback: bool = False,
 ) -> dict[str, object]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     runtime_env = tmp_path / f"{channel}-runtime.env"
@@ -90,6 +91,30 @@ deploy_channel_compose \
     env["VAULT_HOST_ROOT"] = str(hostile_vault)
     env["WATCHER_RUNTIME_ENV_FILE"] = str(hostile_runtime_env)
     env["DEPLOY_VAULT_CONTAINER_ROOT"] = str(hostile_vault)
+    if scalar_rollback:
+        scalar_root = tmp_path / "scalar-selected-vault"
+        scalar_root.mkdir()
+        scalar_htpasswd = tmp_path / "scalar.htpasswd"
+        scalar_htpasswd.write_text("operator:hash\n", encoding="utf-8")
+        ownership_root = tmp_path / "instance-ownership"
+        ownership_root.mkdir()
+        env.update(
+            {
+                "MVR01C_SCALAR_ROLLBACK": "1",
+                "SCALAR_ROLLBACK_GUARD_IMAGE": (
+                    f"ghcr.io/rasmustho/pkm-app:{IMAGE_SHA}"
+                ),
+                "SCALAR_ROLLBACK_PREVIOUS_IMAGE": (
+                    "ghcr.io/rasmustho/pkm-app:previous-scalar"
+                ),
+                "SCALAR_ROLLBACK_VAULT_BINDING_ID": "binding-explicit",
+                "SCALAR_ROLLBACK_VAULT_ROOT": str(scalar_root),
+                "SCALAR_ROLLBACK_HTPASSWD": str(scalar_htpasswd),
+                "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+                "PKM_ENVIRONMENT": channel,
+                "SCALAR_ROLLBACK_BIND_HOST": "0.0.0.0",
+            }
+        )
     result = subprocess.run(
         ["bash", "-c", command],
         cwd=REPO_ROOT,
@@ -212,6 +237,36 @@ def test_full_host_vault_does_not_add_deadlocking_duplicate_legacy_mount(
         assert env["VAULT_ROOT"] == str(selected_vault)
         assert env["VAULT_ROOT_DEV"] == str(selected_vault)
         assert env["WATCHER_VAULT_PATH"] == str(selected_vault)
+
+
+@requires_docker
+def test_scalar_rollback_overrides_full_host_environment_selectors(
+    tmp_path: Path,
+) -> None:
+    services = _services(
+        _render_deploy_compose(
+            tmp_path,
+            channel="dev",
+            explicit_vault=True,
+            selected_vault=Path("/Users/operator/selected-vault"),
+            scalar_rollback=True,
+        )
+    )
+    api = services["api"]
+    env = _environment(api)
+
+    assert env["VAULT_ROOT"] == "/app/selected-vault"
+    assert env["VAULT_ROOT_DEV"] == "/app/selected-vault"
+    assert env["VAULT_ROOT_TEST"] == "/app/selected-vault"
+    assert env["WATCHER_VAULT_PATH"] == "/app/selected-vault"
+    assert _mount_source(api, "/app/selected-vault") == str(
+        tmp_path / "scalar-selected-vault"
+    )
+    assert _mount_source(api, "/Users") is None
+    assert api.get("ports", []) == []
+    gateway_ports = services["scalar-rollback-gateway"]["ports"]
+    assert isinstance(gateway_ports, list)
+    assert gateway_ports[0]["host_ip"] == "127.0.0.1"
 
 
 @requires_docker

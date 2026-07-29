@@ -191,6 +191,27 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(
             rollback_vault_binding_id=registration.vault_binding_id,
             selected_root=root,
         )
+    gateway_config.write_bytes(
+        (REPO_ROOT / "ops/scalar-rollback/nginx.conf").read_bytes()
+    )
+    compose_overlay.write_text(
+        (REPO_ROOT / "docker-compose.scalar-rollback.yml")
+        .read_text(encoding="utf-8")
+        .replace("      WATCHER_VAULT_PATH: /app/selected-vault\n", "", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        RegistryError,
+        match="selectors are not selected-binding-only",
+    ):
+        preflight_scalar_rollback_guard(
+            compose_base=compose_base,
+            compose_overlay=compose_overlay,
+            gateway_config=gateway_config,
+            native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+            rollback_vault_binding_id=registration.vault_binding_id,
+            selected_root=root,
+        )
     gateway = (REPO_ROOT / "ops/scalar-rollback/nginx.conf").read_text(
         encoding="utf-8"
     )
@@ -220,6 +241,12 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(
         ),
         Loader=_ComposeLoader,
     )
+    assert rollback_compose["services"]["api"]["environment"] | {
+        "VAULT_ROOT": "/app/selected-vault",
+        "VAULT_ROOT_DEV": "/app/selected-vault",
+        "VAULT_ROOT_TEST": "/app/selected-vault",
+        "WATCHER_VAULT_PATH": "/app/selected-vault",
+    } == rollback_compose["services"]["api"]["environment"]
     guard_ownership_mount = next(
         mount
         for mount in rollback_compose["services"]["scalar-rollback-guard"][

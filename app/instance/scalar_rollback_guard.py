@@ -204,6 +204,17 @@ def _validate_compose_model(base_model: object, overlay_model: object) -> None:
         "scalar-rollback-guard"
     }:
         raise RegistryError("scalar rollback API has a bypass port or dependency")
+    api_environment = api.get("environment")
+    if not isinstance(api_environment, dict) or any(
+        api_environment.get(selector) != "/app/selected-vault"
+        for selector in (
+            "VAULT_ROOT",
+            "VAULT_ROOT_DEV",
+            "VAULT_ROOT_TEST",
+            "WATCHER_VAULT_PATH",
+        )
+    ):
+        raise RegistryError("scalar rollback API selectors are not selected-binding-only")
     api_targets = _volume_targets(api.get("volumes"))
     if api_targets != {
         "/app/tmp",

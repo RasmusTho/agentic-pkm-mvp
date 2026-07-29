@@ -214,6 +214,53 @@ prepare_scalar_rollback_environment() {
     echo "scalar rollback gateway credential file is missing" >&2
     return 78
   fi
+  if [ ! -s "${SCALAR_ROLLBACK_HTPASSWD}" ] || ! awk '
+    /^[^:[:space:]]+:[^[:space:]]+$/ { seen = 1; next }
+    { invalid = 1 }
+    END { exit (seen && !invalid) ? 0 : 1 }
+  ' "${SCALAR_ROLLBACK_HTPASSWD}"; then
+    echo "scalar rollback gateway credential file is empty or invalid" >&2
+    return 78
+  fi
+  case "${SCALAR_ROLLBACK_AUTH_NETRC:-}" in
+    /*) ;;
+    *)
+      echo "scalar rollback requires an absolute SCALAR_ROLLBACK_AUTH_NETRC" >&2
+      return 78
+      ;;
+  esac
+  if [ ! -f "${SCALAR_ROLLBACK_AUTH_NETRC}" ]; then
+    echo "scalar rollback authenticated probe credential file is missing" >&2
+    return 78
+  fi
+  if ! SCALAR_ROLLBACK_AUTH_PROBE_USER="$(
+    "${PYTHON}" - \
+      "${SCALAR_ROLLBACK_AUTH_NETRC}" \
+      "${SCALAR_ROLLBACK_HTPASSWD}" <<'PY'
+import netrc
+import os
+import stat
+import sys
+
+netrc_path, htpasswd_path = sys.argv[1:]
+if stat.S_IMODE(os.stat(netrc_path).st_mode) & 0o077:
+    raise SystemExit(1)
+credentials = netrc.netrc(netrc_path).authenticators("127.0.0.1")
+if credentials is None:
+    raise SystemExit(1)
+login, _, password = credentials
+if not login or not password:
+    raise SystemExit(1)
+with open(htpasswd_path, encoding="utf-8") as handle:
+    users = {line.split(":", 1)[0] for line in handle if ":" in line}
+if login not in users:
+    raise SystemExit(1)
+print(login)
+PY
+  )"; then
+    echo "scalar rollback authenticated probe credential is invalid or does not match htpasswd" >&2
+    return 78
+  fi
   MVR01C_SCALAR_ROLLBACK=1
   SCALAR_ROLLBACK_GUARD_IMAGE="${image_repository}:${current_sha}"
   SCALAR_ROLLBACK_PREVIOUS_IMAGE="${image_repository}:${target_sha}"
@@ -222,7 +269,9 @@ prepare_scalar_rollback_environment() {
   export MVR01C_SCALAR_ROLLBACK
   export SCALAR_ROLLBACK_GUARD_IMAGE SCALAR_ROLLBACK_PREVIOUS_IMAGE
   export SCALAR_ROLLBACK_VAULT_BINDING_ID SCALAR_ROLLBACK_VAULT_ROOT
-  export SCALAR_ROLLBACK_HTPASSWD PKM_ENVIRONMENT SCALAR_ROLLBACK_PORT
+  export SCALAR_ROLLBACK_HTPASSWD SCALAR_ROLLBACK_AUTH_NETRC
+  export SCALAR_ROLLBACK_AUTH_PROBE_USER
+  export PKM_ENVIRONMENT SCALAR_ROLLBACK_PORT
 }
 
 read_pending_migration_field() {
@@ -393,6 +442,25 @@ embedding_provider_preflight_gate() {
   compose exec -T api python -m app.cli settings validate --json
 }
 
+retire_scalar_rollback_services() {
+  local service container_ids cid rc=0
+  for service in scalar-rollback-gateway scalar-rollback-guard; do
+    container_ids="$(
+      docker ps -aq \
+        --filter "label=com.docker.compose.project=${compose_project}" \
+        --filter "label=com.docker.compose.service=${service}"
+    )" || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+      echo "scalar rollback retirement: ${service} lookup failed" >&2
+      return "${rc}"
+    fi
+    while IFS= read -r cid; do
+      [ -n "${cid}" ] || continue
+      docker rm -f "${cid}" >/dev/null || return $?
+    done <<<"${container_ids}"
+  done
+}
+
 recreate_channel_services() {
   local rc=0
   if [ "${scalar_rollback}" = "1" ]; then
@@ -402,6 +470,7 @@ recreate_channel_services() {
       scalar-rollback-guard api scalar-rollback-gateway
     return $?
   fi
+  retire_scalar_rollback_services || return $?
   if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then
     # During an acknowledged embedding-dimension cutover, /readyz must stay red
     # until the governed full rebuild completes. Start the runtime first, prove
@@ -419,6 +488,43 @@ recreate_channel_services() {
   fi
 
   compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+}
+
+scalar_rollback_gateway_auth_gate() {
+  local status body rc=0
+  status="$(
+    curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --max-time 3 \
+      --user "${SCALAR_ROLLBACK_AUTH_PROBE_USER}:definitely-invalid" \
+      "http://127.0.0.1:${api_port}/healthz"
+  )" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "scalar rollback gate: authenticated gateway is unreachable" >&2
+    return "${rc}"
+  fi
+  if [ "${status}" != "401" ]; then
+    echo "scalar rollback gate: authenticated gateway did not reject invalid credentials (status ${status})" >&2
+    return 1
+  fi
+  rc=0
+  body="$(
+    curl --noproxy '*' -fsS --max-time 3 \
+      --netrc-file "${SCALAR_ROLLBACK_AUTH_NETRC}" \
+      "http://127.0.0.1:${api_port}/healthz"
+  )" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "scalar rollback gate: provisioned credential cannot authenticate" >&2
+    return "${rc}"
+  fi
+  if ! "${PYTHON}" -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+raise SystemExit(0 if isinstance(payload, dict) and payload.get("ok") is True else 1)
+' <<<"${body}"; then
+    echo "scalar rollback gate: authenticated gateway health response is invalid" >&2
+    return 1
+  fi
 }
 
 scalar_rollback_runtime_gate() {
@@ -450,6 +556,7 @@ scalar_rollback_runtime_gate() {
         ;;
     esac
   done
+  scalar_rollback_gateway_auth_gate
 }
 
 apply_changed_migrations() {

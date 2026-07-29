@@ -114,14 +114,16 @@ companion UI is disabled, the real companion picker select/initialize routes are
 old API is reachable from the host only through the authenticated gateway. It mounts only the
 selected content root at `/app/selected-vault`. `deploy_channel.sh rollback` detects a target
 commit that predates `app.instance.runtime`, requires the explicit binding, absolute selected root,
-and gateway credential file before changing the pin, derives the trusted-current and
+gateway credential file, and a private `0600` netrc proof credential for one matching gateway user
+before changing the pin, derives the trusted-current and
 previous-image refs from the current/target pins, and then starts only the guard, old API, and
 gateway through that overlay. Scalar mode keeps the capable current-image pin as its durable guard
 identity and records the old target in the rollback anchor; a failed or restarted establishment
 therefore resumes the guarded mode instead of attempting a session-blocked broad-stack restart.
 The current guard adopts an existing authenticated session only when its binding, registry
 revision, selected root, export, and policy hashes exactly match the retry. The gateway uses the
-channel's managed restart posture. The legacy projection translates only that
+channel's managed restart posture; deployment records success only after the provisioned proof
+credential reaches the old API health endpoint through that live gateway. The legacy projection translates only that
 registration's host path to the container alias and authenticates both the canonical registry
 export and translated projection, so roll-forward restores the original binding identity rather
 than adopting a container path. The ledger validates that alias by its materialized physical-root
