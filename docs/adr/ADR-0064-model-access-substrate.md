@@ -1,4 +1,4 @@
-State: Accepted (owner decision, 2026-07-27). Establishes credential and session resolution as part of the model abstraction and selects declared API keys as the default programmatic auth path. Changes no shipped runtime behavior by itself.
+State: Accepted (owner decision, 2026-07-27); amended 2026-07-27 (§8: CKM sequencing restated after the ADR-0057 A1 orchestration ruling — the migration order does not swap, CKM stays at step 5). Establishes credential and session resolution as part of the model abstraction and selects declared API keys as the default programmatic auth path. Changes no shipped runtime behavior by itself.
 Doc role: Decision record (ADR)
 Authority: Authoritative for model-provider credential and session resolution, the default programmatic auth path, and the single-source provider set. Extends `docs/adr/ADR-0063-shared-llm-contract-kernel.md`, which remains authoritative for the Product/Builder contract seam and the fallback vocabulary. ADR-0062 remains authoritative for Builder process/data/credential separation. `docs/LLM_ROUTING.md` remains authoritative for current Product routing.
 Owner: Architecture spine / LLM boundary
