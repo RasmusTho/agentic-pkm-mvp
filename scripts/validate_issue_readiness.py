@@ -200,6 +200,16 @@ def _verify_file_path(target: str) -> str | None:
     return path if separator else None
 
 
+def _is_new_behavioral_test_file_target(target: str, path: str) -> bool:
+    """Return whether *target* commits the builder to add a test file."""
+
+    return (
+        path.startswith("tests/")
+        and path.endswith(".py")
+        and is_resolvable_verify_target(target)
+    )
+
+
 def _target_has_missing_file_path(target: str) -> bool:
     if re.search(r"<[^>]+>", target):
         return False
@@ -207,10 +217,10 @@ def _target_has_missing_file_path(target: str) -> bool:
     if path is None:
         return False
     candidate = Path(path)
-    return (
-        candidate.is_absolute()
-        or ".." in candidate.parts
-        or not (REPO_ROOT / candidate).is_file()
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return True
+    return not (REPO_ROOT / candidate).is_file() and not _is_new_behavioral_test_file_target(
+        target, path
     )
 
 
@@ -409,7 +419,7 @@ def repair_guidance(
         ]
     if classification == "missing_verify_file_paths":
         return [
-            "Update every file-based `Verify:` target to name an existing repository file.",
+            "Update every non-test file-based `Verify:` target to name an existing repository file; a behavioral `tests/...py::test_name` target may name a new test file for the builder to add.",
             "Missing Verify file path(s): "
             + ", ".join(ac_report.missing_verify_file_paths)
             + ".",
