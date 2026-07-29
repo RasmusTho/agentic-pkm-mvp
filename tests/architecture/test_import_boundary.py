@@ -215,6 +215,11 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
     )
 
 
+def test_llm_contract_kernel_is_covered_by_import_boundary() -> None:
+    section = _contract_section()
+    assert "app.llm_contract" in _module_list(section["source_modules"])
+
+
 # ---------------------------------------------------------------------------
 # MAS-02 — the interim Builder -> Product LLM authority leak is one, visible,
 # and time-boxed until MAS-06 replaces CKM's Product routing.
