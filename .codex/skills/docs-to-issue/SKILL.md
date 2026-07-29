@@ -80,6 +80,12 @@ For every candidate doc item, determine exactly one state:
    Also check whether the spec file's own `State:` line has already been promoted to "Implemented" — if so, classify as `delivered` and skip. If the code exists but `State:` still reads "Not yet implemented", treat the spec as stale, update the `State:` line (docs-authoring lane), and do not file a new issue.
 6. Decide whether the item should stay as one bounded issue or be turned into one parent feature issue plus child slices via `feature-breakdown`.
 7. If the candidate would only create bookkeeping churn, keep it out of the backlog and route it to the maintenance path instead.
+8. **Live duplicate re-check — immediately before creation.** The step 2–4 inspection is an analysis-time snapshot and goes stale: a concurrent session can file the same backlog between your inspection and your `gh issue create` (seen 2026-07-29: hub #4286 + children #4287–#4292 duplicated by #4298–#4304; mirrors `.codex/skills/publish-pr/SKILL.md :: Publication preflight — live open-PR overlap re-check`, whose precedent was PR #2757 duplicating #2755). Immediately before the first `gh issue create`, re-check live open issues via REST:
+   ```bash
+   REPO=$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+   gh api "repos/$REPO/issues?state=open&per_page=100" --jq '.[] | select(.pull_request | not) | "\(.number)\t\(.title)"'
+   ```
+   Any open issue already covering the same source docs or capability => STOP: keep the earlier compliant set, comment new evidence there instead, and file only the non-overlapping delta. When filing a multi-issue set (hub + children), run the re-check once immediately before the first creation, then file the whole set without interleaving further analysis.
 
 ## When a doc item becomes a new Issue
 
