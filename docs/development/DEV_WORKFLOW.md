@@ -78,7 +78,7 @@ Practical rule:
 Escalate to the repo-wide non-PG suite only when the governing Issue/owner document names it or the
 change has cross-system blast radius that focused subsystem tests cannot cover:
 
-`python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m "not pg"`
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -p xdist.plugin -q -m "not pg" -n auto --dist=loadfile`
 
 The full non-PG suite is host-global. The wrapper above holds an atomic repo-common kernel lock for
 the entire child process and releases it automatically when the process exits. A chat handshake,
