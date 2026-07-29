@@ -357,6 +357,9 @@ def _clear_test_deployment_authority(
         host_global_root / "deployment-quiescence-proof.json",
         host_global_root / "legacy-owner-inventory.json",
         _deployment_fence_path(host_global_root, layout.channel_id),
+        host_global_root
+        / "deployment-public"
+        / "scalar-rollback-startup-fence.json",
     ):
         path.unlink(missing_ok=True)
 
@@ -727,6 +730,11 @@ def test_deployment_producer_imports_final_state_bootstraps_owners_and_backs_up(
     assert receipt["final_fingerprint"] != diagnostic["diagnostic_fingerprint"]
     assert receipt["restart_fence_cleared"] is True
     assert not fence.exists()
+    assert not (
+        host_global_root
+        / "deployment-public"
+        / "scalar-rollback-startup-fence.json"
+    ).exists()
     layout = InstanceStateLayout.for_channel(instance_state_root, "test")
     registry = VaultRegistryStore(layout.registry_path).load()
     assert {Path(item.path) for item in registry.registrations.values()} == {

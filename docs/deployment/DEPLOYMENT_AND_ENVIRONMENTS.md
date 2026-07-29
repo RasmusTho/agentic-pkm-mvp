@@ -123,7 +123,9 @@ legacy projection, and installs a host-key-authenticated scalar session before t
 trusted one-shot guard alone receives writable ownership state so it can take the shared lock and
 sign the session; the previous-image API receives no ownership/key mount. The durable session excludes
 current registry writers for the lifetime of the old image; the old image receives neither the
-host key nor a writable registry mount. Native rollback currently fails closed: the root-owned
+host key nor a writable registry mount. Scalar admission and `deployment-begin` share one
+host-global lock; deployment also publishes a marker in a key-free host-global control directory,
+mounted read-only into the old API for its check immediately before startup. Native rollback currently fails closed: the root-owned
 `scripts/scalar_rollback_native.sh` launcher never starts an old image until an authenticated
 mutation-filtering boundary equivalent to the Compose gateway exists. A filesystem sandbox alone
 is insufficient because it cannot exclude a bypass listener. A binding-keyed

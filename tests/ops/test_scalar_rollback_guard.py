@@ -15,6 +15,7 @@ from app.instance.ownership_ledger import LedgerError, LedgerKeyError
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import (
     InstanceRegistryRuntime,
+    _begin_instance_state_deployment,
     _finish_instance_state_deployment,
     _preflight_scalar_rollback,
 )
@@ -366,6 +367,152 @@ def test_binding_keyed_database_floor_blocks_scalar_runtime(tmp_path) -> None:
         )
     assert not pending_rollback.exists()
     assert not pending_runtime.registry.scalar_rollback_session_path.exists()
+
+
+def test_deployment_begin_wins_scalar_admission_and_blocks_session_install(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, registration, root = _runtime(tmp_path)
+    entered_begin = threading.Event()
+    release_begin = threading.Event()
+    scalar_finished = threading.Event()
+    begin_failures: list[BaseException] = []
+    scalar_failures: list[BaseException] = []
+    original_write = runtime_module._write_private_json
+
+    def held_startup_fence(path, payload):
+        if path.name == "scalar-rollback-startup-fence.json":
+            entered_begin.set()
+            assert release_begin.wait(timeout=5)
+        return original_write(path, payload)
+
+    monkeypatch.setattr(runtime_module, "_write_private_json", held_startup_fence)
+
+    def begin() -> None:
+        try:
+            _begin_instance_state_deployment(
+                channel="prod",
+                instance_state_root=runtime.layout.root.parent,
+                host_global_root=runtime.ledger.root,
+                legacy_path=tmp_path / "missing-legacy.md",
+                controller_pid=123,
+                controller_start_token=f"linux:{'0' * 64}",
+            )
+        except BaseException as exc:
+            begin_failures.append(exc)
+
+    def scalar() -> None:
+        try:
+            _scalar_preflight(
+                runtime,
+                registration,
+                root,
+                tmp_path / "rollback" / "app-local.md",
+            )
+        except BaseException as exc:
+            scalar_failures.append(exc)
+        finally:
+            scalar_finished.set()
+
+    begin_thread = threading.Thread(target=begin)
+    scalar_thread = threading.Thread(target=scalar)
+    begin_thread.start()
+    assert entered_begin.wait(timeout=5)
+    scalar_thread.start()
+    assert not scalar_finished.wait(timeout=0.1)
+    release_begin.set()
+    begin_thread.join(timeout=5)
+    scalar_thread.join(timeout=5)
+
+    assert not begin_thread.is_alive()
+    assert not scalar_thread.is_alive()
+    assert begin_failures == []
+    assert len(scalar_failures) == 1
+    assert isinstance(scalar_failures[0], RegistryError)
+    assert "deployment lease or restart fence" in str(scalar_failures[0])
+    assert not runtime.registry.scalar_rollback_session_path.exists()
+
+
+def test_scalar_admission_wins_then_cross_channel_api_handoff_observes_deployment_fence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, registration, root = _runtime(tmp_path)
+    dev_state = tmp_path / "dev-state"
+    dev_state.mkdir()
+    entered_scalar = threading.Event()
+    begin_finished = threading.Event()
+    failures: list[BaseException] = []
+    original_store = runtime_module.VaultRegistryStore
+
+    def observed_store(path):
+        entered_scalar.set()
+        return original_store(path)
+
+    monkeypatch.setattr(runtime_module, "VaultRegistryStore", observed_store)
+
+    def scalar() -> None:
+        try:
+            _scalar_preflight(
+                runtime,
+                registration,
+                root,
+                tmp_path / "rollback" / "app-local.md",
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    def begin() -> None:
+        try:
+            _begin_instance_state_deployment(
+                channel="dev",
+                instance_state_root=dev_state,
+                host_global_root=runtime.ledger.root,
+                legacy_path=tmp_path / "missing-legacy.md",
+                controller_pid=123,
+                controller_start_token=f"linux:{'0' * 64}",
+            )
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            begin_finished.set()
+
+    with runtime_module._producer_transition_locked(runtime.layout):
+        scalar_thread = threading.Thread(target=scalar)
+        begin_thread = threading.Thread(target=begin)
+        scalar_thread.start()
+        assert entered_scalar.wait(timeout=5)
+        begin_thread.start()
+        assert not begin_finished.wait(timeout=0.1)
+
+    scalar_thread.join(timeout=5)
+    begin_thread.join(timeout=5)
+
+    assert not scalar_thread.is_alive()
+    assert not begin_thread.is_alive()
+    assert failures == []
+    assert runtime.registry.scalar_rollback_session_path.is_file()
+    assert (
+        runtime.ledger.root
+        / "deployment-public"
+        / "scalar-rollback-startup-fence.json"
+    ).is_file()
+    rollback_compose = yaml.load(
+        (REPO_ROOT / "docker-compose.scalar-rollback.yml").read_text(
+            encoding="utf-8"
+        ),
+        Loader=_ComposeLoader,
+    )
+    api_command = rollback_compose["services"]["api"]["command"][-1]
+    marker_check = (
+        "test ! -e "
+        "/app/deployment-control/scalar-rollback-startup-fence.json"
+    )
+    assert marker_check in api_command
+    assert api_command.index(marker_check) < api_command.index(
+        "exec bash /app/scripts/start_api.sh"
+    )
 
 
 def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:

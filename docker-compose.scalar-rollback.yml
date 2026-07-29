@@ -59,11 +59,18 @@ services:
       - >-
         test "$${INSTANCE_STATE_LEGACY_ROLLBACK}" = 1 &&
         test -f /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json &&
+        test ! -e /app/deployment-control/scalar-rollback-startup-fence.json &&
         exec bash /app/scripts/start_api.sh
     volumes: !override
       - "runtime-tmp:/app/tmp"
       - "instance-state:/app/instance-state:ro"
       - "scalar-rollback-legacy:/app/scalar-rollback"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}/deployment-public
+        target: /app/deployment-control
+        read_only: true
+        bind:
+          create_host_path: false
       - type: bind
         source: ${SCALAR_ROLLBACK_VAULT_ROOT:?validated selected root is required}
         target: /app/selected-vault

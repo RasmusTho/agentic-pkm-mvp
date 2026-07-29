@@ -209,9 +209,30 @@ def _validate_compose_model(base_model: object, overlay_model: object) -> None:
         "/app/tmp",
         "/app/instance-state",
         "/app/scalar-rollback",
+        "/app/deployment-control",
         "/app/selected-vault",
     }:
         raise RegistryError("scalar rollback API mount set is not selected-binding-only")
+    deployment_control = next(
+        (
+            mount
+            for mount in api["volumes"]
+            if isinstance(mount, dict)
+            and mount.get("target") == "/app/deployment-control"
+        ),
+        None,
+    )
+    if (
+        not isinstance(deployment_control, dict)
+        or deployment_control.get("read_only") is not True
+        or deployment_control.get("source")
+        != (
+            "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:"
+            "?absolute host-global state directory must be resolved by the launcher}"
+            "/deployment-public"
+        )
+    ):
+        raise RegistryError("scalar rollback deployment control mount is invalid")
     guard_targets = _volume_targets(guard.get("volumes"))
     if guard_targets != {
         "/app/instance-state",
@@ -282,8 +303,11 @@ def _validate_compose_model(base_model: object, overlay_model: object) -> None:
             raise RegistryError(
                 "current long-lived service can access scalar rollback policy/source"
             )
-    if "scalar-rollback-session.json" not in str(api.get("command")):
+    api_command = str(api.get("command"))
+    if "scalar-rollback-session.json" not in api_command:
         raise RegistryError("scalar rollback API does not require the durable session")
+    if "deployment-control/scalar-rollback-startup-fence.json" not in api_command:
+        raise RegistryError("scalar rollback API does not recheck deployment startup")
 
 
 def _volume_targets(value: object) -> set[str]:

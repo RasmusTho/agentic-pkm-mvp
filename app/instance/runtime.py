@@ -72,6 +72,25 @@ def _producer_transition_locked(layout: InstanceStateLayout) -> Iterator[None]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def _deployment_admission_locked(host_global_root: Path) -> Iterator[None]:
+    """Serialize deployment-begin with scalar rollback admission."""
+
+    lock_path = Path(host_global_root) / "deployment-admission.lock"
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 class InstanceRegistryRuntime:
     """MVR-01B mechanical runtime; production authority remains legacy scalar."""
 
@@ -716,10 +735,38 @@ def _preflight_scalar_rollback(
     gateway_config: Path,
     native_launcher: Path,
 ) -> int:
-    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
-
     if not host_global_root.is_dir():
         raise RegistryError("host-global ownership mount is missing")
+    with _deployment_admission_locked(host_global_root):
+        return _preflight_scalar_rollback_locked(
+            channel=channel,
+            registry_path=registry_path,
+            host_global_root=host_global_root,
+            rollback_vault_binding_id=rollback_vault_binding_id,
+            legacy_path=legacy_path,
+            selected_root=selected_root,
+            compose_base=compose_base,
+            compose_overlay=compose_overlay,
+            gateway_config=gateway_config,
+            native_launcher=native_launcher,
+        )
+
+
+def _preflight_scalar_rollback_locked(
+    *,
+    channel: str,
+    registry_path: Path,
+    host_global_root: Path,
+    rollback_vault_binding_id: str,
+    legacy_path: Path,
+    selected_root: Path,
+    compose_base: Path,
+    compose_overlay: Path,
+    gateway_config: Path,
+    native_launcher: Path,
+) -> int:
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
     if _deployment_lease_path(host_global_root).exists() or any(
         host_global_root.glob("deployment-*-restart-fence.json")
     ):
@@ -804,6 +851,12 @@ def _preflight_scalar_rollback(
                 _capability=_STORAGE_MUTATION_CAPABILITY,
             )
             guard_receipt.revalidate()
+            if _deployment_lease_path(host_global_root).exists() or any(
+                host_global_root.glob("deployment-*-restart-fence.json")
+            ):
+                raise RegistryError(
+                    "scalar rollback is blocked by a deployment lease or restart fence"
+                )
             store.install_scalar_rollback_session(
                 payload=payload,
                 authentication=authentication,
@@ -946,6 +999,9 @@ _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _LEGACY_INVENTORY_SOURCE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v2"
+_SCALAR_ROLLBACK_STARTUP_FENCE_SCHEMA = (
+    "agentic-pkm.scalar-rollback-startup-fence.v1"
+)
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _CONTROLLER_START_TOKEN_RE = re.compile(r"^(?:linux|darwin):[0-9a-f]{64}$")
 
@@ -956,6 +1012,24 @@ def _deployment_fence_path(host_global_root: Path, channel: str) -> Path:
 
 def _deployment_lease_path(host_global_root: Path) -> Path:
     return Path(host_global_root) / "deployment-host-global-lease.json"
+
+
+def _deployment_public_root(host_global_root: Path) -> Path:
+    return Path(host_global_root) / "deployment-public"
+
+
+def _ensure_deployment_public_root(host_global_root: Path) -> Path:
+    root = _deployment_public_root(host_global_root)
+    root.mkdir(mode=0o700, exist_ok=True)
+    metadata = root.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        raise InstanceStatePreflightError("public deployment control directory is unsafe")
+    os.chmod(root, 0o700)
+    return root
+
+
+def _scalar_rollback_startup_fence_path(host_global_root: Path) -> Path:
+    return _deployment_public_root(host_global_root) / "scalar-rollback-startup-fence.json"
 
 
 def _assert_mount_root(path: Path, label: str) -> Path:
@@ -1061,6 +1135,7 @@ def _begin_instance_state_deployment(
     if controller_pid <= 0 or _CONTROLLER_START_TOKEN_RE.fullmatch(controller_start_token) is None:
         raise InstanceStatePreflightError("valid deployment controller identity is required")
     os.chmod(ownership_root, 0o700)
+    _ensure_deployment_public_root(ownership_root)
     layout = InstanceStateLayout.for_channel(state_mount, channel)
     layout.ensure()
     source = Path(legacy_path).expanduser().resolve(strict=False)
@@ -1081,9 +1156,6 @@ def _begin_instance_state_deployment(
             "start_token": controller_start_token,
         },
     }
-    if lease_path.exists():
-        raise InstanceStatePreflightError("another host-global deployment lease is active")
-    _write_private_json(lease_path, lease)
     payload: dict[str, object] = {
         "schema": _DEPLOYMENT_FENCE_SCHEMA,
         "channel_id": channel,
@@ -1095,15 +1167,34 @@ def _begin_instance_state_deployment(
         "legacy_path": str(source),
         "diagnostic_fingerprint": diagnostic_fingerprint,
     }
-    fence_path = _deployment_fence_path(ownership_root, channel)
-    if fence_path.exists():
-        lease_path.unlink(missing_ok=True)
-        existing = _read_deployment_fence(ownership_root, channel)
-        if existing.get("legacy_path") != str(source):
-            raise InstanceStatePreflightError("existing restart fence targets another legacy store")
-        return existing
-    _write_private_json(fence_path, payload)
-    return payload
+    with _deployment_admission_locked(ownership_root):
+        if lease_path.exists():
+            raise InstanceStatePreflightError("another host-global deployment lease is active")
+        startup_fence_path = _scalar_rollback_startup_fence_path(ownership_root)
+        if startup_fence_path.exists():
+            raise InstanceStatePreflightError(
+                "scalar rollback startup fence is already active"
+            )
+        _write_private_json(
+            startup_fence_path,
+            {
+                "schema": _SCALAR_ROLLBACK_STARTUP_FENCE_SCHEMA,
+                "channel_id": channel,
+                "deployment_nonce": nonce,
+            },
+        )
+        _write_private_json(lease_path, lease)
+        fence_path = _deployment_fence_path(ownership_root, channel)
+        if fence_path.exists():
+            lease_path.unlink(missing_ok=True)
+            existing = _read_deployment_fence(ownership_root, channel)
+            if existing.get("legacy_path") != str(source):
+                raise InstanceStatePreflightError(
+                    "existing restart fence targets another legacy store"
+                )
+            return existing
+        _write_private_json(fence_path, payload)
+        return payload
 
 
 def _prove_instance_state_quiescence(
@@ -1438,19 +1529,21 @@ def _finish_instance_state_deployment(
     """Serialize finalization against authority and other producer transitions."""
 
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
+    ownership_root = _assert_mount_root(host_global_root, "host-global")
     layout = InstanceStateLayout.for_channel(state_mount, channel)
     layout.require_existing()
-    with _producer_transition_locked(layout):
-        return _finish_instance_state_deployment_locked(
-            channel=channel,
-            instance_state_root=state_mount,
-            host_global_root=host_global_root,
-            legacy_path=legacy_path,
-            inventory_path=inventory_path,
-            backup_root=backup_root,
-            restore_root=restore_root,
-            quiescence_proof=quiescence_proof,
-        )
+    with _deployment_admission_locked(ownership_root):
+        with _producer_transition_locked(layout):
+            return _finish_instance_state_deployment_locked(
+                channel=channel,
+                instance_state_root=state_mount,
+                host_global_root=ownership_root,
+                legacy_path=legacy_path,
+                inventory_path=inventory_path,
+                backup_root=backup_root,
+                restore_root=restore_root,
+                quiescence_proof=quiescence_proof,
+            )
 
 
 def _finish_instance_state_deployment_locked(
@@ -1565,6 +1658,15 @@ def _finish_instance_state_deployment_locked(
     fence_path.unlink()
     _deployment_lease_path(ownership_root).unlink()
     (ownership_root / "deployment-quiescence-proof.json").unlink(missing_ok=True)
+    _scalar_rollback_startup_fence_path(ownership_root).unlink()
+    public_directory = os.open(
+        _deployment_public_root(ownership_root),
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(public_directory)
+    finally:
+        os.close(public_directory)
     directory = os.open(ownership_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(directory)
