@@ -282,8 +282,8 @@ class DeliveredLauncher(Launcher):
 class DeferredFindingRetryLauncher(Launcher):
     """A closer that recorded a known capability and an out-of-taxonomy outcome.
 
-    Mirrors the 2026-07-29 Demerzel pilot run (vrun-810951877d5ccce8): a
-    ``review`` event self-reports the run's actual capability but an outcome
+    Mirrors the 2026-07-29 verification_closer pilot run (vrun-810951877d5ccce8):
+    a ``review`` event self-reports the run's actual capability but an outcome
     word (``deferred``) outside ``{blocking, clean, fixed, repaired}``.
     """
 
