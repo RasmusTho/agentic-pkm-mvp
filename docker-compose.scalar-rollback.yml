@@ -54,13 +54,32 @@ services:
     image: ${SCALAR_ROLLBACK_PREVIOUS_IMAGE:?previous scalar image is required}
     ports: !override []
     command:
-      - /bin/bash
+      - python
       - -c
-      - >-
-        test "$${INSTANCE_STATE_LEGACY_ROLLBACK}" = 1 &&
-        test -f /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json &&
-        test ! -e /app/deployment-control/scalar-rollback-startup-fence.json &&
-        exec bash /app/scripts/start_api.sh
+      - |
+        import fcntl
+        import os
+
+        try:
+            descriptor = os.open(
+                "/app/deployment-control/scalar-rollback-runtime.lock",
+                os.O_RDONLY,
+            )
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            if (
+                os.environ.get("INSTANCE_STATE_LEGACY_ROLLBACK") != "1"
+                or not os.path.isfile(
+                    "/app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json"
+                )
+                or os.path.exists(
+                    "/app/deployment-control/deployment-host-global-lease.json"
+                )
+            ):
+                raise SystemExit(75)
+            os.set_inheritable(descriptor, True)
+            os.execv("/bin/bash", ["bash", "/app/scripts/start_api.sh"])
+        except OSError:
+            raise SystemExit(75)
     volumes: !override
       - "runtime-tmp:/app/tmp"
       - "instance-state:/app/instance-state:ro"

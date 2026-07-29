@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import threading
+import time
 
 import pytest
 import yaml
@@ -18,6 +23,7 @@ from app.instance.runtime import (
     _begin_instance_state_deployment,
     _finish_instance_state_deployment,
     _preflight_scalar_rollback,
+    _roll_forward_scalar_rollback,
 )
 from app.instance.scalar_rollback_guard import (
     _ComposeLoader,
@@ -381,13 +387,13 @@ def test_deployment_begin_wins_scalar_admission_and_blocks_session_install(
     scalar_failures: list[BaseException] = []
     original_write = runtime_module._write_private_json
 
-    def held_startup_fence(path, payload):
-        if path.name == "scalar-rollback-startup-fence.json":
+    def held_deployment_lease(path, payload):
+        if path.name == "deployment-host-global-lease.json":
             entered_begin.set()
             assert release_begin.wait(timeout=5)
         return original_write(path, payload)
 
-    monkeypatch.setattr(runtime_module, "_write_private_json", held_startup_fence)
+    monkeypatch.setattr(runtime_module, "_write_private_json", held_deployment_lease)
 
     def begin() -> None:
         try:
@@ -432,6 +438,114 @@ def test_deployment_begin_wins_scalar_admission_and_blocks_session_install(
     assert isinstance(scalar_failures[0], RegistryError)
     assert "deployment lease or restart fence" in str(scalar_failures[0])
     assert not runtime.registry.scalar_rollback_session_path.exists()
+
+
+def test_legacy_deployment_lease_blocks_scalar_guard_before_old_api_start(
+    tmp_path,
+) -> None:
+    runtime, registration, root = _runtime(tmp_path)
+    legacy_lease = runtime.ledger.root / "deployment-host-global-lease.json"
+    legacy_lease.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-lease.v2",
+                "channel_id": "dev",
+                "nonce": "legacy-claimed",
+                "phase": "claimed",
+                "controller": {
+                    "pid": 999_999_995,
+                    "start_token": f"linux:{'1' * 64}",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    legacy_lease.chmod(0o600)
+
+    with pytest.raises(
+        RegistryError,
+        match="deployment lease or restart fence",
+    ):
+        _scalar_preflight(
+            runtime,
+            registration,
+            root,
+            tmp_path / "rollback" / "app-local.md",
+        )
+    assert not runtime.registry.scalar_rollback_session_path.exists()
+
+
+def test_previous_api_handoff_holds_runtime_admission_across_exec(
+    tmp_path,
+) -> None:
+    rollback_compose = yaml.load(
+        (REPO_ROOT / "docker-compose.scalar-rollback.yml").read_text(
+            encoding="utf-8"
+        ),
+        Loader=_ComposeLoader,
+    )
+    command = rollback_compose["services"]["api"]["command"]
+    assert command[:2] == ["python", "-c"]
+    program = command[2]
+    control_root = tmp_path / "deployment-control"
+    control_root.mkdir()
+    runtime_lock = control_root / "scalar-rollback-runtime.lock"
+    runtime_lock.write_bytes(b"")
+    runtime_lock.chmod(0o600)
+    rollback_session = tmp_path / "scalar-rollback-session.json"
+    rollback_session.write_text("{}", encoding="utf-8")
+    ready = tmp_path / "old-api-ready"
+    fake_start = tmp_path / "start_api.sh"
+    fake_start.write_text(
+        "#!/bin/bash\n"
+        f"printf ready > '{ready}'\n"
+        "while true; do sleep 1; done\n",
+        encoding="utf-8",
+    )
+    fake_start.chmod(0o755)
+    test_program = program.replace(
+        "/app/deployment-control",
+        str(control_root),
+    ).replace(
+        "/app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json",
+        str(rollback_session),
+    ).replace(
+        "/app/scripts/start_api.sh",
+        str(fake_start),
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", test_program],
+        env={**os.environ, "INSTANCE_STATE_LEGACY_ROLLBACK": "1"},
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.is_file()
+        descriptor = os.open(runtime_lock, os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(descriptor)
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+    ready.unlink()
+    (control_root / "deployment-host-global-lease.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    blocked = subprocess.run(
+        [sys.executable, "-c", test_program],
+        env={**os.environ, "INSTANCE_STATE_LEGACY_ROLLBACK": "1"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert blocked.returncode == 75
+    assert not ready.exists()
 
 
 def test_scalar_admission_wins_then_cross_channel_api_handoff_observes_deployment_fence(
@@ -496,7 +610,7 @@ def test_scalar_admission_wins_then_cross_channel_api_handoff_observes_deploymen
     assert (
         runtime.ledger.root
         / "deployment-public"
-        / "scalar-rollback-startup-fence.json"
+        / "deployment-host-global-lease.json"
     ).is_file()
     rollback_compose = yaml.load(
         (REPO_ROOT / "docker-compose.scalar-rollback.yml").read_text(
@@ -505,14 +619,94 @@ def test_scalar_admission_wins_then_cross_channel_api_handoff_observes_deploymen
         Loader=_ComposeLoader,
     )
     api_command = rollback_compose["services"]["api"]["command"][-1]
-    marker_check = (
-        "test ! -e "
-        "/app/deployment-control/scalar-rollback-startup-fence.json"
+    lease_check = "/app/deployment-control/deployment-host-global-lease.json"
+    runtime_lock = "/app/deployment-control/scalar-rollback-runtime.lock"
+    assert lease_check in api_command
+    assert runtime_lock in api_command
+    assert api_command.index("fcntl.LOCK_SH") < api_command.index(lease_check)
+    assert api_command.index(lease_check) < api_command.index("os.execv")
+
+
+def test_scalar_roll_forward_serializes_against_deployment_finish(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, registration, root = _runtime(tmp_path)
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _scalar_preflight(runtime, registration, root, rollback_path)
+    proof, inventory = establish_authority_window(runtime, tmp_path / "window")
+    entered_roll_forward = threading.Event()
+    release_roll_forward = threading.Event()
+    entered_finish = threading.Event()
+    failures: list[BaseException] = []
+    original_bind = runtime_module._bind_legacy_owner_inventory_to_proof
+
+    def held_bind(**kwargs):
+        result = original_bind(**kwargs)
+        entered_roll_forward.set()
+        assert release_roll_forward.wait(timeout=5)
+        return result
+
+    def observed_finish(**kwargs):
+        del kwargs
+        entered_finish.set()
+        return {}
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_bind_legacy_owner_inventory_to_proof",
+        held_bind,
     )
-    assert marker_check in api_command
-    assert api_command.index(marker_check) < api_command.index(
-        "exec bash /app/scripts/start_api.sh"
+    monkeypatch.setattr(
+        runtime_module,
+        "_finish_instance_state_deployment_locked",
+        observed_finish,
     )
+
+    def roll_forward() -> None:
+        try:
+            _roll_forward_scalar_rollback(
+                channel="prod",
+                instance_state_root=runtime.layout.root.parent,
+                host_global_root=runtime.ledger.root,
+                legacy_path=rollback_path,
+                inventory_path=inventory,
+                quiescence_proof_path=(
+                    runtime.ledger.root / "deployment-quiescence-proof.json"
+                ),
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    def finish() -> None:
+        try:
+            _finish_instance_state_deployment(
+                channel="prod",
+                instance_state_root=runtime.layout.root.parent,
+                host_global_root=runtime.ledger.root,
+                legacy_path=tmp_path / "missing-legacy.md",
+                inventory_path=inventory,
+                backup_root=tmp_path / "backup",
+                restore_root=None,
+                quiescence_proof=proof,
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    roll_forward_thread = threading.Thread(target=roll_forward)
+    finish_thread = threading.Thread(target=finish)
+    roll_forward_thread.start()
+    assert entered_roll_forward.wait(timeout=5)
+    finish_thread.start()
+    assert not entered_finish.wait(timeout=0.1)
+    release_roll_forward.set()
+    roll_forward_thread.join(timeout=5)
+    finish_thread.join(timeout=5)
+
+    assert not roll_forward_thread.is_alive()
+    assert not finish_thread.is_alive()
+    assert failures == []
+    assert entered_finish.is_set()
 
 
 def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:

@@ -124,8 +124,10 @@ trusted one-shot guard alone receives writable ownership state so it can take th
 sign the session; the previous-image API receives no ownership/key mount. The durable session excludes
 current registry writers for the lifetime of the old image; the old image receives neither the
 host key nor a writable registry mount. Scalar admission and `deployment-begin` share one
-host-global lock; deployment also publishes a marker in a key-free host-global control directory,
-mounted read-only into the old API for its check immediately before startup. Native rollback currently fails closed: the root-owned
+host-global lock. The canonical deployment lease and a runtime-admission lock live in a key-free
+host-global control directory mounted read-only into the old API. The old API takes the shared lock,
+checks that the lease is absent, and carries the lock across exec; deployment quiescence proof must
+take the exclusive side, which catches an API admitted before lease publication. Native rollback currently fails closed: the root-owned
 `scripts/scalar_rollback_native.sh` launcher never starts an old image until an authenticated
 mutation-filtering boundary equivalent to the Compose gateway exists. A filesystem sandbox alone
 is insufficient because it cannot exclude a bypass listener. A binding-keyed
@@ -136,9 +138,15 @@ preserves both sides without recreate. The importer is not a free-standing runti
 `MVR01C_ROLL_FORWARD_LEGACY_PATH` asks the normal deployment producer to run
 `scalar-rollback-roll-forward` only after its host-global lease, restart fence, stopped-writer
 proof, and drained-owner receipt are durable, and before `deployment-finish` permits recreate.
-Registry generation and scalar-session retirement share the crash journal; interruption recovers
-the pre-merge session for retry or the complete committed generation without a stranded stale
-session.
+Roll-forward and finalization use the same host-admission then channel-producer lock order.
+Deployment begin treats the claimed lease as the retry journal for an interrupted channel-fence
+projection. Finalization records its result in a cleanup-phase lease before removing the restart
+fence and proof, then removes the lease last. Registry generation and scalar-session retirement
+share their existing crash journal; interruption recovers the pre-merge session for retry or the
+complete committed generation without a stranded stale session.
+An already-durable root-level v2 lease remains a blocking authority during upgrade. Only a dead
+same-channel `claimed` controller is migrated by publishing the public v3 lease and matching fence
+before v2 is retired; live or `proved` v2 state stays fail-closed on its original recovery path.
 
 ### Target
 

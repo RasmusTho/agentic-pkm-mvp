@@ -35,6 +35,7 @@ from app.instance.runtime import (
     _begin_instance_state_deployment,
     _bind_legacy_owner_inventory_to_proof,
     _deployment_fence_path,
+    _deployment_lease_path,
     _prove_instance_state_quiescence,
 )
 from app.instance.vault_registry import (
@@ -1031,7 +1032,7 @@ def test_key_rotation_rejects_unbound_or_forged_owner_receipt_without_mutation(
     if invalid_receipt == "stale-receipt":
         stale_receipt = owner_inventory.read_bytes()
         _deployment_fence_path(runtime.ledger.root, "dev").unlink()
-        (runtime.ledger.root / "deployment-host-global-lease.json").unlink()
+        _deployment_lease_path(runtime.ledger.root).unlink()
         (runtime.ledger.root / "deployment-quiescence-proof.json").unlink()
         proof, owner_inventory = _rotation_authority(
             runtime,

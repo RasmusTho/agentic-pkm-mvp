@@ -213,8 +213,10 @@ This slice promotes the existing seed without changing content-vault authority.
   that denies picker select/initialize mutations, and mounts only the chosen content root at the
   canonical legacy path. Startup preflight proves the direct port is absent, the gateway policy is
   active, and no broader host vault roots are mounted. A failed guard blocks rollback startup.
-  Rollback admission and deployment start serialize on one host-global lock, and the old API
-  rechecks a key-free host-global deployment marker immediately before exec.
+  Rollback admission and deployment start serialize on one host-global lock. The old API takes a
+  shared runtime-admission lock from a key-free host-global control directory, checks the canonical
+  deployment lease, and carries the lock across exec; deployment proves quiescence only after
+  taking the exclusive side.
 - Native-host scalar rollback is an equally constrained supported path, never an exemption from that
   fence: a root-owned launcher accepts only the validated binding's canonical root, applies a
   deny-by-default filesystem sandbox/allow-list before exec, removes picker select/initialize

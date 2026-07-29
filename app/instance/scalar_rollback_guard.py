@@ -303,10 +303,24 @@ def _validate_compose_model(base_model: object, overlay_model: object) -> None:
             raise RegistryError(
                 "current long-lived service can access scalar rollback policy/source"
             )
-    api_command = str(api.get("command"))
+    command = api.get("command")
+    if (
+        not isinstance(command, list)
+        or len(command) != 3
+        or command[:2] != ["python", "-c"]
+    ):
+        raise RegistryError("scalar rollback API admission command is invalid")
+    api_command = str(command[2])
     if "scalar-rollback-session.json" not in api_command:
         raise RegistryError("scalar rollback API does not require the durable session")
-    if "deployment-control/scalar-rollback-startup-fence.json" not in api_command:
+    if (
+        "deployment-control/deployment-host-global-lease.json"
+        not in api_command
+        or "deployment-control/scalar-rollback-runtime.lock"
+        not in api_command
+        or "fcntl.LOCK_SH" not in api_command
+        or "os.set_inheritable" not in api_command
+    ):
         raise RegistryError("scalar rollback API does not recheck deployment startup")
 
 

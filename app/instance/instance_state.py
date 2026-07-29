@@ -26,7 +26,7 @@ from app.instance.vault_registry import RegistryError, RegistrySnapshot, VaultRe
 _REQUIRED_CONSUMERS = frozenset({"api", "worker", "watcher", "heimdal-capture-watch"})
 _BACKUP_SCHEMA = "agentic-pkm.instance-state-backup.v1"
 _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
-_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v2"
+_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _FINAL_EXPORT_SEAL = os.urandom(32)
@@ -69,7 +69,7 @@ class DeploymentQuiescenceProof:
                     "start_token": self.controller_start_token,
                 }
             if (
-                payload.get("schema") != "agentic-pkm.host-deployment-lease.v2"
+                payload.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
                 or payload.get("channel_id") != self.channel_id
                 or payload.get("nonce") != self.nonce
                 or payload.get("phase") != "proved"
@@ -96,7 +96,9 @@ class DeploymentQuiescenceProof:
         """Authenticate the complete host-global deployment authority in place."""
 
         root = Path(host_global_root).expanduser().resolve(strict=False)
-        canonical_lease = root / "deployment-host-global-lease.json"
+        canonical_lease = (
+            root / "deployment-public" / "deployment-host-global-lease.json"
+        )
         canonical_inventory = root / "deployment-quiescence-inventory.json"
         canonical_receipt = root / "legacy-owner-inventory.json"
         canonical_fence = root / f"deployment-{channel_id}-restart-fence.json"
