@@ -190,18 +190,11 @@ class InstanceRegistryRuntime:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def prepare_nested_registration(self, child_root: Path) -> VaultRegistration:
-        with self._bootstrap_locked():
-            current = self.registry.load()
-            if current.authority != REGISTRY_AUTHORITY_ACTIVE:
-                raise CapabilityNotReadyError(
-                    "MVR-01C authority cutover seals second registration"
-                )
-            return self._register_active_locked(
-                child_root,
-                producer="picker",
-                current=current,
-                allow_same_channel_nested=True,
-            )
+        del child_root
+        raise CapabilityNotReadyError(
+            "MVR-01C authority cutover exposes nested registration only through "
+            "the active production picker"
+        )
 
     def production_register(self, path: Path, *, producer: str) -> VaultRegistration:
         if producer not in {"picker", "api", "cli", "import", "bootstrap", "direct-service"}:
@@ -212,7 +205,12 @@ class InstanceRegistryRuntime:
                 raise CapabilityNotReadyError(
                     "MVR-01C authority cutover seals production registration"
                 )
-            return self._register_active_locked(path, producer=producer, current=current)
+            return self._register_active_locked(
+                path,
+                producer=producer,
+                current=current,
+                allow_same_channel_nested=producer == "picker",
+            )
 
     def _register_active_locked(
         self,
@@ -313,7 +311,11 @@ class InstanceRegistryRuntime:
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
         payload, authentication = self.registry.load_scalar_rollback_session()
-        self.ledger.verify_scalar_rollback_session(payload, authentication)
+        self.ledger.verify_scalar_rollback_session(
+            payload,
+            authentication,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
         return self.registry.merge_scalar_rollback(
             legacy_path,
             session_payload=payload,
@@ -623,6 +625,7 @@ def _require_runtime_floor(snapshot: RegistrySnapshot, *, scalar_runtime: bool) 
 
 def _preflight_scalar_rollback(
     *,
+    channel: str,
     registry_path: Path,
     host_global_root: Path,
     rollback_vault_binding_id: str,
@@ -653,6 +656,14 @@ def _preflight_scalar_rollback(
         try:
             snapshot = store.load()
             _require_runtime_floor(snapshot, scalar_runtime=True)
+            ledger = OwnershipLedger(host_global_root)
+            ledger.require_scalar_rollback_ready(
+                channel_id=channel,
+                registrations={
+                    binding_id: Path(registration.path)
+                    for binding_id, registration in snapshot.registrations.items()
+                },
+            )
             floor = snapshot.extensions.get("scalarRollback")
             if not isinstance(floor, dict):
                 raise RegistryError("active registry scalar rollback floor is invalid")
@@ -693,8 +704,10 @@ def _preflight_scalar_rollback(
                 "gatewayPolicySha256": guard_receipt.gateway_policy_sha256,
                 "nativeLauncherSha256": guard_receipt.native_launcher_sha256,
             }
-            ledger = OwnershipLedger(host_global_root)
-            authentication = ledger.authenticate_scalar_rollback_session(payload)
+            authentication = ledger.authenticate_scalar_rollback_session(
+                payload,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
             guard_receipt.revalidate()
             store.install_scalar_rollback_session(
                 payload=payload,
@@ -747,6 +760,77 @@ def _activate_mvr01c_authority(
                 "authority": activated.authority,
                 "registry_revision": activated.revision,
                 "rollback_vault_binding_id": rollback_vault_binding_id,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _load_deployment_quiescence_proof(path: Path) -> DeploymentQuiescenceProof:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        controller = payload.get("controller")
+        if not isinstance(controller, dict):
+            raise ValueError
+        return DeploymentQuiescenceProof(
+            channel_id=str(payload["channel_id"]),
+            nonce=str(payload["nonce"]),
+            inventory_digest=str(payload["inventory_digest"]),
+            lease_path=Path(str(payload["lease_path"])),
+            controller_pid=int(controller["pid"]),
+            controller_start_token=str(controller["start_token"]),
+            owner_receipt_digest=(
+                str(payload["owner_receipt_digest"])
+                if payload.get("owner_receipt_digest") is not None
+                else None
+            ),
+        )
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise InstanceStatePreflightError(
+            "durable quiescence proof is required"
+        ) from exc
+
+
+def _roll_forward_scalar_rollback(
+    *,
+    channel: str,
+    instance_state_root: Path,
+    host_global_root: Path,
+    legacy_path: Path,
+    inventory_path: Path,
+    quiescence_proof_path: Path,
+) -> int:
+    """Merge a scalar fork only inside the existing host-wide stopped window."""
+
+    state_mount = _assert_mount_root(instance_state_root, "instance-state")
+    ownership_root = _assert_mount_root(host_global_root, "host-global")
+    proof = _load_deployment_quiescence_proof(quiescence_proof_path)
+    _bind_legacy_owner_inventory_to_proof(
+        inventory_path=inventory_path,
+        quiescence_proof=proof,
+        channel=channel,
+        host_global_root=ownership_root,
+    )
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(state_mount, channel),
+        ownership_root,
+        initialize_layout=False,
+    )
+    current = runtime.registry.load()
+    runtime.ledger.require_scalar_rollback_ready(
+        channel_id=channel,
+        registrations={
+            binding_id: Path(registration.path)
+            for binding_id, registration in current.registrations.items()
+        },
+    )
+    merged = runtime.merge_previous_scalar_image(legacy_path)
+    print(
+        json.dumps(
+            {
+                "registry_revision": merged.revision,
+                "scalar_roll_forward": "merged",
             },
             sort_keys=True,
         )
@@ -1374,6 +1458,7 @@ def main(argv: list[str] | None = None) -> int:
     preflight.add_argument("--host-global-root", type=Path, required=True)
     preflight.add_argument("--consumer", required=True)
     scalar = subparsers.add_parser("scalar-rollback-preflight")
+    scalar.add_argument("--channel", required=True)
     scalar.add_argument("--registry-path", type=Path, required=True)
     scalar.add_argument("--host-global-root", type=Path, required=True)
     scalar.add_argument("--rollback-vault-binding-id", required=True)
@@ -1382,6 +1467,17 @@ def main(argv: list[str] | None = None) -> int:
     scalar.add_argument("--compose-overlay", type=Path, required=True)
     scalar.add_argument("--gateway-config", type=Path, required=True)
     scalar.add_argument("--native-launcher", type=Path, required=True)
+    roll_forward = subparsers.add_parser("scalar-rollback-roll-forward")
+    roll_forward.add_argument("--channel", required=True)
+    roll_forward.add_argument("--instance-state-root", type=Path, required=True)
+    roll_forward.add_argument("--host-global-root", type=Path, required=True)
+    roll_forward.add_argument("--legacy-path", type=Path, required=True)
+    roll_forward.add_argument("--inventory-path", type=Path, required=True)
+    roll_forward.add_argument(
+        "--quiescence-proof-path",
+        type=Path,
+        required=True,
+    )
     activate = subparsers.add_parser("authority-cutover")
     activate.add_argument("--channel", required=True)
     activate.add_argument("--instance-state-root", type=Path, required=True)
@@ -1423,6 +1519,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "scalar-rollback-preflight":
         return _preflight_scalar_rollback(
+            channel=args.channel,
             registry_path=args.registry_path,
             host_global_root=args.host_global_root,
             rollback_vault_binding_id=args.rollback_vault_binding_id,
@@ -1443,6 +1540,15 @@ def main(argv: list[str] | None = None) -> int:
             gateway_config=args.gateway_config,
             native_launcher=args.native_launcher,
         )
+    if args.command == "scalar-rollback-roll-forward":
+        return _roll_forward_scalar_rollback(
+            channel=args.channel,
+            instance_state_root=args.instance_state_root,
+            host_global_root=args.host_global_root,
+            legacy_path=args.legacy_path,
+            inventory_path=args.inventory_path,
+            quiescence_proof_path=args.quiescence_proof_path,
+        )
     if args.command == "deployment-begin":
         print(
             json.dumps(
@@ -1459,23 +1565,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "deployment-finish":
-        proof_payload = json.loads(args.quiescence_proof_path.read_text(encoding="utf-8"))
-        controller = proof_payload.get("controller")
-        if not isinstance(controller, dict):
-            raise InstanceStatePreflightError("durable quiescence proof is required")
-        proof = DeploymentQuiescenceProof(
-            channel_id=str(proof_payload["channel_id"]),
-            nonce=str(proof_payload["nonce"]),
-            inventory_digest=str(proof_payload["inventory_digest"]),
-            lease_path=Path(str(proof_payload["lease_path"])),
-            controller_pid=int(controller["pid"]),
-            controller_start_token=str(controller["start_token"]),
-            owner_receipt_digest=(
-                str(proof_payload["owner_receipt_digest"])
-                if proof_payload.get("owner_receipt_digest") is not None
-                else None
-            ),
-        )
+        proof = _load_deployment_quiescence_proof(args.quiescence_proof_path)
         print(
             json.dumps(
                 _finish_instance_state_deployment(

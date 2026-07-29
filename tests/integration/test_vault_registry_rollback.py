@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from pathlib import Path
 
 import pytest
 
 from app.instance.instance_state import InstanceStateLayout
-from app.instance.runtime import InstanceRegistryRuntime, _preflight_scalar_rollback
+from app.instance.runtime import (
+    InstanceRegistryRuntime,
+    _begin_instance_state_deployment,
+    _bind_legacy_owner_inventory_to_proof,
+    _finish_instance_state_deployment,
+    _preflight_scalar_rollback,
+    _prove_instance_state_quiescence,
+    _roll_forward_scalar_rollback,
+)
 from app.instance.scalar_rollback_guard import preflight_scalar_rollback_guard
 from app.instance.vault_registry import (
     AppLocalSettingsStore,
@@ -116,6 +127,7 @@ def _guard_receipt(binding_id, root):
 
 def _start_scalar_runtime(runtime, registration, root, rollback_path) -> None:
     _preflight_scalar_rollback(
+        channel=runtime.layout.channel_id,
         registry_path=runtime.layout.registry_path,
         host_global_root=runtime.ledger.root,
         rollback_vault_binding_id=registration.vault_binding_id,
@@ -124,6 +136,112 @@ def _start_scalar_runtime(runtime, registration, root, rollback_path) -> None:
         compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
         gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
         native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+    )
+
+
+def _deployment_authority(runtime, legacy_path):
+    controller = {
+        "pid": os.getpid(),
+        "start_token": "linux:" + "0" * 64,
+    }
+    _begin_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=legacy_path,
+        controller_pid=controller["pid"],
+        controller_start_token=controller["start_token"],
+    )
+    empty_domains = {
+        domain: [] for domain in ("dev", "native", "prod", "test")
+    }
+    empty_digest = hashlib.sha256(
+        json.dumps(
+            empty_domains,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    quiescence_inventory = (
+        runtime.ledger.root / "deployment-quiescence-inventory.json"
+    )
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": controller,
+                "domains": empty_domains,
+                "snapshot_digests": [empty_digest, empty_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    proof = _prove_instance_state_quiescence(
+        channel=runtime.layout.channel_id,
+        host_global_root=runtime.ledger.root,
+        inventory_path=quiescence_inventory,
+    )
+    owners = [
+        {
+            "channel_id": lease.channel_id,
+            "vault_binding_id": binding_id,
+            "root": runtime.registry.load().registrations[binding_id].path,
+        }
+        for binding_id, lease in runtime.ledger.load().leases.items()
+    ]
+    owner_identities = []
+    for owner in owners:
+        metadata = os.stat(owner["root"])
+        owner_identities.append(
+            {
+                "channel_id": owner["channel_id"],
+                "root": owner["root"],
+                "identity": f"inode:{metadata.st_dev}:{metadata.st_ino}",
+            }
+        )
+    source_evidence = {
+        "docker": [],
+        "config": [],
+        "owners": owners,
+        "owner_identities": owner_identities,
+    }
+    owner_inventory = runtime.ledger.root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.legacy-owner-inventory.v1",
+                "inventory_complete": True,
+                "writers_drained": True,
+                "source_probe_count": 2,
+                "validated_after_quiescence": True,
+                "source_digest": hashlib.sha256(
+                    json.dumps(
+                        source_evidence,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest(),
+                "source_evidence": source_evidence,
+                "owners": owners,
+            }
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    bound = _bind_legacy_owner_inventory_to_proof(
+        inventory_path=owner_inventory,
+        quiescence_proof=proof,
+        channel=runtime.layout.channel_id,
+        host_global_root=runtime.ledger.root,
+    )
+    return (
+        bound,
+        owner_inventory,
+        runtime.ledger.root / "deployment-quiescence-proof.json",
     )
 
 
@@ -228,7 +346,12 @@ def test_01c_unseals_second_registration_only_with_complete_rollback_floor(
 
     nested = first_root / "nested"
     nested.mkdir()
-    assert runtime.prepare_nested_registration(nested).path == str(nested)
+    nested_context = VaultManager().select_vault(nested)
+    assert nested_context.status == "uninitialized"
+    assert any(
+        item.path == str(nested)
+        for item in runtime.registry.load().registrations.values()
+    )
 
 
 def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
@@ -253,10 +376,40 @@ def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
     )
     rollback.save(settings)
 
-    merged = runtime.merge_previous_scalar_image(rollback_path)
+    proof, owner_inventory, proof_path = _deployment_authority(
+        runtime,
+        rollback_path,
+    )
+    assert (
+        _roll_forward_scalar_rollback(
+            channel=runtime.layout.channel_id,
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=owner_inventory,
+            quiescence_proof_path=proof_path,
+        )
+        == 0
+    )
+    merged = runtime.registry.load()
 
     assert merged.registrations[first.vault_binding_id].vault_name == "Renamed during rollback"
     assert merged.extensions["scalarRollForwardLineage"][-1]["mergedRegistryRevision"] == merged.revision
+    deployment = (
+        REPO_ROOT / "scripts/lib/instance_state_deployment.sh"
+    ).read_text(encoding="utf-8")
+    assert "scalar-rollback-roll-forward" in deployment
+    assert "MVR01C_ROLL_FORWARD_LEGACY_PATH" in deployment
+    _finish_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=rollback_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
 
     divergent = tmp_path / "rollback-divergent" / "app-local.md"
     _start_scalar_runtime(

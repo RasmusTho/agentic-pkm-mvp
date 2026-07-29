@@ -133,9 +133,12 @@ class OwnershipLedger:
     def authenticate_scalar_rollback_session(
         self,
         payload: Mapping[str, object],
+        *,
+        _capability: _StorageMutationCapability | None = None,
     ) -> dict[str, object]:
         """Authenticate rollback lineage with the host key unavailable to the old image."""
 
+        _require_storage_mutation_capability(_capability)
         self._assert_existing_artifacts()
         with self._locked():
             key = self._load_or_create_key_locked(allow_create=False)
@@ -155,9 +158,12 @@ class OwnershipLedger:
         self,
         payload: Mapping[str, object],
         authentication: Mapping[str, object],
+        *,
+        _capability: _StorageMutationCapability | None = None,
     ) -> None:
         """Fail when a rollback fork receipt is forged or bound to another key."""
 
+        _require_storage_mutation_capability(_capability)
         self._assert_existing_artifacts()
         with self._locked():
             key = self._load_or_create_key_locked(allow_create=False)
@@ -177,6 +183,40 @@ class OwnershipLedger:
                 )
             ):
                 raise LedgerKeyError("scalar rollback session authentication failed")
+
+    def require_scalar_rollback_ready(
+        self,
+        *,
+        channel_id: str,
+        registrations: Mapping[str, Path],
+    ) -> None:
+        """Reject rollback while any ownership transition is pending or mismatched."""
+
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            if current.transfer is not None or any(
+                lease.state != "active" for lease in current.leases.values()
+            ):
+                raise LedgerError(
+                    "scalar rollback requires no pending ownership transition"
+                )
+            channel_leases = {
+                binding_id: lease
+                for binding_id, lease in current.leases.items()
+                if lease.channel_id == channel_id
+            }
+            if set(channel_leases) != set(registrations):
+                raise LedgerError(
+                    "scalar rollback requires one active lease per registration"
+                )
+            for binding_id, root in registrations.items():
+                lease = channel_leases[binding_id]
+                if not self._matches_complete_root_identity(lease, root, key):
+                    raise LedgerError(
+                        "scalar rollback registration ownership is inconsistent"
+                    )
 
     def resolve_live_owner_bindings(
         self,

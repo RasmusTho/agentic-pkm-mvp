@@ -607,6 +607,7 @@ class VaultRegistryStore:
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
             floor = current.extensions.get("scalarRollback")
+            initial_export_sha256 = str(payload.get("initialExportSha256") or "")
             if (
                 current.authority != REGISTRY_AUTHORITY_ACTIVE
                 or not isinstance(floor, dict)
@@ -625,6 +626,10 @@ class VaultRegistryStore:
                 != floor.get("gatewayPolicySha256")
                 or payload.get("nativeLauncherSha256")
                 != floor.get("nativeLauncherSha256")
+                or not _is_sha256(initial_export_sha256)
+                or not self.rollback_export_path.is_file()
+                or hashlib.sha256(self.rollback_export_path.read_bytes()).hexdigest()
+                != initial_export_sha256
             ):
                 raise RegistryError("scalar rollback session does not match current authority")
             document = {
@@ -673,8 +678,8 @@ class VaultRegistryStore:
 
         _require_storage_mutation_capability(_capability)
         source = Path(source_path)
-        legacy = AppLocalSettingsStore(source).load()
         with self._locked():
+            legacy = AppLocalSettingsStore(source).load()
             current = self._read_current_locked(recover=True)
             floor = current.extensions.get("scalarRollback")
             if (
@@ -689,6 +694,9 @@ class VaultRegistryStore:
             target = current.registrations.get(target_id)
             if target is None:
                 raise RegistryError("scalar rollback target is no longer registered")
+            initial_export_sha256 = str(
+                session_payload.get("initialExportSha256") or ""
+            )
             if (
                 session_payload.get("schema") != ROLL_FORWARD_LINEAGE_SCHEMA
                 or session_payload.get("registrySchema") != current.schema
@@ -696,6 +704,10 @@ class VaultRegistryStore:
                 != floor.get("forkRegistryRevision")
                 or session_payload.get("rollbackVaultBindingId") != target_id
                 or current.revision != floor.get("forkRegistryRevision")
+                or not _is_sha256(initial_export_sha256)
+                or not self.rollback_export_path.is_file()
+                or hashlib.sha256(self.rollback_export_path.read_bytes()).hexdigest()
+                != initial_export_sha256
             ):
                 raise RegistryError("scalar rollback lineage is stale, ambiguous, or divergent")
             if set(legacy.known_vaults) != {target.ref}:
@@ -1962,6 +1974,10 @@ class AppLocalSettingsStore:
 def _optional_str(value: object) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text or None
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 __all__ = [

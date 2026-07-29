@@ -161,6 +161,28 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
 
+  # An explicit scalar fork is imported only while the host-global lease,
+  # restart fence, stopped-writer proof, and drained-owner receipt are live.
+  # Ordinary deployments never infer a scalar fork.
+  if [ -n "${MVR01C_ROLL_FORWARD_LEGACY_PATH:-}" ]; then
+    if [ "${MVR01C_ROLL_FORWARD_LEGACY_PATH}" != "/app/scalar-rollback/app-local.md" ]; then
+      echo "MVR-01C roll-forward source must be the governed scalar volume" >&2
+      return 78
+    fi
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime scalar-rollback-roll-forward \
+        --channel "${channel}" \
+        --instance-state-root /app/instance-state \
+        --host-global-root /app/instance-ownership \
+        --legacy-path "${MVR01C_ROLL_FORWARD_LEGACY_PATH}" \
+        --inventory-path "${inventory_path}" \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      return "${inventory_rc}"
+    fi
+  fi
+
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime deployment-finish \
       "${finish_args[@]}"

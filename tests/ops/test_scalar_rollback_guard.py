@@ -7,13 +7,14 @@ import pytest
 import yaml
 
 from app.instance._storage_boundary import CapabilityNotReadyError
-from app.instance.ownership_ledger import LedgerKeyError
+from app.instance.ownership_ledger import LedgerError, LedgerKeyError
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime, _preflight_scalar_rollback
 from app.instance.scalar_rollback_guard import (
     preflight_scalar_rollback_guard,
     require_native_scalar_launcher,
 )
+from app.instance.vault_registry import RegistryError
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
@@ -43,6 +44,7 @@ def _runtime(tmp_path):
 
 def _scalar_preflight(runtime, registration, root, rollback_path) -> None:
     _preflight_scalar_rollback(
+        channel=runtime.layout.channel_id,
         registry_path=runtime.layout.registry_path,
         host_global_root=runtime.ledger.root,
         rollback_vault_binding_id=registration.vault_binding_id,
@@ -69,6 +71,15 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
     assert receipt.mutation_filtering
     assert receipt.direct_api_port_absent
     assert receipt.selected_mount_only
+    gateway = (REPO_ROOT / "ops/scalar-rollback/nginx.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "location = /api/companion/vault/select" in gateway
+    assert "location = /api/companion/vault/initialize" in gateway
+    overlay = (REPO_ROOT / "docker-compose.scalar-rollback.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'companion-ui:\n    profiles: ["scalar-rollback-disabled"]' in overlay
     deployment = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text(
         encoding="utf-8"
     )
@@ -112,12 +123,36 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(tmp_path) -> None:
 
     session = runtime.registry.scalar_rollback_session_path
     document = json.loads(session.read_text(encoding="utf-8"))
+    authentic_document = json.loads(session.read_text(encoding="utf-8"))
     document["payload"]["forkRegistryRevision"] -= 1
     session.write_text(json.dumps(document), encoding="utf-8")
     session.chmod(0o600)
     with pytest.raises(LedgerKeyError, match="authentication failed"):
         runtime.merge_previous_scalar_image(rollback_path)
     assert runtime.layout.registry_path.read_bytes() == before
+
+    forged_payload = dict(authentic_document["payload"])
+    forged_payload["initialExportSha256"] = "0" * 64
+    forged_authentication = runtime.ledger.authenticate_scalar_rollback_session(
+        forged_payload,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    session.write_text(
+        json.dumps(
+            {
+                "payload": forged_payload,
+                "authentication": forged_authentication,
+            }
+        ),
+        encoding="utf-8",
+    )
+    session.chmod(0o600)
+    with pytest.raises(RegistryError, match="stale, ambiguous, or divergent"):
+        runtime.merge_previous_scalar_image(rollback_path)
+    assert runtime.layout.registry_path.read_bytes() == before
+
+    with pytest.raises(CapabilityNotReadyError, match="private MVR storage"):
+        runtime.ledger.authenticate_scalar_rollback_session(forged_payload)
 
 
 def test_native_scalar_rollback_launcher_enforces_selected_binding_or_fails_closed(
@@ -154,6 +189,7 @@ def test_binding_keyed_database_floor_blocks_scalar_runtime(tmp_path) -> None:
 
     with pytest.raises(CapabilityNotReadyError, match="before database or queue startup"):
         _preflight_scalar_rollback(
+            channel=runtime.layout.channel_id,
             registry_path=runtime.layout.registry_path,
             host_global_root=runtime.ledger.root,
             rollback_vault_binding_id=registration.vault_binding_id,
@@ -166,3 +202,26 @@ def test_binding_keyed_database_floor_blocks_scalar_runtime(tmp_path) -> None:
             native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
         )
     assert not rollback_path.exists()
+
+    pending_runtime, pending_registration, pending_root = _runtime(
+        tmp_path / "pending"
+    )
+    orphan_root = tmp_path / "pending-orphan"
+    orphan_root.mkdir()
+    pending_runtime.ledger.reserve(
+        channel_id="prod",
+        vault_binding_id="pending-orphan",
+        root=orphan_root,
+        allow_same_channel_nested=False,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    pending_rollback = tmp_path / "pending-rollback" / "app-local.md"
+    with pytest.raises(LedgerError, match="no pending ownership transition"):
+        _scalar_preflight(
+            pending_runtime,
+            pending_registration,
+            pending_root,
+            pending_rollback,
+        )
+    assert not pending_rollback.exists()
+    assert not pending_runtime.registry.scalar_rollback_session_path.exists()

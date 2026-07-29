@@ -88,6 +88,9 @@ services:
         bind:
           create_host_path: false
       - "runtime-tmp:/app/tmp"
+      # MVR-01C roll-forward source. Only the one-shot deployment producer
+      # mounts it; current long-lived services never receive this scalar fork.
+      - "scalar-rollback-legacy:/app/scalar-rollback"
       - "/Users:/Users"
       - "/Volumes:/Volumes"
     command:
@@ -496,3 +499,5 @@ volumes:
   # Durable channel-scoped MVR-01B registry state. Compose project namespacing
   # keeps dev/test/prod isolated while container recreation preserves state.
   instance-state:
+  # Previous-image scalar fork, imported only by the fenced deployment helper.
+  scalar-rollback-legacy:

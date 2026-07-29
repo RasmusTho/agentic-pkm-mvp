@@ -17,6 +17,7 @@ from app.instance._storage_boundary import CapabilityNotReadyError, RegistryErro
 
 _GUARD_RECEIPT_AUTHORITY = object()
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_CANONICAL_COMPOSE_BASE = _REPO_ROOT / "docker-compose.yaml"
 _CANONICAL_COMPOSE_OVERLAY = _REPO_ROOT / "docker-compose.scalar-rollback.yml"
 _CANONICAL_GATEWAY_CONFIG = _REPO_ROOT / "ops/scalar-rollback/nginx.conf"
 _CANONICAL_NATIVE_LAUNCHER = _REPO_ROOT / "scripts/scalar_rollback_native.sh"
@@ -25,11 +26,11 @@ _GATEWAY_POLICY = """server {
     auth_basic "scalar rollback";
     auth_basic_user_file /run/secrets/scalar-rollback.htpasswd;
 
-    location = /api/vault/select {
+    location = /api/companion/vault/select {
         return 403;
     }
 
-    location = /api/vault/initialize {
+    location = /api/companion/vault/initialize {
         return 403;
     }
 
@@ -125,12 +126,15 @@ def preflight_scalar_rollback_guard(
     ):
         raise RegistryError("canonical scalar rollback policy files are required")
     compose = compose_path.read_text(encoding="utf-8")
+    compose_base_path = _CANONICAL_COMPOSE_BASE.resolve(strict=True)
+    compose_base = compose_base_path.read_text(encoding="utf-8")
     gateway = gateway_path.read_text(encoding="utf-8")
     try:
-        model = yaml.load(compose, Loader=_ComposeLoader)
+        base_model = yaml.load(compose_base, Loader=_ComposeLoader)
+        overlay_model = yaml.load(compose, Loader=_ComposeLoader)
     except yaml.YAMLError as exc:
         raise RegistryError("scalar rollback compose guard is invalid") from exc
-    _validate_compose_model(model)
+    _validate_compose_model(base_model, overlay_model)
     if gateway != _GATEWAY_POLICY:
         raise RegistryError("authenticated mutation-filtering gateway policy is incomplete")
     if not launcher_path.is_file():
@@ -158,7 +162,9 @@ def preflight_scalar_rollback_guard(
         direct_api_port_absent=True,
         selected_mount_only=True,
         native_guard_fail_closed=True,
-        compose_policy_sha256=hashlib.sha256(compose.encode("utf-8")).hexdigest(),
+        compose_policy_sha256=hashlib.sha256(
+            compose_base.encode("utf-8") + b"\0" + compose.encode("utf-8")
+        ).hexdigest(),
         gateway_policy_sha256=hashlib.sha256(gateway.encode("utf-8")).hexdigest(),
         native_launcher_sha256=hashlib.sha256(launcher_path.read_bytes()).hexdigest(),
         compose_overlay=compose_path,
@@ -168,10 +174,16 @@ def preflight_scalar_rollback_guard(
     )
 
 
-def _validate_compose_model(model: object) -> None:
-    if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
+def _validate_compose_model(base_model: object, overlay_model: object) -> None:
+    if (
+        not isinstance(base_model, dict)
+        or not isinstance(base_model.get("services"), dict)
+        or not isinstance(overlay_model, dict)
+        or not isinstance(overlay_model.get("services"), dict)
+    ):
         raise RegistryError("scalar rollback compose guard is incomplete")
-    services = model["services"]
+    base_services = base_model["services"]
+    services = overlay_model["services"]
     required = {
         "scalar-rollback-guard",
         "api",
@@ -179,6 +191,7 @@ def _validate_compose_model(model: object) -> None:
         "worker",
         "watcher",
         "heimdal-capture-watch",
+        "companion-ui",
     }
     if set(services) != required:
         raise RegistryError("scalar rollback overlay service set is invalid")
@@ -219,6 +232,26 @@ def _validate_compose_model(model: object) -> None:
     for name in ("worker", "watcher", "heimdal-capture-watch"):
         if services[name] != {"profiles": ["scalar-rollback-disabled"]}:
             raise RegistryError("scalar rollback background producer is not disabled")
+    companion = services["companion-ui"]
+    if companion != {
+        "profiles": ["scalar-rollback-disabled"],
+        "ports": [],
+        "depends_on": [],
+    }:
+        raise RegistryError("scalar rollback companion API bypass is not disabled")
+    api_dependents = {
+        name
+        for name, service in base_services.items()
+        if isinstance(service, dict)
+        and "api"
+        in (
+            set((service.get("depends_on") or {}).keys())
+            if isinstance(service.get("depends_on"), dict)
+            else set(service.get("depends_on") or [])
+        )
+    }
+    if api_dependents != {"companion-ui"}:
+        raise RegistryError("base Compose has an ungoverned scalar API dependent")
     if "scalar-rollback-session.json" not in str(api.get("command")):
         raise RegistryError("scalar rollback API does not require the durable session")
 

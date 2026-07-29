@@ -100,11 +100,13 @@ authenticated mutation-filtering gateway and the deny-by-default native guard. A
 proof leaves `authority: dormant` and every registration producer sealed.
 
 Supported container rollback into a previous scalar image uses
-`docker-compose.scalar-rollback.yml`: the old API publishes no direct host port, is reachable only
-through the authenticated gateway, cannot call picker select/initialize routes, and mounts only the
+`docker-compose.scalar-rollback.yml`: the old API publishes no direct host port, the base
+companion UI is disabled, the real companion picker select/initialize routes are denied, and the
+old API is reachable from the host only through the authenticated gateway. It mounts only the
 selected content root at `/app/selected-vault`. A current guard image revalidates the activated
-compose, gateway, and launcher policy, materializes the exact legacy projection, and installs a
-host-key-authenticated scalar session before the old API starts. That durable session excludes
+base-plus-overlay Compose model, gateway, and launcher policy, materializes the exact legacy
+projection, and installs a host-key-authenticated scalar session before the old API starts. That
+durable session excludes
 current registry writers for the lifetime of the old image; the old image receives neither the
 host key nor a writable registry mount. Native rollback currently fails closed: the root-owned
 `scripts/scalar_rollback_native.sh` launcher never starts an old image until an authenticated
@@ -113,7 +115,10 @@ is insufficient because it cannot exclude a bypass listener. A binding-keyed
 `minimumRuntimeSchema` floor blocks scalar API/worker startup before database or queue work. On
 roll-forward, the authenticated session and unchanged registry revision must agree before
 rollback-period metadata and last-active state become the next registry revision; divergence
-preserves both sides without recreate.
+preserves both sides without recreate. The importer is not a free-standing runtime call:
+`MVR01C_ROLL_FORWARD_LEGACY_PATH` asks the normal deployment producer to run
+`scalar-rollback-roll-forward` only after its host-global lease, restart fence, stopped-writer
+proof, and drained-owner receipt are durable, and before `deployment-finish` permits recreate.
 
 ### Target
 

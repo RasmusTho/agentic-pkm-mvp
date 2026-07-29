@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -108,6 +111,7 @@ def test_parent_registry_acceptance(tmp_path) -> None:
 
     rollback_path = tmp_path / "rollback" / "app-local.md"
     _preflight_scalar_rollback(
+        channel="prod",
         registry_path=path,
         host_global_root=ledger.root,
         rollback_vault_binding_id=first.vault_binding_id,
@@ -134,6 +138,27 @@ def test_parent_registry_acceptance(tmp_path) -> None:
     assert merged.registrations[first.vault_binding_id].vault_name == "rollback-name"
     assert second.vault_binding_id in merged.registrations
     assert merged.extensions["futureTopLevel"] == {"preserved": True}
+
+    delivered_proofs = [
+        "tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state",
+        "tests/integration/test_vault_registry_rollback.py::test_multi_binding_rollback_requires_one_safe_explicit_target",
+        "tests/integration/test_vault_registry_rollback.py::test_01c_unseals_second_registration_only_with_complete_rollback_floor",
+        "tests/integration/test_vault_registry_rollback.py::test_rollback_mutations_round_trip_on_roll_forward",
+        "tests/ops/test_scalar_rollback_guard.py::test_rollback_gateway_and_mounts_enforce_selected_binding",
+        "tests/ops/test_scalar_rollback_guard.py::test_native_scalar_rollback_launcher_enforces_selected_binding_or_fails_closed",
+        "tests/ops/test_scalar_rollback_guard.py::test_binding_keyed_database_floor_blocks_scalar_runtime",
+    ]
+    aggregate = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", *delivered_proofs],
+        cwd=REPO_ROOT,
+        env={**os.environ, "RUN_INTEGRATED_RUNTIME_UAT": "1"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert aggregate.returncode == 0, aggregate.stdout + aggregate.stderr
+    assert "7 passed" in aggregate.stdout
 
 
 def test_legacy_app_local_state_migrates_losslessly(tmp_path) -> None:

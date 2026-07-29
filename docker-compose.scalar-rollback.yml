@@ -23,6 +23,8 @@ services:
       - -m
       - app.instance.runtime
       - scalar-rollback-preflight
+      - --channel
+      - ${PKM_ENVIRONMENT:-dev}
       - --registry-path
       - /app/instance-state/agentic-pkm/vault-registry.md
       - --host-global-root
@@ -94,6 +96,11 @@ services:
 
   heimdal-capture-watch:
     profiles: ["scalar-rollback-disabled"]
+
+  companion-ui:
+    profiles: ["scalar-rollback-disabled"]
+    ports: !override []
+    depends_on: !override []
 
 volumes:
   scalar-rollback-legacy:
