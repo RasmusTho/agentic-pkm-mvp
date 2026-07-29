@@ -58,7 +58,7 @@ exclusive remote lock exactly once:
        `[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}`. The exit-1 object must contain exactly
        `schema`, `inquiry_id`, `final_state`, `terminal_receipt_id`, `human_readable_report`,
        `preflight`, and `diagnostic`, with
-       `schema=builderops.model-inquiry-desktop-launch.v1`.
+       `schema=builderops.model-inquiry-desktop-launch.v1`; `preflight` must be a JSON object.
      The exit-status-1 form is a valid durable terminal failure; release staging, report it, and
      stop.
    - For any other nonzero status, empty stdout, malformed JSON, or missing response field, delete

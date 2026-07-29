@@ -161,6 +161,10 @@ def test_desktop_terminal_classifier_accepts_only_exact_typed_credential_failure
     extra_top_level = json.loads(serialized)
     extra_top_level["unexpected"] = "field"
     invalid_payloads.append(extra_top_level)
+    for invalid_preflight in (None, "available", ["available"]):
+        candidate = json.loads(serialized)
+        candidate["preflight"] = invalid_preflight
+        invalid_payloads.append(candidate)
 
     for invalid in invalid_payloads:
         assert start_model_inquiry._launcher_exit_code(invalid) == 2
@@ -336,6 +340,7 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "high-reasoning profile",
             "exit status 1",
             "credential_unavailable",
+            "`preflight` must be a JSON object",
         ):
             assert contract_field in skill
         for required_boundary in (

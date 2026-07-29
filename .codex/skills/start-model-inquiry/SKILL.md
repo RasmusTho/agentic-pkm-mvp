@@ -141,7 +141,7 @@ Run exactly one route as a single-flight operation.
      `[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}`. This exit-1 object must contain exactly the
      top-level fields `schema`, `inquiry_id`, `final_state`, `terminal_receipt_id`,
      `human_readable_report`, `preflight`, and `diagnostic`, with `schema` equal to
-     `builderops.model-inquiry-desktop-launch.v1`.
+     `builderops.model-inquiry-desktop-launch.v1`; `preflight` must be a JSON object.
    The second form is a valid durable terminal failure, not an ambiguous launch. Any other nonzero
    status, non-JSON prefix or suffix, array or scalar, empty required value, or missing required
    field is invalid.
