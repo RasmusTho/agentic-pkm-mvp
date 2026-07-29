@@ -103,7 +103,7 @@ def test_contract_rejects_undeclared_top_level_field(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("surface", ["top", "secret", "consumer"])
-def test_contract_rejects_value_bearing_identifier_field(
+def test_contract_rejects_value_bearing_field(
     tmp_path: Path,
     surface: str,
 ) -> None:

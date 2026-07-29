@@ -153,7 +153,7 @@ workflows green-on-absent would leave the decision undelivered.
       fields at top-level, secret, or consumer scope and duplicate keys are rejected; strict field
       grammars, logical-id/kind/binding relations, and exact grants remain enforced. Identifier and
       `api-key` lexical languages are not required to be disjoint.
-      Verify: `tests/ops/test_host_secret_contract.py::test_contract_rejects_value_bearing_identifier_field`
+      Verify: `tests/ops/test_host_secret_contract.py::test_contract_rejects_value_bearing_field`
       Verify: `tests/ops/test_host_secret_contract.py::test_identifier_grammar_rejects_out_of_grammar_names`
 - [ ] `dev`, `test`, and `prod` resolve distinct Keychain accounts for the same model-provider
       identifier, and a `dev` request cannot resolve a `prod` item.
