@@ -22,6 +22,7 @@ from app.ops.host_secret_contract import HostSecretContract, load_host_secret_co
 
 
 HOST_SECRET_RUNTIME_ENV_FILE = "HOST_SECRET_RUNTIME_ENV_FILE"
+HOST_SECRET_BOOTSTRAP_FAILURE_REF = "HOST_SECRET_BOOTSTRAP_FAILURE_REF"
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _CHILD_WAIT_POLL_SECONDS = 0.1
 _CHILD_TERMINATION_GRACE_SECONDS = 5.0
@@ -33,6 +34,16 @@ CommandRunner = Callable[[list[str], dict[str, str]], int]
 
 class HostSecretBootstrapError(RuntimeError):
     """Redacted bootstrap failure that never carries resolved secret material."""
+
+
+class HostSecretCredentialUnavailableError(HostSecretBootstrapError):
+    """One declared API credential is absent or unusable."""
+
+    def __init__(self, credential_identity_ref: str) -> None:
+        super().__init__(
+            f"host secret bootstrap failed for declared secret: {credential_identity_ref}"
+        )
+        self.credential_identity_ref = credential_identity_ref
 
 
 class HostSecretBootstrapTerminated(HostSecretBootstrapError):
@@ -271,9 +282,7 @@ def _read_runtime_secret_file(path: Path) -> str | None:
 
 def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:
     if kind == "api-key":
-        return HostSecretBootstrapError(
-            f"host secret bootstrap failed for declared secret: {secret}"
-        )
+        return HostSecretCredentialUnavailableError(secret)
     return HostSecretBootstrapError(
         "host secret bootstrap failed for declared consumer"
     )
@@ -485,6 +494,7 @@ def run_with_host_secrets(
     runner: CommandRunner = _subprocess_runner,
     contract: HostSecretContract | None = None,
     directory: Path | None = None,
+    run_on_credential_unavailable: bool = False,
 ) -> int:
     """Launch *command* with a temporary secret env-file pointer, then clean it."""
     selected_command = list(command)
@@ -498,18 +508,37 @@ def run_with_host_secrets(
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         ) from exc
-    with materialize_consumer_environment(
-        channel=channel,
-        consumer=consumer,
-        keychain_lookup=keychain_lookup,
-        contract=selected_contract,
-        directory=directory,
-    ) as env_file:
-        child_env = dict(os.environ)
-        for env_name in selected_contract.child_bindings:
-            child_env.pop(env_name, None)
-        child_env[HOST_SECRET_RUNTIME_ENV_FILE] = str(env_file)
+    try:
+        materialized = materialize_consumer_environment(
+            channel=channel,
+            consumer=consumer,
+            keychain_lookup=keychain_lookup,
+            contract=selected_contract,
+            directory=directory,
+        )
+        with materialized as env_file:
+            child_env = _clean_child_environment(selected_contract)
+            child_env[HOST_SECRET_RUNTIME_ENV_FILE] = str(env_file)
+            return runner(selected_command, child_env)
+    except HostSecretCredentialUnavailableError as exc:
+        if not run_on_credential_unavailable:
+            raise
+        # Model Inquiry owns the durable typed terminal receipt. This opt-in
+        # handoff carries only the declared logical identifier, never a value,
+        # and still launches without any provider credential binding.
+        child_env = _clean_child_environment(selected_contract)
+        child_env[HOST_SECRET_BOOTSTRAP_FAILURE_REF] = exc.credential_identity_ref
         return runner(selected_command, child_env)
+
+
+def _clean_child_environment(contract: HostSecretContract) -> dict[str, str]:
+    """Return ambient state with every bootstrap-owned surface removed."""
+    child_env = dict(os.environ)
+    child_env.pop(HOST_SECRET_RUNTIME_ENV_FILE, None)
+    child_env.pop(HOST_SECRET_BOOTSTRAP_FAILURE_REF, None)
+    for env_name in contract.child_bindings:
+        child_env.pop(env_name, None)
+    return child_env
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -518,6 +547,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--channel", required=True)
     parser.add_argument("--consumer", required=True)
+    parser.add_argument(
+        "--run-on-credential-unavailable",
+        action="store_true",
+        help=(
+            "run the child with a value-free typed failure handoff when a declared "
+            "API credential is unavailable"
+        ),
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
@@ -532,6 +569,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             channel=args.channel,
             consumer=args.consumer,
             command=command,
+            run_on_credential_unavailable=args.run_on_credential_unavailable,
         )
     except HostSecretBootstrapTerminated as exc:
         print(

@@ -22,10 +22,13 @@ from app.builderops.model_inquiry_adapters import (
     ADAPTER_FAILURE_CLASSES,
     AdapterExecutionError,
     AdapterUnavailableError,
+    CredentialUnavailableError,
     load_adapters,
     sanitized_adapter_identity,
+    sanitized_adapter_failure,
 )
 from app.builderops.models import BuilderOpsValidationError
+from app.ops.host_secret_bootstrap import HOST_SECRET_BOOTSTRAP_FAILURE_REF
 from scripts.install_model_inquiry_host import CREDENTIAL_RESOLUTION
 
 WORKFLOW = "fable-gpt-architecture"
@@ -50,7 +53,20 @@ def preflight_dependencies(
     subscription session is probed, required, or discovered.
     """
     ModelInquiryService.from_env(env)
-    adapters = load_adapters(env, resolver=resolver)
+    try:
+        adapters = load_adapters(env, resolver=resolver)
+    except CredentialUnavailableError as exc:
+        if not str(env.get(HOST_SECRET_BOOTSTRAP_FAILURE_REF, "")).strip():
+            raise
+        return {
+            "vault": "available",
+            "credential_resolution": CREDENTIAL_RESOLUTION,
+            "adapters": {},
+            "credential_failure": sanitized_adapter_failure(
+                exc,
+                adapter_id=exc.adapter_id,
+            ),
+        }
     return {
         "vault": "available",
         "credential_resolution": CREDENTIAL_RESOLUTION,

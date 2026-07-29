@@ -15,6 +15,7 @@ import pytest
 
 import app.ops.host_secret_bootstrap as host_secret_bootstrap
 from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_BOOTSTRAP_FAILURE_REF,
     HOST_SECRET_RUNTIME_ENV_FILE,
     HostSecretBootstrapError,
     HostSecretBootstrapTerminated,
@@ -136,6 +137,39 @@ def test_missing_model_provider_secret_fails_consumer_closed(
     assert "openai.api-key" in str(error.value)
     if missing_or_malformed:
         assert missing_or_malformed not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_model_provider_failure_can_reach_typed_receipt_consumer(
+    tmp_path: Path,
+) -> None:
+    observed_env: dict[str, str] = {}
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":anthropic.api-key"):
+            return _ANTHROPIC_KEY
+        raise OSError("keychain item is absent")
+
+    def runner(_command: list[str], env: dict[str, str]) -> int:
+        observed_env.update(env)
+        return 19
+
+    result = run_with_host_secrets(
+        channel="dev",
+        consumer="builderops-model-inquiry",
+        command=["typed-receipt-consumer"],
+        keychain_lookup=lookup,
+        runner=runner,
+        directory=tmp_path,
+        run_on_credential_unavailable=True,
+    )
+
+    assert result == 19
+    assert observed_env[HOST_SECRET_BOOTSTRAP_FAILURE_REF] == "openai.api-key"
+    assert HOST_SECRET_RUNTIME_ENV_FILE not in observed_env
+    assert set(observed_env).isdisjoint(
+        {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HEIMDAL_RAW_STORE_KEY"}
+    )
     assert list(tmp_path.iterdir()) == []
 
 

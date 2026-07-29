@@ -55,7 +55,10 @@ and is unexercised. Switching to it is a configuration and resolution change, no
    value, environment-variable name, host path, or host identifier.
 5. Emit the real failure class. A declared credential that is absent or unusable produces
    `credential_unavailable`, and an expired session on a still-permitted interactive path produces
-   `session_expired`, instead of both collapsing into `command_exit_nonzero`.
+   `session_expired`, instead of both collapsing into `command_exit_nonzero`. The canonical launcher
+   must preserve that typed outcome even when host bootstrap fails before the runner starts: it
+   hands the runner only the declared logical credential identifier, with no credential bindings,
+   so the durable terminal receipt is written before any adapter or fallback path can run.
 6. Keep `scripts/model_inquiry_subscription_adapter.py` for interactive, human-driven use. It must
    remain unreachable from any headless entrypoint.
 
@@ -112,6 +115,7 @@ ADR-0064's option analysis.
       run closed, names only the logical identifier, and does not fall back to a subscription CLI, to
       ambient environment, or to any other provider.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_absent_credential_fails_closed_as_credential_unavailable`
+      Verify: `tests/governance/test_start_model_inquiry_skill.py::test_launcher_fails_closed_on_an_absent_declared_credential`
 - [ ] The two roles still require distinct `adapter_id` values and distinct runtime-target
       fingerprints, and a configuration that collapses them is refused.
       Verify: `tests/builderops/test_model_inquiry_adapters.py::test_provider_enabled_roles_require_distinct_non_mock_attestation`

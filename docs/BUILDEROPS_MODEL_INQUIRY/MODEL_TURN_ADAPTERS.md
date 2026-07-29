@@ -55,7 +55,11 @@ mock fallback. Since MAS-05 (ADR-0064), **the caller declares intent and resolve
   failure class, fails the run closed before any adapter call, names only the logical identifier, and
   never falls back to a subscription CLI, ambient environment, or another provider. An expired
   session on the still-permitted interactive command path produces `session_expired`. Neither
-  collapses into `command_exit_nonzero`.
+  collapses into `command_exit_nonzero`. The canonical launcher opts into the bootstrap's
+  value-free failure handoff: if Keychain resolution fails before the runner starts, the bootstrap
+  removes every credential surface and passes only that logical identifier so the runner can create
+  the same durable typed terminal receipt. Other host-secret consumers retain the strict default in
+  which bootstrap failure does not launch the child.
 
 Role identity remains attested: each role resolves to a distinct `adapter_id` and a distinct
 runtime-target fingerprint, and a mock, fake, or deterministic identity is refused as a

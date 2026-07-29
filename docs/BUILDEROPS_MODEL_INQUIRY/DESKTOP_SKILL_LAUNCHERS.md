@@ -52,7 +52,12 @@ route copies to the same fixed staging file and directly invokes only:
 The operator machine needs the `Tailscale_macmini` SSH alias. On the remote host, declared Anthropic
 and OpenAI API-key identities resolve through the host-secret bootstrap and Keychain contract; no
 headless route uses the legacy GUI-session proxy or an interactive subscription session. Desktop
-skill packages neither provision nor access credential values. A failed copy or launcher command,
+skill packages neither provision nor access credential values. If that bootstrap cannot resolve or
+validate a declared API credential, the fixed Model Inquiry launcher passes only the logical
+credential identifier to the runner. The runner then persists a terminal
+`provider_error`/`credential_unavailable` receipt before any adapter can run; no credential value,
+provider request, subscription command, or alternate provider participates in that handoff. A
+failed copy or launcher command,
 empty stdout, malformed/non-object JSON, or absent/empty response field fails loudly: report the
 error and stop. Do not retry, inspect the vault for a substitute response, or fall back to an
 in-chat inquiry.

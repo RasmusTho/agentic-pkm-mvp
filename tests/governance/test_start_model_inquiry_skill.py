@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.builderops.model_inquiry_adapters import CredentialUnavailableError
+from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.models import BuilderOpsValidationError
 import scripts.start_model_inquiry as start_model_inquiry
 from scripts.start_model_inquiry import preflight_dependencies
@@ -58,6 +59,7 @@ def test_canonical_launcher_invokes_real_host_secret_bootstrap(
         "dev",
         "--consumer",
         "builderops-model-inquiry",
+        "--run-on-credential-unavailable",
         "--",
         str(fake_python),
         str(PYTHON_LAUNCHER),
@@ -114,17 +116,56 @@ def test_local_launcher_emits_terminal_provider_error_json(
 def test_launcher_fails_closed_on_an_absent_declared_credential(
     tmp_path: Path,
 ) -> None:
-    """The reported failure class is the credential, never a session or CLI exit."""
+    """The canonical path durably records the typed failure without a model call."""
     vault = tmp_path / "vault"
     vault.mkdir()
     question_file = tmp_path / "question.md"
     question_file.write_text("Fail closed without a declared value.", encoding="utf-8")
+    provider_call_marker = tmp_path / "provider-called"
+    subscription_call_marker = tmp_path / "subscription-called"
+    instrumentation = tmp_path / "instrumentation"
+    instrumentation.mkdir()
+    (instrumentation / "sitecustomize.py").write_text(
+        """
+import ctypes
+import os
+from pathlib import Path
+
+def _missing_keychain(*_args, **_kwargs):
+    raise OSError("injected missing Keychain item")
+
+ctypes.CDLL = _missing_keychain
+
+try:
+    import requests
+except ImportError:
+    pass
+else:
+    def _forbid_provider(*_args, **_kwargs):
+        Path(os.environ["PROVIDER_CALL_MARKER"]).write_text("called", encoding="utf-8")
+        raise AssertionError("provider transport was reached")
+    requests.post = _forbid_provider
+""",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for command in ("claude", "codex"):
+        executable = fake_bin / command
+        executable.write_text(
+            "#!/bin/sh\nprintf called > \"$SUBSCRIPTION_CALL_MARKER\"\nexit 91\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
     result = subprocess.run(
         [str(LAUNCHER), "--question-file", str(question_file), "--max-rounds", "1"],
         cwd=REPO_ROOT,
         env={
-            "PATH": "/usr/bin:/bin",
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
             "HOME": str(tmp_path),
+            "PYTHONPATH": str(instrumentation),
+            "PROVIDER_CALL_MARKER": str(provider_call_marker),
+            "SUBSCRIPTION_CALL_MARKER": str(subscription_call_marker),
             "BUILDEROPS_PYTHON": sys.executable,
             "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
             "BUILDEROPS_VAULT_ROOT": str(vault),
@@ -135,10 +176,27 @@ def test_launcher_fails_closed_on_an_absent_declared_credential(
         check=False,
     )
 
-    assert result.returncode == 78
-    assert "anthropic.api-key" in result.stderr
-    assert "ANTHROPIC_API_KEY" not in result.stderr
-    assert not (vault / "model-inquiries").exists()
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["final_state"] == "provider_error"
+    assert payload["diagnostic"] == {
+        "adapter_id": "anthropic-claude-fable-5",
+        "adapter_failure_class": "credential_unavailable",
+        "credential_identity_ref": "anthropic.api-key",
+    }
+    trace = ModelInquiryService(vault).trace(payload["inquiry_id"])
+    assert trace["turns"] == []
+    terminal = next(
+        receipt
+        for receipt in trace["receipts"]
+        if receipt["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["details"]["diagnostic"] == payload["diagnostic"]
+    assert not provider_call_marker.exists()
+    assert not subscription_call_marker.exists()
+    serialized = result.stdout + result.stderr + json.dumps(trace)
+    assert "ANTHROPIC_API_KEY" not in serialized
+    assert "OPENAI_API_KEY" not in serialized
 
 
 def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:

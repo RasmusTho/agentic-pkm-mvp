@@ -23,6 +23,7 @@ from app.builderops.model_access_resolver import (
 )
 from app.builderops.model_inquiry_contract import canonical_hash, canonical_json
 from app.builderops.models import BuilderOpsValidationError
+from app.ops.host_secret_bootstrap import HOST_SECRET_BOOTSTRAP_FAILURE_REF
 from llm_contract import (
     ADAPTER_FAILURE_CLASSES,
     AdapterResult,
@@ -532,6 +533,21 @@ def load_adapters(
     """
     source = dict(os.environ if env is None else env)
     selected, resolutions = resolve_inquiry_roles(source, resolver=resolver)
+    failure_ref = source.get(HOST_SECRET_BOOTSTRAP_FAILURE_REF, "").strip()
+    if failure_ref:
+        matches = [
+            resolution
+            for resolution in resolutions.values()
+            if resolution.credential_identity_ref == failure_ref
+        ]
+        if len(matches) != 1:
+            raise AdapterUnavailableError(
+                "host secret bootstrap failure handoff does not name one resolved role"
+            )
+        raise CredentialUnavailableError(
+            adapter_id=matches[0].adapter_id,
+            credential_identity_ref=failure_ref,
+        )
     descriptors = load_adapter_descriptors(source, resolver=selected)
     adapters: dict[str, ModelTurnAdapter] = {}
     for role in ROLE_NAMES:
