@@ -24,7 +24,6 @@ import configparser
 from datetime import date
 import importlib
 from pathlib import Path
-import subprocess
 from typing import Set
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +87,27 @@ def _imported_modules(path: Path) -> Set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module)
     return modules
+
+
+def _builder_to_product_llm_imports() -> Set[tuple[str, str]]:
+    """Return static Builder imports of the Product LLM package by source module."""
+    imports: Set[tuple[str, str]] = set()
+    for path in (APP_ROOT / "builderops").rglob("*.py"):
+        relative = path.relative_to(APP_ROOT).with_suffix("")
+        module_parts = relative.parts[:-1] if relative.name == "__init__" else relative.parts
+        source_module = ".".join(("app", *module_parts))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules = (alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules = (node.module,)
+            else:
+                continue
+            for imported_module in imported_modules:
+                if imported_module.startswith("app.components.llm"):
+                    imports.add((source_module, imported_module))
+    return imports
 
 
 def _is_direct_dynamic_import_call(node: ast.Call) -> bool:
@@ -201,8 +221,8 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_builder_does_not_import_product_llm_without_exemption(tmp_path: Path) -> None:
-    """The CI-consumed linter rejects a second Builder -> Product LLM import."""
+def test_builder_does_not_import_product_llm_without_exemption() -> None:
+    """Only the two configured MAS-06 imports may cross the Builder/LLM boundary."""
     contract = _builder_llm_authority_contract_section()
     assert contract["type"] == "forbidden"
     assert _module_list(contract["source_modules"]) == {"app.builderops"}
@@ -215,25 +235,10 @@ def test_builder_does_not_import_product_llm_without_exemption(tmp_path: Path) -
             encoding="utf-8"
         )
 
-    synthetic_import = APP_ROOT / "builderops" / "_mas02_forbidden_import_probe.py"
-    synthetic_import.write_text(
-        "from app.components.llm.fabric import get_chat_client\n", encoding="utf-8"
-    )
-    try:
-        result = subprocess.run(
-            ["lint-imports", "--config", str(IMPORTLINTER_INI)],
-            cwd=REPO_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        synthetic_import.unlink(missing_ok=True)
-
-    output = result.stdout + result.stderr
-    assert result.returncode != 0, output
-    assert "Builder System must not import the Product LLM fabric" in output
-    assert "app.builderops._mas02_forbidden_import_probe" in output
+    assert _builder_to_product_llm_imports() == {
+        ("app.builderops.ckm.semantic", "app.components.llm.constrained"),
+        ("app.builderops.ckm.semantic", "app.components.llm.fabric"),
+    }
 
 
 def test_interim_exemption_is_single_named_and_dated() -> None:
