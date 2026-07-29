@@ -129,8 +129,17 @@ MCP-first control-plane behavior, and free-form agent queries over operational d
 Git hygiene remains local first. Hot-path preflight is read-only and checks dirty tree,
 in-progress git operations, branch/worktree mismatch, and relevant lease conflicts before local
 mutation. Broader cleanup belongs to a cold-path janitor flow that reports stale merged branches,
-orphaned worktrees, old stashes, and prune candidates while respecting active leases. Destructive
-cleanup is not automatic in v1.
+orphaned worktrees, old stashes, and prune candidates while respecting active leases and the local
+worktree lifecycle registry. Destructive cleanup is never the default: explicit apply may reclaim
+only registered, expired, clean, unlocked worktrees whose live path/branch/HEAD and generation marker
+still match, with proven merge/closure eligibility. Unregistered, active, replaced-generation, or
+orphaned lifecycle state is positive preservation evidence. Apply releases the lifecycle lock during
+fetch and planning so active owners can heartbeat, then rereads lease and lifecycle authority and
+holds the lifecycle lock only through the targeted removal. Before Git removal it durably records a
+generation-bound `removal_pending` transition. Successful removal durably retires that exact
+generation before branch deletion; restart reconciliation completes only a pending transition and
+never infers removal from an ordinary missing lifecycle record. Broad worktree-metadata pruning
+remains report-only.
 
 ## Enforcement intent
 
@@ -188,6 +197,8 @@ Approved governance surfaces:
 - `.github/ISSUE_TEMPLATE/*.yml`
 - `.github/pull_request_template.md`
 - `.github/workflows/issue-pr-governance.yml`
+- `scripts/agent_workspace_cleanup.sh`
+- `scripts/agent_worktree.py`
 - `scripts/docs_guard.py`
 - `scripts/git_hygiene.py`
 - `scripts/git_hygiene_preflight.py`
@@ -195,6 +206,7 @@ Approved governance surfaces:
 - `scripts/reconcile_project_status.py`
 - `scripts/validate_source_anchors.py`
 - `scripts/await_pr_checks.sh`
+- `tests/ops/test_agent_worktree.py`
 - `tests/ops/test_git_hygiene.py`
 - `tests/ops/test_project_status_reconcile.py`
 - `tests/governance/test_known_defects_registry.py`

@@ -8,11 +8,15 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import re
 import subprocess
 import time
+import unicodedata
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, TypeGuard
 
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
@@ -277,7 +281,7 @@ def preflight_report(
         or checks["in_progress_operations"]
         or checks["branch_mismatch"]
         or checks["worktree_mismatch"]
-        or checks["base_branch"]["mismatch"]
+        or base_status["mismatch"]
         or checks["lease_conflicts"]
         or (require_dedicated_worktree and shared_root)
     )
@@ -393,6 +397,169 @@ def _branch_has_active_lease(branch: str, active_resources: set[str]) -> bool:
     return f"branch:{branch}" in active_resources
 
 
+def _canonical_path_key(path: str) -> str:
+    return str(Path(path).expanduser().resolve(strict=False))
+
+
+def _folded_path_key(path: str) -> str:
+    """Case- and normalisation-insensitive identity for a filesystem path.
+
+    Kept in its own ``casefold:`` namespace so it can only ever match another
+    folded identity — an exact spelling never collides with a folded one.
+    """
+    return "casefold:" + unicodedata.normalize("NFC", path).casefold()
+
+
+def _path_identities(path: str | None) -> set[str]:
+    """Every spelling that can denote the same worktree directory.
+
+    Lease matching must not be spelling-bound. Besides the raw and canonical
+    (``resolve()``d) spellings, each is also emitted in a case-folded, NFC
+    normalised form, because the filesystem this repo runs on by default (macOS
+    APFS/HFS+) is case-insensitive *and* normalisation-insensitive:
+    ``…/candidate-wt``, ``…/CANDIDATE-WT`` and the NFD spelling of a non-ASCII
+    path are the identical directory there, and ``os.path.normcase`` is a no-op
+    on POSIX so it cannot express this. The directory is already gone by the
+    time the branch deletion is revalidated, so the filesystem cannot be probed
+    for its actual case sensitivity at that point.
+
+    On a genuinely case-sensitive filesystem those spellings are different
+    directories and the folded identity can over-match. That is deliberate:
+    every consumer uses these identities as a *preservation* predicate, so an
+    over-match at worst preserves a branch that could have been reclaimed, while
+    an under-match runs an irreversible ``git branch -D`` against a directory
+    somebody holds a lease on. The asymmetry is not close, and the collision it
+    costs requires two live agent worktree paths differing only by case or
+    Unicode form.
+    """
+    if not path:
+        return set()
+    spellings = {path, _canonical_path_key(path)}
+    return spellings | {_folded_path_key(spelling) for spelling in spellings}
+
+
+def _leased_worktree_paths(active_resources: set[str]) -> set[str]:
+    paths: set[str] = set()
+    for resource in active_resources:
+        if not resource.startswith("worktree:"):
+            continue
+        paths |= _path_identities(resource.removeprefix("worktree:"))
+    return paths
+
+
+def _worktree_path_has_active_lease(path: str, active_resources: set[str]) -> bool:
+    return bool(_path_identities(path) & _leased_worktree_paths(active_resources))
+
+
+def _lifecycle_worktree_paths_for_branch(
+    branch: str | None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> set[str]:
+    """Every worktree path a lifecycle record binds to ``branch``.
+
+    Records survive the checkout they describe: removal only tombstones them
+    (``status == "removed"``), it never drops the path/branch pair. That durable
+    association is what lets a later cleanup run — after the checkout is gone and
+    the branch looks like an ordinary local branch — still recognise a
+    ``worktree:<path>`` lease as authority over the branch that path held.
+    """
+    if not branch or lifecycle_records is None:
+        return set()
+    paths: set[str] = set()
+    for key, record in lifecycle_records.items():
+        if not isinstance(record, Mapping) or record.get("branch") != branch:
+            continue
+        paths |= _path_identities(key)
+        recorded_path = record.get("path")
+        if isinstance(recorded_path, str):
+            paths |= _path_identities(recorded_path)
+    return paths
+
+
+def _branch_has_worktree_path_lease(
+    branch: str,
+    active_resources: set[str],
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> bool:
+    """True when an active lease holds a worktree path bound to ``branch``."""
+    return bool(
+        _lifecycle_worktree_paths_for_branch(branch, lifecycle_records)
+        & _leased_worktree_paths(active_resources)
+    )
+
+
+def _branch_has_lifecycle_preservation(
+    branch: str,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> bool:
+    if lifecycle_records is None:
+        return False
+    return any(
+        isinstance(record, Mapping)
+        and record.get("branch") == branch
+        and record.get("status") != "removed"
+        for record in lifecycle_records.values()
+    )
+
+
+def _is_finite_timestamp(value: object) -> TypeGuard[int | float]:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _worktree_lifecycle_skip_reason(
+    path: str,
+    branch: str,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+    *,
+    now: float | None,
+) -> str | None:
+    """Require a matching expired lifecycle registration when records are supplied."""
+
+    if lifecycle_records is None:
+        return None
+    canonical_path = str(Path(path).resolve())
+    record = lifecycle_records.get(canonical_path)
+    if not isinstance(record, Mapping):
+        return "unregistered_worktree"
+    owner = record.get("owner")
+    registered_at = record.get("registered_at")
+    heartbeat_at = record.get("heartbeat_at")
+    expires_at = record.get("expires_at")
+    generation = record.get("generation")
+    status = record.get("status")
+    if (
+        record.get("path") != canonical_path
+        or record.get("branch") != branch
+        or not isinstance(owner, str)
+        or not owner.strip()
+        or not (
+            isinstance(generation, str)
+            and re.fullmatch(r"[0-9a-f]{32}", generation)
+        )
+        or status not in {"active", "released", "complete"}
+        or not _is_finite_timestamp(registered_at)
+        or not _is_finite_timestamp(heartbeat_at)
+        or not _is_finite_timestamp(expires_at)
+        or registered_at > heartbeat_at
+        or heartbeat_at > expires_at
+    ):
+        return "registration_mismatch"
+    if status in {"released", "complete"}:
+        terminal_at = record.get(f"{status}_at")
+        if (
+            not _is_finite_timestamp(terminal_at)
+            or terminal_at != expires_at
+        ):
+            return "registration_mismatch"
+    if expires_at > (time.time() if now is None else now):
+        return "active_registration"
+    return None
+
+
 def _worktree_reclaim_reason(
     path: str,
     branch: str,
@@ -403,6 +570,8 @@ def _worktree_reclaim_reason(
     pr_states: dict[str, dict[str, Any]] | None,
     cwd: Path,
     locked: bool = False,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
+    now: float | None = None,
 ) -> tuple[str | None, str | None]:
     """Decide whether a present worktree is safe to reclaim.
 
@@ -431,7 +600,7 @@ def _worktree_reclaim_reason(
     # evidence, not stale metadata: never make it a removal candidate.
     if locked:
         return "locked_worktree", None
-    if f"worktree:{path}" in active_resources or _branch_has_active_lease(
+    if _worktree_path_has_active_lease(path, active_resources) or _branch_has_active_lease(
         branch, active_resources
     ):
         return "active_lease", None
@@ -440,6 +609,14 @@ def _worktree_reclaim_reason(
         return "worktree_state_unavailable", None
     if dirty:
         return "dirty_worktree", None
+    lifecycle_reason = _worktree_lifecycle_skip_reason(
+        path,
+        branch,
+        lifecycle_records,
+        now=now,
+    )
+    if lifecycle_reason is not None:
+        return lifecycle_reason, None
     pr = _pr_state(branch, pr_states)
     if pr.get("state") == "OPEN" or pr.get("isDraft"):
         return "open_or_draft_pr", None
@@ -463,6 +640,7 @@ def _local_branch_skip_reason(
     checked_out: dict[str, str],
     protected_branches: set[str],
     pr_states: dict[str, dict[str, Any]] | None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
     cwd: Path,
 ) -> str | None:
     if branch == current_branch:
@@ -471,6 +649,13 @@ def _local_branch_skip_reason(
         return "protected_branch"
     if _branch_has_active_lease(branch, active_resources):
         return "active_lease"
+    # A branch whose worktree the janitor already removed still belongs to the
+    # holder of that path lease: the removal tombstone keeps the path->branch
+    # association so the restart cannot reclassify it as an ordinary branch.
+    if _branch_has_worktree_path_lease(branch, active_resources, lifecycle_records):
+        return "active_worktree_path_lease"
+    if _branch_has_lifecycle_preservation(branch, lifecycle_records):
+        return "lifecycle_registration"
     pr = _pr_state(branch, pr_states)
     if pr["state"] == "unknown":
         return "unknown_github_state"
@@ -496,6 +681,7 @@ def _remote_branch_skip_reason(
     checked_out: dict[str, str],
     protected_branches: set[str],
     pr_states: dict[str, dict[str, Any]] | None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
     cwd: Path,
 ) -> tuple[str | None, bool]:
     if branch == current_branch:
@@ -504,6 +690,10 @@ def _remote_branch_skip_reason(
         return "protected_branch", False
     if _branch_has_active_lease(branch, active_resources):
         return "active_lease", False
+    if _branch_has_worktree_path_lease(branch, active_resources, lifecycle_records):
+        return "active_worktree_path_lease", False
+    if _branch_has_lifecycle_preservation(branch, lifecycle_records):
+        return "lifecycle_registration", False
     if branch in checked_out:
         dirty = _worktree_dirty(checked_out[branch])
         if dirty is None:
@@ -535,8 +725,12 @@ def _lease_resources(active_leases: list[dict[str, Any]], now: float | None = No
 
 PRESERVATION_REASONS = {
     "active_lease",
+    "active_registration",
     "dirty_worktree",
     "locked_worktree",
+    "registration_mismatch",
+    "orphaned_worktree_report_only",
+    "unregistered_worktree",
     "unknown_merge_state",
     "worktree_state_unavailable",
 }
@@ -549,8 +743,12 @@ def _preservation_receipt(item: dict[str, Any]) -> dict[str, Any] | None:
         return None
     next_action = {
         "active_lease": "wait for the owning agent to release or supersede its lease",
+        "active_registration": "wait for lifecycle expiry or an explicit release/complete receipt",
         "dirty_worktree": "preserve local drift; inspect or commit it before any cleanup",
         "locked_worktree": "preserve the lock; verify the owning session before any cleanup",
+        "registration_mismatch": "repair the lifecycle record; do not infer cleanup authority",
+        "orphaned_worktree_report_only": "inspect and prune missing worktree metadata manually",
+        "unregistered_worktree": "register ownership explicitly before any cleanup decision",
         "unknown_merge_state": "verify merge and ownership state before any cleanup",
         "worktree_state_unavailable": "restore or inspect the worktree; do not infer abandonment",
     }[reason]
@@ -572,6 +770,7 @@ def build_janitor_plan(
     remote_policy: str = DEFAULT_REMOTE_POLICY,
     pr_states: dict[str, dict[str, Any]] | None = None,
     protected_branches: set[str] | None = None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     active_leases = active_leases or []
@@ -593,6 +792,7 @@ def build_janitor_plan(
             checked_out=checked_out,
             protected_branches=protected,
             pr_states=pr_states,
+            lifecycle_records=lifecycle_records,
             cwd=cwd,
         )
         if reason:
@@ -608,15 +808,48 @@ def build_janitor_plan(
         if not path:
             continue
         is_root = Path(path).resolve() == Path(current_worktree).resolve()
-        leased = f"worktree:{path}" in active_resources or _branch_has_active_lease(
-            branch, active_resources
-        )
+        leased = _worktree_path_has_active_lease(
+            path, active_resources
+        ) or _branch_has_active_lease(branch, active_resources)
         locked = "locked" in worktree
         # A missing worktree is an orphan (its metadata is pruned, not reclaimed)
         # — but the root is never missing, and active leases or locks still win
         # so we never touch protected work even if its checkout has gone.
-        if not is_root and not leased and not locked and not Path(path).exists():
-            orphaned_worktrees.append({"path": path, "branch": branch})
+        if not is_root and not Path(path).exists():
+            if locked:
+                reason = "locked_worktree"
+            elif leased:
+                reason = "active_lease"
+            else:
+                reason = _worktree_lifecycle_skip_reason(
+                    path,
+                    branch,
+                    lifecycle_records,
+                    now=now,
+                )
+            if reason is not None:
+                item = {
+                    "artifact": "worktree",
+                    "path": path,
+                    "branch": branch,
+                    "reason": reason,
+                }
+                skipped.append(item)
+                receipt = _preservation_receipt(item)
+                if receipt:
+                    preservation_receipts.append(receipt)
+            else:
+                orphaned_worktrees.append({"path": path, "branch": branch})
+                item = {
+                    "artifact": "worktree",
+                    "path": path,
+                    "branch": branch,
+                    "reason": "orphaned_worktree_report_only",
+                }
+                skipped.append(item)
+                receipt = _preservation_receipt(item)
+                if receipt:
+                    preservation_receipts.append(receipt)
             continue
         # Candidacy gates on merge state, not branch prefix.
         reason, merge_proof = _worktree_reclaim_reason(
@@ -628,6 +861,8 @@ def build_janitor_plan(
             pr_states=pr_states,
             cwd=cwd,
             locked=locked,
+            lifecycle_records=lifecycle_records,
+            now=now,
         )
         if reason:
             item = {"artifact": "worktree", "path": path, "branch": branch, "reason": reason}
@@ -637,7 +872,12 @@ def build_janitor_plan(
                 preservation_receipts.append(receipt)
             continue
         reclaimable_worktrees.append(
-            {"path": path, "branch": branch, "merge_proof": merge_proof}
+            {
+                "path": path,
+                "branch": branch,
+                "head": worktree.get("HEAD", ""),
+                "merge_proof": merge_proof,
+            }
         )
 
     remote_branches = []
@@ -650,6 +890,7 @@ def build_janitor_plan(
             checked_out=checked_out,
             protected_branches=protected,
             pr_states=pr_states,
+            lifecycle_records=lifecycle_records,
             cwd=cwd,
         )
         if reason:
@@ -708,6 +949,7 @@ def janitor_report(
     *,
     active_leases: list[dict[str, Any]] | None = None,
     stale_after_days: int = 14,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     active_leases = active_leases or []
@@ -716,6 +958,7 @@ def janitor_report(
         active_leases=active_leases,
         stale_after_days=stale_after_days,
         pr_states=None,
+        lifecycle_records=lifecycle_records,
         now=now,
     )
     plan["mode"] = "report-only"
@@ -733,6 +976,12 @@ def janitor_apply(
     stale_after_days: int = 14,
     remote_policy: str = DEFAULT_REMOTE_POLICY,
     pr_states: dict[str, dict[str, Any]] | None = None,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None = None,
+    active_lease_loader: Callable[[], list[dict[str, Any]]] | None = None,
+    lifecycle_authority_guard: Callable[
+        [list[dict[str, Any]]], AbstractContextManager[Callable[[], None]]
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -750,8 +999,47 @@ def janitor_apply(
                 }
             ],
         }
+    if active_lease_loader is None:
+        return {
+            "mode": "apply",
+            "ok": False,
+            "destructive_actions": [],
+            "errors": [
+                {
+                    "artifact": "lease_snapshot",
+                    "action": "reload_active_leases",
+                    "reason": "authoritative_lease_reload_required",
+                }
+            ],
+        }
+    if lifecycle_records is None:
+        return {
+            "mode": "apply",
+            "ok": False,
+            "destructive_actions": [],
+            "errors": [
+                {
+                    "artifact": "worktree",
+                    "action": "load_lifecycle_registry",
+                    "reason": "registered_lifecycle_guard_required",
+                }
+            ],
+        }
+    if lifecycle_authority_guard is None:
+        return {
+            "mode": "apply",
+            "ok": False,
+            "destructive_actions": [],
+            "errors": [
+                {
+                    "artifact": "worktree",
+                    "action": "revalidate_lifecycle_registry",
+                    "reason": "authoritative_lifecycle_revalidation_required",
+                }
+            ],
+        }
 
-    def apply_git(args: list[str], action: dict[str, Any]) -> None:
+    def apply_git(args: list[str], action: dict[str, Any]) -> bool:
         result = run_git_result(args, cwd)
         record = {**action, "command": ["git", *args], "returncode": result.returncode}
         if result.stdout.strip():
@@ -760,16 +1048,62 @@ def janitor_apply(
             record["stderr"] = result.stderr.strip()
         if result.returncode == 0:
             actions.append(record)
+            return True
         else:
             errors.append(record)
+            return False
 
     apply_git(["fetch", "--prune", "origin"], {"artifact": "remote", "action": "fetch_prune"})
+    if errors:
+        return {
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": errors,
+            "ok": False,
+        }
+
+    def reload_active_leases() -> tuple[list[dict[str, Any]], set[str]] | None:
+        try:
+            leases = active_lease_loader()
+            if not isinstance(leases, list) or any(
+                not isinstance(item, dict) for item in leases
+            ):
+                raise TypeError("active lease authority must be a list of objects")
+            for lease in leases:
+                resource_id = lease.get("resource_id")
+                expires_at = lease.get("expires_at")
+                if not isinstance(resource_id, str) or not resource_id.strip():
+                    raise ValueError("active lease resource identity is invalid")
+                if expires_at is not None and not _is_finite_timestamp(expires_at):
+                    raise ValueError("active lease expiry is invalid")
+            resources = _lease_resources(leases)
+        except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+            errors.append(
+                {
+                    "artifact": "lease_snapshot",
+                    "action": "reload_active_leases",
+                    "reason": "active_lease_authority_invalid",
+                }
+            )
+            return None
+        return leases, resources
+
+    initial_authority = reload_active_leases()
+    if initial_authority is None:
+        return {
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": errors,
+            "ok": False,
+        }
+    active_leases, _ = initial_authority
     plan = build_janitor_plan(
         cwd,
         active_leases=active_leases,
         stale_after_days=stale_after_days,
         remote_policy=remote_policy,
         pr_states=pr_states,
+        lifecycle_records=lifecycle_records,
     )
 
     preservation_receipts = plan.get("preservation_receipts", [])
@@ -789,14 +1123,134 @@ def janitor_apply(
             "ok": False,
         }
 
-    apply_git(["worktree", "prune"], {"artifact": "worktree", "action": "prune_metadata"})
+    def authority_changed_for(
+        *,
+        path: str | None = None,
+        branch: str | None = None,
+    ) -> bool:
+        """Fail closed unless BOTH identities are still free of an active lease.
+
+        The guarded paths are the explicit target path plus every worktree path a
+        lifecycle record binds to ``branch`` — including the tombstone of a path
+        this run has just removed. A `worktree:<path>` lease claimed after the
+        checkout disappeared therefore still blocks the branch deletion.
+        """
+        refreshed = reload_active_leases()
+        if refreshed is None:
+            return True
+        _, resources = refreshed
+        guarded_paths = _path_identities(path) | _lifecycle_worktree_paths_for_branch(
+            branch, lifecycle_records
+        )
+        conflicts = {
+            resource
+            for resource in resources
+            if (
+                resource.startswith("worktree:")
+                and _path_identities(resource.removeprefix("worktree:")) & guarded_paths
+            )
+            or (branch and resource == f"branch:{branch}")
+        }
+        if conflicts:
+            errors.append(
+                {
+                    "artifact": "worktree",
+                    "action": "preserve",
+                    "reason": "lease_authority_changed",
+                    "path": path,
+                    "branch": branch,
+                    "active_leases": sorted(conflicts),
+                }
+            )
+            return True
+        return False
+
+    def apply_with_lifecycle_authority(
+        args: list[str],
+        action: dict[str, Any],
+        targets: list[dict[str, Any]],
+    ) -> bool:
+        """Run one worktree-destructive command under fresh lifecycle authority."""
+
+        try:
+            with lifecycle_authority_guard(targets) as mark_succeeded:
+                if apply_git(args, action):
+                    mark_succeeded()
+        except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
+            errors.append(
+                {
+                    "artifact": "worktree",
+                    "action": "revalidate_lifecycle_registry",
+                    "reason": "lifecycle_authority_changed",
+                    "targets": targets,
+                }
+            )
+            return False
+        return True
+
     reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
+    cleanup_worktrees = [
+        *plan.get(
+            "orphaned_worktrees",
+            plan["candidates"].get("orphaned_worktrees", []),
+        ),
+        *reclaimable,
+    ]
+    for cleanup_worktree in cleanup_worktrees:
+        if authority_changed_for(
+            path=cleanup_worktree.get("path"),
+            branch=cleanup_worktree.get("branch"),
+        ):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
+
     for worktree in reclaimable:
+        if authority_changed_for(
+            path=worktree.get("path"),
+            branch=worktree.get("branch"),
+        ):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         remove_errors_before = len(errors)
         # Never --force / --ignore-locked: a worktree that turned dirty or locked
         # since planning must fail the remove and keep its branch intact.
-        apply_git(["worktree", "remove", worktree["path"]], {"artifact": "worktree", "action": "remove", **worktree})
+        if not apply_with_lifecycle_authority(
+            ["worktree", "remove", worktree["path"]],
+            {"artifact": "worktree", "action": "remove", **worktree},
+            [worktree],
+        ):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         if len(errors) == remove_errors_before:
+            # Revalidate the worktree path as well as the branch: the checkout is
+            # gone, but its path identity is exactly what a new owner leases, and
+            # the deletion below is irreversible for merged_pr/closed_pr proofs.
+            if authority_changed_for(
+                path=worktree.get("path"),
+                branch=worktree.get("branch"),
+            ):
+                return {
+                    **plan,
+                    "mode": "apply",
+                    "destructive_actions": actions,
+                    "errors": errors,
+                    "ok": False,
+                }
             # Squash/closed-PR-proven branches are not ancestors of origin/main,
             # so `git branch -d` refuses them and the branch would be skipped
             # forever. The merge_proof already establishes safe-to-delete, so use
@@ -809,11 +1263,35 @@ def janitor_apply(
             )
             apply_git(["branch", delete_flag, worktree["branch"]], {"artifact": "local_branch", "action": "delete_after_worktree_remove", "branch": worktree["branch"]})
     for branch in plan["candidates"]["local_branches"]:
+        if authority_changed_for(branch=branch.get("branch")):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         apply_git(["branch", "-d", branch["branch"]], {"artifact": "local_branch", "action": "delete", **branch})
     for remote in plan["candidates"]["remote_branches"]:
+        if authority_changed_for(branch=remote.get("branch")):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         apply_git(["push", "origin", "--delete", remote["branch"]], {"artifact": "remote_branch", "action": "delete", **remote})
     for remote in plan["candidates"]["remote_branches_requiring_rescue"]:
         branch = remote["branch"]
+        if authority_changed_for(branch=branch):
+            return {
+                **plan,
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
         rescue_ref = remote["rescue_ref"]
         source_ref = f"refs/heads/{branch}"
         protected_source_refs = {
@@ -872,6 +1350,14 @@ def janitor_apply(
             )
             rescue_verified = len(errors) == errors_before_verify
         if rescue_created and rescue_pushed and rescue_verified:
+            if authority_changed_for(branch=branch):
+                return {
+                    **plan,
+                    "mode": "apply",
+                    "destructive_actions": actions,
+                    "errors": errors,
+                    "ok": False,
+                }
             # The repository's direct-main pre-push guard is branch-based and
             # rejects every push made while main is checked out. This transport
             # bypass is deliberately confined to a validated archive ref and a
@@ -957,13 +1443,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.resolve_github_state:
         pr_states = load_pr_states_from_gh(cwd)
     if args.mode == "apply":
-        report = janitor_apply(
-            cwd,
-            active_leases=leases,
-            stale_after_days=args.stale_after_days,
-            remote_policy=args.remote_policy,
-            pr_states=pr_states,
+        _print_json(
+            {
+                "mode": "apply",
+                "ok": False,
+                "errors": [
+                    {
+                        "artifact": "worktree",
+                        "action": "cleanup",
+                        "reason": "registered_lifecycle_guard_required",
+                        "next_action": "use scripts/agent_worktree.py janitor --mode apply",
+                    }
+                ],
+            }
         )
+        return 1
     else:
         report = janitor_report(
             cwd,
