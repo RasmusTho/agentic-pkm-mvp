@@ -2165,10 +2165,19 @@ class PostgresBuilderOpsStore:
         claim: OutboxClaim,
         *,
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, Any],
         fault_at: str | None = None,
     ) -> OutboxReconciliation:
-        status = "succeeded" if observed_applied else "pending"
+        if terminal_unknown and observed_applied:
+            raise ValueError(
+                "terminal-unknown reconciliation cannot claim an applied effect"
+            )
+        status = (
+            "dead_letter"
+            if terminal_unknown
+            else ("succeeded" if observed_applied else "pending")
+        )
         request_hash = _hash(
             {
                 "repository": claim.repository,
@@ -2178,6 +2187,7 @@ class PostgresBuilderOpsStore:
                 "claim_receipt_sequence": claim.receipt_sequence,
                 "claim_lsn": claim.claim_lsn,
                 "observed_applied": observed_applied,
+                "terminal_unknown": terminal_unknown,
                 "evidence": dict(evidence),
             }
         )
@@ -2262,6 +2272,18 @@ class PostgresBuilderOpsStore:
                 if updated is None:
                     raise StaleFencingToken("unknown effect was already reconciled or superseded")
                 self._fault(fault_at, "after_reconciliation_state")
+                if terminal_unknown:
+                    conn.execute(
+                        "INSERT INTO builderops_dead_letters("
+                        "repository, operation_key, outcome, authority_envelope) "
+                        "VALUES (%s, %s, %s, %s)",
+                        (
+                            claim.repository,
+                            claim.operation_key,
+                            Jsonb(dict(evidence)),
+                            Jsonb(dict(outbox["authority_envelope"])),
+                        ),
+                    )
                 conn.execute(
                     "INSERT INTO builderops_outbox_reconciliations("
                     "repository, operation_key, claim_fencing_token, task_id, worker_id, "

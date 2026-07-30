@@ -87,7 +87,7 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
     assert replayed_ordinal == ordinal == 1
     assert len(api.attempt_rows[run.run_id]) == 1
     assert recovered["operation_key"] == operation_key
-    assert outbox.calls[-3:] == ["recover", "claim", "reconcile"]
+    assert outbox.calls[-2:] == ["recover", "reconcile"]
 
 
 class FailingIntentClient(FakeBuilderOpsClient):
@@ -95,6 +95,20 @@ class FailingIntentClient(FakeBuilderOpsClient):
         if values.get("outbox") is not None:
             raise RuntimeError("simulated pre-effect commit failure")
         return super().transition_task(**values)
+
+
+class CrashBeforeFirstTaskCompletionClient(FakeBuilderOpsClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.crash_before_completion = True
+
+    def complete_task(self, **values):
+        if self.crash_before_completion:
+            self.crash_before_completion = False
+            raise SystemExit(
+                "simulated crash after dead letter before task completion"
+            )
+        return super().complete_task(**values)
 
 
 class CrashAfterThreadStartLauncher(Launcher):
@@ -128,10 +142,18 @@ class CrashBeforeThreadStartLauncher(Launcher):
 
 
 class LostReconcileResponseOutbox(FakeVerificationOutbox):
-    def reconcile(self, claim, *, observed_applied: bool, evidence):
+    def reconcile(
+        self,
+        claim,
+        *,
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence,
+    ):
         super().reconcile(
             claim,
             observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown,
             evidence=evidence,
         )
         raise RuntimeError("simulated reconciliation response loss")
@@ -152,10 +174,18 @@ class CrashAfterDurableAttemptOutbox(FakeVerificationOutbox):
 
 
 class CrashAfterSucceededReconciliationOutbox(FakeVerificationOutbox):
-    def reconcile(self, claim, *, observed_applied: bool, evidence):
+    def reconcile(
+        self,
+        claim,
+        *,
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence,
+    ):
         super().reconcile(
             claim,
             observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown,
             evidence=evidence,
         )
         raise SystemExit(
@@ -338,8 +368,8 @@ def test_unknown_model_effect_restart_resumes_same_session_after_reconciliation(
     assert len(first_launcher.calls) == 1
 
 
-def test_pre_thread_start_crash_recovers_task_bound_model_effect() -> None:
-    api = FakeBuilderOpsClient()
+def test_pre_thread_start_crash_dead_letters_without_relaunch() -> None:
+    api = CrashBeforeFirstTaskCompletionClient()
     outbox = FakeVerificationOutbox(api)
     first_launcher = CrashBeforeThreadStartLauncher()
     first = VerificationConsumer(
@@ -376,13 +406,18 @@ def test_pre_thread_start_crash_recovers_task_bound_model_effect() -> None:
         restarted_launcher,
         holder="verification-host",
     )
-    recovered = restarted.recover(run_id)
+    with pytest.raises(SystemExit, match="before task completion"):
+        restarted.recover(run_id)
 
-    assert recovered.status == "running"
-    assert len(restarted_launcher.calls) == 1
-    assert restarted_launcher.calls[0][1] is None
+    assert restarted_launcher.calls == []
     assert list(outbox.states) == operation_keys
-    assert outbox.states[operation_keys[0]] == "succeeded"
+    assert outbox.states[operation_keys[0]] == "dead_letter"
+    assert outbox.evidence[operation_keys[0]] == {
+        "outcome": "indeterminate_pre_session_model_effect",
+        "head_sha": HEAD,
+        "provider_session_id": None,
+        "relaunch_performed": False,
+    }
     effect_intents = [
         values
         for name, values in api.calls
@@ -390,6 +425,26 @@ def test_pre_thread_start_crash_recovers_task_bound_model_effect() -> None:
         and isinstance(values.get("outbox"), dict)
     ]
     assert len(effect_intents) == 1
+
+    task = api.tasks[run_id]
+    assert task["state"] == "claimed"
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    final_launcher = VerifiedLauncher()
+    final = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        final_launcher,
+        holder="verification-host",
+    )
+    recovered = final.recover(run_id)
+
+    assert recovered.status == "failed"
+    assert final_launcher.calls == []
+    assert list(outbox.states) == operation_keys
 
 
 def test_recovery_reconciles_durable_model_attempt_without_relaunch() -> None:

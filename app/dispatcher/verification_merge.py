@@ -196,6 +196,7 @@ class OutboxExecutorAuthority(Protocol):
         claim: Mapping[str, object],
         *,
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, object],
     ) -> Mapping[str, object]: ...
 
@@ -276,12 +277,14 @@ class BuilderOpsOutboxExecutor:
         claim: Mapping[str, object],
         *,
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, object],
     ) -> Mapping[str, object]:
         return self.client.reconcile_outbox(
             envelope=self.envelope,
             claim=self._claim_identity(claim),
             observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown,
             evidence=evidence,
         )
 

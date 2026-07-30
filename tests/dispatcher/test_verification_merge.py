@@ -223,18 +223,37 @@ class Outbox:
         self.calls.append("unknown")
         self.state = "unknown"
 
-    def reconcile(self, claim, *, observed_applied: bool, evidence):
+    def reconcile(
+        self,
+        claim,
+        *,
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence,
+    ):
         self.calls.append("reconcile")
-        self.state = "succeeded" if observed_applied else "pending"
+        self.state = (
+            "dead_letter"
+            if terminal_unknown
+            else ("succeeded" if observed_applied else "pending")
+        )
         self.evidence = dict(evidence)
         return {"status": self.state}
 
 
 class CrashAfterReconcileOutbox(Outbox):
-    def reconcile(self, claim, *, observed_applied: bool, evidence):
+    def reconcile(
+        self,
+        claim,
+        *,
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence,
+    ):
         super().reconcile(
             claim,
             observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown,
             evidence=evidence,
         )
         raise SystemExit("simulated crash after durable reconciliation")

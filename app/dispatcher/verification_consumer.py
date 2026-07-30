@@ -5018,7 +5018,7 @@ class VerificationConsumer:
             and run is not None
             and pending.get("head_sha") == run.current_head_sha
             and pending.get("outbox_status")
-            in {"pending", "claimed", "unknown"}
+            in {"pending", "claimed", "unknown", "dead_letter"}
         )
         if (
             run is None
@@ -5077,6 +5077,71 @@ class VerificationConsumer:
                 and pending.get("head_sha") == run.current_head_sha
             ):
                 outbox_status = pending.get("outbox_status")
+                sessionless = (
+                    not run.coordinator_session_id
+                    or not run.context_pack
+                )
+                if (
+                    sessionless
+                    and outbox_status in {"claimed", "unknown"}
+                ):
+                    operation_key = str(pending["operation_key"])
+                    recover_effect(
+                        operation_key,
+                        run_id=run.run_id,
+                        effect_type="model.verification_coordinator",
+                    )
+                    terminalize_effect = getattr(
+                        self.ledger, "finish_effect", None
+                    )
+                    if not callable(terminalize_effect):
+                        raise RuntimeError(
+                            "verification effect reconciliation is unavailable"
+                        )
+                    terminalize_effect(
+                        operation_key,
+                        observed_applied=False,
+                        terminal_unknown=True,
+                        evidence={
+                            "outcome": (
+                                "indeterminate_pre_session_model_effect"
+                            ),
+                            "head_sha": run.current_head_sha,
+                            "provider_session_id": None,
+                            "relaunch_performed": False,
+                        },
+                    )
+                    return self.ledger.terminal(
+                        claimed.run_id,
+                        "failed",
+                        {
+                            "outcome": (
+                                "indeterminate_pre_session_model_effect"
+                            ),
+                            "reason": (
+                                "provider_session_identity_unavailable"
+                            ),
+                            "head_sha": run.current_head_sha,
+                        },
+                        reason="model_effect_identity_unavailable",
+                        holder=self.holder,
+                        lease_id=claimed.lease_id or "",
+                    )
+                if sessionless and outbox_status == "dead_letter":
+                    return self.ledger.terminal(
+                        claimed.run_id,
+                        "failed",
+                        {
+                            "outcome": (
+                                "indeterminate_pre_session_model_effect"
+                            ),
+                            "reason": "effect_already_dead_lettered",
+                            "head_sha": run.current_head_sha,
+                        },
+                        reason="model_effect_identity_unavailable",
+                        holder=self.holder,
+                        lease_id=claimed.lease_id or "",
+                    )
                 attempt_reader = getattr(self.ledger, "attempts", None)
                 attempts = (
                     attempt_reader(run.run_id)

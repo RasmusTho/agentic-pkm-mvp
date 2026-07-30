@@ -172,6 +172,7 @@ class FakeVerificationOutbox:
         self.calls: list[str] = []
         self.states: dict[str, str] = {}
         self.evidence: dict[str, dict[str, Any]] = {}
+        self.claims: dict[str, dict[str, Any]] = {}
 
     def claim(self, operation_key: str):
         self.calls.append("claim")
@@ -181,7 +182,7 @@ class FakeVerificationOutbox:
             for name, values in reversed(self.client.calls)
             if name == "transition_task" and values.get("outbox") is not None
         )
-        return {
+        claim = {
             "repository": effect_call["envelope"]["repository"],
             "operation_key": operation_key,
             "worker_id": "verification-host",
@@ -197,10 +198,15 @@ class FakeVerificationOutbox:
             "effect_type": effect_call["outbox"]["effect_type"],
             "payload": effect_call["outbox"]["payload"],
         }
+        self.claims[operation_key] = claim
+        return dict(claim)
 
     def recover(self, operation_key: str):
         self.calls.append("recover")
-        return self.claim(operation_key)
+        claim = self.claims[operation_key]
+        if self.states.get(operation_key) == "claimed":
+            self.states[operation_key] = "unknown"
+        return dict(claim)
 
     def status(self, operation_key: str):
         self.calls.append("status")
@@ -216,9 +222,20 @@ class FakeVerificationOutbox:
         self.calls.append("unknown")
         self.states[claim["operation_key"]] = "unknown"
 
-    def reconcile(self, claim, *, observed_applied: bool, evidence):
+    def reconcile(
+        self,
+        claim,
+        *,
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence,
+    ):
         self.calls.append("reconcile")
-        status = "succeeded" if observed_applied else "pending"
+        status = (
+            "dead_letter"
+            if terminal_unknown
+            else ("succeeded" if observed_applied else "pending")
+        )
         self.states[claim["operation_key"]] = status
         self.evidence[claim["operation_key"]] = dict(evidence)
         return {"status": status}

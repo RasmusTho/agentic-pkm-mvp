@@ -562,6 +562,7 @@ class BuilderOpsControlPlaneClient:
         envelope: Mapping[str, Any],
         claim: Mapping[str, Any],
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, Any],
     ) -> dict[str, Any]:
         return self._request(
@@ -571,6 +572,7 @@ class BuilderOpsControlPlaneClient:
                 "envelope": dict(envelope),
                 "claim": dict(claim),
                 "observed_applied": observed_applied,
+                "terminal_unknown": terminal_unknown,
                 "evidence": dict(evidence),
             },
         )

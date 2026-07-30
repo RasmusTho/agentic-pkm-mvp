@@ -1120,6 +1120,7 @@ def create_app(
                 store.reconcile_outbox,
                 claim,
                 observed_applied=request.observed_applied,
+                terminal_unknown=request.terminal_unknown,
                 evidence=request.evidence,
             )
         except Exception as exc:

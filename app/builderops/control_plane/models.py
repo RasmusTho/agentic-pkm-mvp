@@ -365,6 +365,7 @@ class StorePort(Protocol):
         claim: OutboxClaim,
         *,
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, Any],
         fault_at: str | None = None,
     ) -> OutboxReconciliation: ...

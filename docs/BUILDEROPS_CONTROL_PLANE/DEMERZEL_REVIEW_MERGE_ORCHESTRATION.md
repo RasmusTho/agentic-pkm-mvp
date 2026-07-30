@@ -54,6 +54,9 @@ host credential mapping, binds a GitHub-enforced authorization fence over protec
 manifest blob/hash + PR head OID + `RepoRef` + credential generation, and submits the task-bound
 merge intent through the repo's conditional or merge-queue path. The outbox executor reconciles
 GitHub (including process-loss recovery) and commits a readback receipt before completion.
+For model execution, a sessionless `pending` intent may be claimed once; a `claimed` or `unknown`
+intent without a durable provider session identity is indeterminate, is reconciled to
+`dead_letter`, and never launches a replacement coordinator.
 
 ## Why This Matters
 
@@ -105,8 +108,10 @@ weaken them and does not enter Product Runtime.
   exclusively through BuilderOps API state, with no dispatcher SQLite ledger.
   Verify: `tests/dispatcher/test_verification_consumer.py::test_consumer_uses_builderops_api_for_durable_state`.
 - [x] Restart after reviewer/repair success does not repeat a committed attempt and resumes unknown
-  external effects through reconciliation.
+  external effects through reconciliation. A pre-session indeterminate model effect fails closed
+  to a durable dead letter without a second launcher invocation.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_restart_resumes_from_api_receipts_without_duplicate_attempt`.
+  Verify: `tests/dispatcher/test_verification_recovery.py::test_pre_thread_start_crash_dead_letters_without_relaunch`.
 - [x] External-effect eligibility is the locally committed fenced pre-effect attempt (ADR-0062 A1):
   an uncommitted attempt performs no GitHub/model call, and a crash between claim and attempt-commit
   leaves the external system untouched.

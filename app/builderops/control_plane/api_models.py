@@ -158,6 +158,7 @@ class OutboxReconcileRequest(BaseModel):
     envelope: AuthorityEnvelopeInput
     claim: OutboxClaimInput
     observed_applied: bool
+    terminal_unknown: bool = False
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 

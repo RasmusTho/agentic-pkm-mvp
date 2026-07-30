@@ -66,6 +66,7 @@ class VerificationEffectOutbox(Protocol):
         claim: Mapping[str, object],
         *,
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, object],
     ) -> Mapping[str, object]: ...
 
@@ -1626,6 +1627,7 @@ class BuilderOpsVerificationLedger:
         operation_key: str,
         *,
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, object],
     ) -> None:
         if self.effect_outbox is None:
@@ -1654,6 +1656,7 @@ class BuilderOpsVerificationLedger:
             self.effect_outbox.reconcile(
                 claim,
                 observed_applied=observed_applied,
+                terminal_unknown=terminal_unknown,
                 evidence=evidence,
             )
         except Exception:

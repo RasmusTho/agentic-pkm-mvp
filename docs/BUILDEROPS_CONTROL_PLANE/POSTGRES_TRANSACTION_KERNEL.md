@@ -69,7 +69,9 @@ by BuilderOps governance and remains outside Product persistence authority.
 
 - No Product database tables or Product Alembic lineage own this schema.
 - GitHub effects do not run inside the transaction; only durable outbox intent does.
-- A timed-out external call stays `unknown` until reconciled.
+- A timed-out external call stays `unknown` until reconciled. When authoritative readback cannot
+  establish whether an effect occurred, reconciliation terminates it as `dead_letter`; it must not
+  become retryable merely because the worker lease expired.
 - Stale fencing tokens cannot mutate after lease expiry/reassignment.
 - File projections/artifacts cannot be the sole terminal-state or receipt authority.
 - A transaction result binds its committed receipt sequence and recovery LSN for observability and
@@ -100,6 +102,9 @@ by BuilderOps governance and remains outside Product persistence authority.
 - [x] Outbox claims are crash-recoverable and a timed-out external effect enters reconciliation
   rather than immediate replay or terminal success.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_unknown_external_effect_requires_readback_before_retry`.
+- [x] An indeterminate effect without a provider identity becomes one durable `dead_letter`
+  reconciliation and cannot be reclaimed or replayed.
+  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_indeterminate_effect_dead_letters_without_retry`.
 - [x] Production construction requires a PostgreSQL DSN and never selects/creates SQLite implicitly;
   the SQLite adapter is available only through explicit test/migration injection.
   Verify: `tests/builderops/control_plane/test_store_selection.py::test_production_store_fails_closed_without_postgres`.

@@ -301,6 +301,44 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
     )
     assert control_plane_store.outbox_status(REPO, dry_run_key) == "succeeded"
 
+    indeterminate_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="model.verification_coordinator",
+        payload={
+            "repository": REPO.lower(),
+            "pr_number": 3603,
+            "head_sha": "a" * 40,
+        },
+        holder="executor:demerzel-verifier",
+        lease_id=claimed.lease_id,
+        idempotency_key="api-roundtrip-indeterminate-model-effect",
+    )
+    restarted = BuilderOpsVerificationLedger(
+        client,
+        repository=REPO,
+        effect_outbox=outbox,
+    )
+    restarted.recover_effect(
+        indeterminate_key,
+        run_id=run.run_id,
+        effect_type="model.verification_coordinator",
+    )
+    restarted.finish_effect(
+        indeterminate_key,
+        observed_applied=False,
+        terminal_unknown=True,
+        evidence={
+            "outcome": "indeterminate_pre_session_model_effect",
+            "provider_session_id": None,
+            "relaunch_performed": False,
+        },
+    )
+
+    assert (
+        control_plane_store.outbox_status(REPO, indeterminate_key)
+        == "dead_letter"
+    )
+
     operation_key = ledger.begin_effect(
         run.run_id,
         effect_type="github.merge",

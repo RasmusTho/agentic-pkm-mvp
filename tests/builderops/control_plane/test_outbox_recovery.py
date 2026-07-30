@@ -140,6 +140,75 @@ def test_unknown_external_effect_requires_readback_before_retry(
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "succeeded"
 
 
+def test_indeterminate_effect_dead_letters_without_retry(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="task-indeterminate-model-effect",
+        key="indeterminate-model-effect",
+        effect_type="model.verification_coordinator",
+        payload={"head_sha": "a" * 40},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="provider session identity was not durably observed"
+    )
+    evidence = {
+        "outcome": "indeterminate_pre_session_model_effect",
+        "provider_session_id": None,
+        "relaunch_performed": False,
+    }
+
+    terminal = control_plane_store.reconcile_outbox(
+        claim,
+        observed_applied=False,
+        terminal_unknown=True,
+        evidence=evidence,
+    )
+    replay = control_plane_store.reconcile_outbox(
+        claim,
+        observed_applied=False,
+        terminal_unknown=True,
+        evidence=evidence,
+    )
+
+    assert terminal.status == "dead_letter"
+    assert replay.status == "dead_letter"
+    assert replay.replayed is True
+    receipt = control_plane_store.receipt(
+        envelope.repository, terminal.receipt_sequence
+    )
+    assert receipt["event_type"] == "outbox.reconciled.dead_letter"
+    assert receipt["recovery_lsn"] == terminal.recovery_lsn
+    with control_plane_store._connect() as conn:
+        dead_letter = conn.execute(
+            "SELECT outcome FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letter is not None
+    assert dead_letter["outcome"] == evidence
+    with pytest.raises(LeaseUnavailable, match="dead_letter"):
+        control_plane_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="replacement-verifier",
+        )
+    with pytest.raises(ValueError, match="cannot claim an applied effect"):
+        control_plane_store.reconcile_outbox(
+            claim,
+            observed_applied=True,
+            terminal_unknown=True,
+            evidence=evidence,
+        )
+
+
 @pytest.mark.parametrize(
     "fault_at",
     [
