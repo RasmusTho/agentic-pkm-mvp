@@ -120,5 +120,18 @@ runtime_channels:
     prod:
       - {role: fable, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output, system_prompt_channel]}
       - {role: gpt_codex, capability_tier: frontier, provider: openai, model: gpt-5.6-sol, credential_identifier: openai.api-key, resolution_group: model-inquiry-independent-review, requires: [structured_output]}
+  design_agent_profiles:
+    dev:
+      - {design_agent_id: claude-design-via-claude-code, role: design.claude, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, requires: [structured_output, system_prompt_channel]}
+      - {design_agent_id: codex, role: design.codex, capability_tier: frontier, provider: openai, model: gpt-5.6-sol, credential_identifier: openai.api-key, requires: [structured_output, system_prompt_channel]}
+      - {design_agent_id: fable, role: design.fable, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, requires: [structured_output, system_prompt_channel]}
+    test:
+      - {design_agent_id: claude-design-via-claude-code, role: design.claude, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, requires: [structured_output, system_prompt_channel]}
+      - {design_agent_id: codex, role: design.codex, capability_tier: frontier, provider: openai, model: gpt-5.6-sol, credential_identifier: openai.api-key, requires: [structured_output, system_prompt_channel]}
+      - {design_agent_id: fable, role: design.fable, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, requires: [structured_output, system_prompt_channel]}
+    prod:
+      - {design_agent_id: claude-design-via-claude-code, role: design.claude, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, requires: [structured_output, system_prompt_channel]}
+      - {design_agent_id: codex, role: design.codex, capability_tier: frontier, provider: openai, model: gpt-5.6-sol, credential_identifier: openai.api-key, requires: [structured_output, system_prompt_channel]}
+      - {design_agent_id: fable, role: design.fable, capability_tier: frontier, provider: anthropic, model: claude-fable-5, credential_identifier: anthropic.api-key, requires: [structured_output, system_prompt_channel]}
   resolution_groups:
     - {id: model-inquiry-independent-review, independence: distinct_effective_target}

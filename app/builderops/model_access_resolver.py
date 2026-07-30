@@ -20,6 +20,7 @@ from pathlib import Path
 
 from app.builderops.models import BuilderOpsValidationError
 from app.components.settings.providers_loader import (
+    DesignAgentProfile,
     ProviderCensus,
     ProviderEntry,
     RoleProfile,
@@ -47,6 +48,7 @@ BUILDER_RUNTIME = "builder"
 CKM_SEMANTIC_CONSUMER = "builderops-ckm-semantic"
 CKM_SEMANTIC_RESOLUTION_GROUP = "ckm-semantic-association"
 CKM_SEMANTIC_ROLE = "ckm_semantic"
+DESIGN_AGENT_CONSUMER = "builderops-design-run"
 MODEL_INQUIRY_CONSUMER = "builderops-model-inquiry"
 MODEL_INQUIRY_RESOLUTION_GROUP = "model-inquiry-independent-review"
 NON_PROVIDER_IDENTITIES = frozenset({"mock", "fake", "deterministic", "test"})
@@ -69,6 +71,11 @@ _CKM_REASONING_EFFORT = "low"
 _CKM_DETERMINISM_REQUIRED = False
 _CKM_OUTPUT_SCHEMA_REF = "builderops.ckm.semantic-association.v1"
 _CKM_SIDE_EFFECT_CLASS = "derived_candidate_evidence"
+_DESIGN_REASONING_EFFORT = "high"
+_DESIGN_DETERMINISM_REQUIRED = False
+_DESIGN_OUTPUT_SCHEMA_REF = "builderops.design-agent-turn.v1"
+_DESIGN_SIDE_EFFECT_CLASS = "builder_design_material"
+_DESIGN_RESOLUTION_GROUP_PREFIX = "design-run:"
 
 
 class ModelAccessResolutionError(BuilderOpsValidationError):
@@ -85,7 +92,7 @@ class DeclaredCredentialUnavailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class BuilderModelAccessResolver:
-    """Builder runtime resolver for declared Model Inquiry and CKM consumers."""
+    """Builder resolver for declared Model Inquiry, CKM, and design consumers."""
 
     census: ProviderCensus
     contract: HostSecretContract
@@ -150,6 +157,13 @@ class BuilderModelAccessResolver:
         request_tuple = tuple(requests)
         if not request_tuple:
             raise ModelAccessResolutionError("resolution group must contain at least one request")
+        if consumer == DESIGN_AGENT_CONSUMER:
+            return self._resolve_design_group(
+                request_tuple,
+                runtime=runtime,
+                channel=channel,
+                consumer=consumer,
+            )
         self._require_builder_authority(runtime=runtime, consumer=consumer)
         profiles = self._channel_profiles(channel)
         resolutions = tuple(
@@ -166,6 +180,146 @@ class BuilderModelAccessResolver:
                 "resolved group requires distinct adapter_id values"
             )
         return validated
+
+    def _resolve_design_group(
+        self,
+        requests: tuple[ModelResolutionRequest, ...],
+        *,
+        runtime: str,
+        channel: str,
+        consumer: str,
+    ) -> tuple[ResolvedModelAccess, ...]:
+        """Resolve domain design roles without choosing a provider in the caller."""
+
+        if runtime != BUILDER_RUNTIME:
+            raise ModelAccessResolutionError(
+                "Builder resolver refuses a non-Builder runtime request"
+            )
+        profiles = self._design_profiles(channel)
+        resolutions = tuple(
+            self._resolve_design_request(
+                request,
+                profiles=profiles,
+            )
+            for request in requests
+        )
+        try:
+            validated = validate_resolved_group(requests, resolutions)
+        except ValueError as exc:
+            raise ModelAccessResolutionError(str(exc)) from exc
+        return validated
+
+    def _design_profiles(self, channel: str) -> dict[str, DesignAgentProfile]:
+        profiles = self.census.runtime_channels.design_agent_profiles.get(channel)
+        if not profiles:
+            raise ModelAccessResolutionError(
+                "declared census has no design-agent profiles for the requested channel"
+            )
+        by_role: dict[str, DesignAgentProfile] = {}
+        for profile in profiles:
+            if profile.role in by_role:
+                raise ModelAccessResolutionError(
+                    "declared census repeats a design-agent role profile"
+                )
+            by_role[profile.role] = profile
+        return by_role
+
+    def _resolve_design_request(
+        self,
+        request: ModelResolutionRequest,
+        *,
+        profiles: Mapping[str, DesignAgentProfile],
+    ) -> ResolvedModelAccess:
+        profile = profiles.get(request.role_profile)
+        if profile is None:
+            raise ModelAccessResolutionError(
+                f"declared census has no profile for role: {request.role_profile}"
+            )
+        intent = request.intent
+        if intent.fallback_requirement != "fallback_forbidden":
+            raise ModelAccessResolutionError(
+                "Builder design-agent policy requires fallback_forbidden"
+            )
+        if intent.capability_tier != profile.capability_tier:
+            raise ModelAccessResolutionError(
+                "design-agent capability tier does not match the declared profile"
+            )
+        if intent.reasoning_effort != _DESIGN_REASONING_EFFORT:
+            raise ModelAccessResolutionError(
+                "Builder design-agent policy requires high reasoning effort"
+            )
+        if intent.determinism_required is not _DESIGN_DETERMINISM_REQUIRED:
+            raise ModelAccessResolutionError(
+                "Builder design-agent policy refuses deterministic execution"
+            )
+        if intent.output_schema_ref != _DESIGN_OUTPUT_SCHEMA_REF:
+            raise ModelAccessResolutionError(
+                "Builder design-agent policy requires the declared response schema"
+            )
+        if intent.side_effect_class != _DESIGN_SIDE_EFFECT_CLASS:
+            raise ModelAccessResolutionError(
+                "Builder design-agent policy permits Builder design material only"
+            )
+        if not request.resolution_group_id.startswith(
+            _DESIGN_RESOLUTION_GROUP_PREFIX
+        ) or not request.resolution_group_id.removeprefix(
+            _DESIGN_RESOLUTION_GROUP_PREFIX
+        ):
+            raise ModelAccessResolutionError(
+                "Builder design-agent policy requires a run-bound resolution group"
+            )
+        provider = self._provider(profile.provider)
+        if provider.id.lower() in NON_PROVIDER_IDENTITIES or provider.tier == "test":
+            raise ModelAccessResolutionError(
+                "Builder design-agent policy refuses a mock identity"
+            )
+        model = next(
+            (item for item in provider.models if item.id == profile.model),
+            None,
+        )
+        if model is None:
+            raise ModelAccessResolutionError(
+                "declared design-agent profile references an undeclared model"
+            )
+        capabilities = self._capabilities(provider, model.capabilities)
+        missing = sorted(
+            capability
+            for capability in profile.requires
+            if not getattr(capabilities, capability)
+        )
+        if missing:
+            raise ModelAccessResolutionError(
+                "declared design-agent target lacks capabilities: "
+                + ", ".join(missing)
+            )
+        credential = self._design_credential_identity(
+            profile,
+            provider,
+        )
+        try:
+            return ResolvedModelAccess(
+                request=request,
+                provider=provider.id,
+                model=model.id,
+                adapter_id=f"{provider.id}-{model.id}",
+                effective_identity=model.effective_identity,
+                capabilities=capabilities,
+                credential_identity_ref=credential,
+            )
+        except ValueError as exc:
+            raise ModelAccessResolutionError(str(exc)) from exc
+
+    def _design_credential_identity(
+        self,
+        profile: DesignAgentProfile,
+        provider: ProviderEntry,
+    ) -> str:
+        credential = profile.credential_identifier
+        if credential not in provider.credential_identifiers:
+            raise ModelAccessResolutionError(
+                "declared design-agent profile uses an undeclared provider credential"
+            )
+        return credential
 
     def _resolve_ckm_semantic(
         self,
@@ -526,6 +680,7 @@ __all__ = [
     "CKM_SEMANTIC_CONSUMER",
     "CKM_SEMANTIC_RESOLUTION_GROUP",
     "CKM_SEMANTIC_ROLE",
+    "DESIGN_AGENT_CONSUMER",
     "MODEL_INQUIRY_CONSUMER",
     "MODEL_INQUIRY_RESOLUTION_GROUP",
     "BuilderModelAccessResolver",
