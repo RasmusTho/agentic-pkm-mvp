@@ -140,6 +140,12 @@ ALLOW_FILES = (
     # direct DSN connection, and fail-loud schema preflight; no ORM layer to
     # route through.
     'app/heimdal/media_receipts.py',
+    # Meeting session/segment ledger (CDLM-02, #4385). Same bounded pattern as
+    # the media-receipt store above: dedicated migration-owned tables
+    # (heimdal_meeting_session/_segment/_segment_conflict) with a
+    # self-contained dual sqlite/pg backend, direct DSN connection, and
+    # fail-loud schema preflight; no ORM layer to route through.
+    'app/heimdal/meeting_ledger.py',
     # YouTube Source Sync durable source registry (YSS-01, #3916). Same bounded
     # pattern as app/heimdal/cursor_store.py above: a dedicated table
     # (acquisition_source_registry) with a self-contained dual memory/pg

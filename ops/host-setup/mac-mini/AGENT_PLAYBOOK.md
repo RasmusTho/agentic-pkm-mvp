@@ -48,11 +48,20 @@ Work top to bottom; stop and report if a step fails.
 
 ## BuilderOps Model Inquiry host entrypoints
 
-The Model Inquiry host owns the fixed `yggdrasil-model-inquiry` launcher plus
-two stable headless role commands: `fable-model-inquiry-role` and
-`codex-model-inquiry-role`. They resolve declared credentials through the host
-secret contract and require no interactive subscription session. Install all
-three as durable, owner-only wrappers bound to the current repository checkout:
+Under ADR-0064's 2026-07-30 owner-cost ruling, current host-local Builder model
+inquiry uses the existing subscription-backed GUI-session bridge as its
+sanctioned operational auth. Metered provider API keys are intentionally
+unprovisioned. This Model Inquiry-only subscription path is never a CKM
+credential source or fallback.
+
+The repository also owns the distinct dormant provider-API launcher
+`yggdrasil-model-inquiry-provider-api` plus two stable provider-API role commands:
+`fable-model-inquiry-role` and `codex-model-inquiry-role`. They preserve the
+declared-credential mechanism for any future metered path, but they are not the
+current operational auth and do not replace or retire the sanctioned
+subscription bridge or its `yggdrasil-model-inquiry` launcher. Install or verify
+these owner-only wrappers only to validate that versioned mechanism against the
+current repository checkout:
 
 ```bash
 repo_root="$(git rev-parse --show-toplevel)"
@@ -62,10 +71,12 @@ python3 "$repo_root/scripts/install_model_inquiry_host.py" install \
   --python "$repo_root/.venv/bin/python3"
 ```
 
-The operation is idempotent. An exact rerun reports the launcher and both role
-entrypoints as `unchanged`; an unrelated existing file, stale subscription
-launcher, symlinked bin directory, or unsafe permissions fails closed and must
-be inspected rather than overwritten.
+The operation is idempotent. An exact rerun reports the provider-API launcher and both role
+entrypoints as `unchanged`; an unrelated existing file, subscription command
+occupying one of these provider-API wrapper names, symlinked bin directory, or
+unsafe permissions fails closed and must be inspected rather than overwritten.
+The installer does not inspect, overwrite, or declare stale the separately
+sanctioned subscription launcher or bridge.
 If an I/O failure interrupts the two-role install, an exact first wrapper may
 remain while the second is absent. Do not delete it as rollback: rerun the same
 command, which validates the retained wrapper and converges the missing role.
@@ -73,7 +84,8 @@ Any reported temporary-file cleanup failure remains an install failure and
 requires inspection of owner-only `.<entrypoint>.*.tmp` files in the bin
 directory.
 
-Before advertising the launcher as healthy, run the sanitized, read-only check:
+Before treating the provider-API wrappers as matching the selected checkout,
+run the sanitized, read-only check:
 
 ```bash
 python3 "$repo_root/scripts/install_model_inquiry_host.py" check \
@@ -84,7 +96,8 @@ python3 "$repo_root/scripts/install_model_inquiry_host.py" check \
 
 The check succeeds only when all three wrappers match the selected checkout and
 interpreter and the current `PATH` resolves all three names to those exact
-files. Discoverability alone is not sufficient for `yggdrasil-model-inquiry`;
+files. Discoverability alone is not sufficient for
+`yggdrasil-model-inquiry-provider-api`;
 its exact repo-owned declared-credential lineage/content must match. It probes
 no provider CLI, does not invoke a provider, and does not inspect
 authentication.
@@ -94,7 +107,8 @@ it.** Both providers' subscription CLI logins are present in this host's login
 keychain (verified 2026-07-30) and are the sanctioned operational auth for
 host-local Builder model inquiry per the owner cost ruling in
 `docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner
-cost ruling on the model-inquiry path`. Before concluding anything about
+cost ruling on the model-inquiry path`. This exception is confined to Model
+Inquiry and must never be offered to CKM. Before concluding anything about
 provider access, verify it empirically — existence checks only, never print or
 copy secret values:
 

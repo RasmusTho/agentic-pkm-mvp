@@ -21,15 +21,15 @@ from typing import Sequence
 SCHEMA_INSTALL = "builderops.model-inquiry-host-install.v1"
 SCHEMA_CHECK = "builderops.model-inquiry-host-check.v1"
 TRUSTED_REPO_ROOT = Path(__file__).resolve().parents[1]
-# The installed fixed launcher and headless role entrypoints bind to the
-# declared-credential provider-API path. The interactive subscription adapter
-# is deliberately not installable from here: no headless entrypoint may depend
-# on an interactive subscription session (ADR-0064 §4).
+# The installed fixed launcher and headless role entrypoints bind only to the
+# dormant declared-credential provider-API path. The sanctioned host-local
+# subscription launcher is deliberately outside this installer and retains the
+# distinct ``yggdrasil-model-inquiry`` identity under ADR-0064's owner ruling.
 VERSIONED_ADAPTER_NAME = "model_inquiry_role_adapter.py"
 VERSIONED_ADAPTER_SHA256 = "51510b1e8095f322ec410cf073bdb534b5e8a690e18cfa34c82eff91222aae77"
 VERSIONED_LAUNCHER_NAME = "start_model_inquiry.py"
 VERSIONED_LAUNCHER_SHA256 = "ff70bd2aea2f5a5ac79ce9831c12cc095be18973547a2688f610db1af0f8c3b4"
-FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry"
+FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry-provider-api"
 CREDENTIAL_RESOLUTION = "host-secret-contract"
 LAUNCHER_LINEAGE = "repo-owned-declared-credential"
 

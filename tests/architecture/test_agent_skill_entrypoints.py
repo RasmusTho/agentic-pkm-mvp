@@ -258,16 +258,17 @@ def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed() -> N
         '/usr/bin/install -m 0600 "$QUESTION_FILE" /tmp/model-inquiry-question.md',
         "*** Delete File: <absolute QUESTION_FILE>",
         "Do not use `rm`, `unlink`, a glob, or a shell cleanup wrapper for this local temporary file.",
+        "sanctioned host-local subscription launcher",
         "non-empty stdout whose entire contents parse as exactly one JSON object",
         "with non-empty string values for `inquiry_id`, `final_state`, `terminal_receipt_id`, and",
-        "exactly the top-level fields `schema`, `inquiry_id`, `final_state`, `terminal_receipt_id`,",
-        "`adapter_id` must match `[A-Za-z0-9][A-Za-z0-9_.-]*`",
-        "`credential_identity_ref` must match `[a-z][a-z0-9]{0,15}\\.[a-z][a-z0-9-]{0,15}`",
+        "Any nonzero status",
+        "does not satisfy the withdrawn `model_access_substrate.provider_enabled_noninteractive_inquiry.v1`",
         "| Failure after lock acquisition but before step 5 starts | Run the fixed remote release command below; report the original failure and any cleanup failure. | Run the fixed proven-local release procedure below; report the original failure and any cleanup failure. |",
-        "| Valid terminal response, including typed exit-1 `credential_unavailable` | Preserve the response, then run the fixed remote release command. | Preserve the response, then run the fixed proven-local release procedure. |",
+        "| Valid exit-zero terminal response | Preserve the response, then run the fixed remote release command. | Preserve the response, then run the fixed proven-local release procedure. |",
         "| Ambiguous launcher outcome after step 5 starts | Preserve the remote staging file and lock. | Preserve the local staging file and lock. |",
         "a cleanup failure must not replace or reclassify the captured launcher outcome.",
-        "The proven-local route may invoke only the fixed declared-credential host launcher.",
+        "The proven-local route may invoke only the fixed sanctioned host-local subscription launcher.",
+        "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`",
     ):
         assert local_contract in normalized_skill
 
@@ -281,3 +282,29 @@ def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed() -> N
         "/bin/rm -f /tmp/model-inquiry-question.md",
     ):
         assert forbidden_bypass not in skill
+
+
+def test_model_inquiry_subscription_route_is_distinct_from_provider_api_mechanism() -> None:
+    codex_skill = _read(".codex/skills/start-model-inquiry/SKILL.md")
+    claude_skill = _read("claude-skills/start-model-inquiry/SKILL.md")
+    installer = _read("scripts/install_model_inquiry_host.py")
+
+    for skill in (codex_skill, claude_skill):
+        assert "sanctioned host-local subscription launcher" in skill
+        assert "$HOME/.local/bin/yggdrasil-model-inquiry --question-file" in skill
+        assert (
+            "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`"
+            in skill
+        )
+        assert "treat every nonzero" in skill.lower()
+
+    assert 'FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry-provider-api"' in installer
+    assert 'FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry"' not in installer
+
+    withdrawn_gate = "model_access_substrate.provider_enabled_noninteractive_inquiry.v1"
+    for doc_path in (
+        "docs/CKM_DESIGN_AGENT_INTEGRATION/README.md",
+        "docs/CKM_DESIGN_AGENT_INTEGRATION/PARENT_FEATURE_ISSUE.md",
+        "docs/CKM_DESIGN_AGENT_INTEGRATION/REGISTER_DESIGN_AGENT_ADAPTERS.md",
+    ):
+        assert withdrawn_gate not in _read(doc_path)

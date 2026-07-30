@@ -1,4 +1,4 @@
-State: Accepted (owner decision, 2026-07-27); amended 2026-07-27 (§8: CKM sequencing restated after the ADR-0057 A1 orchestration ruling — the migration order does not swap, CKM stays at step 5); amended 2026-07-30 (§4: owner cost ruling — metered provider API keys are not provisioned; the subscription-backed session remains the sanctioned operational auth for host-local Builder model inquiry, see `Amendment 2026-07-30` under §4). Establishes credential and session resolution as part of the model abstraction and selects declared API keys as the default programmatic auth path. Changes no shipped runtime behavior by itself.
+State: Accepted (owner decision, 2026-07-27); amended 2026-07-27 (§8: CKM sequencing restated after the ADR-0057 A1 orchestration ruling — the migration order does not swap, CKM stays at step 5); amended 2026-07-30 (§4: owner cost ruling — metered provider API keys are not provisioned; the subscription-backed session remains the sanctioned operational auth for host-local Builder model inquiry, see `Amendment 2026-07-30` under §4); delivery writeback 2026-07-30 (§8: MAS-06 delivered the Builder-owned CKM boundary in PR #4419 / issue #4292 without active provider-backed inference). Establishes credential and session resolution as part of the model abstraction and selects declared API keys as the default programmatic auth path. Changes no shipped runtime behavior by itself.
 Doc role: Decision record (ADR)
 Authority: Authoritative for model-provider credential and session resolution, the default programmatic auth path, and the single-source provider set. Extends `docs/adr/ADR-0063-shared-llm-contract-kernel.md`, which remains authoritative for the Product/Builder contract seam and the fallback vocabulary. ADR-0062 remains authoritative for Builder process/data/credential separation. `docs/LLM_ROUTING.md` remains authoritative for current Product routing.
 Owner: Architecture spine / LLM boundary
@@ -46,10 +46,10 @@ provider's bug:
 
 The owner separately stated that development of the whole system should be orchestrated from the CKM
 (ruled in ADR-0057 A1, 2026-07-27: the acting party is a builder agent reading the map; the CKM has no
-agency of its own). CKM's only
-model path today resolves through the **Product** router (`app/builderops/ckm/semantic.py:32,116-136`)
-and rejects a mock route only after Product routing may already have constructed policy-defined
-fallback candidates.
+agency of its own). At acceptance, CKM's only model path resolved through the **Product** router
+(`app/builderops/ckm/semantic.py` before MAS-06) and rejected a mock route only after Product routing
+could already have constructed policy-defined fallback candidates. MAS-06 later removed that
+historical transition path; §8 records the delivery writeback.
 
 ## Decision
 
@@ -121,9 +121,11 @@ is rejected. Consequences:
   the owner as one. Agents verify provider access on the inquiry host empirically instead of asking
   (`ops/host-setup/mac-mini/AGENT_PLAYBOOK.md :: BuilderOps Model Inquiry host entrypoints`).
 - The parent-acceptance receipts `model_access_substrate.provider_enabled_noninteractive_inquiry.v1`
-  and `model_access_substrate.legacy_bridge_retirement.v1` are withdrawn as gates; MAS-06's entry
-  gate re-scopes with them. Hardening the existing GUI-session bridge, or building the
-  brokered-session backend this ADR already permits, is follow-up scoping — not authorized here.
+  and `model_access_substrate.legacy_bridge_retirement.v1` are withdrawn as gates. MAS-06 proceeded
+  under the delivered MAS-05 mechanism plus this ruling and was delivered by PR #4419 for issue
+  #4292. CKM does not inherit or reuse Model Inquiry's subscription-session exception. Hardening the
+  existing GUI-session bridge, or building the brokered-session backend this ADR already permits,
+  is follow-up scoping — not authorized here.
 - Empirical host verification 2026-07-30 (existence checks only, no values read): subscription CLI
   credentials for both providers are present in the inquiry host's login keychain; no
   `yggdrasil.host-secrets` items and no raw provider API keys exist in any file-based keychain,
@@ -157,38 +159,28 @@ ADR-0063 `:179-180` sequences CKM's migration to happen only after a complete Bu
 That line was written when CKM was a peripheral consumer. **It is amended:** CKM migrates as early as
 its dependencies allow, requiring only credential resolution and the adapter contract.
 
-Through the migration window CKM continues to route Builder inference through Product policy — the
-authority leakage ADR-0063 rejected Option A to prevent.
+**Migration history.** During the interim window, CKM routed Builder inference through Product
+policy, a non-mock degraded Product route could enter the evidence graph without visible degradation
+provenance, and MAS-02 carried one named import-boundary exemption. The 2026-07-27 amendment kept
+Model Inquiry first and CKM at migration step 5 after ADR-0057 A1 admitted orchestration by a builder
+agent. The original conditional step swap was withdrawn; the order did not swap.
 
-**Amended 2026-07-27, superseding this section's original interim conditions.** When this ADR was
-accepted, whether CKM might orchestrate was undecided, so tolerability was made conditional on CKM
-not orchestrating during the window, with a migration-order swap if it did. The owner has since
-ruled (ADR-0057 A1) that delivery may be orchestrated from the CKM by a builder agent. Both the
-original condition and the conditional swap are therefore withdrawn, and the tolerability argument is
-restated on the correct grounds:
+**Delivery writeback 2026-07-30 (MAS-06, #4292 / PR #4419).** The interim facts above are historical,
+not current state:
 
-- **The order does not swap.** The CKM migration stays at step 5 of the migration table in
-  `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8. Migration` (that table is current; only its
-  §8.1 narrative is superseded). Orchestration selects work from
-  gap detection, and an authenticated approval boundary stands between a CKM-shaped draft and any
-  handoff: #4163 puts automatic prioritization from CKM scores out of scope and #4169 approves exact
-  request/preview hashes. (**Corrected 2026-07-28:** this previously said gap detection "consumes
-  `confirmed` material only". It does not — `starved_dimension` thresholds on maturity scores that
-  blend candidate edges. The approval boundary carries the argument, not the detector.) The mock
-  route is separately and already handled:
-  it is rejected before any provider call and the run writes zero edges
-  (`app/builderops/ckm/semantic.py`; `tests/builderops/ckm/test_semantic.py::test_llm_unavailable_skips_cleanly`).
-- **What the leak actually risks is the evidence graph, not the orchestrator — and specifically the
-  non-mock degraded route.** Product policy may silently resolve a degraded fallback
-  (`app/components/llm/router.py` sets `degraded=True`); `semantic.py` never inspects
-  `route.degraded`, and the persisted edge records provider and model but not the degraded state.
-  That is the genuine data-integrity defect, and step 5 closes it.
-- **The visibility condition does not yet exist and is therefore scheduled, not relied upon.** The
-  `app.builderops -> app.components.llm` importlinter contract is **not implemented**: `importlinter.ini`
-  lists `app.builderops` only as a member of a layered-independence contract, and `app.components.llm`
-  is a different package from `app.llm`. Adding it — with a single named, dated exemption for
-  `ckm/semantic.py` — is part of migration step 1. Until it lands, the leak is real and invisible,
-  and this ADR does not pretend otherwise.
+- CKM semantic association now submits provider-free intent through the Builder-owned resolver and
+  declares `fallback_forbidden`.
+- Product policy, Model Inquiry's subscription session, mock identities, unavailable credentials,
+  and degraded Builder results cannot execute the task; each unacceptable state is visible and
+  writes zero semantic edges.
+- The declared metered credentials remain intentionally unprovisioned under the §4 owner-cost
+  ruling. The current production outcome is therefore a visible skip, and no active provider-backed
+  CKM inference is claimed.
+- The `app.builderops -> app.components.llm` import-linter contract is implemented with zero
+  exemptions; the final Product imports and the MAS-02 transition exemption were removed together.
+- The authenticated approval boundary remains the orchestration control: #4163 keeps automatic
+  prioritization from CKM scores out of scope, and #4169 approves exact request/preview hashes.
+  Candidate material may shape a draft; it does not bypass that boundary.
 
 Whether delivery may be orchestrated *from* the CKM is decided in ADR-0057 A1, not here. The CKM
 itself never orchestrates under any reading: the acting party is a builder agent that reads it.

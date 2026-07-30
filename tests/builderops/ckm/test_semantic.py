@@ -5,25 +5,40 @@ import json
 from pathlib import Path
 import sqlite3
 from hashlib import sha256
+from threading import Barrier, Event, Thread
+from typing import Any, Mapping
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
 from app.builderops.ckm.models import CkmValidationError
 from app.builderops.ckm.semantic import (
-    FabricSemanticAssociator,
+    BuilderSemanticAssociator,
+    CKM_SEMANTIC_CONSUMER,
+    CKM_SEMANTIC_RESOLUTION_GROUP,
+    CKM_SEMANTIC_ROLE,
+    SEMANTIC_SCHEMA_REF,
     SemanticAssociationError,
     SemanticAssociationResult,
     SemanticBatch,
     SemanticProposal,
+    SemanticProviderUnavailable,
+    _http_adapter_factory,
     _binding_document,
     _canonical_json,
     associate_unlinked_artifacts,
     reapply_confirmation_receipts,
 )
 from app.builderops.ckm.store import CkmStore
-from app.components.llm.constrained import ConstrainedCompletionError
+from app.builderops.model_inquiry_adapters import HttpModelAdapter
+from app.builderops.model_access_resolver import BuilderModelAccessResolver
+from llm_contract import AdapterResult, ModelCapabilities, ResolvedModelAccess
+
+
+PROVIDER_CENSUS_PATH = Path("docs/settings/models/providers.yaml")
+HOST_SECRET_CONTRACT_PATH = Path("config/secrets/host_secret_contract.json")
 
 
 @pytest.fixture()
@@ -79,6 +94,331 @@ def _proposal(artifact_id: str, capability_id: str, *, confidence: float = 0.9):
     )
 
 
+class RecordingResolver:
+    def __init__(
+        self,
+        *,
+        provider: str = "openai",
+        model: str = "gpt-5.6-sol",
+        effective_identity: str = "openai/gpt-5.6-sol",
+        degraded: bool = False,
+        degradation_reason: str | None = None,
+        credential: str = "declared-openai-credential-0001",
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.effective_identity = effective_identity
+        self.degraded = degraded
+        self.degradation_reason = degradation_reason
+        self.credential = credential
+        self.calls: list[dict[str, Any]] = []
+
+    def resolve(self, request, *, runtime: str, channel: str, consumer: str):
+        self.calls.append(
+            {
+                "request": request,
+                "runtime": runtime,
+                "channel": channel,
+                "consumer": consumer,
+            }
+        )
+        return ResolvedModelAccess(
+            request=request,
+            provider=self.provider,
+            model=self.model,
+            adapter_id=f"{self.provider}-{self.model}",
+            effective_identity=self.effective_identity,
+            capabilities=ModelCapabilities(
+                structured_output=True,
+                system_prompt_channel=True,
+            ),
+            credential_identity_ref=f"{self.provider}.api-key",
+            degraded=self.degraded,
+            degradation_reason=self.degradation_reason,
+        )
+
+    def endpoint_for(self, resolved: ResolvedModelAccess) -> str:
+        return f"https://{resolved.provider}.example.invalid/model"
+
+    def credential_value(self, resolved: ResolvedModelAccess) -> str:
+        del resolved
+        return self.credential
+
+
+class RecordingAdapter:
+    adapter_id = "openai-gpt-5.6-sol"
+    provider = "openai"
+    model = "gpt-5.6-sol"
+
+    def __init__(self, response_text: str) -> None:
+        self.response_text = response_text
+        self.calls: list[dict[str, Any]] = []
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        self.calls.append(dict(request))
+        return AdapterResult(
+            response_text=self.response_text,
+            provider_request_id="provider-request-1",
+        )
+
+
+def _builder_associator(
+    resolver: RecordingResolver,
+    adapter: RecordingAdapter,
+) -> BuilderSemanticAssociator:
+    return BuilderSemanticAssociator(
+        resolver=resolver,
+        env={"PKM_ENVIRONMENT": "dev"},
+        adapter_factory=lambda _resolved, _endpoint, _credential: adapter,
+    )
+
+
+def _response(proposals: list[SemanticProposal]) -> str:
+    return json.dumps(
+        {
+            "proposals": [
+                {
+                    "artifact_id": item.artifact_id,
+                    "capability_id": item.capability_id,
+                    "evidence_kind": item.evidence_kind,
+                    "maturity_dimension": item.maturity_dimension,
+                    "confidence": item.confidence,
+                    "rationale": item.rationale,
+                }
+                for item in proposals
+            ]
+        }
+    )
+
+
+def test_semantic_association_resolves_through_builder_adapter(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    result = associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert result.proposed == 1
+    assert len(adapter.calls) == 1
+    assert store.list_evidence_edges()[0].provider == "openai"
+    assert "FabricSemanticAssociator" not in Path("app/builderops/ckm/semantic.py").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_semantic_production_call_uses_provider_free_builder_resolver(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert len(resolver.calls) == 1
+    call = resolver.calls[0]
+    request = call["request"]
+    assert call == {
+        "request": request,
+        "runtime": "builder",
+        "channel": "dev",
+        "consumer": CKM_SEMANTIC_CONSUMER,
+    }
+    assert request.role_profile == CKM_SEMANTIC_ROLE
+    assert request.resolution_group_id == CKM_SEMANTIC_RESOLUTION_GROUP
+    assert request.intent.output_schema_ref == SEMANTIC_SCHEMA_REF
+    assert {"provider", "model", "credential", "endpoint"}.isdisjoint(
+        request.model_dump(mode="json")
+    )
+
+
+def test_semantic_default_factory_accepts_declared_ckm_intent() -> None:
+    resolver = RecordingResolver()
+
+    associator = BuilderSemanticAssociator(
+        resolver=resolver,
+        env={"PKM_ENVIRONMENT": "dev"},
+        adapter_factory=_http_adapter_factory,
+    )
+
+    assert isinstance(associator._adapter, HttpModelAdapter)
+    assert associator._adapter.required_reasoning_effort == "low"
+    assert associator._adapter.required_output_schema_ref == SEMANTIC_SCHEMA_REF
+    assert associator._adapter.required_side_effect_class == "derived_candidate_evidence"
+
+
+def test_product_fallback_cannot_execute_builder_task(
+    store: CkmStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    product_calls: list[str] = []
+
+    def fail_product_route(*_args: object, **_kwargs: object) -> None:
+        product_calls.append("called")
+        raise AssertionError("Product routing must not execute CKM semantic association")
+
+    monkeypatch.setattr(
+        "app.components.llm.fabric.get_chat_client",
+        fail_product_route,
+    )
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    result = associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert result.proposed == 1
+    assert product_calls == []
+
+
+def test_semantic_request_declares_fallback_forbidden(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert resolver.calls[0]["request"].intent.fallback_requirement == "fallback_forbidden"
+
+
+def test_mock_identity_is_refused_before_route_selection(
+    tmp_path: Path,
+) -> None:
+    payload = yaml.safe_load(PROVIDER_CENSUS_PATH.read_text(encoding="utf-8"))
+    payload["runtime_channels"]["builder"]["dev"]["frontier"] = {
+        "provider": "mock",
+        "model": "mock-chat",
+        "requires": ["structured_output", "deterministic_execution"],
+    }
+    census_path = tmp_path / "providers.yaml"
+    census_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    resolver = BuilderModelAccessResolver.from_declared_sources(
+        env={"PKM_ENVIRONMENT": "dev"},
+        census_path=census_path,
+        contract_path=HOST_SECRET_CONTRACT_PATH,
+    )
+    adapter_selected: list[str] = []
+
+    with pytest.raises(SemanticProviderUnavailable, match="mock identity"):
+        BuilderSemanticAssociator(
+            resolver=resolver,
+            env={"PKM_ENVIRONMENT": "dev"},
+            adapter_factory=lambda *_args: adapter_selected.append("selected"),
+        )
+
+    assert adapter_selected == []
+
+
+def test_credential_unavailable_skips_with_visible_reason(store: CkmStore) -> None:
+    _capability(store)
+    _artifact(store)
+
+    result = associate_unlinked_artifacts(
+        store,
+        client_factory=lambda: BuilderSemanticAssociator(env={"PKM_ENVIRONMENT": "dev"}),
+    )
+
+    assert result.status == "skipped"
+    assert result.reason == "declared credential unavailable: openai.api-key"
+    assert result.proposed == 0
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+def test_subscription_session_cannot_execute_ckm_semantic_task(
+    store: CkmStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _capability(store)
+    _artifact(store)
+    subscription_calls: list[str] = []
+
+    def fail_subscription(*_args: object, **_kwargs: object) -> None:
+        subscription_calls.append("called")
+        raise AssertionError("subscription session must not execute CKM")
+
+    monkeypatch.setattr(
+        "app.builderops.model_inquiry_adapters.LocalCommandAdapter.execute",
+        fail_subscription,
+    )
+
+    result = associate_unlinked_artifacts(
+        store,
+        client_factory=lambda: BuilderSemanticAssociator(env={"PKM_ENVIRONMENT": "dev"}),
+    )
+
+    assert result.status == "skipped"
+    assert result.proposed == 0
+    assert subscription_calls == []
+
+
+def test_degraded_builder_route_writes_zero_edges_with_visible_reason(
+    store: CkmStore,
+) -> None:
+    _capability(store)
+    _artifact(store)
+    resolver = RecordingResolver(
+        degraded=True,
+        degradation_reason="declared Builder route degraded",
+    )
+    adapter_selected: list[str] = []
+
+    result = associate_unlinked_artifacts(
+        store,
+        client_factory=lambda: BuilderSemanticAssociator(
+            resolver=resolver,
+            env={"PKM_ENVIRONMENT": "dev"},
+            adapter_factory=lambda *_args: adapter_selected.append("selected"),
+        ),
+    )
+
+    assert result.status == "skipped"
+    assert result.reason == "degraded Builder route: declared Builder route degraded"
+    assert result.proposed == 0
+    assert store.list_evidence_edges() == []
+    assert adapter_selected == []
+
+
+def test_existing_semantic_contract_regression_suite(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    accepted = _proposal(artifact.id, capability.id)
+    discarded = _proposal(artifact.id, capability.id, confidence=0.59)
+
+    result = associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([accepted, discarded]),
+    )
+
+    assert result == SemanticAssociationResult(
+        status="ok",
+        proposed=1,
+        discarded=1,
+        no_match=0,
+        provider="stub-provider",
+        model="stub-model",
+    )
+    edge = store.list_evidence_edges()[0]
+    assert edge.lifecycle == "candidate"
+    assert edge.extraction_method == "inferred"
+
+
 def test_inferred_edges_fenced_via_store_write_path(store: CkmStore) -> None:
     capability = _capability(store)
     artifact = _artifact(store)
@@ -127,6 +467,271 @@ def test_inferred_edges_fenced_via_store_write_path(store: CkmStore) -> None:
             provider="stub-provider",
             model="stub-model",
         )
+
+
+def test_semantic_batch_and_watermark_rollback_together_on_interruption(
+    store: CkmStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+
+    def interrupt_before_watermark(
+        _conn: sqlite3.Connection,
+        *,
+        source: str,
+        value: str,
+    ) -> bool:
+        del source, value
+        raise RuntimeError("simulated interruption before watermark")
+
+    monkeypatch.setattr(
+        CkmStore,
+        "_set_watermark_in_connection",
+        staticmethod(interrupt_before_watermark),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        associate_unlinked_artifacts(
+            store,
+            client=StubAssociator([_proposal(artifact.id, capability.id)]),
+        )
+
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+def test_concurrent_semantic_batches_converge_without_duplicate_edges(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    barrier = Barrier(2)
+    results: list[SemanticAssociationResult] = []
+    failures: list[BaseException] = []
+
+    class BarrierAssociator(StubAssociator):
+        def propose(self, *, artifacts, capabilities) -> SemanticBatch:
+            barrier.wait()
+            return super().propose(artifacts=artifacts, capabilities=capabilities)
+
+    def run() -> None:
+        try:
+            results.append(
+                associate_unlinked_artifacts(
+                    store,
+                    client=BarrierAssociator([_proposal(artifact.id, capability.id)]),
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    threads = [Thread(target=run), Thread(target=run)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert failures == []
+    assert sorted(result.proposed for result in results) == [0, 1]
+    assert sorted(result.status for result in results) == ["ok", "skipped"]
+    assert len(store.list_evidence_edges()) == 1
+    assert store.get_watermark("semantic_association") is not None
+
+
+def test_semantic_snapshot_drift_during_propose_writes_nothing(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    proposing = Event()
+    resume = Event()
+    results: list[SemanticAssociationResult] = []
+
+    class PausingAssociator(StubAssociator):
+        def propose(self, *, artifacts, capabilities) -> SemanticBatch:
+            proposing.set()
+            assert resume.wait(timeout=5)
+            return super().propose(artifacts=artifacts, capabilities=capabilities)
+
+    thread = Thread(
+        target=lambda: results.append(
+            associate_unlinked_artifacts(
+                store,
+                client=PausingAssociator([_proposal(artifact.id, capability.id)]),
+            )
+        )
+    )
+    thread.start()
+    assert proposing.wait(timeout=5)
+    changed = store.upsert_artifact(
+        source_ref=artifact.source_ref,
+        artifact_kind=artifact.artifact_kind,
+        source=artifact.source,
+        watermark="commit:changed-during-propose",
+        provenance='{"source_ref":"docs/retrieval-notes.md","changed":true}',
+    )
+    assert changed.id == artifact.id
+    resume.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert results == [
+        SemanticAssociationResult(
+            status="skipped",
+            proposed=0,
+            discarded=0,
+            no_match=1,
+            provider="stub-provider",
+            model="stub-model",
+            reason="semantic input snapshot changed before commit; rerun required",
+        )
+    ]
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+def test_semantic_capability_set_drift_during_propose_writes_nothing(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    proposing = Event()
+    resume = Event()
+    results: list[SemanticAssociationResult] = []
+
+    class PausingAssociator(StubAssociator):
+        def propose(self, *, artifacts, capabilities) -> SemanticBatch:
+            proposing.set()
+            assert resume.wait(timeout=5)
+            return super().propose(artifacts=artifacts, capabilities=capabilities)
+
+    thread = Thread(
+        target=lambda: results.append(
+            associate_unlinked_artifacts(
+                store,
+                client=PausingAssociator([_proposal(artifact.id, capability.id)]),
+            )
+        )
+    )
+    thread.start()
+    assert proposing.wait(timeout=5)
+    store.upsert_capability(
+        identity_key="fixture:semantic:concurrent-capability",
+        name="Concurrent capability",
+        definition="Added while the semantic provider work is in flight.",
+        existence_provenance="test:concurrent-capability",
+        lifecycle="confirmed",
+    )
+    resume.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert results[0].status == "skipped"
+    assert results[0].reason == (
+        "semantic input snapshot changed before commit; rerun required"
+    )
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_conflicting_duplicate_semantic_proposals_fail_before_write(
+    store: CkmStore,
+    reverse: bool,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    first = _proposal(artifact.id, capability.id)
+    conflicting = SemanticProposal(
+        artifact_id=first.artifact_id,
+        capability_id=first.capability_id,
+        evidence_kind="spec",
+        maturity_dimension=first.maturity_dimension,
+        confidence=first.confidence,
+        rationale=first.rationale,
+    )
+    proposals = [first, conflicting]
+    if reverse:
+        proposals.reverse()
+
+    with pytest.raises(SemanticAssociationError, match="conflicting duplicate"):
+        associate_unlinked_artifacts(
+            store,
+            client=StubAssociator(proposals),
+        )
+
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+def test_semantic_watermark_binds_input_batch_and_material_edge_state(
+    tmp_path: Path,
+) -> None:
+    def run(
+        name: str,
+        *,
+        source_ref: str,
+        rationale: str,
+    ) -> str:
+        candidate_store = CkmStore(tmp_path / f"{name}.sqlite3")
+        candidate_store.ensure_schema()
+        capability = _capability(candidate_store)
+        artifact = candidate_store.upsert_artifact(
+            source_ref=source_ref,
+            artifact_kind="document",
+            source="repo_docs",
+            watermark="commit:shared",
+            provenance=f'{{"source_ref":"{source_ref}"}}',
+        )
+        proposal = _proposal(artifact.id, capability.id)
+        proposal = SemanticProposal(
+            artifact_id=proposal.artifact_id,
+            capability_id=proposal.capability_id,
+            evidence_kind=proposal.evidence_kind,
+            maturity_dimension=proposal.maturity_dimension,
+            confidence=proposal.confidence,
+            rationale=rationale,
+        )
+        result = associate_unlinked_artifacts(
+            candidate_store,
+            client=StubAssociator([proposal]),
+        )
+        assert result.status == "ok"
+        watermark = candidate_store.get_watermark("semantic_association")
+        assert watermark is not None
+        return watermark
+
+    baseline = run(
+        "baseline",
+        source_ref="docs/retrieval-notes.md",
+        rationale="The artifact explicitly explains retrieval.",
+    )
+    assert (
+        run(
+            "idempotent",
+            source_ref="docs/retrieval-notes.md",
+            rationale="The artifact explicitly explains retrieval.",
+        )
+        == baseline
+    )
+    assert (
+        run(
+            "different-batch",
+            source_ref="docs/other-retrieval-notes.md",
+            rationale="The artifact explicitly explains retrieval.",
+        )
+        != baseline
+    )
+    assert (
+        run(
+            "different-edge",
+            source_ref="docs/retrieval-notes.md",
+            rationale="Materially different semantic evidence.",
+        )
+        != baseline
+    )
 
 
 def _append_confirmation_receipt(
@@ -199,9 +804,7 @@ def _append_confirmation_receipt(
         "forged-payload",
     ],
 )
-def test_confirmation_rejects_invalid_or_forged_receipts(
-    tmp_path: Path, variant: str
-) -> None:
+def test_confirmation_rejects_invalid_or_forged_receipts(tmp_path: Path, variant: str) -> None:
     store = CkmStore(tmp_path / f"{variant}.sqlite3")
     store.ensure_schema()
     capability = _capability(store)
@@ -229,31 +832,14 @@ def test_confirmation_rejects_invalid_or_forged_receipts(
     assert store.list_evidence_edges() == []
 
 
-class _FabricClient:
-    def __init__(self, *, response: str | None = None, error: Exception | None = None) -> None:
-        self.response = response
-        self.error = error
-
-    def chat(self, *args, **kwargs) -> str:
-        if self.error is not None:
-            raise self.error
-        assert self.response is not None
-        return self.response
-
-
 @pytest.mark.parametrize("failure", ["schema", "constrained"])
-def test_fabric_adapter_maps_structured_output_failures(failure: str) -> None:
-    associator = object.__new__(FabricSemanticAssociator)
-    associator.provider = "stub-provider"
-    associator.model = "stub-model"
-    if failure == "schema":
-        associator._client = _FabricClient(response='{"proposals": [{"artifact_id": "x"}]}')
-    else:
-        associator._client = _FabricClient(
-            error=ConstrainedCompletionError(
-                schema_ref="test", reason="schema violation"
-            )
-        )
+def test_builder_adapter_maps_structured_output_failures(failure: str) -> None:
+    resolver = RecordingResolver()
+    response = '{"proposals": [{"artifact_id": "x"}]}'
+    if failure == "constrained":
+        response = "not-json"
+    adapter = RecordingAdapter(response)
+    associator = _builder_associator(resolver, adapter)
 
     with pytest.raises(SemanticAssociationError, match="invalid semantic association response"):
         associator.propose(artifacts=[], capabilities=[])
@@ -341,9 +927,7 @@ def test_confirmation_receipt_survives_rebuild(
 
     # The stable semantic confirmation key makes a delayed retry idempotent;
     # changing wall-clock timestamps cannot conflict with the prior request.
-    monkeypatch.setattr(
-        "app.builderops.ckm.semantic.utc_now", lambda: "2099-01-01T00:00:00Z"
-    )
+    monkeypatch.setattr("app.builderops.ckm.semantic.utc_now", lambda: "2099-01-01T00:00:00Z")
     repeated = runner.invoke(
         builderops,
         ["--db-path", str(store.db_path), "ckm", "confirm-edge", original.id],
@@ -411,9 +995,7 @@ def test_authenticated_pre_v5_confirmation_migrates_before_rebuild(store: CkmSto
         "model": edge.model,
     }
     stable_claim = {key: value for key, value in payload.items() if key != "edge_id"}
-    payload["confirmation_key"] = sha256(
-        _canonical_json(stable_claim).encode("utf-8")
-    ).hexdigest()
+    payload["confirmation_key"] = sha256(_canonical_json(stable_claim).encode("utf-8")).hexdigest()
     envelope = {
         "event_type": "ckm_edge_confirmed",
         "action": "confirm_edge",

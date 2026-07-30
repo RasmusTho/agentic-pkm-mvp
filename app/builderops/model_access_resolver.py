@@ -23,6 +23,7 @@ from app.components.settings.providers_loader import (
     ProviderCensus,
     ProviderEntry,
     RoleProfile,
+    TierMapping,
     load_provider_census,
 )
 from app.ops.host_secret_bootstrap import (
@@ -43,6 +44,9 @@ from llm_contract import (
 
 
 BUILDER_RUNTIME = "builder"
+CKM_SEMANTIC_CONSUMER = "builderops-ckm-semantic"
+CKM_SEMANTIC_RESOLUTION_GROUP = "ckm-semantic-association"
+CKM_SEMANTIC_ROLE = "ckm_semantic"
 MODEL_INQUIRY_CONSUMER = "builderops-model-inquiry"
 MODEL_INQUIRY_RESOLUTION_GROUP = "model-inquiry-independent-review"
 NON_PROVIDER_IDENTITIES = frozenset({"mock", "fake", "deterministic", "test"})
@@ -61,6 +65,10 @@ _MODEL_INQUIRY_REASONING_EFFORT = "xhigh"
 _MODEL_INQUIRY_DETERMINISM_REQUIRED = False
 _MODEL_INQUIRY_OUTPUT_SCHEMA_REF = "builderops.model-turn-response.v1"
 _MODEL_INQUIRY_SIDE_EFFECT_CLASS = "advisory_review"
+_CKM_REASONING_EFFORT = "low"
+_CKM_DETERMINISM_REQUIRED = False
+_CKM_OUTPUT_SCHEMA_REF = "builderops.ckm.semantic-association.v1"
+_CKM_SIDE_EFFECT_CLASS = "derived_candidate_evidence"
 
 
 class ModelAccessResolutionError(BuilderOpsValidationError):
@@ -77,7 +85,7 @@ class DeclaredCredentialUnavailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class BuilderModelAccessResolver:
-    """Builder runtime resolver for the Model Inquiry independent-review group."""
+    """Builder runtime resolver for declared Model Inquiry and CKM consumers."""
 
     census: ProviderCensus
     contract: HostSecretContract
@@ -116,6 +124,13 @@ class BuilderModelAccessResolver:
         consumer: str,
     ) -> ResolvedModelAccess:
         """Resolve one neutral role request into a validated Builder target."""
+        if consumer == CKM_SEMANTIC_CONSUMER:
+            return self._resolve_ckm_semantic(
+                request,
+                runtime=runtime,
+                channel=channel,
+                consumer=consumer,
+            )
         return self.resolve_group(
             [request],
             runtime=runtime,
@@ -151,6 +166,154 @@ class BuilderModelAccessResolver:
                 "resolved group requires distinct adapter_id values"
             )
         return validated
+
+    def _resolve_ckm_semantic(
+        self,
+        request: ModelResolutionRequest,
+        *,
+        runtime: str,
+        channel: str,
+        consumer: str,
+    ) -> ResolvedModelAccess:
+        """Resolve the single CKM semantic role through Builder tier policy."""
+
+        if runtime != BUILDER_RUNTIME:
+            raise ModelAccessResolutionError(
+                "Builder resolver refuses a non-Builder runtime request"
+            )
+        if consumer != CKM_SEMANTIC_CONSUMER:
+            raise ModelAccessResolutionError(
+                "Builder resolver refuses an undeclared model access consumer"
+            )
+        if request.role_profile != CKM_SEMANTIC_ROLE:
+            raise ModelAccessResolutionError(
+                "Builder CKM policy requires the declared semantic role"
+            )
+        if request.resolution_group_id != CKM_SEMANTIC_RESOLUTION_GROUP:
+            raise ModelAccessResolutionError(
+                "Builder CKM policy requires the declared semantic resolution group"
+            )
+        intent = request.intent
+        if intent.fallback_requirement != "fallback_forbidden":
+            raise ModelAccessResolutionError(
+                "Builder CKM policy forbids any fallback requirement other than "
+                "fallback_forbidden"
+            )
+        if intent.reasoning_effort != _CKM_REASONING_EFFORT:
+            raise ModelAccessResolutionError(
+                "Builder CKM policy requires low reasoning effort"
+            )
+        if intent.determinism_required is not _CKM_DETERMINISM_REQUIRED:
+            raise ModelAccessResolutionError(
+                "Builder CKM policy refuses deterministic execution"
+            )
+        if intent.output_schema_ref != _CKM_OUTPUT_SCHEMA_REF:
+            raise ModelAccessResolutionError(
+                "Builder CKM policy requires the declared semantic schema"
+            )
+        if intent.independence != "none":
+            raise ModelAccessResolutionError(
+                "Builder CKM policy permits only the single semantic role"
+            )
+        if intent.side_effect_class != _CKM_SIDE_EFFECT_CLASS:
+            raise ModelAccessResolutionError(
+                "Builder CKM policy permits derived candidate evidence only"
+            )
+
+        mapping = self._builder_tier_mapping(
+            channel=channel,
+            capability_tier=intent.capability_tier,
+        )
+        provider = self._provider(mapping.provider)
+        if provider.id.lower() in NON_PROVIDER_IDENTITIES or provider.tier == "test":
+            raise ModelAccessResolutionError(
+                "Builder CKM policy refuses a mock identity before adapter selection"
+            )
+        model = next((item for item in provider.models if item.id == mapping.model), None)
+        if model is None:
+            raise ModelAccessResolutionError(
+                "declared Builder mapping references an undeclared model"
+            )
+        capabilities = self._capabilities(provider, model.capabilities)
+        missing = sorted(
+            capability
+            for capability in mapping.requires
+            if not getattr(capabilities, capability)
+        )
+        if missing:
+            raise ModelAccessResolutionError(
+                "declared target does not satisfy Builder mapping requirements: "
+                + ", ".join(missing)
+            )
+        credential = self._ckm_credential_identity(
+            provider,
+            channel=channel,
+            consumer=consumer,
+        )
+        try:
+            return ResolvedModelAccess(
+                request=request,
+                provider=provider.id,
+                model=model.id,
+                adapter_id=f"{provider.id}-{model.id}",
+                effective_identity=model.effective_identity,
+                capabilities=capabilities,
+                credential_identity_ref=credential,
+            )
+        except ValueError as exc:
+            raise ModelAccessResolutionError(str(exc)) from exc
+
+    def _builder_tier_mapping(
+        self,
+        *,
+        channel: str,
+        capability_tier: str,
+    ) -> TierMapping:
+        channel_mapping = self.census.runtime_channels.builder.get(channel)
+        if not channel_mapping:
+            raise ModelAccessResolutionError(
+                "declared census has no Builder mapping for the requested channel"
+            )
+        mapping = channel_mapping.get(capability_tier)
+        if mapping is None:
+            raise ModelAccessResolutionError(
+                "declared census has no Builder mapping for the requested capability tier"
+            )
+        return mapping
+
+    def _ckm_credential_identity(
+        self,
+        provider: ProviderEntry,
+        *,
+        channel: str,
+        consumer: str,
+    ) -> str:
+        credentials = tuple(provider.credential_identifiers)
+        if len(credentials) != 1:
+            raise ModelAccessResolutionError(
+                "declared CKM provider must expose exactly one credential identity"
+            )
+        credential = credentials[0]
+        try:
+            required = self.contract.required_secrets_for_role(
+                consumer=consumer,
+                role=CKM_SEMANTIC_ROLE,
+            )
+            self.contract.require_declared(
+                channel=channel,
+                consumer=consumer,
+                secret=credential,
+            )
+        except UndeclaredSecretConsumerError as exc:
+            raise ModelAccessResolutionError(
+                "host secret contract does not declare the CKM semantic credential"
+            ) from exc
+        if required != (credential,):
+            raise ModelAccessResolutionError(
+                "host secret contract CKM role requirement does not match the "
+                "census credential"
+            )
+        return credential
 
     def endpoint_for(self, resolved: ResolvedModelAccess) -> str:
         """Return the declared provider API endpoint for a resolved target."""
@@ -360,6 +523,9 @@ class BuilderModelAccessResolver:
 
 __all__ = [
     "BUILDER_RUNTIME",
+    "CKM_SEMANTIC_CONSUMER",
+    "CKM_SEMANTIC_RESOLUTION_GROUP",
+    "CKM_SEMANTIC_ROLE",
     "MODEL_INQUIRY_CONSUMER",
     "MODEL_INQUIRY_RESOLUTION_GROUP",
     "BuilderModelAccessResolver",

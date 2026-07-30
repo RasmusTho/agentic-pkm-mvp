@@ -5,7 +5,7 @@ Owner: Builder System / CKM
 Temporal class: active specification
 Review cadence: event-driven
 Source of truth: this directory for implementation-task shape; live GitHub for pickup and delivery state
-Last reviewed: 2026-07-29
+Last reviewed: 2026-07-30
 
 # CKM Design-Agent Integration Hub
 
@@ -33,9 +33,11 @@ behavior, and host-specific paths remain behind Builder System adapters.
 Model Access Substrate Phase 1 is governed by parent
 [#4286](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4286) and its serial children
 #4287–#4292. CDH-01 may define design-run domain contracts independently, but CDH-02 and every later
-execution slice remain blocked until #4286 records accepted
-`model_access_substrate.provider_enabled_noninteractive_inquiry.v1` plus the delivered neutral
-intent/resolver/adapter contracts. A merge SHA without that live acceptance receipt is insufficient.
+execution slice remain blocked until #4286 closes with its repo-verifiable Phase 1 acceptance ledger
+plus the delivered neutral intent/resolver/adapter contracts. Under ADR-0064's 2026-07-30 owner-cost
+ruling, that acceptance does not require provider-enabled inquiry, bridge retirement, metered
+credential provisioning, or active provider-backed inference. A child merge SHA without the
+parent's terminal validation is insufficient.
 
 After acceptance, this capability reuses:
 
@@ -194,10 +196,9 @@ earlier slices. CDH-05 may begin only after the Yggdrasil design-handoff gate pa
 - Parent validation hub: #4131. It remains blocked and is never a direct pickup Issue.
 - Child Issues are created only after this specification is merged and their live bodies pass
   strict readiness and Source Anchor validation.
-- External prerequisite: #4286 accepted receipt
-  `model_access_substrate.provider_enabled_noninteractive_inquiry.v1`. #4286 may also discharge the
-  remaining provider-enabled evidence on #3288, but #4131 depends on #4286's explicit receipt rather
-  than inferring acceptance from #3288 labels.
+- External prerequisite: #4286 terminal repo-verifiable Phase 1 acceptance. #4131 depends on that
+  parent validation rather than inferring acceptance from #3288 labels. Withdrawn provider/bridge
+  receipts, metered credentials, and active provider-backed inference are not prerequisites.
 
 ## Source docs
 

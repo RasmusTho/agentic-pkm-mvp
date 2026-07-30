@@ -564,7 +564,8 @@ def ckm_associate(ctx: click.Context, limit: int, confidence_floor: float) -> No
     except (SemanticAssociationError, CkmValidationError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm semantic association failed: {exc}") from exc
     if result.status != "ok":
-        click.echo(result.status)
+        reason = f": {result.reason}" if result.reason else ""
+        click.echo(f"{result.status}{reason}; proposals={result.proposed}")
         return
     provider_model = (
         f"; model={result.provider}:{result.model}" if result.provider and result.model else ""
