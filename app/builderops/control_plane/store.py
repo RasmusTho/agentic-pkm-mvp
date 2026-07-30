@@ -2019,7 +2019,8 @@ class PostgresBuilderOpsStore:
             row = conn.execute(
                 "SELECT repository, operation_key, task_id, effect_type, payload, "
                 "status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
-                "reconciliation_evidence, reconciliation_receipt_sequence "
+                "reconciliation_evidence, reconciliation_receipt_sequence, "
+                "authority_envelope "
                 "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s",
                 (canonical, operation_key),

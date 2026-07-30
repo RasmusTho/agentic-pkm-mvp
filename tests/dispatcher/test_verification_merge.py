@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -14,6 +15,11 @@ from app.dispatcher.verification_merge import (
     MergeAuthorityError,
     ProtectedDeliveryManifest,
     VerificationMergeExecutor,
+)
+from app.dispatcher.verified_merge import (
+    VERIFIED_MERGE_READINESS_CONTRACT,
+    build_verified_merge_phase,
+    prepare_verified_merge,
 )
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
 from tests.dispatcher.verification_helpers import HEAD, REPO, request
@@ -33,6 +39,7 @@ class RepositoryAuthority:
         timeout: bool = False,
         transport_error: bool = False,
         merged: bool = True,
+        prepared_gates: list[dict[str, object]] | None = None,
     ) -> None:
         self.base_reads = iter(base_reads or [BASE, BASE])
         self.manifest_blobs = iter(manifest_blobs or ["blob-1", "blob-1"])
@@ -44,6 +51,25 @@ class RepositoryAuthority:
             "scope": True,
             "current_head": True,
         }
+        self.prepared_gates = iter(
+            prepared_gates
+            or [
+                {
+                    "contract": "verified_merge_prepared_gate.v1",
+                    "repository": REPO.lower(),
+                    "pr_number": 3603,
+                    "run_id": "test-run",
+                    "head_sha": HEAD,
+                    "governing_issue": 3603,
+                    "closing_issues": [3603],
+                    "neutralized_body_sha256": "a" * 64,
+                    "authority_sha256": "b" * 64,
+                    "phase_sha256": "c" * 64,
+                    "closing_reference_count": 0,
+                }
+            ]
+            * 20
+        )
         self.timeout = timeout
         self.transport_error = transport_error
         self.merged = merged
@@ -81,6 +107,24 @@ class RepositoryAuthority:
         self, repository: str, pr_number: int, head_sha: str
     ) -> dict[str, bool]:
         return self.gates
+
+    def verified_merge_prepared(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        run_id: str,
+        head_sha: str,
+        expected_repair_budget: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        gate = dict(next(self.prepared_gates))
+        gate.update(
+            repository=repository,
+            pr_number=pr_number,
+            run_id=run_id,
+            head_sha=head_sha,
+        )
+        return gate
 
     def conditional_merge(self, *args, **kwargs):
         self.calls.append("merge")
@@ -359,6 +403,63 @@ def test_merge_rejects_base_or_manifest_change_after_final_validation() -> None:
     )
 
 
+def test_real_merge_requires_stable_prepared_authority_before_any_effect() -> None:
+    ledger, run, outbox = claimed_run()
+    missing = RepositoryAuthority(prepared_gates=[{}])
+    credentials = Credentials()
+
+    with pytest.raises(
+        MergeAuthorityError, match="prepared authority does not match"
+    ):
+        VerificationMergeExecutor(
+            ledger, outbox, missing, credentials
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert missing.calls == []
+    assert outbox.calls == []
+    assert credentials.calls == []
+
+    drift_ledger, drift_run, drift_outbox = claimed_run()
+    prepared = {
+        "contract": "verified_merge_prepared_gate.v1",
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "neutralized_body_sha256": "a" * 64,
+        "authority_sha256": "b" * 64,
+        "phase_sha256": "c" * 64,
+        "closing_reference_count": 0,
+    }
+    drift = RepositoryAuthority(
+        prepared_gates=[
+            prepared,
+            {**prepared, "phase_sha256": "d" * 64},
+        ]
+    )
+    drift_credentials = Credentials()
+
+    with pytest.raises(
+        MergeAuthorityError, match="changed after final validation"
+    ):
+        VerificationMergeExecutor(
+            drift_ledger,
+            drift_outbox,
+            drift,
+            drift_credentials,
+        ).execute(
+            drift_run,
+            holder="verification-host",
+            lease_id=drift_run.lease_id or "",
+        )
+
+    assert drift.calls == []
+    assert drift_outbox.state == "succeeded"
+    assert drift_credentials.calls == []
+
+
 def test_timed_out_merge_reconciles_before_retry() -> None:
     ledger, run, outbox = claimed_run()
     repository = RepositoryAuthority(timeout=True, merged=False)
@@ -565,7 +666,14 @@ def test_merge_reconstructs_receipt_after_durable_reconciliation_crash() -> None
     assert original_outbox.state == "missing"
 
 
-def test_live_adapter_loads_manifest_from_exact_protected_base() -> None:
+@pytest.mark.parametrize(
+    ("additional_check_conclusion", "expected_ci"),
+    [("success", True), ("failure", False)],
+)
+def test_live_adapter_loads_manifest_from_exact_protected_base(
+    additional_check_conclusion: str,
+    expected_ci: bool,
+) -> None:
     manifest = {
         "repository": REPO,
         "allowed_effects": ["github.merge", "github.merge.dry_run"],
@@ -612,7 +720,7 @@ def test_live_adapter_loads_manifest_from_exact_protected_base() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "total_count": 2,
+                    "total_count": 3,
                     "check_runs": [
                         {
                             "name": "verification",
@@ -624,6 +732,16 @@ def test_live_adapter_loads_manifest_from_exact_protected_base() -> None:
                             "name": "Unit tests (not pg)",
                             "status": "completed",
                             "conclusion": "success",
+                            "app": {
+                                "id": 7,
+                                "slug": "github-actions",
+                            },
+                            "check_suite": {"id": 70},
+                        },
+                        {
+                            "name": "relevant non-required check",
+                            "status": "completed",
+                            "conclusion": additional_check_conclusion,
                             "app": {
                                 "id": 7,
                                 "slug": "github-actions",
@@ -680,7 +798,146 @@ def test_live_adapter_loads_manifest_from_exact_protected_base() -> None:
 
     assert protected.base_sha == BASE
     assert protected.blob_sha == "manifest-blob-1"
-    assert all(gates.values())
+    assert gates["ci"] is expected_ci
+    assert all(
+        value for name, value in gates.items() if name != "ci"
+    )
+
+
+@pytest.mark.parametrize(
+    ("closing_nodes", "accepted"),
+    [
+        ([], True),
+        (
+            [
+                {
+                    "number": 3603,
+                    "repository": {"nameWithOwner": REPO},
+                }
+            ],
+            False,
+        ),
+    ],
+)
+def test_live_adapter_authenticates_exact_prepared_merge_window(
+    closing_nodes: list[dict[str, object]],
+    accepted: bool,
+) -> None:
+    repository = REPO.lower()
+    repair_budget = {"policy": "mechanism-keyed-v1", "rounds": 2}
+    original_pr: dict[str, object] = {
+        "number": 3603,
+        "state": "open",
+        "merged": False,
+        "merged_at": None,
+        "merge_commit_sha": None,
+        "draft": False,
+        "title": "BCP-05 verifier delivery",
+        "body": (
+            "Governing-Issue: #3603\n\n"
+            "Fixes #3603\n\n"
+            "Final-Review-Rounds: 2\n"
+        ),
+        "head": {"sha": HEAD},
+    }
+    plan = prepare_verified_merge(
+        context={
+            "contract": "verification_closer_dispatch_context.v2",
+            "repository": repository,
+            "pr_number": 3603,
+            "governing_issue": 3603,
+            "closing_issues": [3603],
+            "supporting_issues": [],
+            "head_sha": HEAD,
+            "run_id": "test-run",
+            "repair_budget": repair_budget,
+        },
+        pr=original_pr,
+        live_closing_issues=[3603],
+        merge_readiness={
+            "contract": VERIFIED_MERGE_READINESS_CONTRACT,
+            "head_sha": HEAD,
+            "required_checks_green": True,
+            "review_gate_resolved": True,
+            "further_commits_anticipated": False,
+        },
+    )
+    authority_receipt = plan["authority_receipt"]
+    assert isinstance(authority_receipt, Mapping)
+    prepared_pr = {
+        **original_pr,
+        "body": plan["neutralized_body"],
+    }
+    phase = build_verified_merge_phase(
+        authority_receipt=authority_receipt,
+        phase="prepared",
+        pr=prepared_pr,
+    )
+    comments = [
+        {
+            "author_association": "COLLABORATOR",
+            "body": plan["authority_receipt_comment"],
+        },
+        {
+            "author_association": "COLLABORATOR",
+            "body": phase["phase_receipt_comment"],
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls/3603"):
+            return httpx.Response(200, json=prepared_pr)
+        if request.url.path.endswith("/issues/3603/comments"):
+            return httpx.Response(200, json=comments)
+        if request.url.path == "/graphql":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "closingIssuesReferences": {
+                                    "nodes": closing_nodes,
+                                    "pageInfo": {"hasNextPage": False},
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        raise AssertionError(f"unexpected GitHub request: {request.url}")
+
+    adapter = GitHubProtectedRepositoryAuthority(
+        "host-read-token",
+        http_client=httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    if not accepted:
+        with pytest.raises(
+            MergeAuthorityError, match="empty closers"
+        ):
+            adapter.verified_merge_prepared(
+                REPO,
+                3603,
+                run_id="test-run",
+                head_sha=HEAD,
+                expected_repair_budget=repair_budget,
+            )
+        return
+
+    gate = adapter.verified_merge_prepared(
+        REPO,
+        3603,
+        run_id="test-run",
+        head_sha=HEAD,
+        expected_repair_budget=repair_budget,
+    )
+    assert gate["repository"] == repository
+    assert gate["governing_issue"] == 3603
+    assert gate["closing_issues"] == [3603]
+    assert gate["closing_reference_count"] == 0
 
 
 def test_live_adapter_rejects_failing_required_status_and_nondefault_base() -> None:

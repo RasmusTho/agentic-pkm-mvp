@@ -393,6 +393,14 @@ class BuilderOpsVerificationLedger:
                 stop_reason=None,
                 retry_after=None,
             )
+            takeover_payload = _payload_for(existing, takeover)
+            self._settle_prior_head_effect(
+                candidate,
+                takeover_head=str(projected["current_head_sha"]),
+                payload=takeover_payload,
+            )
+            takeover_payload.pop("pending_privileged_effect", None)
+            takeover_payload.pop("merge_ready_receipt", None)
             claimed_response = self.client.claim_task(
                 envelope=self.envelope,
                 task_id=candidate.run_id,
@@ -400,7 +408,7 @@ class BuilderOpsVerificationLedger:
                     f"verification-head-takeover-claim:{candidate.run_id}:"
                     f"{projected['current_head_sha']}:{existing['version']}"
                 ),
-                request=_payload_for(existing, takeover),
+                request=takeover_payload,
                 ttl_seconds=60,
             )
             takeover_lease = claimed_response.get("lease")
@@ -466,6 +474,80 @@ class BuilderOpsVerificationLedger:
                 return concurrent
             raise
         return self.get(run_id) or run
+
+    def _settle_prior_head_effect(
+        self,
+        run: VerificationRun,
+        *,
+        takeover_head: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        """Terminalize a stale read-only model effect before head takeover.
+
+        A GitHub effect is never safe to compensate without repository
+        readback. Model coordinator output, however, is review-only and can be
+        durably discarded when its head is superseded. The outbox operation is
+        first fenced (or recovered), then reconciled as a successful terminal
+        no-effect so it cannot later be replayed against either head.
+        """
+
+        pending = payload.get("pending_privileged_effect")
+        if not isinstance(pending, Mapping):
+            return
+        if self.effect_outbox is None:
+            raise ValueError(
+                "verification head takeover cannot settle its pending effect"
+            )
+        operation_key = pending.get("operation_key")
+        effect_type = pending.get("effect_type")
+        pending_head = pending.get("head_sha")
+        if (
+            not isinstance(operation_key, str)
+            or pending.get("task_id") != run.run_id
+            or not isinstance(effect_type, str)
+            or pending_head != run.current_head_sha
+        ):
+            raise ValueError(
+                "verification head takeover found a malformed effect binding"
+            )
+        status = self.effect_outbox.status(operation_key).get("status")
+        if status in {"succeeded", "dead_letter"}:
+            return
+        if effect_type != "model.verification_coordinator":
+            raise ValueError(
+                "verification head takeover requires GitHub effect readback"
+            )
+        if status == "pending":
+            claim = self.effect_outbox.claim(operation_key)
+            self._validate_effect_claim(
+                claim,
+                operation_key=operation_key,
+                run_id=run.run_id,
+                effect_type=effect_type,
+                require_eligible=True,
+            )
+            self._effect_claims[operation_key] = claim
+        elif status in {"claimed", "unknown"}:
+            self.recover_effect(
+                operation_key,
+                run_id=run.run_id,
+                effect_type=effect_type,
+            )
+        else:
+            raise ValueError(
+                "verification head takeover effect has no durable authority"
+            )
+        self.finish_effect(
+            operation_key,
+            observed_applied=True,
+            evidence={
+                "outcome": "terminal_no_effect",
+                "reason": "head_superseded",
+                "old_head_sha": run.current_head_sha,
+                "new_head_sha": takeover_head,
+                "model_output_applied": False,
+            },
+        )
 
     def get(self, run_id: str) -> VerificationRun | None:
         try:
@@ -1021,6 +1103,105 @@ class BuilderOpsVerificationLedger:
             "mechanisms": mechanisms,
         }
 
+    @staticmethod
+    def _required_clean_review_rounds(
+        run: VerificationRun,
+        attempts: Sequence[Mapping[str, object]],
+    ) -> int:
+        required = _request_final_review_rounds(run.request)
+        repairs = [
+            row
+            for row in attempts
+            if row.get("kind") in {"standard_repair", "escalated_repair"}
+        ]
+        if (
+            not repairs
+            or run.repair_budget_policy != REPAIR_BUDGET_POLICY_MECHANISM
+        ):
+            return required
+        blocking_rounds: dict[
+            tuple[str, str, str, str], set[str]
+        ] = {}
+        for row in attempts:
+            receipt = row.get("receipt")
+            reviewed_attempt_id = (
+                receipt.get("reviewed_attempt_id")
+                if isinstance(receipt, Mapping)
+                else None
+            )
+            values = (
+                row.get("session_id"),
+                reviewed_attempt_id,
+                row.get("failure_domain"),
+                row.get("mechanism_id"),
+                row.get("finding_id"),
+            )
+            if (
+                row.get("kind") == "review"
+                and row.get("outcome") == "blocking"
+                and all(isinstance(value, str) and value for value in values)
+            ):
+                session_id, reviewed, domain, mechanism, finding = values
+                round_key = (
+                    str(session_id),
+                    str(reviewed),
+                    str(domain),
+                    str(mechanism),
+                )
+                blocking_rounds.setdefault(round_key, set()).add(
+                    str(finding)
+                )
+        if any(len(findings) >= 2 for findings in blocking_rounds.values()):
+            required = 2
+        final_repair = repairs[-1]
+        final_key = (
+            final_repair.get("failure_domain"),
+            final_repair.get("mechanism_id"),
+        )
+        final_index = next(
+            (
+                index
+                for index in range(len(attempts) - 1, -1, -1)
+                if attempts[index].get("attempt_id")
+                == final_repair.get("attempt_id")
+            ),
+            -1,
+        )
+        preceding_blocking = next(
+            (
+                row
+                for row in reversed(attempts[:final_index])
+                if row.get("kind") == "review"
+                and row.get("outcome") == "blocking"
+            ),
+            None,
+        )
+        has_prior_same_key_repair = any(
+            row.get("kind")
+            in {"standard_repair", "escalated_repair"}
+            and (
+                row.get("failure_domain"),
+                row.get("mechanism_id"),
+            )
+            == final_key
+            for row in attempts[:final_index]
+        )
+        if (
+            all(
+                isinstance(value, str) and value
+                for value in final_key
+            )
+            and has_prior_same_key_repair
+            and preceding_blocking is not None
+            and (
+                preceding_blocking.get("failure_domain"),
+                preceding_blocking.get("mechanism_id"),
+            )
+            == final_key
+        ):
+            required = 2
+        return required
+
     def closure_ready(self, run_id: str) -> bool:
         run = self.get(run_id)
         if run is None:
@@ -1048,7 +1229,7 @@ class BuilderOpsVerificationLedger:
                 and review_receipt.get("head_sha") == run.current_head_sha
             ):
                 reviews.append(row)
-        required = _request_final_review_rounds(run.request)
+        required = self._required_clean_review_rounds(run, attempts)
         return (
             len(reviews) >= required
             and len(
@@ -1077,7 +1258,7 @@ class BuilderOpsVerificationLedger:
             raise ValueError("merge readiness has no verification anchor")
         anchor = repairs[-1] if repairs else verifications[-1]
         anchor_id = anchor.get("attempt_id")
-        required = _request_final_review_rounds(run.request)
+        required = self._required_clean_review_rounds(run, attempts)
         reviews: builtins.list[dict[str, object]] = []
         for row in attempts:
             review_receipt = row.get("receipt")
@@ -1389,6 +1570,25 @@ class BuilderOpsVerificationLedger:
             if operation_key != expected_operation_key:
                 raise ValueError("BuilderOps effect operation identity is inconsistent")
         claim = self.effect_outbox.claim(operation_key)
+        self._validate_effect_claim(
+            claim,
+            operation_key=operation_key,
+            run_id=run_id,
+            effect_type=effect_type,
+            require_eligible=True,
+        )
+        self._effect_claims[operation_key] = claim
+        return operation_key
+
+    def _validate_effect_claim(
+        self,
+        claim: Mapping[str, object],
+        *,
+        operation_key: str,
+        run_id: str,
+        effect_type: str,
+        require_eligible: bool,
+    ) -> None:
         expires_at = claim.get("expires_at")
         fencing_token = claim.get("fencing_token")
         try:
@@ -1396,24 +1596,30 @@ class BuilderOpsVerificationLedger:
                 str(expires_at).replace("Z", "+00:00")
             )
         except ValueError as exc:
-            raise ValueError("verification outbox claim expiry is malformed") from exc
+            raise ValueError(
+                "verification outbox claim expiry is malformed"
+            ) from exc
         if (
             claim.get("repository") != self.repository
             or claim.get("operation_key") != operation_key
             or claim.get("effect_type") != effect_type
             or claim.get("task_id") != run_id
-            or claim.get("effect_eligible") is not True
+            or (
+                require_eligible
+                and claim.get("effect_eligible") is not True
+            )
             or not isinstance(fencing_token, int)
             or isinstance(fencing_token, bool)
             or fencing_token < 1
             or expires.tzinfo is None
-            or expires <= datetime.now(timezone.utc)
+            or (
+                require_eligible
+                and expires <= datetime.now(timezone.utc)
+            )
         ):
             raise ValueError(
                 "verification outbox claim is not current fenced effect authority"
             )
-        self._effect_claims[operation_key] = claim
-        return operation_key
 
     def finish_effect(
         self,
@@ -1476,29 +1682,13 @@ class BuilderOpsVerificationLedger:
         if self.effect_outbox is None:
             raise ValueError("verification effect outbox is unavailable")
         claim = self.effect_outbox.recover(operation_key)
-        expires_at = claim.get("expires_at")
-        fencing_token = claim.get("fencing_token")
-        try:
-            expires = datetime.fromisoformat(
-                str(expires_at).replace("Z", "+00:00")
-            )
-        except ValueError as exc:
-            raise ValueError(
-                "recovered verification effect claim expiry is malformed"
-            ) from exc
-        if (
-            claim.get("repository") != self.repository
-            or claim.get("operation_key") != operation_key
-            or claim.get("task_id") != run_id
-            or claim.get("effect_type") != effect_type
-            or not isinstance(fencing_token, int)
-            or isinstance(fencing_token, bool)
-            or fencing_token < 1
-            or expires.tzinfo is None
-        ):
-            raise ValueError(
-                "recovered outbox claim identity is not fenced readback authority"
-            )
+        self._validate_effect_claim(
+            claim,
+            operation_key=operation_key,
+            run_id=run_id,
+            effect_type=effect_type,
+            require_eligible=False,
+        )
         self._effect_claims[operation_key] = claim
         self._unknown_effects.add(operation_key)
         return claim

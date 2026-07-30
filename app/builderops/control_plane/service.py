@@ -358,6 +358,24 @@ def _enforce_repo_scope(credential: Credential, repository: str) -> None:
         )
 
 
+def _enforce_outbox_principal(
+    intent: Mapping[str, Any], credential: Credential
+) -> None:
+    """Bind recovery and reconciliation to the credential that claimed it."""
+
+    envelope = intent.get("authority_envelope")
+    if (
+        not isinstance(envelope, Mapping)
+        or envelope.get("actor") != credential.principal
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "outbox claim does not belong to the authenticated principal"
+            ),
+        )
+
+
 def _lease_from_input(
     repository: str, lease: LeaseInput, credential: Credential
 ) -> Lease:
@@ -992,11 +1010,18 @@ def create_app(
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            claim = _outbox_claim_from_input(
+                request.claim, repository=request.envelope.repository
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
             await run_in_threadpool(
                 store.mark_effect_unknown,
-                _outbox_claim_from_input(
-                    request.claim, repository=request.envelope.repository
-                ),
+                claim,
                 detail=request.detail,
             )
         except Exception as exc:
@@ -1011,15 +1036,16 @@ def create_app(
     ) -> dict[str, Any]:
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                request.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
             claim = await run_in_threadpool(
                 store.outbox_claim,
                 canonical_repository(request.envelope.repository),
                 request.operation_key,
-            )
-            intent = await run_in_threadpool(
-                store.outbox_intent,
-                request.envelope.repository,
-                claim.operation_key,
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
@@ -1081,11 +1107,18 @@ def create_app(
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            claim = _outbox_claim_from_input(
+                request.claim, repository=request.envelope.repository
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
             result = await run_in_threadpool(
                 store.reconcile_outbox,
-                _outbox_claim_from_input(
-                    request.claim, repository=request.envelope.repository
-                ),
+                claim,
                 observed_applied=request.observed_applied,
                 evidence=request.evidence,
             )

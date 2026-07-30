@@ -504,3 +504,41 @@ def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(
         },
     )
     assert cross_repo.status_code == 403
+
+    outbox_a = BuilderOpsOutboxExecutor(
+        client_a,
+        repository=REPO,
+        worker_id="executor:a",
+    )
+    ledger.effect_outbox = outbox_a
+    operation_key = ledger.begin_effect(
+        verification_run.run_id,
+        effect_type="model.verification_coordinator",
+        payload={
+            "repository": REPO,
+            "head_sha": verification_run.current_head_sha,
+        },
+        holder=first_heartbeat.claimed_by or "",
+        lease_id=second_heartbeat.lease_id,
+        idempotency_key="principal-bound-effect",
+    )
+    claim_identity = ledger.effect_claim(operation_key)
+
+    with pytest.raises(ControlPlaneScopeError):
+        client_b.recover_outbox(
+            envelope=envelope,
+            operation_key=operation_key,
+        )
+    with pytest.raises(ControlPlaneScopeError):
+        client_b.mark_outbox_unknown(
+            envelope=envelope,
+            claim=claim_identity,
+            detail="cross-principal mutation must fail",
+        )
+    with pytest.raises(ControlPlaneScopeError):
+        client_b.reconcile_outbox(
+            envelope=envelope,
+            claim=claim_identity,
+            observed_applied=False,
+            evidence={"outcome": "cross-principal mutation must fail"},
+        )

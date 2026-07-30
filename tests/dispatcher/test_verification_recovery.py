@@ -4,7 +4,12 @@ import app.dispatcher.cli as dispatcher_cli
 import pytest
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
+from app.dispatcher.verification_agent_loop import VerificationAgentLoop
 from app.dispatcher.verification_consumer import VerificationConsumer
+from app.dispatcher.verification_dispatch import (
+    _authenticated_verification_request,
+    _live_observed_verification_request,
+)
 from tests.dispatcher.builderops_verification_fakes import (
     FakeBuilderOpsClient,
     FakeVerificationOutbox,
@@ -17,6 +22,8 @@ from tests.dispatcher.test_verification_consumer import (
     eligible_pr,
 )
 from tests.dispatcher.verification_helpers import HEAD, REPO, request
+
+NEXT_HEAD = "b" * 40
 
 
 def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
@@ -126,6 +133,18 @@ class CrashAfterDurableAttemptOutbox(FakeVerificationOutbox):
         super().mark_unknown(claim, detail=detail)
         raise SystemExit(
             "simulated host crash after durable model attempt"
+        )
+
+
+class CrashAfterSucceededReconciliationOutbox(FakeVerificationOutbox):
+    def reconcile(self, claim, *, observed_applied: bool, evidence):
+        super().reconcile(
+            claim,
+            observed_applied=observed_applied,
+            evidence=evidence,
+        )
+        raise SystemExit(
+            "simulated crash after succeeded model reconciliation"
         )
 
 
@@ -345,6 +364,191 @@ def test_recovery_reconciles_durable_model_attempt_without_relaunch() -> None:
     assert restarted.ledger.merge_ready_receipt(run_id) is not None
     assert outbox.states
     assert set(outbox.states.values()) == {"succeeded"}
+
+
+def test_succeeded_model_effect_recovery_applies_attempt_without_relaunch() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = CrashAfterSucceededReconciliationOutbox(api)
+    first_launcher = VerifiedLauncher()
+    first = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        first_launcher,
+        holder="verification-host",
+    )
+
+    with pytest.raises(
+        SystemExit, match="succeeded model reconciliation"
+    ):
+        first.consume(request())
+
+    run_id = next(iter(api.tasks))
+    assert len(api.attempt_rows[run_id]) == 1
+    assert set(outbox.states.values()) == {"succeeded"}
+    task = api.tasks[run_id]
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+
+    restarted_launcher = VerifiedLauncher()
+    restarted = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        restarted_launcher,
+        holder="verification-host",
+    )
+    recovered = restarted.recover(run_id)
+
+    assert recovered.status == "running"
+    assert restarted_launcher.calls == []
+    assert len(first_launcher.calls) == 1
+    assert len(api.attempt_rows[run_id]) == 2
+    assert restarted.ledger.merge_ready_receipt(run_id) is not None
+
+
+def test_api_ledger_preserves_dynamic_low_convergence_review_rounds() -> None:
+    api = FakeBuilderOpsClient()
+    ledger = BuilderOpsVerificationLedger(api, repository=REPO)
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "verification-host")
+    assert claimed.lease_id is not None
+    loop = VerificationAgentLoop(
+        ledger,
+        run.run_id,
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+    )
+    context = {"head_sha": HEAD}
+    loop.repair(
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="effect-recovery",
+        session_id="fix-1",
+        capability="gpt-5.6-sol",
+        reasoning_effort="high",
+        context=context,
+        outcome="fixed",
+    )
+    with pytest.raises(ValueError):
+        loop.repair(
+            finding_id="F2",
+            failure_domain="review_code_correctness",
+            mechanism_id="effect-recovery",
+            session_id="fix-2",
+            capability="gpt-5.6-sol",
+            reasoning_effort="high",
+            context=context,
+            outcome="fixed",
+        )
+    loop.review(
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="effect-recovery",
+        session_id="blocking-review",
+        capability="gpt-5.6-sol",
+        reasoning_effort="xhigh",
+        context=context,
+        outcome="blocking",
+    )
+    loop.repair(
+        finding_id="F2",
+        failure_domain="review_code_correctness",
+        mechanism_id="effect-recovery",
+        session_id="fix-2",
+        capability="gpt-5.6-sol",
+        reasoning_effort="high",
+        context=context,
+        outcome="fixed",
+    )
+    loop.review(
+        session_id="clean-review-1",
+        capability="gpt-5.6-sol",
+        reasoning_effort="xhigh",
+        context=context,
+        outcome="clean",
+    )
+    assert ledger.closure_ready(run.run_id) is False
+    loop.review(
+        session_id="clean-review-2",
+        capability="gpt-5.6-sol",
+        reasoning_effort="xhigh",
+        context=context,
+        outcome="clean",
+    )
+    assert ledger.closure_ready(run.run_id) is True
+
+
+def _live_takeover_request(
+    ledger: BuilderOpsVerificationLedger,
+    head_sha: str,
+):
+    payload = request(head_sha)
+    authenticated = _authenticated_verification_request(payload)
+    token = ledger.canonical_chain_token(authenticated)
+    return _live_observed_verification_request(
+        authenticated,
+        observed_repository=REPO,
+        observed_pr_number=3603,
+        observed_head_sha=head_sha,
+        observed_state="open",
+        observed_merged_at=None,
+        observed_draft=False,
+        observed_linked_issue=3603,
+        observed_closing_issues=(3603,),
+        observed_supporting_issues=(),
+        observed_final_review_rounds=1,
+        canonical_chain_token=token,
+    )
+
+
+def test_head_takeover_terminalizes_prior_model_effect_and_clears_binding() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "verification-host")
+    assert claimed.lease_id is not None
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="model.verification_coordinator",
+        payload={"repository": REPO, "head_sha": HEAD},
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+        idempotency_key="prior-head-model",
+    )
+    ledger.abandon_effect(
+        operation_key, detail="simulated prior-head process loss"
+    )
+    ledger.backoff(
+        run.run_id,
+        {"outcome": "retry"},
+        "2000-01-01T00:00:00+00:00",
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+    )
+
+    taken_over = ledger.ingest(
+        _live_takeover_request(ledger, NEXT_HEAD)
+    )
+
+    assert taken_over.current_head_sha == NEXT_HEAD
+    assert taken_over.status == "queued"
+    assert outbox.states[operation_key] == "succeeded"
+    assert ledger.pending_effect_binding(run.run_id) is None
+    assert outbox.evidence[operation_key] == {
+        "outcome": "terminal_no_effect",
+        "reason": "head_superseded",
+        "old_head_sha": HEAD,
+        "new_head_sha": NEXT_HEAD,
+        "model_output_applied": False,
+    }
 
 
 def test_attempt_commit_preserves_effect_identity_until_reconciliation() -> None:

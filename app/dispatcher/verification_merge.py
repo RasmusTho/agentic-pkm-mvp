@@ -97,6 +97,16 @@ class ProtectedRepositoryAuthority(Protocol):
         self, repository: str, pr_number: int, head_sha: str
     ) -> Mapping[str, bool]: ...
 
+    def verified_merge_prepared(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        run_id: str,
+        head_sha: str,
+        expected_repair_budget: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
     def conditional_merge(
         self,
         repository: str,
@@ -129,6 +139,10 @@ class EffectIntentLedger(Protocol):
     def merge_ready_receipt(
         self, run_id: str
     ) -> Mapping[str, object] | None: ...
+
+    def repair_budget_projection(
+        self, run_id: str
+    ) -> Mapping[str, object]: ...
 
     def begin_effect(
         self,
@@ -326,6 +340,27 @@ class VerificationMergeExecutor:
         )
 
     @staticmethod
+    def _same_prepared_gate(
+        left: Mapping[str, object],
+        right: Mapping[str, object],
+    ) -> bool:
+        return hashlib.sha256(
+            json.dumps(
+                dict(left),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).digest() == hashlib.sha256(
+            json.dumps(
+                dict(right),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).digest()
+
+    @staticmethod
     def _validate_claim(
         claim: Mapping[str, object],
         *,
@@ -432,6 +467,26 @@ class VerificationMergeExecutor:
         )
         if not self._required_gates_pass(gates):
             raise MergeAuthorityError("required CI/review/protection/scope gate is missing")
+        prepared_gate: Mapping[str, object] | None = None
+        repair_budget = self.ledger.repair_budget_projection(run.run_id)
+        if not dry_run:
+            prepared_gate = self.repository.verified_merge_prepared(
+                canonical,
+                run.pr_number,
+                run_id=run.run_id,
+                head_sha=run.current_head_sha,
+                expected_repair_budget=repair_budget,
+            )
+            if (
+                prepared_gate.get("governing_issue")
+                != run.request.get("linked_issue")
+                or prepared_gate.get("closing_issues")
+                != list(run.closing_authority)
+                or prepared_gate.get("closing_reference_count") != 0
+            ):
+                raise MergeAuthorityError(
+                    "verified-merge prepared authority does not match the run"
+                )
 
         try:
             operation_key = self.ledger.begin_effect(
@@ -447,6 +502,11 @@ class VerificationMergeExecutor:
                     "manifest_sha256": manifest.content_sha256,
                     "credential_id": manifest.credential_id,
                     "rotation_generation": manifest.credential_generation,
+                    "verified_merge_prepared": (
+                        dict(prepared_gate)
+                        if prepared_gate is not None
+                        else None
+                    ),
                 },
                 holder=holder,
                 lease_id=lease_id,
@@ -468,11 +528,31 @@ class VerificationMergeExecutor:
         effect_gates = self.repository.required_gates(
             canonical, run.pr_number, effect_head
         )
+        effect_prepared_gate = (
+            self.repository.verified_merge_prepared(
+                canonical,
+                run.pr_number,
+                run_id=run.run_id,
+                head_sha=run.current_head_sha,
+                expected_repair_budget=repair_budget,
+            )
+            if prepared_gate is not None
+            else None
+        )
         if (
             effect_base != base_sha
             or effect_head != run.current_head_sha
             or not self._same_manifest(manifest, effect_manifest)
             or not self._required_gates_pass(effect_gates)
+            or (
+                prepared_gate is not None
+                and (
+                    effect_prepared_gate is None
+                    or not self._same_prepared_gate(
+                        prepared_gate, effect_prepared_gate
+                    )
+                )
+            )
         ):
             self._terminal_no_effect(
                 operation_key,
@@ -481,6 +561,11 @@ class VerificationMergeExecutor:
                     "head_sha": effect_head,
                     "manifest_blob_sha": effect_manifest.blob_sha,
                     "required_gates": dict(effect_gates),
+                    "verified_merge_prepared": (
+                        dict(effect_prepared_gate)
+                        if effect_prepared_gate is not None
+                        else None
+                    ),
                 },
             )
             raise MergeAuthorityError(

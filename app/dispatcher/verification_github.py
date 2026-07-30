@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -15,6 +16,14 @@ from app.builderops.control_plane.routing import RepoRef
 from app.dispatcher.verification_merge import (
     MergeAuthorityError,
     ProtectedDeliveryManifest,
+)
+from app.dispatcher.verification_contract import (
+    has_closing_issue_attempt,
+    resolve_neutralized_issue_authority,
+)
+from app.dispatcher.verified_merge import (
+    resolve_verified_merge_authority_receipt,
+    resolve_verified_merge_phase,
 )
 
 _DEFAULT_MANIFEST_PATH = ".builderops/delivery-manifest.json"
@@ -130,6 +139,61 @@ class GitHubProtectedRepositoryAuthority:
             raise MergeAuthorityError("GitHub returned an unexpected response")
         return body
 
+    def _get_list(
+        self, path: str, **params: object
+    ) -> list[Mapping[str, Any]]:
+        response = self._http.get(
+            path,
+            params={key: str(value) for key, value in params.items()},
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        if response.status_code >= 400:
+            raise MergeAuthorityError(
+                f"GitHub protected-repository read failed ({response.status_code})"
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise MergeAuthorityError("GitHub returned malformed JSON") from exc
+        if not isinstance(body, list) or any(
+            not isinstance(row, Mapping) for row in body
+        ):
+            raise MergeAuthorityError("GitHub returned an unexpected response")
+        return body
+
+    def _graphql(
+        self, query: str, variables: Mapping[str, object]
+    ) -> Mapping[str, Any]:
+        response = self._http.post(
+            "/graphql",
+            json={"query": query, "variables": dict(variables)},
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        if response.status_code >= 400:
+            raise MergeAuthorityError(
+                f"GitHub merge-authority read failed ({response.status_code})"
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise MergeAuthorityError("GitHub returned malformed JSON") from exc
+        if (
+            not isinstance(body, Mapping)
+            or body.get("errors")
+            or not isinstance(body.get("data"), Mapping)
+        ):
+            raise MergeAuthorityError(
+                "GitHub merge-authority response is malformed"
+            )
+        return body
+
     def _repository(self, repository: str) -> Mapping[str, Any]:
         canonical = RepoRef.parse(repository).canonical
         return self._get(f"/repos/{canonical}")
@@ -203,6 +267,162 @@ class GitHubProtectedRepositoryAuthority:
         if not isinstance(sha, str) or len(sha) != 40:
             raise MergeAuthorityError("pull request head OID is malformed")
         return sha
+
+    def _issue_comments(
+        self, repository: str, pr_number: int
+    ) -> list[Mapping[str, Any]]:
+        rows: list[Mapping[str, Any]] = []
+        for page in range(1, 11):
+            batch = self._get_list(
+                f"/repos/{repository}/issues/{pr_number}/comments",
+                per_page=100,
+                page=page,
+            )
+            rows.extend(batch)
+            if len(batch) < 100:
+                return rows
+        raise MergeAuthorityError(
+            "GitHub merge-authority comments exceed bounded scan"
+        )
+
+    def _closing_issue_references(
+        self, repository: str, pr_number: int
+    ) -> Sequence[Mapping[str, Any]]:
+        owner, name = RepoRef.parse(repository).canonical.split("/", 1)
+        body = self._graphql(
+            """
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  closingIssuesReferences(first: 11) {
+                    nodes {
+                      number
+                      repository { nameWithOwner }
+                    }
+                    pageInfo { hasNextPage }
+                  }
+                }
+              }
+            }
+            """,
+            {"owner": owner, "name": name, "number": pr_number},
+        )
+        data = body["data"]
+        repository_row = data.get("repository")
+        pull = (
+            repository_row.get("pullRequest")
+            if isinstance(repository_row, Mapping)
+            else None
+        )
+        closing = (
+            pull.get("closingIssuesReferences")
+            if isinstance(pull, Mapping)
+            else None
+        )
+        nodes = closing.get("nodes") if isinstance(closing, Mapping) else None
+        page_info = (
+            closing.get("pageInfo")
+            if isinstance(closing, Mapping)
+            else None
+        )
+        if (
+            not isinstance(nodes, list)
+            or any(not isinstance(row, Mapping) for row in nodes)
+            or not isinstance(page_info, Mapping)
+            or page_info.get("hasNextPage") is not False
+        ):
+            raise MergeAuthorityError(
+                "GitHub closing-reference evidence is incomplete"
+            )
+        return nodes
+
+    def verified_merge_prepared(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        run_id: str,
+        head_sha: str,
+        expected_repair_budget: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        """Authenticate the exact neutralized/prepared merge window."""
+
+        canonical = RepoRef.parse(repository).canonical
+        pull = self._pull(canonical, pr_number)
+        body = pull.get("body")
+        title = pull.get("title")
+        head = pull.get("head")
+        observed_head = (
+            head.get("sha") if isinstance(head, Mapping) else None
+        )
+        neutralized = resolve_neutralized_issue_authority(body)
+        if (
+            pull.get("number") != pr_number
+            or pull.get("state") != "open"
+            or pull.get("merged") is True
+            or pull.get("merged_at") is not None
+            or observed_head != head_sha
+            or neutralized is None
+            or has_closing_issue_attempt(title)
+            or has_closing_issue_attempt(body)
+        ):
+            raise MergeAuthorityError(
+                "real merge requires the exact neutralized live PR"
+            )
+        comments = self._issue_comments(canonical, pr_number)
+        authority = resolve_verified_merge_authority_receipt(
+            comments,
+            pr=pull,
+            repository=canonical,
+            expected_run_id=run_id,
+            expected_repair_budget=expected_repair_budget,
+        )
+        if authority is None:
+            raise MergeAuthorityError(
+                "real merge requires one authenticated authority receipt"
+            )
+        phase = resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority,
+            pr=pull,
+        )
+        if (
+            phase is None
+            or phase.get("phase") != "prepared"
+            or phase.get("closed_issues") != []
+            or phase.get("reopened_unauthorized_issues") != []
+            or phase.get("merge_commit_sha") is not None
+            or self._closing_issue_references(canonical, pr_number)
+        ):
+            raise MergeAuthorityError(
+                "real merge requires empty closers and a continuous prepared phase"
+            )
+
+        def digest(value: Mapping[str, object]) -> str:
+            return hashlib.sha256(
+                json.dumps(
+                    dict(value),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+
+        return {
+            "contract": "verified_merge_prepared_gate.v1",
+            "repository": canonical,
+            "pr_number": pr_number,
+            "run_id": run_id,
+            "head_sha": head_sha,
+            "governing_issue": authority.get("governing_issue"),
+            "closing_issues": authority.get("closing_issues"),
+            "neutralized_body_sha256": authority.get(
+                "neutralized_body_sha256"
+            ),
+            "authority_sha256": digest(authority),
+            "phase_sha256": digest(phase),
+            "closing_reference_count": 0,
+        }
 
     def _check_runs(
         self, repository: str, head_sha: str
@@ -434,8 +654,20 @@ class GitHubProtectedRepositoryAuthority:
                 for row in candidates
             )
 
+        latest_repo_checks = [
+            row
+            for row in latest_checks.values()
+            if isinstance(row, Mapping)
+        ]
+        repo_standard_checks_green = bool(latest_repo_checks) and all(
+            row.get("status") == "completed"
+            and row.get("conclusion")
+            in {"success", "skipped", "neutral"}
+            for row in latest_repo_checks
+        )
         ci = bool(
             required
+            and repo_standard_checks_green
             and all(
                 (
                     successful_check(context, app_id)

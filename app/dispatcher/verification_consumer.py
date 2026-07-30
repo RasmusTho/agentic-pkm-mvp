@@ -5056,15 +5056,8 @@ class VerificationConsumer:
                 == "model.verification_coordinator"
                 and isinstance(pending.get("operation_key"), str)
                 and pending.get("head_sha") == run.current_head_sha
-                and pending.get("outbox_status")
-                in {"claimed", "unknown"}
             ):
-                recovered_operation_key = str(pending["operation_key"])
-                recover_effect(
-                    recovered_operation_key,
-                    run_id=run.run_id,
-                    effect_type="model.verification_coordinator",
-                )
+                outbox_status = pending.get("outbox_status")
                 attempt_reader = getattr(self.ledger, "attempts", None)
                 attempts = (
                     attempt_reader(run.run_id)
@@ -5086,8 +5079,38 @@ class VerificationConsumer:
                     raise ValueError(
                         "verification run has conflicting durable model attempts"
                     )
-                if matching_attempts:
+                if outbox_status in {"claimed", "unknown"}:
+                    recovered_operation_key = str(
+                        pending["operation_key"]
+                    )
+                    recover_effect(
+                        recovered_operation_key,
+                        run_id=run.run_id,
+                        effect_type="model.verification_coordinator",
+                    )
+                    if matching_attempts:
+                        recovered_attempt = matching_attempts[0]
+                elif outbox_status == "succeeded":
+                    evidence = pending.get("reconciliation_evidence")
+                    if (
+                        len(matching_attempts) != 1
+                        or not isinstance(evidence, Mapping)
+                        or evidence.get("outcome")
+                        != "model_receipt_durably_recorded"
+                        or evidence.get("head_sha")
+                        != run.current_head_sha
+                        or evidence.get("session_id")
+                        != matching_attempts[0].get("session_id")
+                    ):
+                        raise ValueError(
+                            "succeeded model effect lacks its durable attempt"
+                        )
                     recovered_attempt = matching_attempts[0]
+                elif outbox_status == "dead_letter":
+                    raise ValueError(
+                        "verification model effect is terminal without "
+                        "applicable review evidence"
+                    )
         return self._launch_after_live_fence(
             claimed,
             recovered_effect_operation_key=recovered_operation_key,
