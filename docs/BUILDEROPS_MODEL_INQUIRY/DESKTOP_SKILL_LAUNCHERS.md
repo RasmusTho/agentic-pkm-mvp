@@ -89,12 +89,13 @@ only after staging deletion succeeded or the staged path was absent. Launcher st
 captured and validated before cleanup, so a cleanup failure is reported separately and cannot erase
 or reclassify the launcher outcome.
 
-The SSH host must expose both durable role entrypoints before its launcher is considered ready.
-They are installed and checked with the repository-owned
+The SSH host must expose the repository-owned fixed launcher and both durable role entrypoints
+before its launcher is considered ready. All three are installed and content/lineage-checked with the repository-owned
 `scripts/install_model_inquiry_host.py` routine documented in the host agent playbook. This
 stabilizes the versioned command boundary across shell and reboot changes without moving provider
 credential values into Git. Each installed wrapper enters the same `run_with_host_secrets` boundary
-before executing the versioned provider-API adapter; it never launches a subscription CLI.
+before executing the versioned provider-API adapter; it never launches a subscription CLI. A merely
+discoverable stale `yggdrasil-model-inquiry` is rejected.
 
 ## Concretely
 

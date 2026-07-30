@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and verify durable BuilderOps Model Inquiry role entrypoints."""
+"""Install and verify the fixed BuilderOps Model Inquiry launcher and role entrypoints."""
 
 from __future__ import annotations
 
@@ -21,13 +21,17 @@ from typing import Sequence
 SCHEMA_INSTALL = "builderops.model-inquiry-host-install.v1"
 SCHEMA_CHECK = "builderops.model-inquiry-host-check.v1"
 TRUSTED_REPO_ROOT = Path(__file__).resolve().parents[1]
-# The installed headless role entrypoints bind to the provider-API role adapter.
-# The interactive subscription adapter is deliberately not installable from here:
-# no headless entrypoint may depend on an interactive subscription session
-# (ADR-0064 §4).
+# The installed fixed launcher and headless role entrypoints bind to the
+# declared-credential provider-API path. The interactive subscription adapter
+# is deliberately not installable from here: no headless entrypoint may depend
+# on an interactive subscription session (ADR-0064 §4).
 VERSIONED_ADAPTER_NAME = "model_inquiry_role_adapter.py"
 VERSIONED_ADAPTER_SHA256 = "51510b1e8095f322ec410cf073bdb534b5e8a690e18cfa34c82eff91222aae77"
+VERSIONED_LAUNCHER_NAME = "start_model_inquiry.py"
+VERSIONED_LAUNCHER_SHA256 = "ff70bd2aea2f5a5ac79ce9831c12cc095be18973547a2688f610db1af0f8c3b4"
+FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry"
 CREDENTIAL_RESOLUTION = "host-secret-contract"
+LAUNCHER_LINEAGE = "repo-owned-declared-credential"
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,9 @@ class Checkout:
     adapter_sha256: str
     root_identity: tuple[int, int]
     adapter_identity: tuple[int, int]
+    launcher: Path
+    launcher_sha256: str
+    launcher_identity: tuple[int, int]
 
 
 def _resolve_file(path: Path, *, label: str, executable: bool = False) -> Path:
@@ -175,6 +182,11 @@ def _resolve_repo_root(path: Path) -> Checkout:
                 VERSIONED_ADAPTER_NAME,
                 label="versioned role adapter",
             )
+            launcher_bytes, launcher_details = _read_regular_file_at(
+                scripts_fd,
+                VERSIONED_LAUNCHER_NAME,
+                label="versioned fixed launcher",
+            )
         finally:
             os.close(scripts_fd)
         adapter_sha256 = hashlib.sha256(adapter_bytes).hexdigest()
@@ -182,14 +194,23 @@ def _resolve_repo_root(path: Path) -> Checkout:
             raise HostInstallError(
                 "versioned role adapter must match the installer digest"
             )
+        launcher_sha256 = hashlib.sha256(launcher_bytes).hexdigest()
+        if launcher_sha256 != VERSIONED_LAUNCHER_SHA256:
+            raise HostInstallError(
+                "versioned fixed launcher must match the installer digest"
+            )
         _assert_directory_identity(resolved, root_identity, label="repo root")
         adapter = resolved / "scripts" / VERSIONED_ADAPTER_NAME
+        launcher = resolved / "scripts" / VERSIONED_LAUNCHER_NAME
         return Checkout(
             resolved,
             adapter,
             adapter_sha256,
             root_identity,
             (adapter_details.st_dev, adapter_details.st_ino),
+            launcher,
+            launcher_sha256,
+            (launcher_details.st_dev, launcher_details.st_ino),
         )
     finally:
         os.close(root_fd)
@@ -240,7 +261,28 @@ def _wrapper_content(
     )
 
 
-def _assert_adapter_identity(checkout: Checkout) -> None:
+def _launcher_content(
+    *,
+    python: Path,
+    launcher: Path,
+    launcher_sha256: str,
+) -> str:
+    return (
+        "#!/bin/sh\n"
+        f"# launcher-sha256={launcher_sha256}\n"
+        f"# credential-resolution={CREDENTIAL_RESOLUTION}\n"
+        f"# launcher-lineage={LAUNCHER_LINEAGE}\n"
+        "set -eu\n"
+        f"cd {shlex.quote(str(launcher.parents[1]))}\n"
+        f"export BUILDEROPS_PYTHON={shlex.quote(str(python))}\n"
+        f"exec {shlex.quote(str(python))} -m app.ops.host_secret_bootstrap "
+        "--channel dev --consumer builderops-model-inquiry "
+        "--run-on-credential-unavailable -- "
+        f"{shlex.quote(str(python))} {shlex.quote(str(launcher))} \"$@\"\n"
+    )
+
+
+def _assert_versioned_sources_identity(checkout: Checkout) -> None:
     root_fd = _open_directory_chain(checkout.root, label="repo root")
     try:
         if _directory_identity(root_fd) != checkout.root_identity:
@@ -260,6 +302,11 @@ def _assert_adapter_identity(checkout: Checkout) -> None:
                 VERSIONED_ADAPTER_NAME,
                 label="versioned role adapter",
             )
+            launcher_bytes, launcher_details = _read_regular_file_at(
+                scripts_fd,
+                VERSIONED_LAUNCHER_NAME,
+                label="versioned fixed launcher",
+            )
         finally:
             os.close(scripts_fd)
     finally:
@@ -269,6 +316,12 @@ def _assert_adapter_identity(checkout: Checkout) -> None:
         or hashlib.sha256(adapter_bytes).hexdigest() != checkout.adapter_sha256
     ):
         raise HostInstallError("versioned role adapter identity changed")
+    if (
+        (launcher_details.st_dev, launcher_details.st_ino)
+        != checkout.launcher_identity
+        or hashlib.sha256(launcher_bytes).hexdigest() != checkout.launcher_sha256
+    ):
+        raise HostInstallError("versioned fixed launcher identity changed")
 
 
 def _assert_checkout_authority(checkout: Checkout) -> None:
@@ -277,7 +330,7 @@ def _assert_checkout_authority(checkout: Checkout) -> None:
         checkout.root_identity,
         label="repo root",
     )
-    _assert_adapter_identity(checkout)
+    _assert_versioned_sources_identity(checkout)
 
 
 def _expected_wrappers(*, checkout: Checkout, python: Path) -> dict[RoleSpec, str]:
@@ -293,6 +346,17 @@ def _expected_wrappers(*, checkout: Checkout, python: Path) -> dict[RoleSpec, st
     }
     _assert_checkout_authority(checkout)
     return wrappers
+
+
+def _expected_launcher(*, checkout: Checkout, python: Path) -> str:
+    _assert_checkout_authority(checkout)
+    launcher = _launcher_content(
+        python=python,
+        launcher=checkout.launcher,
+        launcher_sha256=checkout.launcher_sha256,
+    )
+    _assert_checkout_authority(checkout)
+    return launcher
 
 
 def _entrypoint_matches(directory_fd: int, name: str, expected: str) -> bool:
@@ -378,6 +442,7 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
     checkout = _resolve_repo_root(repo_root)
     interpreter = _resolve_file(python, label="host Python", executable=True)
     wrappers = _expected_wrappers(checkout=checkout, python=interpreter)
+    launcher = _expected_launcher(checkout=checkout, python=interpreter)
     destination, directory_fd, destination_identity = _open_bin_dir(
         bin_dir,
         create=True,
@@ -399,6 +464,16 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
                 if not _entrypoint_matches(directory_fd, spec.entrypoint, content):
                     raise HostInstallError(f"conflicting entrypoint: {spec.entrypoint}")
                 states[spec] = "unchanged"
+        try:
+            os.stat(FIXED_LAUNCHER_NAME, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            launcher_state = "installed"
+        else:
+            if not _entrypoint_matches(directory_fd, FIXED_LAUNCHER_NAME, launcher):
+                raise HostInstallError(
+                    f"conflicting entrypoint: {FIXED_LAUNCHER_NAME}"
+                )
+            launcher_state = "unchanged"
 
         for spec, content in wrappers.items():
             if states[spec] == "installed":
@@ -409,6 +484,14 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
                 )
                 if not installed:
                     states[spec] = "unchanged"
+        if launcher_state == "installed":
+            launcher_installed = _install_no_overwrite(
+                directory_fd,
+                FIXED_LAUNCHER_NAME,
+                launcher,
+            )
+            if not launcher_installed:
+                launcher_state = "unchanged"
         _assert_directory_identity(
             destination,
             destination_identity,
@@ -419,6 +502,10 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
                 raise HostInstallError(
                     f"entrypoint changed during installation: {spec.entrypoint}"
                 )
+        if not _entrypoint_matches(directory_fd, FIXED_LAUNCHER_NAME, launcher):
+            raise HostInstallError(
+                f"entrypoint changed during installation: {FIXED_LAUNCHER_NAME}"
+            )
         _assert_directory_identity(
             destination,
             destination_identity,
@@ -431,6 +518,11 @@ def install(*, repo_root: Path, bin_dir: Path, python: Path) -> dict[str, object
     return {
         "schema": SCHEMA_INSTALL,
         "ok": True,
+        "launcher": {
+            "entrypoint": FIXED_LAUNCHER_NAME,
+            "lineage": LAUNCHER_LINEAGE,
+            "status": launcher_state,
+        },
         "roles": {
             spec.role: {"entrypoint": spec.entrypoint, "status": states[spec]}
             for spec in ROLE_SPECS
@@ -448,6 +540,7 @@ def check(
     checkout = _resolve_repo_root(repo_root)
     interpreter = _resolve_file(python, label="host Python", executable=True)
     wrappers = _expected_wrappers(checkout=checkout, python=interpreter)
+    launcher = _expected_launcher(checkout=checkout, python=interpreter)
     try:
         destination, directory_fd, destination_identity = _open_bin_dir(
             bin_dir,
@@ -489,8 +582,17 @@ def check(
                 "entrypoint_status": "available" if entrypoint_available else "unavailable",
                 "credential_resolution": CREDENTIAL_RESOLUTION,
             }
+        discovered_launcher = shutil.which(FIXED_LAUNCHER_NAME, path=command_path)
+        expected_launcher_path = destination / FIXED_LAUNCHER_NAME
         launcher_available = (
-            shutil.which("yggdrasil-model-inquiry", path=command_path) is not None
+            directory_fd is not None
+            and discovered_launcher is not None
+            and Path(os.path.abspath(discovered_launcher)) == expected_launcher_path
+            and _entrypoint_matches(
+                directory_fd,
+                FIXED_LAUNCHER_NAME,
+                launcher,
+            )
         )
         ok = ok and launcher_available
         if directory_fd is not None and destination_identity is not None:
@@ -512,6 +614,22 @@ def check(
                     role_status = roles[spec.role]
                     if isinstance(role_status, dict):
                         role_status["entrypoint_status"] = "unavailable"
+            discovered_launcher = shutil.which(
+                FIXED_LAUNCHER_NAME,
+                path=command_path,
+            )
+            launcher_available = (
+                discovered_launcher is not None
+                and Path(os.path.abspath(discovered_launcher))
+                == expected_launcher_path
+                and _entrypoint_matches(
+                    directory_fd,
+                    FIXED_LAUNCHER_NAME,
+                    launcher,
+                )
+            )
+            if not launcher_available:
+                ok = False
             _assert_directory_identity(
                 destination,
                 destination_identity,
@@ -525,7 +643,8 @@ def check(
         "schema": SCHEMA_CHECK,
         "ok": ok,
         "launcher": {
-            "command": "yggdrasil-model-inquiry",
+            "command": FIXED_LAUNCHER_NAME,
+            "lineage": LAUNCHER_LINEAGE,
             "status": "available" if launcher_available else "unavailable",
         },
         "roles": roles,
