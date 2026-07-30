@@ -559,9 +559,10 @@ jobs:
               - 'mypy.ini'
               - 'pytest.ini'
               - 'alembic.ini'
-              - '.github/workflows/ci-smoke.yaml'
-              # Agent-contract and doc surfaces have real asserting coverage in
-              # tests/architecture, tests/governance, and tests/ops (e.g.
+              - '.github/**'
+              # GitHub governance, agent-contract, and doc surfaces have real
+              # asserting coverage in tests/architecture, tests/governance,
+              # and tests/ops (e.g.
               # test_agent_skill_entrypoints.py, test_pr_hot_path_governance.py,
               # test_review_before_ci_gate.py). Without these, a PR touching only
               # these paths skipped every real step yet still reported `success`
