@@ -200,6 +200,8 @@ class BuilderModelAccessResolver:
             self._resolve_design_request(
                 request,
                 profiles=profiles,
+                channel=channel,
+                consumer=consumer,
             )
             for request in requests
         )
@@ -229,6 +231,8 @@ class BuilderModelAccessResolver:
         request: ModelResolutionRequest,
         *,
         profiles: Mapping[str, DesignAgentProfile],
+        channel: str,
+        consumer: str,
     ) -> ResolvedModelAccess:
         profile = profiles.get(request.role_profile)
         if profile is None:
@@ -295,6 +299,8 @@ class BuilderModelAccessResolver:
         credential = self._design_credential_identity(
             profile,
             provider,
+            channel=channel,
+            consumer=consumer,
         )
         try:
             return ResolvedModelAccess(
@@ -313,11 +319,32 @@ class BuilderModelAccessResolver:
         self,
         profile: DesignAgentProfile,
         provider: ProviderEntry,
+        *,
+        channel: str,
+        consumer: str,
     ) -> str:
         credential = profile.credential_identifier
         if credential not in provider.credential_identifiers:
             raise ModelAccessResolutionError(
                 "declared design-agent profile uses an undeclared provider credential"
+            )
+        try:
+            required = self.contract.required_secrets_for_role(
+                consumer=consumer,
+                role=profile.role,
+            )
+            self.contract.require_declared(
+                channel=channel,
+                consumer=consumer,
+                secret=credential,
+            )
+        except UndeclaredSecretConsumerError as exc:
+            raise ModelAccessResolutionError(
+                "design-agent credential authorization is unavailable"
+            ) from exc
+        if required != (credential,):
+            raise ModelAccessResolutionError(
+                "design-agent credential authorization does not match its role"
             )
         return credential
 

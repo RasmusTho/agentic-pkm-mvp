@@ -150,41 +150,42 @@ class DesignAgentAdapterRegistry:
             )
         descriptors: list[DesignAgentAvailabilityDescriptor] = []
         for design_agent_id in DESIGN_AGENT_IDS:
+            if design_agent_id in _INTERACTIVE_SUBSCRIPTION_ONLY:
+                descriptors.append(
+                    self._descriptor(
+                        design_agent_id,
+                        available=False,
+                        limitation_code="interactive_subscription_only",
+                    )
+                )
+                continue
             try:
                 resolution = self._resolve(
                     (design_agent_id,),
                     run_id=run_id,
                     independence="none",
                 )[0]
-                if design_agent_id in _INTERACTIVE_SUBSCRIPTION_ONLY:
+                adapter = self.model_turn_adapters.get(resolution.adapter_id)
+                if adapter is None:
                     descriptor = self._descriptor(
                         design_agent_id,
                         resolution=resolution,
                         available=False,
-                        limitation_code="interactive_subscription_only",
+                        limitation_code="headless_adapter_unavailable",
+                    )
+                elif not self._adapter_matches(adapter, resolution):
+                    descriptor = self._descriptor(
+                        design_agent_id,
+                        resolution=resolution,
+                        available=False,
+                        limitation_code="adapter_identity_mismatch",
                     )
                 else:
-                    adapter = self.model_turn_adapters.get(resolution.adapter_id)
-                    if adapter is None:
-                        descriptor = self._descriptor(
-                            design_agent_id,
-                            resolution=resolution,
-                            available=False,
-                            limitation_code="headless_adapter_unavailable",
-                        )
-                    elif not self._adapter_matches(adapter, resolution):
-                        descriptor = self._descriptor(
-                            design_agent_id,
-                            resolution=resolution,
-                            available=False,
-                            limitation_code="adapter_identity_mismatch",
-                        )
-                    else:
-                        descriptor = self._descriptor(
-                            design_agent_id,
-                            resolution=resolution,
-                            available=True,
-                        )
+                    descriptor = self._descriptor(
+                        design_agent_id,
+                        resolution=resolution,
+                        available=True,
+                    )
             except Exception:
                 descriptor = self._descriptor(
                     design_agent_id,

@@ -15,6 +15,10 @@ from app.builderops.design_agent_adapters import (
     UnknownDesignAgentError,
 )
 from app.builderops.model_access_resolver import ModelAccessResolutionError
+from app.ops.host_secret_contract import (
+    UndeclaredSecretConsumerError,
+    load_host_secret_contract,
+)
 from llm_contract import (
     AdapterResult,
     ModelCapabilities,
@@ -138,18 +142,52 @@ def test_supported_design_adapters_conform_to_common_contract() -> None:
     }
     assert all(item.supported_deliverables for item in descriptors)
     assert all(item.available is False for item in descriptors)
-    assert {item.provider_identity for item in descriptors} == {"anthropic", "openai"}
-    assert all("structured_output" in item.capabilities for item in descriptors)
+    assert all(item.provider_identity is None for item in descriptors)
+    assert all(item.capabilities == () for item in descriptors)
     assert {
         item.design_agent_id: item.limitation_code for item in descriptors
     } == {
         "claude-design-via-claude-code": "interactive_subscription_only",
-        "codex": "headless_adapter_unavailable",
-        "fable": "headless_adapter_unavailable",
+        "codex": "model_access_unavailable",
+        "fable": "model_access_unavailable",
     }
 
 
-def test_design_agents_use_the_shared_model_access_substrate() -> None:
+def test_design_agents_use_the_shared_model_access_substrate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract = load_host_secret_contract(
+        Path("config/secrets/host_secret_contract.json")
+    )
+    for role in DESIGN_AGENT_ROLE_PROFILES.values():
+        with pytest.raises(UndeclaredSecretConsumerError):
+            contract.required_secrets_for_role(
+                consumer="builderops-design-run",
+                role=role,
+            )
+
+    def forbid_secret_read(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise AssertionError("design registry must not read a credential binding")
+
+    monkeypatch.setattr(
+        "app.builderops.model_access_resolver.load_runtime_secret_values",
+        forbid_secret_read,
+    )
+    production = DesignAgentAdapterRegistry.from_declared_sources(
+        channel="dev",
+        model_turn_adapters=_adapters(),
+    )
+    assert {
+        descriptor.design_agent_id: descriptor.limitation_code
+        for descriptor in production.descriptors(run_id="run.no-credential-grant")
+    } == {
+        "claude-design-via-claude-code": "interactive_subscription_only",
+        "codex": "model_access_unavailable",
+        "fable": "model_access_unavailable",
+    }
+    with pytest.raises(DesignAgentUnavailableError):
+        production.select("codex", run_id="run.no-credential-read")
+
     resolver = RecordingResolver(_targets())
     adapters = _adapters()
     registry = DesignAgentAdapterRegistry(
