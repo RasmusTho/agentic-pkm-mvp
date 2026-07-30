@@ -1580,6 +1580,15 @@ def _require_matching_compatibility_block(
             )
         )
         and root_authority.get("controller") != expected.get("controller")
+        and (
+            ("scalar_roll_forward" in root_authority)
+            == ("scalar_roll_forward" in expected)
+        )
+        and (
+            "scalar_roll_forward" not in root_authority
+            or root_authority["scalar_roll_forward"]
+            == expected["scalar_roll_forward"]
+        )
         and not _controller_identity_is_live(root_authority.get("controller"))
     ):
         # A successor may have adopted the public claim and then died while

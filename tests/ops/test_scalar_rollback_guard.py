@@ -1269,6 +1269,47 @@ def test_scalar_deployment_begin_rejects_invalid_claimed_receipt_unchanged(
         for path in (public_path, root_path, fence_path)
     } == before_null
 
+    valid_receipt = json.loads(valid_authority[public_path])[
+        "scalar_roll_forward"
+    ]
+    for path in (public_path, root_path):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["scalar_roll_forward"] = dict(valid_receipt)
+        payload["controller"] = {
+            "pid": 999_999_990,
+            "start_token": "linux:" + "8" * 64,
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+    public_payload = json.loads(public_path.read_text(encoding="utf-8"))
+    public_payload["controller"] = {
+        "pid": 999_999_989,
+        "start_token": "linux:" + "9" * 64,
+    }
+    public_payload["scalar_roll_forward"]["session_sha256"] = "f" * 64
+    public_path.write_text(json.dumps(public_payload), encoding="utf-8")
+    public_path.chmod(0o600)
+    before_split_receipt = {
+        path: path.read_bytes()
+        for path in (public_path, root_path, fence_path)
+    }
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="compatibility block does not match",
+    ):
+        _begin_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "window" / "missing-legacy.md",
+            controller_pid=999_999_988,
+            controller_start_token="linux:" + "a" * 64,
+        )
+    assert {
+        path: path.read_bytes()
+        for path in (public_path, root_path, fence_path)
+    } == before_split_receipt
+
 
 def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
     runtime = InstanceRegistryRuntime.for_paths(
