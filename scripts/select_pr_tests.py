@@ -230,19 +230,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # lives in tests/api (test_ask_contract).
             "app/middleware/",
             # Static assets are mounted and served by app/api/app.py; page
-            # handlers (/signboard, /cockpit) are API surface. builder_system
-            # co-owns this prefix for the Builder-state content it renders.
+            # handlers (/signboard, /cockpit) are API surface, asserted from
+            # tests/api (test_signboard_api reads signboard.html/.js), so a
+            # UI-copy change selects that coverage instead of failing closed
+            # as unowned. builder_system co-owns this prefix for the
+            # Builder-state content it renders.
             "app/web/",
             "api/",
             # FastAPI dependency providers (get_agent_repository / get_db)
             # consumed by app/api/routers/agent.py; exercised via tests/api.
             "app/deps.py",
-            # The static pages the API mounts at /static (app/api/app.py) and
-            # serves at /signboard. Their contracts are asserted from tests/api
-            # (test_signboard_api reads signboard.html and signboard.js), so a
-            # UI-copy change belongs here instead of failing closed as an
-            # unowned app/ path.
-            "app/web/",
             "tests/companion_ui/",
             "tests/api/",
             "tests/architecture/test_openapi_static_contract.py",
