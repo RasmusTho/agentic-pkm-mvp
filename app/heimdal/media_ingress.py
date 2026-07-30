@@ -34,10 +34,12 @@ only then receives a receipt (partial-failure matrix, "hub crash between raw
 write and outbox commit"). Absence of a receipt is the honest answer, which is
 exactly what #4369 lacked.
 
-Out of scope here (per the governing issue): session/segment ledger semantics
-(CDLM-02 owns them; `session_id`/`session_seq` are stored opaquely), ASR or any
-derivation (CDLM-06), streaming/resumable uploads, auth keys, and public
-ingress (owner-reserved).
+Session/segment ledger semantics are owned by `app.heimdal.meeting_ledger`
+(CDLM-02, #4385): this seam stores `session_id`/`session_seq` opaquely in
+lineage and hands them to the ledger hook (`_ledger_session_segment`) after the
+receipt exists — it never interprets, orders, or validates them itself. Still
+out of scope here: ASR or any derivation (CDLM-06), streaming/resumable
+uploads, auth keys, and public ingress (owner-reserved).
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ from typing import Any, Dict, List, Optional
 
 from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_CAPTURE_MEDIA_ADMITTED
-from app.heimdal import capture_adapter, media_receipts, raw_store
+from app.heimdal import capture_adapter, media_receipts, meeting_ledger, raw_store
 from app.heimdal.capture_adapter import SensorIdentity
 from app.heimdal.consent_ledger import admit_raw_evidence
 from app.heimdal.media_receipts import MediaReceipt
@@ -392,6 +394,16 @@ def admit_media_bytes(
     # before consent/encryption/write so a replay costs one lookup.
     existing = media_receipts.get_media_receipt(capture_id, content_sha256)
     if existing is not None:
+        # The replay must still reach the ledger (CDLM-02): if a prior attempt
+        # acknowledged the capture but crashed before the ledger row landed, the
+        # client's resend takes this branch — an idempotent ledger upsert here is
+        # what heals that hole; a duplicate replay is a no-op.
+        _ledger_session_segment(
+            session_id=session_id,
+            session_seq=session_seq,
+            receipt=existing,
+            trace_id=trace_id,
+        )
         return MediaAdmission(receipt=existing, idempotent_replay=True)
 
     sensor = SensorIdentity(
@@ -485,10 +497,50 @@ def admit_media_bytes(
         },
         receipt_payload=admission_metadata,
     )
+    _ledger_session_segment(
+        session_id=session_id,
+        session_seq=session_seq,
+        receipt=receipt,
+        trace_id=trace_id,
+    )
     # A concurrent request may have acknowledged this identity between the
     # short-circuit above and the seam's own guard; report that truthfully rather
     # than claiming this call was the one that acknowledged it.
     return MediaAdmission(receipt=receipt, idempotent_replay=not newly_acknowledged)
+
+
+def _ledger_session_segment(
+    *,
+    session_id: Optional[str],
+    session_seq: Optional[int],
+    receipt: MediaReceipt,
+    trace_id: str,
+) -> None:
+    """Ledger one admission's `(session_id, session_seq)` (CDLM-02 hook).
+
+    Runs after the receipt exists, on both the fresh and the replay path, so a
+    resend heals a ledger hole left by a crash between acknowledgement and
+    ledger write. A no-op when the client sent no session fields.
+
+    A ledger persistence failure propagates (fail loud — whether it surfaces as
+    `MeetingLedgerPersistenceError` or a raw store/driver error): the receipt
+    is already durable and remains valid, but the caller must not
+    report a fully recorded admission over a segment the ledger cannot answer
+    for — the client's idempotent resend retries exactly this write. A recorded
+    sequence *conflict* is not a failure: the admission acknowledged real
+    bytes, and the conflict is surfaced through the gap report (fail closed on
+    the ledger row, honest receipt on the transfer).
+    """
+    if session_id is None or session_seq is None:
+        return
+    meeting_ledger.record_segment_admission(
+        session_id=session_id,
+        session_seq=session_seq,
+        receipt_id=receipt.receipt_id,
+        content_sha256=receipt.content_sha256,
+        raw_ref=receipt.raw_ref,
+        trace_id=trace_id,
+    )
 
 
 def record_watched_folder_admission(

@@ -174,6 +174,15 @@ HEIMDAL_OBSERVATION_CORRECTED = "heimdal.observation.corrected"
 # auditable record of how the admission happened.
 HEIMDAL_CAPTURE_MEDIA_ADMITTED = "heimdal.capture.media.admitted"
 
+# Emitted by `app.heimdal.meeting_ledger.record_segment_admission` when an
+# admission lands in a session that is already closed (CDLM-02, #4385). The
+# ledger row is the truth and is written first; this event is the re-derive
+# trigger CDLM-06/08 consume, not an acknowledgement — like the admission
+# event above it is not dispatched (`outbox_worker._dispatch_topic` has no
+# branch for it) and has no topic-schema registration. Sessions never re-open:
+# consumers recompute completeness from the ledger.
+HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED = "heimdal.meeting.segment.late_admitted"
+
 __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
@@ -264,5 +273,6 @@ __all__ = [
     "HEIMDAL_CONSENT_REVOKED",
     "HEIMDAL_OBSERVATION_CORRECTED",
     "HEIMDAL_CAPTURE_MEDIA_ADMITTED",
+    "HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED",
     "EPISODE_CLOSED",
 ]

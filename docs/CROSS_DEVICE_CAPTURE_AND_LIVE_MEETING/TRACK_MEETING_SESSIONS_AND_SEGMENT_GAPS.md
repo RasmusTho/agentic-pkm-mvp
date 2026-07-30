@@ -11,6 +11,16 @@ can_parallelize_with: [RETAIN_ORIGINALS_UNTIL_BACKEND_RECEIPT.md]
 
 # Track Meeting Sessions And Segment Gaps
 
+State: Delivered by hub issue #4385 (2026-07-30). `POST /api/heimdal/meeting/session`,
+`POST /api/heimdal/meeting/{session_id}/close`, and `GET /api/heimdal/meeting/{session_id}/segments`
+are implemented in `app/api/routes/heimdal_meeting.py` over `app/heimdal/meeting_ledger.py`, with the
+admission hook wired into `app/heimdal/media_ingress.py` and the six acceptance criteria below proven
+by `tests/heimdal/test_meeting_session_ledger.py`; the `heimdal.meeting.segment.late_admitted` event
+contract is recorded in `docs/EVENTS.md`. Ledger tables ship in migration `a7c2e9f4b1d3` (Postgres /
+PDM) with a file-backed SQLite lane for dev/test, so the restart criterion is proven against real
+durable storage. The `HEIMDAL_RAW_STORE_KEY` provisioning gap CDLM-01 states (KD-4384-RAWKEY) bounds
+live end-to-end use of the admission-fed segment path the same way it bounds CDLM-01.
+
 ## Purpose
 
 Make "which parts of this meeting does the hub durably hold?" a database answer instead of a
