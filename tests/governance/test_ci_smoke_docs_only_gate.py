@@ -2,7 +2,7 @@
 
 `pr-unit-tests-not-pg` (`Unit tests (not pg)`) is a required PR check that
 gates every merge to `main`. Its `code` paths-filter used to omit
-`AGENTS.md`, `CLAUDE.md`, `.codex/**`, and `docs/**` -- paths that
+`.github/**`, `AGENTS.md`, `CLAUDE.md`, `.codex/**`, and `docs/**` -- paths that
 `tests/architecture/test_agent_skill_entrypoints.py` and
 `tests/ops/test_review_before_ci_gate.py` assert on directly, and that
 `tests/governance/**` exists to cover. A PR touching only those paths made the
@@ -30,8 +30,10 @@ docs-only/unowned no-op (executable check against the real selector).
 
 from __future__ import annotations
 
-import re
+from fnmatch import fnmatchcase
 from pathlib import Path
+
+import yaml
 
 from scripts.select_pr_tests import select_tests
 
@@ -61,26 +63,23 @@ def _smoke_text() -> str:
     return CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
 
 
-def _unit_tests_job_text() -> str:
-    workflow = _smoke_text()
-    return workflow[
-        workflow.index("pr-unit-tests-not-pg:") : workflow.index("pr-index-pg-contracts:")
-    ]
+def _unit_tests_job_text() -> dict[str, object]:
+    workflow = yaml.safe_load(_smoke_text())
+    return workflow["jobs"]["pr-unit-tests-not-pg"]
 
 
-def _code_filter_block() -> str:
+def _code_filter_block() -> dict[str, list[str]]:
     job = _unit_tests_job_text()
-    # The `code` filter block runs from its own "code:" key to the first
-    # subsequent step ("- uses: actions/setup-python@v5"), which is gated on
-    # this same filter's output.
-    start = job.index("filters: |")
-    end = job.index("- uses: actions/setup-python@v5")
-    return job[start:end]
+    filter_step = next(
+        step
+        for step in job["steps"]
+        if step.get("uses") == "dorny/paths-filter@v3"
+    )
+    return yaml.safe_load(filter_step["with"]["filters"])
 
 
 def _code_filter_globs() -> list[str]:
-    block = _code_filter_block()
-    return re.findall(r"- '([^']+)'", block)
+    return _code_filter_block()["code"]
 
 
 def test_unit_test_filter_or_skip_conclusion_is_corrected() -> None:
@@ -89,8 +88,8 @@ def test_unit_test_filter_or_skip_conclusion_is_corrected() -> None:
     # list must now be a superset of the agent-contract/doc surface that has
     # real asserting test coverage.
     job = _unit_tests_job_text()
-    assert "Detect unit-test surface" in job
-    assert "dorny/paths-filter@v3" in job
+    assert any(step.get("name") == "Detect unit-test surface" for step in job["steps"])
+    assert any(step.get("uses") == "dorny/paths-filter@v3" for step in job["steps"])
 
     globs = _code_filter_globs()
     for expected in PREVIOUSLY_EXCLUDED_GLOBS:
@@ -107,9 +106,23 @@ def test_unit_test_filter_or_skip_conclusion_is_corrected() -> None:
     # The skip step, and every real step it is the mirror image of, must
     # still be driven by this one filter output -- otherwise "extending the
     # filter" and "what actually runs" could silently drift apart.
-    assert "if: steps.changes.outputs.code == 'true'" in job
-    assert "if: steps.changes.outputs.code != 'true'" in job
-    assert 'name: Skip unit tests for docs-only PR' in job
+    conditions = {step.get("if") for step in job["steps"]}
+    names = {step.get("name") for step in job["steps"]}
+    assert "steps.changes.outputs.code == 'true'" in conditions
+    assert "steps.changes.outputs.code != 'true'" in conditions
+    assert "Skip unit tests for docs-only PR" in names
+
+
+def test_code_filter_covers_github_surface() -> None:
+    globs = _code_filter_globs()
+    for github_path in (
+        ".github/pull_request_template.md",
+        ".github/workflows/issue-pr-governance.yml",
+    ):
+        assert any(fnmatchcase(github_path, pattern) for pattern in globs), (
+            f"code filter does not cover {github_path!r}; a PR touching only "
+            "this asserted-on surface would self-skip the required check"
+        )
 
 
 def test_unit_test_lane_covers_agent_contract_and_doc_paths() -> None:
