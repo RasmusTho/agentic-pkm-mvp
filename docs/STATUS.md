@@ -73,7 +73,12 @@ promote public internet readiness.
   arrived. Watched-folder admissions are receipted through the same seam (content-hash keyed) but
   gain no receipt-gated retention — that stays an outbox-lane property owned by CDLM-03. This slice
   ships no session/segment ledger, no ASR or derivation, no streaming/resumable upload, no auth
-  keys, and no public ingress: both routes refuse peers outside loopback/LAN/tailnet. Contract detail
+  keys, and no public ingress: both routes refuse peers outside loopback/LAN/tailnet. **Operator
+  precondition, not yet provisioned:** admission encrypts through the raw store, so the api process
+  needs `HEIMDAL_RAW_STORE_KEY`, which `config/secrets/host_secret_contract.json` currently declares
+  for the `heimdal-capture-watch` consumer only; without it every admission returns a named 500
+  `raw_store_key_unavailable` / `not_acknowledged` rather than failing silently. The pre-existing
+  `POST /api/heimdal/screen/capture` shares that gap. Contract detail
   is owned by `docs/EVENTS.md :: Heimdal governed media ingress + durable receipts` and
   `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`; promotion into
   `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 remains parent-acceptance work on #4383.

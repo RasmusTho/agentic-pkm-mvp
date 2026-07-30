@@ -141,12 +141,14 @@ class _MemoryReceiptStore:
         with self._lock:
             return self._by_receipt_id.get(receipt_id)
 
-    def first_by_capture_id(self, capture_id: str) -> Optional[MediaReceipt]:
+    def first_by_capture_ids(self, capture_ids: List[str]) -> Dict[str, MediaReceipt]:
+        wanted = set(capture_ids)
+        found: Dict[str, MediaReceipt] = {}
         with self._lock:
             for row in self._rows:
-                if row.capture_id == capture_id:
-                    return row
-            return None
+                if row.capture_id in wanted and row.capture_id not in found:
+                    found[row.capture_id] = row
+            return found
 
     def all_rows(self) -> List[MediaReceipt]:
         with self._lock:
@@ -342,18 +344,27 @@ class _PgReceiptStore:
         finally:
             conn.close()
 
-    def first_by_capture_id(self, capture_id: str) -> Optional[MediaReceipt]:
+    def first_by_capture_ids(self, capture_ids: List[str]) -> Dict[str, MediaReceipt]:
+        """Resolve a whole bounded batch in one statement on one connection.
+
+        The recovery query is a bounded batch, so a per-id round trip would open
+        two connections per requested id; this keeps a 100-id reconnect query at
+        one connection and one scan of the `capture_id` index.
+        """
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
             cur.execute(
-                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE} WHERE capture_id = %s "
-                "ORDER BY sequence ASC LIMIT 1",
-                (capture_id,),
+                f"SELECT {_SELECT_COLUMNS} FROM {_TABLE} WHERE capture_id = ANY(%s) "
+                "ORDER BY sequence ASC",
+                (list(capture_ids),),
             )
-            row = cur.fetchone()
-            return _row_from_db(row) if row else None
+            found: Dict[str, MediaReceipt] = {}
+            for row in cur.fetchall():
+                receipt = _row_from_db(row)
+                found.setdefault(receipt.capture_id, receipt)
+            return found
         finally:
             conn.close()
 
@@ -424,17 +435,19 @@ def get_media_receipt(capture_id: str, content_sha256: str) -> Optional[MediaRec
     return _backend().get_by_receipt_id(derive_receipt_id(capture_id, content_sha256))
 
 
-def find_media_receipt_by_capture_id(capture_id: str) -> Optional[MediaReceipt]:
-    """Resolve the earliest receipt for ``capture_id``, or ``None`` if never seen.
+def find_media_receipts_by_capture_ids(capture_ids: List[str]) -> Dict[str, MediaReceipt]:
+    """Resolve the earliest receipt per requested ``capture_id``, in one backend pass.
 
-    The recovery query carries a `capture_id` and not the content hash, so this
-    is the lookup that answers `admitted` vs `unknown`. A client that reused one
-    `capture_id` for different bytes gets the first admission; the returned
-    ``content_sha256`` is what lets it detect that reuse.
+    The recovery query carries `capture_id`s and not content hashes, so this is
+    the lookup that answers `admitted` vs `unknown`. Ids with no receipt are
+    simply absent from the result — that absence is the `unknown` answer. A
+    client that reused one `capture_id` for different bytes gets the first
+    admission; the returned ``content_sha256`` is what lets it detect that reuse.
     """
-    if not isinstance(capture_id, str) or not capture_id.strip():
-        return None
-    return _backend().first_by_capture_id(capture_id)
+    wanted = [value for value in capture_ids if isinstance(value, str) and value.strip()]
+    if not wanted:
+        return {}
+    return _backend().first_by_capture_ids(wanted)
 
 
 def all_media_receipts() -> List[MediaReceipt]:
@@ -449,7 +462,7 @@ __all__ = [
     "all_media_receipts",
     "append_media_receipt",
     "derive_receipt_id",
-    "find_media_receipt_by_capture_id",
+    "find_media_receipts_by_capture_ids",
     "get_media_receipt",
     "reset_memory_media_receipts",
 ]

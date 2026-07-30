@@ -43,17 +43,24 @@ MEDIA_ADMITTED_EVENT = "heimdal.capture.media.admitted"
 
 
 @pytest.fixture(autouse=True)
-def _memory_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+def _memory_runtime(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
     """Volatile Heimdal backend plus a per-test JSONL outbox sink.
 
     `DATABASE_URL`/`DB_DSN` are removed explicitly rather than relying on the
     root conftest's `-m "not pg"` normalization, so the suggested validation
     command (which passes no marker expression) still resolves the memory
     backend and the JSONL audit log as the single outbox sink.
+
+    A `pg`-marked test is left alone, mirroring the root conftest's
+    `force_memory_store_for_non_pg`: forcing the memory backend there would
+    defeat the point of exercising the Postgres one.
     """
-    monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("DB_DSN", raising=False)
+    if request.node.get_closest_marker("pg") is None:
+        monkeypatch.setenv("STORE_BACKEND", "memory")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
     outbox_path = tmp_path / "outbox.jsonl"
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
@@ -323,10 +330,27 @@ def test_receipt_query_answers_recovery(client: TestClient) -> None:
 
 
 def test_watched_folder_admission_shares_receipt_seam(
-    client: TestClient, tmp_path: Path, _memory_runtime: Path
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _memory_runtime: Path
 ) -> None:
     watch_dir = tmp_path / "watched"
     watch_dir.mkdir()
+
+    # The legacy lane runs through the same acknowledgement seam, so it owes the
+    # same ordering: event committed before the receipt exists. Asserted here and
+    # not only on the HTTP lane, or an inversion on this lane would go unseen.
+    order: list[str] = []
+    real_commit = media_ingress.outbox_service.append_jsonl_outbox_event
+    real_receipt_write = media_ingress.media_receipts.append_media_receipt
+    monkeypatch.setattr(
+        media_ingress.outbox_service,
+        "append_jsonl_outbox_event",
+        lambda *a, **k: (order.append("event-commit"), real_commit(*a, **k))[1],
+    )
+    monkeypatch.setattr(
+        media_ingress.media_receipts,
+        "append_media_receipt",
+        lambda **k: (order.append("receipt-write"), real_receipt_write(**k))[1],
+    )
 
     # (a) sidecar supplies a capture_id -> the receipt is keyed by it.
     with_sidecar = watch_dir / "memo-with-sidecar.m4a"
@@ -365,6 +389,64 @@ def test_watched_folder_admission_shares_receipt_seam(
     assert hash_keyed["content_sha256"] == content_hash
 
     assert len(_admitted_events(_memory_runtime)) == 2
+    assert order == ["event-commit", "receipt-write"] * 2
+
+
+def test_watched_folder_replay_emits_no_further_admission_event(
+    tmp_path: Path, _memory_runtime: Path
+) -> None:
+    """A re-admitted watched-folder file must not emit an event per watch tick.
+
+    `_delete_source_file` logs rather than raises, so a memo whose delete fails
+    stays in the folder and is re-admitted on every tick. The raw store is
+    idempotent by content hash, so without a replay guard in the shared
+    acknowledgement seam that one file would emit an unbounded number of
+    admission events against a single receipt — and CDLM-02/CDLM-06 would
+    double-count it.
+    """
+    watch_dir = tmp_path / "watched"
+    watch_dir.mkdir()
+    memo = watch_dir / "sticky-memo.m4a"
+    memo.write_bytes(b"a memo whose source delete keeps failing")
+
+    for tick in range(4):
+        memo.write_bytes(b"a memo whose source delete keeps failing")
+        result = admit_capture_file(memo, key=_KEY, stability_delay=0.0)
+        assert result.created is (tick == 0)
+
+    assert len(all_raw_records()) == 1
+    assert len(all_media_receipts()) == 1
+    assert len(_admitted_events(_memory_runtime)) == 1
+
+
+def test_watched_folder_sidecar_capture_id_of_the_wrong_type_is_not_a_new_failure_mode(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A malformed sidecar value must degrade, never break the legacy lane.
+
+    Sidecar values are untrusted and not type-validated upstream, and the receipt
+    call runs *after* the durable write and before delete-after-confirmed-ingest.
+    An exception escaping there would leave the memo admitted but undeleted and
+    "refused" on every later tick.
+    """
+    watch_dir = tmp_path / "watched"
+    watch_dir.mkdir()
+    memo = watch_dir / "memo-bad-sidecar.m4a"
+    memo.write_bytes(b"watched-folder-memo-with-a-numeric-capture-id")
+    memo.with_name(f"{memo.name}.capture.json").write_text(
+        json.dumps({"sidecar_version": 1, "device_id": "iphone-1", "capture_id": 12345}),
+        encoding="utf-8",
+    )
+
+    result = admit_capture_file(memo, key=_KEY, stability_delay=0.0)
+
+    assert result.created and result.source_deleted
+    assert not memo.exists()
+    # The receipt falls back to the content-hash key rather than being lost.
+    content_hash = result.record.content_identity
+    answered = _get_receipts(client, content_hash).json()["receipts"][0]
+    assert answered["outcome"] == "admitted"
+    assert answered["capture_id"] == content_hash
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +482,87 @@ def test_ingress_refuses_public_binding(client: TestClient) -> None:
     assert _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]["outcome"] == "unknown"
 
 
+def test_no_reachable_failure_returns_an_unnamed_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Never blind-retryable" only holds if every failure carries a branchable `error`.
+
+    Two failures that bypass the specific handlers: the raw-store key precondition
+    (resolved before the guarded raw write) and an arbitrary store fault.
+    """
+    monkeypatch.delenv("HEIMDAL_RAW_STORE_KEY", raising=False)
+    media = b"cannot-be-encrypted-without-a-key"
+    keyless = _post_media(client, media, _sidecar(media))
+    assert keyless.status_code == 500
+    keyless_detail = keyless.json()["detail"]
+    assert keyless_detail["error"] == "raw_store_key_unavailable"
+    assert keyless_detail["state"] == "not_acknowledged"
+
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    def exploding_lookup(*_args: Any, **_kwargs: Any):
+        raise TimeoutError("receipt store went away mid-admission")
+
+    monkeypatch.setattr(media_ingress.media_receipts, "get_media_receipt", exploding_lookup)
+    other = b"an-unexpected-store-fault"
+    unexpected = _post_media(client, other, _sidecar(other))
+    assert unexpected.status_code == 500
+    unexpected_detail = unexpected.json()["detail"]
+    assert unexpected_detail["error"] == "admission_failed"
+    assert unexpected_detail["state"] == "not_acknowledged"
+    assert all_media_receipts() == []
+
+    # A receipt-store read failure must never be answered as `unknown`: a client
+    # deletes originals against that answer.
+    monkeypatch.setattr(
+        media_receipts, "find_media_receipts_by_capture_ids", exploding_lookup
+    )
+    degraded = _get_receipts(client, str(uuid4()))
+    assert degraded.status_code == 503
+    assert degraded.json()["detail"]["error"] == "receipt_store_unavailable"
+
+
+def test_committed_db_outbox_event_is_not_reread_as_uncommitted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A derived idempotency key makes an ON CONFLICT no-op *proof of commit*.
+
+    `write_outbox_event` returns "" when its ON CONFLICT swallowed a duplicate.
+    Because this lane's key is derived from the transfer identity (unlike the
+    governed text capture's random event_id), treating "" as "not committed"
+    would refuse an already-committed capture forever. The DB sink branch is
+    reached by configuring a DSN while the stores stay on the memory backend.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://unused:unused@db.invalid:5432/none")
+
+    def conflict_noop(*_args: Any, **_kwargs: Any) -> str:
+        return ""
+
+    def unwritable_jsonl(*_args: Any, **_kwargs: Any) -> bool:
+        raise OSError("jsonl sink unavailable")
+
+    monkeypatch.setattr(media_ingress.outbox_service, "write_outbox_event", conflict_noop)
+    monkeypatch.setattr(
+        media_ingress.outbox_service, "append_jsonl_outbox_event", unwritable_jsonl
+    )
+
+    media = b"already-committed-on-a-prior-attempt"
+    admitted = _post_media(client, media, _sidecar(media))
+    assert admitted.status_code == 200, admitted.text
+    assert len(all_media_receipts()) == 1
+
+    # A genuine sink failure (both sinks raising) still refuses to acknowledge.
+    def exploding_db(*_args: Any, **_kwargs: Any) -> str:
+        raise OSError("db outbox unavailable")
+
+    monkeypatch.setattr(media_ingress.outbox_service, "write_outbox_event", exploding_db)
+    other = b"neither-sink-accepted-this-one"
+    refused = _post_media(client, other, _sidecar(other))
+    assert refused.status_code == 500
+    assert refused.json()["detail"]["error"] == "admission_event_commit_failed"
+    assert len(all_media_receipts()) == 1
+
+
 def test_media_receipt_store_rejects_a_second_receipt_for_the_same_identity() -> None:
     """The receipt identity is `(capture_id, content_sha256)`, storage-enforced."""
     capture_id = str(uuid4())
@@ -427,3 +590,64 @@ def test_media_receipt_store_rejects_a_second_receipt_for_the_same_identity() ->
     assert second.receipt_id == first.receipt_id
     assert second.admitted_at == first.admitted_at
     assert len(all_media_receipts()) == 1
+
+
+@pytest.mark.pg
+def test_append_only_enforced_pg_media_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real Postgres trigger rejects UPDATE/DELETE against heimdal_media_receipt (HEIM-1).
+
+    Mirrors `test_raw_store.py::test_append_only_enforced_pg_read_receipt`: the
+    Python store exposes no mutation, and the database refuses one anyway. Also
+    exercises `_PgReceiptStore`'s insert/replay path, which the memory-backend
+    tests above cannot reach.
+    """
+    pytest.importorskip("psycopg")
+    del monkeypatch  # the root conftest's pg fixtures supply DSN + autocreate
+
+    content_sha256 = hashlib.sha256(f"pg-media-receipt-{secrets.token_hex(8)}".encode()).hexdigest()
+    receipt, created = media_receipts.append_media_receipt(
+        capture_id=str(uuid4()),
+        content_sha256=content_sha256,
+        raw_ref="heimraw:pg-record",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        trace_id="t-pg",
+        payload={"device_id": "ipad-pg"},
+    )
+    assert created
+    # The derived primary key makes a replay a no-op that returns the original
+    # row rather than an UPDATE the trigger would reject.
+    replayed, created_again = media_receipts.append_media_receipt(
+        capture_id=receipt.capture_id,
+        content_sha256=content_sha256,
+        raw_ref="heimraw:pg-record",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        trace_id="t-pg-2",
+        payload={},
+    )
+    assert not created_again and replayed.receipt_id == receipt.receipt_id
+    assert media_receipts.find_media_receipts_by_capture_ids([receipt.capture_id])[
+        receipt.capture_id
+    ].receipt_id == receipt.receipt_id
+
+    conn = media_receipts._pg_connect()
+    try:
+        cur = conn.cursor()
+        with pytest.raises(Exception) as excinfo:
+            cur.execute(
+                f"UPDATE {media_receipts._TABLE} SET kind = 'tampered' WHERE receipt_id = %s",
+                (receipt.receipt_id,),
+            )
+        assert "append-only" in str(excinfo.value).lower() or "HEIM-1" in str(excinfo.value)
+
+        with pytest.raises(Exception) as excinfo_del:
+            cur.execute(
+                f"DELETE FROM {media_receipts._TABLE} WHERE receipt_id = %s",
+                (receipt.receipt_id,),
+            )
+        assert "append-only" in str(excinfo_del.value).lower() or "HEIM-1" in str(
+            excinfo_del.value
+        )
+    finally:
+        conn.close()

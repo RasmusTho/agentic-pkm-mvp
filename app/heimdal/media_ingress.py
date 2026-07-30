@@ -229,13 +229,21 @@ def _emit_admission_event(
         outbox_evt = outbox_service.coerce_outbox_event(evt, default_source=_EVENT_SOURCE)
         if outbox_evt is not None:
             try:
-                stored_id = outbox_service.write_outbox_event(
+                outbox_service.write_outbox_event(
                     outbox_evt,
                     idempotency_key=outbox_service.derive_idempotency_key(
                         outbox_evt.event, receipt_id, content_sha256
                     ),
                 )
-                emitted = emitted or bool(stored_id)
+                # Returning normally means the row exists: `write_outbox_event`
+                # yields the new id on insert and "" when its ON CONFLICT
+                # swallowed a duplicate. Unlike the governed text capture, whose
+                # key is the per-emission random event_id and therefore always
+                # inserts, this key is *derived* from the transfer identity — so
+                # a swallowed duplicate is proof the event was already committed
+                # by a prior attempt, not evidence that nothing was committed.
+                # Treating "" as a failure would refuse such a capture forever.
+                emitted = True
             except Exception as exc:
                 logger.warning(
                     "media admission event db outbox write failed trace_id=%s err=%s",
@@ -263,14 +271,28 @@ def record_media_admission(
     committed, never before, because the receipt is the acknowledgement. A
     caller must only reach this function once the raw write is durable.
 
-    Two concurrent admissions of the same identity may both reach the receipt
-    write; the derived primary key makes the second a no-op that returns the
-    first row, so both callers acknowledge the same receipt identity.
+    An identity that is already acknowledged short-circuits here: it returns the
+    existing receipt and emits **no** second event. The guard lives in this
+    shared seam, not only in `admit_media_bytes`, because the watched-folder lane
+    re-admits the same content on every tick whenever a source delete failed --
+    without it, one file would emit an unbounded number of admission events while
+    holding a single receipt, and CDLM-02/CDLM-06 would double-count it.
+
+    Two concurrent admissions of the same identity can still both pass that
+    unlocked read. The derived primary key makes the second receipt insert a
+    no-op returning the first row, so the acknowledgement stays single; the DB
+    outbox likewise dedupes on a derived idempotency key. Only the JSONL audit
+    log can record the attempt twice, and an audit line is a trace, not an
+    acknowledgement.
 
     Raises :class:`MediaAdmissionEventPersistenceError` when no sink accepted the
     event, or :class:`media_receipts.MediaReceiptPersistenceError` when the
     receipt itself could not be persisted. In both cases nothing is acknowledged.
     """
+    already_acknowledged = media_receipts.get_media_receipt(capture_id, content_sha256)
+    if already_acknowledged is not None:
+        return already_acknowledged
+
     receipt_id = media_receipts.derive_receipt_id(capture_id, content_sha256)
     if not _emit_admission_event(
         event_payload,
@@ -473,12 +495,17 @@ def record_watched_folder_admission(
 
     ``capture_id`` comes from the HCAP-07 sidecar when it carries one; otherwise
     the receipt is keyed by the content hash itself, so one query parameter
-    serves both lanes.
+    serves both lanes. A sidecar is untrusted client input whose values are not
+    type-validated upstream, so a non-string `capture_id` must degrade to the
+    content-hash key rather than raise -- everything here runs *after* the
+    durable write, and an exception escaping into `admit_capture_file` would
+    strand the source file as permanently "refused" on every tick.
     """
     content_sha256 = record.content_identity
-    resolved_capture_id = (capture_id or "").strip() or content_sha256
-    raw_ref = raw_ref_for(record)
     try:
+        raw_ref = raw_ref_for(record)
+        sidecar_capture_id = capture_id.strip() if isinstance(capture_id, str) else ""
+        resolved_capture_id = sidecar_capture_id or content_sha256
         receipt = record_media_admission(
             capture_id=resolved_capture_id,
             content_sha256=content_sha256,
@@ -496,7 +523,9 @@ def record_watched_folder_admission(
                     resolved_capture_id, content_sha256
                 ),
             },
-            receipt_payload={"sidecar_capture_id": capture_id},
+            receipt_payload=(
+                {"sidecar_capture_id": sidecar_capture_id} if sidecar_capture_id else {}
+            ),
         )
     except Exception as exc:  # noqa: BLE001 -- the legacy lane must not gain a new failure mode
         logger.error(

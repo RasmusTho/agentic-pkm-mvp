@@ -563,8 +563,16 @@ Contract:
 - **Transfer identity is `(capture_id, content_sha256)` (INV-CDLM-3).**
   `receipt_id` is derived (uuid5) from that pair and is the receipt table's
   primary key, so a resend after a lost response returns the same receipt
-  identity, leaves one raw object, and emits no second admission event.
-  Duplicates are a hub-side impossibility, not a client-side courtesy.
+  identity and leaves one raw object. What is guaranteed exactly: one receipt
+  identity, one raw object, and one DB-outbox row per transfer identity (the
+  outbox idempotency key is derived from that identity, not from a per-emission
+  event id). An *already-acknowledged* identity emits no further admission event
+  at all — the guard lives in the shared `record_media_admission` seam, so it
+  also covers a watched-folder file re-admitted on every tick after a failed
+  source delete. Two genuinely concurrent first admissions of the same identity
+  can each append a JSONL audit line before either receipt exists; an audit line
+  is an operational trace, not an acknowledgement, and the receipt stays single.
+  A consumer keys on `receipt_id`.
 - **Receipts are their own append-only store, not a raw-record field.** The raw
   store holds one object per *content hash* while receipts are keyed by transfer
   identity, and recovery queries by `capture_id` — a direction the raw store
@@ -574,12 +582,35 @@ Contract:
   evidence.
 - **Named error states, never blind-retryable.** 415 `unsupported_media_kind`,
   413 `media_too_large` (with `max_bytes`), 422 `sidecar_schema_invalid` /
-  `content_hash_mismatch`, 409 `consent_refused` (HEIM-3), 500
-  `raw_write_failed` / `admission_event_commit_failed` with state
-  `not_acknowledged`. Per-kind caps default in
+  `content_hash_mismatch`, 409 `consent_refused` (HEIM-3), and a
+  `state: not_acknowledged` 500 family: `raw_write_failed`,
+  `admission_event_commit_failed`, `receipt_persistence_failed`,
+  `raw_store_key_unavailable`, `media_cap_misconfigured`, plus the
+  `admission_failed` catch-all — no reachable failure on this seam may surface as
+  an unnamed 500, because "never blind-retryable" only holds if the client always
+  has an `error` to branch on. The receipt query answers 503
+  `receipt_store_unavailable` rather than `unknown` when the store cannot be
+  read: `unknown` is an answer a client deletes originals against, so it is never
+  used to report a read failure. Per-kind caps default in
   `media_ingress.DEFAULT_MEDIA_KIND_MAX_BYTES` and are overridable per kind via
   `HEIMDAL_MEDIA_MAX_BYTES_<KIND>`; a present-but-unusable override fails loud
   rather than admitting evidence the operator believed was bounded.
+- **Operator precondition.** Admission encrypts through
+  `app.heimdal.raw_store`, so `HEIMDAL_RAW_STORE_KEY` must be provisioned to the
+  process serving the API. Today `config/secrets/host_secret_contract.json`
+  declares that secret for the `heimdal-capture-watch` consumer only, so an api
+  process without it refuses every admission with 500
+  `raw_store_key_unavailable` / `not_acknowledged` — named and remediable, never
+  a silent or ambiguous failure. Provisioning it to the api consumer (which the
+  pre-existing `POST /api/heimdal/screen/capture` needs equally) is tracked
+  separately, not claimed here.
+- **Consent scope, stated honestly.** Every kind is admitted under the standing
+  self-record grant the voice-memo lane uses
+  (`consent_ledger.SELF_RECORD_SCOPE`), whose descriptive
+  `capture_profile.modalities` names `speech` only. No modality enforcement reads
+  that field today, so this is a provenance-accuracy gap rather than an
+  admission bypass; giving the media lane its own grant naming its modalities is
+  an owner decision tracked separately.
 - **LAN/loopback/tailnet posture only.** Both routes refuse a peer outside
   loopback, RFC1918/ULA, link-local, or the tailnet CGNAT range with 403
   `public_ingress_refused`, judged on the immediate peer and never on
@@ -871,8 +902,10 @@ Payload fields (in addition to the envelope):
 - `receipt_id` (`string`): the derived receipt identity this admission will
   acknowledge under.
 - `device_id`, `captured_at`, `schema_version`: client lineage, governed lane only.
-- `session_id`, `session_seq` (nullable): carried opaquely for CDLM-02, which
-  owns every ledger semantic over them; this lane never interprets or orders them.
+- `session_id`, `session_seq`: **present only when the client sent them** — the
+  keys are omitted rather than emitted as null, so a consumer must use a
+  defaulting read. Carried opaquely for CDLM-02, which owns every ledger semantic
+  over them; this lane never interprets or orders them.
 
 ### `panel.intent.created`
 

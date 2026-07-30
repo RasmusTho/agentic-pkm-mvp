@@ -12,11 +12,18 @@ can_parallelize_with: []
 # Admit Media With Durable Receipts
 
 State: Delivered by hub issue #4384 (2026-07-30). `POST /api/heimdal/capture/media` and
-`GET /api/heimdal/capture/receipts` are live in `app/api/routes/heimdal_capture.py` over
-`app/heimdal/media_ingress.py` + `app/heimdal/media_receipts.py`; the event contract is recorded in
-`docs/EVENTS.md :: Heimdal governed media ingress + durable receipts`. Promotion of this lane into
-`docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 (closing client-contract gap F5 for the media lane)
-remains parent-acceptance work on #4383 and is deliberately not claimed here.
+`GET /api/heimdal/capture/receipts` are implemented in `app/api/routes/heimdal_capture.py` over
+`app/heimdal/media_ingress.py` + `app/heimdal/media_receipts.py`, with the six acceptance criteria
+below proven by `tests/heimdal/test_media_ingress.py`; the event contract is recorded in
+`docs/EVENTS.md :: Heimdal governed media ingress + durable receipts`.
+
+Two things are deliberately **not** claimed by this slice. First, the api process needs
+`HEIMDAL_RAW_STORE_KEY` to encrypt into the raw store, and the host secret contract declares that
+secret for the `heimdal-capture-watch` consumer only — until it is provisioned to the api consumer,
+admission returns a named 500 `raw_store_key_unavailable` / `not_acknowledged` rather than a receipt
+(the pre-existing `POST /api/heimdal/screen/capture` shares that gap). Second, promotion of this lane
+into `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 (closing client-contract gap F5 for the media lane)
+remains parent-acceptance work on #4383.
 
 ## Purpose
 

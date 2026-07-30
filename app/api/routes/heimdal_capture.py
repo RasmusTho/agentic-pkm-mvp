@@ -31,15 +31,22 @@ Named error states, never blind-retryable — the client must branch on `error`:
 | 422 | `sidecar_schema_invalid` | Sidecar missing/malformed against the admission schema |
 | 422 | `content_hash_mismatch` | Received bytes do not hash to `content_sha256` |
 | 422 | `capture_id_required` / `too_many_capture_ids` | Receipt query outside its bounds |
+| 503 | `receipt_store_unavailable` | Receipt store unreadable — never answered as `unknown` |
 | 409 | `consent_refused` | No active consent grant (HEIM-3); nothing admitted |
-| 500 | `raw_write_failed` / `admission_event_commit_failed` / `receipt_persistence_failed` | State `not_acknowledged` |
+| 500 | `raw_write_failed` / `admission_event_commit_failed` / `receipt_persistence_failed` / `raw_store_key_unavailable` / `media_cap_misconfigured` / `admission_failed` | State `not_acknowledged` |
 
-**Where the per-kind cap is enforced.** After the multipart parse, not before:
-`kind` lives in the sidecar, so the cap that applies is not knowable until the
-body is read. Starlette spools large parts to disk rather than holding them in
-memory, and this seam is LAN-only under a single-operator trust model, so a
-coarse pre-parse `Content-Length` guard is deliberately not added — the
-per-kind cap remains the one bound the contract publishes.
+`admission_failed` is the catch-all: no reachable failure on this seam may
+surface as an unnamed 500, because "never blind-retryable" only holds if the
+client always has an `error` to branch on.
+
+**Where the per-kind cap is enforced.** The exact per-kind cap is not knowable
+until the sidecar is parsed, because `kind` lives in the sidecar. So the read is
+bounded twice: this module reads at most `max(per-kind caps) + 1` bytes into
+memory and rejects anything longer with 413 before a `kind` is even known, and
+`media_ingress.admit_media_bytes` then applies the specific per-kind cap. The
+multipart parse itself is bounded by Starlette spooling large parts to disk. A
+pre-parse `Content-Length` guard is deliberately not added on top: it would only
+duplicate the byte bound already enforced here, less precisely.
 """
 
 from __future__ import annotations
@@ -71,6 +78,7 @@ from app.heimdal.media_ingress import (
     MediaTooLargeError,
 )
 from app.heimdal.media_receipts import MediaReceiptPersistenceError
+from app.heimdal.raw_store import RawStoreKeyMissingError
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +100,16 @@ _ADMITTED_PEER_NETWORKS = (
 
 # `testclient` is Starlette's synthetic in-process peer, treated as loopback for
 # the same reason `app.auth._is_loopback_host` does: an in-process call has no
-# network hop to judge.
-_LOOPBACK_HOST_NAMES = {"", "localhost", "testclient"}
+# network hop to judge. Unlike that helper, an *empty* host is NOT admitted here:
+# on this seam an unknown peer is not provably inside the posture, so it fails
+# closed.
+_LOOPBACK_HOST_NAMES = {"localhost", "testclient"}
 
 _SIDECAR_SCHEMA_VERSIONS = (1,)
+
+# The sidecar is a small metadata object; a megabyte is already far past any
+# legitimate value and keeps a malformed part from being materialized whole.
+_MAX_SIDECAR_BYTES = 1024 * 1024
 
 
 class MediaSidecar(BaseModel):
@@ -206,6 +220,11 @@ def _is_admitted_peer(host: str | None) -> bool:
         # A name we cannot resolve to an address is not provably inside the
         # posture, so it is refused rather than assumed local.
         return False
+    # A dual-stack listener reports an IPv4 LAN peer as `::ffff:192.168.1.5`;
+    # judge it as the IPv4 address it is rather than false-refusing it.
+    mapped = getattr(address, "ipv4_mapped", None)
+    if mapped is not None:
+        address = mapped
     if address.is_loopback:
         return True
     return any(address in network for network in _ADMITTED_PEER_NETWORKS)
@@ -273,7 +292,7 @@ def _parse_sidecar(raw_sidecar: str, trace_id: str) -> MediaSidecar:
         ) from exc
 
 
-async def _part_bytes(name: str, part: Any, trace_id: str) -> bytes:
+async def _part_bytes(name: str, part: Any, trace_id: str, *, max_bytes: int) -> bytes:
     """Read one multipart part as bytes, accepting both wire shapes.
 
     A client may send `sidecar` as a plain form field (the contract's own curl:
@@ -281,6 +300,9 @@ async def _part_bytes(name: str, part: Any, trace_id: str) -> bytes:
     (what most native multipart builders produce). Both are valid multipart and
     both carry the same bytes, so the seam accepts either rather than refusing a
     well-formed request over a filename.
+
+    ``max_bytes`` bounds what is materialized in memory. It reads one byte past
+    the bound so an oversize part is detectable without holding all of it.
     """
     if part is None:
         raise HTTPException(
@@ -294,10 +316,25 @@ async def _part_bytes(name: str, part: Any, trace_id: str) -> bytes:
             },
         )
     if isinstance(part, UploadFile):
-        return await part.read()
-    if isinstance(part, bytes):
-        return part
-    return str(part).encode("utf-8")
+        data = await part.read(max_bytes + 1)
+    elif isinstance(part, bytes):
+        data = part[: max_bytes + 1]
+    else:
+        data = str(part).encode("utf-8")[: max_bytes + 1]
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "media_too_large" if name == "media" else f"{name}_part_too_large",
+                "message": (
+                    f"The {name!r} part exceeds the largest configured bound of {max_bytes} "
+                    "bytes; nothing was admitted."
+                ),
+                "max_bytes": max_bytes,
+                "trace_id": trace_id,
+            },
+        )
+    return data
 
 
 @router.post(
@@ -357,10 +394,19 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
             },
         ) from exc
 
-    media_bytes = await _part_bytes("media", form.get("media"), trace_id)
-    raw_sidecar = (await _part_bytes("sidecar", form.get("sidecar"), trace_id)).decode(
-        "utf-8", errors="replace"
+    # The coarse bound: the largest cap any kind could resolve to. The exact
+    # per-kind cap is applied by the admission seam once `kind` is known.
+    largest_media_cap = max(
+        media_ingress.resolve_media_kind_max_bytes(kind) for kind in media_ingress.MEDIA_KINDS
     )
+    media_bytes = await _part_bytes(
+        "media", form.get("media"), trace_id, max_bytes=largest_media_cap
+    )
+    raw_sidecar = (
+        await _part_bytes(
+            "sidecar", form.get("sidecar"), trace_id, max_bytes=_MAX_SIDECAR_BYTES
+        )
+    ).decode("utf-8", errors="replace")
     parsed = _parse_sidecar(raw_sidecar, trace_id)
 
     reserved = {
@@ -444,6 +490,24 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
                 "trace_id": trace_id,
             },
         ) from exc
+    except RawStoreKeyMissingError as exc:
+        # Operator precondition, not a client error: without the raw-store key
+        # nothing can be encrypted, so nothing can be admitted. Named and
+        # remediable rather than an unnamed 500 the client cannot branch on.
+        logger.error("heimdal media ingress refused: raw-store key unavailable: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "raw_store_key_unavailable",
+                "state": "not_acknowledged",
+                "message": (
+                    "The encrypted raw store's key is not available to this process, so "
+                    "nothing was admitted. Provision HEIMDAL_RAW_STORE_KEY for the api "
+                    "service (see config/secrets/host_secret_contract.json)."
+                ),
+                "trace_id": trace_id,
+            },
+        ) from exc
     except MediaAdmissionError as exc:
         raise HTTPException(
             status_code=500,
@@ -486,6 +550,32 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
                     "The durable-acceptance receipt could not be persisted, so none was "
                     "issued. Re-send the same capture_id and content_sha256 — admission is "
                     "idempotent."
+                ),
+                "trace_id": trace_id,
+            },
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Catch-all so that *no* reachable failure on this seam can surface as an
+        # unnamed 500. "Never blind-retryable" only holds if every failure the
+        # client can hit carries an `error` it can branch on — an unregistered
+        # sensor, an absent receipt table, a driver error, or anything a later
+        # change introduces lands here rather than as a bare Internal Server
+        # Error. The state is still the honest one: nothing was acknowledged.
+        logger.exception(
+            "heimdal media ingress failed unexpectedly trace_id=%s capture_id=%s",
+            trace_id,
+            parsed.capture_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "admission_failed",
+                "state": "not_acknowledged",
+                "message": (
+                    f"Media admission failed and issued no receipt ({type(exc).__name__}). "
+                    "Re-send the same capture_id and content_sha256 — admission is idempotent."
                 ),
                 "trace_id": trace_id,
             },
@@ -540,12 +630,26 @@ def query_receipts(
             },
         )
 
-    answers = [
-        media_ingress.receipt_answer(
-            media_receipts.find_media_receipt_by_capture_id(value), value
-        )
-        for value in requested
-    ]
+    try:
+        found = media_receipts.find_media_receipts_by_capture_ids(requested)
+    except Exception as exc:
+        # A read failure must not be reported as `unknown`: "never arrived" is a
+        # load-bearing answer a client acts on (CDLM-03 deletes originals against
+        # it), so an unavailable store says so instead of answering wrongly.
+        logger.exception("heimdal receipt query failed trace_id=%s", trace_id)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "receipt_store_unavailable",
+                "message": (
+                    f"The receipt store could not be read ({type(exc).__name__}); no "
+                    "admission state is being asserted. Retry — this query is read-only."
+                ),
+                "trace_id": trace_id,
+            },
+        ) from exc
+
+    answers = [media_ingress.receipt_answer(found.get(value), value) for value in requested]
     return ReceiptQueryResponse(receipts=answers, trace_id=trace_id)
 
 
