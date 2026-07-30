@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import os
 import re
 import threading
@@ -21,7 +23,23 @@ class FdOracle:
         self.active: dict[int, FdToken] = {}
         self.events: list[tuple[object, ...]] = []
         self._generation = 0
+        self._ignored_active: set[int] = set()
+        self._retired_tracked: set[int] = set()
+        self._scope_depth = 0
         self._lock = threading.Lock()
+
+    @contextmanager
+    def observe(self) -> Iterator[None]:
+        """Limit ownership accounting to the production call under test."""
+
+        with self._lock:
+            self._scope_depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._scope_depth -= 1
+                assert self._scope_depth >= 0
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         real_open = os.open
@@ -47,6 +65,8 @@ class FdOracle:
                     f"{operation}:{source[3]}",
                 )
                 assert duplicate_fd not in self.active
+                assert duplicate_fd not in self._ignored_active
+                self._retired_tracked.discard(duplicate_fd)
                 self.active[duplicate_fd] = token
                 self.opened.append(token)
                 self.duplicates.append((operation, source_fd, duplicate_fd))
@@ -70,9 +90,14 @@ class FdOracle:
                 else "file"
             )
             with self._lock:
+                assert fd not in self.active, f"raw fd {fd} reused while still owned"
+                assert fd not in self._ignored_active
+                self._retired_tracked.discard(fd)
+                if self._scope_depth == 0 or kind == "file":
+                    self._ignored_active.add(fd)
+                    return fd
                 self._generation += 1
                 token = (fd, self._generation, kind, raw_path)
-                assert fd not in self.active, f"raw fd {fd} reused while still owned"
                 self.active[fd] = token
                 self.opened.append(token)
                 self.events.append(("open", raw_path, flags, dir_fd, token))
@@ -81,8 +106,15 @@ class FdOracle:
         def traced_close(fd: int) -> None:
             with self._lock:
                 token = self.active.pop(fd, None)
-                self.close_attempts.append(token)
-                self.events.append(("close", fd, token))
+                if token is not None:
+                    self.close_attempts.append(token)
+                    self.events.append(("close", fd, token))
+                    self._retired_tracked.add(fd)
+                elif fd in self._ignored_active:
+                    self._ignored_active.remove(fd)
+                elif self._scope_depth > 0 and fd in self._retired_tracked:
+                    self.close_attempts.append(None)
+                    self.events.append(("close", fd, None))
             real_close(fd)
 
         def traced_dup(fd: int) -> int:

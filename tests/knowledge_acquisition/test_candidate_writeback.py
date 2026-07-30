@@ -447,25 +447,26 @@ def test_rerun_existing_candidate_returns_before_render_and_creates_no_recovery_
     monkeypatch.setattr(os, "fsync", faulting_fsync)
     monkeypatch.setattr(os, "stat", faulting_stat)
 
-    if fault is None:
-        second = write_candidate_note(
-            candidate,
-            vault_context=vault,
-            write_guard=guard,
-            sources_dir=sources_dir,
-        )
-        assert second.status == "already_exists"
-        assert second.artifact_path == relative
-    else:
-        with pytest.raises(CandidateWritebackError):
-            write_candidate_note(
+    with oracle.observe():
+        if fault is None:
+            second = write_candidate_note(
                 candidate,
                 vault_context=vault,
                 write_guard=guard,
                 sources_dir=sources_dir,
             )
-        if fault != "nonregular_target":
-            assert fired == 1
+            assert second.status == "already_exists"
+            assert second.artifact_path == relative
+        else:
+            with pytest.raises(CandidateWritebackError):
+                write_candidate_note(
+                    candidate,
+                    vault_context=vault,
+                    write_guard=guard,
+                    sources_dir=sources_dir,
+                )
+            if fault != "nonregular_target":
+                assert fired == 1
 
     if expected_bytes is not None:
         assert target.read_bytes() == expected_bytes

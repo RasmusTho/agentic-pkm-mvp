@@ -425,13 +425,14 @@ def test_candidate_create_once_owns_durable_parent_chain(
 
     guard.assert_writes_allowed = tracked_assert  # type: ignore[method-assign]
 
-    result = write_ops.create_candidate_note_once(
-        "Sources/Nested/candidate.md",
-        "complete candidate",
-        vault_root=vault,
-        action="candidate.test",
-        write_guard=guard,
-    )
+    with oracle.observe():
+        result = write_ops.create_candidate_note_once(
+            "Sources/Nested/candidate.md",
+            "complete candidate",
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=guard,
+        )
 
     assert result == "written"
     assert guard_calls == ["candidate.test"]
@@ -499,6 +500,14 @@ def test_candidate_create_once_publishes_fsynced_raw_stage_without_replace(
     parent.mkdir(parents=True)
     oracle = _FdOracle()
     oracle.install(monkeypatch)
+    unrelated_fd = os.open(os.devnull, os.O_RDONLY)
+    os.close(unrelated_fd)
+    with oracle.observe():
+        unrelated_fd = os.open(os.devnull, os.O_RDONLY)
+        os.close(unrelated_fd)
+    assert oracle.opened == []
+    assert oracle.close_attempts == []
+    assert oracle.active == {}
     real_write = os.write
     real_fsync = os.fsync
     real_publish = write_ops._atomic_rename_noreplace_at
@@ -542,13 +551,14 @@ def test_candidate_create_once_publishes_fsynced_raw_stage_without_replace(
     monkeypatch.setattr(os, "fsync", traced_fsync)
     monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", traced_publish)
 
-    result = write_ops.create_candidate_note_once(
-        "Sources/candidate.md",
-        "complete candidate",
-        vault_root=vault,
-        action="candidate.test",
-        write_guard=WriteGuard(lambda: {"state": "healthy"}),
-    )
+    with oracle.observe():
+        result = write_ops.create_candidate_note_once(
+            "Sources/candidate.md",
+            "complete candidate",
+            vault_root=vault,
+            action="candidate.test",
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
 
     assert result == "written"
     assert (parent / "candidate.md").read_bytes() == b"complete candidate"
@@ -616,16 +626,17 @@ def test_candidate_create_once_publishes_fsynced_raw_stage_without_replace(
     name_max = os.pathconf(parent, "PC_NAME_MAX")
     max_name = ("x" * (name_max - 3)) + ".md"
     assert len(max_name.encode("ascii")) == name_max
-    assert (
-        write_ops.create_candidate_note_once(
-            f"Sources/{max_name}",
-            "max-name candidate",
-            vault_root=vault,
-            action="candidate.test",
-            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    with oracle.observe():
+        assert (
+            write_ops.create_candidate_note_once(
+                f"Sources/{max_name}",
+                "max-name candidate",
+                vault_root=vault,
+                action="candidate.test",
+                write_guard=WriteGuard(lambda: {"state": "healthy"}),
+            )
+            == "written"
         )
-        == "written"
-    )
     assert (parent / max_name).read_text(encoding="utf-8") == "max-name candidate"
 
 
@@ -831,12 +842,13 @@ def test_candidate_create_once_real_same_target_race(
             write_guard=guard,
         )
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(contender, "contender one"),
-            executor.submit(contender, "contender two"),
-        ]
-        results = [future.result(timeout=10) for future in futures]
+    with oracle.observe():
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(contender, "contender one"),
+                executor.submit(contender, "contender two"),
+            ]
+            results = [future.result(timeout=10) for future in futures]
 
     assert sorted(results) == ["already_exists", "written"]
     winner = (parent / "race.md").read_text(encoding="utf-8")
@@ -1028,16 +1040,17 @@ def test_candidate_create_once_fault_matrix(
     monkeypatch.setattr(write_ops, "_atomic_rename_noreplace_at", faulting_publish)
 
     outcome: object
-    try:
-        outcome = write_ops.create_candidate_note_once(
-            "Sources/Nested/candidate.md",
-            "complete candidate",
-            vault_root=vault,
-            action="candidate.test",
-            write_guard=WriteGuard(lambda: {"state": "healthy"}),
-        )
-    except (OSError, RuntimeError) as exc:
-        outcome = exc
+    with oracle.observe():
+        try:
+            outcome = write_ops.create_candidate_note_once(
+                "Sources/Nested/candidate.md",
+                "complete candidate",
+                vault_root=vault,
+                action="candidate.test",
+                write_guard=WriteGuard(lambda: {"state": "healthy"}),
+            )
+        except (OSError, RuntimeError) as exc:
+            outcome = exc
     _assert_candidate_fault_outcome(outcome)
 
     expected_arms = (
