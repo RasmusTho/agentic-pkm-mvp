@@ -567,6 +567,7 @@ class InstanceStateBackup:
         *,
         quiescence_proof: DeploymentQuiescenceProof | None,
         owner_receipt_path: Path | None = None,
+        require_materialized_owner_roots: bool = True,
     ) -> InstanceStateBackupReceipt:
         if quiescence_proof is None:
             raise InstanceStatePreflightError(
@@ -598,6 +599,7 @@ class InstanceStateBackup:
         ledger, _ = self._verify_staged_backup(
             payloads=payloads,
             owner_payload=owner_payload,
+            require_materialized_owner_roots=require_materialized_owner_roots,
         )
         checksums = {
             name: hashlib.sha256(payload).hexdigest()
@@ -756,6 +758,7 @@ class InstanceStateBackup:
         *,
         payloads: Mapping[str, bytes],
         owner_payload: Mapping[str, object],
+        require_materialized_owner_roots: bool = True,
     ) -> tuple[LedgerSnapshot, tuple[LegacyOwner, ...]]:
         try:
             with tempfile.TemporaryDirectory(
@@ -780,11 +783,17 @@ class InstanceStateBackup:
                     owner_payload=owner_payload,
                     registry=registry,
                     ledger=scratch_ledger,
+                    require_materialized_owner_roots=(
+                        require_materialized_owner_roots
+                    ),
                 )
                 ledger = self._require_registry_ledger_consistency(
                     registry=registry,
                     ledger=scratch_ledger,
                     global_live_owners=global_live_owners,
+                    require_materialized_owner_roots=(
+                        require_materialized_owner_roots
+                    ),
                 )
                 return ledger, global_live_owners
         except Exception as exc:
@@ -799,16 +808,25 @@ class InstanceStateBackup:
         registry: RegistrySnapshot,
         ledger: OwnershipLedger,
         global_live_owners: Sequence[LegacyOwner],
+        require_materialized_owner_roots: bool = True,
     ) -> LedgerSnapshot:
         try:
             return ledger.require_registry_consistency(
                 channel_id=self.layout.channel_id,
                 registrations={
-                    binding_id: Path(registration.path)
+                    binding_id: (
+                        Path(registration.path)
+                        if require_materialized_owner_roots
+                        else None
+                    )
                     for binding_id, registration in registry.registrations.items()
                 },
                 tombstones={
-                    binding_id: Path(tombstone.path)
+                    binding_id: (
+                        Path(tombstone.path)
+                        if require_materialized_owner_roots
+                        else None
+                    )
                     for binding_id, tombstone in registry.removal_tombstones.items()
                 },
                 transfer_lineage=tuple(
@@ -822,6 +840,7 @@ class InstanceStateBackup:
                     for item in registry.transfer_lineage
                 ),
                 global_live_owners=global_live_owners,
+                require_materialized_roots=require_materialized_owner_roots,
             )
         except LedgerError as exc:
             raise InstanceStatePreflightError(
@@ -834,6 +853,7 @@ class InstanceStateBackup:
         owner_payload: Mapping[str, object],
         registry: RegistrySnapshot,
         ledger: OwnershipLedger,
+        require_materialized_owner_roots: bool = True,
     ) -> tuple[LegacyOwner, ...]:
         raw_owners = owner_payload.get("owners")
         if not isinstance(raw_owners, list):
@@ -850,12 +870,25 @@ class InstanceStateBackup:
             root = Path(str(item.get("root") or "")).expanduser().resolve(
                 strict=False
             )
-            if not channel_id or not root.is_dir():
+            binding_id = str(item.get("vault_binding_id") or "").strip()
+            if (
+                not channel_id
+                or (
+                    require_materialized_owner_roots
+                    and not root.is_dir()
+                )
+                or (
+                    not require_materialized_owner_roots
+                    and not binding_id
+                )
+            ):
                 raise InstanceStatePreflightError(
                     "canonical global live-owner inventory is invalid"
                 )
-            binding_id = str(item.get("vault_binding_id") or "").strip()
-            if channel_id == self.layout.channel_id:
+            if (
+                require_materialized_owner_roots
+                and channel_id == self.layout.channel_id
+            ):
                 for registration in registry.registrations.values():
                     if same_filesystem_root(
                         resolve_filesystem_root_identity(root),

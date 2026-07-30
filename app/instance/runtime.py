@@ -2070,6 +2070,7 @@ def _finish_instance_state_deployment(
     backup_root: Path,
     restore_root: Path | None,
     quiescence_proof: DeploymentQuiescenceProof | None,
+    scalar_roll_forward_merged: bool = False,
 ) -> dict[str, object]:
     """Serialize finalization against authority and other producer transitions."""
 
@@ -2088,6 +2089,7 @@ def _finish_instance_state_deployment(
                 backup_root=backup_root,
                 restore_root=restore_root,
                 quiescence_proof=quiescence_proof,
+                scalar_roll_forward_merged=scalar_roll_forward_merged,
             )
 
 
@@ -2166,6 +2168,7 @@ def _finish_instance_state_deployment_locked(
     backup_root: Path,
     restore_root: Path | None,
     quiescence_proof: DeploymentQuiescenceProof | None,
+    scalar_roll_forward_merged: bool = False,
 ) -> dict[str, object]:
     """Finalize legacy state while stopped, then clear the restart fence."""
 
@@ -2274,13 +2277,25 @@ def _finish_instance_state_deployment_locked(
             writers_drained=True,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
-    for registration in registry.registrations.values():
-        ledger.recover_or_require_active(
-            registration.vault_binding_id,
+    if scalar_roll_forward_merged:
+        if restore_root is not None:
+            raise InstanceStatePreflightError(
+                "scalar roll-forward finalization cannot restore instance state"
+            )
+        ledger.require_scalar_rollback_ready(
             channel_id=channel,
-            root=Path(registration.path),
-            _capability=_STORAGE_MUTATION_CAPABILITY,
+            registrations={
+                binding_id: None for binding_id in registry.registrations
+            },
         )
+    else:
+        for registration in registry.registrations.values():
+            ledger.recover_or_require_active(
+                registration.vault_binding_id,
+                channel_id=channel,
+                root=Path(registration.path),
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
     if not ledger_snapshot.legacy_bootstrap_complete:
         raise InstanceStatePreflightError("legacy owner bootstrap did not complete")
 
@@ -2288,6 +2303,7 @@ def _finish_instance_state_deployment_locked(
         backup_root,
         quiescence_proof=quiescence_proof,
         owner_receipt_path=inventory_path,
+        require_materialized_owner_roots=not scalar_roll_forward_merged,
     )
     result: dict[str, object] = {
         "channel": channel,
@@ -2295,6 +2311,7 @@ def _finish_instance_state_deployment_locked(
         "final_fingerprint": final_fingerprint,
         "backup_manifest": str(backup_receipt.manifest_path),
         "restart_fence_cleared": True,
+        "scalar_roll_forward_merged": scalar_roll_forward_merged,
     }
     lease_path = _deployment_lease_path(ownership_root)
     lease = _read_deployment_lease(ownership_root)
@@ -2377,6 +2394,7 @@ def main(argv: list[str] | None = None) -> int:
     finish.add_argument("--backup-root", type=Path, required=True)
     finish.add_argument("--restore-root", type=Path)
     finish.add_argument("--quiescence-proof-path", type=Path, required=True)
+    finish.add_argument("--scalar-roll-forward-merged", action="store_true")
     prove = subparsers.add_parser("deployment-prove")
     prove.add_argument("--channel", required=True)
     prove.add_argument("--host-global-root", type=Path, required=True)
@@ -2478,6 +2496,7 @@ def main(argv: list[str] | None = None) -> int:
                     backup_root=args.backup_root,
                     restore_root=args.restore_root,
                     quiescence_proof=proof,
+                    scalar_roll_forward_merged=args.scalar_roll_forward_merged,
                 ),
                 sort_keys=True,
             )

@@ -318,10 +318,11 @@ class OwnershipLedger:
         self,
         *,
         channel_id: str,
-        registrations: Mapping[str, Path],
-        tombstones: Mapping[str, Path],
+        registrations: Mapping[str, Path | None],
+        tombstones: Mapping[str, Path | None],
         transfer_lineage: Sequence[Mapping[str, str]],
         global_live_owners: Sequence[LegacyOwner],
+        require_materialized_roots: bool = True,
     ) -> LedgerSnapshot:
         """Authenticate one channel registry and the complete host-global ledger."""
 
@@ -334,16 +335,21 @@ class OwnershipLedger:
                     "registry/ledger consistency cannot commit an in-progress transfer"
                 )
 
+            ledger_live_owners: set[tuple[str, str]] = set()
             ledger_live_roots: list[tuple[str, str, str]] = []
             for binding_id, lease in current.leases.items():
                 if (
                     binding_id != lease.vault_binding_id
                     or lease.state != "active"
-                    or not self._has_complete_self_identity(lease, key)
+                    or (
+                        require_materialized_roots
+                        and not self._has_complete_self_identity(lease, key)
+                    )
                 ):
                     raise LedgerError(
                         "registry/ledger consistency found an invalid host-global live lease"
                     )
+                ledger_live_owners.add((lease.channel_id, lease.vault_binding_id))
                 ledger_live_roots.append(
                     (
                         lease.channel_id,
@@ -351,35 +357,47 @@ class OwnershipLedger:
                         lease.root_fingerprint,
                     )
                 )
-            try:
-                expected_live_roots = [
-                    (
-                        owner.channel_id,
-                        owner.vault_binding_id,
-                        self._lease_for_root(
-                            channel_id=owner.channel_id,
-                            vault_binding_id=owner.vault_binding_id,
-                            root=owner.root,
-                            key=key,
-                            state="active",
-                        ).root_fingerprint,
-                    )
-                    for owner in global_live_owners
-                ]
-            except FilesystemIdentityError as exc:
-                raise LedgerError(
-                    "registry/ledger consistency cannot resolve global live-owner identity"
-                ) from exc
-            if sorted(ledger_live_roots) != sorted(expected_live_roots):
+            expected_live_owners = {
+                (owner.channel_id, owner.vault_binding_id)
+                for owner in global_live_owners
+            }
+            if ledger_live_owners != expected_live_owners:
                 raise LedgerError(
                     "registry/ledger consistency requires one live lease per global owner"
                 )
+            if require_materialized_roots:
+                try:
+                    expected_live_roots = [
+                        (
+                            owner.channel_id,
+                            owner.vault_binding_id,
+                            self._lease_for_root(
+                                channel_id=owner.channel_id,
+                                vault_binding_id=owner.vault_binding_id,
+                                root=owner.root,
+                                key=key,
+                                state="active",
+                            ).root_fingerprint,
+                        )
+                        for owner in global_live_owners
+                    ]
+                except FilesystemIdentityError as exc:
+                    raise LedgerError(
+                        "registry/ledger consistency cannot resolve global live-owner identity"
+                    ) from exc
+                if sorted(ledger_live_roots) != sorted(expected_live_roots):
+                    raise LedgerError(
+                        "registry/ledger consistency requires one live lease per global owner"
+                    )
 
             for binding_id, retired in current.tombstones.items():
                 if (
                     binding_id != retired.vault_binding_id
                     or retired.state != "retired"
-                    or not self._has_complete_self_identity(retired, key)
+                    or (
+                        require_materialized_roots
+                        and not self._has_complete_self_identity(retired, key)
+                    )
                 ):
                     raise LedgerError(
                         "registry/ledger consistency found an invalid host-global tombstone"
@@ -424,7 +442,10 @@ class OwnershipLedger:
                     or destination.root_fingerprint != item.root_fingerprint
                     or source.ancestor_fingerprints != item.ancestor_fingerprints
                     or destination.ancestor_fingerprints != item.ancestor_fingerprints
-                    or not self._has_complete_self_identity(lineage_lease, key)
+                    or (
+                        require_materialized_roots
+                        and not self._has_complete_self_identity(lineage_lease, key)
+                    )
                 ):
                     raise LedgerError(
                         "registry/ledger consistency found invalid host-global transfer lineage"
@@ -446,7 +467,15 @@ class OwnershipLedger:
                 if (
                     lease.state != "active"
                     or lease.vault_binding_id != binding_id
-                    or not self._matches_complete_root_identity(lease, root, key)
+                    or (
+                        require_materialized_roots
+                        and (
+                            root is None
+                            or not self._matches_complete_root_identity(
+                                lease, root, key
+                            )
+                        )
+                    )
                 ):
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible live lease"
@@ -466,7 +495,15 @@ class OwnershipLedger:
                 if (
                     retired.state != "retired"
                     or retired.vault_binding_id != binding_id
-                    or not self._matches_complete_root_identity(retired, root, key)
+                    or (
+                        require_materialized_roots
+                        and (
+                            root is None
+                            or not self._matches_complete_root_identity(
+                                retired, root, key
+                            )
+                        )
+                    )
                 ):
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible tombstone"
@@ -514,7 +551,7 @@ class OwnershipLedger:
             for identity, item in ledger_lineage.items():
                 destination_binding_id = identity[-1]
                 destination_root = roots.get(destination_binding_id)
-                if destination_root is None:
+                if require_materialized_roots and destination_root is None:
                     raise LedgerError(
                         "registry/ledger consistency lineage has no destination root"
                     )
@@ -526,10 +563,13 @@ class OwnershipLedger:
                     sealed_root=item.sealed_root,
                     state="lineage",
                 )
-                if not self._matches_complete_root_identity(
-                    lineage_lease,
-                    destination_root,
-                    key,
+                if require_materialized_roots and (
+                    destination_root is None
+                    or not self._matches_complete_root_identity(
+                        lineage_lease,
+                        destination_root,
+                        key,
+                    )
                 ):
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible lineage fingerprint"

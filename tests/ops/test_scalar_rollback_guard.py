@@ -808,6 +808,18 @@ def test_scalar_roll_forward_uses_lease_coverage_without_opening_vault_roots(
     )
 
     assert result == 0
+    receipt = _finish_instance_state_deployment(
+        channel="prod",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        inventory_path=inventory,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+        scalar_roll_forward_merged=True,
+    )
+    assert receipt["scalar_roll_forward_merged"] is True
 
 
 def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:

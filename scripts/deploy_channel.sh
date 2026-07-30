@@ -470,7 +470,9 @@ recreate_channel_services() {
       scalar-rollback-guard api scalar-rollback-gateway
     return $?
   fi
-  retire_scalar_rollback_services || return $?
+  if [ "${action}" != "deploy" ]; then
+    retire_scalar_rollback_services || return $?
+  fi
   if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then
     # During an acknowledged embedding-dimension cutover, /readyz must stay red
     # until the governed full rebuild completes. Start the runtime first, prove
@@ -994,6 +996,10 @@ if [ "${scalar_rollback}" = "1" ]; then
 else
   run_postmutation_gate "image pull failed" \
     compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+fi
+if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
+  run_postmutation_gate "scalar rollback service retirement failed" \
+    retire_scalar_rollback_services || exit $?
 fi
 if [ "${action}" = "deploy" ]; then
   if prepare_instance_state_deployment compose "${channel}"; then

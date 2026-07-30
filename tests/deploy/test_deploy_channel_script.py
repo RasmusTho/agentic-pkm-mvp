@@ -415,6 +415,11 @@ def test_normal_roll_forward_retires_scalar_services_before_recreate(
     )
     gateway_remove = events.index("docker rm -f fake-scalar-gateway")
     guard_remove = events.index("docker rm -f fake-scalar-guard")
+    instance_state_init = next(
+        index
+        for index, event in enumerate(events)
+        if "run --rm --no-deps -T instance-state-init" in event
+    )
     normal_recreate = next(
         index
         for index, event in enumerate(events)
@@ -423,8 +428,8 @@ def test_normal_roll_forward_retires_scalar_services_before_recreate(
             "heimdal-capture-watch companion-ui"
         )
     )
-    assert gateway_lookup < gateway_remove < normal_recreate
-    assert guard_remove < normal_recreate
+    assert gateway_lookup < gateway_remove < instance_state_init < normal_recreate
+    assert guard_remove < instance_state_init
 
 
 def test_scalar_rollback_establishment_failure_retains_retryable_guarded_mode(
