@@ -1076,6 +1076,21 @@ def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
     assert "tests/invariants" in selection.targets
     assert "tests/invariants/test_episode_binding.py" in selection.targets
 
+def test_api_served_static_page_change_selects_api_coverage() -> None:
+    """The pages the API serves are API surface, not an unowned app/ path.
+
+    `app/api/app.py` mounts `app/web/static`, and tests/api asserts on the
+    served HTML/JS directly, so a Signboard UI-copy change must select that
+    coverage instead of failing closed (exit 2) as unowned runtime code.
+    """
+    selection = select_tests(["app/web/static/signboard.js"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("companion_ui",)
+    assert selection.unowned_paths == ()
+    assert "tests/api" in selection.targets
+
+
 def test_builder_system_change_selects_its_own_regression_tests() -> None:
     selection = select_tests(["app/builderops/cli.py"])
 

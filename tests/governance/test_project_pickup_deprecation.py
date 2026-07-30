@@ -166,10 +166,16 @@ def test_signboard_root_consumers_are_projection_layer_only() -> None:
         if "SIGNBOARD_ROOT" in path.read_text(encoding="utf-8")
     }
 
-    assert signboard_root_consumers == {
-        "app/api/routes/signboard.py",
-        "app/ops/builderops_startup.py",
-    }
+    # Since #4401 only the legacy export bootstrap consumes the board root. The
+    # API route serves the board from the dispatcher store and resolves no root,
+    # so a filesystem projection can no longer be board input at all.
+    assert signboard_root_consumers == {"app/ops/builderops_startup.py"}
+
+    # The board route may share the dispatcher's pure status/column helpers, but
+    # not the export or card-reading machinery.
+    assert _signboard_imports(
+        _read("app/api/routes/signboard.py"), filename="app/api/routes/signboard.py"
+    ) <= {"STATUS_COLUMNS", "canonical_status", "column_for_status"}
 
     # CLI may export the projection, but no command may consume the operator
     # board-root setting as pickup input.

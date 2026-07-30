@@ -491,12 +491,12 @@ def test_signboard_root_is_single_sourced() -> None:
 
     Three independent resolutions of the Signboard root (the API route, the
     full-stack launcher, and the vault-relative dispatcher default) is the
-    divergence #4198 removes. The route and the shell launchers must derive
-    from ``default_signboard_root`` instead of carrying a home-relative
-    literal of their own.
+    divergence #4198 removes. The launchers must derive from
+    ``default_signboard_root`` instead of carrying a home-relative literal of
+    their own. Since #4401 the API route resolves no root at all — it serves the
+    board from the dispatcher store — so it carries neither the literal nor a
+    resolution of its own.
     """
-    from app.api.routes import signboard as signboard_route
-
     repo_root = Path(signboard_module.__file__).resolve().parents[2]
     literal = "BuilderOpsVault"
 
@@ -510,10 +510,15 @@ def test_signboard_root_is_single_sourced() -> None:
         assert literal not in source, f"{relative} must not carry its own board-root literal"
 
     assert literal in Path(signboard_module.__file__).read_text(encoding="utf-8")
-    assert signboard_route.default_signboard_root is default_signboard_root
 
 
-def test_signboard_route_root_falls_back_to_the_single_source(monkeypatch, tmp_path) -> None:
+def test_export_remains_the_only_board_root_consumer(monkeypatch, tmp_path) -> None:
+    """The legacy export still resolves the single-sourced root; the API does not.
+
+    The board root exists for ``export-signboard`` only now. The API route must
+    not reintroduce a root: reading back a filesystem copy of the store is the
+    loop #4401 removed.
+    """
     from app.api.routes import signboard as signboard_route
 
     vault_dir = tmp_path / "RouteVault"
@@ -524,11 +529,31 @@ def test_signboard_route_root_falls_back_to_the_single_source(monkeypatch, tmp_p
     )
 
     monkeypatch.delenv("SIGNBOARD_ROOT", raising=False)
-    assert signboard_route.signboard_root() == vault_dir.resolve() / DEFAULT_SIGNBOARD_SUBPATH
+    assert default_signboard_root() == vault_dir.resolve() / DEFAULT_SIGNBOARD_SUBPATH
 
-    # A launcher-forwarded root still wins, so container forwarding keeps working.
-    monkeypatch.setenv("SIGNBOARD_ROOT", str(tmp_path / "forwarded"))
-    assert signboard_route.signboard_root() == (tmp_path / "forwarded").resolve()
+    for retired in ("signboard_root", "read_signboard", "parse_signboard_markdown"):
+        assert not hasattr(signboard_route, retired)
+    route_source = Path(signboard_route.__file__).read_text(encoding="utf-8")
+    assert "SIGNBOARD_ROOT" not in route_source
+
+
+def test_export_and_validate_commands_announce_themselves_as_legacy() -> None:
+    """Both commands still work, and both say they are legacy (#4401).
+
+    Deprecation here is a `--help` promise made to operators with a live board;
+    ``docs/AGENT_ISSUE_DISPATCHER.md :: Signboard projection`` states it, so it
+    has to stay true.
+    """
+    from app.dispatcher.cli import build_parser
+
+    parser = build_parser()
+    top_level_help = parser.format_help()
+    subparsers = parser._subparsers._group_actions[0]  # type: ignore[union-attr]
+    for command in ("export-signboard", "signboard-validate"):
+        assert command in subparsers.choices
+        # The command listing and the command's own --help both say it.
+        assert "[LEGACY]" in top_level_help
+        assert "[LEGACY]" in subparsers.choices[command].format_help()
 
 
 def _write_stale_card(board: Path, template: Path, *, task_id: str, notes: str | None) -> Path:

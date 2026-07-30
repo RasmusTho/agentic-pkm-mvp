@@ -386,15 +386,24 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   #4080 independently accepted and closed the capability on 2026-07-28. Direction A remains the
   script-free default. The opt-in `ckm overview --cockpit` surface is supported and remains local,
   generated, deterministic, non-authoritative, network-free, and non-mutating.
-- The dispatcher's Signboard Markdown projection (`app/dispatcher/signboard.py`,
-  `python -m app.dispatcher export-signboard`) preserves any human-authored `## Notes` content
+- The visual Signboard at `/signboard` is served from the dispatcher store. `/api/signboard/board`
+  builds every card from `store.list_tasks()` per request, derives its columns from
+  `STATUS_COLUMNS`, and reads no files; a card move is a dispatcher write and nothing is exported
+  afterwards. The response carries no filesystem `root`, `SIGNBOARD_ROOT` has no effect on it, and a
+  missing or unreadable store returns HTTP 503 rather than an empty healthy board — the invariant
+  that "no work" and "misconfigured" must not look alike now keys on the store, not on a resolved
+  root (#4401). That retires the projection as a live read path and, with it, the root-resolution and
+  drift defects filed as #4279, #4293, and #4370.
+- The dispatcher's Signboard Markdown export (`app/dispatcher/signboard.py`,
+  `python -m app.dispatcher export-signboard`) is now **legacy**: both it and `signboard-validate`
+  announce themselves as `[LEGACY]` in `--help` and are kept working only for the builder hosts that
+  still hold a board directory. Physically removing the exporter, prune, and lint is a separate
+  follow-up. It preserves any human-authored `## Notes` content
   across re-export instead of overwriting it, and its export path defaults to
   `BuilderOpsVault/agent-delivery` under the currently active vault (resolved through the shipped
   `VaultManager` active-vault-selection mechanism) so no CLI/automation caller has to type a manual
-  path (#3312). That default is now the single source for the board root: the `/signboard` API route
-  and the full-stack launcher derive from it instead of a home-relative `~/BuilderOpsVault` literal
-  of their own, so with no vault selected there is no board root and the board reports an explicit
-  error state rather than an empty one. `export-signboard --prune-absent` removes generated cards
+  path (#3312). That default remains the single source for the export root, now consumed by the
+  full-stack launcher bootstrap alone. `export-signboard --prune-absent` removes generated cards
   whose task id has left the dispatcher store, retaining any card that carries human-authored
   `## Notes` or `## Receipts` text (#4198). A board now also records which dispatcher store owns it:
   every export writes a `.signboard-store.json` stamp carrying that store's durable identity (minted
