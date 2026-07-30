@@ -1035,11 +1035,15 @@ def build_projection(session_id: str) -> Dict[str, Any]:
     derivations = store.derivations_for(hashes)
 
     by_seq = {seg["seq"]: seg for seg in report["segments"]}
-    max_bound = 0
+    # The transcript covers every ledgered sequence AND every declared slot:
+    # clamping to the declared count would silently elide an admitted segment
+    # whose seq lands at or beyond an undercounted close (INV-CDLM-9 — the
+    # ledger and analysis would carry a row the transcript never shows).
+    received_bound = (max(report["received"]) + 1) if report["received"] else 0
     if report["closed"] and report["final_seq_count"] is not None:
-        max_bound = report["final_seq_count"]
-    elif report["received"]:
-        max_bound = max(report["received"]) + 1
+        max_bound = max(report["final_seq_count"], received_bound)
+    else:
+        max_bound = received_bound
 
     transcript: List[Dict[str, Any]] = []
     needs_attention: List[Dict[str, Any]] = list(report["needs_attention"])

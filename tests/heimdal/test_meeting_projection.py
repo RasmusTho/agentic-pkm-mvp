@@ -284,6 +284,27 @@ def test_late_segment_creates_new_revision(
     assert revision_before in revs and revision_before + 1 in revs
 
 
+def test_transcript_shows_segments_beyond_declared_count(
+    client: TestClient, asr_stub: list[str]
+) -> None:
+    """A segment at/beyond an undercounted close still renders — never elided."""
+    session_id = f"mtg-{uuid4()}"
+    assert _open_session(client, session_id).status_code == 200
+    assert _admit_segment(client, session_id, 0, b"segment zero text.").status_code == 200
+    assert _close_session(client, session_id, 1).status_code == 200
+    # Declared count says 1, but a late over-count segment arrives at seq 2.
+    assert _admit_segment(client, session_id, 2, b"over-count segment two.").status_code == 200
+
+    projection = _projection(client, session_id).json()
+    seqs = [row["seq"] for row in projection["transcript"]]
+    assert seqs == [0, 1, 2]
+    kinds = {row["seq"]: row["kind"] for row in projection["transcript"]}
+    assert kinds[0] == "segment"
+    assert kinds[1] == "gap"  # declared but never admitted
+    assert kinds[2] == "segment"  # admitted beyond the declared count — shown, not elided
+    assert 2 in [item["seq"] for item in projection["analysis"]["derived_from"]]
+
+
 def test_asr_failure_is_legible_and_isolated(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
