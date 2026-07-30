@@ -923,6 +923,27 @@ Payload fields (in addition to the envelope):
   defaulting read. Carried opaquely for CDLM-02, which owns every ledger semantic
   over them; this lane never interprets or orders them.
 
+### `heimdal.meeting.segment.late_admitted`
+
+Emitted by `app.heimdal.meeting_ledger.record_segment_admission` when an
+admission lands a **new** ledger row in a session that is already closed
+(CDLM-02, #4385). This is the trigger CDLM-06/08 re-derive on: completeness is
+recomputed from the ledger, and the session itself never re-opens. Not a
+dispatched command: no `outbox_worker._dispatch_topic` branch and no registered
+topic schema. The ledger row is written first and is the truth; a consumer must
+read completeness from the gap report
+(`GET /api/heimdal/meeting/{session_id}/segments`), not reconstruct it from
+event arrival counts.
+
+Payload fields (in addition to the envelope):
+- `session_id` (`string`): the client-minted meeting session id.
+- `session_seq` (`integer`): the sequence number the late admission filled.
+- `receipt_id` (`string`): the CDLM-01 admission receipt the ledger row references.
+- `content_sha256` (`string`): the admitted bytes' hash.
+- `complete` (`boolean`): whether the ledger now covers the declared final
+  count, recomputed at emission time.
+- `missing` (`array[integer]`): the sequence numbers still missing at emission time.
+
 ### `panel.intent.created`
 
 Emitted when an AI panel is parsed for a note and actions are mapped.
