@@ -137,9 +137,10 @@ _deploy_channel_needs_dev_capture_secret() {
 # The api process is a declared consumer of heimdal.raw-store-key (#4422): the
 # governed media/screen ingress lanes encrypt through the raw store. Bootstrap
 # fires whenever `up` includes the api service (named explicitly, or implied by
-# an un-filtered `up`). Posture is degrade-visibly, never fail-deploy:
-# --run-on-credential-unavailable launches the stack without the binding, and
-# the api startup preflight reports the ingress lanes unavailable.
+# an un-filtered `up`). Posture is degrade-visibly, never fail-deploy: the
+# availability precheck proves the contract and Keychain item resolve before
+# any wrap is added, so an unprovisioned key skips the layer loudly and the
+# api startup preflight reports the ingress lanes unavailable.
 # The api ingress secret layer is additive and degrade-visibly: when the host
 # secret contract cannot be loaded or does not declare the api consumer in this
 # environment (e.g. a harness root without config/secrets), the deploy proceeds
