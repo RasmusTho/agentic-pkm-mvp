@@ -378,7 +378,11 @@ def test_create_once_stays_behind_knowledge_service_boundary() -> None:
             call_sites.append((str(path.relative_to(REPO_ROOT)), owner.name))
 
     assert call_sites == [
-        ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note")
+        # Meeting finalization (CDLM-08, #4388): create-once Sources-zone
+        # artifacts written atomically through the same O_EXCL primitive,
+        # WriteGuard-gated with its own action string.
+        ("app/heimdal/meeting_finalization.py", "finalize_session"),
+        ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
     ]
     writeback_path = app_root / "knowledge_acquisition" / "candidate_writeback.py"
     imports = [

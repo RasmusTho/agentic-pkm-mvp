@@ -190,6 +190,13 @@ HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED = "heimdal.meeting.segment.late_admitted"
 # note-revision row is the ack, this event is the record of how it happened.
 HEIMDAL_MEETING_USER_NOTE_WRITTEN = "heimdal.meeting.user_note.written"
 
+# Emitted by meeting finalization (CDLM-08, #4388) after the three vault
+# artifacts are materialized and BEFORE the durable finalization receipt that
+# is the finalized acknowledgement — the CDLM-01 ack-ordering family. Audit
+# lineage only: not dispatched, no topic-schema registration; consumers read
+# completeness from the receipt/projection, never from event arrival counts.
+HEIMDAL_MEETING_FINALIZED = "heimdal.meeting.finalized"
+
 __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
@@ -281,6 +288,7 @@ __all__ = [
     "HEIMDAL_OBSERVATION_CORRECTED",
     "HEIMDAL_CAPTURE_MEDIA_ADMITTED",
     "HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED",
+    "HEIMDAL_MEETING_FINALIZED",
     "HEIMDAL_MEETING_USER_NOTE_WRITTEN",
     "EPISODE_CLOSED",
 ]

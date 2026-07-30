@@ -889,11 +889,12 @@ def _derive_segment_inner(
     store = _backend()
     existing = store.get_derivation(content_sha256)
     if existing is not None and existing.status == DERIVATION_OK:
-        # The replay still re-derives the analysis: if the first attempt
-        # crashed between the derivation insert and the revision insert, this
-        # is the only writer that can heal the missing revision (reads are
-        # side-effect-free). Idempotent by input-set identity, so an already
-        # current analysis returns its cached revision and mints nothing.
+        # The replay heals everything a crashed first attempt may have left
+        # unfinished (KD-F9588AFBC165): the transcript block registration is
+        # an idempotent guard create, and the analysis re-derivation is
+        # idempotent by input-set identity — an already-complete state mints
+        # nothing on either path.
+        _register_transcript_block(session_id, session_seq, content_sha256, existing)
         _rederive_analysis(session_id)
         return existing
     retry_of_failed = existing is not None and existing.status == DERIVATION_FAILED
@@ -947,19 +948,7 @@ def _derive_segment_inner(
             derivation = stored
 
     if derivation.status == DERIVATION_OK:
-        # Register the transcript block through the shared ownership guard
-        # (CDLM-07): the ASR derivation is the only writer of
-        # transcript_segment blocks, and even it goes through the guard seam.
-        meeting_blocks.apply_block_write(
-            session_id=session_id,
-            writer=_ASR_WRITER,
-            action=meeting_blocks.ACTION_CREATE,
-            block_id=f"{session_id}:transcript:{session_seq}",
-            block_type=meeting_blocks.TYPE_TRANSCRIPT_SEGMENT,
-            content=derivation.text,
-            position=session_seq,
-            provenance_extra={"content_sha256": content_sha256},
-        )
+        _register_transcript_block(session_id, session_seq, content_sha256, derivation)
 
     try:
         _rederive_analysis(session_id)
@@ -973,6 +962,26 @@ def _derive_segment_inner(
             exc,
         )
     return derivation
+
+
+def _register_transcript_block(
+    session_id: str, session_seq: int, content_sha256: str, derivation: AsrDerivation
+) -> None:
+    """Register the transcript block through the shared ownership guard
+    (CDLM-07): the ASR derivation is the only writer of transcript_segment
+    blocks, and even it goes through the guard seam. Idempotent (guard create
+    replays), and called on both the fresh and the replay derivation path so
+    duplicate-content segments and crash windows still register."""
+    meeting_blocks.apply_block_write(
+        session_id=session_id,
+        writer=_ASR_WRITER,
+        action=meeting_blocks.ACTION_CREATE,
+        block_id=f"{session_id}:transcript:{session_seq}",
+        block_type=meeting_blocks.TYPE_TRANSCRIPT_SEGMENT,
+        content=derivation.text,
+        position=session_seq,
+        provenance_extra={"content_sha256": content_sha256},
+    )
 
 
 def _admitted_input_set(session_id: str) -> tuple[List[Dict[str, Any]], Dict[str, AsrDerivation]]:

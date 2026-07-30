@@ -123,6 +123,19 @@ promote public internet readiness.
   projection read). The pg migration `c9e4a1b6d3f5` adds a DB-level trigger rejecting user_note
   content changes without user-editor provenance. Editor identity is structural, not cryptographic,
   until client-contract F2.
+- Meeting finalization is shipped (CDLM-08, #4388): closing a session (and every post-close
+  late-segment reconciliation) consolidates the projections into three create-once Sources-zone
+  artifacts through the governed write seam — the ordered transcript with explicit gap markers, the
+  final `generic-default@1` analysis at draft standing with full provenance frontmatter (promotion
+  to canonical knowledge stays a human act via the trust path), and the user's notes verbatim as a
+  distinct human-provenance artifact never merged into derived output. Finalization is idempotent
+  per `(session_id, ledger completeness state)`; a gapped close is legible as `needs_attention`
+  with exact missing sequences in the receipt, the projection read, and note frontmatter; a late
+  admission re-finalizes with lineage to the superseded state while old artifacts remain untouched.
+  The `heimdal.meeting.finalized` event commits before the durable receipt that is the finalized
+  acknowledgement (migration `d0f5b2c7e4a6`). Finalization writes its own block through the CDLM-07
+  guard as a derived writer and is structurally refused any user-note mutation. The vault root
+  resolves from `HEIMDAL_MEETING_VAULT_ROOT`; unconfigured is a named, honest skip.
 - The System Entry Point capability (#1782) is delivered. All twelve implementation children shipped: server-declared entry state (#1783/PR #1800), latency-ladder re-entry treatments (#1784/PR #1801), unified topbar/overlay host (#1785/PR #1802), the ⌘K Panel command palette (#1786/PR #1817), the system map overlay (#1787/PR #1846), the opt-in guidance layer (#1788/PR #1847), the settings drawer (#1789/PR #1834), governed capture append plus the ⌘N capture modal (#1790/PR #1799, #1791/PR #1816), memory review-queue endpoints plus drawer (#1792/PR #1798, #1793/PR #1818), and the read-only receipts history modal (#1794/PR #1833). The fixture-driven state-gallery validation harness (#1795, SEP-11; `tests/companion_ui/test_entry_state_gallery.py`) proves the composition: declared transitions render and undeclared transitions are rejected, cold/first-contact/no-vault render no re-entry overlay, the governed-vs-body-edit receipt asymmetry holds, no UI-derived authority classification renders, the display budget stays at or below the server caps, reduced-motion end-states are fully visible, and narrow mode preserves every critical affordance. The source-peek popover presentation and posture emphasis switch remain truthfully unshipped (declared overlay ids that do not mount); the context lane / place band stay parked under the gated decision issue #1796. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits

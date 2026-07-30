@@ -11,6 +11,20 @@ can_parallelize_with: [RUN_LIVE_MEETING_ON_IPAD.md]
 
 # Consolidate Meeting On End
 
+State: Delivered by hub issue #4388 (2026-07-30). Finalization is implemented in
+`app/heimdal/meeting_finalization.py`, triggered on session close (`POST
+/api/heimdal/meeting/{session_id}/close`) and on post-close late-segment reconciliation through the
+production admission path. It materializes the consolidated transcript, the final derived analysis
+(draft standing, human-only promotion), and the verbatim user-notes artifact create-once into the
+Sources zone through the governed write seam, registers its own block through the CDLM-07 guard as
+the finalization writer, and commits the `heimdal.meeting.finalized` event before the durable
+receipt that is the finalized acknowledgement (migration `d0f5b2c7e4a6`; receipt surfaced on the
+projection read). The six acceptance criteria below are proven by
+`tests/heimdal/test_meeting_finalization.py`. The vault root is settings-resolved via
+`HEIMDAL_MEETING_VAULT_ROOT`; when unconfigured, finalization reports a named `skipped` outcome
+rather than guessing a vault (the close remains ledger truth). KD-F9588AFBC165 (transcript-block
+registration on the derivation-replay path) was absorbed here per its promotion trigger.
+
 ## Purpose
 
 Turn a closed session's projections into durable artifacts with honest completeness — the step
