@@ -327,6 +327,7 @@ _MAX_ARTIFACT_LISTING_ROWS = 1_000
 # runs from that window, which scales with current dispatch *rate*, not with
 # all-time repository history.
 _MAX_VERIFICATION_REQUEST_RUN_ROWS = 1_000
+_MAX_GITHUB_CHECK_AUTHORITY_ROWS = 1_000
 _VERIFICATION_REQUEST_RUN_LOOKBACK = timedelta(hours=48)
 _MAX_REQUEST_BYTES = 1_000_000
 _MAX_CLOSURE_CANDIDATES = 20
@@ -717,6 +718,141 @@ class GhCliVerificationSource:
                     raise RuntimeError("GitHub workflow run listing is incomplete")
                 return rows
         raise RuntimeError("GitHub workflow run listing exceeds bounded scan")
+
+    def _counted_mapping_pages(
+        self,
+        endpoint: str,
+        *,
+        collection_key: str,
+        label: str,
+        limit: int = _MAX_GITHUB_CHECK_AUTHORITY_ROWS,
+    ) -> list[Mapping[str, object]]:
+        """Read a bounded GitHub counted listing only when it is complete."""
+
+        rows: list[Mapping[str, object]] = []
+        seen_ids: set[int] = set()
+        expected_total: int | None = None
+        separator = "&" if "?" in endpoint else "?"
+        for page in range(1, (limit // 100) + 1):
+            page_endpoint = (
+                endpoint if page == 1 else f"{endpoint}{separator}page={page}"
+            )
+            payload = self._json(page_endpoint)
+            batch = (
+                payload.get(collection_key)
+                if isinstance(payload, Mapping)
+                else None
+            )
+            total = (
+                payload.get("total_count")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            if (
+                not isinstance(batch, list)
+                or not isinstance(total, int)
+                or isinstance(total, bool)
+                or total < 0
+                or len(batch) > 100
+                or any(not isinstance(row, Mapping) for row in batch)
+            ):
+                raise RuntimeError(f"malformed GitHub {label} response")
+            if expected_total is None:
+                expected_total = total
+                if expected_total > limit:
+                    raise RuntimeError(
+                        f"GitHub {label} listing exceeds bounded scan"
+                    )
+            elif total != expected_total:
+                raise RuntimeError(
+                    f"GitHub {label} total changed during bounded scan"
+                )
+            for row in batch:
+                assert isinstance(row, Mapping)
+                row_id = row.get("id")
+                if (
+                    not isinstance(row_id, int)
+                    or isinstance(row_id, bool)
+                    or row_id <= 0
+                    or row_id in seen_ids
+                ):
+                    raise RuntimeError(
+                        f"malformed GitHub {label} response"
+                    )
+                seen_ids.add(row_id)
+                rows.append(row)
+            if len(rows) > expected_total:
+                raise RuntimeError(f"malformed GitHub {label} response")
+            if len(rows) == expected_total:
+                return rows
+            if len(batch) < 100:
+                raise RuntimeError(f"GitHub {label} listing is incomplete")
+        raise RuntimeError(f"GitHub {label} listing exceeds bounded scan")
+
+    def _workflow_rows_by_suite(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        head_sha: str,
+    ) -> dict[int, Mapping[str, object]]:
+        """Resolve one unambiguous exact-head workflow run per suite."""
+
+        candidates_by_suite: dict[int, list[Mapping[str, object]]] = {}
+        for row in rows:
+            suite_id = row.get("check_suite_id")
+            workflow_id = row.get("workflow_id")
+            path = row.get("path")
+            event = row.get("event")
+            run_attempt = row.get("run_attempt")
+            if (
+                not isinstance(suite_id, int)
+                or isinstance(suite_id, bool)
+                or suite_id <= 0
+                or not isinstance(workflow_id, int)
+                or isinstance(workflow_id, bool)
+                or workflow_id <= 0
+                or not isinstance(path, str)
+                or not path
+                or not isinstance(event, str)
+                or not event
+                or row.get("head_sha") != head_sha
+                or not isinstance(run_attempt, int)
+                or isinstance(run_attempt, bool)
+                or run_attempt <= 0
+            ):
+                raise RuntimeError(
+                    "GitHub workflow-suite provenance is malformed"
+                )
+            candidates_by_suite.setdefault(suite_id, []).append(row)
+
+        resolved: dict[int, Mapping[str, object]] = {}
+        for suite_id, candidates in candidates_by_suite.items():
+            if len(candidates) > 1:
+                identities = {
+                    (
+                        candidate.get("workflow_id"),
+                        candidate.get("path"),
+                        candidate.get("event"),
+                        candidate.get("head_sha"),
+                        candidate.get("check_suite_id"),
+                    )
+                    for candidate in candidates
+                }
+                attempts = [
+                    candidate.get("run_attempt") for candidate in candidates
+                ]
+                if (
+                    len(identities) != 1
+                    or len(set(attempts)) != len(attempts)
+                ):
+                    raise RuntimeError(
+                        "GitHub workflow-suite provenance is ambiguous"
+                    )
+            resolved[suite_id] = max(
+                candidates,
+                key=lambda candidate: cast(int, candidate["run_attempt"]),
+            )
+        return resolved
 
     def _artifact_bytes(self, endpoint: str, artifact_id: int) -> bytes:
         if self.runner is not subprocess.run:
@@ -1611,43 +1747,75 @@ class GhCliVerificationSource:
         }
 
     def checks(self, repository: str, head_sha: str) -> Sequence[Mapping[str, object]]:
-        payload = self._json(f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100")
-        if not isinstance(payload, Mapping) or not isinstance(payload.get("check_runs"), list):
-            raise RuntimeError("malformed GitHub check-runs response")
-        workflow_payload = self._json(
-            f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100"
+        check_rows = self._counted_mapping_pages(
+            f"repos/{repository}/commits/{head_sha}/check-runs"
+            "?per_page=100&filter=all",
+            collection_key="check_runs",
+            label="check-runs",
         )
-        if not isinstance(workflow_payload, Mapping) or not isinstance(
-            workflow_payload.get("workflow_runs"), list
-        ):
-            raise RuntimeError("malformed GitHub workflow-runs response")
-        workflows_by_suite: dict[int, list[Mapping[str, object]]] = {}
-        for workflow in workflow_payload["workflow_runs"]:
-            if not isinstance(workflow, Mapping):
-                continue
-            suite_id = workflow.get("check_suite_id")
-            if (
-                not isinstance(suite_id, int)
-                or isinstance(suite_id, bool)
-                or workflow.get("head_sha") != head_sha
-            ):
-                continue
-            workflows_by_suite.setdefault(suite_id, []).append(workflow)
+        workflow_rows = self._counted_mapping_pages(
+            f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100",
+            collection_key="workflow_runs",
+            label="workflow-runs",
+        )
+        workflows_by_suite = self._workflow_rows_by_suite(
+            workflow_rows,
+            head_sha=head_sha,
+        )
 
         checks: list[Mapping[str, object]] = []
-        for row in payload["check_runs"]:
-            if not isinstance(row, Mapping):
-                continue
+        for row in check_rows:
+            name = row.get("name")
+            app = row.get("app")
+            app_slug = app.get("slug") if isinstance(app, Mapping) else None
+            app_id = app.get("id") if isinstance(app, Mapping) else None
+            status = row.get("status")
+            conclusion = row.get("conclusion")
             authenticated = dict(row)
             authenticated.pop("workflow_run", None)
             suite_id = _nested(row, "check_suite", "id")
-            candidates = (
-                workflows_by_suite.get(suite_id, [])
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(app, Mapping)
+                or not isinstance(app_id, int)
+                or isinstance(app_id, bool)
+                or app_id <= 0
+                or (
+                    app_slug is not None
+                    and (
+                        not isinstance(app_slug, str)
+                        or not app_slug
+                    )
+                )
+                or not isinstance(status, str)
+                or not status
+                or (
+                    conclusion is not None
+                    and not isinstance(conclusion, str)
+                )
+            ):
+                raise RuntimeError(
+                    "GitHub check-run evidence is malformed"
+                )
+            if (
+                app_slug == "github-actions"
+                and (
+                    not isinstance(suite_id, int)
+                    or isinstance(suite_id, bool)
+                    or suite_id <= 0
+                    or suite_id not in workflows_by_suite
+                )
+            ):
+                raise RuntimeError(
+                    "GitHub Actions check-suite evidence is malformed"
+                )
+            workflow = (
+                workflows_by_suite.get(suite_id)
                 if isinstance(suite_id, int) and not isinstance(suite_id, bool)
-                else []
+                else None
             )
-            if len(candidates) == 1:
-                workflow = candidates[0]
+            if isinstance(workflow, Mapping):
                 authenticated["workflow_run"] = {
                     "id": workflow.get("id"),
                     "workflow_id": workflow.get("workflow_id"),
@@ -3354,10 +3522,13 @@ def _checks_rejection(
         app_slug = _nested(check, "app", "slug")
         app_id = _nested(check, "app", "id")
         app_identity = (
-            f"slug:{app_slug}"
+            (
+                f"slug:{app_slug}|id:"
+                f"{app_id if isinstance(app_id, int) and not isinstance(app_id, bool) else 'unknown'}"
+            )
             if isinstance(app_slug, str) and app_slug
             else (
-                f"id:{app_id}"
+                f"slug:unknown|id:{app_id}"
                 if isinstance(app_id, int) and not isinstance(app_id, bool)
                 else f"unknown:{index}"
             )
@@ -3371,14 +3542,20 @@ def _checks_rejection(
         )
         if key not in latest or rank > latest[key][0]:
             latest[key] = (rank, check)
-    required_identities = {
-        (name, "slug:github-actions") for name in required_checks
-    }
-    if not required_identities <= latest.keys():
-        return "missing_checks"
-    for required in required_identities:
-        check = latest[required][1]
-        if check.get("status") != "completed" or check.get("conclusion") != "success":
+    for required_name in required_checks:
+        candidates = [
+            check
+            for (name, app_identity), (_rank, check) in latest.items()
+            if name == required_name
+            and app_identity.startswith("slug:github-actions|id:")
+        ]
+        if not candidates:
+            return "missing_checks"
+        if not any(
+            check.get("status") == "completed"
+            and check.get("conclusion") == "success"
+            for check in candidates
+        ):
             return "checks_not_green"
     for _, check in latest.values():
         if check.get("status") != "completed" or check.get("conclusion") not in {

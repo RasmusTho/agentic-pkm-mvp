@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -43,30 +44,113 @@ def _latest_github_result(
         return None
     if len(rows) == 1:
         return rows[0]
-    ordered: list[tuple[str, int, Mapping[str, Any]]] = []
+    ordered: list[tuple[datetime, int, Mapping[str, Any]]] = []
     for row in rows:
-        timestamp = next(
-            (
-                row.get(field)
-                for field in (
-                    "completed_at",
-                    "updated_at",
-                    "started_at",
-                    "created_at",
+        timestamps: list[datetime] = []
+        for field in (
+            "completed_at",
+            "updated_at",
+            "started_at",
+            "created_at",
+        ):
+            value = row.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value:
+                raise MergeAuthorityError(
+                    "GitHub rerun history timestamp is malformed"
                 )
-                if isinstance(row.get(field), str) and row.get(field)
-            ),
-            None,
-        )
+            try:
+                instant = datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise MergeAuthorityError(
+                    "GitHub rerun history timestamp is malformed"
+                ) from exc
+            if instant.tzinfo is None:
+                raise MergeAuthorityError(
+                    "GitHub rerun history timestamp is malformed"
+                )
+            timestamps.append(instant)
         row_id = row.get("id")
         if (
-            not isinstance(timestamp, str)
+            not timestamps
             or not isinstance(row_id, int)
             or isinstance(row_id, bool)
         ):
-            return None
-        ordered.append((timestamp, row_id, row))
+            raise MergeAuthorityError(
+                "GitHub rerun history is malformed"
+            )
+        ordered.append((timestamps[0], row_id, row))
     return max(ordered, key=lambda item: (item[0], item[1]))[2]
+
+
+def _workflow_runs_by_suite(
+    rows: list[Mapping[str, Any]],
+    *,
+    head_sha: str,
+) -> dict[int, Mapping[str, Any]]:
+    """Resolve one unambiguous workflow run per check suite."""
+
+    candidates_by_suite: dict[int, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        suite_id = row.get("check_suite_id")
+        if (
+            not isinstance(suite_id, int)
+            or isinstance(suite_id, bool)
+            or suite_id <= 0
+            or not isinstance(row.get("workflow_id"), int)
+            or isinstance(row.get("workflow_id"), bool)
+            or row["workflow_id"] <= 0
+            or not isinstance(row.get("path"), str)
+            or not row["path"]
+            or not isinstance(row.get("event"), str)
+            or not row["event"]
+            or row.get("head_sha") != head_sha
+            or not isinstance(row.get("run_attempt"), int)
+            or isinstance(row.get("run_attempt"), bool)
+            or row["run_attempt"] <= 0
+        ):
+            raise MergeAuthorityError(
+                "GitHub workflow-suite provenance is malformed"
+            )
+        candidates_by_suite.setdefault(suite_id, []).append(row)
+
+    resolved: dict[int, Mapping[str, Any]] = {}
+    for suite_id, candidates in candidates_by_suite.items():
+        if len(candidates) > 1:
+            identities = {
+                (
+                    candidate.get("workflow_id"),
+                    candidate.get("path"),
+                    candidate.get("event"),
+                    candidate.get("head_sha"),
+                    candidate.get("check_suite_id"),
+                )
+                for candidate in candidates
+            }
+            attempts = [candidate.get("run_attempt") for candidate in candidates]
+            if (
+                len(identities) != 1
+                or any(
+                    not isinstance(attempt, int)
+                    or isinstance(attempt, bool)
+                    or attempt <= 0
+                    for attempt in attempts
+                )
+                or len(set(attempts)) != len(attempts)
+            ):
+                raise MergeAuthorityError(
+                    "GitHub workflow-suite provenance is ambiguous"
+                )
+        selected = _latest_github_result(candidates)
+        if selected is None:
+            raise MergeAuthorityError(
+                "GitHub workflow-suite provenance is unavailable"
+            )
+        resolved[suite_id] = selected
+    return resolved
 
 
 class ConditionalMergeTransport(Protocol):
@@ -430,97 +514,102 @@ class GitHubProtectedRepositoryAuthority:
             "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
         }
 
-    def _check_runs(
-        self, repository: str, head_sha: str
+    def _counted_rows(
+        self,
+        endpoint: str,
+        *,
+        collection_key: str,
+        label: str,
+        **parameters: object,
     ) -> list[Mapping[str, Any]]:
         rows: list[Mapping[str, Any]] = []
+        seen_ids: set[int] = set()
+        expected_total: int | None = None
         for page in range(1, 11):
             payload = self._get(
-                f"/repos/{repository}/commits/{head_sha}/check-runs",
+                endpoint,
                 per_page=100,
                 page=page,
-                filter="all",
+                **parameters,
             )
-            batch = payload.get("check_runs")
+            batch = payload.get(collection_key)
             total = payload.get("total_count")
             if (
                 not isinstance(batch, list)
                 or not isinstance(total, int)
                 or isinstance(total, bool)
-                or total < len(rows) + len(batch)
+                or total < 0
+                or len(batch) > 100
                 or any(not isinstance(row, Mapping) for row in batch)
             ):
-                raise MergeAuthorityError("GitHub check-run listing is malformed")
-            rows.extend(batch)
-            if len(rows) == total:
+                raise MergeAuthorityError(
+                    f"GitHub {label} listing is malformed"
+                )
+            if expected_total is None:
+                expected_total = total
+                if expected_total > 1_000:
+                    raise MergeAuthorityError(
+                        f"GitHub {label} listing exceeds bounded scan"
+                    )
+            elif total != expected_total:
+                raise MergeAuthorityError(
+                    f"GitHub {label} listing total changed during scan"
+                )
+            for row in batch:
+                assert isinstance(row, Mapping)
+                row_id = row.get("id")
+                if (
+                    not isinstance(row_id, int)
+                    or isinstance(row_id, bool)
+                    or row_id <= 0
+                    or row_id in seen_ids
+                ):
+                    raise MergeAuthorityError(
+                        f"GitHub {label} listing is malformed"
+                    )
+                seen_ids.add(row_id)
+                rows.append(row)
+            if len(rows) > expected_total:
+                raise MergeAuthorityError(
+                    f"GitHub {label} listing is malformed"
+                )
+            if len(rows) == expected_total:
                 return rows
             if len(batch) < 100:
-                raise MergeAuthorityError("GitHub check-run listing is incomplete")
-        raise MergeAuthorityError("GitHub check-run listing exceeds bounded scan")
+                raise MergeAuthorityError(
+                    f"GitHub {label} listing is incomplete"
+                )
+        raise MergeAuthorityError(
+            f"GitHub {label} listing exceeds bounded scan"
+        )
+
+    def _check_runs(
+        self, repository: str, head_sha: str
+    ) -> list[Mapping[str, Any]]:
+        return self._counted_rows(
+            f"/repos/{repository}/commits/{head_sha}/check-runs",
+            collection_key="check_runs",
+            label="check-run",
+            filter="all",
+        )
 
     def _commit_statuses(
         self, repository: str, head_sha: str
     ) -> list[Mapping[str, Any]]:
-        rows: list[Mapping[str, Any]] = []
-        for page in range(1, 11):
-            payload = self._get(
-                f"/repos/{repository}/commits/{head_sha}/status",
-                per_page=100,
-                page=page,
-            )
-            batch = payload.get("statuses")
-            total = payload.get("total_count")
-            if (
-                not isinstance(batch, list)
-                or not isinstance(total, int)
-                or isinstance(total, bool)
-                or total < len(rows) + len(batch)
-                or any(not isinstance(row, Mapping) for row in batch)
-            ):
-                raise MergeAuthorityError(
-                    "GitHub commit-status listing is malformed"
-                )
-            rows.extend(batch)
-            if len(rows) == total:
-                return rows
-            if len(batch) < 100:
-                raise MergeAuthorityError(
-                    "GitHub commit-status listing is incomplete"
-                )
-        raise MergeAuthorityError("GitHub commit-status listing exceeds bounded scan")
+        return self._counted_rows(
+            f"/repos/{repository}/commits/{head_sha}/status",
+            collection_key="statuses",
+            label="commit-status",
+        )
 
     def _workflow_runs(
         self, repository: str, head_sha: str
     ) -> list[Mapping[str, Any]]:
-        rows: list[Mapping[str, Any]] = []
-        for page in range(1, 11):
-            payload = self._get(
-                f"/repos/{repository}/actions/runs",
-                head_sha=head_sha,
-                per_page=100,
-                page=page,
-            )
-            batch = payload.get("workflow_runs")
-            total = payload.get("total_count")
-            if (
-                not isinstance(batch, list)
-                or not isinstance(total, int)
-                or isinstance(total, bool)
-                or total < len(rows) + len(batch)
-                or any(not isinstance(row, Mapping) for row in batch)
-            ):
-                raise MergeAuthorityError(
-                    "GitHub workflow-run listing is malformed"
-                )
-            rows.extend(batch)
-            if len(rows) == total:
-                return rows
-            if len(batch) < 100:
-                raise MergeAuthorityError(
-                    "GitHub workflow-run listing is incomplete"
-                )
-        raise MergeAuthorityError(
-            "GitHub workflow-run listing exceeds bounded scan"
+        return self._counted_rows(
+            f"/repos/{repository}/actions/runs",
+            collection_key="workflow_runs",
+            label="workflow-run",
+            head_sha=head_sha,
         )
 
     def required_gates(
@@ -585,44 +674,89 @@ class GitHubProtectedRepositoryAuthority:
         status_history: dict[str, list[Mapping[str, Any]]] = {}
         for row in statuses:
             context = row.get("context")
-            if isinstance(context, str):
-                status_history.setdefault(context, []).append(row)
+            state = row.get("state")
+            if (
+                not isinstance(context, str)
+                or not context
+                or not isinstance(state, str)
+                or not state
+            ):
+                raise MergeAuthorityError(
+                    "GitHub commit-status evidence is malformed"
+                )
+            status_history.setdefault(context, []).append(row)
         latest_statuses = {
             context: _latest_github_result(history)
             for context, history in status_history.items()
         }
         workflow_rows = self._workflow_runs(canonical, head_sha)
-        workflows_by_suite: dict[int, list[Mapping[str, Any]]] = {}
-        for workflow in workflow_rows:
-            suite_id = workflow.get("check_suite_id")
-            if isinstance(suite_id, int) and not isinstance(suite_id, bool):
-                workflows_by_suite.setdefault(suite_id, []).append(workflow)
+        workflows_by_suite = _workflow_runs_by_suite(
+            workflow_rows,
+            head_sha=head_sha,
+        )
         pull_request_workflow_suites = {
             suite_id
-            for suite_id, candidates in workflows_by_suite.items()
-            if len(candidates) == 1
-            and candidates[0].get("event") == "pull_request"
-            and candidates[0].get("head_sha") == head_sha
+            for suite_id, workflow in workflows_by_suite.items()
+            if workflow.get("event") == "pull_request"
         }
         check_history: dict[
-            tuple[str, int | None], list[Mapping[str, Any]]
+            tuple[str, str | None, int], list[Mapping[str, Any]]
         ] = {}
         for row in rows:
             name = row.get("name")
             app = row.get("app")
             app_id = app.get("id") if isinstance(app, Mapping) else None
+            app_slug = app.get("slug") if isinstance(app, Mapping) else None
+            status = row.get("status")
+            conclusion = row.get("conclusion")
             suite = row.get("check_suite")
             suite_id = (
                 suite.get("id") if isinstance(suite, Mapping) else None
             )
             if (
-                isinstance(app, Mapping)
-                and app.get("slug") == "github-actions"
+                not isinstance(name, str)
+                or not name
+                or not isinstance(app, Mapping)
+                or not isinstance(app_id, int)
+                or isinstance(app_id, bool)
+                or app_id <= 0
+                or (
+                    app_slug is not None
+                    and (
+                        not isinstance(app_slug, str)
+                        or not app_slug
+                    )
+                )
+                or not isinstance(status, str)
+                or not status
+                or (
+                    conclusion is not None
+                    and not isinstance(conclusion, str)
+                )
+            ):
+                raise MergeAuthorityError(
+                    "GitHub check-run evidence is malformed"
+                )
+            if (
+                app_slug == "github-actions"
+                and (
+                    not isinstance(suite_id, int)
+                    or isinstance(suite_id, bool)
+                    or suite_id <= 0
+                    or suite_id not in workflows_by_suite
+                )
+            ):
+                raise MergeAuthorityError(
+                    "GitHub Actions check-suite evidence is malformed"
+                )
+            if (
+                app_slug == "github-actions"
                 and suite_id not in pull_request_workflow_suites
             ):
                 continue
-            if isinstance(name, str):
-                check_history.setdefault((name, app_id), []).append(row)
+            check_history.setdefault((name, app_slug, app_id), []).append(
+                row
+            )
         latest_checks = {
             identity: _latest_github_result(history)
             for identity, history in check_history.items()
@@ -634,9 +768,9 @@ class GitHubProtectedRepositoryAuthority:
         ):
             authenticated_workflow_suites = {
                 suite_id
-                for suite_id, candidates in workflows_by_suite.items()
+                for suite_id, workflow in workflows_by_suite.items()
                 if suite_id in pull_request_workflow_suites
-                and candidates[0].get("path")
+                and workflow.get("path")
                 == _REQUIRED_VERIFICATION_WORKFLOW
             }
 
@@ -646,11 +780,17 @@ class GitHubProtectedRepositoryAuthority:
 
         def successful_check(context: str, app_id: int | None) -> bool:
             candidates = (
-                [latest_checks.get((context, app_id))]
+                [
+                    row
+                    for (name, _candidate_slug, candidate_app_id), row
+                    in latest_checks.items()
+                    if name == context and candidate_app_id == app_id
+                ]
                 if app_id is not None
                 else [
                     row
-                    for (name, _candidate_app), row in latest_checks.items()
+                    for (name, _candidate_slug, _candidate_app), row
+                    in latest_checks.items()
                     if name == context
                 ]
             )

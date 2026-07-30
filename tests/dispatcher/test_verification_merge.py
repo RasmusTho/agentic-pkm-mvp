@@ -10,7 +10,11 @@ import httpx
 import pytest
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
-from app.dispatcher.verification_github import GitHubProtectedRepositoryAuthority
+from app.dispatcher.verification_github import (
+    GitHubProtectedRepositoryAuthority,
+    _latest_github_result,
+    _workflow_runs_by_suite,
+)
 from app.dispatcher.verification_merge import (
     MergeAuthorityError,
     ProtectedDeliveryManifest,
@@ -962,12 +966,14 @@ def test_live_adapter_loads_manifest_from_exact_protected_base(
                     "total_count": 3,
                     "check_runs": [
                         {
+                            "id": 1,
                             "name": "verification",
                             "status": "completed",
                             "conclusion": "success",
                             "app": {"id": 7},
                         },
                         {
+                            "id": 2,
                             "name": "Unit tests (not pg)",
                             "status": "completed",
                             "conclusion": "success",
@@ -978,6 +984,7 @@ def test_live_adapter_loads_manifest_from_exact_protected_base(
                             "check_suite": {"id": 70},
                         },
                         {
+                            "id": 3,
                             "name": "relevant non-required check",
                             "status": "completed",
                             "conclusion": additional_check_conclusion,
@@ -1003,6 +1010,8 @@ def test_live_adapter_loads_manifest_from_exact_protected_base(
                     "workflow_runs": [
                         {
                             "id": 80,
+                            "workflow_id": 198962230,
+                            "run_attempt": 1,
                             "check_suite_id": 70,
                             "path": ".github/workflows/ci-smoke.yaml",
                             "event": "pull_request",
@@ -1210,7 +1219,11 @@ def test_live_adapter_rejects_failing_required_status_and_nondefault_base() -> N
                 json={
                     "total_count": 1,
                     "statuses": [
-                        {"context": "legacy-required", "state": "failure"}
+                        {
+                            "id": 1,
+                            "context": "legacy-required",
+                            "state": "failure",
+                        }
                     ],
                 },
             )
@@ -1266,6 +1279,7 @@ def test_live_adapter_paginates_required_check_runs() -> None:
             rows = (
                 [
                     {
+                        "id": index + 1,
                         "name": f"other-{index}",
                         "status": "completed",
                         "conclusion": "success",
@@ -1276,12 +1290,14 @@ def test_live_adapter_paginates_required_check_runs() -> None:
                 if page == 1
                 else [
                     {
+                        "id": 101,
                         "name": "required-last",
                         "status": "completed",
                         "conclusion": "success",
                         "app": {"id": 7},
                     },
                     {
+                        "id": 102,
                         "name": "Unit tests (not pg)",
                         "status": "completed",
                         "conclusion": "success",
@@ -1305,6 +1321,8 @@ def test_live_adapter_paginates_required_check_runs() -> None:
                     "workflow_runs": [
                         {
                             "id": 80,
+                            "workflow_id": 198962230,
+                            "run_attempt": 1,
                             "check_suite_id": 70,
                             "path": ".github/workflows/ci-smoke.yaml",
                             "event": "pull_request",
@@ -1340,6 +1358,260 @@ def test_live_adapter_paginates_required_check_runs() -> None:
     assert all(gates.values())
 
 
+@pytest.mark.parametrize(
+    ("method_name", "path_suffix", "collection_key"),
+    (
+        ("_check_runs", f"/commits/{HEAD}/check-runs", "check_runs"),
+        ("_workflow_runs", "/actions/runs", "workflow_runs"),
+        ("_commit_statuses", f"/commits/{HEAD}/status", "statuses"),
+    ),
+)
+@pytest.mark.parametrize("defect", ("duplicate_page", "changed_total"))
+def test_live_adapter_rejects_false_complete_counted_authority(
+    method_name: str,
+    path_suffix: str,
+    collection_key: str,
+    defect: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(path_suffix)
+        page = int(request.url.params["page"])
+        start = 1 if page == 1 or defect == "duplicate_page" else 101
+        total = 200 if page == 1 or defect == "duplicate_page" else 201
+        return httpx.Response(
+            200,
+            json={
+                "total_count": total,
+                collection_key: [
+                    {"id": index} for index in range(start, start + 100)
+                ],
+            },
+        )
+
+    authority = GitHubProtectedRepositoryAuthority(
+        "host-read-token",
+        http_client=httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    with pytest.raises(
+        MergeAuthorityError,
+        match="malformed|total changed",
+    ):
+        getattr(authority, method_name)(REPO, HEAD)
+
+
+def test_live_adapter_rejects_ambiguous_workflow_suite_provenance() -> None:
+    common = {
+        "workflow_id": 198962230,
+        "path": ".github/workflows/docs-guard.yml",
+        "event": "pull_request",
+        "head_sha": HEAD,
+        "check_suite_id": 71,
+        "run_attempt": 1,
+        "created_at": "2026-07-30T10:00:00Z",
+    }
+
+    with pytest.raises(
+        MergeAuthorityError,
+        match="workflow-suite provenance is ambiguous",
+    ):
+        _workflow_runs_by_suite(
+            [
+                {"id": 81, **common},
+                {"id": 82, **common},
+            ],
+            head_sha=HEAD,
+        )
+
+
+def test_live_adapter_rejects_malformed_multirow_check_history() -> None:
+    with pytest.raises(
+        MergeAuthorityError,
+        match="rerun history is malformed",
+    ):
+        _latest_github_result(
+            [
+                {
+                    "id": 90,
+                    "completed_at": "2026-07-30T10:00:00Z",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 91,
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+            ]
+        )
+
+
+def test_live_adapter_rejects_malformed_timestamp_before_fallback() -> None:
+    with pytest.raises(
+        MergeAuthorityError,
+        match="rerun history timestamp is malformed",
+    ):
+        _latest_github_result(
+            [
+                {
+                    "id": 90,
+                    "completed_at": "2026-07-30T10:00:00Z",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 91,
+                    "completed_at": 123,
+                    "updated_at": "2099-01-01T00:00:00Z",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ("unnamed_check", "invalid_suite", "malformed_timestamp"),
+)
+def test_live_adapter_rejects_malformed_check_reduction(
+    defect: str,
+) -> None:
+    checks: list[dict[str, object]] = [
+        {
+            "id": 10,
+            "name": "Unit tests (not pg)",
+            "status": "completed",
+            "conclusion": "success",
+            "completed_at": "2026-07-30T10:00:00Z",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 70},
+        }
+    ]
+    if defect == "unnamed_check":
+        checks.append(
+            {
+                "id": 11,
+                "status": "completed",
+                "conclusion": "failure",
+                "completed_at": "2026-07-30T10:01:00Z",
+                "app": {"id": 7, "slug": "github-actions"},
+                "check_suite": {"id": 70},
+            }
+        )
+    elif defect == "invalid_suite":
+        checks.append(
+            {
+                "id": 11,
+                "name": "Docs Guard",
+                "status": "completed",
+                "conclusion": "failure",
+                "completed_at": "2026-07-30T10:01:00Z",
+                "app": {"id": 7, "slug": "github-actions"},
+                "check_suite": {"id": 0},
+            }
+        )
+    else:
+        checks.extend(
+            [
+                {
+                    "id": 11,
+                    "name": "Docs Guard",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "completed_at": "2026-07-30T10:01:00Z",
+                    "app": {"id": 7, "slug": "github-actions"},
+                    "check_suite": {"id": 70},
+                },
+                {
+                    "id": 12,
+                    "name": "Docs Guard",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "completed_at": "not-a-time",
+                    "app": {"id": 7, "slug": "github-actions"},
+                    "check_suite": {"id": 70},
+                },
+            ]
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == f"/repos/{REPO.lower()}":
+            return httpx.Response(200, json={"default_branch": "main"})
+        if path.endswith("/pulls/3603"):
+            return httpx.Response(
+                200,
+                json={
+                    "head": {"sha": HEAD},
+                    "base": {
+                        "ref": "main",
+                        "repo": {"full_name": REPO},
+                    },
+                },
+            )
+        if path.endswith(f"/commits/{HEAD}/check-runs"):
+            return httpx.Response(
+                200,
+                json={"total_count": len(checks), "check_runs": checks},
+            )
+        if path.endswith(f"/commits/{HEAD}/status"):
+            return httpx.Response(
+                200, json={"total_count": 0, "statuses": []}
+            )
+        if path.endswith("/actions/runs"):
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 1,
+                    "workflow_runs": [
+                        {
+                            "id": 80,
+                            "workflow_id": 198962230,
+                            "path": ".github/workflows/ci-smoke.yaml",
+                            "event": "pull_request",
+                            "head_sha": HEAD,
+                            "check_suite_id": 70,
+                            "run_attempt": 1,
+                        }
+                    ],
+                },
+            )
+        if path.endswith("/branches/main/protection"):
+            return httpx.Response(
+                200,
+                json={
+                    "required_status_checks": {
+                        "contexts": [],
+                        "checks": [
+                            {
+                                "context": "Unit tests (not pg)",
+                                "app_id": 7,
+                            }
+                        ],
+                    }
+                },
+            )
+        raise AssertionError(f"unexpected GitHub request: {request.url}")
+
+    authority = GitHubProtectedRepositoryAuthority(
+        "host-read-token",
+        http_client=httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    with pytest.raises(
+        MergeAuthorityError,
+        match="check-run|check-suite|timestamp",
+    ):
+        authority.required_gates(REPO, 3603, HEAD)
+
+
 def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -1360,7 +1632,7 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "total_count": 4,
+                    "total_count": 5,
                     "check_runs": [
                         {
                             "id": 10,
@@ -1385,6 +1657,7 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
                             "name": "Docs Guard",
                             "status": "completed",
                             "conclusion": "failure",
+                            "completed_at": "2026-07-30T10:00:00Z",
                             "app": {
                                 "id": 7,
                                 "slug": "github-actions",
@@ -1402,6 +1675,17 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
                             },
                             "check_suite": {"id": 71},
                         },
+                        {
+                            "id": 14,
+                            "name": "Docs Guard",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "completed_at": "2026-07-30T10:01:00Z",
+                            "app": {
+                                "id": 7,
+                                "slug": "other-app",
+                            },
+                        },
                     ],
                 },
             )
@@ -1417,6 +1701,8 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
                     "workflow_runs": [
                         {
                             "id": 80,
+                            "workflow_id": 198962230,
+                            "run_attempt": 1,
                             "check_suite_id": 70,
                             "path": ".github/workflows/ci-smoke.yaml",
                             "event": "pull_request",
@@ -1424,6 +1710,8 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
                         },
                         {
                             "id": 81,
+                            "workflow_id": 198962230,
+                            "run_attempt": 1,
                             "check_suite_id": 71,
                             "path": ".github/workflows/docs-guard.yml",
                             "event": "push",
@@ -1538,7 +1826,11 @@ def test_app_bound_required_check_rejects_same_name_legacy_status() -> None:
                 json={
                     "total_count": 1,
                     "statuses": [
-                        {"context": "app-bound", "state": "success"}
+                        {
+                            "id": 1,
+                            "context": "app-bound",
+                            "state": "success",
+                        }
                     ],
                 },
             )
@@ -1604,10 +1896,12 @@ def test_mandatory_behavioral_check_rejects_legacy_status_substitution(
                     "total_count": 2,
                     "statuses": [
                         {
+                            "id": 1,
                             "context": "Unit tests (not pg)",
                             "state": "success",
                         },
                         {
+                            "id": 2,
                             "context": "another-required-check",
                             "state": "success",
                         },
@@ -1808,6 +2102,8 @@ def test_required_behavioral_check_requires_authenticated_success(
                     "workflow_runs": [
                         {
                             "id": 80,
+                            "workflow_id": 198962230,
+                            "run_attempt": 1,
                             "check_suite_id": 70,
                             "path": workflow_path,
                             "event": "pull_request",
