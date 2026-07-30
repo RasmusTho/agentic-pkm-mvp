@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BuilderOps cockpit · register of everything in motion</title>
+<link rel="stylesheet" href="/static/colors_and_type.css">
+<link rel="stylesheet" href="/static/cockpit.css">
+</head>
+<body>
+<div class="wrap">
+  <section class="claim" id="claim">
+    <div class="claim-top">
+      <div>
+        <p class="eyebrow">BuilderOps · read-time join · nothing here survives a reload</p>
+        <h1>Cockpit</h1>
+      </div>
+      <span class="mono" id="generated-at"></span>
+    </div>
+    <p class="said" id="claim-text">Reading the authorities…</p>
+    <div class="sources" id="sources"></div>
+    <p class="mono" id="unread-planes" style="margin-top:var(--space-3);color:var(--fg-3)"></p>
+  </section>
+
+  <noscript>
+    <section class="void refuse">
+      <p>I cannot render the register: this page computes its claim at read
+      time and needs JavaScript to fetch it.</p>
+      <p class="sub">The authorities themselves are unaffected — dispatcher,
+      GitHub, and the repo remain the truth.</p>
+    </section>
+  </noscript>
+
+  <section class="legend">
+    <div>
+      <h2>Evidence spine</h2>
+      <ul class="spine-scale">
+        <li><span class="dot p"></span><span>proven — CI-forced or database-keyed edge</span></li>
+        <li><span class="dot d"></span><span>derived — prose edge (none rendered in v1)</span></li>
+        <li><span class="dot a"></span><span>unlinked — known but not joined</span></li>
+        <li><span class="dot n"></span><span>absent — no object at this level yet</span></li>
+      </ul>
+    </div>
+    <div>
+      <h2>Card edge</h2>
+      <ul>
+        <li><i class="dot p"></i>active thread</li>
+        <li><i class="dot" style="background:var(--accent)"></i>delivered</li>
+        <li><i class="dot a"></i>carries a flaw</li>
+        <li><i class="dot n"></i>untouched</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Actions</h2>
+      <ul>
+        <li><span class="btn btn-out" style="pointer-events:none"><span class="k">out</span>opens the authority</span></li>
+        <li style="color:var(--fg-2)">v1 is read-only: no contract calls, no agent starts, no approvals.</li>
+      </ul>
+    </div>
+  </section>
+
+  <div id="bands" aria-live="polite"></div>
+
+  <section id="unclassified-wrap" hidden>
+    <p class="sec-note"><b>Unclassifiable.</b> These rows have a status this
+    surface cannot map to a band. They are listed, not guessed.</p>
+    <div class="still" id="unclassified"></div>
+  </section>
+
+  <p class="sec-note" style="margin-top:var(--space-12)">This surface is a
+  projection. It owns no queue, no register, and no decision right. Deletion,
+  approval, and attention state live in their own authorities
+  (<span class="mono">docs/BUILDEROPS_COCKPIT/README.md</span>).</p>
+</div>
+<script src="/static/cockpit.js"></script>
+</body>
+</html>

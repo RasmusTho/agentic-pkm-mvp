@@ -70,6 +70,7 @@ VAULT_STORE_ALLOWLIST: frozenset[str] = frozenset(
         "app/builderops/ckm/metrics.py",  # outer adapter over query_service; own small versioned SQLite receipt store, non-authoritative
         "app/builderops/ckm/comparison.py",  # fail-closed, descriptive-only comparison of retained metrics observations
         "app/builderops/ckm/observation_capture.py",  # privacy-safe observations over already-returned CKM outcomes; own adjacent SQLite store, no policy/promotion authority
+        "app/builderops/cockpit_registry.py",  # #4438 cockpit read-time projection: direct SQLite mode=ro over the dispatcher store, read-only, never creates the DB, non-authoritative (same class as ckm/query_service.py)
     }
 )
 
