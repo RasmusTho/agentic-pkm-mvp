@@ -592,6 +592,80 @@ def test_semantic_snapshot_drift_during_propose_writes_nothing(
     assert store.get_watermark("semantic_association") is None
 
 
+def test_semantic_capability_set_drift_during_propose_writes_nothing(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    proposing = Event()
+    resume = Event()
+    results: list[SemanticAssociationResult] = []
+
+    class PausingAssociator(StubAssociator):
+        def propose(self, *, artifacts, capabilities) -> SemanticBatch:
+            proposing.set()
+            assert resume.wait(timeout=5)
+            return super().propose(artifacts=artifacts, capabilities=capabilities)
+
+    thread = Thread(
+        target=lambda: results.append(
+            associate_unlinked_artifacts(
+                store,
+                client=PausingAssociator([_proposal(artifact.id, capability.id)]),
+            )
+        )
+    )
+    thread.start()
+    assert proposing.wait(timeout=5)
+    store.upsert_capability(
+        identity_key="fixture:semantic:concurrent-capability",
+        name="Concurrent capability",
+        definition="Added while the semantic provider work is in flight.",
+        existence_provenance="test:concurrent-capability",
+        lifecycle="confirmed",
+    )
+    resume.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert results[0].status == "skipped"
+    assert results[0].reason == (
+        "semantic input snapshot changed before commit; rerun required"
+    )
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_conflicting_duplicate_semantic_proposals_fail_before_write(
+    store: CkmStore,
+    reverse: bool,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    first = _proposal(artifact.id, capability.id)
+    conflicting = SemanticProposal(
+        artifact_id=first.artifact_id,
+        capability_id=first.capability_id,
+        evidence_kind="spec",
+        maturity_dimension=first.maturity_dimension,
+        confidence=first.confidence,
+        rationale=first.rationale,
+    )
+    proposals = [first, conflicting]
+    if reverse:
+        proposals.reverse()
+
+    with pytest.raises(SemanticAssociationError, match="conflicting duplicate"):
+        associate_unlinked_artifacts(
+            store,
+            client=StubAssociator(proposals),
+        )
+
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
 def test_semantic_watermark_binds_input_batch_and_material_edge_state(
     tmp_path: Path,
 ) -> None:

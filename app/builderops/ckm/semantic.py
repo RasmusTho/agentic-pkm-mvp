@@ -408,6 +408,31 @@ def _semantic_batch_watermark(
     return "batch:" + sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def _canonicalize_accepted_writes(
+    writes: Sequence[CkmEvidenceEdgeWrite],
+) -> list[CkmEvidenceEdgeWrite]:
+    by_natural_key: dict[tuple[str, str, str], CkmEvidenceEdgeWrite] = {}
+    for write in writes:
+        key = (write.artifact_id, write.capability_id, write.basis or write.source_ref)
+        existing = by_natural_key.get(key)
+        if existing is not None and existing != write:
+            raise SemanticAssociationError(
+                "conflicting duplicate semantic proposals share one evidence-edge identity"
+            )
+        by_natural_key[key] = write
+    return sorted(
+        by_natural_key.values(),
+        key=lambda item: (
+            item.artifact_id,
+            item.capability_id,
+            item.basis or item.source_ref,
+            item.evidence_kind,
+            item.maturity_dimension,
+            item.confidence,
+        ),
+    )
+
+
 def associate_unlinked_artifacts(
     store: CkmStore,
     *,
@@ -515,6 +540,7 @@ def associate_unlinked_artifacts(
             )
         )
 
+    accepted = _canonicalize_accepted_writes(accepted)
     watermark = _semantic_batch_watermark(
         artifacts=artifacts,
         capabilities=capabilities,
