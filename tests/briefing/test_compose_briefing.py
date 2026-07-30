@@ -45,6 +45,27 @@ def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, VaultC
     root = tmp_path / "vault"
     root.mkdir()
     monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "_system")
+    from app.briefing import compose as compose_module
+    from app.episodes.stream_registry import STATUS_LIVE, StreamRegistry, StreamRegistryEntry
+
+    monkeypatch.setattr(
+        compose_module,
+        "load_registry",
+        lambda: StreamRegistry(
+            entries={
+                "calendar": StreamRegistryEntry(
+                    stream_id="calendar",
+                    status=STATUS_LIVE,
+                    owner_constituent="private-bindings",
+                    dimensions_fed=("time",),
+                    transport="module:app.episodes.calendar_stream",
+                    consent_class="operator-bound",
+                    cadence="sparse",
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(compose_module, "read_calendar_raw_items_for_tick", lambda: ([], []))
     return root, _context(root)
 
 
@@ -390,7 +411,7 @@ def test_empty_sources_are_available_not_degraded(vault: tuple[Path, VaultContex
     assert note is not None
     assert note.degraded_sections == ()
     assert all(section.status == "available" for section in note.sections.values())
-    assert _target(root).read_text(encoding="utf-8").count("No items.") == 3
+    assert _target(root).read_text(encoding="utf-8").count("No items.") == 4
 
 
 def test_receipt_window_is_half_open_previous_utc_day(vault: tuple[Path, VaultContext]) -> None:
