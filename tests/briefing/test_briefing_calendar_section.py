@@ -175,3 +175,49 @@ def test_calendar_section_reads_existing_ere_interfaces_only(
     rendered = (root / "_system" / "briefings" / "2026-07-10.md").read_text(encoding="utf-8")
     assert "calendar:planning-1:etag-1" in rendered
     assert "ep-00000000-0000-4000-8000-000000000001" in rendered
+
+
+def test_calendar_section_uses_stockholm_day_boundaries_and_excludes_old_points(
+    vault: tuple[Path, VaultContext], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Entries are bounded by the local day used by the briefing scheduler."""
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    binding, _item = _calendar_item()
+    local_midnight_entry = CalendarRawItem(
+        uid="local-start",
+        etag="etag-local",
+        ics_text=(
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:local-start\n"
+            "SUMMARY:Local midnight\nDTSTART:20260709T223000Z\n"
+            "DTEND:20260709T230000Z\nEND:VEVENT\nEND:VCALENDAR\n"
+        ),
+    )
+    old_point_entry = CalendarRawItem(
+        uid="old-point",
+        etag="etag-old",
+        ics_text=(
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:old-point\n"
+            "SUMMARY:Yesterday point\nDTSTART:20260709T120000Z\n"
+            "END:VEVENT\nEND:VCALENDAR\n"
+        ),
+    )
+    monkeypatch.setattr(compose_module, "load_registry", _calendar_registry)
+    monkeypatch.setattr(
+        compose_module,
+        "read_calendar_raw_items_for_tick",
+        lambda: ([(binding, local_midnight_entry), (binding, old_point_entry)], []),
+    )
+
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    assert [item.provenance_ref for item in note.sections["calendar_episodes"].items] == [
+        "calendar:local-start:etag-local"
+    ]

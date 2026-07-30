@@ -744,6 +744,36 @@ def test_load_briefing_round_trip_absent_and_invalid_schema(
         load_briefing(vault_context=context, for_date=BRIEFING_DATE)
 
 
+def test_load_briefing_keeps_schema_v1_artifacts_readable(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    payload = yaml.safe_load(target.read_text(encoding="utf-8").split("---", 2)[1])
+    payload["schema_version"] = 1
+    payload["sections"].pop("calendar_episodes")
+    target.write_text(
+        "---\n"
+        + yaml.safe_dump(payload, sort_keys=False)
+        + "---\n"
+        + "# Daily Briefing — 2026-07-10\n\n"
+        + "> Derived, read-only briefing. Source artifacts remain authoritative.\n\n"
+        + "## Commitments\n\nNo items.\n\n"
+        + "## Moments\n\nNo items.\n\n"
+        + "## Decision receipts\n\nNo items.\n",
+        encoding="utf-8",
+    )
+
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    assert note.sections["calendar_episodes"].items == ()
+
+
 @pytest.mark.parametrize(
     "corruption",
     [

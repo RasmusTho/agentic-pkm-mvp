@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypeAlias, get_args
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -23,6 +24,7 @@ from app.domain.commitments import (
     CommitmentRecord,
     query_next_and_waiting_commitments,
 )
+from app.briefing.config import BRIEFING_TIMEZONE
 from app.episodes.calendar_stream import (
     CalendarRawItem,
     parse_vevent,
@@ -55,6 +57,11 @@ SECTION_ORDER: tuple[SectionName, ...] = (
     "moments",
     "decision_receipts",
     "calendar_episodes",
+)
+_V1_SECTION_ORDER: tuple[SectionName, ...] = (
+    "commitments",
+    "moments",
+    "decision_receipts",
 )
 SECTION_TITLES: dict[SectionName, str] = {
     "commitments": "Commitments",
@@ -217,7 +224,14 @@ def load_briefing(
             system_dir=system_dir,
         )
         # Canonical re-render makes frontmatter and body one tamper-evident projection.
-        if content != _render_note(note):
+        schema_version = frontmatter.get("schema_version")
+        if schema_version not in (1, BRIEFING_SCHEMA_VERSION):
+            raise BriefingReadError("briefing identity or schema is incompatible")
+        if content != _render_note(
+            note,
+            schema_version=schema_version,
+            section_order=_V1_SECTION_ORDER if schema_version == 1 else SECTION_ORDER,
+        ):
             raise BriefingReadError("briefing body disagrees with structured content")
         return note
     except BriefingReadError:
@@ -490,8 +504,11 @@ def _read_calendar_episodes(
     if calendar is None or calendar.status != STATUS_LIVE:
         raise _InvalidSourceRecord
 
-    day_start = datetime.combine(for_date, time.min, tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=1)
+    briefing_zone = ZoneInfo(BRIEFING_TIMEZONE)
+    day_start = datetime.combine(for_date, time.min, tzinfo=briefing_zone).astimezone(timezone.utc)
+    day_end = datetime.combine(
+        for_date + timedelta(days=1), time.min, tzinfo=briefing_zone
+    ).astimezone(timezone.utc)
     calendar_items, degraded = read_calendar_raw_items_for_tick()
     if degraded:
         raise RuntimeError("calendar stream degraded")
@@ -513,7 +530,10 @@ def _calendar_item_for_day(
         raise _InvalidSourceRecord
     starts_at = event.dtstart.astimezone(timezone.utc)
     ends_at = event.dtend.astimezone(timezone.utc) if event.dtend is not None else None
-    if starts_at >= day_end or (ends_at is not None and ends_at <= day_start):
+    if ends_at is None:
+        if not day_start <= starts_at < day_end:
+            return None
+    elif starts_at >= day_end or ends_at <= day_start:
         return None
     if not raw_item.uid or not raw_item.etag:
         raise _InvalidSourceRecord
@@ -557,17 +577,22 @@ def _episode_items_for_day(
     return tuple(items)
 
 
-def _render_note(note: BriefingNote) -> str:
+def _render_note(
+    note: BriefingNote,
+    *,
+    schema_version: int = BRIEFING_SCHEMA_VERSION,
+    section_order: tuple[SectionName, ...] = SECTION_ORDER,
+) -> str:
     frontmatter: dict[str, Any] = {
         "artifact_class": BRIEFING_ARTIFACT_CLASS,
-        "schema_version": BRIEFING_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "agent_maintained": True,
         "read_only": True,
         "authority_role": "derived",
         "briefing_date": note.briefing_date.isoformat(),
-        "degraded_sections": list(note.degraded_sections),
+        "degraded_sections": [name for name in section_order if name in note.degraded_sections],
         "sections": {
-            name: _section_to_mapping(note.sections[name]) for name in SECTION_ORDER
+            name: _section_to_mapping(note.sections[name]) for name in section_order
         },
     }
     body = [
@@ -575,7 +600,7 @@ def _render_note(note: BriefingNote) -> str:
         "",
         "> Derived, read-only briefing. Source artifacts remain authoritative.",
     ]
-    for name in SECTION_ORDER:
+    for name in section_order:
         section = note.sections[name]
         body.extend(["", f"## {SECTION_TITLES[name]}", ""])
         if section.status == "degraded":
@@ -691,9 +716,12 @@ def _note_from_frontmatter(
     vault_root: Path,
     system_dir: str,
 ) -> BriefingNote:
+    schema_version = frontmatter.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (1, BRIEFING_SCHEMA_VERSION):
+        raise BriefingReadError("briefing identity or schema is incompatible")
+    section_order = _V1_SECTION_ORDER if schema_version == 1 else SECTION_ORDER
     required_identity = {
         "artifact_class": BRIEFING_ARTIFACT_CLASS,
-        "schema_version": BRIEFING_SCHEMA_VERSION,
         "agent_maintained": True,
         "read_only": True,
         "authority_role": "derived",
@@ -709,11 +737,11 @@ def _note_from_frontmatter(
     sections_raw = frontmatter.get("sections")
     if not isinstance(degraded_raw, list) or not isinstance(sections_raw, dict):
         raise BriefingReadError("briefing sections are invalid")
-    if any(name not in SECTION_ORDER for name in degraded_raw):
+    if any(name not in section_order for name in degraded_raw):
         raise BriefingReadError("briefing degraded sections are invalid")
-    degraded = tuple(name for name in SECTION_ORDER if name in degraded_raw)
+    degraded = tuple(name for name in section_order if name in degraded_raw)
     sections: dict[SectionName, BriefingSection] = {}
-    for name in SECTION_ORDER:
+    for name in section_order:
         raw = sections_raw.get(name)
         if not isinstance(raw, dict):
             raise BriefingReadError("briefing section is missing")
@@ -741,11 +769,11 @@ def _note_from_frontmatter(
         elif reason is not None:
             raise BriefingReadError("available briefing section must have no reason")
         sections[name] = BriefingSection(status=status, items=items, reason=reason)
-    actual_degraded = tuple(
-        name for name in SECTION_ORDER if sections[name].status == "degraded"
-    )
+    actual_degraded = tuple(name for name in section_order if sections[name].status == "degraded")
     if actual_degraded != degraded or degraded_raw != list(actual_degraded):
         raise BriefingReadError("briefing degraded section markers disagree")
+    if schema_version == 1:
+        sections["calendar_episodes"] = BriefingSection(status="available", items=())
     return BriefingNote(
         briefing_date=expected_date,
         degraded_sections=degraded,
