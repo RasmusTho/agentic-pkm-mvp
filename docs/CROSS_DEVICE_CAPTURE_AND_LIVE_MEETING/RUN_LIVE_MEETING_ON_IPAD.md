@@ -84,8 +84,7 @@ minute ago. The UI here is the product expression of the contract, not decoratio
 
 ## How to Verify (Pre-Merge)
 
-- bifrost CI: `LiveMeetingSessionTests` + the iPad journey. **Execution gate G-CI:** bifrost#52
-  fixed, or local `xcodebuild test` output attached.
+- bifrost CI: `LiveMeetingSessionTests` + the iPad journey.
 - `swiftlint --strict` clean; existing B1/B2/B3 journeys stay green on the same head.
 
 ## Out of Scope

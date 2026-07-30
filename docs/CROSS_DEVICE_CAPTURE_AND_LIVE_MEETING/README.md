@@ -179,6 +179,17 @@ receipts are recorded on the parent issue.
   foundation (its body carries the 2026-07-29 product-priority reconciliation); its journeys will
   compose with the outbox and receipt states once CDLM-03/05 land. Its label was corrected
   `agent:ready` → `agent:blocked` on 2026-07-29, naming bifrost#57/#59 and hub #4389 as blockers.
+- **Execution gate G-CI is retired (2026-07-30).** This directory originally required bifrost#52
+  to be fixed, or local `xcodebuild test` evidence attached, before any bifrost child could merge.
+  That gate rested on a stale premise: all three defects bifrost#52 described had already been
+  removed by bifrost PR #32 (merged 2026-07-20), nine days before the issue was filed — the filing
+  read `.github/workflows/ci.yml` out of a shared checkout parked on an old branch rather than out
+  of the resolved base SHA. Bifrost CI pins `-scheme Yggdrasil`, runs both an iPhone and an iPad
+  destination, and runs `xcodebuild test` unpiped under `set -euo pipefail`. Its fail-closed
+  behavior was then proven empirically for the first time by scratch PR bifrost#61 (closed
+  unmerged): an injected `XCTFail` turned the check red and `set -e` aborted the destination loop
+  on the first non-zero exit. Bifrost children therefore verify on ordinary bifrost CI with no
+  extra evidence obligation.
 - **HCAP-08 (#3191) is not absorbed.** That issue keeps proving the Model-1 watched-folder round
   trip; CDLM-10 (#4389) proves the receipt-gated outbox lane. The boundary is recorded as a
   comment on #3191 so neither re-proves the other's lane.
@@ -206,7 +217,7 @@ The parent feature issue can be closed when all of the following hold:
 
 - **Parent / validation hub:** [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383),
   filed 2026-07-29 with `agent:blocked` — a validation hub, never a pickup issue. It carries the
-  live child table, the capability acceptance ledger, and the G-CI execution gate.
+  live child table and the capability acceptance ledger.
 - **Hub children:** CDLM-01 [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384)
   (`agent:ready`), CDLM-02 [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385),
   CDLM-06 [#4386](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386),
@@ -219,17 +230,15 @@ The parent feature issue can be closed when all of the following hold:
   CDLM-09 [bifrost#60](https://github.com/RasmusTho/bifrost/issues/60) (same repo split as B3).
   Every child except CDLM-01 is `agent:blocked` on its named prerequisite's acceptance receipt.
 - **Adjacent, not owned here:** #4362 (capture-watch env delivery bug) and #4369 (locate the
-  legacy recording path — owner-gated) repair the Model-1 floor; bifrost#52 (CI runs the wrong
-  scheme and masks xcodebuild failures) is an execution gate below; #3026/B3 remains the audio
+  legacy recording path — owner-gated) repair the Model-1 floor; #3026/B3 remains the audio
   floor's validation hub.
 
 ## Verification path
 
 Hub tasks verify with pytest targets named per AC (new test files are spec-level commitments);
 enforcement ACs assert the guard at its production call site. Bifrost tasks verify with
-XCTest/XCUITest targets in bifrost CI. **Execution gate G-CI:** bifrost#52 must be fixed — or the
-child PR must attach local `xcodebuild test` evidence for the named targets — before any bifrost
-child of this vertical merges; a green checkmark from the wrong scheme is not verification.
+XCTest/XCUITest targets in bifrost CI, which runs the `Yggdrasil` scheme explicitly on both an
+iPhone and an iPad destination and is proven fail-closed (see the retired-gate note below).
 CDLM-10's test-channel run follows `docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md` and posts
 its receipts on the parent issue.
 

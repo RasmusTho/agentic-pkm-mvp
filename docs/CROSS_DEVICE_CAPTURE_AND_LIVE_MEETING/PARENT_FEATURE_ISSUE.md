@@ -116,8 +116,8 @@ Specification directory: `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/` — inten
 
 Hub children: named pytest targets per AC (enforcement ACs at production call sites); `Unit tests
 (not pg)` green on each delivering head. Bifrost children: named XCTest/XCUITest targets under
-**execution gate G-CI** — bifrost#52 fixed, or local `xcodebuild test` evidence attached to the
-child PR. Composed: the CDLM-10 test-channel run.
+ordinary bifrost CI (the `Yggdrasil` scheme on both an iPhone and an iPad destination, proven
+fail-closed by scratch PR bifrost#61). Composed: the CDLM-10 test-channel run.
 
 ## Validation / Acceptance Path
 
