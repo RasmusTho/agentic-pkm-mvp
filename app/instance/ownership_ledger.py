@@ -219,13 +219,7 @@ class OwnershipLedger:
                 )
             for binding_id, root in registrations.items():
                 lease = channel_leases[binding_id]
-                if not self._has_complete_self_identity(lease, key):
-                    raise LedgerError(
-                        "scalar rollback registration ownership is inconsistent"
-                    )
-                if root is not None and not self._matches_materialized_root(
-                    lease, root, key
-                ):
+                if root is not None and not self._matches_materialized_root(lease, root, key):
                     raise LedgerError(
                         "scalar rollback registration ownership is inconsistent"
                     )

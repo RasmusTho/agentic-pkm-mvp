@@ -1973,6 +1973,82 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     assert produce_index < begin_index < stop_index < proof_index < validate_index < finish_index
 
 
+def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
+    tmp_path,
+) -> None:
+    """Cutover receives exactly the selected root even outside full-host mounts."""
+
+    event_log = tmp_path / "events.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    python = fake_bin / "python3"
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'python:%s\\n\' "$*" >> "$EVENT_LOG"\n'
+        'case " $* " in\n'
+        "  *' produce-legacy-owners '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{"writers_drained":false}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
+        "  *' prove-quiescent '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "  *' validate-legacy-owners '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --output ]; then printf \'{"writers_drained":true}\\n\' > "$2"; exit 0; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    exit 2 ;;\n"
+        "esac\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    harness = tmp_path / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() {\n"
+        "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        "  return 0\n"
+        "}\n"
+        "prepare_instance_state_deployment fake_compose prod\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    selected_root = "/srv/operator/vault"
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env={
+            **os.environ,
+            "EVENT_LOG": str(event_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "MVR01C_ROLLBACK_VAULT_BINDING_ID": "binding-selected",
+            "MVR01C_ROLLBACK_VAULT_ROOT": selected_root,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    cutover = next(
+        event
+        for event in event_log.read_text(encoding="utf-8").splitlines()
+        if "authority-cutover" in event
+    )
+    assert f"--volume {selected_root}:/app/selected-vault:ro" in cutover
+    assert "--rollback-vault-binding-id binding-selected" in cutover
+    assert "--selected-root /app/selected-vault" in cutover
+
+
 def _legacy_owner_source_fixture(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
     repo_root = tmp_path / "repo"
     (repo_root / "config" / "deploy").mkdir(parents=True)

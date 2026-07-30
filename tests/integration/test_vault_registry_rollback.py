@@ -312,6 +312,22 @@ def test_multi_binding_rollback_requires_one_safe_explicit_target(tmp_path) -> N
         second.vault_binding_id,
     }
 
+    # The scalar guard intentionally mounts only the selected root. Lease
+    # coverage for every other registration must remain provable from the
+    # authenticated ledger without opening its sealed host path.
+    second_root.rename(tmp_path / "two-sealed")
+    selected_alias = tmp_path / "selected-container-alias"
+    selected_alias.symlink_to(Path(first.path), target_is_directory=True)
+    _start_scalar_runtime(
+        runtime,
+        first,
+        selected_alias,
+        rollback_path,
+    )
+    assert set(AppLocalSettingsStore(rollback_path).load().known_vaults) == {
+        first.ref
+    }
+
 
 def test_01c_unseals_second_registration_only_with_complete_rollback_floor(
     tmp_path,

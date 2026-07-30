@@ -192,13 +192,15 @@ prepare_instance_state_deployment() {
       echo "MVR-01C cutover requires both rollback binding and root" >&2
       return 78
     fi
-    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    "${compose_function}" run --rm --no-deps -T \
+      --volume "${MVR01C_ROLLBACK_VAULT_ROOT}:/app/selected-vault:ro" \
+      --user "${runtime_user}" instance-state-init \
       python -m app.instance.runtime authority-cutover \
         --channel "${channel}" \
         --instance-state-root /app/instance-state \
         --host-global-root /app/instance-ownership \
         --rollback-vault-binding-id "${MVR01C_ROLLBACK_VAULT_BINDING_ID}" \
-        --selected-root "${MVR01C_ROLLBACK_VAULT_ROOT}" \
+        --selected-root /app/selected-vault \
         --compose-base /run/scalar-rollback-policy/docker-compose.yaml \
         --compose-overlay /run/scalar-rollback-policy/docker-compose.scalar-rollback.yml \
         --gateway-config /run/scalar-rollback-policy/nginx.conf \
