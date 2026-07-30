@@ -2,10 +2,11 @@
 
 The running Product paths deliberately retain their compiled local provider
 sets, so for Product this module remains an authoring and verification surface
-rather than a routing dependency.  The Builder Model Access resolver
-(`app/builderops/model_access_resolver.py`, ADR-0064 / MAS-05) is the one
-runtime consumer: it selects provider, model, effective identity, and the
-declared credential identifier from these exact mappings.
+rather than a routing dependency. The Builder Model Access resolver
+(`app/builderops/model_access_resolver.py`, ADR-0064 / MAS-05) consumes the
+Builder-owned inquiry, CKM, and design-agent mappings: it selects provider,
+model, effective identity, and the declared credential identifier from these
+exact mappings.
 """
 
 from __future__ import annotations
@@ -89,6 +90,15 @@ class RoleProfile(TierMapping):
     resolution_group: str = Field(min_length=1)
 
 
+class DesignAgentProfile(TierMapping):
+    model_config = ConfigDict(extra="forbid")
+
+    design_agent_id: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+    capability_tier: str = Field(min_length=1)
+    credential_identifier: str = Field(min_length=1)
+
+
 class ResolutionGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,6 +112,9 @@ class RuntimeChannelMappings(BaseModel):
     product: dict[str, dict[str, TierMapping]] = Field(default_factory=dict)
     builder: dict[str, dict[str, TierMapping]] = Field(default_factory=dict)
     model_inquiry_profiles: dict[str, list[RoleProfile]] = Field(default_factory=dict)
+    design_agent_profiles: dict[str, list[DesignAgentProfile]] = Field(
+        default_factory=dict
+    )
     resolution_groups: list[ResolutionGroup] = Field(default_factory=list)
 
 
@@ -131,6 +144,11 @@ class ProviderCensus(BaseModel):
             for profiles in self.runtime_channels.model_inquiry_profiles.values()
             for profile in profiles
         )
+        mappings.extend(
+            profile
+            for profiles in self.runtime_channels.design_agent_profiles.values()
+            for profile in profiles
+        )
         for mapping in mappings:
             provider = self.provider(mapping.provider)
             model = next((item for item in provider.models if item.id == mapping.model), None)
@@ -141,7 +159,10 @@ class ProviderCensus(BaseModel):
                     raise ValueError(
                         f"Provider census mapping {mapping.provider}/{mapping.model} lacks {capability}"
                     )
-            if isinstance(mapping, RoleProfile) and mapping.credential_identifier not in provider.credential_identifiers:
+            if (
+                isinstance(mapping, (RoleProfile, DesignAgentProfile))
+                and mapping.credential_identifier not in provider.credential_identifiers
+            ):
                 raise ValueError(
                     f"Provider census role profile {mapping.role} uses undeclared credential "
                     f"{mapping.credential_identifier}"
@@ -154,6 +175,26 @@ class ProviderCensus(BaseModel):
         for profiles in self.runtime_channels.model_inquiry_profiles.values():
             if {profile.resolution_group for profile in profiles} != {"model-inquiry-independent-review"}:
                 raise ValueError("Model Inquiry profiles must reference the independent-review group")
+        expected_design_roles = {
+            "claude-design-via-claude-code": "design.claude",
+            "codex": "design.codex",
+            "fable": "design.fable",
+        }
+        if set(self.runtime_channels.design_agent_profiles) != set(
+            self.runtime_channels.builder
+        ):
+            raise ValueError(
+                "Design-agent profiles must cover every declared Builder channel"
+            )
+        for profiles in self.runtime_channels.design_agent_profiles.values():
+            actual = {
+                profile.design_agent_id: profile.role
+                for profile in profiles
+            }
+            if actual != expected_design_roles or len(profiles) != len(actual):
+                raise ValueError(
+                    "Design-agent profiles must declare exactly the supported domain roles"
+                )
         return self
 
     def provider(self, provider_id: str) -> ProviderEntry:

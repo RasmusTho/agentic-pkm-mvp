@@ -57,6 +57,17 @@ def _normalized_identifier(value: Any) -> Any:
     return value.strip() if isinstance(value, str) else value
 
 
+def is_safe_design_run_identifier(value: object) -> bool:
+    """Return whether a caller identity is safe to include in descriptor provenance."""
+
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and re.fullmatch(_ID, value) is not None
+        and _FORBIDDEN_DETAIL.search(value) is None
+    )
+
+
 NonEmpty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Identifier = Annotated[
     str,
@@ -80,6 +91,12 @@ DesignRunStatusValue: TypeAlias = Literal[
     "failed",
     "running",
     "succeeded",
+]
+DesignAgentLimitationCode: TypeAlias = Literal[
+    "model_access_unavailable",
+    "headless_adapter_unavailable",
+    "adapter_identity_mismatch",
+    "interactive_subscription_only",
 ]
 RefusalCode: TypeAlias = Literal[
     "unknown_adapter",
@@ -187,6 +204,58 @@ class DesignAgentDescriptor(CanonicalDesignRunContract):
         if not self.supported_deliverables:
             raise ValueError("design agent descriptor requires supported deliverables")
         _require_sorted_unique(self.supported_deliverables, "supported deliverables")
+        return self
+
+
+class DesignAgentAvailabilityDescriptor(_StrictFrozen):
+    """Secret-safe CKM projection of one registered design-agent route."""
+
+    design_agent_id: Identifier
+    display_name: NonEmpty
+    role_profile_id: Identifier
+    supported_deliverables: tuple[DesignDeliverableKind, ...]
+    available: bool
+    provider_identity: NonEmpty | None = None
+    model_identity: NonEmpty | None = None
+    effective_identity: NonEmpty | None = None
+    capabilities: tuple[NonEmpty, ...] = ()
+    resolution_group_id: NonEmpty | None = None
+    limitation_code: DesignAgentLimitationCode | None = None
+    limitation_detail: NonEmpty | None = None
+
+    @model_validator(mode="after")
+    def _validate_availability(self) -> "DesignAgentAvailabilityDescriptor":
+        if not self.supported_deliverables:
+            raise ValueError("design agent descriptor requires supported deliverables")
+        _require_sorted_unique(self.supported_deliverables, "supported deliverables")
+        _require_sorted_unique(self.capabilities, "capabilities")
+        resolved = (
+            self.provider_identity,
+            self.model_identity,
+            self.effective_identity,
+            self.resolution_group_id,
+        )
+        variable_text = (
+            self.provider_identity,
+            self.model_identity,
+            self.effective_identity,
+            self.resolution_group_id,
+            *self.capabilities,
+        )
+        if any(
+            value is not None and _FORBIDDEN_DETAIL.search(value)
+            for value in variable_text
+        ):
+            raise ValueError("design agent descriptor contains unsafe identity detail")
+        if self.available:
+            if any(value is None for value in resolved):
+                raise ValueError("available design agent requires resolved identity")
+            if self.limitation_code is not None or self.limitation_detail is not None:
+                raise ValueError("available design agent must not carry a limitation")
+        elif self.limitation_code is None or self.limitation_detail is None:
+            raise ValueError("unavailable design agent requires a safe limitation")
+        if self.limitation_detail and _FORBIDDEN_DETAIL.search(self.limitation_detail):
+            raise ValueError("design agent limitation contains unsafe detail")
         return self
 
 
@@ -500,10 +569,12 @@ def _contract_type_from_payload(payload: Mapping[str, Any]) -> type[CanonicalDes
 
 __all__ = [
     "CanonicalDesignRunContract", "ContractIdentityRef", "CuratedDesignBrief",
-    "DESIGN_RUN_CONTRACT_VERSION", "DesignAgentDescriptor", "DesignDeliverableKind",
+    "DESIGN_RUN_CONTRACT_VERSION", "DesignAgentAvailabilityDescriptor",
+    "DesignAgentDescriptor", "DesignAgentLimitationCode", "DesignDeliverableKind",
     "DesignHandoffRef", "DesignRunAdmission", "DesignRunApprovalEvidence",
     "DesignRunPolicyProfile", "DesignRunRefusalDetail", "DesignRunRequest", "DesignRunResult",
     "DesignRunStatus", "DigestBoundAttachmentRef", "DesignSourceRef", "YggdrasilGateReceipt",
     "canonical_hash", "canonical_json", "contract_ref", "parse_design_run_contract",
+    "is_safe_design_run_identifier",
     "validate_admission_bindings", "validate_approval_bindings", "validate_request_bindings",
 ]
