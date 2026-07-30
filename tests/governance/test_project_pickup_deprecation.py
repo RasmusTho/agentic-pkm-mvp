@@ -176,6 +176,10 @@ def test_signboard_root_consumers_are_projection_layer_only() -> None:
     assert "SIGNBOARD_ROOT" not in _read("app/dispatcher/cli.py")
     assert _signboard_imports(_read("app/dispatcher/cli.py"), filename="app/dispatcher/cli.py") == {
         "NoActiveVaultError",
+        # The board-ownership refusal (#4370) surfaces as a non-zero exit, not
+        # as a traceback; that is projection-layer error handling, not pickup
+        # input.
+        "SignboardStoreOwnershipError",
         "default_signboard_root",
         "export_signboard",
         "validate_signboard",
