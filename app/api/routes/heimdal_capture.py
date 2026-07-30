@@ -40,13 +40,14 @@ surface as an unnamed 500, because "never blind-retryable" only holds if the
 client always has an `error` to branch on.
 
 **Where the per-kind cap is enforced.** The exact per-kind cap is not knowable
-until the sidecar is parsed, because `kind` lives in the sidecar. So the read is
-bounded twice: this module reads at most `max(per-kind caps) + 1` bytes into
-memory and rejects anything longer with 413 before a `kind` is even known, and
-`media_ingress.admit_media_bytes` then applies the specific per-kind cap. The
-multipart parse itself is bounded by Starlette spooling large parts to disk. A
-pre-parse `Content-Length` guard is deliberately not added on top: it would only
-duplicate the byte bound already enforced here, less precisely.
+until the sidecar is parsed, because `kind` lives in the sidecar. So this module
+reads at most `max(per-kind caps) + 1` bytes into memory and rejects anything
+longer with 413 before a `kind` is known, and `media_ingress.admit_media_bytes`
+then applies the specific per-kind cap. Stated precisely, because it matters for
+an ingress seam: that bounds *resident memory*, not total bytes accepted —
+Starlette spools the parsed body to a temp file first, and the total body is
+unbounded on disk under this LAN-only, single-operator posture. The form is read
+inside `async with` so those temp files are released on every exit path.
 """
 
 from __future__ import annotations
@@ -292,6 +293,20 @@ def _parse_sidecar(raw_sidecar: str, trace_id: str) -> MediaSidecar:
         ) from exc
 
 
+def _cap_misconfigured(exc: Exception, trace_id: str) -> HTTPException:
+    """One renderer for the per-kind-cap misconfiguration, used by both call sites."""
+    logger.error("heimdal media ingress refused: per-kind cap misconfigured: %s", exc)
+    return HTTPException(
+        status_code=500,
+        detail={
+            "error": "media_cap_misconfigured",
+            "state": "not_acknowledged",
+            "message": str(exc),
+            "trace_id": trace_id,
+        },
+    )
+
+
 async def _part_bytes(name: str, part: Any, trace_id: str, *, max_bytes: int) -> bytes:
     """Read one multipart part as bytes, accepting both wire shapes.
 
@@ -382,8 +397,34 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
     trace_id = _trace_id(request)
     _assert_lan_posture(request, trace_id)
 
+    # The coarse bound: the largest cap any kind could resolve to. The exact
+    # per-kind cap is applied by the admission seam once `kind` is known. This
+    # resolves *every* kind, so a single unusable override must be named here
+    # too — it is the same operator misconfiguration `admit_media_bytes` reports,
+    # just detected earlier.
     try:
-        form = await request.form()
+        largest_media_cap = max(
+            media_ingress.resolve_media_kind_max_bytes(kind)
+            for kind in media_ingress.MEDIA_KINDS
+        )
+    except MediaCapConfigError as exc:
+        raise _cap_misconfigured(exc, trace_id) from exc
+
+    # `async with` so the spooled temp files behind large parts are released on
+    # every exit path; declaring only `request` means FastAPI's own form-close
+    # never runs for this route.
+    try:
+        async with request.form() as form:
+            media_bytes = await _part_bytes(
+                "media", form.get("media"), trace_id, max_bytes=largest_media_cap
+            )
+            raw_sidecar = (
+                await _part_bytes(
+                    "sidecar", form.get("sidecar"), trace_id, max_bytes=_MAX_SIDECAR_BYTES
+                )
+            ).decode("utf-8", errors="replace")
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=422,
@@ -394,19 +435,6 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
             },
         ) from exc
 
-    # The coarse bound: the largest cap any kind could resolve to. The exact
-    # per-kind cap is applied by the admission seam once `kind` is known.
-    largest_media_cap = max(
-        media_ingress.resolve_media_kind_max_bytes(kind) for kind in media_ingress.MEDIA_KINDS
-    )
-    media_bytes = await _part_bytes(
-        "media", form.get("media"), trace_id, max_bytes=largest_media_cap
-    )
-    raw_sidecar = (
-        await _part_bytes(
-            "sidecar", form.get("sidecar"), trace_id, max_bytes=_MAX_SIDECAR_BYTES
-        )
-    ).decode("utf-8", errors="replace")
     parsed = _parse_sidecar(raw_sidecar, trace_id)
 
     reserved = {
@@ -481,15 +509,7 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
             },
         ) from exc
     except MediaCapConfigError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "media_cap_misconfigured",
-                "state": "not_acknowledged",
-                "message": str(exc),
-                "trace_id": trace_id,
-            },
-        ) from exc
+        raise _cap_misconfigured(exc, trace_id) from exc
     except RawStoreKeyMissingError as exc:
         # Operator precondition, not a client error: without the raw-store key
         # nothing can be encrypted, so nothing can be admitted. Named and

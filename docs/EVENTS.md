@@ -569,10 +569,13 @@ Contract:
   event id). An *already-acknowledged* identity emits no further admission event
   at all — the guard lives in the shared `record_media_admission` seam, so it
   also covers a watched-folder file re-admitted on every tick after a failed
-  source delete. Two genuinely concurrent first admissions of the same identity
-  can each append a JSONL audit line before either receipt exists; an audit line
-  is an operational trace, not an acknowledgement, and the receipt stays single.
-  A consumer keys on `receipt_id`.
+  source delete. The guard keys on *receipt existence*, so the JSONL audit log can
+  still record the same admission twice whenever no receipt yet exists: two
+  genuinely concurrent first admissions, or a retry after the event committed but
+  the receipt did not (500 `receipt_persistence_failed`). Under a pg backend the
+  derived idempotency key collapses those to one outbox row; the JSONL log is an
+  operational trace, not an acknowledgement, and the receipt stays single either
+  way. **A consumer keys on `receipt_id`, never on event arrival count.**
 - **Receipts are their own append-only store, not a raw-record field.** The raw
   store holds one object per *content hash* while receipts are keyed by transfer
   identity, and recovery queries by `capture_id` — a direction the raw store
@@ -604,6 +607,15 @@ Contract:
   a silent or ambiguous failure. Provisioning it to the api consumer (which the
   pre-existing `POST /api/heimdal/screen/capture` needs equally) is tracked
   separately, not claimed here.
+- **Receipts are not retention-aware, stated honestly.**
+  `app.heimdal.retention.enforce_hard_retention_bound` hard-deletes raw records
+  past the retention window without consulting receipts, so a receipt can outlive
+  the raw object it attests to: the query would still answer `admitted` with a
+  `raw_ref` that no longer resolves, and a resend short-circuits on that receipt
+  rather than re-admitting the original. Latent today — nothing schedules that job
+  — but CDLM-03 deletes client originals against an `admitted` answer, so a
+  receipt-aware retention interaction must land before that. Tracked as a deferred
+  defect on the Known Defects registry (#4172), not claimed as solved here.
 - **Consent scope, stated honestly.** Every kind is admitted under the standing
   self-record grant the voice-memo lane uses
   (`consent_ledger.SELF_RECORD_SCOPE`), whose descriptive

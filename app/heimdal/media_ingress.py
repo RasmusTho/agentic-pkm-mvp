@@ -263,8 +263,13 @@ def record_media_admission(
     trace_id: str,
     event_payload: Dict[str, Any],
     receipt_payload: Optional[Dict[str, Any]] = None,
-) -> MediaReceipt:
+) -> tuple[MediaReceipt, bool]:
     """Commit the admission event, then persist the receipt.
+
+    Returns ``(receipt, newly_acknowledged)``. ``newly_acknowledged=False`` means
+    this identity was already acknowledged, which is what lets the caller report
+    ``idempotent_replay`` truthfully even when the acknowledgement was made by a
+    concurrent request rather than by an earlier one this caller saw.
 
     This is the shared acknowledgement seam for both lanes, and the ordering
     inside it is the contract: the receipt is written **after** the event is
@@ -291,7 +296,7 @@ def record_media_admission(
     """
     already_acknowledged = media_receipts.get_media_receipt(capture_id, content_sha256)
     if already_acknowledged is not None:
-        return already_acknowledged
+        return already_acknowledged, False
 
     receipt_id = media_receipts.derive_receipt_id(capture_id, content_sha256)
     if not _emit_admission_event(
@@ -305,7 +310,7 @@ def record_media_admission(
             f"for capture_id={capture_id!r}; no receipt was written."
         )
     try:
-        receipt, _created = media_receipts.append_media_receipt(
+        receipt, created = media_receipts.append_media_receipt(
             capture_id=capture_id,
             content_sha256=content_sha256,
             raw_ref=raw_ref,
@@ -324,7 +329,7 @@ def record_media_admission(
             f"receipt for capture_id={capture_id!r} could not be persisted: {exc}. "
             "Nothing was acknowledged."
         ) from exc
-    return receipt
+    return receipt, created
 
 
 def admit_media_bytes(
@@ -455,7 +460,7 @@ def admit_media_bytes(
         )
         if value is not None
     }
-    receipt = record_media_admission(
+    receipt, newly_acknowledged = record_media_admission(
         capture_id=capture_id,
         content_sha256=content_sha256,
         raw_ref=raw_ref,
@@ -473,7 +478,10 @@ def admit_media_bytes(
         },
         receipt_payload=admission_metadata,
     )
-    return MediaAdmission(receipt=receipt, idempotent_replay=False)
+    # A concurrent request may have acknowledged this identity between the
+    # short-circuit above and the seam's own guard; report that truthfully rather
+    # than claiming this call was the one that acknowledged it.
+    return MediaAdmission(receipt=receipt, idempotent_replay=not newly_acknowledged)
 
 
 def record_watched_folder_admission(
@@ -506,7 +514,7 @@ def record_watched_folder_admission(
         raw_ref = raw_ref_for(record)
         sidecar_capture_id = capture_id.strip() if isinstance(capture_id, str) else ""
         resolved_capture_id = sidecar_capture_id or content_sha256
-        receipt = record_media_admission(
+        receipt, _newly_acknowledged = record_media_admission(
             capture_id=resolved_capture_id,
             content_sha256=content_sha256,
             raw_ref=raw_ref,

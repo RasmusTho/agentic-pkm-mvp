@@ -17,6 +17,7 @@ receipt query that still answers `unknown`.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import secrets
 from pathlib import Path
@@ -24,7 +25,9 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.datastructures import UploadFile
 
 from app.api.app import app
 from app.heimdal import media_ingress, media_receipts
@@ -454,12 +457,103 @@ def test_watched_folder_sidecar_capture_id_of_the_wrong_type_is_not_a_new_failur
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("peer", ["192.168.1.20", "100.101.102.103", "10.0.0.5"])
+@pytest.mark.parametrize(
+    "peer",
+    [
+        "192.168.1.20",
+        "100.101.102.103",  # tailnet CGNAT
+        "10.0.0.5",
+        "fd7a:115c:a1e0::1",  # tailnet ULA
+        "::ffff:192.168.1.20",  # a dual-stack listener's view of an IPv4 LAN peer
+    ],
+)
 def test_ingress_admits_lan_loopback_and_tailnet_peers(peer: str) -> None:
     """The refusal below is specific to public peers, not a blanket refusal."""
     lan_client = TestClient(app, client=(peer, 41000))
     media = f"admitted-from-{peer}".encode()
     assert _post_media(lan_client, media, _sidecar(media)).status_code == 200
+
+
+@pytest.mark.parametrize("peer", ["203.0.113.7", "8.8.8.8", "2001:db8::1", ""])
+def test_ingress_refuses_peers_it_cannot_place_inside_the_posture(peer: str) -> None:
+    """A public peer *and* an unidentifiable one both fail closed.
+
+    An empty host is not provably inside the posture, so it is refused rather
+    than treated as loopback the way the general-purpose auth helper does.
+    """
+    outside = TestClient(app, client=(peer, 41000))
+    media = f"never-admitted-from-{peer}".encode()
+    response = _post_media(outside, media, _sidecar(media))
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "public_ingress_refused"
+    assert all_raw_records() == []
+
+
+def test_media_over_every_cap_is_refused_before_the_kind_is_known(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The coarse bound limits resident memory before any per-kind cap applies."""
+    for kind in media_ingress.MEDIA_KINDS:
+        monkeypatch.setenv(f"HEIMDAL_MEDIA_MAX_BYTES_{kind.upper()}", "16")
+    oversize = b"y" * 128
+    response = _post_media(client, oversize, _sidecar(oversize, kind="video"))
+    assert response.status_code == 413
+    detail = response.json()["detail"]
+    assert detail["error"] == "media_too_large"
+    assert detail["max_bytes"] == 16
+    assert all_raw_records() == []
+
+
+@pytest.mark.asyncio
+async def test_part_read_is_bounded_rather_than_slurped() -> None:
+    """The part read passes its bound down, so resident memory is actually capped.
+
+    Asserted on `_part_bytes` directly: "how many bytes reached memory" has no
+    black-box signal — an unbounded read produces the identical 413 — so the
+    bound is pinned where it is owned.
+    """
+    from app.api.routes import heimdal_capture
+
+    requested: list[int | None] = []
+
+    class _RecordingPart(UploadFile):
+        def __init__(self) -> None:
+            super().__init__(file=io.BytesIO(b"z" * 4096), filename="big.bin")
+
+        async def read(self, size: int = -1) -> bytes:  # type: ignore[override]
+            requested.append(size)
+            return b"z" * (size if size and size > 0 else 4096)
+
+    with pytest.raises(HTTPException) as refusal:
+        await heimdal_capture._part_bytes("media", _RecordingPart(), "t-bound", max_bytes=64)
+
+    assert requested == [65]
+    assert refusal.value.status_code == 413
+    assert refusal.value.detail["max_bytes"] == 64
+
+
+def test_unusable_per_kind_cap_override_is_a_named_refusal(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An override on *any* kind must be named, not an unnamed 500.
+
+    The coarse bound resolves every kind, so a bad override on a kind the request
+    does not even use is still reached — and must still be branchable.
+    """
+    monkeypatch.setenv("HEIMDAL_MEDIA_MAX_BYTES_VIDEO", "not-a-number")
+    media = b"audio-post-with-a-broken-video-cap"
+    response = _post_media(client, media, _sidecar(media, kind="audio"))
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error"] == "media_cap_misconfigured"
+    assert detail["state"] == "not_acknowledged"
+    assert "HEIMDAL_MEDIA_MAX_BYTES_VIDEO" in detail["message"]
+    assert all_raw_records() == []
+
+    monkeypatch.setenv("HEIMDAL_MEDIA_MAX_BYTES_VIDEO", "0")
+    zero_cap = _post_media(client, media, _sidecar(media, kind="audio"))
+    assert zero_cap.status_code == 500
+    assert zero_cap.json()["detail"]["error"] == "media_cap_misconfigured"
 
 
 def test_ingress_refuses_public_binding(client: TestClient) -> None:
