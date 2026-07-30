@@ -268,7 +268,12 @@ def stage_1_multi_modality(hub: Hub) -> StageResult:
     return result
 
 
-def stage_2_kill_restart(hub: Hub, api_container: Optional[str], admissions: List[Dict[str, Any]]) -> StageResult:
+def stage_2_kill_restart(
+    hub: Hub,
+    api_container: Optional[str],
+    admissions: List[Dict[str, Any]],
+    restart_cmd: Optional[str] = None,
+) -> StageResult:
     result = StageResult(stage=2, id="kill_restart_chaos")
     if not admissions:
         result.status = "limited"
@@ -278,12 +283,19 @@ def stage_2_kill_restart(hub: Hub, api_container: Optional[str], admissions: Lis
     ids = "&".join(f"capture_id={a['capture_id']}" for a in admissions)
     result.evidence["pre_restart_receipts"] = hub.get(f"/api/heimdal/capture/receipts?{ids}")
 
-    if api_container:
-        restart = subprocess.run(
-            ["docker", "restart", api_container], capture_output=True, text=True, check=False
-        )
+    if api_container or restart_cmd:
+        if api_container:
+            restart = subprocess.run(
+                ["docker", "restart", api_container], capture_output=True, text=True, check=False
+            )
+            restart_evidence = {"container": api_container}
+        else:
+            restart = subprocess.run(
+                ["sh", "-c", restart_cmd], capture_output=True, text=True, check=False
+            )
+            restart_evidence = {"restart_cmd": restart_cmd}
         result.evidence["restart"] = {
-            "container": api_container,
+            **restart_evidence,
             "returncode": restart.returncode,
             "stderr_tail": restart.stderr[-400:],
         }
@@ -306,8 +318,9 @@ def stage_2_kill_restart(hub: Hub, api_container: Optional[str], admissions: Lis
         result.status = "limited"
         result.evidence["restart"] = {"skipped": True}
         result.limits.append(
-            "no --api-container handle provided; a real process restart was not exercised "
-            "in this run (receipts durability is still asserted by re-query below)"
+            "no --api-container or --restart-cmd handle provided; a real process restart "
+            "was not exercised in this run (receipts durability is still asserted by "
+            "re-query below)"
         )
 
     result.evidence["post_restart_receipts"] = hub.get(f"/api/heimdal/capture/receipts?{ids}")
@@ -392,7 +405,26 @@ def _admit_segment(hub: Hub, session_id: str, seq: int, media: bytes) -> Dict[st
     return out
 
 
-def stage_4_live_meeting(hub: Hub) -> StageResult:
+def _load_audio_fixtures(fixture_dir: Optional[str], prefix: str, count: int) -> Optional[Dict[int, bytes]]:
+    """Real speech fixtures for the meeting stages, when provided.
+
+    The live hub runs the real ASR engine, which (correctly) refuses
+    non-audio bytes — so an honest live run feeds real audio. Returns None
+    when the directory or any expected file is absent.
+    """
+    if not fixture_dir:
+        return None
+    base = Path(fixture_dir)
+    fixtures: Dict[int, bytes] = {}
+    for seq in range(count):
+        path = base / f"{prefix}-{seq}.m4a"
+        if not path.is_file():
+            return None
+        fixtures[seq] = path.read_bytes()
+    return fixtures
+
+
+def stage_4_live_meeting(hub: Hub, audio_fixtures: Optional[str] = None) -> StageResult:
     result = StageResult(stage=4, id="live_meeting_reconnect")
     session_id = f"cdlm10-{uuid.uuid4().hex[:12]}"
     opened = hub.post_json(
@@ -404,9 +436,14 @@ def stage_4_live_meeting(hub: Hub) -> StageResult:
         result.status = "fail"
         return result
 
-    segments = {
+    segments = _load_audio_fixtures(audio_fixtures, "seg", 6) or {
         seq: f"cdlm10 meeting segment {seq}: we decided item {seq}.".encode() for seq in range(6)
     }
+    if not _load_audio_fixtures(audio_fixtures, "seg", 6):
+        result.limits.append(
+            "no real audio fixtures provided; segment bytes are synthetic and the live "
+            "ASR engine will record failed derivations (structure still proven)"
+        )
     growth = []
     note_id = str(uuid.uuid4())
     note_text = "CDLM-10 verbatim note — must survive é å 中文, tabs\tand all."
@@ -473,14 +510,18 @@ def stage_4_live_meeting(hub: Hub) -> StageResult:
     return result
 
 
-def stage_5_gapped_close(hub: Hub, vault_root: Optional[Path]) -> StageResult:
+def stage_5_gapped_close(
+    hub: Hub, vault_root: Optional[Path], audio_fixtures: Optional[str] = None
+) -> StageResult:
     result = StageResult(stage=5, id="gapped_close_late_reconcile")
     session_id = f"cdlm10-gap-{uuid.uuid4().hex[:10]}"
     hub.post_json(
         "/api/heimdal/meeting/session",
         {"session_id": session_id, "device_id": "ipad-sim", "template_selection": {}},
     )
-    segs = {seq: f"cdlm10 gapped segment {seq} content.".encode() for seq in range(3)}
+    segs = _load_audio_fixtures(audio_fixtures, "gap", 3) or {
+        seq: f"cdlm10 gapped segment {seq} content.".encode() for seq in range(3)
+    }
     for seq in (0, 2):  # withhold 1
         _admit_segment(hub, session_id, seq, segs[seq])
     note_text = "gap-session verbatim user note."
@@ -734,11 +775,13 @@ def run(args: argparse.Namespace) -> int:
     results["multi_modality_round_trip"] = s1
     admitted = [a for a in s1.evidence.get("admissions", []) if a["status"] == 200]
     # regenerate media bytes references (kept in-process from stage 1)
-    results["kill_restart_chaos"] = stage_2_kill_restart(hub, args.api_container, admitted)
+    results["kill_restart_chaos"] = stage_2_kill_restart(
+        hub, args.api_container, admitted, restart_cmd=args.restart_cmd
+    )
     results["duplicate_injection"] = stage_3_duplicate_injection(hub, admitted)
-    results["live_meeting_reconnect"] = stage_4_live_meeting(hub)
+    results["live_meeting_reconnect"] = stage_4_live_meeting(hub, args.audio_fixtures)
     results["gapped_close_late_reconcile"] = stage_5_gapped_close(
-        hub, Path(args.vault_root) if args.vault_root else None
+        hub, Path(args.vault_root) if args.vault_root else None, args.audio_fixtures
     )
     results["legacy_lane_statement"] = stage_6_legacy_statement(
         hub, Path(args.watched_folder) if args.watched_folder else None
@@ -789,8 +832,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--hub-sha", default="unknown")
     parser.add_argument("--client-sha", default="unknown")
     parser.add_argument("--api-container", default=None, help="docker container name for the restart stage")
+    parser.add_argument(
+        "--restart-cmd",
+        default=None,
+        help="shell command that restarts the api process (alternative to --api-container)",
+    )
     parser.add_argument("--vault-root", default=None, help="test-channel vault root for artifact reads")
     parser.add_argument("--watched-folder", default=None, help="watched folder for the legacy-lane stage")
+    parser.add_argument(
+        "--audio-fixtures",
+        default=None,
+        help="directory of real speech fixtures (seg-0..5.m4a, gap-0..2.m4a) for the meeting stages",
+    )
     parser.add_argument("--out-dir", default="runtime/proof/cdlm10")
     parser.add_argument(
         "--plan",
