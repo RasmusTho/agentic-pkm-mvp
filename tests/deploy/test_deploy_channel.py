@@ -38,6 +38,59 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
+def _install_writer_inventory_harness(root: Path) -> None:
+    """Keep channel-flow tests independent of the shared runner process table.
+
+    The real helper's Linux race and fail-closed contracts are exercised in
+    test_instance_state_volume_contract.py. These tests instead verify the
+    deploy script's command ordering and failure routing, so inspecting every
+    unrelated GitHub-runner process would add nondeterminism without covering
+    another deploy-channel behavior.
+    """
+
+    _write_executable(
+        root / "scripts/instance_state_writer_inventory.py",
+        """#!/usr/bin/env python3
+import json
+from pathlib import Path
+import sys
+
+
+def _value(flag: str) -> str:
+    try:
+        return sys.argv[sys.argv.index(flag) + 1]
+    except (ValueError, IndexError):
+        raise SystemExit(f"missing required fixture argument: {flag}")
+
+
+command = sys.argv[1] if len(sys.argv) > 1 else ""
+if command == "controller-token":
+    int(_value("--pid"))
+    print("0" * 64)
+elif command in {
+    "produce-legacy-owners",
+    "prove-quiescent",
+    "validate-legacy-owners",
+}:
+    output = Path(_value("--output"))
+    output.write_text(
+        json.dumps(
+            {
+                "fixture": "deploy-channel-writer-inventory",
+                "inventory_complete": True,
+                "writers_drained": True,
+            },
+            sort_keys=True,
+        )
+        + "\\n",
+        encoding="utf-8",
+    )
+else:
+    raise SystemExit(f"unsupported writer-inventory fixture command: {command}")
+""",
+    )
+
+
 def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     root = tmp_path / "repo"
     (root / "scripts/lib").mkdir(parents=True)
@@ -66,6 +119,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     ):
         destination = root / relative
         shutil.copy2(REPO_ROOT / relative, destination)
+    _install_writer_inventory_harness(root)
     (root / "app/instance/runtime.py").write_text(
         '"""Fixture marker for a target with the instance-state preflight."""\n',
         encoding="utf-8",
