@@ -688,7 +688,7 @@ def test_carried_open_calendar_signal_is_recorded_when_later_tick_is_degraded(
     degraded_close = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
     replay = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
 
-    key = "calendar_consumed_signal:work:carried-event:etag-1"
+    key = segmenter._calendar_consumed_signal_key("work", "carried-event:etag-1")
     assert degraded_close["degraded"] == ["calendar"]
     assert state[key] == {"consumed": True}
     assert replay["consumed"][CALENDAR_STREAM_ID] == 0
@@ -1221,3 +1221,31 @@ def test_content_token_summary_with_pipe_does_not_collide() -> None:
     id_2 = calendar_signal_id("pipe-event", "etag-x", "20260706T090000Z", event_2)
     assert id_1 != id_2
     assert id_1.rsplit(":", 1)[0] == id_2.rsplit(":", 1)[0] == "pipe-event:20260706T090000Z"
+
+
+def test_calendar_consumed_signal_key_is_collision_free() -> None:
+    """Distinct (scope, signal_id) pairs must never share a ledger key.
+
+    ``signal_id`` always carries its own embedded ``:`` separators
+    (``uid:etag`` or ``uid:occurrence_key:token``) and ``scope`` is
+    unrestricted free-text config, so a plain ``f"{scope}:{signal_id}"`` join
+    is ambiguous: a colon in ``scope`` can shift the boundary. Two distinct
+    pairs that would collide under that OLD naive join must still resolve to
+    different keys.
+    """
+    # scope="a:b", signal_id="c:d" vs. scope="a", signal_id="b:c:d" were
+    # byte-identical under the old f"{scope}:{signal_id}" join.
+    key_1 = segmenter._calendar_consumed_signal_key("a:b", "c:d")
+    key_2 = segmenter._calendar_consumed_signal_key("a", "b:c:d")
+    assert key_1 != key_2
+
+    # A realistic pair: scope containing a colon (free-text config) vs. the
+    # calendar_signal_id shape itself (uid:occurrence_key:token).
+    key_3 = segmenter._calendar_consumed_signal_key("team:calendar", "uid-1:occ-1:token-1")
+    key_4 = segmenter._calendar_consumed_signal_key("team", "calendar:uid-1:occ-1:token-1")
+    assert key_3 != key_4
+
+    # Same (scope, signal_id) pair is still stable/idempotent.
+    assert segmenter._calendar_consumed_signal_key("work", "uid:etag") == segmenter._calendar_consumed_signal_key(
+        "work", "uid:etag"
+    )

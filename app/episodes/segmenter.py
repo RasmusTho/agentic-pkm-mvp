@@ -810,8 +810,16 @@ def _calendar_consumed_signal_key(scope: str, signal_id: str) -> str:
     a separately configured calendar scope.  ``signal_id`` already preserves
     recurrence identity and changes (``calendar_signal_id``), so an edited
     occurrence has a new key and remains eligible.
+
+    ``scope`` is unrestricted free-text config and ``signal_id`` always
+    contains its own embedded ``:`` separators (``uid:etag`` or
+    ``uid:occurrence_key:token``), so a plain ``f"{scope}:{signal_id}"`` join
+    is ambiguous: distinct ``(scope, signal_id)`` pairs can serialize to the
+    same string (e.g. ``scope="a:b", signal_id="c"`` vs. ``scope="a",
+    signal_id="b:c"``). Length-prefix ``scope`` (netstring-style) so the
+    boundary is unambiguous regardless of either string's content.
     """
-    return f"{_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX}{scope}:{signal_id}"
+    return f"{_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX}{len(scope)}:{scope}:{signal_id}"
 
 
 _STREAM_ADAPTERS: Final[Mapping[str, StreamAdapter]] = {
@@ -1274,16 +1282,12 @@ def run_segmentation_tick(
     # evidence cannot be folded into a later segment.  Changed events retain
     # eligibility because calendar_signal_id changes with their ETag/content token.
     consumed_calendar = engine_state.all_state_with_prefix(_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX)
-    calendar_signal_keys = {
-        key[len(_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX) :]
-        for key in consumed_calendar
-    }
     signals_before_calendar_boundary = len(signals)
     signals = [
         signal
         for signal in signals
         if signal.stream_id != CALENDAR_STREAM_ID
-        or f"{signal.scope}:{signal.signal_id}" not in calendar_signal_keys
+        or _calendar_consumed_signal_key(signal.scope, signal.signal_id) not in consumed_calendar
     ]
     if CALENDAR_STREAM_ID in consumed:
         consumed[CALENDAR_STREAM_ID] -= signals_before_calendar_boundary - len(signals)
