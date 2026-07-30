@@ -5020,13 +5020,32 @@ class VerificationConsumer:
             and pending.get("outbox_status")
             in {"pending", "claimed", "unknown", "dead_letter"}
         )
+        invalid_model_session = bool(
+            run is not None
+            and (
+                (run.coordinator_session_id is None)
+                != (run.context_pack is None)
+                or (
+                    run.coordinator_session_id is not None
+                    and not run.coordinator_session_id.strip()
+                )
+                or (
+                    run.context_pack is not None
+                    and not run.context_pack
+                )
+            )
+        )
+        if invalid_model_session:
+            raise ValueError(
+                "verification run is not resumable: partial_model_session_state"
+            )
         if (
             run is None
             or run.status not in {"claimed", "running", "backoff"}
             or (
                 (
-                    not run.coordinator_session_id
-                    or not run.context_pack
+                    run.coordinator_session_id is None
+                    and run.context_pack is None
                 )
                 and not prestart_model_effect
             )
@@ -5078,8 +5097,8 @@ class VerificationConsumer:
             ):
                 outbox_status = pending.get("outbox_status")
                 sessionless = (
-                    not run.coordinator_session_id
-                    or not run.context_pack
+                    run.coordinator_session_id is None
+                    and run.context_pack is None
                 )
                 if (
                     sessionless

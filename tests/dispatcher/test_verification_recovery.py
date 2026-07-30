@@ -447,6 +447,69 @@ def test_pre_thread_start_crash_dead_letters_without_relaunch() -> None:
     assert list(outbox.states) == operation_keys
 
 
+@pytest.mark.parametrize(
+    ("session_id", "persisted_context"),
+    (
+        (
+            "01900000-0000-7000-8000-000000000099",
+            None,
+        ),
+        (
+            None,
+            {"head_sha": HEAD},
+        ),
+        (
+            "01900000-0000-7000-8000-000000000099",
+            {},
+        ),
+    ),
+)
+def test_pre_thread_start_recovery_rejects_partial_session_state_without_mutation(
+    session_id, persisted_context
+) -> None:
+    api = CrashBeforeFirstTaskCompletionClient()
+    outbox = FakeVerificationOutbox(api)
+    first = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        CrashBeforeThreadStartLauncher(),
+        holder="verification-host",
+    )
+
+    with pytest.raises(SystemExit, match="thread-start persistence"):
+        first.consume(request())
+
+    run_id = next(iter(api.tasks))
+    task = api.tasks[run_id]
+    task["payload"]["run"]["coordinator_session_id"] = session_id
+    task["payload"]["run"]["context_pack"] = persisted_context
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    operation_key = next(iter(outbox.states))
+    before_calls = list(outbox.calls)
+    restarted_launcher = VerifiedLauncher()
+    restarted = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        restarted_launcher,
+        holder="verification-host",
+    )
+
+    with pytest.raises(ValueError, match="partial_model_session_state"):
+        restarted.recover(run_id)
+
+    assert restarted_launcher.calls == []
+    assert outbox.states[operation_key] == "claimed"
+    assert operation_key not in outbox.evidence
+    assert outbox.calls == before_calls + ["status"]
+
+
 def test_recovery_reconciles_durable_model_attempt_without_relaunch() -> None:
     api = FakeBuilderOpsClient()
     outbox = CrashAfterDurableAttemptOutbox(api)

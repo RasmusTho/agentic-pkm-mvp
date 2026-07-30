@@ -50,6 +50,7 @@ def _assert_terminal_unknown_model_evidence(
     *,
     effect_type: str,
     effect_payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
     evidence: Mapping[str, Any],
 ) -> None:
     expected_keys = {
@@ -59,8 +60,18 @@ def _assert_terminal_unknown_model_evidence(
         "relaunch_performed",
     }
     head_sha = evidence.get("head_sha")
+    run = task_payload.get("run")
+    durable_pre_session = bool(
+        task_payload.get("contract_version") == "builderops_verification_run.v1"
+        and isinstance(run, Mapping)
+        and "coordinator_session_id" in run
+        and run.get("coordinator_session_id") is None
+        and "context_pack" in run
+        and run.get("context_pack") is None
+    )
     if (
         effect_type != "model.verification_coordinator"
+        or not durable_pre_session
         or set(evidence) != expected_keys
         or evidence.get("outcome") != "indeterminate_pre_session_model_effect"
         or evidence.get("provider_session_id") is not None
@@ -2233,8 +2244,12 @@ class PostgresBuilderOpsStore:
             )
             if terminal_unknown:
                 effect = conn.execute(
-                    "SELECT effect_type, payload FROM builderops_outbox "
-                    "WHERE repository = %s AND operation_key = %s FOR UPDATE",
+                    "SELECT outbox.effect_type, outbox.payload AS effect_payload, "
+                    "task.payload AS task_payload FROM builderops_outbox AS outbox "
+                    "JOIN builderops_tasks AS task ON task.repository = outbox.repository "
+                    "AND task.task_id = outbox.task_id "
+                    "WHERE outbox.repository = %s AND outbox.operation_key = %s "
+                    "FOR UPDATE OF outbox, task",
                     (claim.repository, claim.operation_key),
                 ).fetchone()
                 if effect is None:
@@ -2243,7 +2258,8 @@ class PostgresBuilderOpsStore:
                     )
                 _assert_terminal_unknown_model_evidence(
                     effect_type=str(effect["effect_type"]),
-                    effect_payload=dict(effect["payload"]),
+                    effect_payload=dict(effect["effect_payload"]),
+                    task_payload=dict(effect["task_payload"]),
                     evidence=evidence,
                 )
             existing = conn.execute(

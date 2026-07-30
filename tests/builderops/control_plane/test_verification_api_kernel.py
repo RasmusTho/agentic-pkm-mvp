@@ -431,6 +431,75 @@ def test_authenticated_api_rejects_github_terminal_unknown(
     assert control_plane_store.outbox_status(REPO, rejected_key) == "unknown"
 
 
+def test_authenticated_api_rejects_sessionful_model_terminal_unknown(
+    control_plane_store, tmp_path
+) -> None:
+    ledger, client, outbox = _authenticated_api_ledger(
+        control_plane_store, tmp_path
+    )
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "ignored-client-holder")
+    assert claimed.claimed_by is not None
+    assert claimed.lease_id is not None
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="model.verification_coordinator",
+        payload={
+            "repository": REPO.lower(),
+            "pr_number": 3603,
+            "head_sha": "a" * 40,
+        },
+        holder=claimed.claimed_by,
+        lease_id=claimed.lease_id,
+        idempotency_key="api-roundtrip-sessionful-model-effect",
+    )
+    ledger.start(
+        run.run_id,
+        claimed.claimed_by,
+        claimed.lease_id,
+        "01900000-0000-7000-8000-000000000099",
+        {"head_sha": "a" * 40},
+    )
+    restarted = BuilderOpsVerificationLedger(
+        client,
+        repository=REPO,
+        effect_outbox=outbox,
+    )
+    restarted.recover_effect(
+        operation_key,
+        run_id=run.run_id,
+        effect_type="model.verification_coordinator",
+    )
+
+    with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
+        restarted.finish_effect(
+            operation_key,
+            observed_applied=False,
+            terminal_unknown=True,
+            evidence={
+                "head_sha": "a" * 40,
+                "outcome": "indeterminate_pre_session_model_effect",
+                "provider_session_id": None,
+                "relaunch_performed": False,
+            },
+        )
+
+    assert control_plane_store.outbox_status(REPO, operation_key) == "unknown"
+    with control_plane_store._connect() as conn:
+        dead_letters = conn.execute(
+            "SELECT count(*) AS count FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (REPO.lower(), operation_key),
+        ).fetchone()
+        reconciliations = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (REPO.lower(), operation_key),
+        ).fetchone()
+    assert dead_letters is not None and dead_letters["count"] == 0
+    assert reconciliations is not None and reconciliations["count"] == 0
+
+
 def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(
     control_plane_store, tmp_path
 ) -> None:

@@ -27,7 +27,14 @@ def _expire_outbox_claim(store, repository: str, operation_key: str) -> None:
 
 
 def _commit_outbox_task(
-    store, envelope, *, task_id: str, key: str, effect_type: str, payload: dict
+    store,
+    envelope,
+    *,
+    task_id: str,
+    key: str,
+    effect_type: str,
+    payload: dict,
+    task_payload: dict | None = None,
 ):
     store.commit_transition(
         envelope=envelope,
@@ -48,7 +55,7 @@ def _commit_outbox_task(
         task_id=task_id,
         to_state="effect_pending",
         idempotency_key=key,
-        request={"command": "schedule-effect"},
+        request=task_payload or {"command": "schedule-effect"},
         outbox={"effect_type": effect_type, "payload": payload},
         lease=lease,
     )
@@ -151,6 +158,13 @@ def test_indeterminate_effect_dead_letters_without_retry(
         key="indeterminate-model-effect",
         effect_type="model.verification_coordinator",
         payload={"head_sha": "a" * 40},
+        task_payload={
+            "contract_version": "builderops_verification_run.v1",
+            "run": {
+                "coordinator_session_id": None,
+                "context_pack": None,
+            },
+        },
     )
     claim = control_plane_store.claim_outbox(
         envelope=envelope,
@@ -273,6 +287,13 @@ def test_terminal_unknown_requires_exact_model_evidence_without_mutation(
         key="model-effect-exact-evidence",
         effect_type="model.verification_coordinator",
         payload={"head_sha": "a" * 40},
+        task_payload={
+            "contract_version": "builderops_verification_run.v1",
+            "run": {
+                "coordinator_session_id": None,
+                "context_pack": None,
+            },
+        },
     )
     claim = control_plane_store.claim_outbox(
         envelope=envelope,
@@ -304,6 +325,88 @@ def test_terminal_unknown_requires_exact_model_evidence_without_mutation(
                 terminal_unknown=True,
                 evidence=evidence,
             )
+
+    assert (
+        control_plane_store.outbox_status(envelope.repository, result.operation_key)
+        == "unknown"
+    )
+    with control_plane_store._connect() as conn:
+        dead_letters = conn.execute(
+            "SELECT count(*) AS count FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+        reconciliations = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letters is not None and dead_letters["count"] == 0
+    assert reconciliations is not None and reconciliations["count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("case", "run_state"),
+    (
+        (
+            "sessionful",
+            {
+                "coordinator_session_id": "01900000-0000-7000-8000-000000000099",
+                "context_pack": {"head_sha": "a" * 40},
+            },
+        ),
+        (
+            "session_without_context",
+            {
+                "coordinator_session_id": "01900000-0000-7000-8000-000000000099",
+                "context_pack": None,
+            },
+        ),
+        (
+            "context_without_session",
+            {
+                "coordinator_session_id": None,
+                "context_pack": {"head_sha": "a" * 40},
+            },
+        ),
+    ),
+)
+def test_terminal_unknown_rejects_session_bound_task_without_mutation(
+    control_plane_store, envelope, case: str, run_state: dict
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id=f"task-model-effect-{case}",
+        key=f"model-effect-{case}",
+        effect_type="model.verification_coordinator",
+        payload={"head_sha": "a" * 40},
+        task_payload={
+            "contract_version": "builderops_verification_run.v1",
+            "run": run_state,
+        },
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="provider session state requires fail-closed recovery"
+    )
+
+    with pytest.raises(StateConflict, match="restricted"):
+        control_plane_store.reconcile_outbox(
+            claim,
+            observed_applied=False,
+            terminal_unknown=True,
+            evidence={
+                "head_sha": "a" * 40,
+                "outcome": "indeterminate_pre_session_model_effect",
+                "provider_session_id": None,
+                "relaunch_performed": False,
+            },
+        )
 
     assert (
         control_plane_store.outbox_status(envelope.repository, result.operation_key)

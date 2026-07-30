@@ -249,7 +249,13 @@ def test_initialize_upgrades_v2_preserving_data_and_replacing_reconciliation_con
             task_id="v3-dead-letter-task",
             to_state="effect_pending",
             idempotency_key="v3-dead-letter-effect",
-            request={"command": "schedule-effect"},
+            request={
+                "contract_version": "builderops_verification_run.v1",
+                "run": {
+                    "coordinator_session_id": None,
+                    "context_pack": None,
+                },
+            },
             outbox={
                 "effect_type": "model.verification_coordinator",
                 "payload": {"head_sha": "a" * 40},

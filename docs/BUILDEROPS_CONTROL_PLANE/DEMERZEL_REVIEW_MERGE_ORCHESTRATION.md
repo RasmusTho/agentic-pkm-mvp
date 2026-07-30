@@ -58,7 +58,9 @@ For model execution, a sessionless `pending` intent may be claimed once; a `clai
 intent without a durable provider session identity is indeterminate, is reconciled to
 `dead_letter`, and never launches a replacement coordinator. The central PostgreSQL authority
 accepts that terminal path only for `model.verification_coordinator` with the exact pre-session
-outcome, null provider session, no-relaunch flag, and head SHA matching the scheduled payload.
+outcome, null provider session, no-relaunch flag, head SHA matching the scheduled payload, and a
+task payload whose durable session identity and context are both absent. One-sided or empty session
+state fails closed without reconciliation or relaunch.
 GitHub effects remain `unknown` until authoritative GitHub readback reconciles them.
 
 ## Why This Matters
