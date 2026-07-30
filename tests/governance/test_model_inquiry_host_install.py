@@ -49,6 +49,9 @@ def _init_adapter_checkout(root: Path) -> Path:
     adapter.write_bytes(
         (REPO_ROOT / "scripts" / host_installer.VERSIONED_ADAPTER_NAME).read_bytes()
     )
+    (root / "scripts" / host_installer.VERSIONED_LAUNCHER_NAME).write_bytes(
+        (REPO_ROOT / "scripts" / host_installer.VERSIONED_LAUNCHER_NAME).read_bytes()
+    )
     return adapter
 
 
@@ -77,6 +80,16 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
             "status": "unchanged",
         },
     }
+    assert first_payload["launcher"] == {
+        "entrypoint": "yggdrasil-model-inquiry",
+        "lineage": "repo-owned-declared-credential",
+        "status": "installed",
+    }
+    assert second_payload["launcher"] == {
+        "entrypoint": "yggdrasil-model-inquiry",
+        "lineage": "repo-owned-declared-credential",
+        "status": "unchanged",
+    }
     for name in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
         path = bin_dir / name
         assert path.is_file()
@@ -96,6 +109,22 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
     assert "conflicting entrypoint" in conflict.stderr
     assert conflicting.read_text(encoding="utf-8") == "unrelated host command\n"
     assert not (bin_dir / "codex-model-inquiry-role").exists()
+
+    stale_launcher_bin = tmp_path / "stale-launcher-bin"
+    stale_launcher_bin.mkdir()
+    stale_launcher = stale_launcher_bin / host_installer.FIXED_LAUNCHER_NAME
+    stale_launcher.write_text(
+        "#!/bin/sh\nexec fable-subscription-cli \"$@\"\n",
+        encoding="utf-8",
+    )
+    stale_launcher.chmod(0o700)
+    stale_conflict = _install(stale_launcher_bin)
+
+    assert stale_conflict.returncode == 2
+    assert "conflicting entrypoint: yggdrasil-model-inquiry" in stale_conflict.stderr
+    assert "fable-subscription-cli" in stale_launcher.read_text(encoding="utf-8")
+    assert not (stale_launcher_bin / "fable-model-inquiry-role").exists()
+    assert not (stale_launcher_bin / "codex-model-inquiry-role").exists()
 
     real_bin = tmp_path / "real-bin"
     real_bin.mkdir()
@@ -175,6 +204,25 @@ def test_installer_rejects_dirty_tracked_adapter(
     with pytest.raises(
         host_installer.HostInstallError,
         match="must match the installer digest",
+    ):
+        host_installer._resolve_repo_root(checkout)
+
+
+def test_installer_rejects_dirty_tracked_fixed_launcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = tmp_path / "checkout"
+    _init_adapter_checkout(checkout)
+    launcher = checkout / "scripts" / host_installer.VERSIONED_LAUNCHER_NAME
+    monkeypatch.setattr(host_installer, "TRUSTED_REPO_ROOT", checkout.resolve())
+
+    host_installer._resolve_repo_root(checkout)
+    launcher.write_text("raise SystemExit('stale subscription launcher')\n", encoding="utf-8")
+
+    with pytest.raises(
+        host_installer.HostInstallError,
+        match="fixed launcher must match the installer digest",
     ):
         host_installer._resolve_repo_root(checkout)
 
@@ -409,6 +457,15 @@ def test_installed_entrypoints_bind_exact_role_and_versioned_adapter(
         assert "TOKEN" not in content
         assert "KEY" not in content
 
+    launcher = (bin_dir / host_installer.FIXED_LAUNCHER_NAME).read_text(
+        encoding="utf-8"
+    )
+    assert host_installer.VERSIONED_LAUNCHER_NAME in launcher
+    assert f"launcher-sha256={host_installer.VERSIONED_LAUNCHER_SHA256}" in launcher
+    assert "launcher-lineage=repo-owned-declared-credential" in launcher
+    assert "--run-on-credential-unavailable" in launcher
+    assert "model_inquiry_subscription_adapter" not in launcher
+
 
 def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
@@ -442,7 +499,7 @@ def test_installed_entrypoints_retain_selected_interpreter_path(tmp_path: Path) 
 def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     assert _install(bin_dir).returncode == 0
-    for command in ("claude", "codex", "yggdrasil-model-inquiry"):
+    for command in ("claude", "codex"):
         executable = bin_dir / command
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o700)
@@ -471,6 +528,7 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
         "ok": True,
         "launcher": {
             "command": "yggdrasil-model-inquiry",
+            "lineage": "repo-owned-declared-credential",
             "status": "available",
         },
         "roles": {
@@ -521,6 +579,42 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
         "credential_resolution": "host-secret-contract",
     }
     assert missing_payload["roles"]["gpt_codex"]["entrypoint_status"] == "unavailable"
+
+
+def test_check_rejects_discoverable_stale_subscription_launcher(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    assert _install(bin_dir).returncode == 0
+    stale_bin = tmp_path / "stale-bin"
+    stale_bin.mkdir()
+    stale_launcher = stale_bin / host_installer.FIXED_LAUNCHER_NAME
+    stale_launcher.write_text(
+        "#!/bin/sh\nexec fable-subscription-cli \"$@\"\n",
+        encoding="utf-8",
+    )
+    stale_launcher.chmod(0o700)
+
+    result = _run_installer(
+        "check",
+        "--repo-root",
+        str(REPO_ROOT),
+        "--bin-dir",
+        str(bin_dir),
+        "--python",
+        sys.executable,
+        env={**os.environ, "PATH": f"{stale_bin}{os.pathsep}{bin_dir}"},
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["launcher"] == {
+        "command": "yggdrasil-model-inquiry",
+        "lineage": "repo-owned-declared-credential",
+        "status": "unavailable",
+    }
+    assert payload["roles"]["fable"]["entrypoint_status"] == "available"
+    assert payload["roles"]["gpt_codex"]["entrypoint_status"] == "available"
 
 
 def test_partial_install_is_retained_for_exact_retry(
@@ -835,7 +929,7 @@ def test_install_revalidates_all_wrappers_before_success(
 
 
 def _add_fake_host_dependencies(bin_dir: Path) -> None:
-    for command in ("claude", "codex", "yggdrasil-model-inquiry"):
+    for command in ("claude", "codex"):
         executable = bin_dir / command
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o700)

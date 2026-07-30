@@ -9,10 +9,11 @@ depends_on: [PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
 can_parallelize_with: []
 ---
 
-State: Implemented. Delivered by repair PR #4392 (issue #4291, 2026-07-30), superseding the rejected
-PR #4368 delivery claim and its invalid parent handoff. The live provider run and legacy-bridge
-retirement remain parent validation on #4286. **This is the first task in the capability that
-changes runtime behaviour.**
+State: Repair in progress on reopened issue #4291. The PR #4392 implementation is retained, but live
+parent validation proved that the host installer/check accepted a discoverable stale subscription
+launcher instead of binding the fixed launcher to repo-owned declared-credential lineage. The live
+provider run and legacy-bridge retirement remain parent validation on #4286. **This is the first
+task in the capability that changes runtime behaviour.**
 
 # Resolve Model Inquiry Credentials Through Contract
 
@@ -42,13 +43,12 @@ and is unexercised. Switching to it is a configuration and resolution change, no
    `HttpModelAdapter` takes `api_key` as an injected field and reads no environment itself, so
    `load_adapter_descriptors` no longer accepts provider/model/`api_key_env` from inquiry caller
    configuration or ambient environment.
-3. Make the installed headless entrypoints use provider-API adapters.
-   `scripts/install_model_inquiry_host.py:33-36` currently pins
-   `RoleSpec("fable", "fable-subscription-cli", "claude")` and
-   `RoleSpec("gpt_codex", "codex-subscription-cli", "codex")` — two subscription CLIs as the only
-   installable headless roles. Headless role installation must no longer require a subscription
-   session. Both `xhigh` provider-API roles use the extended 1200-second per-role request deadline;
-   the generic 60-second HTTP posture must not truncate production Model Inquiry turns.
+3. Make the installed headless entrypoints use provider-API adapters. The host installer owns the
+   fixed `yggdrasil-model-inquiry` launcher plus both role wrappers, pins the repo launcher/adapter
+   content, and rejects a stale but discoverable subscription launcher. Headless role installation
+   requires no subscription session. Both `xhigh` provider-API roles use the extended 1200-second
+   per-role request deadline; the generic 60-second HTTP posture must not truncate production Model
+   Inquiry turns.
 4. Replace the provider-bearing `BUILDEROPS_INQUIRY_ADAPTERS_JSON` mechanism with a value-free
    inquiry-role intent configuration. The committed example contains the seven neutral intent fields,
    role independence requirement, channel/consumer references, and no provider, model, credential

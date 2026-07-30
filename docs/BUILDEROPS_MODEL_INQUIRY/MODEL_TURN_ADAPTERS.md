@@ -83,20 +83,23 @@ does not install it.
 
 ## Host role-entrypoint lifecycle
 
-The repository owns the two stable headless command names: `fable-model-inquiry-role` and
-`codex-model-inquiry-role`. Run `scripts/install_model_inquiry_host.py install` to create owner-only
-executable wrappers in an explicit host bin directory. Each wrapper binds exactly one role to the
-versioned `scripts/model_inquiry_role_adapter.py` through the host-secret bootstrap, which resolves a
-declared credential rather than an interactive session; an exact reinstall is a no-op, while a
-symlink, unsafe directory, or unrelated existing command fails closed without overwriting it.
+The repository owns the fixed launcher `yggdrasil-model-inquiry` plus the two stable headless role
+commands `fable-model-inquiry-role` and `codex-model-inquiry-role`. Run
+`scripts/install_model_inquiry_host.py install` to create all three owner-only executable wrappers
+in an explicit host bin directory. The fixed launcher binds to the digest-pinned
+`scripts/start_model_inquiry.py` declared-credential path; each role wrapper binds exactly one role
+to the versioned `scripts/model_inquiry_role_adapter.py` through the host-secret bootstrap. None can
+select an interactive session. An exact reinstall is a no-op, while a symlink, unsafe directory,
+stale subscription launcher, or unrelated existing command fails closed without overwriting it.
 
-The companion `check` operation is read-only. It reports only whether both installed entrypoints
-match the adapter digest committed into the installer in its own operator-authoritative checkout
-and Python interpreter, whether the launch `PATH` resolves both names to those exact files, and
-whether the host launcher command is discoverable. It probes no provider CLI, because no headless
-entrypoint depends on one. Host-time validation does not invoke Git; an adapter change and its
-installer digest update are one repo change. The check does not run either provider, inspect
-subscription state, reveal paths, or create inquiry artifacts.
+The companion `check` operation is read-only. It reports only whether all three installed
+entrypoints match the adapter/launcher digests committed into the installer in its own
+operator-authoritative checkout and Python interpreter, and whether the launch `PATH` resolves all
+three names to those exact files. Mere launcher discoverability is insufficient: a stale
+subscription-backed command with the fixed name is unavailable. It probes no provider CLI. Host-time
+validation does not invoke Git; an adapter or fixed-launcher change and its installer digest update
+are one repo change. The check does not run either provider, inspect subscription state, reveal
+paths, or create inquiry artifacts.
 
 ## Concretely
 
