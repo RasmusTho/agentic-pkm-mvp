@@ -163,3 +163,25 @@ def test_unresolvable_root_reports_error_state(tmp_path: Path, monkeypatch) -> N
 
     refresh = TestClient(app).post("/api/signboard/refresh")
     assert refresh.status_code == 503
+
+
+def test_store_identity_stamp_is_never_rendered_as_a_card(tmp_path: Path, monkeypatch) -> None:
+    """The board's owning-store stamp (#4370) is not board content.
+
+    It sits at the board root outside the card namespace, so the projection
+    reader neither renders it nor reports it as an error.
+    """
+    from app.dispatcher.signboard import STORE_STAMP_FILENAME
+
+    store = _configure(tmp_path, monkeypatch)
+    _seed(store)
+    client = TestClient(app)
+
+    payload = client.post("/api/signboard/refresh").json()
+
+    assert (tmp_path / "board" / STORE_STAMP_FILENAME).is_file()
+    assert payload["errors"] == []
+    assert payload["status"] == "ok"
+    cards = [card for column in payload["columns"] for card in column["cards"]]
+    assert len(cards) == 1
+    assert all(STORE_STAMP_FILENAME not in card["id"] for card in cards)

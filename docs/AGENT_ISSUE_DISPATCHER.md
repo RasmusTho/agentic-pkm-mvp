@@ -797,8 +797,8 @@ Run `python -m app.dispatcher signboard-validate [path] --json` to lint the gene
 changing either the board or dispatcher store. As with `export-signboard`, the path is optional and
 defaults to the active vault's `BuilderOpsVault/agent-delivery` root. Validation exits nonzero for
 malformed generated cards, duplicate generated cards, column/status drift, cards stale against the
-dispatcher store, and unreadable generated-filename candidates; run `export-signboard` to repair
-valid generated-card drift. Human-authored files are outside this lint's jurisdiction.
+dispatcher store, unreadable generated-filename candidates, and a board stamped by a different
+dispatcher store; run `export-signboard` to repair valid generated-card drift. Human-authored files are outside this lint's jurisdiction.
 
 A plain `export-signboard` only rewrites cards for task IDs that still exist in the dispatcher
 store, so it cannot clear a card whose task ID has disappeared from the store — those accumulate as
@@ -809,6 +809,35 @@ exactly those cards:
 python -m app.dispatcher signboard-validate [path] --json   # reports stale_card findings
 python -m app.dispatcher export-signboard [path] --prune-absent --json
 ```
+
+A board records which dispatcher store owns it. Every export writes a `.signboard-store.json` stamp
+into the board root carrying that store's durable identity — an id minted once and kept in the
+store's own metadata, never the store's path, so relocating a store does not make its boards read as
+foreign. The stamp is not a card: it sits at the board root outside the column directories and is
+not a `.md` file, so neither the exporter, the lint, nor the `/signboard` API ever renders it, and
+it never becomes a second source of task truth.
+
+This matters because the store resolves from the **current working directory**
+(`app/dispatcher/config.py :: load_paths` → `_default_state_dir` → `discover_primary_worktree`).
+Two checkouts of this repo on one host therefore have two independent stores, and to the store that
+does not own a board *every* card on it is absent. On 2026-07-29 that deleted 404 live cards.
+`--prune-absent` now refuses, non-zero and before it writes or unlinks anything, unless the board's
+stamp matches the store the process resolved:
+
+- **Stamp matches** — prunes exactly as described below.
+- **Stamp belongs to another store** — refuses. Run the prune from the checkout that owns the board.
+  A plain export from the other checkout does *not* re-stamp the board; a board changes owner only
+  when a human deletes the stamp file.
+- **No stamp, and the board already holds generated cards** — refuses. This is every board that
+  predates the stamp. Claim it with a plain `export-signboard <path>` (no `--prune-absent`) run from
+  the checkout that owns it, then retry. An unstamped board is never adopted by the same command
+  that prunes it, because that would defeat the guard on exactly the boards that need it.
+- **No stamp and no generated cards** — proceeds and stamps the board. A first export has nothing to
+  lose, so a fresh board still works in one command.
+
+`signboard-validate` reports a mismatch read-only as its own `store_stamp_mismatch` finding, named
+before the `stale_card` findings it explains, and in that case its `repair` hint deliberately does
+not name `--prune-absent`.
 
 `--prune-absent` deletes a generated card only when its task ID is absent from the store *and* the
 card carries nothing a human wrote. Both hand-editable sections count: `## Notes`, and any non-blank

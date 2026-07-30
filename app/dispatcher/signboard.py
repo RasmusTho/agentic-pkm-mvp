@@ -6,7 +6,9 @@ one-way Markdown projection that lightweight kanban tools can render from disk.
 
 from __future__ import annotations
 
+import json
 import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -33,10 +35,30 @@ _NOTES_HEADING = "## Notes"
 _RECEIPTS_HEADING = "## Receipts"
 _GENERATED_FILENAME_RE = re.compile(r".+--.+\.md$")
 
+# A board records which dispatcher store owns it (#4370). The store resolves
+# from the current working directory (``app/dispatcher/config.py ::
+# load_paths`` -> ``_default_state_dir`` -> ``discover_primary_worktree``), so
+# two checkouts of this repo on one host have two independent stores. Without
+# this fact, ``--prune-absent`` reads "unknown to whichever store this process
+# resolved" as "dead card": on 2026-07-29 it was run from the checkout that did
+# not own the board and deleted 404 live cards.
+#
+# The stamp is a durable *identity*, never the store's path — a path is exactly
+# the thing that cannot identify a store here, and a legitimate relocation must
+# not read as a foreign store.
+STORE_IDENTITY_META_KEY = "signboard_store_id"
+STORE_STAMP_FILENAME = ".signboard-store.json"
+STORE_STAMP_VERSION = 1
+
 
 class NoActiveVaultError(RuntimeError):
     """Raised when a default Signboard export path is requested but no vault
     is currently selected via the active-vault-selection mechanism."""
+
+
+class SignboardStoreOwnershipError(RuntimeError):
+    """Raised when a destructive board operation cannot prove the board belongs
+    to the dispatcher store this process resolved."""
 
 
 def default_signboard_root() -> Path:
@@ -89,6 +111,111 @@ def column_for_status(status: str) -> str:
     return STATUS_COLUMNS.get(normalized, "Backlog")
 
 
+def read_store_identity(store: SqliteStore) -> str | None:
+    """Return the store's durable identity, or ``None`` when it has none yet.
+
+    Read-only on purpose: ``validate_signboard`` must not write to the store,
+    and a store that owns a stamped board necessarily already carries the
+    identity that stamped it — so "no identity" is itself proof of non-ownership.
+    """
+
+    value = store.get_meta(STORE_IDENTITY_META_KEY)
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def resolve_store_identity(store: SqliteStore) -> str:
+    """Return the store's durable identity, minting one on first use.
+
+    The identity lives in the store's own metadata, so it travels with the
+    store when the store moves and is never inherited by a different store.
+    """
+
+    existing = read_store_identity(store)
+    if existing is not None:
+        return existing
+    minted = uuid.uuid4().hex
+    store.set_meta(STORE_IDENTITY_META_KEY, minted)
+    return minted
+
+
+def read_board_store_id(board_root: Path) -> str | None:
+    """Return the store id a board is stamped with, or ``None`` when unstamped.
+
+    A stamp file that exists but cannot be read as a stamp also returns
+    ``None``: every caller treats "cannot prove ownership" as "not owned", and
+    the claim below keys on the file's *absence*, so a corrupted stamp keeps
+    refusing until a human removes it instead of being silently re-claimed.
+    """
+
+    try:
+        data = json.loads((Path(board_root) / STORE_STAMP_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    store_id = data.get("store_id")
+    if not isinstance(store_id, str) or not store_id.strip():
+        return None
+    return store_id.strip()
+
+
+def _claim_board_stamp(root: Path, store_id: str) -> None:
+    """Stamp the board with its owning store, once.
+
+    Written only when no stamp file exists at all. A board already stamped by
+    another store is never re-stamped: a plain export must not become the way
+    the prune guard gets defeated.
+    """
+
+    path = root / STORE_STAMP_FILENAME
+    if path.exists():
+        return
+    path.write_text(
+        json.dumps(
+            {
+                "generated_by": "dispatcher.signboard",
+                "stamp_version": STORE_STAMP_VERSION,
+                "store_id": store_id,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _board_has_generated_cards(root: Path) -> bool:
+    if not root.is_dir():
+        return False
+    return any(_is_generated_card(path) for path in root.rglob("*.md"))
+
+
+def _require_board_ownership(root: Path, store_id: str) -> None:
+    """Refuse a destructive board operation this store cannot prove it owns."""
+
+    board_store_id = read_board_store_id(root)
+    if board_store_id == store_id:
+        return
+    if board_store_id is None:
+        if not _board_has_generated_cards(root):
+            # Nothing to lose: an unstamped board holding no generated cards
+            # cannot be another store's board in any way a prune could harm,
+            # so a first export may still prune in a single command.
+            return
+        raise SignboardStoreOwnershipError(
+            f"board {root} carries no store-identity stamp but already holds generated cards; "
+            "refusing to prune. Run 'export-signboard <path>' without --prune-absent from the "
+            "checkout that owns this board to stamp it, then retry."
+        )
+    raise SignboardStoreOwnershipError(
+        f"board {root} is stamped by dispatcher store {board_store_id!r}, but this process "
+        f"resolved store {store_id!r}; refusing to prune. Cards absent from this store may "
+        "simply belong to the other one — run the prune from the checkout that owns the board."
+    )
+
+
 def export_signboard(
     store: SqliteStore,
     board_root: Path,
@@ -108,12 +235,22 @@ def export_signboard(
     card carries no human-authored ``## Notes`` content; a stale card that does
     carry notes is kept and surfaced under ``retained_with_notes`` so a human
     decides its fate. Human material is never silently destroyed.
+
+    A prune additionally requires that the board's store-identity stamp match
+    this store (#4370). That check runs *before* anything is written or
+    unlinked: the per-task cleanup below already unlinks stale generated cards
+    of its own accord, so a refusal raised any later would not be total.
     """
 
     root = Path(board_root).expanduser()
+    store_id = resolve_store_identity(store)
+    if prune_absent:
+        _require_board_ownership(root, store_id)
+
     root.mkdir(parents=True, exist_ok=True)
     for column in sorted(set(STATUS_COLUMNS.values())):
         (root / column).mkdir(parents=True, exist_ok=True)
+    _claim_board_stamp(root, store_id)
 
     # Synchronization metadata is stored alongside tasks for dispatcher
     # compatibility, but it is not a user-facing Signboard card.
@@ -159,11 +296,14 @@ def export_signboard(
     retained_with_notes: list[str] = []
     if prune_absent:
         pruned, retained_with_notes = _prune_cards_absent_from_store(
-            root, known_task_ids={task.task_id for task in tasks}
+            root,
+            known_task_ids={task.task_id for task in tasks},
+            expected_store_id=store_id,
         )
 
     return {
         "root": str(root),
+        "store_id": store_id,
         "count": len(tasks),
         "columns": sorted(set(STATUS_COLUMNS.values())),
         "written": written,
@@ -173,14 +313,20 @@ def export_signboard(
 
 
 def _prune_cards_absent_from_store(
-    root: Path, *, known_task_ids: set[str]
+    root: Path, *, known_task_ids: set[str], expected_store_id: str
 ) -> tuple[list[str], list[str]]:
     """Remove empty generated cards whose task ID is gone from dispatcher.
 
     Returns ``(pruned, retained_with_notes)``. Malformed generated cards are
     left in place: ``signboard-validate`` already reports them under their own
     finding kind, and their task identity cannot be trusted for a delete.
+
+    This is the deleting primitive, so it re-asserts board ownership itself
+    rather than trusting its caller to have done it: "absent from the store" is
+    only a fact about a card when the store is the one that owns the board.
     """
+
+    _require_board_ownership(root, expected_store_id)
 
     pruned: list[str] = []
     retained_with_notes: list[str] = []
@@ -247,6 +393,23 @@ def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
     findings: list[dict[str, str]] = []
     cards_by_task: dict[str, list[str]] = {}
 
+    # Name a foreign-store comparison before the cards it explains (#4370).
+    # Against someone else's board every card reads as ``stale_card``, and that
+    # is the noise that hid the 2026-07-29 incident: 378 of 405 findings, each
+    # individually true and collectively the wrong conclusion.
+    board_store_id = read_board_store_id(root)
+    foreign_store = board_store_id is not None and board_store_id != read_store_identity(store)
+    if foreign_store:
+        findings.append({
+            "kind": "store_stamp_mismatch",
+            "path": STORE_STAMP_FILENAME,
+            "detail": (
+                f"board is stamped by dispatcher store {board_store_id!r}, which is not the "
+                "store this process resolved; cards reported below as absent from the store "
+                "may simply belong to the other one"
+            ),
+        })
+
     for path in sorted(root.rglob("*.md")) if root.is_dir() else []:
         relative_path = str(path.relative_to(root))
         text = _read_card_text(path)
@@ -312,7 +475,14 @@ def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
             })
 
     result: dict[str, Any] = {"root": str(root), "count": len(tasks), "findings": findings}
-    if any(finding["kind"] == "stale_card" for finding in findings):
+    if foreign_store:
+        # Never name the prune here: on a foreign board that repair is the
+        # command that destroys it (#4370).
+        result["repair"] = (
+            "this board belongs to another dispatcher store; run export-signboard from the "
+            "checkout that owns it. Do not prune from here."
+        )
+    elif any(finding["kind"] == "stale_card" for finding in findings):
         # Name the repair in the lint output itself. A finding an operator
         # cannot act on is the bug this replaces (#4198).
         result["repair"] = "python -m app.dispatcher export-signboard [path] --prune-absent"
