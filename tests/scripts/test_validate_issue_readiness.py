@@ -120,6 +120,37 @@ def test_ready_issue_accepts_existing_verify_file_path() -> None:
     assert report.acceptance_criteria.missing_verify_file_paths == []
 
 
+def test_readiness_accepts_real_path_containing_vague_authority_token() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        (
+            "tests/architecture/test_pr_hot_path_governance.py::"
+            "test_hot_path_doc_defers_escalation_and_names_direct_repair_contract"
+        ),
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_readiness_still_rejects_nonexistent_path_with_vague_token() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "tests/architecture/test_nonexistent_hot_path_thing.py::test_x",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+    assert report.acceptance_criteria.missing_verify_file_paths == [
+        "tests/architecture/test_nonexistent_hot_path_thing.py"
+    ]
+
+
 def test_ready_issue_accepts_existing_root_level_verify_file_path() -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
     body = body.replace(

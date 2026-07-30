@@ -224,6 +224,20 @@ def _target_has_missing_file_path(target: str) -> bool:
     )
 
 
+def _target_has_existing_file_path(target: str) -> bool:
+    if re.search(r"<[^>]+>", target):
+        return False
+    path = _verify_file_path(target)
+    if path is None:
+        return False
+    candidate = Path(path)
+    return (
+        not candidate.is_absolute()
+        and ".." not in candidate.parts
+        and (REPO_ROOT / candidate).is_file()
+    )
+
+
 def _has_concrete_verify_marker(item: str) -> bool:
     targets = tuple(
         match.group(1).strip()
@@ -237,6 +251,7 @@ def _has_concrete_verify_marker(item: str) -> bool:
         and len(set(targets)) == len(targets)
         and all(
             is_resolvable_verify_target(target)
+            or _target_has_existing_file_path(target)
             or _target_has_missing_file_path(target)
             for target in targets
         )
