@@ -30,10 +30,10 @@ network, no real Postgres, no real vault.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import multiprocessing
 from pathlib import Path
-import threading
+import queue
 
 import pytest
 
@@ -349,10 +349,9 @@ def test_posthoc_steering_prior_lines_survive_verbatim_across_appends(tmp_path: 
     )
     after_third = (vault_root / rel_path).read_text(encoding="utf-8")
 
-    # `write_settings_note` rewrites frontmatter each time (that is expected
-    # -- frontmatter is agent-authored bookkeeping, not a log entry), but
-    # the appended body *lines* from the first write must still appear
-    # verbatim and in original order in the final body.
+    # The guarded bookkeeping patch rewrites frontmatter each time, but the
+    # appended body *lines* from the first write must still appear verbatim
+    # and in original order in the final body.
     first_line = [ln for ln in after_first.splitlines() if "target-a" in ln][0]
     assert first_line in after_third.splitlines()
 
@@ -375,34 +374,56 @@ def test_concurrent_steering_log_appends_preserve_all_entries_and_bookkeeping(
     tmp_path: Path,
 ) -> None:
     vault_root = _vault(tmp_path)
-    guard = _allowing_guard()
     writer_count = 12
-    barrier = threading.Barrier(writer_count)
+    context = multiprocessing.get_context("fork")
+    barrier = context.Barrier(writer_count)
+    results = context.Queue()
     start = datetime(2026, 7, 30, 9, 0, 0, tzinfo=timezone.utc)
 
-    def append_one(index: int) -> str:
+    def append_one(index: int) -> None:
         barrier.wait()
-        return append_steering_log(
-            vault_root,
-            "wrong",
-            f"target-{index}",
-            source="chat",
-            operation_id=f"concurrent-{index}",
-            at=start + timedelta(microseconds=index),
-            write_guard=guard,
-        )
+        try:
+            line = append_steering_log(
+                vault_root,
+                "wrong",
+                f"target-{index}",
+                source="chat",
+                operation_id=f"concurrent-{index}",
+                at=start + timedelta(microseconds=index),
+                write_guard=_allowing_guard(),
+            )
+        except BaseException as exc:  # noqa: BLE001 - preserve child failure evidence
+            results.put(("error", repr(exc)))
+            raise
+        results.put(("ok", line))
 
-    with ThreadPoolExecutor(max_workers=writer_count) as pool:
-        lines = list(pool.map(append_one, range(writer_count)))
+    processes = [context.Process(target=append_one, args=(index,)) for index in range(writer_count)]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=15)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+    assert all(process.exitcode == 0 for process in processes)
+
+    child_results = []
+    try:
+        for _index in range(writer_count):
+            child_results.append(results.get(timeout=2))
+    except queue.Empty:
+        pytest.fail("concurrent steering writer failed to return a result")
+    assert all(status == "ok" for status, _value in child_results)
+    lines = [value for _status, value in child_results]
 
     body = read_steering_log_body(vault_root)
     assert all(body.count(line) == 1 for line in lines)
-    assert body.count(" operation_id=concurrent-") == writer_count
+    assert body.count('"operation_id":"concurrent-') == writer_count
 
     note = read_settings_note(vault_root, STEERING_LOG)
     assert note is not None
     assert note.values["entry_count"] == writer_count
-    last_entry = [line for line in body.splitlines() if " operation_id=" in line][-1]
+    last_entry = [line for line in body.splitlines() if '"operation_id":' in line][-1]
     assert note.values["last_appended"] == last_entry.split("]", 1)[0].removeprefix("- [")
 
 
@@ -412,6 +433,27 @@ def test_steering_log_retry_recovers_interrupted_states(
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
     real_append = steering_module.append_note_relative
+    real_replace = steering_module.os.replace
+    rel_path = note_rel_path(STEERING_LOG)
+    log_path = vault_root / rel_path
+
+    monkeypatch.setattr(
+        steering_module.os,
+        "replace",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("seed replace")),
+    )
+    with pytest.raises(RuntimeError, match="seed replace"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "atomic-seed",
+            source="chat",
+            operation_id="recover-atomic-seed",
+            write_guard=guard,
+        )
+    assert not log_path.exists()
+    assert not list(log_path.parent.glob(f".{log_path.name}.*.tmp"))
+    monkeypatch.setattr(steering_module.os, "replace", real_replace)
 
     monkeypatch.setattr(
         steering_module,
@@ -464,12 +506,186 @@ def test_steering_log_retry_recovers_interrupted_states(
         operation_id="recover-bookkeeping",
         write_guard=guard,
     )
+
+    real_path_open = Path.open
+
+    class _FailingStageFile:
+        def __init__(self, inner):  # type: ignore[no-untyped-def]
+            self._inner = inner
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            self._inner.__enter__()
+            return self
+
+        def __exit__(self, *args):  # type: ignore[no-untyped-def]
+            return self._inner.__exit__(*args)
+
+        def write(self, _content):  # type: ignore[no-untyped-def]
+            raise RuntimeError("stage write")
+
+        def __getattr__(self, name):  # type: ignore[no-untyped-def]
+            return getattr(self._inner, name)
+
+    def fail_staged_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        opened = real_path_open(path, *args, **kwargs)
+        if path.name.startswith(f".{log_path.name}.") and path.suffix == ".tmp":
+            return _FailingStageFile(opened)
+        return opened
+
+    monkeypatch.setattr(Path, "open", fail_staged_open)
+    with pytest.raises(RuntimeError, match="stage write"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "stage-write",
+            source="chat",
+            operation_id="recover-stage-write",
+            write_guard=guard,
+        )
+    monkeypatch.setattr(Path, "open", real_path_open)
+    stage_write_recovered = append_steering_log(
+        vault_root,
+        "wrong",
+        "stage-write",
+        source="chat",
+        operation_id="recover-stage-write",
+        write_guard=guard,
+    )
+
+    real_fsync = steering_module.os.fsync
+    monkeypatch.setattr(
+        steering_module.os,
+        "fsync",
+        lambda _fd: (_ for _ in ()).throw(RuntimeError("stage fsync")),
+    )
+    with pytest.raises(RuntimeError, match="stage fsync"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "stage-fsync",
+            source="chat",
+            operation_id="recover-stage-fsync",
+            write_guard=guard,
+        )
+    monkeypatch.setattr(steering_module.os, "fsync", real_fsync)
+    stage_fsync_recovered = append_steering_log(
+        vault_root,
+        "wrong",
+        "stage-fsync",
+        source="chat",
+        operation_id="recover-stage-fsync",
+        write_guard=guard,
+    )
+
+    monkeypatch.setattr(
+        steering_module.os,
+        "replace",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bookkeeping replace")),
+    )
+    with pytest.raises(RuntimeError, match="bookkeeping replace"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "replace",
+            source="chat",
+            operation_id="recover-replace",
+            write_guard=guard,
+        )
+    monkeypatch.setattr(steering_module.os, "replace", real_replace)
+    replace_recovered = append_steering_log(
+        vault_root,
+        "wrong",
+        "replace",
+        source="chat",
+        operation_id="recover-replace",
+        write_guard=guard,
+    )
+
+    fsync_calls = 0
+
+    def fail_directory_fsync(fd: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        real_fsync(fd)
+        if fsync_calls == 2:
+            raise RuntimeError("directory fsync")
+
+    monkeypatch.setattr(steering_module.os, "fsync", fail_directory_fsync)
+    with pytest.raises(RuntimeError, match="directory fsync"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "directory-fsync",
+            source="chat",
+            operation_id="recover-directory-fsync",
+            write_guard=guard,
+        )
+    monkeypatch.setattr(steering_module.os, "fsync", real_fsync)
+    directory_fsync_recovered = append_steering_log(
+        vault_root,
+        "wrong",
+        "directory-fsync",
+        source="chat",
+        operation_id="recover-directory-fsync",
+        write_guard=guard,
+    )
+
     body = read_steering_log_body(vault_root)
-    assert body.count(bookkeeping_recovered) == 1
-    assert body.count(" operation_id=") == 2
+    for recovered_line in (
+        bookkeeping_recovered,
+        stage_write_recovered,
+        stage_fsync_recovered,
+        replace_recovered,
+        directory_fsync_recovered,
+    ):
+        assert body.count(recovered_line) == 1
+    assert body.count('"operation_id":') == 6
     note = read_settings_note(vault_root, STEERING_LOG)
     assert note is not None
-    assert note.values["entry_count"] == 2
+    assert note.values["entry_count"] == 6
+
+
+def test_steering_log_bookkeeping_preserves_existing_body_bytes(tmp_path: Path) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "first",
+        source="chat",
+        operation_id="byte-preservation-first",
+        note="operation_id=impersonator\nsecond physical line",
+        write_guard=guard,
+    )
+
+    path = vault_root / note_rel_path(STEERING_LOG)
+    raw = path.read_bytes()
+    closing = raw.index(b"\n---", 4) + len(b"\n---")
+    original_body = raw[closing:].replace(b"\n", b"\r\n") + b"\r\n"
+    path.write_bytes(raw[:closing] + original_body)
+
+    append_steering_log(
+        vault_root,
+        "mute\nwith-newline",
+        "second",
+        source="item",
+        operation_id="byte-preservation-second",
+        write_guard=guard,
+    )
+    impersonator_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "third",
+        source="chat",
+        operation_id="impersonator",
+        write_guard=guard,
+    )
+    updated = path.read_bytes()
+    updated_closing = updated.index(b"\n---", 4) + len(b"\n---")
+    assert updated[updated_closing:].startswith(original_body)
+    assert updated.count(b'"operation_id":"byte-preservation-first"') == 1
+    assert updated.count(b'"operation_id":"byte-preservation-second"') == 1
+    assert updated.decode("utf-8").count(impersonator_line) == 1
 
 
 def test_steering_log_operation_id_collision_fails_loud(tmp_path: Path) -> None:

@@ -62,15 +62,15 @@ Four capabilities, four distinct write shapes:
    spec verbatim (:func:`update_source_filters`); this module adds no new
    schema for it, only a steering-shaped convenience wrapper.
 
-Every write in this module reaches the vault through the same governed
-seam every other Heimdal control note uses
-(`app.knowledge.write_ops.write_note_relative` / `append_note_relative` +
-the caller-selected `app.write_guard.WriteGuard`), mirroring
-`app.heimdal.settings_notes` and `app.heimdal.consent_surface` -- no
-hand-rolled YAML, no bypassed guard. This module asserts the capability
-action before every append, then passes the same guard and action through
-so `append_note_relative` reasserts the caller-authorized policy at its
-own seam.
+Every durable intent entry in this module reaches the vault through the
+same governed append seam every other Heimdal control note uses
+(`app.knowledge.write_ops.append_note_relative` + the caller-selected
+`app.write_guard.WriteGuard`). The steering-log seed and derived
+frontmatter use guarded atomic replacements because they must preserve
+crash recovery and the existing body bytes. This module asserts the
+capability action before every append, then passes the same guard and
+action through so `append_note_relative` reasserts the caller-authorized
+policy at its own seam.
 
 Out of scope (per the governing Issue): watch-as-selection cognition
 (Mimer's, §9-k(b)), native-app editor rendering, automatic source
@@ -84,6 +84,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -103,6 +104,7 @@ from app.heimdal.settings_notes import (
     apply_agent_update,
     note_rel_path,
     read_settings_note,
+    render_note,
     write_settings_note,
 )
 from app.knowledge.write_ops import append_note_relative
@@ -367,14 +369,59 @@ POSTHOC_STEERING_VERBS = ("less_of_this", "mute", "wrong")
 
 def _ensure_steering_log_seed(vault_root: Path, *, write_guard: WriteGuard) -> None:
     """Create `steering.log.md` with its initial frontmatter+body if it does
-    not exist yet. Uses the normal `write_settings_note`/`render_note` path
-    -- safe here because there is no prior body content to lose on a
-    brand-new file."""
+    not exist yet.
+
+    The complete seed is rendered through the normal settings-note renderer,
+    then installed by atomic replacement so an interrupted first write cannot
+    leave a partial YAML document for a retry to mistake for a durable seed.
+    """
     rel_path = note_rel_path(STEERING_LOG)
-    if (vault_root / rel_path).exists():
+    path = vault_root / rel_path
+    if path.exists():
         return
+    write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
     note = SettingsNote(spec=STEERING_LOG, values={"entry_count": 0, "last_appended": None})
-    write_settings_note(vault_root, note, write_guard=write_guard, action=POSTHOC_STEERING_WRITE_ACTION)
+    _atomic_replace_bytes(path, render_note(note).encode("utf-8"))
+
+
+def _atomic_replace_bytes(path: Path, content: bytes) -> None:
+    """Durably install complete bytes at ``path`` using a sibling stage."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with staged.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def _split_steering_log_bytes(raw: bytes) -> tuple[dict[str, Any], bytes]:
+    """Parse frontmatter while returning every byte after its closer intact."""
+    if not (raw.startswith(b"---\r\n") or raw.startswith(b"---\n")):
+        raise ValueError("steering log is missing YAML frontmatter")
+
+    offset = 0
+    closing_end = -1
+    for index, line in enumerate(raw.splitlines(keepends=True)):
+        content = line.rstrip(b"\r\n")
+        if index > 0 and content == b"---":
+            closing_end = offset + len(content)
+            break
+        offset += len(line)
+    if closing_end < 0:
+        raise ValueError("steering log has unterminated YAML frontmatter")
+
+    frontmatter_only = raw[:closing_end].decode("utf-8") + "\n"
+    frontmatter, _body = load_frontmatter(frontmatter_only)
+    return frontmatter, raw[closing_end:]
 
 
 def _patch_steering_log_frontmatter(
@@ -397,24 +444,10 @@ def _patch_steering_log_frontmatter(
     write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
     rel_path = note_rel_path(STEERING_LOG)
     path = vault_root / rel_path
-    text = path.read_text(encoding="utf-8")
-    fm, body = load_frontmatter(text)
+    fm, body_bytes = _split_steering_log_bytes(path.read_bytes())
     fm.update(patch)
-    rendered = dump_frontmatter(fm, body)
-    staged = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        with staged.open("x", encoding="utf-8") as handle:
-            handle.write(rendered)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(staged, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        staged.unlink(missing_ok=True)
+    rendered_frontmatter = dump_frontmatter(fm, "").removesuffix("\n").encode("utf-8")
+    _atomic_replace_bytes(path, rendered_frontmatter + body_bytes)
 
 
 @contextmanager
@@ -436,18 +469,33 @@ def _locked_steering_log(vault_root: Path) -> Iterator[None]:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
-def _steering_log_entries(text: str) -> list[str]:
-    """Return durable steering body entries, including pre-operation-id lines."""
-    _frontmatter, body = load_frontmatter(text)
-    return [
-        line
-        for line in body.splitlines(keepends=True)
-        if line.startswith("- [") and "] " in line and " verb=" in line and " source=" in line
-    ]
+@dataclass(frozen=True)
+class _SteeringLogEntry:
+    line: str
+    timestamp: str
+    payload: dict[str, Any] | None
 
 
-def _steering_entry_timestamp(line: str) -> str:
-    return line.split("]", 1)[0].removeprefix("- [")
+def _steering_log_entries(raw: bytes) -> list[_SteeringLogEntry]:
+    """Return structured entries plus countable legacy steering lines."""
+    _frontmatter, body_bytes = _split_steering_log_bytes(raw)
+    entries: list[_SteeringLogEntry] = []
+    for line in body_bytes.decode("utf-8").splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        if not content.startswith("- [") or "] " not in content:
+            continue
+        timestamp, payload_text = content[3:].split("] ", 1)
+        if payload_text.startswith("{"):
+            try:
+                payload = json.loads(payload_text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("malformed structured steering log entry") from exc
+            if not isinstance(payload, dict) or not isinstance(payload.get("operation_id"), str):
+                raise RuntimeError("structured steering log entry is missing operation_id")
+            entries.append(_SteeringLogEntry(line=line, timestamp=timestamp, payload=payload))
+        elif " verb=" in payload_text and " source=" in payload_text:
+            entries.append(_SteeringLogEntry(line=line, timestamp=timestamp, payload=None))
+    return entries
 
 
 def _reconcile_steering_log_bookkeeping(
@@ -456,12 +504,12 @@ def _reconcile_steering_log_bookkeeping(
     write_guard: WriteGuard,
 ) -> None:
     path = vault_root / note_rel_path(STEERING_LOG)
-    entries = _steering_log_entries(path.read_text(encoding="utf-8"))
+    entries = _steering_log_entries(path.read_bytes())
     _patch_steering_log_frontmatter(
         vault_root,
         {
             "entry_count": len(entries),
-            "last_appended": _steering_entry_timestamp(entries[-1]) if entries else None,
+            "last_appended": entries[-1].timestamp if entries else None,
         },
         write_guard=write_guard,
     )
@@ -503,28 +551,38 @@ def append_steering_log(
         )
 
     timestamp = (at or datetime.now(timezone.utc)).isoformat().replace("+00:00", "Z")
-    suffix = f" | {note}" if note else ""
-    payload = (
-        f"operation_id={operation_id} verb={verb} source={source} "
-        f"target={target!r}{suffix}"
+    payload: dict[str, Any] = {
+        "note": note,
+        "operation_id": operation_id,
+        "source": source,
+        "target": target,
+        "verb": verb,
+    }
+    encoded_payload = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
     )
-    line = f"- [{timestamp}] {payload}\n"
+    line = f"- [{timestamp}] {encoded_payload}\n"
 
     _assert_append_allowed(write_guard, POSTHOC_STEERING_WRITE_ACTION)
     with _locked_steering_log(vault_root):
         _ensure_steering_log_seed(vault_root, write_guard=write_guard)
         path = vault_root / note_rel_path(STEERING_LOG)
-        entries = _steering_log_entries(path.read_text(encoding="utf-8"))
-        marker = f" operation_id={operation_id} "
-        matches = [entry for entry in entries if marker in entry]
+        entries = _steering_log_entries(path.read_bytes())
+        matches = [
+            entry
+            for entry in entries
+            if entry.payload and entry.payload["operation_id"] == operation_id
+        ]
         if len(matches) > 1:
             raise RuntimeError(f"operation_id collision: duplicate durable entries for {operation_id}")
         if matches:
-            existing_payload = matches[0].split("] ", 1)[1].rstrip("\n")
-            if existing_payload != payload:
+            if matches[0].payload != payload:
                 raise ValueError(f"operation_id collision for {operation_id}")
             _reconcile_steering_log_bookkeeping(vault_root, write_guard=write_guard)
-            return matches[0]
+            return matches[0].line
 
         append_note_relative(
             note_rel_path(STEERING_LOG),
