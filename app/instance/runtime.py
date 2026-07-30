@@ -1821,7 +1821,7 @@ def _begin_instance_state_deployment(
         scalar_receipt_resume: dict[str, object] | None = None
         if existing_lease is not None:
             receipt_value = existing_lease.get("scalar_roll_forward")
-            if receipt_value is not None:
+            if "scalar_roll_forward" in existing_lease:
                 if not (
                     existing_lease.get("phase") in {"claimed", "proved"}
                     and isinstance(receipt_value, dict)

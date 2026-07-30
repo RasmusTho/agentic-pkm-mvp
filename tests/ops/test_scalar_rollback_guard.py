@@ -1195,6 +1195,32 @@ def test_scalar_deployment_begin_rejects_invalid_claimed_receipt_unchanged(
         for path in (public_path, root_path, fence_path)
     } == before
 
+    for path in (public_path, root_path):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["scalar_roll_forward"] = None
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+    before_null = {
+        path: path.read_bytes()
+        for path in (public_path, root_path, fence_path)
+    }
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="recovery receipt is invalid",
+    ):
+        _begin_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "window" / "missing-legacy.md",
+            controller_pid=999_999_991,
+            controller_start_token="linux:" + "7" * 64,
+        )
+    assert {
+        path: path.read_bytes()
+        for path in (public_path, root_path, fence_path)
+    } == before_null
+
 
 def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
     runtime = InstanceRegistryRuntime.for_paths(
