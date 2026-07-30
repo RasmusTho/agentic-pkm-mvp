@@ -84,8 +84,8 @@ $ pytest -q tests/builderops/ckm/test_semantic.py
 
 ```
 # with only a Product policy route reachable and no declared Builder credential:
-$ builderops ckm associate --json
-{"status": "skipped", "reason": "semantic provider unavailable", "proposals": 0}
+$ builderops ckm associate
+skipped: declared credential unavailable: openai.api-key; proposals=0
 # never: a proposal produced by a Product-policy-selected route
 ```
 
@@ -110,8 +110,9 @@ MAS-06 ended that interim window by removing the Product imports and exemption t
 - [ ] A Product policy fallback cannot execute the Builder semantic-association task, asserted on the
       production association path rather than on the guard in isolation.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`
-      — the test drives the real association entry point with a Product route configured and asserts no
-      Product client is constructed and no proposal is produced.
+      — the test drives the real association entry point with a Product route configured, asserts no
+      Product client is constructed, and proves that its one candidate proposal came from the
+      Builder adapter rather than Product routing.
 - [ ] The request declares `fallback_forbidden`, and no other fallback requirement value is accepted for
       this task.
       Verify: `tests/builderops/ckm/test_semantic.py::test_semantic_request_declares_fallback_forbidden`
