@@ -58,7 +58,7 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
     )
     operation_key = first.begin_effect(
         run.run_id,
-        effect_type="github.merge",
+        effect_type="model.verification_coordinator",
         payload={"repository": REPO, "pr_number": 3603, "head_sha": HEAD},
         holder="verification-host",
         lease_id=claimed.lease_id,
@@ -74,7 +74,7 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
     recovered = restarted.recover_effect(
         operation_key,
         run_id=run.run_id,
-        effect_type="github.merge",
+        effect_type="model.verification_coordinator",
     )
     restarted.finish_effect(
         operation_key,

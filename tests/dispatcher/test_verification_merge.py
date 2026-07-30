@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import replace
@@ -10,6 +11,7 @@ import httpx
 import pytest
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
+from app.dispatcher.verification_agent_loop import VerificationAgentLoop
 from app.dispatcher.verification_github import (
     GitHubProtectedRepositoryAuthority,
     _latest_github_result,
@@ -297,10 +299,35 @@ class CrashAfterReconcileOutbox(Outbox):
         raise SystemExit("simulated crash after durable reconciliation")
 
 
+class BlockingReviewWinsIntentRaceClient(FakeBuilderOpsClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.before_merge_intent = None
+
+    def transition_task(self, **values):
+        callback = self.before_merge_intent
+        if (
+            callback is not None
+            and isinstance(values.get("outbox"), Mapping)
+            and values["outbox"].get("effect_type")
+            in {"github.merge", "github.merge.dry_run"}
+        ):
+            self.before_merge_intent = None
+            callback()
+            task = self.tasks[values["task_id"]]
+            if int(task["version"]) != values.get("expected_version"):
+                raise ValueError(
+                    "simulated task-version CAS rejected stale merge intent"
+                )
+        return super().transition_task(**values)
+
+
 def claimed_run(
     effect_type: str = "github.merge",
+    *,
+    api: FakeBuilderOpsClient | None = None,
 ):
-    api = FakeBuilderOpsClient()
+    api = api or FakeBuilderOpsClient()
     ledger = BuilderOpsVerificationLedger(api, repository=REPO)
     run = ledger.ingest(request())
     claimed = ledger.claim(run.run_id, "verification-host")
@@ -350,6 +377,47 @@ def claimed_run(
     outbox = Outbox(ready.run_id, effect_type)
     ledger.effect_outbox = outbox
     return ledger, ready, outbox
+
+
+def test_blocking_review_wins_atomic_merge_intent_race() -> None:
+    api = BlockingReviewWinsIntentRaceClient()
+    ledger, run, outbox = claimed_run(api=api)
+    loop = VerificationAgentLoop(
+        ledger,
+        run.run_id,
+        holder="verification-host",
+        lease_id=run.lease_id or "",
+    )
+    api.before_merge_intent = lambda: loop.review(
+        finding_id="F-race",
+        failure_domain="review_code_correctness",
+        mechanism_id="merge-authority",
+        session_id="late-blocking-review",
+        capability="gpt-5.6-sol",
+        reasoning_effort="xhigh",
+        context={"head_sha": HEAD},
+        outcome="blocking",
+    )
+    repository = RepositoryAuthority()
+
+    with pytest.raises(
+        MergeAuthorityError,
+        match="outbox claim is not an eligible current fenced merge intent",
+    ):
+        VerificationMergeExecutor(
+            ledger,
+            outbox,
+            repository,
+            Credentials(),
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert ledger.closure_ready(run.run_id) is False
+    assert repository.calls == []
+    assert outbox.state == "missing"
 
 
 def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> None:
@@ -494,6 +562,25 @@ def test_merge_requires_fixed_non_closing_text_in_transport_and_readback(
         payload["fixed_commit_message"]
         == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
     )
+    marker = ledger.merge_ready_receipt(run.run_id)
+    assert isinstance(marker, Mapping)
+    expected_review_digest = hashlib.sha256(
+        json.dumps(
+            dict(marker),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
+    assert payload["review_authority_sha256"] == expected_review_digest
+    task_payload = ledger._snapshot(run.run_id)["payload"]
+    assert isinstance(task_payload, Mapping)
+    assert task_payload["attempt_write_seal"] == {
+        "contract": "builderops_attempt_write_seal.v1",
+        "operation_key": pending["operation_key"],
+        "effect_type": "github.merge",
+        "review_authority_sha256": expected_review_digest,
+    }
 
 
 def test_merge_rejects_base_or_manifest_change_after_final_validation() -> None:

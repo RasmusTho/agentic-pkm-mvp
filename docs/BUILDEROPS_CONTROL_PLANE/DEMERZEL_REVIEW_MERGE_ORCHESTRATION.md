@@ -62,6 +62,12 @@ outcome, null provider session, no-relaunch flag, head SHA matching the schedule
 task payload whose durable session identity and context are both absent. One-sided or empty session
 state fails closed without reconciliation or relaunch.
 GitHub effects remain `unknown` until authoritative GitHub readback reconciles them.
+The merge-ready review frontier is hash-bound to the outbox payload and an
+`builderops_attempt_write_seal.v1` marker in the same task transition that creates the merge
+intent. The task-version compare-and-swap serializes a late blocking review against that intent:
+the blocker wins and the intent is not committed, or the intent wins and PostgreSQL rejects later
+attempt writes for that run. A head takeover clears the seal together with the obsolete effect and
+merge-ready bindings.
 
 ## Why This Matters
 
@@ -113,6 +119,10 @@ weaken them and does not enter Product Runtime.
 - `terminal_unknown` is not a general executor escape hatch: the API/store rejects it for every
   GitHub effect and for any verification-model evidence not exactly bound to the scheduled head.
 - Existing CI + review + protection gates are not weakened by autonomous execution.
+- Review authority remains fenced through the privileged effect. The exact current review frontier,
+  its attempt-write seal, and the merge outbox intent commit atomically; a task-version advance
+  invalidates the intent, while a committed seal rejects later review/repair attempts until the run
+  completes or an authorized head takeover establishes a new frontier.
 - Rate limiting/backoff follows the shared API-budget contract; no tight GraphQL polling.
 
 ## Acceptance Criteria

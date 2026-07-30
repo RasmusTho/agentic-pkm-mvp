@@ -159,6 +159,7 @@ class EffectIntentLedger(Protocol):
         holder: str,
         lease_id: str,
         idempotency_key: str,
+        merge_ready_receipt: Mapping[str, object] | None = None,
     ) -> str: ...
 
     def effect_claim(
@@ -334,6 +335,17 @@ class VerificationMergeExecutor:
             "current_head",
         }
         return required.issubset(gates) and all(gates[name] for name in required)
+
+    @staticmethod
+    def _authority_digest(value: Mapping[str, object]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                dict(value),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
 
     @staticmethod
     def _same_manifest(
@@ -530,6 +542,7 @@ class VerificationMergeExecutor:
                     f"{run.run_id}:github.merge:{run.current_head_sha}:"
                     f"{base_sha}:{manifest.blob_sha}"
                 ),
+                merge_ready_receipt=marker,
             )
         except ValueError as exc:
             raise MergeAuthorityError(
@@ -704,6 +717,8 @@ class VerificationMergeExecutor:
             != fixed_verified_merge_commit_title(run.pr_number)
             or payload.get("fixed_commit_message")
             != FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+            or payload.get("review_authority_sha256")
+            != self._authority_digest(marker)
         ):
             raise MergeAuthorityError(
                 "merge recovery manifest binding is inconsistent"

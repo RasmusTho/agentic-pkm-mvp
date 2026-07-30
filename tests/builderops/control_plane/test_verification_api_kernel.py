@@ -18,6 +18,7 @@ from app.builderops.control_plane.client import (
 )
 from app.builderops.control_plane.models import LeaseUnavailable, StateConflict
 from app.builderops.control_plane.service import create_app
+from app.builderops.control_plane.store import _operation_key
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_merge import BuilderOpsOutboxExecutor
 from tests.dispatcher.verification_helpers import REPO, request
@@ -89,6 +90,111 @@ def test_concurrent_attempts_share_one_task_version_cas(
         int(control_plane_store.get_task(envelope.repository, task_id)["version"])
         == expected_version + 1
     )
+
+
+def test_active_merge_intent_atomically_seals_attempt_writes(
+    control_plane_store, envelope
+) -> None:
+    task_id = "vrun-merge-attempt-seal"
+    transition_key = "verification-effect:merge-attempt-seal"
+    operation_key = _operation_key(
+        envelope.repository,
+        transition_key,
+        "github.merge",
+    )
+    control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="ready",
+        idempotency_key="merge-attempt-seal-create",
+        request={"status": "ready"},
+    )
+    _, lease = control_plane_store.claim_task(
+        envelope=envelope,
+        task_id=task_id,
+        holder="executor:merge-attempt-seal",
+        idempotency_key="merge-attempt-seal-claim",
+        request={"status": "claimed"},
+    )
+    expected_version = int(
+        control_plane_store.get_task(
+            envelope.repository,
+            task_id,
+        )["version"]
+    )
+    result = control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="claimed",
+        idempotency_key=transition_key,
+        request={
+            "status": "claimed",
+            "attempt_write_seal": {
+                "contract": "builderops_attempt_write_seal.v1",
+                "operation_key": operation_key,
+                "effect_type": "github.merge",
+                "review_authority_sha256": "a" * 64,
+            },
+        },
+        outbox={
+            "effect_type": "github.merge",
+            "payload": {"head_sha": "b" * 40},
+        },
+        lease=lease,
+        expected_states=("claimed",),
+        expected_version=expected_version,
+    )
+    assert result.operation_key == operation_key
+    sealed_version = int(
+        control_plane_store.get_task(
+            envelope.repository,
+            task_id,
+        )["version"]
+    )
+
+    with pytest.raises(
+        StateConflict,
+        match="attempt writes are sealed",
+    ):
+        control_plane_store.commit_attempt(
+            envelope=envelope,
+            task_id=task_id,
+            attempt_id="late-blocking-review",
+            state="review",
+            payload={"outcome": "blocking"},
+            idempotency_key="late-blocking-review",
+            lease=lease,
+            expected_task_version=sealed_version,
+        )
+
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=operation_key,
+        worker_id="demerzel-verifier",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim,
+        detail="merge effect reached terminal no-effect readback",
+    )
+    control_plane_store.reconcile_outbox(
+        claim,
+        observed_applied=True,
+        evidence={"outcome": "terminal_no_effect"},
+    )
+    with pytest.raises(
+        StateConflict,
+        match="attempt writes are sealed",
+    ):
+        control_plane_store.commit_attempt(
+            envelope=envelope,
+            task_id=task_id,
+            attempt_id="post-settlement-review",
+            state="review",
+            payload={"outcome": "blocking"},
+            idempotency_key="post-settlement-review",
+            lease=lease,
+            expected_task_version=sealed_version,
+        )
 
 
 def test_stale_task_version_rejects_transition_attempt_release_and_complete(
@@ -326,9 +432,9 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
     run = ledger.ingest(request())
     claimed = ledger.claim(run.run_id, "ignored-client-holder")
     assert claimed.lease_id is not None
-    dry_run_key = ledger.begin_effect(
+    completed_key = ledger.begin_effect(
         run.run_id,
-        effect_type="github.merge.dry_run",
+        effect_type="github.comment",
         payload={
             "repository": REPO.lower(),
             "pr_number": 3603,
@@ -336,14 +442,14 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
         },
         holder="executor:demerzel-verifier",
         lease_id=claimed.lease_id,
-        idempotency_key="api-roundtrip-dry-run",
+        idempotency_key="api-roundtrip-completed-github-effect",
     )
     ledger.finish_effect(
-        dry_run_key,
+        completed_key,
         observed_applied=True,
-        evidence={"outcome": "dry_run_no_merge", "merged": False},
+        evidence={"outcome": "comment_created"},
     )
-    assert control_plane_store.outbox_status(REPO, dry_run_key) == "succeeded"
+    assert control_plane_store.outbox_status(REPO, completed_key) == "succeeded"
 
     indeterminate_key = ledger.begin_effect(
         run.run_id,
@@ -389,7 +495,7 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
 
     operation_key = ledger.begin_effect(
         run.run_id,
-        effect_type="github.merge",
+        effect_type="github.comment",
         payload={
             "repository": REPO.lower(),
             "pr_number": 3603,
@@ -409,7 +515,7 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
     restarted.recover_effect(
         operation_key,
         run_id=run.run_id,
-        effect_type="github.merge",
+        effect_type="github.comment",
     )
     restarted.finish_effect(
         operation_key,
@@ -457,7 +563,7 @@ def test_authenticated_outbox_recovery_rejects_durable_secret_fields(
     assert claimed.lease_id is not None
     operation_key = ledger.begin_effect(
         run.run_id,
-        effect_type="github.merge",
+        effect_type="github.comment",
         payload={
             "repository": REPO.lower(),
             "pr_number": 3603,
@@ -504,7 +610,7 @@ def test_authenticated_api_rejects_github_terminal_unknown(
     assert claimed.lease_id is not None
     rejected_key = ledger.begin_effect(
         run.run_id,
-        effect_type="github.merge",
+        effect_type="github.comment",
         payload={
             "repository": REPO.lower(),
             "pr_number": 3603,
@@ -523,7 +629,7 @@ def test_authenticated_api_rejects_github_terminal_unknown(
     restarted.recover_effect(
         rejected_key,
         run_id=run.run_id,
-        effect_type="github.merge",
+        effect_type="github.comment",
     )
     with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
         restarted.finish_effect(

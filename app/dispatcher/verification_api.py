@@ -79,6 +79,10 @@ def _digest(*parts: object) -> str:
     return hashlib.sha256(_canonical(list(parts)).encode()).hexdigest()
 
 
+def _authority_digest(value: Mapping[str, object]) -> str:
+    return hashlib.sha256(_canonical(dict(value)).encode()).hexdigest()
+
+
 def _outbox_operation_key(
     repository: str, idempotency_key: str, effect_type: str
 ) -> str:
@@ -401,6 +405,7 @@ class BuilderOpsVerificationLedger:
                 payload=takeover_payload,
             )
             takeover_payload.pop("pending_privileged_effect", None)
+            takeover_payload.pop("attempt_write_seal", None)
             takeover_payload.pop("merge_ready_receipt", None)
             claimed_response = self.client.claim_task(
                 envelope=self.envelope,
@@ -1365,6 +1370,13 @@ class BuilderOpsVerificationLedger:
         self, run_id: str
     ) -> Mapping[str, object] | None:
         snapshot = self._snapshot(run_id)
+        return self._merge_ready_receipt_from_snapshot(run_id, snapshot)
+
+    def _merge_ready_receipt_from_snapshot(
+        self,
+        run_id: str,
+        snapshot: Mapping[str, object],
+    ) -> Mapping[str, object] | None:
         run = _run_from_snapshot(snapshot)
         marker = _snapshot_payload(snapshot).get("merge_ready_receipt")
         if not isinstance(marker, Mapping):
@@ -1385,7 +1397,6 @@ class BuilderOpsVerificationLedger:
             or not isinstance(coordinator, Mapping)
             or coordinator.get("verdict") != "verified"
             or coordinator.get("head_sha") != run.current_head_sha
-            or not self.closure_ready(run_id)
         ):
             raise ValueError("BuilderOps merge-ready receipt is malformed or stale")
         return dict(marker)
@@ -1484,6 +1495,7 @@ class BuilderOpsVerificationLedger:
         lease_id: str,
         idempotency_key: str,
         task_metadata: Mapping[str, object] | None = None,
+        expected_task_version: int | None = None,
     ) -> str:
         """Commit the fenced eligibility receipt before a privileged effect."""
         snapshot = self._snapshot(run_id)
@@ -1500,8 +1512,12 @@ class BuilderOpsVerificationLedger:
             outbox={"effect_type": effect_type, "payload": dict(payload)},
             lease=lease,
             expected_states=("claimed",),
-            expected_version=_required_int(
-                snapshot.get("version"), "task version"
+            expected_version=(
+                expected_task_version
+                if expected_task_version is not None
+                else _required_int(
+                    snapshot.get("version"), "task version"
+                )
             ),
         )
         result = response.get("result")
@@ -1519,6 +1535,7 @@ class BuilderOpsVerificationLedger:
         holder: str,
         lease_id: str,
         idempotency_key: str,
+        merge_ready_receipt: Mapping[str, object] | None = None,
     ) -> str:
         if self.effect_outbox is None:
             raise ValueError(
@@ -1526,6 +1543,39 @@ class BuilderOpsVerificationLedger:
             )
         snapshot = self._snapshot(run_id)
         task_document = _snapshot_payload(snapshot)
+        effect_seals_attempts = effect_type in {
+            "github.merge",
+            "github.merge.dry_run",
+        }
+        merge_ready_marker: Mapping[str, object] | None = None
+        expected_task_version: int | None = None
+        if effect_seals_attempts:
+            merge_ready_marker = self._merge_ready_receipt_from_snapshot(
+                run_id,
+                snapshot,
+            )
+            if (
+                not isinstance(merge_ready_marker, Mapping)
+                or not isinstance(merge_ready_receipt, Mapping)
+                or dict(merge_ready_marker) != dict(merge_ready_receipt)
+            ):
+                raise ValueError(
+                    "merge effect requires the exact current review frontier"
+                )
+            expected_task_version = _required_int(
+                snapshot.get("version"), "task version"
+            )
+        elif merge_ready_receipt is not None:
+            raise ValueError(
+                "merge-ready authority is valid only for a merge effect"
+            )
+        effect_payload = dict(payload)
+        review_authority_digest: str | None = None
+        if merge_ready_marker is not None:
+            review_authority_digest = _authority_digest(
+                merge_ready_marker
+            )
+            effect_payload["review_authority_sha256"] = review_authority_digest
         pending = task_document.get("pending_privileged_effect")
         operation_key: str
         existing: Mapping[str, object]
@@ -1550,13 +1600,34 @@ class BuilderOpsVerificationLedger:
             if existing.get("status") == "pending":
                 if (
                     pending_type != effect_type
-                    or pending_head != payload.get("head_sha")
+                    or pending_head != effect_payload.get("head_sha")
                     or not isinstance(pending_payload, Mapping)
-                    or dict(pending_payload) != dict(payload)
+                    or dict(pending_payload) != effect_payload
                 ):
                     raise ValueError(
                         "pending verification effect binding is malformed or conflicting"
                     )
+                if effect_seals_attempts:
+                    attempt_write_seal = task_document.get(
+                        "attempt_write_seal"
+                    )
+                    if (
+                        not isinstance(attempt_write_seal, Mapping)
+                        or attempt_write_seal.get("contract")
+                        != "builderops_attempt_write_seal.v1"
+                        or attempt_write_seal.get("operation_key")
+                        != pending_key
+                        or attempt_write_seal.get("effect_type")
+                        != effect_type
+                        or attempt_write_seal.get(
+                            "review_authority_sha256"
+                        )
+                        != review_authority_digest
+                    ):
+                        raise ValueError(
+                            "pending merge effect lacks its review-authority "
+                            "seal"
+                        )
                 operation_key = pending_key
             elif existing.get("status") in {"succeeded", "dead_letter"}:
                 pending = None
@@ -1578,7 +1649,7 @@ class BuilderOpsVerificationLedger:
             operation_key = self.commit_effect_intent(
                 run_id,
                 effect_type=effect_type,
-                payload=payload,
+                payload=effect_payload,
                 holder=holder,
                 lease_id=lease_id,
                 idempotency_key=idempotency_key,
@@ -1587,10 +1658,27 @@ class BuilderOpsVerificationLedger:
                         "operation_key": expected_operation_key,
                         "effect_type": effect_type,
                         "task_id": run_id,
-                        "head_sha": payload.get("head_sha"),
-                        "payload": dict(payload),
-                    }
+                        "head_sha": effect_payload.get("head_sha"),
+                        "payload": effect_payload,
+                    },
+                    **(
+                        {
+                            "attempt_write_seal": {
+                                "contract": (
+                                    "builderops_attempt_write_seal.v1"
+                                ),
+                                "operation_key": expected_operation_key,
+                                "effect_type": effect_type,
+                                "review_authority_sha256": (
+                                    review_authority_digest
+                                ),
+                            }
+                        }
+                        if merge_ready_marker is not None
+                        else {}
+                    ),
                 },
+                expected_task_version=expected_task_version,
             )
             if operation_key != expected_operation_key:
                 raise ValueError("BuilderOps effect operation identity is inconsistent")

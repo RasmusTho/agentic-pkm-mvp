@@ -1061,7 +1061,7 @@ class PostgresBuilderOpsStore:
                         (f"task:{envelope.repository}:{primary_id}",),
                     )
                     task = conn.execute(
-                        "SELECT state, version FROM builderops_tasks WHERE repository = %s "
+                        "SELECT state, version, payload FROM builderops_tasks WHERE repository = %s "
                         "AND task_id = %s FOR UPDATE",
                         (envelope.repository, primary_id),
                     ).fetchone()
@@ -1074,6 +1074,52 @@ class PostgresBuilderOpsStore:
                         raise StateConflict(
                             f"expected task version {expected_task_version}, "
                             f"observed {int(task['version'])}"
+                        )
+                    task_payload = task["payload"]
+                    seal = (
+                        task_payload.get("attempt_write_seal")
+                        if isinstance(task_payload, Mapping)
+                        else None
+                    )
+                    if seal is not None:
+                        if (
+                            not isinstance(seal, Mapping)
+                            or seal.get("contract")
+                            != "builderops_attempt_write_seal.v1"
+                            or not isinstance(
+                                seal.get("operation_key"), str
+                            )
+                            or seal.get("effect_type")
+                            not in {
+                                "github.merge",
+                                "github.merge.dry_run",
+                            }
+                        ):
+                            raise StateConflict(
+                                "task attempt-write seal is malformed"
+                            )
+                        sealed_effect = conn.execute(
+                            "SELECT task_id, effect_type, status "
+                            "FROM builderops_outbox WHERE repository = %s "
+                            "AND operation_key = %s",
+                            (
+                                envelope.repository,
+                                seal["operation_key"],
+                            ),
+                        ).fetchone()
+                        if (
+                            sealed_effect is None
+                            or sealed_effect["task_id"] != primary_id
+                            or sealed_effect["effect_type"]
+                            != seal["effect_type"]
+                        ):
+                            raise StateConflict(
+                                "task attempt-write seal is not bound to its "
+                                "privileged merge intent"
+                            )
+                        raise StateConflict(
+                            "attempt writes are sealed by privileged "
+                            "merge authority"
                         )
                 previous = self._authority_object_row(
                     conn,
