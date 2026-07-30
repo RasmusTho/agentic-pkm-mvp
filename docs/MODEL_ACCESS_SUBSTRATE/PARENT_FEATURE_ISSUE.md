@@ -1,7 +1,8 @@
-State: Filed as validation hub #4286 on 2026-07-29. Children #4287–#4292 formed the strict serial
-execution chain and are delivered; MAS-06 was delivered by PR #4419 for issue #4292. GitHub holds
-the live acceptance ledger; this file is its repo-governed contract. **Owner ruling 2026-07-30
-(cost):** the two live receipts below
+State: Accepted Phase 1 validation contract. Hub #4286 completed its nine repo-verifiable acceptance
+criteria on 2026-07-30. Children #4287–#4292 formed the strict serial execution chain and are
+delivered; MAS-06 was delivered by PR #4419 for issue #4292. GitHub holds the terminal acceptance
+ledger; this file is its repo-governed contract. **Owner ruling 2026-07-30 (cost):** the two receipt
+identities below
 (`provider_enabled_noninteractive_inquiry.v1`, legacy-bridge retirement) are withdrawn as acceptance
 gates — metered provider API keys are not provisioned and the subscription-backed session remains
 the sanctioned operational auth for host-local model inquiry. The delivered CKM path uses the
@@ -9,12 +10,12 @@ neutral mechanism, fails closed with zero inferred edges while credentials are a
 reuses the Model Inquiry subscription session
 (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
 model-inquiry path`). Parent acceptance is repo-verifiable under the re-scoped criteria below.
-Doc role: Parent feature issue contract (live validation hub #4286)
+Doc role: Parent feature issue contract (terminal validation ledger #4286)
 Authority: Owns the capability-level validation-hub contract and the acceptance ledger. Subordinate to
 `docs/MODEL_ACCESS_SUBSTRATE/README.md` for task shape and to `docs/adr/ADR-0064-model-access-substrate.md`
 for the decision.
 Owner: Architecture spine / LLM boundary
-Temporal class: active delivery contract
+Temporal class: completed delivery contract
 Review cadence: event-driven (filing, each child merge, capability acceptance)
 Source of truth: `docs/MODEL_ACCESS_SUBSTRATE/README.md`
 Last reviewed: 2026-07-30
@@ -86,32 +87,32 @@ verification-stage CKM posture apply to every child. The order did not swap.
 
 These are the capability-level criteria. Per-task criteria live in the task specifications.
 
-- [ ] Every provider allowlist in the repository equals its census projection, and a deliberately
+- [x] Every provider allowlist in the repository equals its census projection, and a deliberately
       drifted site fails CI naming the site.
       Verify: `tests/settings/test_provider_census.py::test_all_allowlists_match_census`
-- [ ] A model-provider credential is declared, channel-scoped, and resolvable through the host secret
+- [x] A model-provider credential is declared, channel-scoped, and resolvable through the host secret
       contract, and a missing value fails the consumer closed while naming only the logical identifier.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_provider_identifiers_are_declared_data`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
-- [ ] The repo-owned `yggdrasil-model-inquiry-provider-api` launcher remains content/lineage
+- [x] The repo-owned `yggdrasil-model-inquiry-provider-api` launcher remains content/lineage
       verified and fail-closed, while the sanctioned `yggdrasil-model-inquiry` host subscription
       launcher is confined to Model Inquiry and is not a CKM fallback.
       Verify: `tests/governance/test_model_inquiry_host_install.py::test_check_rejects_conflicting_command_at_provider_api_name`
-- [ ] The production inquiry caller submits provider-free intent and resolves provider/model through
+- [x] The production inquiry caller submits provider-free intent and resolves provider/model through
       the Builder runtime/channel census mapping after capability checks.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_provider_free_intent_through_builder_census`
-- [ ] The two neutral inquiry roles resolve as one independent group to distinct effective targets,
+- [x] The two neutral inquiry roles resolve as one independent group to distinct effective targets,
       and a colliding mapping is refused before provider execution.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_distinct_effective_targets_for_role_group`
-- [ ] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
+- [x] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`
-- [ ] No `app.builderops -> app.components.llm` import remains, and the `importlinter` contract passes
+- [x] No `app.builderops -> app.components.llm` import remains, and the `importlinter` contract passes
       with zero exemptions.
       Verify: `tests/architecture/test_import_boundary.py::test_builder_does_not_import_product_llm_without_exemption`
-- [ ] No CI workflow step reports success while its declared model-provider credential is absent.
+- [x] No CI workflow step reports success while its declared model-provider credential is absent.
       Verify: `tests/ops/test_ci_smoke_workflow.py::test_no_workflow_step_is_green_on_absent_provider_secret`
-- [ ] Owner docs describe the delivered mechanism rather than the pre-ADR-0064 exclusions.
+- [x] Owner docs describe the delivered mechanism rather than the pre-ADR-0064 exclusions.
       Verify: `doc writeback at docs/LLM.md :: Providers (Current)`
       Verify: `doc writeback at docs/LOCAL_SECRET_PROVISIONING/README.md :: Out of scope`
       Verify: `doc writeback at docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md :: 5. Slices`
@@ -150,12 +151,12 @@ uses the repo-verifiable child criteria, including MAS-06's Product-import remov
 zero-edge behavior. No real provider inquiry is requested, and no receipt may contain a credential
 value or a host identifier.
 
-Owner-doc promotion triggers only after every acceptance criterion above is satisfied: one PR updating
-`docs/LLM.md` and the capability owner docs named by the child specs. `docs/SECURITY.md` remains owned
-by #3843 and is not touched here. Until then owner docs stay stable while evidence accumulates.
+Owner-doc promotion completed through the child writebacks and post-merge PR #4425. `docs/LLM.md`
+points to the provider census, and the capability owner docs named by the child specs describe the
+delivered mechanism. `docs/SECURITY.md` remains owned by #3843 and is not touched here.
 
-On closure, three local surfaces are reconciled together: this file's header and state, the capability
-`README.md` state line, and the `README.md` relationship-to-GitHub-issues section.
+Terminal reconciliation updates this file's header and state, the capability `README.md` state line,
+and the `README.md` relationship-to-GitHub-issues section together.
 
 ## Out of Scope
 

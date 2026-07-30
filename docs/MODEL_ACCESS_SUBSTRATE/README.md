@@ -1,6 +1,7 @@
-State: Active validation specification under parent hub #4286. The serial MAS-01..06 implementation
-chain is delivered; MAS-06 was delivered by PR #4419 for child issue #4292. Parent acceptance remains
-separate. **Owner ruling 2026-07-30 (cost):** metered provider API keys are not provisioned; the
+State: Accepted Phase 1 capability. Parent hub #4286 completed its nine repo-verifiable acceptance
+criteria on 2026-07-30 after the serial MAS-01..06 implementation chain was delivered; MAS-06 was
+delivered by PR #4419 for child issue #4292. **Owner ruling 2026-07-30 (cost):** metered provider API
+keys are not provisioned; the
 subscription-backed session remains the sanctioned operational auth for host-local model inquiry
 (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
 model-inquiry path`). MAS-01..05 stay delivered as merged code; the parent live-proof receipt
@@ -308,15 +309,17 @@ credential sharing.
 
 ## Relationship to GitHub issues
 
-Parent [#4286](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4286) is the live validation hub.
-The strict serial children are
+Parent [#4286](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4286) is the terminal validation
+ledger. Its nine capability-level criteria passed against live `origin/main` on 2026-07-30. The
+strict serial children were
 [#4287](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4287) MAS-01 →
 [#4288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4288) MAS-02 →
 [#4289](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4289) MAS-03 →
 [#4290](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4290) MAS-04 →
 [#4291](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4291) MAS-05 →
 [#4292](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4292) MAS-06.
-Each merged child posts current-SHA evidence to #4286 before the next child becomes ready.
+Each merged child posted current-SHA evidence to #4286 before the next child became ready; the
+terminal parent receipt binds the accepted repo-verifiable Phase 1 ledger.
 
 ## Related sources
 
