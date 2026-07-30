@@ -144,6 +144,7 @@ def test_obsidian_boundary_guardrails_dont_allow_escape_hatches() -> None:
     expected_adapters_importers_allow = {
         REPO_ROOT / "app" / "knowledge" / "__init__.py",
         REPO_ROOT / "app" / "knowledge" / "service.py",
+        REPO_ROOT / "app" / "knowledge" / "write_ops.py",
     }
 
     note_func = _find_function(module, "test_note_locator_construction_is_centralized")
