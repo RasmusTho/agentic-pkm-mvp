@@ -82,6 +82,12 @@ BLOCK_TYPES = (TYPE_USER_NOTE, TYPE_DERIVED_PROJECTION, TYPE_TRANSCRIPT_SEGMENT)
 WRITER_USER_EDITOR = "user_editor"
 WRITER_DERIVED = "derived"
 
+# Structural provenance keys the guard derives from the writer identity; a
+# caller-supplied `provenance_extra` can never override them (P1: allowing it
+# would let a writer re-home a block under another writer's provenance or
+# forge the user-editor kind).
+_RESERVED_PROVENANCE_KEYS = frozenset({"kind", "engine", "role", "editor_identity"})
+
 ACTION_CREATE = "create"
 ACTION_REVISE = "revise"
 ACTION_RETIRE = "retire"
@@ -763,6 +769,36 @@ def _refuse(
     return BlockWriteOutcome(allowed=False, reason=reason)
 
 
+def _authorize_target(
+    writer: WriterIdentity, block: MeetingBlock, session_id: str
+) -> Optional[str]:
+    """Authorize ``writer`` against an existing block; None means authorized,
+    otherwise the refusal reason. One function so no path (revise, retire,
+    move, create-replay, race-loser replay) can skip a check the others run."""
+    if block.session_id != session_id:
+        return "block belongs to a different session (ownership conflict)"
+    if block.owner not in OWNERS or block.block_type not in BLOCK_TYPES:
+        return (
+            f"recorded ownership is unknown (owner={block.owner!r}, "
+            f"type={block.block_type!r}); failing closed"
+        )
+    if block.block_type == TYPE_USER_NOTE:
+        if writer.kind != WRITER_USER_EDITOR:
+            return "derived writers never touch user_note blocks (INV-CDLM-6)"
+        recorded_identity = (block.provenance or {}).get("editor_identity", "")
+        if not writer.editor_identity.strip() or (
+            recorded_identity and writer.editor_identity != recorded_identity
+        ):
+            return "editor identity does not match the note's recorded editor"
+        return None
+    if writer.kind != WRITER_DERIVED or not _derived_owns(writer, block):
+        return (
+            "writer provenance does not own this block "
+            "(derived writers are confined to their own provenance)"
+        )
+    return None
+
+
 def _derived_owns(writer: WriterIdentity, block: MeetingBlock) -> bool:
     """A derived writer owns exactly the blocks whose recorded provenance
     carries its engine and role — never anything broader."""
@@ -820,11 +856,22 @@ def apply_block_write(
 
     if action == ACTION_CREATE:
         if existing is not None:
-            if (
-                existing.session_id == session_id
-                and existing.block_type == (block_type or "")
-                and existing.content == content
-            ):
+            # A create landing on an existing block is a replay only when the
+            # writer would also be AUTHORIZED for that block and the identity
+            # and content match — authorization is never skipped on replay
+            # (otherwise a derived writer could collect success acks against
+            # user notes, or a foreign editor against another's note).
+            auth_refusal = _authorize_target(writer, existing, session_id)
+            if auth_refusal is not None:
+                return _refuse(
+                    store,
+                    session_id=session_id,
+                    block_id=block_id,
+                    writer=writer,
+                    action=action,
+                    reason=auth_refusal,
+                )
+            if existing.block_type == (block_type or "") and existing.content == content:
                 return BlockWriteOutcome(allowed=True, block=existing, replayed=True)
             return _refuse(
                 store,
@@ -880,7 +927,14 @@ def apply_block_write(
             owner = OWNER_SYSTEM
         provenance = writer.as_provenance()
         if provenance_extra:
-            provenance = {**provenance, **provenance_extra}
+            provenance = {
+                **provenance,
+                **{
+                    k: v
+                    for k, v in provenance_extra.items()
+                    if k not in _RESERVED_PROVENANCE_KEYS
+                },
+            }
         now = _utcnow()
         block = MeetingBlock(
             block_id=block_id,
@@ -898,7 +952,12 @@ def apply_block_write(
         created = store.insert_block(block)
         if not created:
             racer = store.get_block(block_id)
-            if racer is not None and racer.content == content:
+            if (
+                racer is not None
+                and _authorize_target(writer, racer, session_id) is None
+                and racer.block_type == block_type
+                and racer.content == content
+            ):
                 return BlockWriteOutcome(allowed=True, block=racer, replayed=True)
             return _refuse(
                 store,
@@ -920,59 +979,26 @@ def apply_block_write(
             action=action,
             reason="unknown block_id (fail closed: nothing was written)",
         )
-    if existing.session_id != session_id:
+    auth_refusal = _authorize_target(writer, existing, session_id)
+    if auth_refusal is not None:
         return _refuse(
             store,
             session_id=session_id,
             block_id=block_id,
             writer=writer,
             action=action,
-            reason="block belongs to a different session (ownership conflict)",
-        )
-    if existing.owner not in OWNERS or existing.block_type not in BLOCK_TYPES:
-        return _refuse(
-            store,
-            session_id=session_id,
-            block_id=block_id,
-            writer=writer,
-            action=action,
-            reason=f"recorded ownership is unknown (owner={existing.owner!r}, "
-            f"type={existing.block_type!r}); failing closed",
+            reason=auth_refusal,
         )
 
-    if existing.block_type == TYPE_USER_NOTE:
-        if writer.kind != WRITER_USER_EDITOR:
-            return _refuse(
-                store,
-                session_id=session_id,
-                block_id=block_id,
-                writer=writer,
-                action=action,
-                reason="derived writers never touch user_note blocks (INV-CDLM-6)",
-            )
-        recorded_identity = (existing.provenance or {}).get("editor_identity", "")
-        if not writer.editor_identity.strip() or (
-            recorded_identity and writer.editor_identity != recorded_identity
-        ):
-            return _refuse(
-                store,
-                session_id=session_id,
-                block_id=block_id,
-                writer=writer,
-                action=action,
-                reason="editor identity does not match the note's recorded editor",
-            )
-    else:
-        if writer.kind != WRITER_DERIVED or not _derived_owns(writer, existing):
-            return _refuse(
-                store,
-                session_id=session_id,
-                block_id=block_id,
-                writer=writer,
-                action=action,
-                reason="writer provenance does not own this block "
-                "(derived writers are confined to their own provenance)",
-            )
+    # Same-content revise is a replay: fully authorized above, nothing to
+    # write, no revision bump — this is how idempotent resends stay
+    # authorization-checked without double-counting.
+    if (
+        action == ACTION_REVISE
+        and content == existing.content
+        and (position is None or position == existing.position)
+    ):
+        return BlockWriteOutcome(allowed=True, block=existing, replayed=True)
 
     now = _utcnow()
     if action == ACTION_MOVE:
@@ -1006,7 +1032,14 @@ def apply_block_write(
     else:  # revise
         provenance = existing.provenance
         if provenance_extra:
-            provenance = {**provenance, **provenance_extra}
+            provenance = {
+                **provenance,
+                **{
+                    k: v
+                    for k, v in provenance_extra.items()
+                    if k not in _RESERVED_PROVENANCE_KEYS
+                },
+            }
         revised = MeetingBlock(
             block_id=existing.block_id,
             session_id=existing.session_id,
@@ -1014,13 +1047,7 @@ def apply_block_write(
             block_type=existing.block_type,
             provenance=provenance,
             content=content,
-            position=existing.position
-            if position is None
-            else (
-                position
-                if existing.owner == OWNER_USER or _derived_owns(writer, existing)
-                else existing.position
-            ),
+            position=existing.position if position is None else position,
             revision=existing.revision + 1,
             retired=existing.retired,
             created_at=existing.created_at,
@@ -1095,7 +1122,6 @@ __all__ = [
     "blocks_for_session",
     "get_block",
     "get_note_revision",
-    "insert_note_revision",
     "note_revisions",
     "refusals_for_session",
     "reset_process_meeting_blocks",

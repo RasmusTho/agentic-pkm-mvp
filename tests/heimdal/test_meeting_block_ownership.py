@@ -423,6 +423,56 @@ def test_derived_writers_confined_to_own_provenance(client: TestClient) -> None:
     assert own.allowed is True
 
 
+def test_replays_and_revisions_never_bypass_authorization(client: TestClient) -> None:
+    """Convergence-review regressions: replays are authorized; revisions honest."""
+    session_id = f"mtg-{uuid4()}"
+    assert _open_session(client, session_id).status_code == 200
+    note_id = str(uuid4())
+    assert _write_note(client, session_id, note_id, 1, "mine").status_code == 200
+
+    # A wrong editor replaying IDENTICAL text gets refused, not a success ack.
+    wrong_editor = _write_note(client, session_id, note_id, 1, "mine", editor="intruder")
+    assert wrong_editor.status_code == 409
+    assert wrong_editor.json()["detail"]["error"] == "block_write_refused"
+
+    # A derived block id targeted through the user-note route with matching
+    # text cannot mint a user-note ack/history row.
+    assert _admit_segment(client, session_id, 0, b"transcript text.").status_code == 200
+    derived_id = f"{session_id}:transcript:0"
+    forged = _write_note(client, session_id, derived_id, 1, "transcript text.")
+    assert forged.status_code == 409
+    assert meeting_blocks.note_revisions(derived_id) == []
+
+    # Same (note, revision) with different text: named conflict, stored text wins.
+    conflict = _write_note(client, session_id, note_id, 1, "rewritten history")
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["error"] == "note_revision_conflict"
+    assert meeting_blocks.get_block(note_id).content == "mine"
+
+    # Stale (lower/equal, non-replay) revision numbers are refused.
+    assert _write_note(client, session_id, note_id, 3, "third").status_code == 200
+    stale = _write_note(client, session_id, note_id, 2, "late arrival")
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["error"] == "stale_note_revision"
+
+    # provenance_extra can never override structural provenance keys.
+    analysis = DERIVED_WRITERS[0]
+    outcome = meeting_blocks.apply_block_write(
+        session_id=session_id,
+        writer=analysis,
+        action=meeting_blocks.ACTION_CREATE,
+        block_id=f"{session_id}:analysis:poisoned",
+        block_type=meeting_blocks.TYPE_DERIVED_PROJECTION,
+        content="x",
+        provenance_extra={"kind": "user_editor", "engine": "other", "note": "kept"},
+    )
+    assert outcome.allowed is True
+    prov = outcome.block.provenance
+    assert prov["kind"] == "derived"
+    assert prov["engine"] == "heimdal-meeting-analysis"
+    assert prov["note"] == "kept"
+
+
 def test_editor_identity_required_for_user_notes(client: TestClient) -> None:
     """Only the user's editor identity passes; forged identities from derived contexts refuse."""
     session_id = f"mtg-{uuid4()}"

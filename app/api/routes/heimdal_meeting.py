@@ -215,9 +215,50 @@ def write_user_note(
         if session is None:
             raise MeetingSessionNotFoundError(session_id)
 
-        # Idempotent replay: the stored revision is the acknowledgement.
+        writer = meeting_blocks.WriterIdentity(
+            kind=meeting_blocks.WRITER_USER_EDITOR,
+            editor_identity=body.editor_identity,
+        )
+
+        # Idempotent replay: the stored revision is the acknowledgement — but
+        # the replay is still fully authorized through the guard (a wrong
+        # editor, a derived block id, or a foreign session must never collect
+        # a success ack by replaying identical text), and a reused revision
+        # number carrying different text is a named conflict, not a false ack.
         existing = meeting_blocks.get_note_revision(body.note_block_id, body.revision)
         if existing is not None:
+            replay_auth = meeting_blocks.apply_block_write(
+                session_id=session_id,
+                writer=writer,
+                action=meeting_blocks.ACTION_REVISE,
+                block_id=body.note_block_id,
+                content=meeting_blocks.get_block(body.note_block_id).content
+                if meeting_blocks.get_block(body.note_block_id)
+                else body.text,
+            )
+            if not replay_auth.allowed:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "block_write_refused",
+                        "message": replay_auth.reason,
+                        "state": "not_acknowledged",
+                        "trace_id": trace_id,
+                    },
+                )
+            if existing["text"] != body.text:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "note_revision_conflict",
+                        "message": (
+                            f"revision {body.revision} of this note was already "
+                            "acknowledged with different text; revisions are "
+                            "immutable — send the new text as the next revision."
+                        ),
+                        "trace_id": trace_id,
+                    },
+                )
             digest = hashlib.sha256(existing["text"].encode("utf-8")).hexdigest()
             return UserNoteResponse(
                 session_id=session_id,
@@ -228,10 +269,25 @@ def write_user_note(
                 trace_id=trace_id,
             )
 
-        writer = meeting_blocks.WriterIdentity(
-            kind=meeting_blocks.WRITER_USER_EDITOR,
-            editor_identity=body.editor_identity,
-        )
+        # Client-monotonic revisions: a new write must advance past every
+        # acknowledged revision of this note (gaps allowed); a lower or equal
+        # number that is not an exact replay is stale.
+        history = meeting_blocks.note_revisions(body.note_block_id)
+        latest_acked = max((rev["revision"] for rev in history), default=0)
+        if body.revision <= latest_acked:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "stale_note_revision",
+                    "message": (
+                        f"revision {body.revision} is not ahead of the latest "
+                        f"acknowledged revision {latest_acked}; note revisions are "
+                        "client-monotonic."
+                    ),
+                    "trace_id": trace_id,
+                },
+            )
+
         block = meeting_blocks.get_block(body.note_block_id)
         if block is None:
             outcome = meeting_blocks.apply_block_write(
@@ -242,9 +298,9 @@ def write_user_note(
                 block_type=meeting_blocks.TYPE_USER_NOTE,
                 content=body.text,
             )
-        elif block.content == body.text:
-            outcome = meeting_blocks.BlockWriteOutcome(allowed=True, block=block, replayed=True)
         else:
+            # The guard authorizes and treats same-content revises as replays
+            # internally; the route never bypasses it.
             outcome = meeting_blocks.apply_block_write(
                 session_id=session_id,
                 writer=writer,

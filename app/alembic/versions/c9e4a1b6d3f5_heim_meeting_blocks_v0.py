@@ -9,8 +9,10 @@ Creates the tables backing `app/heimdal/meeting_blocks.py`:
   invariants no application bug may cross: identity fields (block_id,
   session_id, owner, block_type, created_at) are immutable, rows are never
   deleted, and a `user_note` row's content/position may only change together
-  with a provenance that carries the user-editor kind — a derived writer that
-  somehow reached UPDATE still cannot rewrite a user note.
+  with a provenance that *claims* the user-editor kind. The trigger checks
+  that claim, not authority — a bypassing writer that also forges the
+  provenance kind passes it; real authorization lives in the application
+  guard, and this trigger is the backstop against honest-but-buggy writers.
 - `heimdal_meeting_user_note_revision`: append-only edit history, one row per
   `(note_block_id, revision)` — the durable acknowledgement rows for the
   user-note endpoint (CDLM-01 ack-ordering family). User notes are Human
