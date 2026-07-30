@@ -1779,7 +1779,6 @@ class CkmStore:
             for item in expected_capabilities
         }
         artifact_placeholders = ",".join("?" for _ in artifact_snapshot)
-        capability_placeholders = ",".join("?" for _ in capability_snapshot)
         current_artifacts = {
             str(row["id"]): (
                 str(row["public_id"]),
@@ -1804,12 +1803,10 @@ class CkmStore:
                 str(row["definition"]),
             )
             for row in conn.execute(
-                f"""
+                """
                 SELECT id, public_id, name, definition
                 FROM ckm_capability
-                WHERE id IN ({capability_placeholders})
-                """,
-                tuple(capability_snapshot),
+                """
             )
         }
         linked_artifact = conn.execute(
