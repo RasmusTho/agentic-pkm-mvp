@@ -11,9 +11,16 @@ can_parallelize_with: []
 
 State: Implemented. Delivered by repair PR #4392 (issue #4291, 2026-07-30) and repaired again by PR
 #4410 (issue #4291, 2026-07-30), which bound the fixed host launcher to repo-owned
-declared-credential lineage and rejected a discoverable-but-stale subscription launcher. The live
-provider run and legacy-bridge retirement remain parent validation on #4286. **This is the first
-task in the capability that changes runtime behaviour.**
+declared-credential lineage and rejected a discoverable-but-stale subscription launcher. **This is
+the first task in the capability that changes runtime behaviour.** **Owner ruling 2026-07-30
+(cost):** the live provider run and legacy-bridge retirement are withdrawn from parent validation —
+metered provider API keys are not provisioned, the declared identifiers stay intentionally
+unprovisioned, and the subscription-backed session remains the sanctioned operational auth on the
+inquiry host (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost
+ruling on the model-inquiry path`). The delivered code stays merged as the required mechanism for
+any future metered path; "Provisioning credential values, which is an owner action" under
+`Out of scope` reads under that ruling — the owner has declined it, so it is not a pending
+prerequisite.
 
 # Resolve Model Inquiry Credentials Through Contract
 

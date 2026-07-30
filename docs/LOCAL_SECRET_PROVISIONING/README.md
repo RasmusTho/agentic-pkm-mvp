@@ -67,6 +67,12 @@ The delivered HSP-02 bootstrap resolves each consumer's allowlist into a tempora
 The child receives only `HOST_SECRET_RUNTIME_ENV_FILE`; declared secret bindings are never copied
 into its ambient environment.
 
+Status 2026-07-30: both model-provider identifiers remain declared and are **intentionally
+unprovisioned** by owner cost ruling
+(`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
+model-inquiry path`); `credential_unavailable` on their resolution path is expected state, not a
+provisioning gap to escalate. `heimdal.raw-store-key` provisioning is unaffected.
+
 ## Task order
 
 | Order | Task | ID | Prerequisite | Outcome |

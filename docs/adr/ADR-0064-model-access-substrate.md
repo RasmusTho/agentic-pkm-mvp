@@ -1,4 +1,4 @@
-State: Accepted (owner decision, 2026-07-27); amended 2026-07-27 (§8: CKM sequencing restated after the ADR-0057 A1 orchestration ruling — the migration order does not swap, CKM stays at step 5). Establishes credential and session resolution as part of the model abstraction and selects declared API keys as the default programmatic auth path. Changes no shipped runtime behavior by itself.
+State: Accepted (owner decision, 2026-07-27); amended 2026-07-27 (§8: CKM sequencing restated after the ADR-0057 A1 orchestration ruling — the migration order does not swap, CKM stays at step 5); amended 2026-07-30 (§4: owner cost ruling — metered provider API keys are not provisioned; the subscription-backed session remains the sanctioned operational auth for host-local Builder model inquiry, see `Amendment 2026-07-30` under §4). Establishes credential and session resolution as part of the model abstraction and selects declared API keys as the default programmatic auth path. Changes no shipped runtime behavior by itself.
 Doc role: Decision record (ADR)
 Authority: Authoritative for model-provider credential and session resolution, the default programmatic auth path, and the single-source provider set. Extends `docs/adr/ADR-0063-shared-llm-contract-kernel.md`, which remains authoritative for the Product/Builder contract seam and the fallback vocabulary. ADR-0062 remains authoritative for Builder process/data/credential separation. `docs/LLM_ROUTING.md` remains authoritative for current Product routing.
 Owner: Architecture spine / LLM boundary
@@ -102,6 +102,32 @@ generalized.
 The credential contract's existing invariants are inherited unchanged: value non-disclosure, channel
 isolation, consumer minimization, and fail-closed on a missing or malformed secret
 (`docs/LOCAL_SECRET_PROVISIONING/README.md:70-78`).
+
+#### Amendment 2026-07-30 — owner cost ruling on the model-inquiry path
+
+The owner declines to provision metered provider API keys for the Builder model-inquiry path. Both
+provider subscriptions are already paid; metered API billing on top of them (this ADR's stated cost)
+is rejected. Consequences:
+
+- The subscription-backed CLI session on the inquiry host remains the **sanctioned operational auth**
+  for host-local Builder model inquiry. This section's rule that no headless path may depend on a
+  subscription session is suspended for that path until the capability is re-scoped.
+- The MAS-05 implementation (contract-resolved credentials, typed `credential_unavailable` /
+  `session_expired` failures, no subscription or cross-provider fallback) stays merged and remains
+  the required mechanism for any future metered path. No code is reverted by this amendment.
+- The declared `anthropic.api-key` and `openai.api-key` identifiers stay in the host secret contract
+  and are **intentionally unprovisioned**. `credential_unavailable` from the provider-API path is
+  the expected state under this ruling — it is not a provisioning gap and must not be escalated to
+  the owner as one. Agents verify provider access on the inquiry host empirically instead of asking
+  (`ops/host-setup/mac-mini/AGENT_PLAYBOOK.md :: BuilderOps Model Inquiry host entrypoints`).
+- The parent-acceptance receipts `model_access_substrate.provider_enabled_noninteractive_inquiry.v1`
+  and `model_access_substrate.legacy_bridge_retirement.v1` are withdrawn as gates; MAS-06's entry
+  gate re-scopes with them. Hardening the existing GUI-session bridge, or building the
+  brokered-session backend this ADR already permits, is follow-up scoping — not authorized here.
+- Empirical host verification 2026-07-30 (existence checks only, no values read): subscription CLI
+  credentials for both providers are present in the inquiry host's login keychain; no
+  `yggdrasil.host-secrets` items and no raw provider API keys exist in any file-based keychain,
+  launchd environment, or deploy surface. Absence of metered keys is ruled intentional.
 
 ### 5. One provider set
 

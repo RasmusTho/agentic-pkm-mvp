@@ -1,6 +1,11 @@
 State: Active filed specification under parent validation hub #4286. Children #4287–#4292 execute
 serially; only #4287 is initially `agent:ready`. No Phase 1 shipped behavior is claimed until parent
-acceptance.
+acceptance. **Owner ruling 2026-07-30 (cost):** metered provider API keys are not provisioned; the
+subscription-backed session remains the sanctioned operational auth for host-local model inquiry
+(`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
+model-inquiry path`). MAS-01..05 stay delivered as merged code; the parent live-proof receipt
+`provider_enabled_noninteractive_inquiry.v1` and the legacy-bridge retirement receipt are withdrawn
+as acceptance gates, and MAS-06's entry gate re-scopes with them. Capability re-scoping is pending.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the task decomposition, execution order, cross-task invariants, and acceptance path for the model access substrate. Subordinate to `docs/adr/ADR-0064-model-access-substrate.md` (the decision), `docs/adr/ADR-0063-shared-llm-contract-kernel.md` (contract seam and fallback vocabulary), ADR-0062 (Builder credential/process separation), `docs/LOCAL_SECRET_PROVISIONING/README.md` (host secret boundary and INV-HSP-1..4), and `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` (provider census and egress posture). Owner docs win on disagreement.
 Owner: Architecture spine / LLM boundary

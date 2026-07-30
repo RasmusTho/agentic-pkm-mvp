@@ -1,6 +1,11 @@
 State: Filed as live validation hub #4286 (`agent:blocked`) on 2026-07-29. Children #4287–#4292 form
 the strict serial execution chain. GitHub holds the live acceptance ledger; this file is its
-repo-governed contract.
+repo-governed contract. **Owner ruling 2026-07-30 (cost):** the two live receipts below
+(`provider_enabled_noninteractive_inquiry.v1`, legacy-bridge retirement) are withdrawn as acceptance
+gates — metered provider API keys are not provisioned and the subscription-backed session remains
+the sanctioned operational auth for host-local model inquiry
+(`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
+model-inquiry path`). Parent acceptance re-scopes accordingly; a correction is posted on #4286.
 Doc role: Parent feature issue contract (live validation hub #4286)
 Authority: Owns the capability-level validation-hub contract and the acceptance ledger. Subordinate to
 `docs/MODEL_ACCESS_SUBSTRATE/README.md` for task shape and to `docs/adr/ADR-0064-model-access-substrate.md`
