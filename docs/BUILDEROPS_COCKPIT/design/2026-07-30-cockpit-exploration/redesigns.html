@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BuilderOps-cockpiten — registret över allt i rörelse</title>
+<link rel="stylesheet" href="colors_and_type.css">
+<link rel="stylesheet" href="cockpit.css">
+<style id="__om-edit-overrides"></style>
+<style>
+body:has(#st-normal:checked) #p-normal{display:block}
+body:has(#st-many:checked) #p-many{display:block}
+body:has(#st-empty:checked) #p-empty{display:block}
+body:has(#st-dead:checked) #p-dead{display:block}
+body:has(#st-degraded:checked) #p-degraded{display:block}
+body:has(#st-zoom:checked) #p-zoom{display:block}
+body:has(#ln-band:checked) #l-band{display:block}
+body:has(#ln-graf:checked) #l-graf{display:block}
+body:has(#ln-focus:checked) #l-focus{display:block}
+body:has(#fq1:checked) #f1,body:has(#fq2:checked) #f2,body:has(#fq3:checked) #f3,body:has(#fq4:checked) #f4{display:flex}
+#l-focus .focus{display:none}
+@media print{#l-focus .focus{display:flex}}
+.radios input:checked+label{background:var(--bg-overlay);color:var(--fg-1);border-color:var(--cyan);box-shadow:var(--cyan-glow)}
+body:has(#st-normal:checked) #lensgrp,body:has(#st-many:checked) #lensgrp{display:flex}
+#lensgrp{display:none}
+</style>
+</head>
+<body>
+<template id="__bundler_thumbnail"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="#070b12"/><g stroke="#00d4e8" stroke-width="3" fill="none"><path d="M60 100h30M110 100h30"/></g><g fill="#00d4e8"><circle cx="60" cy="100" r="7"/><circle cx="100" cy="100" r="7"/></g><circle cx="140" cy="100" r="6" fill="none" stroke="#f09030" stroke-width="2" stroke-dasharray="3 3"/><text x="100" y="150" fill="#d4a843" font-family="Georgia,serif" font-size="22" text-anchor="middle">Cockpit</text></svg></template>
+
+<div class="radios">
+<input type="radio" name="state" id="st-normal" checked><label for="st-normal">Normal</label>
+<input type="radio" name="state" id="st-many"><label for="st-many">Många på en gång</label>
+<input type="radio" name="state" id="st-empty"><label for="st-empty">Tom — sann</label>
+<input type="radio" name="state" id="st-dead"><label for="st-dead">Tom — död källa</label>
+<input type="radio" name="state" id="st-degraded"><label for="st-degraded">Degraderad</label>
+<input type="radio" name="state" id="st-zoom"><label for="st-zoom">Smal + 200 %</label>
+<input type="radio" name="lens" id="ln-band" checked><label for="ln-band">Band</label>
+<input type="radio" name="lens" id="ln-graf"><label for="ln-graf">Graf</label>
+<input type="radio" name="lens" id="ln-focus"><label for="ln-focus">En fråga i taget</label>
+<input type="radio" name="fq" id="fq1" checked><label for="fq1">1</label>
+<input type="radio" name="fq" id="fq2"><label for="fq2">2</label>
+<input type="radio" name="fq" id="fq3"><label for="fq3">3</label>
+<input type="radio" name="fq" id="fq4"><label for="fq4">4</label>
+</div>
+
+<div class="sw">
+<div class="sw-in">
+<div class="sw-grp"><span class="eyebrow">Tillstånd</span><div class="sw-row">
+<label for="st-normal" tabindex="0">Normal</label><label for="st-many" tabindex="0">Många på en gång</label><label for="st-empty" tabindex="0">Tom — sann</label><label for="st-dead" tabindex="0">Tom — död källa</label><label for="st-degraded" tabindex="0">Degraderad</label><label for="st-zoom" tabindex="0">Smal + 200 %</label></div></div>
+<div class="sw-grp" id="lensgrp"><span class="eyebrow">Lins</span><div class="sw-row">
+<label for="ln-band" tabindex="0">Band</label><label for="ln-graf" tabindex="0">Graf</label><label for="ln-focus" tabindex="0">En fråga i taget</label></div></div>
+<p class="doc-note">Designutforskning, inte specifikation. Ingen knapp här muterar något; cockpiten äger inget plan och sparar inget som överlever en omladdning.</p>
+</div>
+</div>
+
+<!-- ================= NORMAL ================= -->
+<div class="pane" id="p-normal"><div class="wrap">
+
+<section class="claim">
+<div class="claim-top"><div><p class="eyebrow">BuilderOps · registret</p><h1>Allt i rörelse</h1></div>
+<span class="band-count">17 trådar · 3 kapabiliteter</span></div>
+<p class="said">17 trådar kl 09:41. Sju källor, alla lästa inom fyra minuter. Två saker kräver dig. Ingenting här är cockpitens minne — varje rad räknas om ur sin auktoritet vid laddning.</p>
+<div class="sources">
+<div class="src"><b>GitHub</b><span>läst 09:41 · 0 m</span></div>
+<div class="src"><b>dispatcher-store</b><span>läst 09:41 · 0 m</span></div>
+<div class="src"><b>git</b><span>läst 09:40 · 1 m</span></div>
+<div class="src"><b>docs-frontmatter</b><span>läst 09:38 · 3 m</span></div>
+<div class="src"><b>CKM-projektion</b><span>läst 09:37 · 4 m</span></div>
+<div class="src"><b>deploy-kvitton</b><span>läst 09:39 · 2 m</span></div>
+<div class="src"><b>verification-runs</b><span>läst 09:41 · 0 m</span></div>
+</div>
+</section>
+
+<section class="legend">
+<div><h2>Beviskedjan — läs vänster till höger</h2>
+<div class="spine spine-lg"><b class="p"></b><i class="p"></i><b class="p"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<div class="spine-cols"><ul class="spine-scale"><li><i></i>1 · intention</li><li><i></i>2 · kapabilitet</li><li><i></i>3 · epic</li><li><i></i>4 · slice</li></ul><ul class="spine-scale"><li><i></i>5 · PR</li><li><i></i>6 · CI / sha</li><li><i></i>7 · kvitto</li><li><i></i>8 · prövat</li></ul></div>
+</div>
+<div><h2>Kantklass</h2><ul>
+<li><i class="spine"><b class="p"></b><i class="p"></i><b class="p"></b></i> Beviskedjad — CI-tvingad nyckel</li>
+<li><i class="spine"><b class="d"></b><i class="d"></i><b class="d"></b></i> Härledd — prosa, kan ljuga</li>
+<li><i class="spine"><b class="a"></b><i class="a"></i><b class="a"></b></i> Känd men okopplad — delvis, inte fel</li>
+<li><i class="spine"><b class="n"></b><i class="n"></i><b class="n"></b></i> Finns inte ännu</li>
+</ul></div>
+<div><h2>Knappklass</h2><ul>
+<li><span class="btn btn-contract"><span class="k">kontrakt</span>Typat anrop</span></li>
+<li><span class="btn btn-agent"><span class="k">agent</span>Startar agent</span></li>
+<li><span class="btn btn-out"><span class="k">ut</span>Öppnar auktoriteten</span></li>
+</ul></div>
+</section>
+
+<!-- ---------- LENS: BAND ---------- -->
+<div class="pane" id="l-band">
+
+<section class="band" id="b1">
+<div class="band-head"><span class="band-no">1</span><h2 class="band-q">Vad jobbar vi på?</h2><span class="band-count">7 aktiva</span>
+<p class="band-sub">Grupperat på kapabilitet där kopplingen finns.<br>Två trådar bär en brist och står också i band 3.</p></div>
+<div class="lanes">
+
+<div class="lane"><div class="lane-head"><b>Deterministisk leverans</b><span>cap_ddo · 2 trådar</span></div><div class="lane-cards">
+<details class="card card-active"><summary>
+<div class="meta"><span class="chip">#4401</span><span class="chip chip-lease">lås aktivt 1 t 12 m</span><span class="chip chip-empty">labels: tomt fält</span></div>
+<h3>En källa för task_id-derivering</h3>
+<div class="spine" role="img" aria-label="Beviskedja: intention saknas, kapabilitet och epic härledda, slice till CI beviskedjade, kvitto och prövat finns inte ännu"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">Grön CI på sha <span class="mono">168edbe2</span>. Inget verifieringskvitto ännu — därför är den inte gjord.</p>
+</summary>
+<div class="body">
+<div><h4>Kedjan, rung för rung</h4>
+<ul class="rungs">
+<li class="r-a"><i class="dot a"></i><span class="r-name">intention</span><span class="r-val">inget objekt finns i systemet</span><span class="r-cls">saknas</span></li>
+<li class="r-d"><i class="dot d"></i><span class="r-name">kapabilitet</span><span class="r-val">cap_ddo · via traceability-matrix</span><span class="r-cls">härledd</span></li>
+<li class="r-d"><i class="dot d"></i><span class="r-name">epic</span><span class="r-val">#4163 · via prosarad Parent: **#4163**</span><span class="r-cls">härledd</span></li>
+<li class="r-p"><i class="dot p"></i><span class="r-name">slice</span><span class="r-val">issue #4401 · task github-…-issue-4401</span><span class="r-cls">bevisad</span></li>
+<li class="r-p"><i class="dot p"></i><span class="r-name">PR</span><span class="r-val">#4408 · Governing-Issue: #4401</span><span class="r-cls">bevisad</span></li>
+<li class="r-p"><i class="dot p"></i><span class="r-name">CI / sha</span><span class="r-val">168edbe2 · 14 checks grön 09:12</span><span class="r-cls">bevisad</span></li>
+<li class="r-n"><i class="dot n"></i><span class="r-name">kvitto</span><span class="r-val">verified-merge sker vid merge</span><span class="r-cls">ännu ej</span></li>
+<li class="r-n"><i class="dot n"></i><span class="r-name">prövat</span><span class="r-val">inget kontrakt finns för ägaracceptans</span><span class="r-cls">ännu ej</span></li>
+</ul>
+<p class="partial"><b>Delvis, inte fel.</b> Raderna med prickad ram är kända ur specen men saknar maskinnyckel. Cockpiten visar dem hellre än att låta kedjan se hel ut.</p></div>
+<div><h4>Vidare — sista lagret är det riktiga systemet</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>PR #4408 i GitHub</a>
+<a class="btn btn-out" href="#"><span class="k">ut</span>Kortet i Signboard</a>
+<button class="btn btn-agent"><span class="k">agent</span>Låt en agent avsluta slicen</button>
+</div></div>
+</div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip">#4405</span><span class="chip chip-flaw">brist · branch utan PR</span><span class="chip">rörelse 4 d sedan</span></div>
+<h3>Parent-rad som läsbarhetskontroll</h3>
+<div class="spine" role="img" aria-label="Beviskedja: bruten efter slice, ingen PR"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">Branch <span class="mono">feat/parent-line-check</span> har 6 commits och ingen PR. Kedjan slutar där CI skulle börjat.</p>
+</summary><div class="body">
+<div><h4>Vad som är läst</h4><ul class="rungs">
+<li class="r-p"><i class="dot p"></i><span class="r-name">slice</span><span class="r-val">issue #4405 · öppet 11 d</span><span class="r-cls">bevisad</span></li>
+<li class="r-a"><i class="dot a"></i><span class="r-name">PR</span><span class="r-val">git: branch finns, GitHub: ingen PR</span><span class="r-cls">bruten</span></li>
+</ul></div>
+<div><h4>Vidare</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>Branchen i GitHub</a>
+<button class="btn btn-agent"><span class="k">agent</span>Låt en agent öppna PR:en</button>
+</div></div></div></details>
+
+</div></div>
+
+<div class="lane"><div class="lane-head"><b>BuilderOps control plane</b><span>cap_bcp · 3 trådar</span></div><div class="lane-cards">
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip">#4169</span><span class="chip chip-flaw">brist · CI röd</span><span class="chip chip-lease">lås aktivt 22 m</span></div>
+<h3>DeliveryRunView-konsolen</h3>
+<div class="spine" role="img" aria-label="Beviskedja: PR finns men CI röd"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">PR #4415, <span class="mono">3 av 14 checks röda</span> sedan 08:03. Agenten har inte rört den på 1 t 38 m.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>Röda checks i GitHub</a>
+<button class="btn btn-agent"><span class="k">agent</span>Låt en agent läsa loggen och laga</button>
+</div></div></div></details>
+
+<details class="card card-active"><summary>
+<div class="meta"><span class="chip">#3793</span><span class="chip">BCP-06</span><span class="chip chip-agent">blockerar 1 annan tråd</span></div>
+<h3>Stäng BCP-06</h3>
+<div class="spine" role="img" aria-label="Beviskedja: slice bevisad, PR saknas ännu"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="d"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">Så länge den står öppen får ADR-0065:s skrivare inte aktiveras — därför sparar den här ytan ingenting.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>#3793 i GitHub</a>
+<a class="btn btn-out" href="#"><span class="k">ut</span>ADR-0065</a>
+</div></div></div></details>
+
+<details class="card card-active"><summary>
+<div class="meta"><span class="chip">#4412</span><span class="chip chip-empty">labels: tomt fält</span><span class="chip chip-empty">github_url: tomt fält</span></div>
+<h3>Labels och länk genom dispatchern</h3>
+<div class="spine" role="img" aria-label="Beviskedja: slice och PR bevisade, CI pågår"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">De två tomma fälten ovan är inte en avsaknad av innehåll — de är fält dispatchern kastar bort i dag. Den här tråden lagar just det.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>#4412 i GitHub</a>
+<button class="btn btn-contract"><span class="k">kontrakt</span>Läs om från dispatcher-store</button>
+</div></div></div></details>
+</div></div>
+
+<div class="lane"><div class="lane-head"><b>Capability knowledge model</b><span>cap_ckm · 2 trådar</span></div><div class="lane-cards">
+<details class="card card-active"><summary>
+<div class="meta"><span class="chip">#4288</span><span class="chip">rörelse 40 m sedan</span></div>
+<h3>Precision i matrix-linkern</h3>
+<div class="spine" role="img" aria-label="Beviskedja: slice till CI bevisade"><b class="a"></b><i class="a"></i><b class="p"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">Enda tråden vars kapabilitetskant är maskinläst — den kommer ur en rad i traceability-matrisen, inte ur prosa.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>#4288 i GitHub</a><a class="btn btn-out" href="#"><span class="k">ut</span>CKM-vyn</a>
+</div></div></div></details>
+
+<details class="card card-active"><summary>
+<div class="meta"><span class="chip">spec-dir</span><span class="chip chip-partial">ingen issue-koppling</span></div>
+<h3>Kanten till användning och konsumenter</h3>
+<div class="spine" role="img" aria-label="Beviskedja: känd ur specen, ingen issue-nyckel nedåt"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">Fyra task-dokument med beroende-DAG finns i specmappen. <span class="mono">github_issue:</span> är tomt i alla fyra, så cockpiten kan inte säga om något är filat.</p>
+</summary><div class="body">
+<div><h4>Delvis-läge</h4><p class="partial"><b>Känt ur specen, okopplat till drift.</b> Fyra barn är kända: <span class="mono">usage-linker-01…04</span>. Ingen av dem har en issue-nyckel. Det här är inte ett fel i cockpiten och inte fullständighet — det är exakt så mycket som går att veta.</p></div>
+<div><h4>Vidare</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>Specmappen i repot</a>
+<button class="btn btn-agent"><span class="k">agent</span>Låt en agent fila de fyra barnen</button>
+</div></div></div></details>
+</div></div>
+</div>
+</section>
+
+<section class="band" id="b2">
+<div class="band-head"><span class="band-no">2</span><h2 class="band-q">Vad är gjort?</h2><span class="band-count">3 levererade · 4 prövade</span>
+<p class="band-sub">Levererat och prövat är inte samma sak.<br>Ett system kan leverera felfritt mot fel beställning.</p></div>
+
+<div class="tier tier-invite">
+<div class="tier-head"><h3>Klart för dig att använda</h3><p>Tre saker är levererade och testade av systemet. Ingen av dem har mött dig än. Det är inte en läxa — det är tre saker som väntar på att bli användbara.</p></div>
+<div class="lanes">
+<details class="card card-done"><summary>
+<div class="meta"><span class="chip">#4290</span><span class="chip">cap_ckm</span></div>
+<h3>github_issue: backfyllt i två specmappar</h3>
+<div class="spine" role="img" aria-label="Beviskedja: hel till kvitto, prövat saknas"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="a"></i><b class="a"></b></div>
+</summary>
+<div class="receipt none"><b>Inte prövat av dig.</b> Levererat 2026-07-29 09:04.</div>
+<div class="body"><div><h4>Kvittot bakom &quot;testat&quot;</h4><ul class="rungs">
+<li class="r-p"><i class="dot p"></i><span class="r-name">CI</span><span class="r-val">14 checks grön · sha 9f1c02de · 2026-07-29 08:51</span><span class="r-cls">bevisad</span></li>
+<li class="r-p"><i class="dot p"></i><span class="r-name">kvitto</span><span class="r-val">verified-merge run 88214 · issue-set {4290}</span><span class="r-cls">bevisad</span></li>
+<li class="r-a"><i class="dot a"></i><span class="r-name">prövat</span><span class="r-val">inget acceptanskvitto — inget kontrakt finns</span><span class="r-cls">saknas</span></li>
+</ul></div>
+<div><h4>Vidare</h4><div class="out">
+<a class="btn btn-open" href="#"><span class="k">öppna</span>Se de backfyllda mapparna</a>
+<a class="btn btn-out" href="#"><span class="k">ut</span>Verifieringskvittot</a>
+</div></div></div></details>
+
+<details class="card card-done"><summary>
+<div class="meta"><span class="chip">#4271</span><span class="chip">cap_bcp</span></div>
+<h3>Färskhetsrad per källa</h3>
+<div class="spine" role="img" aria-label="Beviskedja: hel till kvitto, prövat saknas"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="a"></i><b class="a"></b></div>
+</summary>
+<div class="receipt none"><b>Inte prövat av dig.</b> Levererat 2026-07-28 16:20.</div>
+<div class="body"><div><h4>Vidare</h4><div class="out">
+<a class="btn btn-open" href="#"><span class="k">öppna</span>Använd raden överst på den här ytan</a>
+<a class="btn btn-out" href="#"><span class="k">ut</span>Verifieringskvittot</a></div></div></div></details>
+
+<details class="card card-done"><summary>
+<div class="meta"><span class="chip">#4260</span><span class="chip">cap_bcp</span></div>
+<h3>Signboards läsväg mot dispatcher-storen</h3>
+<div class="spine" role="img" aria-label="Beviskedja: hel till kvitto, prövat saknas"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="a"></i><b class="a"></b></div>
+</summary>
+<div class="receipt none"><b>Inte prövat av dig.</b> Levererat 2026-07-27 11:47.</div>
+<div class="body"><div><h4>Vidare</h4><div class="out">
+<a class="btn btn-open" href="#"><span class="k">öppna</span>Öppna Signboard</a>
+<a class="btn btn-out" href="#"><span class="k">ut</span>Verifieringskvittot</a></div></div></div></details>
+</div>
+</div>
+
+<div class="tier tier-archive">
+<div class="tier-head"><h3>Prövat av dig</h3><p>Daterade påståenden med kvitto bakom. Ingen färg, ingen prick — bara datum, issue-mängd och sha.</p></div>
+<ul class="arch">
+<li><span class="id">#4188</span><span>Epic-ledger renderas</span><span class="rc">prövat 2026-07-28 · sha 4b1e77a1</span></li>
+<li><span class="id">#4142</span><span>Lås som går ut städas</span><span class="rc">prövat 2026-07-24 · sha 0cc93e10</span></li>
+<li><span class="id">#4098</span><span>Deploy-kvitto per kanal</span><span class="rc">prövat 2026-07-21 · sha 77aa1d3f</span></li>
+<li><span class="id">#4031</span><span>Governing-Issue-grinden</span><span class="rc">prövat 2026-07-16 · sha e51902bb</span></li>
+</ul>
+</div>
+</section>
+
+<section class="band" id="b3">
+<div class="band-head"><span class="band-no">3</span><h2 class="band-q">Vad har brister?</h2><span class="band-count">8 avläsningar</span>
+<p class="band-sub">Sorterat på risk, inte på ålder.<br>Åtta typer, alla avläsbara i dag.</p></div>
+<p class="flaw-note"><b>Det här är vad systemet vet om sig självt, inte en lista över misslyckanden.</b> Varje rad namnger mekanismen som brast och har en agent som kan ta den. Friktionen växer med risk: låg risk är ett klick, skrivning i ett externt system kräver att du håller inne knappen.</p>
+<div class="flaws">
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">levererad PR utan kvitto</span><span class="risk hi" role="img" aria-label="risk 4 av 4"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+<h3>#4251 mergad utan verifieringskvitto</h3>
+<p class="why">Merge-sha <span class="mono">a30c4be9</span> finns i git. Ingen rad i <span class="mono">verification_runs</span>, inget verified-merge-kvitto. Det är precis det påstående du litar på som saknas.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out">
+<a class="btn btn-out" href="#"><span class="k">ut</span>Merge-commit i GitHub</a>
+<button class="btn btn-hold"><span class="k">håll 2 s</span>Begär efterhandsverifiering — kör CI mot mergad sha</button>
+</div></div></div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">CI röd</span><span class="risk" role="img" aria-label="risk 3 av 4"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+<h3>PR #4415 har varit röd i 1 t 38 m</h3>
+<p class="why">3 av 14 checks röda. Ingen agent har rört den sedan 08:03.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out"><button class="btn btn-agent"><span class="k">agent</span>Läs loggen och laga</button><a class="btn btn-out" href="#"><span class="k">ut</span>Checks</a></div></div></div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">stängt utan ägardok</span><span class="risk" role="img" aria-label="risk 3 av 4"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+<h3>#4203 stängdes, ägardokumentet står kvar</h3>
+<p class="why">Stängt 2026-07-26. <span class="mono">docs/STATUS.md</span> beskriver fortfarande det gamla läget. Nästa läsning av dokumentet är fel.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out"><button class="btn btn-agent"><span class="k">agent</span>Föreslå dokumentändringen</button><a class="btn btn-out" href="#"><span class="k">ut</span>#4203</a></div></div></div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">session utan landning</span><span class="risk" role="img" aria-label="risk 3 av 4"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+<h3>En model inquiry 2026-07-22 landade ingenstans</h3>
+<p class="why">Körd, avslutad, 0 issues, 0 dokument, 0 kvitton. Det som kom ut ur den finns bara i en logg. Det är waste, inte arbete.</p>
+</summary><div class="body">
+<div><h4>Vad som är läst</h4><ul class="rungs">
+<li class="r-p"><i class="dot p"></i><span class="r-name">session</span><span class="r-val">AgentWorklog 2026-07-22T13:02Z · 41 min</span><span class="r-cls">bevisad</span></li>
+<li class="r-a"><i class="dot a"></i><span class="r-name">landning</span><span class="r-val">ingen LearningSignal, ingen PromotionIntent</span><span class="r-cls">saknas</span></li>
+</ul></div>
+<div><h4>Vidare</h4><div class="out"><button class="btn btn-agent"><span class="k">agent</span>Låt en agent läsa loggen och föreslå ett issue</button></div></div></div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">utgånget lås</span><span class="risk" role="img" aria-label="risk 2 av 4"><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+<h3>Någon slutade mitt i #4118</h3>
+<p class="why">Låset på <span class="mono">issue:4118</span> gick ut 03:14. Arbetsträdet står kvar, ingen har tagit över.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out"><button class="btn btn-contract"><span class="k">kontrakt</span>Släpp låset</button><button class="btn btn-agent"><span class="k">agent</span>Låt en agent ta över där den slutade</button></div></div></div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">branch utan PR</span><span class="risk" role="img" aria-label="risk 2 av 4"><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+<h3>#4405 har en branch och ingen PR</h3>
+<p class="why">6 commits på <span class="mono">feat/parent-line-check</span>, senaste för 4 dagar sedan.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out"><button class="btn btn-agent"><span class="k">agent</span>Öppna PR:en</button></div></div></div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">aldrig pushat</span><span class="risk" role="img" aria-label="risk 2 av 4"><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+<h3>Tre commits i ett arbetsträd har aldrig lämnat maskinen</h3>
+<p class="why"><span class="mono">wt/ckm-linkers</span> · 3 commits · äldsta 6 d. Ingen remote känner till dem. Den osynliga luckan.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out"><button class="btn btn-hold"><span class="k">håll 2 s</span>Pusha branchen — skriver i GitHub</button></div></div></div></details>
+
+<details class="card card-flaw"><summary>
+<div class="meta"><span class="chip chip-flaw">epic utan rörelse</span><span class="risk" role="img" aria-label="risk 1 av 4"><i class="on"></i><i></i><i></i><i></i></span></div>
+<h3>#4163 har fyra öppna barn och ingen rörelse på 11 d</h3>
+<p class="why">Barnmängden är läst ur en prosatabell, inte ur en ledger. Antalet kan vara fel — det är själva bristen.</p>
+</summary><div class="body">
+<div><h4>Vad som är läst</h4><ul class="rungs">
+<li class="r-d"><i class="dot d"></i><span class="r-name">barn</span><span class="r-val">4 rader i ## Implementation Tasks · kolumnnamn Issue</span><span class="r-cls">härledd</span></li>
+<li class="r-a"><i class="dot a"></i><span class="r-name">ledger</span><span class="r-val">epic_delivery_ledger renderas men postas aldrig</span><span class="r-cls">saknas</span></li>
+</ul></div>
+<div><h4>Vidare</h4><div class="out">
+<button class="btn btn-hold"><span class="k">håll 2 s</span>Posta ledgern som kommentar — skriver i GitHub</button>
+<a class="btn btn-out" href="#"><span class="k">ut</span>#4163</a></div></div></div></details>
+</div>
+</section>
+
+<section class="band" id="b4">
+<div class="band-head"><span class="band-no">4</span><h2 class="band-q">Vad är bortglömt?</h2><span class="band-count">10 orörda</span>
+<p class="band-sub">Ålder plus avsaknad av rörelse i sina egna auktoriteter.<br>Ren ålder räcker inte — se <span class="mono">open-questions.md</span>.</p></div>
+<div class="still">
+<div class="still-row"><span class="id">#4301</span><span class="nm">Recall-mätning mot storen<span class="age-bar old"><b style="width:74%"></b></span></span><span class="ag">orört 23 d</span><span class="mv">sista rörelse: git 2026-07-07</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4266</span><span class="nm">associate-körning mot storen<span class="age-bar old"><b style="width:68%"></b></span></span><span class="ag">orört 21 d</span><span class="mv">sista rörelse: issue-kommentar</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4219</span><span class="nm">Stabila id på behovslagret<span class="age-bar old"><b style="width:61%"></b></span></span><span class="ag">orört 19 d</span><span class="mv">väntar på dig — se nedan</span><button class="btn btn-out"><span class="k">ut</span>Öppna</button></div>
+<div class="still-row"><span class="id">#4180</span><span class="nm">Rate-limit-hållning för läs-tids-joins<span class="age-bar"><b style="width:55%"></b></span></span><span class="ag">orört 17 d</span><span class="mv">obeslutat överallt</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4155</span><span class="nm">type:epic utanför etikett-taxonomin<span class="age-bar"><b style="width:48%"></b></span></span><span class="ag">orört 15 d</span><span class="mv">sista rörelse: label satt</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4121</span><span class="nm">Tracked by-markören är demoterad men enda vägen<span class="age-bar"><b style="width:42%"></b></span></span><span class="ag">orört 13 d</span><span class="mv">sista rörelse: docs 2026-07-17</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4090</span><span class="nm">epic_run_state matchar nycklar utan schema<span class="age-bar"><b style="width:39%"></b></span></span><span class="ag">orört 12 d</span><span class="mv">sista rörelse: PR stängd</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4066</span><span class="nm">stable-kanalens hårdare krav ligger inerta<span class="age-bar"><b style="width:35%"></b></span></span><span class="ag">orört 11 d</span><span class="mv">kanal vilande</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4044</span><span class="nm">PR-lane-markörer bor i select_pr_tests<span class="age-bar"><b style="width:32%"></b></span></span><span class="ag">orört 10 d</span><span class="mv">sista rörelse: git 2026-07-20</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+<div class="still-row"><span class="id">#4012</span><span class="nm">Doctor för färskhet per plan<span class="age-bar"><b style="width:29%"></b></span></span><span class="ag">orört 9 d</span><span class="mv">sista rörelse: issue skapat</span><button class="btn btn-agent"><span class="k">agent</span>Ta upp</button></div>
+</div>
+</section>
+
+<section class="band" id="b5">
+<div class="band-head"><span class="band-no">·</span><h2 class="band-q">Kräver dig</h2><span class="band-count">2</span>
+<p class="band-sub">Ett band inuti registret, inte framsidan.<br>Ingen förvald rekommendation, inget ett-klicks-godkännande.</p></div>
+<div class="lanes">
+<details class="card card-human"><summary>
+<div class="meta"><span class="chip chip-agent">ägarbeslut</span><span class="chip">Product-ägda dokument</span></div>
+<h3>Ska behovslagret få stabila id?</h3>
+<p class="why">14 behov, inga id. Utan dem kan kanten behov → kapabilitet inte uttryckas, och grafens rot förblir oritad. Ändringen rör dokument du äger — en agent får inte välja för dig.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out"><a class="btn btn-out" href="#"><span class="k">ut</span>USER_NEEDS_MODEL.md</a><button class="btn btn-agent"><span class="k">agent</span>Låt en agent förbereda ett förslag att läsa</button></div></div></div></details>
+<details class="card card-human"><summary>
+<div class="meta"><span class="chip chip-agent">ägarbeslut</span><span class="chip">saknar kontrakt</span></div>
+<h3>Vad ska ett acceptanskvitto innehålla?</h3>
+<p class="why">Kolumnen &quot;prövat av dig&quot; kan inte fyllas maskinellt förrän det finns ett kvittokontrakt. Det enda som finns i dag är ett exempel för produktionsdriftsättning.</p>
+</summary><div class="body"><div><h4>Vidare</h4><div class="out"><a class="btn btn-out" href="#"><span class="k">ut</span>prod_acceptance_receipt.example.json</a></div></div></div></details>
+</div>
+</section>
+</div>
+
+<!-- ---------- LENS: GRAF ---------- -->
+<div class="pane" id="l-graf">
+<p class="sec-note"><b>Samma 17 trådar, ritade som fan-out.</b> Kolumnerna är grafens nivåer. En nod ärver kantklassen från kanten in i sig: heldragen vänsterkant är beviskedjad, streckad är härledd ur prosa, prickad amber är känd men okopplad. Grenar delar noder — <span class="mono">#4163</span> står under två kapabiliteter eftersom matrisen ger den två föräldrar.</p>
+<div class="graf"><div class="graf-cols">
+<div class="graf-col"><h3>intention</h3>
+<div class="node node-abs">Inget objekt finns<span class="n-id">grafens rot är oritad</span></div>
+<div class="node node-abs">Inget objekt finns<span class="n-id">behovslagret har inga id</span></div>
+</div>
+<div class="graf-col"><h3>kapabilitet</h3>
+<div class="node node-d">Deterministisk leverans<span class="n-id">cap_ddo · seed_source YAML</span></div>
+<div class="node node-d">BuilderOps control plane<span class="n-id">cap_bcp · seed_source YAML</span></div>
+<div class="node node-p">Capability knowledge model<span class="n-id">cap_ckm · matrisrad</span></div>
+</div>
+<div class="graf-col"><h3>epic</h3>
+<div class="graf-group"><b>ur cap_ddo</b>
+<div class="node node-d">#4163 Epic-ledger<span class="n-id">4 barn ur prosatabell</span></div>
+<div class="node node-ghost">spec-dir utan issue<span class="n-id">DETERMINISTIC_… · 3 task-dok</span></div></div>
+<div class="graf-group"><b>ur cap_bcp</b>
+<div class="node node-d">#4169 Leveranskonsol<span class="n-id">6 barn ur prosatabell</span></div>
+<div class="node node-d">#3793 BCP-06<span class="n-id">2 barn</span></div></div>
+<div class="graf-group"><b>ur cap_ckm</b>
+<div class="node node-d">#4288 Linker-precision<span class="n-id">3 barn</span></div>
+<div class="node node-ghost">usage-linker spec-dir<span class="n-id">4 task-dok · github_issue: tomt</span></div></div>
+</div>
+<div class="graf-col"><h3>slice</h3>
+<div class="graf-group"><b>ur #4163</b>
+<div class="node node-p">#4401 task_id<span class="n-id">PR #4408 · grön</span></div>
+<div class="node node-p">#4405 parent-rad<span class="n-id">branch utan PR</span></div>
+<div class="node node-p">#4118 låst<span class="n-id">lås gick ut 03:14</span></div>
+<div class="node node-p">#4251 mergad<span class="n-id">utan kvitto</span></div></div>
+<div class="graf-group"><b>ur #4169</b>
+<div class="node node-p">#4415 konsol-PR<span class="n-id">3 checks röda</span></div>
+<div class="node node-p">#4412 labels genom<span class="n-id">CI kör</span></div></div>
+<div class="graf-group"><b>ur usage-linker</b>
+<div class="node node-ghost">usage-linker-01…04<span class="n-id">kända ur specen · ingen issue</span></div></div>
+</div>
+<div class="graf-col"><h3>bevis</h3>
+<div class="node node-p">sha 168edbe2<span class="n-id">14 checks grön · kvitto vid merge</span></div>
+<div class="node node-ghost">#4251 · a30c4be9<span class="n-id">mergad, inget kvitto</span></div>
+<div class="node node-p">run 88214<span class="n-id">verified-merge · issue-set {4290}</span></div>
+<div class="node node-abs">ägaracceptans<span class="n-id">inget kontrakt finns</span></div>
+</div>
+</div></div>
+<p class="sec-note">Grafens svaghet är läsbar i formen: allt till vänster om <b>slice</b> är streckat eller prickat. Den enda heldragna ryggraden är slice → PR → sha → kvitto. Det är också den enda kant CI tvingar.</p>
+</div>
+
+<!-- ---------- LENS: EN FRÅGA I TAGET ---------- -->
+<div class="pane" id="l-focus">
+<p class="sec-note"><b>Lägsta kognitiva last.</b> En fråga fyller ytan. Svaret först som ett påstående, sedan högst fem rader. Fyra steg, samma ordning varje gång, ingen sidoläsning.</p>
+
+<div class="focus" id="f1"><p class="eyebrow">Fråga 1 av 4 · kl 09:41</p>
+<p class="q">Vad jobbar vi på?</p>
+<p class="a">Sju trådar rör sig, över tre kapabiliteter. Fem hade rörelse i dag.</p>
+<ul class="focus-list">
+<li><span class="id">#4401</span><span>En källa för task_id</span><span class="mono">lås aktivt · grön CI</span></li>
+<li><span class="id">#4415</span><span>Leveranskonsolen</span><span class="mono">CI röd 1 t 38 m</span></li>
+<li><span class="id">#4412</span><span>Labels genom dispatchern</span><span class="mono">CI kör</span></li>
+<li><span class="id">#4288</span><span>Linker-precision</span><span class="mono">rörelse 40 m sedan</span></li>
+<li><span class="id">#3793</span><span>BCP-06</span><span class="mono">blockerar 1 tråd</span></li>
+</ul>
+<div class="focus-nav"><label class="btn btn-out" for="fq2"><span class="k">nästa</span>Vad är gjort?</label><label class="btn" for="ln-band">Visa hela registret</label></div></div>
+
+<div class="focus" id="f2"><p class="eyebrow">Fråga 2 av 4 · kl 09:41</p>
+<p class="q">Vad är gjort?</p>
+<p class="a warn">Tre saker är levererade och testade. Ingen av dem har mött dig än.</p>
+<ul class="focus-list">
+<li><span class="id">#4290</span><span>github_issue: backfyllt</span><span class="mono">levererat 07-29 · ej prövat</span></li>
+<li><span class="id">#4271</span><span>Färskhetsrad per källa</span><span class="mono">levererat 07-28 · ej prövat</span></li>
+<li><span class="id">#4260</span><span>Signboards läsväg</span><span class="mono">levererat 07-27 · ej prövat</span></li>
+</ul>
+<p class="mono" style="color:var(--fg-2)">Fyra äldre trådar är prövade av dig, senast 2026-07-28.</p>
+<div class="focus-nav"><label class="btn btn-out" for="fq3"><span class="k">nästa</span>Vad har brister?</label><label class="btn" for="fq1">Tillbaka</label></div></div>
+
+<div class="focus" id="f3"><p class="eyebrow">Fråga 3 av 4 · kl 09:41</p>
+<p class="q">Vad har brister?</p>
+<p class="a warn">Åtta avläsningar. En av dem rör påståendet du litar på.</p>
+<ul class="focus-list">
+<li><span class="id">#4251</span><span>Mergad utan verifieringskvitto</span><span class="mono">risk 4/4</span></li>
+<li><span class="id">#4415</span><span>CI röd sedan 08:03</span><span class="mono">risk 3/4</span></li>
+<li><span class="id">#4203</span><span>Stängt utan ägardok-uppdatering</span><span class="mono">risk 3/4</span></li>
+<li><span class="id">07-22</span><span>Session som landade ingenstans</span><span class="mono">risk 3/4</span></li>
+<li><span class="id">+4</span><span>Lägre risk</span><span class="mono">lås, branch, opushat, epic</span></li>
+</ul>
+<div class="focus-nav"><label class="btn btn-out" for="fq4"><span class="k">nästa</span>Vad är bortglömt?</label><label class="btn" for="fq2">Tillbaka</label></div></div>
+
+<div class="focus" id="f4"><p class="eyebrow">Fråga 4 av 4 · kl 09:41</p>
+<p class="q">Vad är bortglömt?</p>
+<p class="a">Tio trådar har inte rört sig i någon av sina auktoriteter. Äldst 23 dagar.</p>
+<ul class="focus-list">
+<li><span class="id">#4301</span><span>Recall-mätning</span><span class="mono">orört 23 d</span></li>
+<li><span class="id">#4266</span><span>associate-körning</span><span class="mono">orört 21 d</span></li>
+<li><span class="id">#4219</span><span>Stabila id på behovslagret</span><span class="mono">väntar på dig</span></li>
+<li><span class="id">+7</span><span>Mellan 9 och 17 dagar</span><span class="mono">alla med agent-väg</span></li>
+</ul>
+<div class="focus-nav"><label class="btn btn-out" for="ln-band"><span class="k">klar</span>Öppna registret</label><label class="btn" for="fq3">Tillbaka</label></div></div>
+</div>
+
+</div></div>
+
+<!-- ================= MÅNGA PÅ EN GÅNG ================= -->
+<div class="pane" id="p-many"><div class="wrap">
+<section class="claim warn">
+<div class="claim-top"><div><p class="eyebrow">BuilderOps · registret</p><h1>Allt i rörelse</h1></div><span class="band-count">41 trådar · 6 kapabiliteter</span></div>
+<p class="said">41 trådar kl 09:41. Ytan säger fortfarande fyra saker i samma ordning — den blir längre, inte tätare. Inget band komprimeras bort, ingen rad döljs bakom &quot;visa mer&quot;.</p>
+<div class="sources">
+<div class="src"><b>GitHub</b><span>läst 09:41 · 0 m</span></div><div class="src"><b>dispatcher-store</b><span>läst 09:41 · 0 m</span></div><div class="src"><b>git</b><span>läst 09:40 · 1 m</span></div><div class="src"><b>docs-frontmatter</b><span>läst 09:38 · 3 m</span></div><div class="src"><b>CKM-projektion</b><span>läst 09:37 · 4 m</span></div><div class="src"><b>deploy-kvitton</b><span>läst 09:39 · 2 m</span></div><div class="src"><b>verification-runs</b><span>läst 09:41 · 0 m</span></div>
+</div>
+</section>
+<p class="sec-note"><b>Mekanismen vid volym:</b> band-ordningen är låst, kapabilitetsbanan blir en kolumn per kapabilitet i en rullande rad, och kort över fem per bana faller ihop till en radform med samma beviskedja. Inget sorteras om av ett tal — risk ordnar <em>inom</em> band 3, aldrig mellan band.</p>
+<section class="band"><div class="band-head"><span class="band-no">1</span><h2 class="band-q">Vad jobbar vi på?</h2><span class="band-count">19 aktiva</span><p class="band-sub">6 kapabilitetsbanor · rullar i sidled</p></div>
+<div class="lanes" style="grid-template-columns:repeat(3,1fr)">
+<div class="lane"><div class="lane-head"><b>Deterministisk leverans</b><span>cap_ddo · 5</span></div><div class="lane-cards">
+<div class="card card-active" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4401</span><span class="chip chip-lease">lås</span></div><h3>En källa för task_id</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+<div class="card card-flaw" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4405</span><span class="chip chip-flaw">brist</span></div><h3>Parent-rad som kontroll</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+<div class="card card-active" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4418</span></div><h3>Ledger-schema i CI</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+<div class="still"><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#4422</span><span class="nm">Deriveringstest</span><span class="mono" style="color:var(--fg-2)">grön</span></div><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#4425</span><span class="nm">Städa dubbletten i skriptet</span><span class="mono" style="color:var(--fg-2)">CI kör</span></div></div>
+</div></div>
+<div class="lane"><div class="lane-head"><b>BuilderOps control plane</b><span>cap_bcp · 6</span></div><div class="lane-cards">
+<div class="card card-flaw" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4415</span><span class="chip chip-flaw">CI röd</span></div><h3>Leveranskonsolen</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+<div class="card card-active" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4412</span><span class="chip chip-empty">labels: tomt</span></div><h3>Labels genom dispatchern</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+<div class="still"><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#3793</span><span class="nm">BCP-06</span><span class="mono" style="color:var(--fg-2)">blockerar 1</span></div><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#4430</span><span class="nm">API-tjänstens cache-hållning</span><span class="mono" style="color:var(--fg-2)">obeslutat</span></div><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#4433</span><span class="nm">Spegel för GraphQL-budget</span><span class="mono" style="color:var(--fg-2)">pågår</span></div><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#4436</span><span class="nm">Signboard som flik</span><span class="mono" style="color:var(--fg-2)">pågår</span></div></div>
+</div></div>
+<div class="lane"><div class="lane-head"><b>Capability knowledge model</b><span>cap_ckm · 4</span></div><div class="lane-cards">
+<div class="card card-active" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4288</span></div><h3>Linker-precision</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="p"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+<div class="card card-active" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">spec-dir</span><span class="chip chip-partial">okopplad</span></div><h3>Användningskanten</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+<div class="still"><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#4292</span><span class="nm">Watermark per källa i manifestet</span><span class="mono" style="color:var(--fg-2)">grön</span></div><div class="still-row" style="grid-template-columns:auto 1fr auto"><span class="id">#4299</span><span class="nm">Kandidatevidens som eget läge</span><span class="mono" style="color:var(--fg-2)">pågår</span></div></div>
+</div></div>
+</div>
+<p class="partial" style="margin-top:var(--space-4)"><b>Tre banor till rullar i sidled.</b> Ratatosk · Tyr · Brokkr — 4 trådar totalt. Sidled är avsiktligt: fyra frågor står kvar lodrätt, kapabiliteter växer vågrätt.</p>
+</section>
+<section class="band"><div class="band-head"><span class="band-no">3</span><h2 class="band-q">Vad har brister?</h2><span class="band-count">14 avläsningar</span><p class="band-sub">Risk ordnar inom bandet. Ingen skamsortering, ingen ålderssortering.</p></div>
+<p class="flaw-note"><b>Vid 14 brister ändras inte språket, bara längden.</b> Tre står över 3/4 i risk och ligger först. De elva övriga fälls ihop till radform med samma agent-väg — de göms inte, de tar mindre plats.</p>
+<div class="flaws">
+<div class="card card-flaw" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip chip-flaw">levererad PR utan kvitto</span><span class="risk hi"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div><h3>#4251 mergad utan verifieringskvitto</h3></div>
+<div class="card card-flaw" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip chip-flaw">levererad PR utan kvitto</span><span class="risk hi"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div><h3>#4257 mergad utan verifieringskvitto</h3></div>
+<div class="card card-flaw" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip chip-flaw">session utan landning</span><span class="risk"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div><h3>Två inquiries landade ingenstans</h3></div>
+</div>
+<div class="still" style="margin-top:var(--space-4)">
+<div class="still-row" style="grid-template-columns:170px 1fr auto auto"><span class="mono" style="color:var(--amber)">CI röd</span><span class="nm">PR #4415</span><span class="risk"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><button class="btn btn-agent"><span class="k">agent</span>Laga</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto auto"><span class="mono" style="color:var(--amber)">stängt utan dok</span><span class="nm">#4203</span><span class="risk"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><button class="btn btn-agent"><span class="k">agent</span>Föreslå</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto auto"><span class="mono" style="color:var(--amber)">utgånget lås</span><span class="nm">issue:4118 · 03:14</span><span class="risk"><i class="on"></i><i class="on"></i><i></i><i></i></span><button class="btn btn-contract"><span class="k">kontrakt</span>Släpp</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto auto"><span class="mono" style="color:var(--amber)">branch utan PR</span><span class="nm">#4405 · 6 commits</span><span class="risk"><i class="on"></i><i class="on"></i><i></i><i></i></span><button class="btn btn-agent"><span class="k">agent</span>Öppna PR</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto auto"><span class="mono" style="color:var(--amber)">aldrig pushat</span><span class="nm">wt/ckm-linkers · 3 commits</span><span class="risk"><i class="on"></i><i class="on"></i><i></i><i></i></span><button class="btn btn-hold"><span class="k">håll 2 s</span>Pusha</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto auto"><span class="mono" style="color:var(--amber)">epic utan rörelse</span><span class="nm">#4163 · 4 öppna barn · 11 d</span><span class="risk"><i class="on"></i><i></i><i></i><i></i></span><button class="btn btn-hold"><span class="k">håll 2 s</span>Posta ledger</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto auto"><span class="mono" style="color:var(--fg-2)">+5 rader</span><span class="nm">risk 1/4 — lås, branch, dok</span><span class="risk"><i class="on"></i><i></i><i></i><i></i></span><span class="mono" style="color:var(--fg-2)">samma form</span></div>
+</div>
+</section>
+</div></div>
+
+<!-- ================= TOM — SANN ================= -->
+<div class="pane" id="p-empty"><div class="wrap">
+<section class="claim">
+<div class="claim-top"><div><p class="eyebrow">BuilderOps · registret</p><h1>Allt i rörelse</h1></div><span class="band-count">0 trådar</span></div>
+<p class="said">0 poster kl 09:41. Sju källor, alla lästa inom fyra minuter. Tomheten är läst, inte antagen.</p>
+<div class="sources">
+<div class="src"><b>GitHub</b><span>läst 09:41 · 0 m</span></div><div class="src"><b>dispatcher-store</b><span>läst 09:41 · 0 m</span></div><div class="src"><b>git</b><span>läst 09:40 · 1 m</span></div><div class="src"><b>docs-frontmatter</b><span>läst 09:38 · 3 m</span></div><div class="src"><b>CKM-projektion</b><span>läst 09:37 · 4 m</span></div><div class="src"><b>deploy-kvitton</b><span>läst 09:39 · 2 m</span></div><div class="src"><b>verification-runs</b><span>läst 09:41 · 0 m</span></div>
+</div>
+</section>
+<div class="void"><p>Ingenting är i rörelse, och det är ett läst påstående.</p>
+<p class="sub">7 av 7 källor svarade · äldsta läsning 4 min gammal · 0 aktiva, 0 levererade utan prövning, 0 brister, 0 orörda</p></div>
+<p class="sec-note"><b>Varför den här ytan inte är blank:</b> en blank yta går inte att skilja från en död projektor. Påståendet, klockslaget och de sju källraderna är hela innehållet — de bär bevisbördan för tomheten. Ordningen är densamma som annars, banden står kvar med noll.</p>
+<section class="band"><div class="band-head"><span class="band-no">1</span><h2 class="band-q">Vad jobbar vi på?</h2><span class="band-count">0</span><p class="band-sub">Inget lås är aktivt. Ingen branch utan PR.</p></div>
+<div class="void" style="padding:var(--space-6)"><p style="font-size:var(--text-md)">0 aktiva trådar kl 09:41.</p><p class="sub">GitHub, dispatcher-store och git svarade alla inom en minut.</p></div></section>
+<section class="band"><div class="band-head"><span class="band-no">2</span><h2 class="band-q">Vad är gjort?</h2><span class="band-count">0 väntar på dig</span><p class="band-sub">Ingenting levererat sedan senaste prövning.</p></div>
+<div class="void" style="padding:var(--space-6)"><p style="font-size:var(--text-md)">Allt levererat är prövat. Senast 2026-07-28.</p><p class="sub">verification-runs läst 09:41 · 4 acceptansrader, alla daterade</p></div></section>
+</div></div>
+
+<!-- ================= TOM — DÖD KÄLLA ================= -->
+<div class="pane" id="p-dead"><div class="wrap">
+<section class="claim bad">
+<div class="claim-top"><div><p class="eyebrow">BuilderOps · registret</p><h1>Allt i rörelse</h1></div><span class="band-count" style="border-color:var(--destructive);color:var(--destructive)">okänt antal</span></div>
+<p class="said">Jag kan inte säga att det är tomt. GitHub svarade senast 07:12 — 2 t 29 min sedan. Allt nedan är ett delvis läge, inte ett läge.</p>
+<div class="sources">
+<div class="src dead"><b>GitHub</b><span>senast lyckad 07:12 · 2 t 29 m</span></div><div class="src"><b>dispatcher-store</b><span>läst 09:41 · 0 m</span></div><div class="src"><b>git</b><span>läst 09:40 · 1 m</span></div><div class="src"><b>docs-frontmatter</b><span>läst 09:38 · 3 m</span></div><div class="src"><b>CKM-projektion</b><span>läst 09:37 · 4 m</span></div><div class="src"><b>deploy-kvitton</b><span>läst 09:39 · 2 m</span></div><div class="src"><b>verification-runs</b><span>läst 09:41 · 0 m</span></div>
+</div>
+</section>
+<div class="void refuse"><p>Tomheten är inte verifierbar. Den vägras.</p>
+<p class="sub">6 av 7 källor svarade. GitHub är auktoritet för slice, PR, CI och merge — fyra av åtta rungar i varje beviskedja. Utan den kan cockpiten inte skilja &quot;inget pågår&quot; från &quot;jag ser inte vad som pågår&quot;.</p>
+<div class="out" style="justify-content:center;margin-top:var(--space-5)"><button class="btn btn-contract"><span class="k">kontrakt</span>Försök läsa GitHub igen</button><a class="btn btn-out" href="#"><span class="k">ut</span>GitHub status</a></div></div>
+<p class="sec-note"><b>Det farligaste felläget, uttryckligen hanterat.</b> En tom lista med en död källa är rött, inte lugnt. Skillnaden mot föregående tillstånd är inte en ikon i ett hörn: påståendet byts ut, ramen byter färg, och de band som beror på den döda källan vägrar rendera siffror. Ingen delvis-siffra visas som om den vore hel.</p>
+<section class="band"><div class="band-head"><span class="band-no">1</span><h2 class="band-q">Vad jobbar vi på?</h2><span class="band-count" style="border-color:var(--destructive);color:var(--destructive)">kan inte räknas</span><p class="band-sub">Slice, PR, CI och merge är alla GitHub-lästa.</p></div>
+<div class="partial" style="border-left-color:var(--destructive)"><b>Det här vet dispatcher-storen ändå:</b> 3 tasks har aktiva lås (<span class="mono">issue:4401 · issue:4415 · issue:4288</span>). Det säger att något rör sig — inte vad, inte hur långt.</div></section>
+<section class="band"><div class="band-head"><span class="band-no">3</span><h2 class="band-q">Vad har brister?</h2><span class="band-count" style="border-color:var(--destructive);color:var(--destructive)">kan inte räknas</span><p class="band-sub">Sex av åtta bristtyper läses ur GitHub.</p></div>
+<div class="partial" style="border-left-color:var(--destructive)"><b>Två typer kan fortfarande läsas:</b> utgånget lås (dispatcher-store) och lokalt arbete som aldrig pushats (git). Båda visas — de andra sex står som okända, inte som noll.</div>
+<div class="still" style="margin-top:var(--space-3)">
+<div class="still-row" style="grid-template-columns:170px 1fr auto"><span class="mono" style="color:var(--amber)">utgånget lås</span><span class="nm">issue:4118 · gick ut 03:14</span><button class="btn btn-contract"><span class="k">kontrakt</span>Släpp</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto"><span class="mono" style="color:var(--amber)">aldrig pushat</span><span class="nm">wt/ckm-linkers · 3 commits · 6 d</span><button class="btn btn-hold"><span class="k">håll 2 s</span>Pusha</button></div>
+<div class="still-row" style="grid-template-columns:170px 1fr auto"><span class="mono" style="color:var(--destructive)">6 typer</span><span class="nm">Okända medan GitHub är otillgänglig — inte noll</span><span class="mono" style="color:var(--fg-2)">räknas om vid laddning</span></div>
+</div></section>
+</div></div>
+
+<!-- ================= DEGRADERAD ================= -->
+<div class="pane" id="p-degraded"><div class="wrap">
+<section class="claim warn">
+<div class="claim-top"><div><p class="eyebrow">BuilderOps · registret</p><h1>Allt i rörelse</h1></div><span class="band-count" style="border-color:var(--amber);color:var(--amber)">17 trådar · delvis läst</span></div>
+<p class="said">17 trådar kl 09:41, men CKM-projektionen är 2 dygn gammal. Kapabilitetsnamn och matriskanter kommer därifrån — de kan vara fel, och de bär ingen siffra.</p>
+<div class="sources">
+<div class="src"><b>GitHub</b><span>läst 09:41 · 0 m</span></div><div class="src"><b>dispatcher-store</b><span>läst 09:41 · 0 m</span></div><div class="src"><b>git</b><span>läst 09:40 · 1 m</span></div><div class="src"><b>docs-frontmatter</b><span>läst 09:38 · 3 m</span></div><div class="src stale"><b>CKM-projektion</b><span>senast lyckad 07-28 09:12 · 2 d</span></div><div class="src"><b>deploy-kvitton</b><span>läst 09:39 · 2 m</span></div><div class="src"><b>verification-runs</b><span>läst 09:41 · 0 m</span></div>
+</div>
+</section>
+<p class="sec-note"><b>Degradering är per källa, inte för hela ytan.</b> Det som GitHub, git och dispatchern äger är färskt och visas normalt. Det som CKM äger blir amber-märkt och förlorar sin siffra. Ytan säger inte &quot;delvis nedsatt&quot; i ett hörn — den märker exakt de rader som beror på den gamla källan.</p>
+<section class="band"><div class="band-head"><span class="band-no">1</span><h2 class="band-q">Vad jobbar vi på?</h2><span class="band-count">7 aktiva</span><p class="band-sub">Trådarna är färska. Grupperingen är 2 dygn gammal.</p></div>
+<div class="lanes">
+<div class="lane"><div class="lane-head" style="border-bottom-color:var(--amber)"><b style="color:var(--amber)">Deterministisk leverans</b><span style="color:var(--amber)">cap_ddo · gruppering 2 d gammal</span></div><div class="lane-cards">
+<div class="card card-active" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4401</span><span class="chip chip-lease">lås aktivt</span></div><h3>En källa för task_id</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div><p class="why" style="color:var(--amber)">Kapabilitetsrungen är amber: kanten kommer ur en projektion som inte lästs sedan 07-28.</p></div>
+</div></div>
+<div class="lane"><div class="lane-head" style="border-bottom-color:var(--amber)"><b style="color:var(--amber)">BuilderOps control plane</b><span style="color:var(--amber)">cap_bcp · gruppering 2 d gammal</span></div><div class="lane-cards">
+<div class="card card-flaw" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4415</span><span class="chip chip-flaw">CI röd</span></div><h3>Leveranskonsolen</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="a"></i><b class="a"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div><p class="why">Bristen är färsk — den läses ur GitHub, inte ur CKM.</p></div>
+</div></div>
+<div class="lane"><div class="lane-head" style="border-bottom-color:var(--amber)"><b style="color:var(--amber)">Okänd gruppering</b><span style="color:var(--amber)">2 trådar utan färsk kapabilitetskant</span></div><div class="lane-cards">
+<div class="partial"><b>Fristående, inte felplacerade.</b> Två trådar filades efter 07-28. Projektionen känner dem inte, så cockpiten grupperar dem inte — den visar dem fristående med en amber-rung istället för att gissa förälder.</div>
+<div class="card card-active" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip">#4436</span><span class="chip chip-partial">ingen färsk kapabilitetskant</span></div><h3>Signboard som flik i registret</h3><div class="spine"><b class="a"></b><i class="a"></i><b class="a"></b><i class="a"></i><b class="a"></b><i class="a"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div></div>
+</div></div>
+</div></section>
+<section class="band"><div class="band-head"><span class="band-no">2</span><h2 class="band-q">Vad är gjort?</h2><span class="band-count">3 väntar på dig</span><p class="band-sub">Opåverkat. Kvitton läses ur verification-runs och git.</p></div>
+<div class="tier tier-invite"><div class="tier-head"><h3>Klart för dig att använda</h3><p>Tre saker. Kedjan hit är beviskedjad hela vägen och rör inte den gamla källan.</p></div>
+<ul class="arch"><li><span class="id">#4290</span><span>github_issue: backfyllt</span><span class="rc" style="color:var(--amber)">levererat 07-29 · ej prövat</span></li><li><span class="id">#4271</span><span>Färskhetsrad per källa</span><span class="rc" style="color:var(--amber)">levererat 07-28 · ej prövat</span></li><li><span class="id">#4260</span><span>Signboards läsväg</span><span class="rc" style="color:var(--amber)">levererat 07-27 · ej prövat</span></li></ul></div>
+</section>
+</div></div>
+
+<!-- ================= SMAL + 200 % ================= -->
+<div class="pane" id="p-zoom"><div class="wrap">
+<p class="sec-note"><b>Smal bredd vid 200 % typstorlek.</b> Samma dokumentordning, en kolumn. Beviskedjan skalar med typen och behåller alla åtta rungar — den är det enda elementet som aldrig får beskäras, för den är hela kortets läsning. Ingen horisontell rullning, inga dolda kolumner.</p>
+<div class="zoom-frame"><div class="zoom">
+<section class="claim">
+<p class="eyebrow">BuilderOps · registret</p><h1 style="font-size:var(--text-xl)">Allt i rörelse</h1>
+<p class="said">17 trådar kl 09:41. Sju källor, alla lästa inom fyra minuter.</p>
+<div class="sources"><div class="src"><b>GitHub</b><span>09:41</span></div><div class="src"><b>dispatcher</b><span>09:41</span></div><div class="src"><b>git</b><span>09:40</span></div><div class="src"><b>docs</b><span>09:38</span></div><div class="src stale"><b>CKM</b><span>07-28</span></div></div>
+</section>
+<section class="band"><div class="band-head"><span class="band-no">1</span><h2 class="band-q">Vad jobbar vi på?</h2><span class="band-count">7</span></div>
+<div class="lanes"><div class="lane"><div class="lane-head"><b>Deterministisk leverans</b><span>2 trådar</span></div><div class="lane-cards">
+<details class="card card-active"><summary><div class="meta"><span class="chip">#4401</span><span class="chip chip-lease">lås aktivt</span></div><h3>En källa för task_id</h3>
+<div class="spine spine-lg"><b class="a"></b><i class="a"></i><b class="d"></b><i class="d"></i><b class="d"></b><i class="d"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="p"></i><b class="p"></b><i class="n"></i><b class="n"></b><i class="n"></i><b class="n"></b></div>
+<p class="why">Grön CI. Inget kvitto ännu.</p></summary>
+<div class="body"><ul class="rungs">
+<li class="r-a"><i class="dot a"></i><span class="r-name">intention</span><span class="r-val">inget objekt</span><span class="r-cls">saknas</span></li>
+<li class="r-p"><i class="dot p"></i><span class="r-name">slice</span><span class="r-val">#4401</span><span class="r-cls">bevisad</span></li>
+<li class="r-p"><i class="dot p"></i><span class="r-name">CI / sha</span><span class="r-val">168edbe2</span><span class="r-cls">bevisad</span></li>
+</ul><div class="out"><a class="btn btn-out" href="#"><span class="k">ut</span>GitHub</a></div></div></details>
+</div></div></div></section>
+<section class="band"><div class="band-head"><span class="band-no">3</span><h2 class="band-q">Vad har brister?</h2><span class="band-count">8</span></div>
+<div class="flaws"><div class="card card-flaw" style="padding:var(--space-3) var(--space-4)"><div class="meta"><span class="chip chip-flaw">utan kvitto</span><span class="risk hi"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div><h3>#4251 mergad utan verifieringskvitto</h3><div class="out" style="margin-top:var(--space-3)"><button class="btn btn-hold"><span class="k">håll 2 s</span>Begär verifiering</button></div></div></div>
+</section>
+</div></div>
+</div></div>
+
+</body>
+</html>
