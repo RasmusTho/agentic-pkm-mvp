@@ -225,9 +225,13 @@ def test_verification_task_attempt_and_outbox_share_postgres_authority(
     assert reconciliation.status == "pending"
 
 
-def test_verification_adapter_round_trips_only_through_authenticated_api(
+def _authenticated_api_ledger(
     control_plane_store, tmp_path
-) -> None:
+) -> tuple[
+    BuilderOpsVerificationLedger,
+    BuilderOpsControlPlaneClient,
+    BuilderOpsOutboxExecutor,
+]:
     secret = tmp_path / "executor.secret"
     secret.write_text("verification-executor-token\n", encoding="utf-8")
     manifest = tmp_path / "credentials.json"
@@ -277,6 +281,15 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
         client,
         repository=REPO,
         effect_outbox=outbox,
+    )
+    return ledger, client, outbox
+
+
+def test_verification_adapter_round_trips_only_through_authenticated_api(
+    control_plane_store, tmp_path
+) -> None:
+    ledger, client, outbox = _authenticated_api_ledger(
+        control_plane_store, tmp_path
     )
 
     run = ledger.ingest(request())
@@ -328,6 +341,7 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
         observed_applied=False,
         terminal_unknown=True,
         evidence={
+            "head_sha": "a" * 40,
             "outcome": "indeterminate_pre_session_model_effect",
             "provider_session_id": None,
             "relaunch_performed": False,
@@ -369,6 +383,52 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
     )
 
     assert control_plane_store.outbox_status(REPO, operation_key) == "pending"
+
+
+def test_authenticated_api_rejects_github_terminal_unknown(
+    control_plane_store, tmp_path
+) -> None:
+    ledger, client, outbox = _authenticated_api_ledger(
+        control_plane_store, tmp_path
+    )
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "ignored-client-holder")
+    assert claimed.lease_id is not None
+    rejected_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="github.merge",
+        payload={
+            "repository": REPO.lower(),
+            "pr_number": 3603,
+            "head_sha": "a" * 40,
+        },
+        holder="executor:demerzel-verifier",
+        lease_id=claimed.lease_id,
+        idempotency_key="api-roundtrip-rejected-github-dead-letter",
+    )
+    restarted = BuilderOpsVerificationLedger(
+        client,
+        repository=REPO,
+        effect_outbox=outbox,
+    )
+    restarted.recover_effect(
+        rejected_key,
+        run_id=run.run_id,
+        effect_type="github.merge",
+    )
+    with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
+        restarted.finish_effect(
+            rejected_key,
+            observed_applied=False,
+            terminal_unknown=True,
+            evidence={
+                "head_sha": "a" * 40,
+                "outcome": "indeterminate_pre_session_model_effect",
+                "provider_session_id": None,
+                "relaunch_performed": False,
+            },
+        )
+    assert control_plane_store.outbox_status(REPO, rejected_key) == "unknown"
 
 
 def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(

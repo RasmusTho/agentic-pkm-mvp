@@ -56,7 +56,10 @@ merge intent through the repo's conditional or merge-queue path. The outbox exec
 GitHub (including process-loss recovery) and commits a readback receipt before completion.
 For model execution, a sessionless `pending` intent may be claimed once; a `claimed` or `unknown`
 intent without a durable provider session identity is indeterminate, is reconciled to
-`dead_letter`, and never launches a replacement coordinator.
+`dead_letter`, and never launches a replacement coordinator. The central PostgreSQL authority
+accepts that terminal path only for `model.verification_coordinator` with the exact pre-session
+outcome, null provider session, no-relaunch flag, and head SHA matching the scheduled payload.
+GitHub effects remain `unknown` until authoritative GitHub readback reconciles them.
 
 ## Why This Matters
 
@@ -99,6 +102,8 @@ weaken them and does not enter Product Runtime.
   conditional/queue path, direct merge fails closed.
 - A merge receipt binds the exact current SHA and GitHub readback; a local success return is
   insufficient.
+- `terminal_unknown` is not a general executor escape hatch: the API/store rejects it for every
+  GitHub effect and for any verification-model evidence not exactly bound to the scheduled head.
 - Existing CI + review + protection gates are not weakened by autonomous execution.
 - Rate limiting/backoff follows the shared API-budget contract; no tight GraphQL polling.
 

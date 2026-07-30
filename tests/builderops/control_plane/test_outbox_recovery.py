@@ -9,6 +9,7 @@ import pytest
 from app.builderops.control_plane import (
     IdempotencyConflict,
     LeaseUnavailable,
+    StateConflict,
     StaleFencingToken,
     UnknownEffectNeedsReconciliation,
 )
@@ -160,6 +161,7 @@ def test_indeterminate_effect_dead_letters_without_retry(
         claim, detail="provider session identity was not durably observed"
     )
     evidence = {
+        "head_sha": "a" * 40,
         "outcome": "indeterminate_pre_session_model_effect",
         "provider_session_id": None,
         "relaunch_performed": False,
@@ -207,6 +209,119 @@ def test_indeterminate_effect_dead_letters_without_retry(
             terminal_unknown=True,
             evidence=evidence,
         )
+
+
+def test_terminal_unknown_rejects_github_effect_without_mutation(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="task-github-effect-cannot-dead-letter",
+        key="github-effect-cannot-dead-letter",
+        effect_type="github.merge",
+        payload={"head_sha": "a" * 40, "pr": 3852},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="merge-executor",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="merge response was not durably observed"
+    )
+
+    with pytest.raises(StateConflict, match="restricted"):
+        control_plane_store.reconcile_outbox(
+            claim,
+            observed_applied=False,
+            terminal_unknown=True,
+            evidence={
+                "head_sha": "a" * 40,
+                "outcome": "indeterminate_pre_session_model_effect",
+                "provider_session_id": None,
+                "relaunch_performed": False,
+            },
+        )
+
+    assert (
+        control_plane_store.outbox_status(envelope.repository, result.operation_key)
+        == "unknown"
+    )
+    with control_plane_store._connect() as conn:
+        dead_letters = conn.execute(
+            "SELECT count(*) AS count FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+        reconciliations = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letters is not None and dead_letters["count"] == 0
+    assert reconciliations is not None and reconciliations["count"] == 0
+
+
+def test_terminal_unknown_requires_exact_model_evidence_without_mutation(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="task-model-effect-exact-evidence",
+        key="model-effect-exact-evidence",
+        effect_type="model.verification_coordinator",
+        payload={"head_sha": "a" * 40},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="provider session identity was not durably observed"
+    )
+    exact = {
+        "head_sha": "a" * 40,
+        "outcome": "indeterminate_pre_session_model_effect",
+        "provider_session_id": None,
+        "relaunch_performed": False,
+    }
+    invalid_evidence = (
+        {key: value for key, value in exact.items() if key != "head_sha"},
+        {**exact, "unexpected": True},
+        {**exact, "head_sha": "b" * 40},
+        {**exact, "provider_session_id": "thread-123"},
+        {**exact, "relaunch_performed": True},
+    )
+
+    for evidence in invalid_evidence:
+        with pytest.raises(StateConflict, match="exact"):
+            control_plane_store.reconcile_outbox(
+                claim,
+                observed_applied=False,
+                terminal_unknown=True,
+                evidence=evidence,
+            )
+
+    assert (
+        control_plane_store.outbox_status(envelope.repository, result.operation_key)
+        == "unknown"
+    )
+    with control_plane_store._connect() as conn:
+        dead_letters = conn.execute(
+            "SELECT count(*) AS count FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+        reconciliations = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letters is not None and dead_letters["count"] == 0
+    assert reconciliations is not None and reconciliations["count"] == 0
 
 
 @pytest.mark.parametrize(

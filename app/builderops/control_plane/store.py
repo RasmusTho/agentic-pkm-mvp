@@ -46,6 +46,36 @@ def _operation_key(repository: str, idempotency_key: str, effect_type: str) -> s
     )
 
 
+def _assert_terminal_unknown_model_evidence(
+    *,
+    effect_type: str,
+    effect_payload: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+) -> None:
+    expected_keys = {
+        "head_sha",
+        "outcome",
+        "provider_session_id",
+        "relaunch_performed",
+    }
+    head_sha = evidence.get("head_sha")
+    if (
+        effect_type != "model.verification_coordinator"
+        or set(evidence) != expected_keys
+        or evidence.get("outcome") != "indeterminate_pre_session_model_effect"
+        or evidence.get("provider_session_id") is not None
+        or evidence.get("relaunch_performed") is not False
+        or not isinstance(head_sha, str)
+        or len(head_sha) != 40
+        or any(character not in "0123456789abcdef" for character in head_sha)
+        or effect_payload.get("head_sha") != head_sha
+    ):
+        raise StateConflict(
+            "terminal-unknown reconciliation is restricted to an exact "
+            "pre-session verification-model effect receipt"
+        )
+
+
 class PostgresBuilderOpsStore:
     """Single-authority kernel; it never performs an external side effect."""
 
@@ -2201,6 +2231,21 @@ class PostgresBuilderOpsStore:
                     f"{claim.fencing_token}",
                 ),
             )
+            if terminal_unknown:
+                effect = conn.execute(
+                    "SELECT effect_type, payload FROM builderops_outbox "
+                    "WHERE repository = %s AND operation_key = %s FOR UPDATE",
+                    (claim.repository, claim.operation_key),
+                ).fetchone()
+                if effect is None:
+                    raise StaleFencingToken(
+                        "unknown effect was already reconciled or superseded"
+                    )
+                _assert_terminal_unknown_model_evidence(
+                    effect_type=str(effect["effect_type"]),
+                    effect_payload=dict(effect["payload"]),
+                    evidence=evidence,
+                )
             existing = conn.execute(
                 "SELECT request_hash, receipt_sequence FROM builderops_outbox_reconciliations "
                 "WHERE repository = %s AND operation_key = %s AND claim_fencing_token = %s "
