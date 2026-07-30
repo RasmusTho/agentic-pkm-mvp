@@ -1310,6 +1310,37 @@ def test_scalar_deployment_begin_rejects_invalid_claimed_receipt_unchanged(
         for path in (public_path, root_path, fence_path)
     } == before_split_receipt
 
+    claimed_root = runtime_module._compatibility_block_payload(
+        json.loads(valid_authority[public_path])
+    )
+    claimed_root["phase"] = "claimed"
+    claimed_root["controller"] = {
+        "pid": 999_999_986,
+        "start_token": "linux:" + "c" * 64,
+    }
+    root_path.write_text(json.dumps(claimed_root), encoding="utf-8")
+    root_path.chmod(0o600)
+    public_path.unlink()
+    before_root_only = {
+        path: path.read_bytes() for path in (root_path, fence_path)
+    }
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="root-only deployment claim cannot carry scalar",
+    ):
+        _begin_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "window" / "missing-legacy.md",
+            controller_pid=999_999_985,
+            controller_start_token="linux:" + "d" * 64,
+        )
+    assert not public_path.exists()
+    assert {
+        path: path.read_bytes() for path in (root_path, fence_path)
+    } == before_root_only
+
 
 def test_non_scalar_reconciliation_preserves_exact_scalar_receipt(
     tmp_path,

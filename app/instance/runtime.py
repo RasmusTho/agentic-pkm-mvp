@@ -1817,6 +1817,13 @@ def _begin_instance_state_deployment(
         if compatibility_resume:
             if root_authority is None:
                 raise AssertionError
+            if (
+                root_authority.get("phase") == "claimed"
+                and "scalar_roll_forward" in root_authority
+            ):
+                raise InstanceStatePreflightError(
+                    "root-only deployment claim cannot carry scalar recovery authority"
+                )
             if root_authority.get("phase") == "cleanup":
                 _complete_instance_state_deployment_cleanup(ownership_root)
                 root_authority = None
