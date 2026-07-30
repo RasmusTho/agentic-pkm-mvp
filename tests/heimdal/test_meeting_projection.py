@@ -305,6 +305,52 @@ def test_transcript_shows_segments_beyond_declared_count(
     assert 2 in [item["seq"] for item in projection["analysis"]["derived_from"]]
 
 
+def test_replay_heals_missing_analysis_revision(
+    client: TestClient, asr_stub: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash between derivation and revision insert is healed by the resend."""
+    session_id = f"mtg-{uuid4()}"
+    assert _open_session(client, session_id).status_code == 200
+
+    def exploding_rederive(sid: str) -> None:
+        raise RuntimeError("crashed before revision insert")
+
+    real = meeting_projection._rederive_analysis
+    monkeypatch.setattr(meeting_projection, "_rederive_analysis", exploding_rederive)
+    media = b"segment zero spoken text."
+    capture_id = str(uuid4())
+    assert _admit_segment(client, session_id, 0, media, capture_id=capture_id).status_code == 200
+    monkeypatch.setattr(meeting_projection, "_rederive_analysis", real)
+
+    # Derivation exists, revision does not; reads are side-effect-free.
+    assert _projection(client, session_id).json()["analysis"]["revision"] is None
+    # The idempotent resend replays the derivation and heals the revision.
+    assert _admit_segment(client, session_id, 0, media, capture_id=capture_id).status_code == 200
+    assert len(asr_stub) == 1  # still derived exactly once
+    after = _projection(client, session_id).json()["analysis"]
+    assert after["revision"] == 1
+    assert [item["seq"] for item in after["derived_from"]] == [0]
+
+
+def test_long_gap_runs_are_bounded_and_legible(
+    client: TestClient, asr_stub: list[str]
+) -> None:
+    """An undercounted sparse session renders a bounded, explicit gap-run marker."""
+    session_id = f"mtg-{uuid4()}"
+    assert _open_session(client, session_id).status_code == 200
+    assert _admit_segment(client, session_id, 0, b"segment zero.").status_code == 200
+    assert _close_session(client, session_id, 10_000).status_code == 200
+
+    projection = _projection(client, session_id).json()
+    transcript = projection["transcript"]
+    assert len(transcript) == 2  # one segment + one collapsed gap run
+    run = transcript[1]
+    assert run["kind"] == "gap_run"
+    assert run["from"] == 1 and run["to"] == 9_999 and run["count"] == 9_999
+    # The ledger's missing list still names them; nothing is elided.
+    assert projection["missing"][0] == 1 and len(projection["missing"]) == 9_999
+
+
 def test_asr_failure_is_legible_and_isolated(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

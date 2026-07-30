@@ -90,6 +90,11 @@ ANALYSIS_ENGINE = {"engine": "heimdal-meeting-analysis", "version": "v1"}
 DEFAULT_REVISION_RETENTION = 20
 _REVISION_RETENTION_ENV = "HEIMDAL_MEETING_REVISION_RETENTION"
 
+# Runs of missing sequences longer than this collapse into one explicit
+# `gap_run` marker in the transcript (from/to/count), bounding the poll
+# payload for undercounted or sparse sessions.
+_GAP_RUN_COLLAPSE_THRESHOLD = 25
+
 DERIVATION_OK = "ok"
 DERIVATION_FAILED = "failed"
 
@@ -412,18 +417,22 @@ class _SqliteProjectionStore:
     def derivations_for(self, hashes: List[str]) -> Dict[str, AsrDerivation]:
         if not hashes:
             return {}
-        placeholders = ",".join("?" for _ in hashes)
+        # Chunked: a legal session can hold up to MAX_SESSION_SEQ segments,
+        # which would exceed SQLite's default variable limit in one IN clause.
+        found: Dict[str, AsrDerivation] = {}
         with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT content_sha256, status, text, segments, language, error, engine, "
-                f"derived_at FROM {_DERIVATION_TABLE} "
-                f"WHERE content_sha256 IN ({placeholders})",
-                hashes,
-            ).fetchall()
-        found = {}
-        for row in rows:
-            derivation = self._derivation_from_row(row)
-            found[derivation.content_sha256] = derivation
+            for start in range(0, len(hashes), 500):
+                chunk = hashes[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"SELECT content_sha256, status, text, segments, language, error, engine, "
+                    f"derived_at FROM {_DERIVATION_TABLE} "
+                    f"WHERE content_sha256 IN ({placeholders})",
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    derivation = self._derivation_from_row(row)
+                    found[derivation.content_sha256] = derivation
         return found
 
     @staticmethod
@@ -869,6 +878,12 @@ def _derive_segment_inner(
     store = _backend()
     existing = store.get_derivation(content_sha256)
     if existing is not None and existing.status == DERIVATION_OK:
+        # The replay still re-derives the analysis: if the first attempt
+        # crashed between the derivation insert and the revision insert, this
+        # is the only writer that can heal the missing revision (reads are
+        # side-effect-free). Idempotent by input-set identity, so an already
+        # current analysis returns its cached revision and mints nothing.
+        _rederive_analysis(session_id)
         return existing
     retry_of_failed = existing is not None and existing.status == DERIVATION_FAILED
 
@@ -1047,11 +1062,40 @@ def build_projection(session_id: str) -> Dict[str, Any]:
 
     transcript: List[Dict[str, Any]] = []
     needs_attention: List[Dict[str, Any]] = list(report["needs_attention"])
+
+    def _flush_gap_run(run_start: int, run_end: int) -> None:
+        """Render a run of missing sequences: individual markers for short
+        runs, one explicit bounded run marker for long ones — still legible
+        (INV-CDLM-9: from/to/count name every missing seq), never a multi-MB
+        payload when a declared count vastly exceeds what arrived."""
+        count = run_end - run_start + 1
+        if count <= _GAP_RUN_COLLAPSE_THRESHOLD:
+            for missing_seq in range(run_start, run_end + 1):
+                transcript.append(
+                    {"seq": missing_seq, "kind": "gap", "reason": "segment_missing"}
+                )
+        else:
+            transcript.append(
+                {
+                    "seq": run_start,
+                    "kind": "gap_run",
+                    "reason": "segments_missing",
+                    "from": run_start,
+                    "to": run_end,
+                    "count": count,
+                }
+            )
+
+    pending_gap_start: Optional[int] = None
     for seq in range(max_bound):
         seg = by_seq.get(seq)
         if seg is None:
-            transcript.append({"seq": seq, "kind": "gap", "reason": "segment_missing"})
+            if pending_gap_start is None:
+                pending_gap_start = seq
             continue
+        if pending_gap_start is not None:
+            _flush_gap_run(pending_gap_start, seq - 1)
+            pending_gap_start = None
         derivation = derivations.get(seg["content_sha256"])
         if derivation is None:
             transcript.append(
@@ -1094,6 +1138,9 @@ def build_projection(session_id: str) -> Dict[str, Any]:
             }
         )
 
+    if pending_gap_start is not None:
+        _flush_gap_run(pending_gap_start, max_bound - 1)
+
     latest = store.latest_revision(session_id)
     revisions = store.revisions_for_session(session_id)
     session = meeting_ledger.get_meeting_session(session_id)
@@ -1114,10 +1161,15 @@ def build_projection(session_id: str) -> Dict[str, Any]:
             "engine": latest.engine if latest else dict(ANALYSIS_ENGINE),
             "blocks": latest.blocks if latest else [],
         },
+        # The history entries are deliberately slim (count + set identity, not
+        # the full derived_from list): the latest revision above carries the
+        # complete provenance, and repeating every retained revision's input
+        # list would make the poll payload O(retention x segments).
         "revisions": [
             {
                 "revision": rev.revision,
-                "derived_from": rev.derived_from,
+                "derived_from_count": len(rev.derived_from),
+                "input_set_sha256": rev.input_set_sha256,
                 "template_id": rev.template_id,
                 "derived_at": _iso(rev.derived_at),
             }
