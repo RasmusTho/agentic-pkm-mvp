@@ -82,7 +82,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from app.heimdal.attribution_stage import RESOLUTION_UNRESOLVED, EntityMention
-from app.heimdal.entity_register import EntityRegister
+from app.heimdal.entity_register import EntityRegister, EntityRegisterError
+from app.heimdal.entity_review_operation_journal import (
+    EntityReviewOperationConflictError,
+    EntityReviewOperationJournalError,
+    EntityReviewOperationJournalPort,
+    EntityReviewOperationSchemaMissingError,
+    decision_mapping_digest,
+)
 from app.heimdal.settings_notes import (
     DEFAULT_SETTINGS_DIR,
     ENTITY_REVIEW,
@@ -343,11 +350,19 @@ class ReviewDecision:
 @dataclass(frozen=True)
 class AppliedDecision:
     """Result of applying one `ReviewDecision`: which queue entry it
-    resolved and whether a register merge was performed."""
+    resolved, whether a register merge was performed, and (for merges) the
+    entity-review operation the merge was journaled under (EROJ-01)."""
 
     queue_entry_id: str
     action: str
     merged: bool
+    operation_id: str | None = None
+
+
+def _vault_identity(vault_root: Path) -> str:
+    """The active-vault identity an operation binds (INV-EROJ-2): the resolved
+    active-vault root this applicator was invoked for."""
+    return str(Path(vault_root).expanduser().resolve())
 
 
 def apply_human_review_decisions(
@@ -356,27 +371,60 @@ def apply_human_review_decisions(
     register: EntityRegister,
     settings_dir: str = DEFAULT_SETTINGS_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    journal: EntityReviewOperationJournalPort | None = None,
 ) -> tuple[AppliedDecision, ...]:
     """Fold and apply each pending entry's ordered `decisions` history.
 
     This is the confirmation mechanism itself: reading `decisions` off disk
     IS reading the human ruling -- there is no separate "confirm" API a UI
     calls that the note lacks (Constraints: "the ruling itself is a one-line
-    note edit ... the UI owns no capability the note lacks"). A `merge`
-    decision calls `register.merge(from_id, into_id)` -- A1's own mechanism,
-    reversible via `register.split()` (F5) -- never a bespoke mutation here.
-    A `reject` decision only clears the queue entry; the register is
-    untouched (no identity assertion is made for a declined candidate).
-    A following `undo` resets that queue entry to undecided before
-    application: no register mutation occurs, `pending` remains, and the
-    append-only `decisions` history is retained. A later merge/reject can
+    note edit ... the UI owns no capability the note lacks"). A Bifrost/iPad
+    record is only ever a proposal-bound review signal (INV-EROJ-1): this Hub
+    fold is what validates that a decision is bound to a displayed pending
+    proposal and canonicalizes an approval into an executable operation — a
+    client record alone is never replayed as a merge command.
+
+    A `merge` decision runs the EROJ-01 restart-safe sequence (#4350):
+
+    1. the exact human-authored decision mapping is bound into one
+       deterministic operation, committed by the journal **before** the first
+       register note write (`claim_operation`; a changed mapping for a
+       still-active entry fails closed);
+    2. the note effects are applied resumably through
+       `register.ensure_merge_effects` (A1's own mechanism — reversible via
+       `register.split()` (F5) — never a bespoke mutation here, and never
+       re-applied when a crash already wrote them);
+    3. the operation's `heimdal.register.entity.merged` event commits
+       atomically with the terminal journal state in a journal-owned
+       transaction (`commit_merge_event`);
+    4. the queue entry may leave `pending` only after a **fresh**
+       connection/transaction observes both the terminal journal state and
+       the matching committed outbox row (`verify_committed_visibility`,
+       INV-EROJ-3). Visibility on the writer's or a caller's own uncommitted
+       transaction never authorizes the clear — that same-connection read is
+       exactly how #4253 lost the merge event after the retry anchor was gone.
+
+    Merges therefore **require** `journal`; calling with merge intent and no
+    journal raises before anything is applied. A `reject` decision only
+    clears the queue entry and keeps its current semantics: the register and
+    journal are untouched (no identity assertion is made for a declined
+    candidate). A following `undo` resets that queue entry to undecided
+    before application: no register mutation occurs, `pending` remains, and
+    the append-only `decisions` history is retained. A later merge/reject can
     establish a new terminal intent. Once the hub has applied a decision and
     removed the pending entry, a later undo is an idempotent no-op rather
     than a register reversal.
 
+    Per-entry refusals (a changed decision digest, unprovable/evolved note
+    effects, a failed visibility fence) leave that entry `pending` with its
+    history byte-for-byte unchanged, do not block other entries, and are
+    raised loudly as one aggregate `EntityConfirmError` after durable
+    successes are recorded.
+
     Idempotent: a decision whose `queue_entry_id` is no longer in `pending`
     has already been applied (or never existed) and is skipped rather than
-    re-merged -- re-running this function is always safe.
+    re-merged -- re-running this function is always safe, and a re-run after
+    a crash resumes each in-flight operation at its journaled state.
     """
     note = _read_review_note(vault_root, settings_dir=settings_dir)
     pending = list(note.values.get("pending") or [])
@@ -385,6 +433,7 @@ def apply_human_review_decisions(
 
     pending_ids = {p.get("queue_entry_id") for p in pending}
     applied: list[AppliedDecision] = []
+    refused: list[tuple[str, str]] = []
     remaining_pending = list(pending)
 
     # Fold every pending queue entry to its final pre-application intent.
@@ -399,19 +448,81 @@ def apply_human_review_decisions(
             None if decision.action == "undo" else decision,
         )
 
-    for _, effective_decision in sorted(
-        terminal_by_queue_id.values(), key=lambda item: item[0]
-    ):
-        if effective_decision is None:
-            continue
+    ordered_terminals = [
+        (index, effective_decision)
+        for index, effective_decision in sorted(
+            terminal_by_queue_id.values(), key=lambda item: item[0]
+        )
+        if effective_decision is not None
+    ]
+
+    if journal is None and any(d.action == "merge" for _, d in ordered_terminals):
+        raise EntityConfirmError(
+            "apply_human_review_decisions: a merge decision is pending but no "
+            "entity-review operation journal was provided; a merge queue entry may "
+            "leave 'pending' only through the committed-visibility fence "
+            "(EROJ-01, INV-EROJ-3), so nothing was applied"
+        )
+
+    vault_identity = _vault_identity(vault_root)
+
+    for index, effective_decision in ordered_terminals:
         merged = False
+        operation_id: str | None = None
         if effective_decision.action == "merge":
             assert (
                 effective_decision.from_id is not None
                 and effective_decision.into_id is not None
             )
-            register.merge(effective_decision.from_id, effective_decision.into_id)
+            assert journal is not None  # guaranteed by the upfront check
+            try:
+                # Pre-claim validation: prove the merge is executable (or
+                # resumable) from current notes BEFORE binding an operation,
+                # so a typo'd decision never strands an active operation row.
+                register.merge_effect_state(
+                    effective_decision.from_id, effective_decision.into_id
+                )
+                # 1. Operation identity commits before the first register
+                #    effect (INV-EROJ-2; a changed mapping fails closed).
+                operation = journal.claim_operation(
+                    vault_identity=vault_identity,
+                    queue_entry_id=effective_decision.queue_entry_id,
+                    decision_position=index,
+                    decision_digest=decision_mapping_digest(raw_decisions[index]),
+                    from_id=effective_decision.from_id,
+                    into_id=effective_decision.into_id,
+                )
+                # 2. Resumable note effects (skips sides a crash already wrote).
+                register.ensure_merge_effects(
+                    effective_decision.from_id, effective_decision.into_id
+                )
+                # 3. Terminal journal state + exactly one event, atomically.
+                operation = journal.commit_merge_event(operation)
+                # 4. The fence: only a fresh transaction's read of the
+                #    committed journal + outbox rows authorizes the clear.
+                if not journal.verify_committed_visibility(operation):
+                    refused.append(
+                        (
+                            effective_decision.queue_entry_id,
+                            "committed visibility was not observed on a fresh "
+                            "transaction; the queue entry stays pending (INV-EROJ-3)",
+                        )
+                    )
+                    continue
+                operation = journal.mark_cleared(operation)
+            except EntityReviewOperationSchemaMissingError:
+                # System misconfiguration, not a per-entry ambiguity: surface
+                # the migration guidance immediately.
+                raise
+            except (
+                EntityRegisterError,
+                EntityReviewOperationConflictError,
+                EntityReviewOperationJournalError,
+            ) as exc:
+                refused.append((effective_decision.queue_entry_id, str(exc)))
+                continue
             merged = True
+            operation_id = operation.operation_id
         # "reject": no register mutation -- the candidate stays unresolved/
         # ambiguous, exactly as it was before queuing. "undo" never reaches
         # this application loop because the fold represents it as no intent.
@@ -426,6 +537,7 @@ def apply_human_review_decisions(
                 queue_entry_id=effective_decision.queue_entry_id,
                 action=effective_decision.action,
                 merged=merged,
+                operation_id=operation_id,
             )
         )
 
@@ -449,6 +561,14 @@ def apply_human_review_decisions(
             settings_dir=settings_dir,
             write_guard=write_guard,
             action=ENTITY_CONFIRM_WRITE_ACTION,
+        )
+
+    if refused:
+        details = "; ".join(f"{queue_id}: {reason}" for queue_id, reason in refused)
+        raise EntityConfirmError(
+            "apply_human_review_decisions: "
+            f"{len(refused)} queue entr{'y' if len(refused) == 1 else 'ies'} refused and "
+            f"left pending with decision history unchanged -- {details}"
         )
 
     return tuple(applied)
