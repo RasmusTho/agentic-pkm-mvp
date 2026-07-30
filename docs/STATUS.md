@@ -96,6 +96,19 @@ promote public internet readiness.
   `HEIMDAL_RAW_STORE_KEY` provisioning gap above bounds live use of the admission-fed segment path
   the same way it bounds CDLM-01. Contract detail is owned by `docs/EVENTS.md` and
   `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/TRACK_MEETING_SESSIONS_AND_SEGMENT_GAPS.md`.
+- Live meeting projections are shipped (CDLM-06, #4386): every admitted meeting segment derives ASR
+  exactly once per content hash through the shared engine seam (`app.media.transcribe.run_asr`),
+  durably, so replays and hub restarts re-derive nothing; a failed derivation is per-segment
+  needs-attention state, isolated from other segments, retried on resend, and never an admission
+  failure. `GET /api/heimdal/meeting/{session_id}/projection` returns the sequence-ordered transcript
+  with explicit gap markers, plus the `generic-default@1` analysis (summary, themes, provisional
+  decisions, open questions, action candidates) as `derived_projection` blocks carrying
+  `{revision, derived_from, template_id, engine}` provenance — projections, never canonical truth,
+  with no person attribution anywhere. Re-derivation over an identical admitted set is convergent
+  and mints no new revision; a late admission derives the next revision. The template precedence
+  seam (user selection > permitted metadata > default) ships with `generic-default@1` as the only
+  template; the analysis engine is deterministic in this slice (no LLM). Projection state is durable
+  and rebuildable (migration `b8d3f0a5c2e4`; SQLite dev/test lane).
 - The System Entry Point capability (#1782) is delivered. All twelve implementation children shipped: server-declared entry state (#1783/PR #1800), latency-ladder re-entry treatments (#1784/PR #1801), unified topbar/overlay host (#1785/PR #1802), the ⌘K Panel command palette (#1786/PR #1817), the system map overlay (#1787/PR #1846), the opt-in guidance layer (#1788/PR #1847), the settings drawer (#1789/PR #1834), governed capture append plus the ⌘N capture modal (#1790/PR #1799, #1791/PR #1816), memory review-queue endpoints plus drawer (#1792/PR #1798, #1793/PR #1818), and the read-only receipts history modal (#1794/PR #1833). The fixture-driven state-gallery validation harness (#1795, SEP-11; `tests/companion_ui/test_entry_state_gallery.py`) proves the composition: declared transitions render and undeclared transitions are rejected, cold/first-contact/no-vault render no re-entry overlay, the governed-vs-body-edit receipt asymmetry holds, no UI-derived authority classification renders, the display budget stays at or below the server caps, reduced-motion end-states are fully visible, and narrow mode preserves every critical affordance. The source-peek popover presentation and posture emphasis switch remain truthfully unshipped (declared overlay ids that do not mount); the context lane / place band stay parked under the gated decision issue #1796. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits

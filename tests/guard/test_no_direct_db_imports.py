@@ -146,6 +146,11 @@ ALLOW_FILES = (
     # self-contained dual sqlite/pg backend, direct DSN connection, and
     # fail-loud schema preflight; no ORM layer to route through.
     'app/heimdal/meeting_ledger.py',
+    # Meeting transcript/analysis projection store (CDLM-06, #4386). Same
+    # bounded pattern as the meeting ledger above: dedicated migration-owned
+    # tables (heimdal_meeting_asr_derivation/_analysis_revision) with a
+    # self-contained dual sqlite/pg backend and fail-loud schema preflight.
+    'app/heimdal/meeting_projection.py',
     # YouTube Source Sync durable source registry (YSS-01, #3916). Same bounded
     # pattern as app/heimdal/cursor_store.py above: a dedicated table
     # (acquisition_source_registry) with a self-contained dual memory/pg
