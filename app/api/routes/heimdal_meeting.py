@@ -35,7 +35,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.routes.heimdal_capture import _assert_lan_posture, _trace_id
 from app.events.schema import make_outbox_event
@@ -174,6 +176,23 @@ class UserNoteRequest(BaseModel):
     """One user-note write: client-minted identity, client-monotonic revision."""
 
     note_block_id: str = Field(min_length=1)
+
+    @field_validator("note_block_id")
+    @classmethod
+    def _uuid_note_block_id(cls, value: str) -> str:
+        """`note_block_id` is a client-minted UUID (per the task contract).
+
+        This is also the namespace boundary: derived block ids are structured
+        (`{session}:analysis:{type}`, `{session}:transcript:{seq}`), so
+        requiring a UUID here makes it impossible to squat a derived id
+        through the user-note surface and flood the refusal ledger.
+        """
+        try:
+            UUID(value)
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ValueError("note_block_id must be a client-minted UUID") from exc
+        return value
+
     revision: int = Field(ge=1, le=1_000_000)
     text: str = Field(max_length=1_000_000)
     editor_identity: str = Field(min_length=1)

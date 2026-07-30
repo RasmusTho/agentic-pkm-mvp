@@ -856,6 +856,41 @@ def apply_block_write(
     existing = store.get_block(block_id)
 
     if action == ACTION_CREATE:
+        if verify_only and existing is None:
+            # A probe never writes — on any branch. Creating on a free id is
+            # authorized purely by writer kind/type rules, checked below via a
+            # dry evaluation with no insert.
+            if block_type not in BLOCK_TYPES:
+                return _refuse(
+                    store,
+                    session_id=session_id,
+                    block_id=block_id,
+                    writer=writer,
+                    action=action,
+                    reason=f"unknown block type {block_type!r}",
+                )
+            if block_type == TYPE_USER_NOTE:
+                if writer.kind != WRITER_USER_EDITOR or not writer.editor_identity.strip():
+                    return _refuse(
+                        store,
+                        session_id=session_id,
+                        block_id=block_id,
+                        writer=writer,
+                        action=action,
+                        reason="user_note blocks are writable only by the user's editor "
+                        "identity (INV-CDLM-6)",
+                    )
+            elif writer.kind != WRITER_DERIVED or not writer.engine:
+                return _refuse(
+                    store,
+                    session_id=session_id,
+                    block_id=block_id,
+                    writer=writer,
+                    action=action,
+                    reason=f"{block_type} blocks are created only by derived writers "
+                    "with engine provenance",
+                )
+            return BlockWriteOutcome(allowed=True)
         if existing is not None:
             # A create landing on an existing block is a replay only when the
             # writer would also be AUTHORIZED for that block and the identity

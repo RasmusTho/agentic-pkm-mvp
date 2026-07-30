@@ -435,13 +435,25 @@ def test_replays_and_revisions_never_bypass_authorization(client: TestClient) ->
     assert wrong_editor.status_code == 409
     assert wrong_editor.json()["detail"]["error"] == "block_write_refused"
 
-    # A derived block id targeted through the user-note route with matching
-    # text cannot mint a user-note ack/history row.
+    # A derived block id targeted through the user-note route cannot mint a
+    # user-note ack/history row: derived ids are structured (non-UUID), and
+    # the route's UUID contract refuses them before anything else runs.
     assert _admit_segment(client, session_id, 0, b"transcript text.").status_code == 200
     derived_id = f"{session_id}:transcript:0"
     forged = _write_note(client, session_id, derived_id, 1, "transcript text.")
-    assert forged.status_code == 409
+    assert forged.status_code == 422
     assert meeting_blocks.note_revisions(derived_id) == []
+    # And even below the route, the guard itself refuses the same attempt.
+    guard_forged = meeting_blocks.apply_block_write(
+        session_id=session_id,
+        writer=meeting_blocks.WriterIdentity(
+            kind=meeting_blocks.WRITER_USER_EDITOR, editor_identity="operator@ipad-1"
+        ),
+        action=meeting_blocks.ACTION_REVISE,
+        block_id=derived_id,
+        content="user rewrite",
+    )
+    assert guard_forged.allowed is False
 
     # Same (note, revision) with different text: named conflict, stored text wins.
     conflict = _write_note(client, session_id, note_id, 1, "rewritten history")
