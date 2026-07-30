@@ -91,8 +91,12 @@ class MediaReceipt:
     sequence: int
 
 
-def canonical_capture_id(value: str) -> str:
+def canonical_capture_id(value: Any) -> str:
     """Canonical storage/lookup form of a capture id.
+
+    Typed ``Any`` deliberately: one caller is the watched-folder lane, whose id
+    comes from an untrusted HCAP-07 sidecar that is not type-validated upstream,
+    so this must accept whatever arrived and answer with a string.
 
     This module owns the rule, so no caller can key a receipt one way and look it
     up another. A UUID collapses to its plain lowercase hyphenated form, because
