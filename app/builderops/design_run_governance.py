@@ -35,9 +35,11 @@ from app.builderops.design_run_contract import (
     CanonicalDesignRunContract,
     ContractIdentityRef,
     CuratedDesignBrief,
+    DESIGN_AGENT_HANDOFF_OUTPUT_VERSION,
     DESIGN_RUN_CONTRACT_VERSION,
     DesignAgentAvailabilityDescriptor,
     DesignAgentDescriptor,
+    DesignAgentHandoffOutput,
     DesignHandoffRef,
     DesignRunAdmission,
     DesignRunApprovalEvidence,
@@ -51,6 +53,7 @@ from app.builderops.design_run_contract import (
     canonical_json,
     contract_ref,
     is_safe_design_run_identifier,
+    parse_design_agent_handoff_output,
     parse_design_run_contract,
     validate_admission_bindings,
     validate_approval_bindings,
@@ -68,6 +71,9 @@ DESIGN_RUN_POLICY_PATH: Final = Path(
 DESIGN_RUN_EVENT_VERSION: Final = "builderops.design-run-receipt-event.v1"
 DESIGN_RUN_RECEIPT_EVENT_TYPE: Final = "design_run_event"
 _SERVICE_ACTOR_ID: Final = "builderops-design-run"
+_UNACCEPTED_HANDOFF_LIMITATIONS: Final = (
+    "Unaccepted Builder material; governed promotion is required.",
+)
 _YGGDRASIL_REPO_TOKEN_SOURCE: Final = (
     "companion-ui/companion-app/colors_and_type.css"
 )
@@ -601,6 +607,26 @@ class DesignRunGovernance:
                     actor=self._execution_actor,
                 )
                 chain = (*chain, start)
+                start_receipt_ref = ContractIdentityRef(
+                    schema_version=DESIGN_RUN_EVENT_VERSION,
+                    contract_id=start.receipt_id,
+                    content_hash=start.event_hash,
+                )
+                handoff_binding = {
+                    "acceptance_state": "unaccepted_builder_material",
+                    "adapter_ref": bundle.request.adapter_ref.model_dump(
+                        mode="json"
+                    ),
+                    "handoff_id": f"{run_id}.handoff",
+                    "limitations": list(_UNACCEPTED_HANDOFF_LIMITATIONS),
+                    "produced_at": completed_at,
+                    "receipt_ref": start_receipt_ref.model_dump(mode="json"),
+                    "run_id": run_id,
+                    "source_refs": [
+                        source.model_dump(mode="json")
+                        for source in bundle.brief.source_refs
+                    ],
+                }
                 payload = {
                     "admission": admission.model_dump(mode="json"),
                     "approval": (
@@ -609,6 +635,10 @@ class DesignRunGovernance:
                         else None
                     ),
                     "brief": bundle.brief.model_dump(mode="json"),
+                    "handoff_binding": handoff_binding,
+                    "handoff_output_schema_version": (
+                        DESIGN_AGENT_HANDOFF_OUTPUT_VERSION
+                    ),
                     "request": bundle.request.model_dump(mode="json"),
                     "run_id": run_id,
                     "schema_version": DESIGN_RUN_CONTRACT_VERSION,
@@ -618,12 +648,16 @@ class DesignRunGovernance:
                     Literal["execution_failed", "timed_out"],
                     str,
                 ] | None = None
-                adapter_response: str | None = None
+                handoff: DesignHandoffRef | None = None
                 try:
                     adapter_result = selected.execute(payload)
-                    if not adapter_result.response_text.strip():
-                        raise ValueError("empty adapter response")
-                    adapter_response = adapter_result.response_text
+                    output = parse_design_agent_handoff_output(
+                        adapter_result.response_text
+                    )
+                    handoff = self._validate_returned_handoff(
+                        output=output,
+                        binding=handoff_binding,
+                    )
                 except TimeoutError:
                     terminal_failure = (
                         "timed_out",
@@ -661,29 +695,11 @@ class DesignRunGovernance:
                         code=code,
                         message=message,
                     )
-                if adapter_response is None:
+                if handoff is None:
                     raise DesignRunIncompleteError(
-                        "design run adapter returned no terminal material"
+                        "design run adapter returned no validated handoff"
                     )
 
-                handoff = DesignHandoffRef(
-                    handoff_id=f"{run_id}.handoff",
-                    content_hash=hashlib.sha256(
-                        adapter_response.encode("utf-8")
-                    ).hexdigest(),
-                    source_refs=bundle.brief.source_refs,
-                    adapter_ref=bundle.request.adapter_ref,
-                    run_id=run_id,
-                    receipt_ref=ContractIdentityRef(
-                        schema_version=DESIGN_RUN_EVENT_VERSION,
-                        contract_id=start.receipt_id,
-                        content_hash=start.event_hash,
-                    ),
-                    limitations=(
-                        "Unaccepted Builder material; governed promotion is required.",
-                    ),
-                    produced_at=completed_at,
-                )
                 result = DesignRunResult(
                     result_id=f"{run_id}.result",
                     run_id=run_id,
@@ -709,6 +725,23 @@ class DesignRunGovernance:
             finally:
                 if lease is not None:
                     self._release_run_lease(lease)
+
+    @staticmethod
+    def _validate_returned_handoff(
+        *,
+        output: DesignAgentHandoffOutput,
+        binding: Mapping[str, Any],
+    ) -> DesignHandoffRef:
+        handoff = output.handoff
+        returned = handoff.model_dump(
+            mode="json",
+            exclude={"content_hash"},
+        )
+        if returned != dict(binding):
+            raise ValueError(
+                "design-agent handoff does not bind the exact run"
+            )
+        return handoff
 
     def recover_incomplete(
         self,
@@ -1826,10 +1859,7 @@ class DesignRunGovernance:
                         )
                         or handoff.produced_at != result.completed_at
                         or handoff.limitations
-                        != (
-                            "Unaccepted Builder material; "
-                            "governed promotion is required.",
-                        )
+                        != _UNACCEPTED_HANDOFF_LIMITATIONS
                     ):
                         raise DesignRunEvidenceError(
                             "design-run handoff lineage is invalid"

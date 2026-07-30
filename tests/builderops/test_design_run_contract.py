@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 from pydantic import ValidationError
 
 from app.builderops.design_run_contract import (
+    ContractIdentityRef,
     CuratedDesignBrief,
+    DesignAgentHandoffOutput,
     DesignAgentDescriptor,
+    DesignHandoffRef,
     DesignRunAdmission,
     DesignRunApprovalEvidence,
     DesignRunPolicyProfile,
@@ -17,6 +23,7 @@ from app.builderops.design_run_contract import (
     DigestBoundAttachmentRef,
     YggdrasilGateReceipt,
     contract_ref,
+    parse_design_agent_handoff_output,
     validate_admission_bindings,
     validate_approval_bindings,
 )
@@ -107,6 +114,57 @@ def test_curated_brief_is_bounded_provenanced_and_deterministic() -> None:
         CuratedDesignBrief(**(_brief().model_dump() | {"yggdrasil_gate_receipt": None}))
     with pytest.raises(ValidationError, match="ambient"):
         DesignSourceRef(source_type="repo_document", source_id="whole-repo", content_hash=SHA_A)
+
+
+def test_design_agent_handoff_output_requires_structured_digest_bound_ref() -> None:
+    content = "bounded design artifact"
+    handoff = DesignHandoffRef(
+        handoff_id="run.design.one.handoff",
+        content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        source_refs=(_source(),),
+        adapter_ref=contract_ref(_adapter(), "adapter.claude.design"),
+        run_id="run.design.one",
+        receipt_ref=ContractIdentityRef(
+            schema_version="builderops.design-run-receipt-event.v1",
+            contract_id="receipt.design.one",
+            content_hash=SHA_B,
+        ),
+        limitations=(
+            "Unaccepted Builder material; governed promotion is required.",
+        ),
+        produced_at=TS,
+    )
+    output = DesignAgentHandoffOutput(
+        artifact_content=content,
+        handoff=handoff,
+    )
+
+    assert (
+        parse_design_agent_handoff_output(
+            json.dumps(output.model_dump(mode="json"))
+        )
+        == output
+    )
+    with pytest.raises(ValidationError, match="content digest"):
+        DesignAgentHandoffOutput(
+            artifact_content=f"{content} changed",
+            handoff=handoff,
+        )
+    with pytest.raises(ValidationError, match="content digest"):
+        DesignAgentHandoffOutput(
+            artifact_content=f" {content} ",
+            handoff=handoff,
+        )
+    padded_binding = output.model_dump(mode="json")
+    padded_binding["handoff"]["handoff_id"] = (
+        f" {handoff.handoff_id} "
+    )
+    with pytest.raises(ValueError, match="exact canonical bindings"):
+        parse_design_agent_handoff_output(
+            json.dumps(padded_binding)
+        )
+    with pytest.raises(ValueError, match="one JSON object"):
+        parse_design_agent_handoff_output("provider prose")
 
 
 def test_admission_and_approval_bind_the_exact_request() -> None:

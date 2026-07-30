@@ -18,6 +18,7 @@ from app.builderops.cli import builderops
 from app.builderops.design_agent_adapters import ResolvedDesignAgentAdapter
 from app.builderops.design_run_contract import (
     CuratedDesignBrief,
+    DESIGN_RUN_CONTRACT_VERSION,
     DesignAgentAvailabilityDescriptor,
     DesignAgentDescriptor,
     DesignRunPolicyProfile,
@@ -27,6 +28,7 @@ from app.builderops.design_run_contract import (
     canonical_json,
 )
 from app.builderops.design_run_governance import (
+    DESIGN_RUN_EVENT_VERSION,
     DesignRunApprovalRequiredError,
     DesignRunEvidenceError,
     DesignRunGovernance,
@@ -53,15 +55,39 @@ T4 = "2026-07-30T10:04:00Z"
 @dataclass
 class RecordingAdapter:
     calls: list[dict[str, Any]] = field(default_factory=list)
-    response_text: str = "bounded design output"
+    artifact_content: str = "bounded design output"
+    response_text: str | None = None
+    content_hash_override: str | None = None
+    handoff_overrides: dict[str, Any] = field(default_factory=dict)
     adapter_id: str = "test-codex"
     provider: str = "test-provider"
     model: str = "test-model"
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
         self.calls.append(dict(request))
+        response_text = self.response_text
+        if response_text is None:
+            response_text = json.dumps(
+                {
+                    "schema_version": request[
+                        "handoff_output_schema_version"
+                    ],
+                    "artifact_content": self.artifact_content,
+                    "handoff": {
+                        **dict(request["handoff_binding"]),
+                        **self.handoff_overrides,
+                        "content_hash": (
+                            self.content_hash_override
+                            or hashlib.sha256(
+                                self.artifact_content.encode("utf-8")
+                            ).hexdigest()
+                        ),
+                    },
+                },
+                sort_keys=True,
+            )
         return AdapterResult(
-            response_text=self.response_text,
+            response_text=response_text,
             provider_request_id="provider-request-not-persisted",
         )
 
@@ -1388,7 +1414,7 @@ def test_design_outputs_have_no_direct_authority_or_writeback(
     repo_root: Path,
 ) -> None:
     adapter = RecordingAdapter(
-        response_text="unaccepted design proposal; do not publish"
+        artifact_content="unaccepted design proposal; do not publish"
     )
     service, registry, _ = _service(store, repo_root, adapter=adapter)
     _submit(service)
@@ -1419,7 +1445,7 @@ def test_design_outputs_have_no_direct_authority_or_writeback(
         "BuilderOpsReceipt"
     }
     serialized = json.dumps(records, sort_keys=True)
-    assert adapter.response_text not in serialized
+    assert adapter.artifact_content not in serialized
     assert "provider-request-not-persisted" not in serialized
     assert "PromotionIntent" not in serialized
     assert not any(
@@ -1431,6 +1457,163 @@ def test_design_outputs_have_no_direct_authority_or_writeback(
             "product_runtime_writeback",
         )
     )
+
+
+@pytest.mark.parametrize(
+    "adapter",
+    (
+        pytest.param(
+            RecordingAdapter(response_text="unstructured provider prose"),
+            id="unstructured-prose",
+        ),
+        pytest.param(
+            RecordingAdapter(content_hash_override="0" * 64),
+            id="content-digest",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "acceptance_state": "accepted",
+                }
+            ),
+            id="acceptance-state",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "adapter_ref": {
+                        "schema_version": DESIGN_RUN_CONTRACT_VERSION,
+                        "contract_id": "adapter.foreign",
+                        "content_hash": SHA_A,
+                    },
+                }
+            ),
+            id="adapter-ref",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "handoff_id": "run.foreign.handoff",
+                }
+            ),
+            id="handoff-id",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "limitations": ["Different unaccepted limitation."],
+                }
+            ),
+            id="limitations",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "produced_at": T3,
+                }
+            ),
+            id="produced-at",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "receipt_ref": {
+                        "schema_version": DESIGN_RUN_EVENT_VERSION,
+                        "contract_id": "receipt.foreign",
+                        "content_hash": SHA_A,
+                    },
+                }
+            ),
+            id="receipt-ref",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "run_id": "run.foreign",
+                }
+            ),
+            id="run-id",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "source_refs": [
+                        {
+                            "source_type": "ckm_observation",
+                            "source_id": "ckm:observation:foreign",
+                            "content_hash": SHA_A,
+                        }
+                    ],
+                }
+            ),
+            id="source-refs",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "handoff_id": " run.foreign.handoff ",
+                }
+            ),
+            id="padded-identifier",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "limitations": [
+                        " Unaccepted Builder material; governed promotion is required. "
+                    ]
+                }
+            ),
+            id="padded-non-empty",
+        ),
+        pytest.param(
+            RecordingAdapter(
+                handoff_overrides={
+                    "source_refs": [],
+                }
+            ),
+            id="missing-sources",
+        ),
+    ),
+)
+def test_unverifiable_adapter_handoff_never_records_success(
+    tmp_path: Path,
+    repo_root: Path,
+    adapter: RecordingAdapter,
+) -> None:
+    store = SqliteBuilderOpsStore(
+        tmp_path / f"{len(adapter.response_text or '')}.sqlite3"
+    )
+    store.initialize()
+    service, _, _ = _service(store, repo_root, adapter=adapter)
+    run_id = (
+        "run.invalid.handoff.prose"
+        if adapter.response_text is not None
+        else "run.invalid.handoff.digest"
+    )
+    _submit(service, run_id=run_id)
+    service.approve(
+        run_id=run_id,
+        approval_id=f"{run_id}.approval",
+        approved_at=T2,
+    )
+
+    result = service.execute(
+        run_id=run_id,
+        started_at=T3,
+        completed_at=T4,
+    )
+
+    assert result.final_status == "failed"
+    assert result.handoff is None
+    assert result.refusal is not None
+    assert result.refusal.code == "execution_failed"
+    assert service.projection(run_id).state == "failed"
+    serialized = json.dumps(store.list_records(), sort_keys=True)
+    assert adapter.artifact_content not in serialized
+    if adapter.response_text:
+        assert adapter.response_text not in serialized
+    assert "provider-request-not-persisted" not in serialized
 
 
 def test_persistence_failures_remain_fail_closed(

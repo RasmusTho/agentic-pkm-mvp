@@ -43,8 +43,12 @@ transition/refusal/failure/result as a prior-receipt-linked `BuilderOpsReceipt`.
   unique execution actor; lease expiry cannot admit a second provider turn or sibling terminal
   receipt.
 - Status is reconstructed from validated immutable artifacts and receipt ancestry.
-- Returned handoff refs are accepted only with stable identity, content digest, sources, and
-  provider/run lineage.
+- Returned handoff refs are accepted only from the strict
+  `builderops.design-agent-turn.v1` response envelope. The exact returned UTF-8 artifact content,
+  including whitespace, must match its digest without normalization, and the returned stable
+  identity, sources, adapter, run, accepted-start receipt,
+  limitations, and produced-at time must exactly match the predeclared binding. Plain prose,
+  malformed output, digest drift, or foreign lineage records a typed failure, never success.
 - Reuse the generic receipt envelope; add no receipt type, database, table, or PromotionIntent
   execution authority.
 
