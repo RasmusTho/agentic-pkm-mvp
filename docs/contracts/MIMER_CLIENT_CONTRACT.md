@@ -59,6 +59,8 @@ Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `m
 | Operation | Method + path | Purpose | Provenance/trace | Governance |
 | --- | --- | --- | --- | --- |
 | Capture (write) | `POST /api/companion/capture` | Friction-free intake into the vault inbox note | `x-trace-id`; actor currently fixed (§9 F1) | Full governed chain (§4.1) |
+| Media capture (write) | `POST /api/heimdal/capture/media` | Admit one captured original (audio/image/video/document) and return its durable-acceptance receipt | `x-trace-id` / response `trace_id`; client-minted `capture_id` + `content_sha256` | Governed chain, acknowledged only on durable acceptance (§4.4) |
+| Receipt query | `GET /api/heimdal/capture/receipts?capture_id=` | Answer `admitted` or `unknown` per capture id — the reconnect/recovery answer after a lost response | `x-trace-id` / response `trace_id` | Read-only; discloses admission state, same LAN posture (§4.4) |
 | Retrieve | `GET /search?q=` | Hybrid retrieval over the durable index (KERNEL-05) | `x-trace-id` | Read-only |
 | Ask | `POST /api/ask` | Grounded Q&A with per-source citations | `x-trace-id` | Read-only |
 | Voice ask | `POST /api/ask/voice` | One turn from transient audio to a grounded ASK answer and optional local speech | `x-trace-id` / response `trace_id` | **Read-only**; no transcript, capture intent, or audio is written |
@@ -113,6 +115,70 @@ Clients must handle the three named voice-leg degradation states without inventi
 | STT unavailable or yields no transcript | `503 {error: "stt_unavailable", trace_id}` | Surface the failure; do not substitute an empty or guessed answer. |
 | Grounded ASK unavailable after transcription | `503 {error: "ask_unavailable", transcript, detected_language, session_id?, trace_id}` | Preserve and show the heard transcript; do not answer from client/model memory. |
 | Local TTS unavailable or disabled | `200` grounded text response with `degraded: true`, `reason: "tts_unavailable"`, and no `audio_url` | Show the grounded answer and sources as text; do not fail the turn solely because speech is unavailable. |
+
+### 4.4 `POST /api/heimdal/capture/media` + `GET /api/heimdal/capture/receipts` (the governed media lane)
+
+Implementation: `app/api/routes/heimdal_capture.py` over `app/heimdal/media_ingress.py` and
+`app/heimdal/media_receipts.py`. Shipped by #4384 / PR #4400. The runtime event contract and the
+lane's known limitations are owned by `docs/EVENTS.md :: Heimdal governed media ingress + durable
+receipts`; the task specification is
+`docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`. This section
+states only what a client may call and must handle.
+
+**Request.** Multipart with two parts: `media` (the original's bytes) and `sidecar` (JSON). The
+sidecar may be sent as a plain form field or as a named part with a filename; both are accepted. It
+carries at minimum `capture_id` (client-minted UUID), `content_sha256`, `kind` ∈ `{audio, image,
+video, document}`, `captured_at` (ISO-8601), `device_id`, and `schema_version`, plus optional
+`session_id`/`session_seq` which this lane stores opaquely. Unknown fields are retained as opaque
+lineage rather than rejected, so the sidecar composes with the capture-time metadata sidecar
+(`docs/HEIMDAL_CAPTURE_CLIENT/CAPTURE_TIME_METADATA_SIDECAR.md`) instead of forking it.
+
+**A 2xx is a receipt, not transport success.** The response exists only after the original is
+durably written to the encrypted raw store **and** the `heimdal.capture.media.admitted` outbox event
+is committed; the receipt is persisted last, because the receipt *is* the acknowledgement. This is
+the same outbox-before-ack ordering as §4.1. Success (`200`):
+`{outcome: "admitted", capture_id, content_sha256, receipt_id, raw_ref, kind, admitted_at, trace_id}`
+plus `idempotent_replay: true` when this identity was already acknowledged. A client MUST surface
+this receipt and never fabricate its own.
+
+**Idempotency identity is `(capture_id, content_sha256)`** — the client-visible key §9 F5 asks for,
+delivered here for the media lane. `receipt_id` is derived from that pair, so re-sending after a lost
+response returns the same receipt identity, leaves one raw object, and re-admits nothing. UUID
+spelling is canonicalized (uppercase, braced, unhyphenated, and `urn:uuid:` forms are one identity),
+but a client should still persist and re-send one stable spelling. **Key on `receipt_id`, never on how
+many admission events arrived** — the audit log may record one admission twice while the receipt
+stays single.
+
+**Recovery.** `GET /api/heimdal/capture/receipts?capture_id=…` takes the parameter repeatably, up to
+100 ids per call, and answers `{receipts: [...]}` with one entry per requested id, echoing the id you
+asked for so answers stay alignable with the request. Each entry is either
+`{capture_id, outcome: "admitted", receipt_id, content_sha256, raw_ref, kind, lane, admitted_at}` or
+`{capture_id, outcome: "unknown"}`. `unknown` means *never arrived* and is a first-class answer, not
+an error — it is how a client distinguishes a lost response from a capture that never reached the hub.
+
+Error contract (a client must branch on `error`; never retry blindly):
+
+| Status | `error` | Meaning | Client behavior |
+| --- | --- | --- | --- |
+| 403 | `public_ingress_refused` | Peer is outside the loopback/LAN/tailnet posture; nothing admitted | Fix the host; do not retry from a public network |
+| 415 | `unsupported_media_kind` | `kind` outside the four admitted kinds | Fix the request; surface to human |
+| 413 | `media_too_large` | Over the per-kind cap, or over the coarse cross-kind bound | Do **not** treat `max_bytes` as a size that would be accepted — it may be the coarse bound |
+| 413 | `sidecar_part_too_large` | Sidecar beyond any legitimate metadata size | Fix the request |
+| 422 | `multipart_invalid` / `media_part_required` / `sidecar_part_required` | Malformed body or a missing part | Fix the request |
+| 422 | `sidecar_schema_invalid` | Sidecar fails the admission schema (`violations` included) | Fix the request; surface to human |
+| 422 | `content_hash_mismatch` | Received bytes do not hash to `content_sha256`; nothing admitted | Re-read the source and re-hash before resending |
+| 409 | `consent_refused` | No active consent grant (HEIM-3); nothing admitted | Surface the reason verbatim; never fall back to a direct FS write |
+| 500 | `raw_write_failed`, `admission_event_commit_failed`, `receipt_persistence_failed`, `raw_store_key_unavailable`, `media_cap_misconfigured`, `admission_failed` — all with `state: "not_acknowledged"` | Nothing was acknowledged | Safe to re-send the same `capture_id` + `content_sha256`; admission is idempotent. Retain the original |
+| 503 | `receipt_store_unavailable` | The receipt store could not be read | Treat as *no information*, **never** as `unknown`; retry the read |
+
+The v1 auth posture above is unchanged for these routes: no per-agent identity, LAN/loopback/tailnet
+only. The posture is enforced hub-side on the immediate peer and deliberately ignores
+`X-Forwarded-For`, so a client behind a relay cannot present itself as local.
+
+**One operator precondition, stated honestly:** admission encrypts through the raw store, so the api
+process needs `HEIMDAL_RAW_STORE_KEY`. It is not yet provisioned to that consumer, so until it is,
+every admission answers `500 raw_store_key_unavailable` / `not_acknowledged` rather than a receipt.
+Tracked as `KD-4384-RAWKEY` on the Known Defects registry #4172.
 
 ## 5. Direct-filesystem write transport (owner-permitted, 2026-07-07)
 
@@ -230,7 +296,7 @@ Therefore: the rules below remain **binding client discipline around the progres
 - **W2 — Read-fresh, write-promptly, verify-staleness.** Before any whole-file write: read the file and record its raw-byte content hash; keep the read→write window as short as possible; immediately before writing, re-check the hash. Callers using the shared Mimer filesystem seam pass that hash as `expected_version` with their `writer_identity`, so VMW-02 can write atomically or stage an initially stale proposal. A direct filesystem client outside that seam must still re-read and re-apply its edit when the hash changed; its check remains advisory and the TOCTOU window remains real.
 - **W3 — Ownership courtesy.** Default to creating and editing files the client itself authored (workspace roots, §5). Edit a human-authored note only on explicit human direction in the live session, and prefer append/patch-shaped edits over whole-file rewrites of prose the human may have open in Obsidian.
 - **W4 — Atomic replace.** Whole-file writes land as write-to-temp-then-rename within the same directory, so the watcher and other readers never observe a half-written note. Never leave temp files in the vault on failure.
-- **W5 — Idempotency by verification, not by retry.** No client-supplied idempotency key exists on the capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target (the inbox note tail for captures; the file content for FS writes) before any retry. Direct FS whole-file writes are idempotent by content (re-applying the identical content is safe); appends are not — check for the marker/timestamp line before re-appending.
+- **W5 — Idempotency by verification, not by retry — except on the media lane.** No client-supplied idempotency key exists on the *text* capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So for `POST /api/companion/capture` and direct FS writes: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target (the inbox note tail for captures; the file content for FS writes) before any retry. Direct FS whole-file writes are idempotent by content (re-applying the identical content is safe); appends are not — check for the marker/timestamp line before re-appending. **`POST /api/heimdal/capture/media` is the exception:** it carries a client-minted `(capture_id, content_sha256)` identity, so a lost response is resolved either by re-sending the identical pair or by asking `GET /api/heimdal/capture/receipts` — never by guessing (§4.4).
 - **W6 — Write-ordering vs the watcher.** The watcher detects changes by mtime + sha256 and feeds ingest; the index trails the file. After a write, the file is truth and the index is eventually consistent. Never re-write a file to "fix" perceived index lag, and never treat index state as evidence the write failed.
 - **W7 — One transport per note; reconciling FS vs API writes.** The only note both transports touch by design is excluded from FS writes (the capture inbox, §5), so a governed API write and a direct FS write to the same note should not occur under this contract. If a client nevertheless observes it caused such a collision (e.g. it rewrote a note between another writer's read and write), the reconciliation is: the file's current content is the outcome (LWW), the AuthorityReceipt/outbox event remains the truthful record of *what the governed write did at its time*, and the client surfaces the suspected collision to the human rather than silently re-asserting its own version. Receipts are authoritative for what happened, never for what is currently true (AGENT-FLOWS §10).
 - **W8 — iCloud conflict artifacts.** If a client encounters a `… (conflicted copy …)` sibling, it must not merge, delete, or adopt it silently: surface it to the human. The production vault Markdown iterator uses the VMW-01 shared classifier to quarantine both iCloud and runtime-staged conflict artifacts before watcher/ingest/index parsing, preserves the artifact on disk, and emits a legible classification receipt (VMW-03 / #3452). VMW-04 / #3453 reconciled this as shipped INV-VW3 enforcement.
@@ -289,7 +355,7 @@ Named follow-on work; each routes through `feature-breakdown`/`docs-to-issue`, n
 - **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the four client routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). Owner-ruled as the first hardening slice, not a v1 blocker.
 - **F3 — uuid-resolving note fetch or enriched search payload.** Close the §4.2 uuid→path gap at the API instead of by client-side filesystem enrichment.
 - **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of 23+ route modules (audit §3; the surface is still growing); a client-publishable contract needs both.
-- **F5 — Client-visible idempotency key on capture.** Lets a client retry safely after `not_acknowledged`/timeout instead of verify-by-read (§6 W5).
+- **F5 — Client-visible idempotency key on the *text* capture endpoint.** Still open for `POST /api/companion/capture`: no client-supplied key exists there, so a client must verify-by-read after `not_acknowledged`/timeout instead of retrying (§6 W5). **Delivered for the media lane** by #4384 / PR #4400: `POST /api/heimdal/capture/media` takes `(capture_id, content_sha256)` as its client-minted identity and answers a resend with the same `receipt_id` (§4.4), so that lane retries safely and needs no verify-by-read.
 - **F6 — Multi-writer consistency progressive caller migration.** The shared ADR-0055 enactment is delivered: #3131 supplies the published note-classification table; VMW-01 supplies the shared request/receipt/provenance/classifier substrate; VMW-02 stages initially stale rewritten proposals; VMW-03 quarantines shared artifacts before ordinary ingestion; VMW-04 reconciles INV-VW1/INV-VW3 and parent acceptance; and #3129 independently closes INV-VW2 by guarding `append_note_relative` at the seam. Remaining #3570 work migrates versionless rewritten writers to opt into `expected_version`; until then those callers still use the recorded last-write-wins migration posture. This contract's §6 discipline complements that progressive enforcement and does not overstate it.
 - **F7 — `_heimdal/**` published note-shape schema (audit G3): delivered by #3131.** [`schemas/heimdal-control-notes.schema.json`](../../schemas/heimdal-control-notes.schema.json) publishes the registry's note kinds, paths, authorities, sections, and field-authority split. `tests/heimdal/test_published_control_surface_schema.py` prevents drift from `settings_notes.py`; schema-version evolution remains a future contract change, not a silent runtime edit.
 
