@@ -109,6 +109,20 @@ promote public internet readiness.
   seam (user selection > permitted metadata > default) ships with `generic-default@1` as the only
   template; the analysis engine is deterministic in this slice (no LLM). Projection state is durable
   and rebuildable (migration `b8d3f0a5c2e4`; SQLite dev/test lane).
+- Meeting block ownership is enforced mechanically (CDLM-07, #4387): every meeting-page block
+  carries `{block_id, owner, type, provenance, created_at, revised_at}` in a durable registry, and
+  every block mutation — user edits, analysis revisions, reconciliation, template re-render,
+  finalization — passes one shared fail-closed guard (`app/heimdal/meeting_blocks.py::apply_block_write`).
+  `user_note` blocks are writable only by the user's editor identity through
+  `POST /api/heimdal/meeting/{session_id}/user-note` (idempotent by `(note_block_id, revision)`,
+  acknowledged only after durable write plus the committed `heimdal.meeting.user_note.written`
+  event); derived writers are confined to blocks their own provenance minted, cannot move, merge,
+  reorder, or renumber anything else, and a forged editor-identity string from a derived context
+  cannot pass because the writer kind is structural. Unknown or conflicting ownership refuses the
+  write, preserves content byte-for-byte, and records a surfaceable refusal (needs-attention on the
+  projection read). The pg migration `c9e4a1b6d3f5` adds a DB-level trigger rejecting user_note
+  content changes without user-editor provenance. Editor identity is structural, not cryptographic,
+  until client-contract F2.
 - The System Entry Point capability (#1782) is delivered. All twelve implementation children shipped: server-declared entry state (#1783/PR #1800), latency-ladder re-entry treatments (#1784/PR #1801), unified topbar/overlay host (#1785/PR #1802), the ⌘K Panel command palette (#1786/PR #1817), the system map overlay (#1787/PR #1846), the opt-in guidance layer (#1788/PR #1847), the settings drawer (#1789/PR #1834), governed capture append plus the ⌘N capture modal (#1790/PR #1799, #1791/PR #1816), memory review-queue endpoints plus drawer (#1792/PR #1798, #1793/PR #1818), and the read-only receipts history modal (#1794/PR #1833). The fixture-driven state-gallery validation harness (#1795, SEP-11; `tests/companion_ui/test_entry_state_gallery.py`) proves the composition: declared transitions render and undeclared transitions are rejected, cold/first-contact/no-vault render no re-entry overlay, the governed-vs-body-edit receipt asymmetry holds, no UI-derived authority classification renders, the display budget stays at or below the server caps, reduced-motion end-states are fully visible, and narrow mode preserves every critical affordance. The source-peek popover presentation and posture emphasis switch remain truthfully unshipped (declared overlay ids that do not mount); the context lane / place band stay parked under the gated decision issue #1796. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits
