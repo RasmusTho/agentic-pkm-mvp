@@ -315,6 +315,26 @@ def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:
         assert answer["capture_id"] == sidecar["capture_id"]
 
 
+def test_capture_id_spelling_does_not_mint_a_second_receipt(client: TestClient) -> None:
+    """One logical UUID is one transfer identity, whatever spelling arrives.
+
+    `UUID()` accepts uppercase, braced, and `urn:uuid:` forms of the same id, and
+    the receipt identity is derived from this string — so admitting a spelling
+    verbatim would mint a receipt per spelling and answer `unknown` for the rest.
+    """
+    media = b"same-capture-id-two-spellings"
+    canonical = str(uuid4())
+    first = _post_media(client, media, _sidecar(media, capture_id=canonical))
+    second = _post_media(client, media, _sidecar(media, capture_id=canonical.upper()))
+    assert first.status_code == 200 and second.status_code == 200, second.text
+
+    assert second.json()["receipt_id"] == first.json()["receipt_id"]
+    assert second.json()["idempotent_replay"] is True
+    assert second.json()["capture_id"] == canonical
+    assert len(all_media_receipts()) == 1
+    assert _get_receipts(client, canonical).json()["receipts"][0]["outcome"] == "admitted"
+
+
 def test_consent_refusal_admits_nothing(client: TestClient) -> None:
     """HEIM-3 is the one signal->raw gate, and its refusal is a named 409."""
     revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="test-operator")
@@ -410,12 +430,26 @@ def test_kind_caps_and_named_error_states(
     assert mismatch.status_code == 422
     assert mismatch.json()["detail"]["error"] == "content_hash_mismatch"
 
-    # Sidecar schema violation (missing required field) -> 422, nothing admitted.
+    # Sidecar schema violations -> 422, nothing admitted. Both shapes are
+    # covered: a missing field (rejected by pydantic itself) and every
+    # custom-validator rejection. The latter must be asserted separately —
+    # pydantic attaches the raising exception to each error's `ctx`, so a
+    # response that carries the error list verbatim fails to encode and degrades
+    # into a bare 500 for exactly these inputs while a missing-field test stays
+    # green over the break.
     incomplete = _sidecar(media)
     incomplete.pop("device_id")
-    schema_violation = _post_media(client, media, incomplete)
-    assert schema_violation.status_code == 422
-    assert schema_violation.json()["detail"]["error"] == "sidecar_schema_invalid"
+    for invalid in (
+        incomplete,
+        _sidecar(media, capture_id="not-a-uuid"),
+        _sidecar(media, content_sha256="abc"),
+        _sidecar(media, captured_at="yesterday"),
+        _sidecar(media, schema_version=2),
+    ):
+        schema_violation = _post_media(client, media, invalid)
+        assert schema_violation.status_code == 422, schema_violation.text
+        assert schema_violation.headers["content-type"].startswith("application/json")
+        assert schema_violation.json()["detail"]["error"] == "sidecar_schema_invalid"
 
     # Unsupported kind -> 415, nothing admitted.
     unsupported = _post_media(client, media, _sidecar(media, kind="hologram"))

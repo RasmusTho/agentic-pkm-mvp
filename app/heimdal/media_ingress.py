@@ -165,9 +165,9 @@ def resolve_media_kind_max_bytes(kind: str) -> int:
     unusable override -- a silently ignored cap would admit oversize evidence
     the operator believed was bounded.
 
-    The route resolves every kind up front to derive its coarse read bound, so in
-    practice a `MediaCapConfigError` surfaces there rather than from an admission;
-    both paths render the same named refusal.
+    The route resolves every kind up front to derive its coarse read bound, so a
+    `MediaCapConfigError` reaches a client from there rather than from an
+    admission; that call site renders the published named refusal.
     """
     if kind not in DEFAULT_MEDIA_KIND_MAX_BYTES:
         raise MediaKindUnsupportedError(

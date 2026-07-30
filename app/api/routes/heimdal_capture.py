@@ -143,12 +143,18 @@ class MediaSidecar(BaseModel):
 
         Validated here and *not* on the receipt query: a watched-folder receipt
         is keyed by its content hash, so the query must accept that form too.
+
+        Canonicalized to the plain hyphenated lowercase form, because the receipt
+        identity is derived from this string: `UUID()` accepts uppercase, braced,
+        and `urn:uuid:` spellings of the same id, and admitting them verbatim
+        would mint a distinct receipt per spelling and answer `unknown` for the
+        others.
         """
         try:
-            UUID(value)
+            canonical = str(UUID(value))
         except (ValueError, AttributeError, TypeError) as exc:
             raise ValueError("capture_id must be a client-minted UUID") from exc
-        return value
+        return canonical
 
     @field_validator("content_sha256")
     @classmethod
@@ -291,14 +297,22 @@ def _parse_sidecar(raw_sidecar: str, trace_id: str) -> MediaSidecar:
             detail={
                 "error": "sidecar_schema_invalid",
                 "message": "The sidecar does not satisfy the admission schema; nothing was admitted.",
-                "violations": exc.errors(include_url=False),
+                # `include_context=False` is load-bearing, not tidiness: pydantic
+                # puts the raw exception a custom `@field_validator` raised into
+                # each error's `ctx`, and that object is not JSON-serializable.
+                # Leaving it in makes the response encoder raise *after* this
+                # 422 is constructed, so every validator-driven rejection —
+                # a malformed capture_id, hash, timestamp, or an unsupported
+                # schema_version — degrades into a bare text/plain 500 the client
+                # cannot branch on.
+                "violations": exc.errors(include_url=False, include_context=False),
                 "trace_id": trace_id,
             },
         ) from exc
 
 
 def _cap_misconfigured(exc: Exception, trace_id: str) -> HTTPException:
-    """One renderer for the per-kind-cap misconfiguration, used by both call sites."""
+    """Render the per-kind-cap misconfiguration as its published named refusal."""
     logger.error("heimdal media ingress refused: per-kind cap misconfigured: %s", exc)
     return HTTPException(
         status_code=500,
