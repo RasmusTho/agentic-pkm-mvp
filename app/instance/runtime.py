@@ -1821,17 +1821,21 @@ def _begin_instance_state_deployment(
         scalar_receipt_resume: dict[str, object] | None = None
         if existing_lease is not None:
             receipt_value = existing_lease.get("scalar_roll_forward")
-            if (
-                existing_lease.get("phase") in {"claimed", "proved"}
-                and isinstance(receipt_value, dict)
-                and receipt_value.get("deployment_nonce")
-                == existing_lease.get("nonce")
-                and receipt_value.get("channel_id") == channel
-                and _scalar_roll_forward_receipt_can_resume(
-                    receipt_value,
-                    VaultRegistryStore(layout.registry_path).load(),
-                )
-            ):
+            if receipt_value is not None:
+                if not (
+                    existing_lease.get("phase") in {"claimed", "proved"}
+                    and isinstance(receipt_value, dict)
+                    and receipt_value.get("deployment_nonce")
+                    == existing_lease.get("nonce")
+                    and receipt_value.get("channel_id") == channel
+                    and _scalar_roll_forward_receipt_can_resume(
+                        receipt_value,
+                        VaultRegistryStore(layout.registry_path).load(),
+                    )
+                ):
+                    raise InstanceStatePreflightError(
+                        "scalar deployment recovery receipt is invalid"
+                    )
                 scalar_receipt_resume = dict(receipt_value)
             if (
                 existing_lease.get("phase") == "proved"
