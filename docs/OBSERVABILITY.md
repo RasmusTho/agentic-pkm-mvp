@@ -63,7 +63,7 @@ Tests: `tests/api/test_health_failures.py::test_health_handles_malformed_heartbe
 Logs are the primary tracing surface; no external APM is required for the current MVP.
 
 ## Scheduled host watchers (push alerts)
-Two launchd jobs on the mac mini are the only push-alerting surface; both are
+Two launchd jobs on the always-on host are the only push-alerting surface; both are
 transition-based (one alert on entering a bad state, one recovery signal on the first
 healthy run) and both default to the same `NTFY_TOPIC` so the operator watches one topic.
 
