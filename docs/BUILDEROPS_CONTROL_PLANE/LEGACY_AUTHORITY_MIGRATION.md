@@ -25,6 +25,26 @@ SQLite/JSONL, file-first model inquiries/promotions, and epic-run JSON. Issue #3
 prove path fragmentation; their host-stable SQLite destination is superseded, but their discovery and
 host-identity lessons remain migration inputs.
 
+The dispatcher store fragments the same way, and this is verified live rather than inferred. On
+2026-07-29 Demerzel carried two dispatcher stores simultaneously, because
+`app/dispatcher/config.py :: load_paths` falls through to `_default_state_dir`, which resolves the
+state directory via `discover_primary_worktree(cwd=...)`:
+
+| Checkout | Store | Live tasks |
+| --- | --- | --- |
+| `~/workspace` | `/Volumes/ColimaT7/workspace-root/runtime/dispatcher/dispatcher.sqlite3` | 431 |
+| `~/agentic-pkm-builderops` | `~/agentic-pkm-builderops/runtime/dispatcher/dispatcher.sqlite3` | 27 |
+
+The two are not views of one store: validating the same Signboard board against the first reported
+zero cards absent, against the second 378. A `export-signboard --prune-absent` run from the second
+checkout deleted 404 live cards; the board was rebuilt from the owning store, and #4370 (PR #4402,
+merge `168edbe2`) added a store-ownership stamp so a mismatched prune now refuses.
+
+This is the #3686 defect class one store over, and it is a concrete acceptance case for the
+worktree-enumeration coverage this task already requires: an inventory that finds only the dispatcher
+store belonging to the invoking checkout would silently omit the other, along with every task and
+event recorded in it.
+
 ## What This Task Does
 
 - derive an expected-source manifest from every repo-owned legacy producer/default-path rule, then
@@ -139,7 +159,11 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 - construct fixtures for omitted caller roots, multiple worktrees, host/container path divergence,
   unmounted/inaccessible volumes, ambiguous/missing repo provenance, stale acknowledgements, partial
   imports, and source mutation;
-- run importer twice and compare database/result hashes; and
+- run importer twice and compare database/result hashes;
+- exercise the verified Demerzel two-dispatcher-store case from Purpose: an inventory run from one
+  checkout must still enumerate the dispatcher store belonging to the other, and the reconciliation
+  receipt must account for both rather than reporting the invoking checkout's store as the universe;
+  and
 - preserve #3686/PR #3695 evidence in the migration receipt.
 
 ## Related Docs
@@ -152,3 +176,6 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 
 - [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789), blocked on BCP-01.
 - Reconciles issue #3686 / PR #3695 as discovery evidence with a superseded target.
+- [#4370](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4370) (closed by PR #4402) records the
+  verified Demerzel two-dispatcher-store condition described in Purpose. It shipped a guard at the
+  projection layer; the underlying CWD-derived fragmentation is this task's to migrate.
