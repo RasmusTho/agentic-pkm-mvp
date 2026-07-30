@@ -79,6 +79,22 @@ class CkmProjectionBatch:
     current_watermark_set: Mapping[str, str]
 
 
+@dataclass(frozen=True)
+class CkmEvidenceEdgeWrite:
+    artifact_id: str
+    capability_id: str
+    evidence_kind: str
+    polarity: str
+    maturity_dimension: str
+    confidence: float
+    extraction_method: str
+    lifecycle: str
+    source_ref: str
+    basis: str | None = None
+    model: str | None = None
+    provider: str | None = None
+
+
 def _dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
@@ -174,17 +190,13 @@ class CkmStore:
                 details.append(f"tables: {', '.join(missing_tables)}")
             if missing_indexes:
                 details.append(f"indexes: {', '.join(missing_indexes)}")
-            raise CkmValidationError(
-                f"CKM read preflight failed; missing {'; '.join(details)}"
-            )
+            raise CkmValidationError(f"CKM read preflight failed; missing {'; '.join(details)}")
         CkmStore._validate_required_columns(conn, legacy=False)
         state_rows = conn.execute(
             "SELECT schema_version FROM ckm_state WHERE singleton = 1"
         ).fetchall()
         if len(state_rows) != 1 or int(state_rows[0]["schema_version"]) != CKM_SCHEMA_VERSION:
-            raise CkmValidationError(
-                "CKM read preflight failed: missing or unsupported state row"
-            )
+            raise CkmValidationError("CKM read preflight failed: missing or unsupported state row")
 
     # --- Schema lifecycle ----------------------------------------------------
 
@@ -208,7 +220,11 @@ class CkmStore:
                 "ckm_public_identity",
                 "ckm_identity_successor",
             }
-            if existing_tables and existing_tables != current_tables and existing_tables != legacy_tables:
+            if (
+                existing_tables
+                and existing_tables != current_tables
+                and existing_tables != legacy_tables
+            ):
                 raise CkmValidationError(
                     "unsupported partial CKM schema; refusing to half-initialize identity/state metadata"
                 )
@@ -233,9 +249,7 @@ class CkmStore:
             self._initialize_or_validate_state(conn, initial_revision=initial_revision)
             citations_changed = self._backfill_public_identities(conn)
             identity_lifecycle_changed = self._register_existing_public_identities(conn)
-            if existing_tables and not legacy and (
-                citations_changed or identity_lifecycle_changed
-            ):
+            if existing_tables and not legacy and (citations_changed or identity_lifecycle_changed):
                 self._advance_state_revision(conn)
             for statement in CKM_DDL_STATEMENTS:
                 if "CREATE UNIQUE INDEX" in statement and (
@@ -263,7 +277,10 @@ class CkmStore:
     @staticmethod
     def _add_public_identity_columns(conn: sqlite3.Connection) -> None:
         additions = {
-            "ckm_capability": (("public_id", "TEXT NOT NULL DEFAULT ''"), ("identity_key", "TEXT NOT NULL DEFAULT ''")),
+            "ckm_capability": (
+                ("public_id", "TEXT NOT NULL DEFAULT ''"),
+                ("identity_key", "TEXT NOT NULL DEFAULT ''"),
+            ),
             "ckm_artifact": (("public_id", "TEXT NOT NULL DEFAULT ''"),),
             "ckm_evidence_edge": (("public_id", "TEXT NOT NULL DEFAULT ''"),),
             "ckm_evidence_edge_history": (("public_id", "TEXT NOT NULL DEFAULT ''"),),
@@ -326,9 +343,7 @@ class CkmStore:
                 identity_key = seed_identity_by_name.get(str(row["name"])) or (
                     f"inferred:{row['existence_provenance']}:{row['boundary_ref'] or row['name']}"
                 )
-            public_id = str(row["public_id"] or "") or stable_public_id(
-                "capability", identity_key
-            )
+            public_id = str(row["public_id"] or "") or stable_public_id("capability", identity_key)
             conn.execute(
                 "UPDATE ckm_capability SET identity_key = ?, public_id = ? WHERE id = ?",
                 (identity_key, public_id, row["id"]),
@@ -338,7 +353,9 @@ class CkmStore:
             public_id = str(row["public_id"] or "") or stable_public_id(
                 "artifact", str(row["source_ref"])
             )
-            conn.execute("UPDATE ckm_artifact SET public_id = ? WHERE id = ?", (public_id, row["id"]))
+            conn.execute(
+                "UPDATE ckm_artifact SET public_id = ? WHERE id = ?", (public_id, row["id"])
+            )
 
         for row in conn.execute("SELECT * FROM ckm_evidence_edge ORDER BY id").fetchall():
             public_id = str(row["public_id"] or "") or CkmStore._edge_public_id(
@@ -410,10 +427,7 @@ class CkmStore:
                 "SELECT id FROM ckm_evidence_edge WHERE public_id = ?",
                 (public_id,),
             ).fetchone()
-            if (
-                active_identity_owner is not None
-                and str(active_identity_owner["id"]) != edge_id
-            ):
+            if active_identity_owner is not None and str(active_identity_owner["id"]) != edge_id:
                 raise CkmValidationError(
                     "unsupported history-only evidence edge maps multiple internal edge ids "
                     "to one public identity"
@@ -437,26 +451,22 @@ class CkmStore:
                 str(row["asserted_at"]),
                 int(row["migration_rowid"]),
             )
-            if row_order > latest_order_by_capability.get(
-                capability_id, ("", -1)
-            ):
+            if row_order > latest_order_by_capability.get(capability_id, ("", -1)):
                 latest_by_capability[capability_id] = str(row["id"])
                 latest_order_by_capability[capability_id] = row_order
 
         for row in assessment_rows:
             fingerprint = str(row["edge_fingerprint"])
             is_pre_v5 = fingerprint != "legacy" and not fingerprint.startswith("v2:")
-            is_historical_pre_v5 = is_pre_v5 and str(row["id"]) != latest_by_capability[
-                str(row["capability_id"])
-            ]
+            is_historical_pre_v5 = (
+                is_pre_v5 and str(row["id"]) != latest_by_capability[str(row["capability_id"])]
+            )
             normalized_fingerprint = (
                 None
                 if is_historical_pre_v5
                 else CkmStore._normalized_assessment_fingerprint(conn, row)
             )
-            is_unverified_latest_pre_v5 = (
-                is_pre_v5 and normalized_fingerprint is None
-            )
+            is_unverified_latest_pre_v5 = is_pre_v5 and normalized_fingerprint is None
             identity_row: Mapping[str, Any] = row
             if is_historical_pre_v5 or is_unverified_latest_pre_v5:
                 historical_row = dict(row)
@@ -486,7 +496,9 @@ class CkmStore:
             public_id = str(row["public_id"] or "") or CkmStore._finding_public_id(
                 conn, row["kind"], row["capability_id"], row["dimension"]
             )
-            conn.execute("UPDATE ckm_finding SET public_id = ? WHERE id = ?", (public_id, row["id"]))
+            conn.execute(
+                "UPDATE ckm_finding SET public_id = ? WHERE id = ?", (public_id, row["id"])
+            )
         return citations_changed
 
     @staticmethod
@@ -533,10 +545,7 @@ class CkmStore:
                     (row["public_id"],),
                 ).fetchone()
                 if existing is not None:
-                    if (
-                        existing["resource_type"] != resource_type
-                        or existing["status"] != "active"
-                    ):
+                    if existing["resource_type"] != resource_type or existing["status"] != "active":
                         raise CkmValidationError(
                             f"active {resource_type} content conflicts with public identity "
                             f"{row['public_id']!r}"
@@ -665,11 +674,15 @@ class CkmStore:
         migrated = {
             key: CkmStore._backfill_citation_value(conn, item) for key, item in value.items()
         }
-        if not migrated.get("public_id") and {
-            "id",
-            "artifact_kind",
-            "source_ref",
-        } <= migrated.keys():
+        if (
+            not migrated.get("public_id")
+            and {
+                "id",
+                "artifact_kind",
+                "source_ref",
+            }
+            <= migrated.keys()
+        ):
             artifact = conn.execute(
                 "SELECT public_id FROM ckm_artifact WHERE id = ?", (migrated["id"],)
             ).fetchone()
@@ -678,13 +691,17 @@ class CkmStore:
                 if artifact
                 else stable_public_id("artifact", str(migrated["source_ref"]))
             )
-        if not migrated.get("public_id") and {
-            "id",
-            "artifact_id",
-            "capability_id",
-            "basis",
-            "evidence_kind",
-        } <= migrated.keys():
+        if (
+            not migrated.get("public_id")
+            and {
+                "id",
+                "artifact_id",
+                "capability_id",
+                "basis",
+                "evidence_kind",
+            }
+            <= migrated.keys()
+        ):
             edge = conn.execute(
                 "SELECT public_id FROM ckm_evidence_edge WHERE id = ?", (migrated["id"],)
             ).fetchone()
@@ -758,10 +775,11 @@ class CkmStore:
             if legacy and table == "ckm_state":
                 continue
             present = {
-                str(row["name"])
-                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
             }
-            expected = required - CKM_LEGACY_ADDED_COLUMNS.get(table, frozenset()) if legacy else required
+            expected = (
+                required - CKM_LEGACY_ADDED_COLUMNS.get(table, frozenset()) if legacy else required
+            )
             missing = sorted(expected - present)
             if missing:
                 raise CkmValidationError(
@@ -779,7 +797,9 @@ class CkmStore:
             (utc_now(), CKM_SCHEMA_VERSION),
         )
         if updated.rowcount != 1:
-            raise CkmValidationError("CKM mutation refused: state metadata is missing or unsupported")
+            raise CkmValidationError(
+                "CKM mutation refused: state metadata is missing or unsupported"
+            )
 
     def state_identity(self) -> CkmStateIdentity:
         with self._connect() as conn:
@@ -796,12 +816,8 @@ class CkmStore:
         )
 
     @staticmethod
-    def _referenced_public_id(
-        conn: sqlite3.Connection, table: str, internal_id: str
-    ) -> str:
-        row = conn.execute(
-            f"SELECT public_id FROM {table} WHERE id = ?", (internal_id,)
-        ).fetchone()
+    def _referenced_public_id(conn: sqlite3.Connection, table: str, internal_id: str) -> str:
+        row = conn.execute(f"SELECT public_id FROM {table} WHERE id = ?", (internal_id,)).fetchone()
         if row is None or not row["public_id"]:
             raise CkmValidationError(
                 f"CKM identity preflight failed: {table} row {internal_id!r} has no public identity"
@@ -813,9 +829,7 @@ class CkmStore:
         conn: sqlite3.Connection, artifact_id: str, capability_id: str, basis: str
     ) -> str:
         return CkmStore._edge_public_id_from_refs(
-            artifact_public_id=CkmStore._referenced_public_id(
-                conn, "ckm_artifact", artifact_id
-            ),
+            artifact_public_id=CkmStore._referenced_public_id(conn, "ckm_artifact", artifact_id),
             capability_public_id=CkmStore._referenced_public_id(
                 conn, "ckm_capability", capability_id
             ),
@@ -908,8 +922,10 @@ class CkmStore:
     ) -> str | None:
         edge_fingerprint = str(row["edge_fingerprint"])
         fingerprint_payload = edge_fingerprint.removeprefix("v2:")
-        if edge_fingerprint.startswith("v2:") and len(fingerprint_payload) == 64 and all(
-            character in "0123456789abcdef" for character in fingerprint_payload
+        if (
+            edge_fingerprint.startswith("v2:")
+            and len(fingerprint_payload) == 64
+            and all(character in "0123456789abcdef" for character in fingerprint_payload)
         ):
             return edge_fingerprint
         if edge_fingerprint == "legacy":
@@ -946,18 +962,14 @@ class CkmStore:
             )
         raw_watermarks = row["watermark_set"]
         watermark_set = (
-            _loads(raw_watermarks)
-            if isinstance(raw_watermarks, str)
-            else raw_watermarks
+            _loads(raw_watermarks) if isinstance(raw_watermarks, str) else raw_watermarks
         )
         if legacy_assessment_fingerprint(edges, artifacts) != edge_fingerprint:
             # Evidence changed after the old assertion. It is representable as
             # a stable value/citation snapshot, but must remain stale so the
             # normal engine appends a newly measured v2 assertion.
             return None
-        return assessment_fingerprint(
-            edges, artifacts, watermark_set=watermark_set
-        )
+        return assessment_fingerprint(edges, artifacts, watermark_set=watermark_set)
 
     @staticmethod
     def _finding_public_id(
@@ -966,9 +978,7 @@ class CkmStore:
         identity = canonical_digest(
             {
                 "kind": kind,
-                "capability": CkmStore._referenced_public_id(
-                    conn, "ckm_capability", capability_id
-                ),
+                "capability": CkmStore._referenced_public_id(conn, "ckm_capability", capability_id),
                 "dimension": dimension,
             }
         )
@@ -981,7 +991,8 @@ class CkmStore:
             return
         conn.execute("ALTER TABLE ckm_evidence_edge RENAME TO ckm_evidence_edge_v1")
         edge_ddl = next(
-            statement for statement in CKM_DDL_STATEMENTS
+            statement
+            for statement in CKM_DDL_STATEMENTS
             if "CREATE TABLE IF NOT EXISTS ckm_evidence_edge" in statement
         )
         conn.execute(edge_ddl)
@@ -1030,7 +1041,9 @@ class CkmStore:
             if name not in columns:
                 conn.execute(f"ALTER TABLE ckm_assessment ADD COLUMN {name} {declaration}")
         zero_shares = _dumps({dimension: 0.0 for dimension in MATURITY_DIMENSIONS})
-        legacy_formulas = _dumps({dimension: "legacy-pre-ckm07" for dimension in MATURITY_DIMENSIONS})
+        legacy_formulas = _dumps(
+            {dimension: "legacy-pre-ckm07" for dimension in MATURITY_DIMENSIONS}
+        )
         conn.execute(
             """
             UPDATE ckm_assessment
@@ -1069,15 +1082,12 @@ class CkmStore:
                     "SELECT * FROM ckm_identity_successor ORDER BY source_public_id, successor_public_id"
                 ).fetchall()
             active_ids = {
-                str(row["public_id"])
-                for row in preserved_identities
-                if row["status"] == "active"
+                str(row["public_id"]) for row in preserved_identities if row["status"] == "active"
             }
             unknown_retained = set(retained) - active_ids
             if unknown_retained:
                 raise CkmValidationError(
-                    "retained public identities are not active: "
-                    f"{sorted(unknown_retained)}"
+                    "retained public identities are not active: " f"{sorted(unknown_retained)}"
                 )
             for table in reversed(CKM_TABLE_NAMES):
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
@@ -1156,9 +1166,7 @@ class CkmStore:
             event_type=event_type,
             actor={"actor_type": "agent", "id": "ckm_store"},
             occurred_at=now,
-            target_refs=[
-                {"ref_type": "ckm_tables", "ref": table} for table in CKM_TABLE_NAMES
-            ],
+            target_refs=[{"ref_type": "ckm_tables", "ref": table} for table in CKM_TABLE_NAMES],
             action=action,
             receipt_body=_dumps({"tables": list(CKM_TABLE_NAMES)}),
             idempotency_key=f"ckm-{action}-{uuid4().hex}",
@@ -1183,9 +1191,7 @@ class CkmStore:
         public_id = stable_public_id("capability", resolved_identity_key)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._claim_public_identity(
-                conn, public_id=public_id, resource_type="capability"
-            )
+            self._claim_public_identity(conn, public_id=public_id, resource_type="capability")
             existing = conn.execute(
                 "SELECT * FROM ckm_capability WHERE identity_key = ?",
                 (resolved_identity_key,),
@@ -1344,9 +1350,7 @@ class CkmStore:
 
     def get_capability_by_name(self, name: str) -> CkmCapability | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM ckm_capability WHERE name = ?", (name,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM ckm_capability WHERE name = ?", (name,)).fetchone()
         return CkmCapability.from_row(row) if row is not None else None
 
     def get_capability(self, capability_id: str) -> CkmCapability | None:
@@ -1375,8 +1379,7 @@ class CkmStore:
             conn.execute("BEGIN")
             self._preflight_read_schema(conn)
             start_state_row = conn.execute(
-                "SELECT epoch, state_revision, schema_version "
-                "FROM ckm_state WHERE singleton = 1"
+                "SELECT epoch, state_revision, schema_version " "FROM ckm_state WHERE singleton = 1"
             ).fetchone()
             assert start_state_row is not None
             state_identity = CkmStateIdentity(
@@ -1408,9 +1411,7 @@ class CkmStore:
                 )
             }
             over_bound = {
-                key: count
-                for key, count in object_counts.items()
-                if count > class_capture_limit
+                key: count for key, count in object_counts.items() if count > class_capture_limit
             }
             aggregate_count = sum(object_counts.values())
             if over_bound or aggregate_count > aggregate_capture_limit:
@@ -1425,15 +1426,26 @@ class CkmStore:
                         "aggregate_count": aggregate_count,
                     },
                 )
-            capability_rows = conn.execute("SELECT * FROM ckm_capability ORDER BY name, id").fetchall()
-            artifact_rows = conn.execute("SELECT * FROM ckm_artifact ORDER BY source_ref, id").fetchall()
-            edge_rows = conn.execute("SELECT * FROM ckm_evidence_edge ORDER BY capability_id, public_id").fetchall()
-            assessment_rows = conn.execute("SELECT * FROM ckm_assessment ORDER BY capability_id, asserted_at, rowid").fetchall()
-            finding_rows = conn.execute("SELECT * FROM ckm_finding ORDER BY capability_id, kind, dimension").fetchall()
-            watermark_rows = conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source").fetchall()
+            capability_rows = conn.execute(
+                "SELECT * FROM ckm_capability ORDER BY name, id"
+            ).fetchall()
+            artifact_rows = conn.execute(
+                "SELECT * FROM ckm_artifact ORDER BY source_ref, id"
+            ).fetchall()
+            edge_rows = conn.execute(
+                "SELECT * FROM ckm_evidence_edge ORDER BY capability_id, public_id"
+            ).fetchall()
+            assessment_rows = conn.execute(
+                "SELECT * FROM ckm_assessment ORDER BY capability_id, asserted_at, rowid"
+            ).fetchall()
+            finding_rows = conn.execute(
+                "SELECT * FROM ckm_finding ORDER BY capability_id, kind, dimension"
+            ).fetchall()
+            watermark_rows = conn.execute(
+                "SELECT source, value FROM ckm_watermark ORDER BY source"
+            ).fetchall()
             end_state_row = conn.execute(
-                "SELECT epoch, state_revision, schema_version "
-                "FROM ckm_state WHERE singleton = 1"
+                "SELECT epoch, state_revision, schema_version " "FROM ckm_state WHERE singleton = 1"
             ).fetchone()
             if end_state_row is None or (
                 str(end_state_row["epoch"]),
@@ -1595,33 +1607,39 @@ class CkmStore:
     def set_watermark(self, source: str, value: str) -> None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute(
-                "SELECT value FROM ckm_watermark WHERE source = ?", (source,)
-            ).fetchone()
-            if existing is not None and existing["value"] == value:
+            if not self._set_watermark_in_connection(conn, source=source, value=value):
                 conn.commit()
                 return
-            conn.execute(
-                """
-                INSERT INTO ckm_watermark (source, value, updated_at) VALUES (?, ?, ?)
-                ON CONFLICT(source) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-                """,
-                (source, value, utc_now()),
-            )
             self._advance_state_revision(conn)
             conn.commit()
 
+    @staticmethod
+    def _set_watermark_in_connection(conn: sqlite3.Connection, *, source: str, value: str) -> bool:
+        existing = conn.execute(
+            "SELECT value FROM ckm_watermark WHERE source = ?", (source,)
+        ).fetchone()
+        if existing is not None and existing["value"] == value:
+            return False
+        conn.execute(
+            """
+            INSERT INTO ckm_watermark (source, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(source) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (source, value, utc_now()),
+        )
+        return True
+
     def current_watermark_set(self) -> dict[str, str]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source").fetchall()
+            rows = conn.execute(
+                "SELECT source, value FROM ckm_watermark ORDER BY source"
+            ).fetchall()
         return {str(row["source"]): str(row["value"]) for row in rows}
 
     # --- Evidence edge ---------------------------------------------------------
 
     @staticmethod
-    def _archive_evidence_edges(
-        conn: sqlite3.Connection, rows: list[sqlite3.Row]
-    ) -> None:
+    def _archive_evidence_edges(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> None:
         """Preserve superseded edge versions outside the active CEG projection."""
 
         retired_at = utc_now()
@@ -1673,96 +1691,150 @@ class CkmStore:
         model: str | None = None,
         provider: str | None = None,
     ) -> CkmEvidenceEdge:
+        write = CkmEvidenceEdgeWrite(
+            artifact_id=artifact_id,
+            capability_id=capability_id,
+            evidence_kind=evidence_kind,
+            polarity=polarity,
+            maturity_dimension=maturity_dimension,
+            confidence=confidence,
+            extraction_method=extraction_method,
+            lifecycle=lifecycle,
+            source_ref=source_ref,
+            basis=basis,
+            model=model,
+            provider=provider,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            edge, changed, _created = self._upsert_evidence_edge_in_connection(conn, write)
+            if changed:
+                self._advance_state_revision(conn)
+            conn.commit()
+        return edge
+
+    def upsert_evidence_edges_with_watermark(
+        self,
+        writes: Sequence[CkmEvidenceEdgeWrite],
+        *,
+        watermark_source: str,
+        watermark_value: str,
+    ) -> int:
+        """Commit one inferred batch and its watermark as a single transaction."""
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            changed = False
+            created = 0
+            for write in writes:
+                _edge, edge_changed, edge_created = self._upsert_evidence_edge_in_connection(
+                    conn, write
+                )
+                changed = changed or edge_changed
+                created += int(edge_created)
+            watermark_changed = self._set_watermark_in_connection(
+                conn,
+                source=watermark_source,
+                value=watermark_value,
+            )
+            if changed or watermark_changed:
+                self._advance_state_revision(conn)
+            conn.commit()
+        return created
+
+    def _upsert_evidence_edge_in_connection(
+        self,
+        conn: sqlite3.Connection,
+        write: CkmEvidenceEdgeWrite,
+    ) -> tuple[CkmEvidenceEdge, bool, bool]:
         now = utc_now()
         candidate_id = new_id("edge")
-        if extraction_method == "inferred" and (
-            basis is None or not isinstance(basis, str) or not basis.strip()
+        if write.extraction_method == "inferred" and (
+            write.basis is None or not isinstance(write.basis, str) or not write.basis.strip()
         ):
             raise CkmValidationError(
                 "inferred evidence edges require an explicit non-empty rationale as basis"
             )
-        resolved_basis = basis or source_ref
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            public_id = self._edge_public_id(conn, artifact_id, capability_id, resolved_basis)
-            self._claim_public_identity(
-                conn, public_id=public_id, resource_type="evidence_edge"
+        resolved_basis = write.basis or write.source_ref
+        public_id = self._edge_public_id(
+            conn, write.artifact_id, write.capability_id, resolved_basis
+        )
+        self._claim_public_identity(conn, public_id=public_id, resource_type="evidence_edge")
+        candidate = CkmEvidenceEdge(
+            id=candidate_id,
+            public_id=public_id,
+            artifact_id=write.artifact_id,
+            capability_id=write.capability_id,
+            evidence_kind=write.evidence_kind,
+            polarity=write.polarity,
+            maturity_dimension=write.maturity_dimension,
+            confidence=write.confidence,
+            extraction_method=write.extraction_method,
+            model=write.model,
+            provider=write.provider,
+            lifecycle=write.lifecycle,
+            source_ref=write.source_ref,
+            basis=resolved_basis,
+            created_at=now,
+            updated_at=now,
+        ).validate()
+        if candidate.extraction_method == "inferred" and candidate.lifecycle != "candidate":
+            raise CkmValidationError(
+                "inferred evidence edges must enter as candidate; use a confirmation receipt"
             )
-            candidate = CkmEvidenceEdge(
-                id=candidate_id,
-                public_id=public_id,
-                artifact_id=artifact_id,
-                capability_id=capability_id,
-                evidence_kind=evidence_kind,
-                polarity=polarity,
-                maturity_dimension=maturity_dimension,
-                confidence=confidence,
-                extraction_method=extraction_method,
-                model=model,
-                provider=provider,
-                lifecycle=lifecycle,
-                source_ref=source_ref,
-                basis=resolved_basis,
-                created_at=now,
-                updated_at=now,
-            ).validate()
-            if candidate.extraction_method == "inferred" and candidate.lifecycle != "candidate":
-                raise CkmValidationError(
-                    "inferred evidence edges must enter as candidate; use a confirmation receipt"
-                )
-            existing_row = conn.execute(
-                """
+        existing_row = conn.execute(
+            """
                 SELECT * FROM ckm_evidence_edge
                 WHERE artifact_id = ? AND capability_id = ? AND basis = ?
                 """,
-                (artifact_id, capability_id, resolved_basis),
-            ).fetchone()
-            if existing_row is not None:
-                material_fields = (
-                    "artifact_id",
-                    "capability_id",
-                    "evidence_kind",
-                    "polarity",
-                    "maturity_dimension",
-                    "confidence",
-                    "extraction_method",
-                    "model",
-                    "provider",
-                    "source_ref",
-                    "basis",
-                )
-                desired = {
-                    "artifact_id": artifact_id,
-                    "capability_id": capability_id,
-                    "evidence_kind": evidence_kind,
-                    "polarity": polarity,
-                    "maturity_dimension": maturity_dimension,
-                    "confidence": confidence,
-                    "extraction_method": extraction_method,
-                    "model": model,
-                    "provider": provider,
-                    "source_ref": source_ref,
-                    "basis": resolved_basis,
-                }
-                material_unchanged = all(
-                    existing_row[field] == desired[field] for field in material_fields
-                )
-                confirmation_preserved = (
-                    material_unchanged
-                    and existing_row["extraction_method"] == "inferred"
-                    and existing_row["lifecycle"] == "confirmed"
-                    and extraction_method == "inferred"
-                    and lifecycle == "candidate"
-                )
-                unchanged = material_unchanged and (
-                    existing_row["lifecycle"] == lifecycle or confirmation_preserved
-                )
-                if unchanged:
-                    conn.commit()
-                    return CkmEvidenceEdge.from_row(existing_row)
-                self._archive_evidence_edges(conn, [existing_row])
-            conn.execute(
-                """
+            (write.artifact_id, write.capability_id, resolved_basis),
+        ).fetchone()
+        created = existing_row is None
+        if existing_row is not None:
+            material_fields = (
+                "artifact_id",
+                "capability_id",
+                "evidence_kind",
+                "polarity",
+                "maturity_dimension",
+                "confidence",
+                "extraction_method",
+                "model",
+                "provider",
+                "source_ref",
+                "basis",
+            )
+            desired = {
+                "artifact_id": write.artifact_id,
+                "capability_id": write.capability_id,
+                "evidence_kind": write.evidence_kind,
+                "polarity": write.polarity,
+                "maturity_dimension": write.maturity_dimension,
+                "confidence": write.confidence,
+                "extraction_method": write.extraction_method,
+                "model": write.model,
+                "provider": write.provider,
+                "source_ref": write.source_ref,
+                "basis": resolved_basis,
+            }
+            material_unchanged = all(
+                existing_row[field] == desired[field] for field in material_fields
+            )
+            confirmation_preserved = (
+                material_unchanged
+                and existing_row["extraction_method"] == "inferred"
+                and existing_row["lifecycle"] == "confirmed"
+                and write.extraction_method == "inferred"
+                and write.lifecycle == "candidate"
+            )
+            unchanged = material_unchanged and (
+                existing_row["lifecycle"] == write.lifecycle or confirmation_preserved
+            )
+            if unchanged:
+                return CkmEvidenceEdge.from_row(existing_row), False, False
+            self._archive_evidence_edges(conn, [existing_row])
+        conn.execute(
+            """
                 INSERT INTO ckm_evidence_edge (
                     id, public_id, artifact_id, capability_id, evidence_kind, polarity,
                     maturity_dimension, confidence, extraction_method, model,
@@ -1781,37 +1853,36 @@ class CkmStore:
                     source_ref = excluded.source_ref,
                     updated_at = excluded.updated_at
                 """,
-                (
-                    candidate_id,
-                    public_id,
-                    artifact_id,
-                    capability_id,
-                    evidence_kind,
-                    polarity,
-                    maturity_dimension,
-                    confidence,
-                    extraction_method,
-                    model,
-                    provider,
-                    lifecycle,
-                    source_ref,
-                    resolved_basis,
-                    now,
-                    now,
-                ),
-            )
-            self._advance_state_revision(conn)
-            conn.commit()
-        edge = self.get_evidence_edge(
-            artifact_id=artifact_id,
-            capability_id=capability_id,
-            evidence_kind=evidence_kind,
-            maturity_dimension=maturity_dimension,
-            basis=resolved_basis,
+            (
+                candidate_id,
+                public_id,
+                write.artifact_id,
+                write.capability_id,
+                write.evidence_kind,
+                write.polarity,
+                write.maturity_dimension,
+                write.confidence,
+                write.extraction_method,
+                write.model,
+                write.provider,
+                write.lifecycle,
+                write.source_ref,
+                resolved_basis,
+                now,
+                now,
+            ),
         )
+        row = conn.execute(
+            """
+            SELECT * FROM ckm_evidence_edge
+            WHERE artifact_id = ? AND capability_id = ? AND basis = ?
+            """,
+            (write.artifact_id, write.capability_id, resolved_basis),
+        ).fetchone()
+        edge = CkmEvidenceEdge.from_row(row) if row is not None else None
         if edge is None:  # pragma: no cover - defensive
             raise CkmValidationError("evidence edge upsert did not persist")
-        return edge
+        return edge, True, created
 
     def get_evidence_edge(
         self,
@@ -1986,8 +2057,7 @@ class CkmStore:
                 row
                 for row in rows
                 if str(row["basis"]).startswith(owned_basis_prefixes)
-                if (row["artifact_id"], row["capability_id"], row["basis"])
-                not in edge_keys
+                if (row["artifact_id"], row["capability_id"], row["basis"]) not in edge_keys
             ]
             archived = []
             for row in stale:
@@ -2146,9 +2216,7 @@ class CkmStore:
                 "asserted_at": resolved_asserted_at,
             }
             values[1] = self._assessment_public_id(conn, identity_row)
-            self._claim_public_identity(
-                conn, public_id=str(values[1]), resource_type="assessment"
-            )
+            self._claim_public_identity(conn, public_id=str(values[1]), resource_type="assessment")
             conn.execute(
                 f"INSERT INTO ckm_assessment ({column_list}) VALUES ({placeholders})",
                 values,
@@ -2322,8 +2390,7 @@ class CkmStore:
             conn.execute("BEGIN IMMEDIATE")
             existing_rows = conn.execute("SELECT * FROM ckm_finding").fetchall()
             existing = {
-                (row["kind"], row["capability_id"], row["dimension"]): row
-                for row in existing_rows
+                (row["kind"], row["capability_id"], row["dimension"]): row for row in existing_rows
             }
             changed = bool(set(existing) ^ set(candidates))
             for kind, capability_id, dimension in set(existing) - set(candidates):
@@ -2345,9 +2412,7 @@ class CkmStore:
                     public_id = self._finding_public_id(
                         conn, candidate.kind, candidate.capability_id, candidate.dimension
                     )
-                    self._claim_public_identity(
-                        conn, public_id=public_id, resource_type="finding"
-                    )
+                    self._claim_public_identity(conn, public_id=public_id, resource_type="finding")
                     conn.execute(
                         """
                         INSERT INTO ckm_finding (

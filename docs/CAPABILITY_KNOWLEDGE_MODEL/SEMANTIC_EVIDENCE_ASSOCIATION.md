@@ -33,6 +33,9 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
   route is unavailable, the stage names the safe reason, reports `proposals=0`, and exits 0 — the
   pipeline is complete without semantic inference and coverage is simply lower. It never writes
   degraded evidence.
+- A validated proposal batch and its semantic watermark commit in one SQLite transaction. An
+  interruption rolls back both, and concurrent reruns converge through the existing stable edge
+  identity rather than exposing partial evidence under an unchanged watermark.
 - Confirmation path: `python -m app.builderops ckm confirm-edge <edge-id>` flips a candidate edge to `confirmed` and writes a BuilderOps confirmation receipt (re-applied on rebuild per INV-CKM-4).
 - CLI: `python -m app.builderops ckm associate [--limit N]`.
 

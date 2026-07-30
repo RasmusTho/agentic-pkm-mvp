@@ -26,6 +26,7 @@ from app.builderops.ckm.models import (
     utc_now,
 )
 from app.builderops.ckm.store import CkmStore
+from app.builderops.ckm.store import CkmEvidenceEdgeWrite
 from app.builderops.model_access_resolver import (
     BUILDER_RUNTIME,
     CKM_SEMANTIC_CONSUMER,
@@ -197,6 +198,9 @@ def _http_adapter_factory(
         api_key=credential,
         intent=resolved.request.intent,
         timeout_seconds=_SEMANTIC_HTTP_TIMEOUT_SECONDS,
+        required_reasoning_effort="low",
+        required_output_schema_ref=SEMANTIC_SCHEMA_REF,
+        required_side_effect_class=_SEMANTIC_SIDE_EFFECT_CLASS,
     )
 
 
@@ -214,9 +218,7 @@ class BuilderSemanticAssociator:
     ) -> None:
         source = dict(os.environ if env is None else env)
         try:
-            selected = resolver or BuilderModelAccessResolver.from_declared_sources(
-                env=source
-            )
+            selected = resolver or BuilderModelAccessResolver.from_declared_sources(env=source)
             resolved = selected.resolve(
                 _semantic_resolution_request(),
                 runtime=BUILDER_RUNTIME,
@@ -238,8 +240,7 @@ class BuilderSemanticAssociator:
             )
         if resolved.degraded:
             raise SemanticProviderUnavailable(
-                "degraded Builder route: "
-                + (resolved.degradation_reason or "reason unavailable"),
+                "degraded Builder route: " + (resolved.degradation_reason or "reason unavailable"),
                 provider=resolved.provider,
                 model=resolved.model,
             )
@@ -320,9 +321,7 @@ class BuilderSemanticAssociator:
             )
             proposals = [SemanticProposal(**item) for item in payload["proposals"]]
         except (json.JSONDecodeError, SchemaValidationError) as exc:
-            raise SemanticAssociationError(
-                f"invalid semantic association response: {exc}"
-            ) from exc
+            raise SemanticAssociationError(f"invalid semantic association response: {exc}") from exc
         except (TypeError, ValueError, KeyError) as exc:
             raise SemanticAssociationError(f"invalid semantic association response: {exc}") from exc
         return SemanticBatch(provider=self.provider, model=self.model, proposals=proposals)
@@ -412,9 +411,9 @@ def associate_unlinked_artifacts(
         if not proposal.rationale.strip():
             raise SemanticAssociationError("proposal rationale must not be empty")
 
-    proposed = 0
     discarded = 0
     matched_artifacts: set[str] = set()
+    accepted: list[CkmEvidenceEdgeWrite] = []
     for proposal in batch.proposals:
         artifact = artifact_by_id.get(proposal.artifact_id)
         if artifact is None:  # pragma: no cover - guarded above
@@ -423,27 +422,31 @@ def associate_unlinked_artifacts(
         if proposal.confidence < confidence_floor:
             discarded += 1
             continue
-        before = len(store.list_evidence_edges())
-        store.upsert_evidence_edge(
-            artifact_id=proposal.artifact_id,
-            capability_id=proposal.capability_id,
-            evidence_kind=proposal.evidence_kind,
-            polarity="supports",
-            maturity_dimension=proposal.maturity_dimension,
-            confidence=proposal.confidence,
-            extraction_method="inferred",
-            lifecycle="candidate",
-            source_ref=artifact.source_ref,
-            basis=proposal.rationale,
-            provider=batch.provider,
-            model=batch.model,
+        accepted.append(
+            CkmEvidenceEdgeWrite(
+                artifact_id=proposal.artifact_id,
+                capability_id=proposal.capability_id,
+                evidence_kind=proposal.evidence_kind,
+                polarity="supports",
+                maturity_dimension=proposal.maturity_dimension,
+                confidence=proposal.confidence,
+                extraction_method="inferred",
+                lifecycle="candidate",
+                source_ref=artifact.source_ref,
+                basis=proposal.rationale,
+                provider=batch.provider,
+                model=batch.model,
+            )
         )
-        proposed += int(len(store.list_evidence_edges()) > before)
 
     watermark = sha256(
         "\n".join(sorted(item.watermark for item in artifacts)).encode("utf-8")
     ).hexdigest()
-    store.set_watermark("semantic_association", f"batch:{watermark}")
+    proposed = store.upsert_evidence_edges_with_watermark(
+        accepted,
+        watermark_source="semantic_association",
+        watermark_value=f"batch:{watermark}",
+    )
     return SemanticAssociationResult(
         status="ok",
         proposed=proposed,
@@ -458,9 +461,7 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _confirmation_payload(
-    store: CkmStore, edge_id: str
-) -> tuple[dict[str, Any], str, str, str]:
+def _confirmation_payload(store: CkmStore, edge_id: str) -> tuple[dict[str, Any], str, str, str]:
     edge = store.get_active_evidence_edge_by_id(edge_id)
     if edge is None:
         raise CkmValidationError(f"evidence edge not found: {edge_id}")
@@ -487,9 +488,7 @@ def _confirmation_payload(
         "model": edge.model,
     }
     stable_claim = {key: value for key, value in payload.items() if key != "edge_id"}
-    payload["confirmation_key"] = sha256(
-        _canonical_json(stable_claim).encode("utf-8")
-    ).hexdigest()
+    payload["confirmation_key"] = sha256(_canonical_json(stable_claim).encode("utf-8")).hexdigest()
     return payload, artifact.public_id, capability.public_id, capability.name
 
 
@@ -506,9 +505,7 @@ def _binding_document(receipt: dict[str, Any], payload: dict[str, Any]) -> dict[
     }
 
 
-def _sign_confirmation(
-    store: CkmStore, envelope: dict[str, Any], payload: dict[str, Any]
-) -> str:
+def _sign_confirmation(store: CkmStore, envelope: dict[str, Any], payload: dict[str, Any]) -> str:
     key = store._confirmation_signing_key(create=True)
     if key is None:  # pragma: no cover - create=True guarantees a key
         raise CkmValidationError("CKM confirmation signing key is unavailable")
@@ -553,9 +550,7 @@ def _validated_confirmation_receipt(
     edge_public_id = payload.get("edge_public_id")
     if not isinstance(edge_public_id, str) or not edge_public_id:
         raise CkmValidationError("confirmation receipt payload requires an edge public id")
-    if receipt.get("source_refs") != [
-        {"ref_type": "ckm_evidence_edge", "ref": edge_public_id}
-    ]:
+    if receipt.get("source_refs") != [{"ref_type": "ckm_evidence_edge", "ref": edge_public_id}]:
         raise CkmValidationError("confirmation receipt source does not bind its payload edge")
     if payload.get("extraction_method") != "inferred" or payload.get("lifecycle") != "confirmed":
         raise CkmValidationError("confirmation receipt must promote one inferred edge")
@@ -570,11 +565,13 @@ def _validated_confirmation_receipt(
     ):
         value = payload.get(field)
         if not isinstance(value, str) or not value.strip():
-            raise CkmValidationError(
-                f"confirmation receipt payload requires non-empty {field}"
-            )
+            raise CkmValidationError(f"confirmation receipt payload requires non-empty {field}")
     artifact = next(
-        (item for item in store.list_artifacts() if item.public_id == payload["artifact_public_id"]),
+        (
+            item
+            for item in store.list_artifacts()
+            if item.public_id == payload["artifact_public_id"]
+        ),
         None,
     )
     capability = next(
@@ -658,9 +655,7 @@ def _validated_legacy_confirmation_receipt(
         raise CkmValidationError("legacy confirmation must promote one inferred edge")
     if payload.get("source_ref") != payload["artifact_source_ref"]:
         raise CkmValidationError("legacy confirmation artifact binding is inconsistent")
-    if receipt.get("source_refs") != [
-        {"ref_type": "ckm_evidence_edge", "ref": payload["edge_id"]}
-    ]:
+    if receipt.get("source_refs") != [{"ref_type": "ckm_evidence_edge", "ref": payload["edge_id"]}]:
         raise CkmValidationError("legacy confirmation source does not bind its edge")
     artifact = next(
         (
@@ -671,11 +666,7 @@ def _validated_legacy_confirmation_receipt(
         None,
     )
     capability = next(
-        (
-            item
-            for item in store.list_capabilities()
-            if item.name == payload["capability_name"]
-        ),
+        (item for item in store.list_capabilities() if item.name == payload["capability_name"]),
         None,
     )
     if artifact is None or capability is None:
@@ -737,9 +728,7 @@ def migrate_legacy_confirmation_receipts(store: CkmStore) -> int:
             "event_type": "ckm_edge_confirmed",
             "action": "confirm_edge",
             "actor": receipt["actor"],
-            "source_refs": [
-                {"ref_type": "ckm_evidence_edge", "ref": payload["edge_public_id"]}
-            ],
+            "source_refs": [{"ref_type": "ckm_evidence_edge", "ref": payload["edge_public_id"]}],
             "target_refs": [
                 {"ref_type": "ckm_artifact", "ref": artifact.public_id},
                 {"ref_type": "ckm_capability", "ref": capability.public_id},
@@ -766,8 +755,8 @@ def migrate_legacy_confirmation_receipts(store: CkmStore) -> int:
 def _confirm_edge_from_cli(store: CkmStore, edge_id: str) -> dict[str, Any]:
     """Execute the human-operated CLI confirmation boundary."""
 
-    payload, artifact_public_id, capability_public_id, capability_name = (
-        _confirmation_payload(store, edge_id)
+    payload, artifact_public_id, capability_public_id, capability_name = _confirmation_payload(
+        store, edge_id
     )
     for existing in store.list_builderops_receipts("ckm_edge_confirmed"):
         try:
@@ -782,9 +771,7 @@ def _confirm_edge_from_cli(store: CkmStore, edge_id: str) -> dict[str, Any]:
         "event_type": "ckm_edge_confirmed",
         "action": "confirm_edge",
         "actor": {"actor_type": "human", "id": "operator"},
-        "source_refs": [
-            {"ref_type": "ckm_evidence_edge", "ref": payload["edge_public_id"]}
-        ],
+        "source_refs": [{"ref_type": "ckm_evidence_edge", "ref": payload["edge_public_id"]}],
         "target_refs": [
             {"ref_type": "ckm_artifact", "ref": artifact_public_id},
             {"ref_type": "ckm_capability", "ref": capability_public_id},

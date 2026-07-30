@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 from hashlib import sha256
+from threading import Barrier, Thread
 from typing import Any, Mapping
 
 import pytest
@@ -24,12 +25,14 @@ from app.builderops.ckm.semantic import (
     SemanticBatch,
     SemanticProposal,
     SemanticProviderUnavailable,
+    _http_adapter_factory,
     _binding_document,
     _canonical_json,
     associate_unlinked_artifacts,
     reapply_confirmation_receipts,
 )
 from app.builderops.ckm.store import CkmStore
+from app.builderops.model_inquiry_adapters import HttpModelAdapter
 from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from llm_contract import AdapterResult, ModelCapabilities, ResolvedModelAccess
 
@@ -202,9 +205,9 @@ def test_semantic_association_resolves_through_builder_adapter(store: CkmStore) 
     assert result.proposed == 1
     assert len(adapter.calls) == 1
     assert store.list_evidence_edges()[0].provider == "openai"
-    assert "FabricSemanticAssociator" not in Path(
-        "app/builderops/ckm/semantic.py"
-    ).read_text(encoding="utf-8")
+    assert "FabricSemanticAssociator" not in Path("app/builderops/ckm/semantic.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_semantic_production_call_uses_provider_free_builder_resolver(
@@ -235,6 +238,21 @@ def test_semantic_production_call_uses_provider_free_builder_resolver(
     assert {"provider", "model", "credential", "endpoint"}.isdisjoint(
         request.model_dump(mode="json")
     )
+
+
+def test_semantic_default_factory_accepts_declared_ckm_intent() -> None:
+    resolver = RecordingResolver()
+
+    associator = BuilderSemanticAssociator(
+        resolver=resolver,
+        env={"PKM_ENVIRONMENT": "dev"},
+        adapter_factory=_http_adapter_factory,
+    )
+
+    assert isinstance(associator._adapter, HttpModelAdapter)
+    assert associator._adapter.required_reasoning_effort == "low"
+    assert associator._adapter.required_output_schema_ref == SEMANTIC_SCHEMA_REF
+    assert associator._adapter.required_side_effect_class == "derived_candidate_evidence"
 
 
 def test_product_fallback_cannot_execute_builder_task(
@@ -313,9 +331,7 @@ def test_credential_unavailable_skips_with_visible_reason(store: CkmStore) -> No
 
     result = associate_unlinked_artifacts(
         store,
-        client_factory=lambda: BuilderSemanticAssociator(
-            env={"PKM_ENVIRONMENT": "dev"}
-        ),
+        client_factory=lambda: BuilderSemanticAssociator(env={"PKM_ENVIRONMENT": "dev"}),
     )
 
     assert result.status == "skipped"
@@ -344,9 +360,7 @@ def test_subscription_session_cannot_execute_ckm_semantic_task(
 
     result = associate_unlinked_artifacts(
         store,
-        client_factory=lambda: BuilderSemanticAssociator(
-            env={"PKM_ENVIRONMENT": "dev"}
-        ),
+        client_factory=lambda: BuilderSemanticAssociator(env={"PKM_ENVIRONMENT": "dev"}),
     )
 
     assert result.status == "skipped"
@@ -455,6 +469,76 @@ def test_inferred_edges_fenced_via_store_write_path(store: CkmStore) -> None:
         )
 
 
+def test_semantic_batch_and_watermark_rollback_together_on_interruption(
+    store: CkmStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+
+    def interrupt_before_watermark(
+        _conn: sqlite3.Connection,
+        *,
+        source: str,
+        value: str,
+    ) -> bool:
+        del source, value
+        raise RuntimeError("simulated interruption before watermark")
+
+    monkeypatch.setattr(
+        CkmStore,
+        "_set_watermark_in_connection",
+        staticmethod(interrupt_before_watermark),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        associate_unlinked_artifacts(
+            store,
+            client=StubAssociator([_proposal(artifact.id, capability.id)]),
+        )
+
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+def test_concurrent_semantic_batches_converge_without_duplicate_edges(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    barrier = Barrier(2)
+    results: list[SemanticAssociationResult] = []
+    failures: list[BaseException] = []
+
+    class BarrierAssociator(StubAssociator):
+        def propose(self, *, artifacts, capabilities) -> SemanticBatch:
+            barrier.wait()
+            return super().propose(artifacts=artifacts, capabilities=capabilities)
+
+    def run() -> None:
+        try:
+            results.append(
+                associate_unlinked_artifacts(
+                    store,
+                    client=BarrierAssociator([_proposal(artifact.id, capability.id)]),
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    threads = [Thread(target=run), Thread(target=run)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert failures == []
+    assert sorted(result.proposed for result in results) == [0, 1]
+    assert len(store.list_evidence_edges()) == 1
+    assert store.get_watermark("semantic_association") is not None
+
+
 def _append_confirmation_receipt(
     store: CkmStore,
     *,
@@ -525,9 +609,7 @@ def _append_confirmation_receipt(
         "forged-payload",
     ],
 )
-def test_confirmation_rejects_invalid_or_forged_receipts(
-    tmp_path: Path, variant: str
-) -> None:
+def test_confirmation_rejects_invalid_or_forged_receipts(tmp_path: Path, variant: str) -> None:
     store = CkmStore(tmp_path / f"{variant}.sqlite3")
     store.ensure_schema()
     capability = _capability(store)
@@ -650,9 +732,7 @@ def test_confirmation_receipt_survives_rebuild(
 
     # The stable semantic confirmation key makes a delayed retry idempotent;
     # changing wall-clock timestamps cannot conflict with the prior request.
-    monkeypatch.setattr(
-        "app.builderops.ckm.semantic.utc_now", lambda: "2099-01-01T00:00:00Z"
-    )
+    monkeypatch.setattr("app.builderops.ckm.semantic.utc_now", lambda: "2099-01-01T00:00:00Z")
     repeated = runner.invoke(
         builderops,
         ["--db-path", str(store.db_path), "ckm", "confirm-edge", original.id],
@@ -720,9 +800,7 @@ def test_authenticated_pre_v5_confirmation_migrates_before_rebuild(store: CkmSto
         "model": edge.model,
     }
     stable_claim = {key: value for key, value in payload.items() if key != "edge_id"}
-    payload["confirmation_key"] = sha256(
-        _canonical_json(stable_claim).encode("utf-8")
-    ).hexdigest()
+    payload["confirmation_key"] = sha256(_canonical_json(stable_claim).encode("utf-8")).hexdigest()
     envelope = {
         "event_type": "ckm_edge_confirmed",
         "action": "confirm_edge",

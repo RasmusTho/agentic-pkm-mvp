@@ -84,7 +84,9 @@ _INTENT_FIELDS = frozenset(
         "side_effect_class",
     }
 )
-_CONFIG_FIELDS = frozenset({"schema", "runtime", "channel", "consumer", "resolution_group_id", "roles"})
+_CONFIG_FIELDS = frozenset(
+    {"schema", "runtime", "channel", "consumer", "resolution_group_id", "roles"}
+)
 
 
 class AdapterUnavailableError(RuntimeError):
@@ -105,7 +107,9 @@ class AdapterExecutionError(RuntimeError):
         self.failure_class = validate_adapter_failure_class(failure_class)
         self.exit_code = (
             exit_code
-            if isinstance(exit_code, int) and not isinstance(exit_code, bool) and 1 <= exit_code <= 255
+            if isinstance(exit_code, int)
+            and not isinstance(exit_code, bool)
+            and 1 <= exit_code <= 255
             else None
         )
 
@@ -200,9 +204,7 @@ class LocalCommandAdapter:
                 f"local command returned empty output: {self.adapter_id}",
                 failure_class="stdout_empty",
             )
-        if self.environment and any(
-            value and value in text for value in self.environment.values()
-        ):
+        if self.environment and any(value and value in text for value in self.environment.values()):
             raise AdapterExecutionError(
                 f"local command output contained an allowed environment value: {self.adapter_id}",
                 failure_class="output_contains_allowed_environment",
@@ -219,22 +221,23 @@ class HttpModelAdapter:
     api_key: str
     intent: ModelAccessIntent
     timeout_seconds: float = MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS
+    required_reasoning_effort: str = "xhigh"
+    required_output_schema_ref: str = "builderops.model-turn-response.v1"
+    required_side_effect_class: str = "advisory_review"
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
             raise BuilderOpsValidationError("HTTP adapter timeout_seconds must be positive")
-        if self.intent.reasoning_effort != "xhigh":
-            raise BuilderOpsValidationError("HTTP adapter requires xhigh reasoning effort")
+        if self.intent.reasoning_effort != self.required_reasoning_effort:
+            raise BuilderOpsValidationError(
+                f"HTTP adapter requires {self.required_reasoning_effort} reasoning effort"
+            )
         if self.intent.determinism_required:
-            raise BuilderOpsValidationError(
-                "HTTP adapter refuses deterministic Model Inquiry execution"
-            )
-        if self.intent.output_schema_ref != "builderops.model-turn-response.v1":
-            raise BuilderOpsValidationError(
-                "HTTP adapter requires the declared Model Inquiry response schema"
-            )
-        if self.intent.side_effect_class != "advisory_review":
-            raise BuilderOpsValidationError("HTTP adapter permits advisory review only")
+            raise BuilderOpsValidationError("HTTP adapter refuses deterministic execution")
+        if self.intent.output_schema_ref != self.required_output_schema_ref:
+            raise BuilderOpsValidationError("HTTP adapter requires its declared response schema")
+        if self.intent.side_effect_class != self.required_side_effect_class:
+            raise BuilderOpsValidationError("HTTP adapter requires its declared side-effect class")
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
         if not self.endpoint or not self.api_key:
@@ -277,7 +280,9 @@ class HttpModelAdapter:
             raise AdapterExecutionError("OpenAI-compatible response omitted content") from exc
         request_id = response.headers.get("x-request-id") or payload.get("id")
         if self.api_key in str(text):
-            raise AdapterExecutionError(f"HTTP adapter output contained credential: {self.adapter_id}")
+            raise AdapterExecutionError(
+                f"HTTP adapter output contained credential: {self.adapter_id}"
+            )
         if request_id and self.api_key in str(request_id):
             raise AdapterExecutionError(
                 f"HTTP adapter request ID contained credential: {self.adapter_id}"
@@ -322,7 +327,9 @@ class HttpModelAdapter:
         if not text.strip():
             raise AdapterExecutionError("Anthropic response returned empty content")
         if self.api_key in text:
-            raise AdapterExecutionError(f"HTTP adapter output contained credential: {self.adapter_id}")
+            raise AdapterExecutionError(
+                f"HTTP adapter output contained credential: {self.adapter_id}"
+            )
         request_id = response.headers.get("request-id") or payload.get("id")
         if request_id and self.api_key in str(request_id):
             raise AdapterExecutionError(
@@ -359,18 +366,14 @@ def load_inquiry_intent(
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise BuilderOpsValidationError(
-            f"{INQUIRY_INTENT_CONFIG_ENV} must be valid JSON"
-        ) from exc
+        raise BuilderOpsValidationError(f"{INQUIRY_INTENT_CONFIG_ENV} must be valid JSON") from exc
     return parse_inquiry_intent(payload)
 
 
 def parse_inquiry_intent(payload: Any) -> InquiryRoleIntentConfig:
     """Validate one inquiry-role intent document into neutral resolution requests."""
     if not isinstance(payload, dict):
-        raise BuilderOpsValidationError(
-            f"{INQUIRY_INTENT_CONFIG_ENV} must be a JSON object"
-        )
+        raise BuilderOpsValidationError(f"{INQUIRY_INTENT_CONFIG_ENV} must be a JSON object")
     _reject_forbidden_intent_keys(payload)
     if set(payload) != _CONFIG_FIELDS:
         raise BuilderOpsValidationError("inquiry role intent fields are invalid")
@@ -443,9 +446,7 @@ def resolve_inquiry_roles(
         channel=config.channel,
         consumer=config.consumer,
     )
-    return selected, {
-        resolution.request.role_profile: resolution for resolution in resolutions
-    }
+    return selected, {resolution.request.role_profile: resolution for resolution in resolutions}
 
 
 def load_adapter_descriptors(
@@ -463,10 +464,7 @@ def load_adapter_descriptors(
             for role in ROLE_NAMES
         }
     except ModelAccessResolutionError as exc:
-        return {
-            role: {"role": role, "available": False, "reason": str(exc)}
-            for role in ROLE_NAMES
-        }
+        return {role: {"role": role, "available": False, "reason": str(exc)} for role in ROLE_NAMES}
     descriptors: dict[str, dict[str, Any]] = {}
     for role in ROLE_NAMES:
         resolution = resolutions[role]
