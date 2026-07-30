@@ -181,6 +181,17 @@ class DesignRunReceiptStore(Protocol):
 
 
 class DesignAgentRegistry(Protocol):
+    def descriptors(
+        self,
+        *,
+        run_id: str,
+    ) -> tuple[DesignAgentAvailabilityDescriptor, ...]: ...
+
+    def contract_descriptor(
+        self,
+        design_agent_id: str,
+    ) -> DesignAgentDescriptor: ...
+
     def select(
         self,
         design_agent_id: str,
@@ -385,6 +396,98 @@ class DesignRunGovernance:
             requested_at=requested_at,
         )
 
+    def list_adapters(
+        self,
+        *,
+        run_id: str,
+    ) -> tuple[DesignAgentAvailabilityDescriptor, ...]:
+        """Return sanitized exact-route availability without selecting a provider."""
+
+        self._require_run_id(run_id)
+        return self.registry.descriptors(run_id=run_id)
+
+    def preview(
+        self,
+        *,
+        run_id: str,
+        request_id: str,
+        brief: CuratedDesignBrief,
+        adapter_id: str,
+        requested_at: str,
+        evaluated_at: str,
+    ) -> tuple[DesignRunRequest, DesignRunAdmission]:
+        """Evaluate one exact request without persisting or executing it."""
+
+        request, adapter, bundle = self._prepare_request(
+            run_id=run_id,
+            request_id=request_id,
+            brief=brief,
+            adapter_id=adapter_id,
+            requested_at=requested_at,
+            evaluated_at=evaluated_at,
+        )
+        admission = self._evaluate_admission(
+            run_id=run_id,
+            bundle=bundle,
+            evaluated_at=evaluated_at,
+            repo_token_hash=self._trusted_repo_token_hash(brief),
+        )
+        return request, admission
+
+    def admit(
+        self,
+        *,
+        run_id: str,
+        request_id: str,
+        brief: CuratedDesignBrief,
+        adapter_id: str,
+        requested_at: str,
+        evaluated_at: str,
+    ) -> tuple[DesignRunRequest, DesignRunAdmission]:
+        """Persist one exact request and its deterministic admission."""
+
+        request, adapter, _bundle = self._prepare_request(
+            run_id=run_id,
+            request_id=request_id,
+            brief=brief,
+            adapter_id=adapter_id,
+            requested_at=requested_at,
+            evaluated_at=evaluated_at,
+        )
+        admission = self.submit(
+            run_id=run_id,
+            request=request,
+            brief=brief,
+            adapter=adapter,
+            evaluated_at=evaluated_at,
+        )
+        return request, admission
+
+    def _prepare_request(
+        self,
+        *,
+        run_id: str,
+        request_id: str,
+        brief: CuratedDesignBrief,
+        adapter_id: str,
+        requested_at: str,
+        evaluated_at: str,
+    ) -> tuple[DesignRunRequest, DesignAgentDescriptor, _RunBundle]:
+        self._require_run_id(run_id)
+        if evaluated_at < requested_at:
+            raise DesignRunGovernanceError(
+                "design-run admission time precedes its request"
+            )
+        adapter = self.registry.contract_descriptor(adapter_id)
+        request = self.build_request(
+            request_id=request_id,
+            brief=brief,
+            adapter=adapter,
+            requested_at=requested_at,
+        )
+        policy = load_design_run_policy(self.repo_root)
+        return request, adapter, _RunBundle(request, brief, adapter, policy)
+
     def submit(
         self,
         *,
@@ -507,6 +610,58 @@ class DesignRunGovernance:
     ) -> DesignRunResult:
         """Execute one exact approved adapter after a durable accepted-start fence."""
 
+        return self._execute(
+            run_id=run_id,
+            started_at=started_at,
+            completed_at=completed_at,
+            expected_request_id=None,
+            expected_request_hash=None,
+            expected_admission_id=None,
+            expected_admission_hash=None,
+            expected_approval_id=None,
+            expected_approval_hash=None,
+        )
+
+    def execute_exact(
+        self,
+        *,
+        run_id: str,
+        started_at: str,
+        completed_at: str,
+        expected_request_id: str,
+        expected_request_hash: str,
+        expected_admission_id: str,
+        expected_admission_hash: str,
+        expected_approval_id: str,
+        expected_approval_hash: str,
+    ) -> DesignRunResult:
+        """Execute only when caller-named evidence is still the exact current chain."""
+
+        return self._execute(
+            run_id=run_id,
+            started_at=started_at,
+            completed_at=completed_at,
+            expected_request_id=expected_request_id,
+            expected_request_hash=expected_request_hash,
+            expected_admission_id=expected_admission_id,
+            expected_admission_hash=expected_admission_hash,
+            expected_approval_id=expected_approval_id,
+            expected_approval_hash=expected_approval_hash,
+        )
+
+    def _execute(
+        self,
+        *,
+        run_id: str,
+        started_at: str,
+        completed_at: str,
+        expected_request_id: str | None = None,
+        expected_request_hash: str | None = None,
+        expected_admission_id: str | None = None,
+        expected_admission_hash: str | None = None,
+        expected_approval_id: str | None = None,
+        expected_approval_hash: str | None = None,
+    ) -> DesignRunResult:
         self._require_run_id(run_id)
         self._require_causal_execution_times(
             started_at=started_at,
@@ -514,6 +669,15 @@ class DesignRunGovernance:
         )
         with self._run_lock(run_id):
             initial = self._load_chain(run_id)
+            self._require_exact_start_evidence(
+                initial,
+                expected_request_id=expected_request_id,
+                expected_request_hash=expected_request_hash,
+                expected_admission_id=expected_admission_id,
+                expected_admission_hash=expected_admission_hash,
+                expected_approval_id=expected_approval_id,
+                expected_approval_hash=expected_approval_hash,
+            )
             existing_result = self._result(initial)
             if existing_result is not None:
                 return existing_result
@@ -528,6 +692,15 @@ class DesignRunGovernance:
             )
             try:
                 chain = self._load_chain(run_id)
+                self._require_exact_start_evidence(
+                    chain,
+                    expected_request_id=expected_request_id,
+                    expected_request_hash=expected_request_hash,
+                    expected_admission_id=expected_admission_id,
+                    expected_admission_hash=expected_admission_hash,
+                    expected_approval_id=expected_approval_id,
+                    expected_approval_hash=expected_approval_hash,
+                )
                 existing_result = self._result(chain)
                 if existing_result is not None:
                     return existing_result
@@ -726,6 +899,50 @@ class DesignRunGovernance:
                 if lease is not None:
                     self._release_run_lease(lease)
 
+    def _require_exact_start_evidence(
+        self,
+        chain: Sequence[_ReceiptNode],
+        *,
+        expected_request_id: str | None,
+        expected_request_hash: str | None,
+        expected_admission_id: str | None,
+        expected_admission_hash: str | None,
+        expected_approval_id: str | None,
+        expected_approval_hash: str | None,
+    ) -> None:
+        """Bind an operator start to the exact durable evidence it names."""
+
+        if expected_request_id is not None:
+            request = self._bundle(chain).request
+            if (
+                request.request_id != expected_request_id
+                or request.content_hash != expected_request_hash
+            ):
+                raise DesignRunGovernanceError(
+                    "design-run start request identity mismatch"
+                )
+        if expected_admission_id is not None:
+            admission = self._admission(chain)
+            if (
+                admission is None
+                or admission.admission_id != expected_admission_id
+                or admission.content_hash != expected_admission_hash
+            ):
+                raise DesignRunGovernanceError(
+                    "design-run start admission identity mismatch"
+                )
+        if expected_approval_id is not None:
+            approval = self._latest_approval(chain)
+            if (
+                approval is None
+                or approval.approval_id != expected_approval_id
+                or approval.content_hash != expected_approval_hash
+                or approval.state != "approved"
+            ):
+                raise DesignRunApprovalRequiredError(
+                    "design-run start approval identity mismatch"
+                )
+
     @staticmethod
     def _validate_returned_handoff(
         *,
@@ -855,6 +1072,10 @@ class DesignRunGovernance:
             )
             try:
                 chain = self._load_chain(run_id)
+                if self._current_state(chain) != "approval_pending":
+                    raise DesignRunApprovalRequiredError(
+                        "design-run approval mutation is no longer allowed"
+                    )
                 bundle = self._bundle(chain)
                 admission = self._required_admission(chain)
                 if admission.outcome != "approval_required":

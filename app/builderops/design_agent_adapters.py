@@ -13,6 +13,7 @@ from typing import Any, Final, Literal
 
 from app.builderops.design_run_contract import (
     DesignAgentAvailabilityDescriptor,
+    DesignAgentDescriptor,
     DesignDeliverableKind,
     is_safe_design_run_identifier,
 )
@@ -194,6 +195,23 @@ class DesignAgentAdapterRegistry:
                 )
             descriptors.append(descriptor)
         return tuple(descriptors)
+
+    def contract_descriptor(
+        self,
+        design_agent_id: str,
+    ) -> DesignAgentDescriptor:
+        """Return the stable provider-neutral contract for one exact agent ID."""
+
+        role_profile_id = DESIGN_AGENT_ROLE_PROFILES.get(design_agent_id)
+        if role_profile_id is None:
+            raise UnknownDesignAgentError
+        return DesignAgentDescriptor(
+            descriptor_id=design_agent_id,
+            display_name=_DISPLAY_NAMES[design_agent_id],
+            role_profile_id=role_profile_id,
+            supported_deliverables=_SUPPORTED_DELIVERABLES,
+            descriptor_revision="v1",
+        )
 
     def select(
         self,

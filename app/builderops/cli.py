@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, cast
+from typing import Any, Callable, Iterable, Literal, Mapping, cast
 
 import click
 
@@ -61,6 +63,12 @@ from app.builderops.cutover_evidence import (
 from app.builderops.design_run_governance import (
     DesignRunGovernance,
     DesignRunGovernanceError,
+    DesignRunProjection,
+)
+from app.builderops.design_run_contract import (
+    CuratedDesignBrief,
+    is_safe_design_run_identifier,
+    parse_design_run_contract,
 )
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
@@ -805,25 +813,391 @@ def inquiry() -> None:
 
 @builderops.group(
     "design-run",
-    help="Record authenticated local approval evidence for Builder design runs.",
+    help="Operate exact, governed Builder design runs outside the CKM cockpit.",
 )
 def design_run() -> None:
-    """Approval evidence only; execution and downstream writeback stay separate."""
+    """Explicit local control surface; CKM remains projection-only."""
 
 
 def _design_run_governance(
     ctx: click.Context,
     *,
     repo_root: Path,
+    store_mode: Literal["write", "read_only", "existing"] = "write",
 ) -> DesignRunGovernance:
     try:
+        if store_mode == "write":
+            store = _store(ctx)
+        else:
+            paths = _effective_paths(ctx)
+            if store_mode == "existing" and not paths.db_path.is_file():
+                raise DesignRunGovernanceError(
+                    "design-run evidence store does not exist"
+                )
+            store = SqliteBuilderOpsStore(paths.db_path)
         return DesignRunGovernance.from_declared_sources(
-            store=_store(ctx),
+            store=store,
             channel="dev",
             repo_root=repo_root,
         )
     except DesignRunGovernanceError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+_DESIGN_RUN_CLI_REQUEST_VERSION = "builderops.design-run-cli-request.v1"
+_DESIGN_RUN_UTC_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
+)
+_DESIGN_RUN_CLI_REQUEST_FIELDS = frozenset(
+    {
+        "adapter_id",
+        "brief",
+        "evaluated_at",
+        "request_id",
+        "requested_at",
+        "run_id",
+        "schema_version",
+    }
+)
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("duplicate JSON key")
+        payload[key] = value
+    return payload
+
+
+def _load_design_run_cli_request(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(
+            path.read_bytes(),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+        if not isinstance(payload, dict):
+            raise ValueError
+        if set(payload) != _DESIGN_RUN_CLI_REQUEST_FIELDS:
+            raise ValueError
+        if payload.get("schema_version") != _DESIGN_RUN_CLI_REQUEST_VERSION:
+            raise ValueError
+        for field in (
+            "adapter_id",
+            "evaluated_at",
+            "request_id",
+            "requested_at",
+            "run_id",
+        ):
+            if not isinstance(payload.get(field), str):
+                raise ValueError
+        for field in ("adapter_id", "request_id", "run_id"):
+            if not is_safe_design_run_identifier(payload[field]):
+                raise ValueError
+        for field in ("evaluated_at", "requested_at"):
+            timestamp = payload[field]
+            if not _DESIGN_RUN_UTC_TIMESTAMP.fullmatch(timestamp):
+                raise ValueError
+            datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+        raw_brief = payload["brief"]
+        if not isinstance(raw_brief, dict):
+            raise ValueError
+        brief = parse_design_run_contract(raw_brief)
+        if not isinstance(brief, CuratedDesignBrief):
+            raise ValueError
+        if brief.model_dump(mode="json") != raw_brief:
+            raise ValueError
+    except (OSError, TypeError, ValueError):
+        raise click.BadParameter(
+            "request-file must contain one exact canonical design-run CLI request"
+        ) from None
+    return {**payload, "brief": brief}
+
+
+def _load_design_run_brief(path: Path) -> CuratedDesignBrief:
+    try:
+        payload = json.loads(
+            path.read_bytes(),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+        if not isinstance(payload, dict):
+            raise ValueError
+        brief = parse_design_run_contract(payload)
+        if not isinstance(brief, CuratedDesignBrief):
+            raise ValueError
+        if brief.model_dump(mode="json") != payload:
+            raise ValueError
+    except (OSError, TypeError, ValueError):
+        raise click.BadParameter(
+            "brief-file must contain one canonical curated design brief"
+        ) from None
+    return brief
+
+
+def _design_run_cli_exception(exc: Exception) -> click.ClickException:
+    if isinstance(exc, DesignRunGovernanceError):
+        return click.ClickException(str(exc))
+    if isinstance(exc, (OSError, sqlite3.Error)):
+        return click.ClickException("design-run storage is unavailable")
+    return click.ClickException("design-run request was refused")
+
+
+def _design_run_preparation_payload(
+    *,
+    request: Any,
+    admission: Any,
+    persisted: bool,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "builderops.design-run-cli-output.v1",
+        "persisted": persisted,
+        "request": request.model_dump(mode="json"),
+        "request_hash": request.content_hash,
+        "admission": admission.model_dump(mode="json"),
+        "admission_hash": admission.content_hash,
+    }
+
+
+def _design_run_projection_payload(
+    projection: DesignRunProjection,
+) -> dict[str, Any]:
+    admission = projection.admission
+    approval = projection.approval
+    result = projection.result
+    return {
+        "schema_version": "builderops.design-run-cli-output.v1",
+        "run_id": projection.run_id,
+        "state": projection.state,
+        "latest_receipt_id": projection.latest_receipt_id,
+        "latest_receipt_hash": projection.latest_receipt_hash,
+        "admission": (
+            {
+                "admission_id": admission.admission_id,
+                "outcome": admission.outcome,
+                "request_ref": admission.request_ref.model_dump(mode="json"),
+            }
+            if admission is not None
+            else None
+        ),
+        "approval": (
+            {
+                "approval_id": approval.approval_id,
+                "state": approval.state,
+                "request_ref": approval.request_ref.model_dump(mode="json"),
+                "admission_ref": approval.admission_ref.model_dump(mode="json"),
+            }
+            if approval is not None
+            else None
+        ),
+        "result": result.model_dump(mode="json") if result is not None else None,
+        "refusal": (
+            projection.refusal.model_dump(mode="json")
+            if projection.refusal is not None
+            else None
+        ),
+    }
+
+
+@design_run.command(
+    "brief-build",
+    help="Validate and emit the bounded brief embedded in one canonical request file.",
+)
+@click.option(
+    "--request-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--json", "as_json", is_flag=True)
+def design_run_brief_build(request_file: Path, as_json: bool) -> None:
+    request = _load_design_run_cli_request(request_file)
+    brief = cast(CuratedDesignBrief, request["brief"])
+    _emit(
+        {
+            "schema_version": "builderops.design-run-cli-output.v1",
+            "brief": brief.model_dump(mode="json"),
+            "brief_hash": brief.content_hash,
+        },
+        as_json,
+    )
+
+
+@design_run.command(
+    "brief-inspect",
+    help="Validate and inspect one canonical bounded design brief.",
+)
+@click.option(
+    "--brief-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--json", "as_json", is_flag=True)
+def design_run_brief_inspect(brief_file: Path, as_json: bool) -> None:
+    brief = _load_design_run_brief(brief_file)
+    _emit(
+        {
+            "schema_version": "builderops.design-run-cli-output.v1",
+            "brief": brief.model_dump(mode="json"),
+            "brief_hash": brief.content_hash,
+        },
+        as_json,
+    )
+
+
+@design_run.command(
+    "agents",
+    help="List sanitized exact design-agent routes without selecting one.",
+)
+@click.option("--run-id", required=True)
+@click.option(
+    "--repo-root",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_agents(
+    ctx: click.Context,
+    run_id: str,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        descriptors = _design_run_governance(
+            ctx,
+            repo_root=repo_root,
+            store_mode="read_only",
+        ).list_adapters(run_id=run_id)
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(
+        {
+            "schema_version": "builderops.design-run-cli-output.v1",
+            "run_id": run_id,
+            "agents": [
+                descriptor.model_dump(mode="json")
+                for descriptor in descriptors
+            ],
+        },
+        as_json,
+    )
+
+
+def _prepare_design_run_from_cli(
+    ctx: click.Context,
+    *,
+    request_file: Path,
+    repo_root: Path,
+    persist: bool,
+) -> dict[str, Any]:
+    payload = _load_design_run_cli_request(request_file)
+    service = _design_run_governance(
+        ctx,
+        repo_root=repo_root,
+        store_mode="write" if persist else "read_only",
+    )
+    prepare = service.admit if persist else service.preview
+    request, admission = prepare(
+        run_id=payload["run_id"],
+        request_id=payload["request_id"],
+        brief=payload["brief"],
+        adapter_id=payload["adapter_id"],
+        requested_at=payload["requested_at"],
+        evaluated_at=payload["evaluated_at"],
+    )
+    return _design_run_preparation_payload(
+        request=request,
+        admission=admission,
+        persisted=persist,
+    )
+
+
+def _design_run_request_file_option(
+    function: Callable[..., Any],
+) -> Callable[..., Any]:
+    return click.option(
+        "--request-file",
+        required=True,
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    )(function)
+
+
+def _design_run_repo_root_option(
+    function: Callable[..., Any],
+) -> Callable[..., Any]:
+    return click.option(
+        "--repo-root",
+        required=True,
+        type=click.Path(exists=True, file_okay=False, path_type=Path),
+    )(function)
+
+
+@design_run.command(
+    "preview",
+    help="Evaluate exact admission read-only; write no receipt and call no provider.",
+)
+@_design_run_request_file_option
+@_design_run_repo_root_option
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_preview(
+    ctx: click.Context,
+    request_file: Path,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        payload = _prepare_design_run_from_cli(
+            ctx,
+            request_file=request_file,
+            repo_root=repo_root,
+            persist=False,
+        )
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(payload, as_json)
+
+
+@design_run.command(
+    "admit",
+    help="Persist the exact request and its deterministic admission.",
+)
+@_design_run_request_file_option
+@_design_run_repo_root_option
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_admit(
+    ctx: click.Context,
+    request_file: Path,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        payload = _prepare_design_run_from_cli(
+            ctx,
+            request_file=request_file,
+            repo_root=repo_root,
+            persist=True,
+        )
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(payload, as_json)
 
 
 @design_run.command(
@@ -852,14 +1226,26 @@ def design_run_approve(
         evidence = _design_run_governance(
             ctx,
             repo_root=repo_root,
+            store_mode="existing",
         ).approve(
             run_id=run_id,
             approval_id=approval_id,
             approved_at=approved_at,
         )
-    except (BuilderOpsValidationError, OSError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    _emit(evidence.model_dump(mode="json"), as_json)
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(
+        {
+            **evidence.model_dump(mode="json"),
+            "content_hash": evidence.content_hash,
+        },
+        as_json,
+    )
 
 
 @design_run.command(
@@ -888,14 +1274,149 @@ def design_run_revoke(
         evidence = _design_run_governance(
             ctx,
             repo_root=repo_root,
+            store_mode="existing",
         ).revoke(
             run_id=run_id,
             revocation_id=revocation_id,
             revoked_at=revoked_at,
         )
-    except (BuilderOpsValidationError, OSError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    _emit(evidence.model_dump(mode="json"), as_json)
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(
+        {
+            **evidence.model_dump(mode="json"),
+            "content_hash": evidence.content_hash,
+        },
+        as_json,
+    )
+
+
+@design_run.command(
+    "start",
+    help="Start only the exact durable request, admission, and approval named.",
+)
+@click.argument("run_id")
+@click.option("--request-id", required=True)
+@click.option("--request-hash", required=True)
+@click.option("--admission-id", required=True)
+@click.option("--admission-hash", required=True)
+@click.option("--approval-id", required=True)
+@click.option("--approval-hash", required=True)
+@click.option("--started-at", required=True)
+@click.option("--completed-at", required=True)
+@_design_run_repo_root_option
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_start(
+    ctx: click.Context,
+    run_id: str,
+    request_id: str,
+    request_hash: str,
+    admission_id: str,
+    admission_hash: str,
+    approval_id: str,
+    approval_hash: str,
+    started_at: str,
+    completed_at: str,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        result = _design_run_governance(
+            ctx,
+            repo_root=repo_root,
+            store_mode="existing",
+        ).execute_exact(
+            run_id=run_id,
+            started_at=started_at,
+            completed_at=completed_at,
+            expected_request_id=request_id,
+            expected_request_hash=request_hash,
+            expected_admission_id=admission_id,
+            expected_admission_hash=admission_hash,
+            expected_approval_id=approval_id,
+            expected_approval_hash=approval_hash,
+        )
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(
+        {
+            "schema_version": "builderops.design-run-cli-output.v1",
+            "run_id": run_id,
+            "result": result.model_dump(mode="json"),
+        },
+        as_json,
+    )
+
+
+@design_run.command(
+    "status",
+    help="Derive current status only from the validated durable receipt chain.",
+)
+@click.argument("run_id")
+@_design_run_repo_root_option
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_status(
+    ctx: click.Context,
+    run_id: str,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        projection = _design_run_governance(
+            ctx,
+            repo_root=repo_root,
+            store_mode="existing",
+        ).projection(run_id)
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(_design_run_projection_payload(projection), as_json)
+
+
+@design_run.command(
+    "result",
+    help="Show validated terminal evidence without exposing adapter internals.",
+)
+@click.argument("run_id")
+@_design_run_repo_root_option
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_result(
+    ctx: click.Context,
+    run_id: str,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        projection = _design_run_governance(
+            ctx,
+            repo_root=repo_root,
+            store_mode="existing",
+        ).projection(run_id)
+    except (
+        BuilderOpsValidationError,
+        OSError,
+        sqlite3.Error,
+        ValueError,
+    ) as exc:
+        raise _design_run_cli_exception(exc) from exc
+    _emit(_design_run_projection_payload(projection), as_json)
 
 
 @inquiry.command("start", help="Persist an immutable inquiry question before model execution.")
