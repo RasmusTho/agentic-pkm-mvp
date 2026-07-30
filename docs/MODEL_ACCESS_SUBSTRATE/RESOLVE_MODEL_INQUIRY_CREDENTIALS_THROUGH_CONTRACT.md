@@ -9,9 +9,11 @@ depends_on: [PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
 can_parallelize_with: []
 ---
 
-State: Implemented. Delivered by PR #4368 (issue #4291, 2026-07-29). The live provider run and
-legacy-bridge retirement remain parent validation on #4286. **This is the first task in the
-capability that changes runtime behaviour.**
+State: Repair in progress on reopened issue #4291. PR #4368 merged an implementation on 2026-07-29,
+but its exact SHA was already rejected by the required independent review; that delivery claim and
+its parent handoff are superseded until every protected repair item, full non-PG proof, and two clean
+final reviews are complete. The live provider run and legacy-bridge retirement remain parent
+validation on #4286. **This is the first task in the capability that changes runtime behaviour.**
 
 # Resolve Model Inquiry Credentials Through Contract
 
@@ -46,14 +48,23 @@ and is unexercised. Switching to it is a configuration and resolution change, no
    `RoleSpec("fable", "fable-subscription-cli", "claude")` and
    `RoleSpec("gpt_codex", "codex-subscription-cli", "codex")` — two subscription CLIs as the only
    installable headless roles. Headless role installation must no longer require a subscription
-   session.
+   session. Both `xhigh` provider-API roles use the extended 1200-second per-role request deadline;
+   the generic 60-second HTTP posture must not truncate production Model Inquiry turns.
 4. Replace the provider-bearing `BUILDEROPS_INQUIRY_ADAPTERS_JSON` mechanism with a value-free
    inquiry-role intent configuration. The committed example contains the seven neutral intent fields,
    role independence requirement, channel/consumer references, and no provider, model, credential
    value, environment-variable name, host path, or host identifier.
 5. Emit the real failure class. A declared credential that is absent or unusable produces
    `credential_unavailable`, and an expired session on a still-permitted interactive path produces
-   `session_expired`, instead of both collapsing into `command_exit_nonzero`.
+   `session_expired`, instead of both collapsing into `command_exit_nonzero`. The canonical launcher
+   must preserve that typed outcome even when host bootstrap fails before the runner starts: it
+   hands the runner only the declared logical credential identifier, with no credential bindings,
+   so the durable terminal receipt is written before any adapter or fallback path can run. The
+   canonical launcher returns that complete JSON receipt with exit status 1; desktop callers treat
+   only that exact typed status/JSON combination—with complete desktop fields, the exact persisted
+   three-field diagnostic, safe adapter ID, and canonical logical-secret identifier—as a valid
+   terminal failure and release their single-flight staging. Malformed or extended forms preserve
+   staging as ambiguous.
 6. Keep `scripts/model_inquiry_subscription_adapter.py` for interactive, human-driven use. It must
    remain unreachable from any headless entrypoint.
 
@@ -106,10 +117,13 @@ ADR-0064's option analysis.
       Verify: `tests/governance/test_model_inquiry_host_install.py::test_headless_entrypoints_do_not_require_subscription_session`
       — the test drives `scripts/install_model_inquiry_host.py`'s installation path and asserts the
       produced role entrypoints resolve credentials rather than a CLI session.
+- [ ] Production provider-API adapters retain the extended `xhigh` per-role request deadline.
+      Verify: `tests/builderops/test_model_inquiry_adapters.py::test_production_http_adapters_use_extended_xhigh_deadline`
 - [ ] A declared credential that is absent or malformed produces `credential_unavailable`, fails the
       run closed, names only the logical identifier, and does not fall back to a subscription CLI, to
       ambient environment, or to any other provider.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_absent_credential_fails_closed_as_credential_unavailable`
+      Verify: `tests/governance/test_start_model_inquiry_skill.py::test_launcher_fails_closed_on_an_absent_declared_credential`
 - [ ] The two roles still require distinct `adapter_id` values and distinct runtime-target
       fingerprints, and a configuration that collapses them is refused.
       Verify: `tests/builderops/test_model_inquiry_adapters.py::test_provider_enabled_roles_require_distinct_non_mock_attestation`

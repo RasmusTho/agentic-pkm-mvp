@@ -10,16 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.model_inquiry_adapters import CredentialUnavailableError
+from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.models import BuilderOpsValidationError
+import scripts.start_model_inquiry as start_model_inquiry
 from scripts.start_model_inquiry import preflight_dependencies
 from tests.builderops.inquiry_intent import (
-    census_with_role_targets,
     intent_env,
     provisioned_env,
+    resolver_for_targets,
 )
-from tests.governance.stub_provider_api import stub_provider_api
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "start_model_inquiry.sh"
@@ -27,106 +27,206 @@ PYTHON_LAUNCHER = REPO_ROOT / "scripts" / "start_model_inquiry.py"
 SUBSCRIPTION_ADAPTER = REPO_ROOT / "scripts" / "model_inquiry_subscription_adapter.py"
 
 
-def _configured_env(tmp_path: Path, census: Path) -> dict[str, str]:
-    """Provider-free intent, a declared credential surface, and a stub census."""
-    vault = tmp_path / "vault"
-    vault.mkdir(exist_ok=True)
+def test_canonical_launcher_invokes_real_host_secret_bootstrap(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "python-argv"
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TRACE_FILE\"\nexit 23\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o700)
+
+    result = subprocess.run(
+        [str(LAUNCHER), "--help"],
+        cwd=REPO_ROOT,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "BUILDEROPS_PYTHON": str(fake_python),
+            "TRACE_FILE": str(trace),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 23
+    assert trace.read_text(encoding="utf-8").splitlines() == [
+        "-m",
+        "app.ops.host_secret_bootstrap",
+        "--channel",
+        "dev",
+        "--consumer",
+        "builderops-model-inquiry",
+        "--run-on-credential-unavailable",
+        "--",
+        str(fake_python),
+        str(PYTHON_LAUNCHER),
+        "--help",
+    ]
+
+
+def test_local_launcher_emits_terminal_provider_error_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        start_model_inquiry,
+        "preflight_dependencies",
+        lambda *_args, **_kwargs: {
+            "vault": "available",
+            "credential_resolution": "host-secret-contract",
+            "adapters": {},
+        },
+    )
+    responses = iter(
+        [
+            {"inquiry": {"inquiry_id": "inq_safe"}},
+            {
+                "outcome": "provider_error",
+                "terminal_receipt_id": "receipt_safe",
+                "human_readable_report": "/safe/report.md",
+                "details": {
+                    "diagnostic": {
+                        "adapter_id": "anthropic-safe",
+                        "adapter_failure_class": "unexpected_adapter_error",
+                    }
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        start_model_inquiry,
+        "_run_cli",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    payload = start_model_inquiry.launch(
+        "Produce a safe failure receipt.",
+        max_rounds=1,
+        env={},
+        repo_root=REPO_ROOT,
+    )
+
+    assert payload["final_state"] == "provider_error"
+    assert payload["diagnostic"]["adapter_failure_class"] == "unexpected_adapter_error"
+    assert "credential-sentinel" not in json.dumps(payload)
+
+
+def _typed_credential_terminal() -> dict[str, object]:
     return {
-        **os.environ,
-        "PATH": "/usr/bin:/bin",
-        "BUILDEROPS_PYTHON": sys.executable,
-        "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
-        "BUILDEROPS_VAULT_ROOT": str(vault),
-        "PROVIDER_CENSUS_PATH": str(census),
-        **provisioned_env(tmp_path / "secrets"),
+        "schema": "builderops.model-inquiry-desktop-launch.v1",
+        "inquiry_id": "inq_typed",
+        "final_state": "provider_error",
+        "terminal_receipt_id": "receipt_typed",
+        "human_readable_report": "/safe/report.md",
+        "preflight": {"vault": "available"},
+        "diagnostic": {
+            "adapter_id": "anthropic-claude-fable-5",
+            "adapter_failure_class": "credential_unavailable",
+            "credential_identity_ref": "anthropic.api-key",
+        },
     }
 
 
-def test_local_launcher_runs_common_command(tmp_path: Path) -> None:
-    marker = tmp_path / "must-not-exist"
-    question = f"Keep quotes ' and newlines safe\n$(touch {marker})"
-    question_file = tmp_path / "question.md"
-    question_file.write_text(question, encoding="utf-8")
-    with stub_provider_api(tmp_path / "census") as census:
-        env = _configured_env(tmp_path, census)
-        result = subprocess.run(
-            [
-                str(LAUNCHER),
-                "--question-file",
-                str(question_file),
-                "--max-rounds",
-                "1",
-            ],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
+def test_desktop_terminal_classifier_accepts_only_exact_typed_credential_failure() -> None:
+    valid = _typed_credential_terminal()
+    serialized = json.dumps(valid)
+
+    assert start_model_inquiry._launcher_exit_code(valid) == 1
+    assert start_model_inquiry.is_valid_desktop_terminal_response(1, serialized)
+    assert not start_model_inquiry.is_valid_desktop_terminal_response(0, serialized)
+    assert not start_model_inquiry.is_valid_desktop_terminal_response(2, serialized)
+    assert not start_model_inquiry.is_valid_desktop_terminal_response(1, "{not-json")
+
+    invalid_payloads: list[dict[str, object]] = []
+    for missing_field in ("adapter_id", "credential_identity_ref"):
+        candidate = json.loads(serialized)
+        del candidate["diagnostic"][missing_field]
+        invalid_payloads.append(candidate)
+    for bad_adapter_id in ("", "/tmp/adapter", "adapter secret"):
+        candidate = json.loads(serialized)
+        candidate["diagnostic"]["adapter_id"] = bad_adapter_id
+        invalid_payloads.append(candidate)
+    for bad_credential_ref in ("", "/tmp/key", "credential-sentinel", "ANTHROPIC_API_KEY"):
+        candidate = json.loads(serialized)
+        candidate["diagnostic"]["credential_identity_ref"] = bad_credential_ref
+        invalid_payloads.append(candidate)
+    extra_diagnostic = json.loads(serialized)
+    extra_diagnostic["diagnostic"]["adapter_exit_code"] = 1
+    invalid_payloads.append(extra_diagnostic)
+    wrong_final_state = json.loads(serialized)
+    wrong_final_state["final_state"] = "consensus"
+    invalid_payloads.append(wrong_final_state)
+    extra_top_level = json.loads(serialized)
+    extra_top_level["unexpected"] = "field"
+    invalid_payloads.append(extra_top_level)
+    for invalid_preflight in (None, "available", ["available"]):
+        candidate = json.loads(serialized)
+        candidate["preflight"] = invalid_preflight
+        invalid_payloads.append(candidate)
+
+    for invalid in invalid_payloads:
+        assert start_model_inquiry._launcher_exit_code(invalid) == 2
+        assert not start_model_inquiry.is_valid_desktop_terminal_response(
+            1,
+            json.dumps(invalid),
         )
-
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["inquiry_id"].startswith("inq_")
-    assert payload["final_state"] == "consensus"
-    assert payload["terminal_receipt_id"]
-    assert payload["preflight"]["credential_resolution"] == "host-secret-contract"
-    assert {
-        identity["provider"] for identity in payload["preflight"]["adapters"].values()
-    } == {"anthropic", "openai"}
-    report = Path(payload["human_readable_report"])
-    assert report.is_file()
-    assert report.parent.name == payload["inquiry_id"]
-    assert not marker.exists()
-    trace = ModelInquiryService.from_env(env).trace(payload["inquiry_id"])
-    assert trace["question"]["content"] == question
-    assert trace["question"]["source_refs"] == [
-        {"ref_type": "desktop_skill", "ref": "start-model-inquiry"}
-    ]
-    assert all(turn["provider_request_id"] for turn in trace["turns"])
-    launcher = PYTHON_LAUNCHER.read_text()
-    assert '"builderops",\n                "inquiry",\n                "start"' in launcher
-
-
-def test_local_launcher_emits_terminal_provider_error_json(tmp_path: Path) -> None:
-    question_file = tmp_path / "question.md"
-    question_file.write_text("Produce a safe failure receipt.", encoding="utf-8")
-    with stub_provider_api(tmp_path / "census", failing_roles=("fable",)) as census:
-        env = _configured_env(tmp_path, census)
-        result = subprocess.run(
-            [str(LAUNCHER), "--question-file", str(question_file), "--max-rounds", "1"],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["final_state"] == "provider_error"
-    assert payload["diagnostic"]["adapter_failure_class"] == "unexpected_adapter_error"
-    rendered = "".join(
-        path.read_text(encoding="utf-8")
-        for path in (tmp_path / "vault").rglob("*.json")
-    )
-    assert "credential-sentinel" not in rendered
-    assert "credential-sentinel" not in result.stdout
 
 
 def test_launcher_fails_closed_on_an_absent_declared_credential(
     tmp_path: Path,
 ) -> None:
-    """The reported failure class is the credential, never a session or CLI exit."""
+    """The canonical path durably records the typed failure without a model call."""
     vault = tmp_path / "vault"
     vault.mkdir()
     question_file = tmp_path / "question.md"
     question_file.write_text("Fail closed without a declared value.", encoding="utf-8")
+    provider_call_marker = tmp_path / "provider-called"
+    subscription_call_marker = tmp_path / "subscription-called"
+    instrumentation = tmp_path / "instrumentation"
+    instrumentation.mkdir()
+    (instrumentation / "sitecustomize.py").write_text(
+        """
+import ctypes
+import os
+from pathlib import Path
+
+def _missing_keychain(*_args, **_kwargs):
+    raise OSError("injected missing Keychain item")
+
+ctypes.CDLL = _missing_keychain
+
+try:
+    import requests
+except ImportError:
+    pass
+else:
+    def _forbid_provider(*_args, **_kwargs):
+        Path(os.environ["PROVIDER_CALL_MARKER"]).write_text("called", encoding="utf-8")
+        raise AssertionError("provider transport was reached")
+    requests.post = _forbid_provider
+""",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for command in ("claude", "codex"):
+        executable = fake_bin / command
+        executable.write_text(
+            "#!/bin/sh\nprintf called > \"$SUBSCRIPTION_CALL_MARKER\"\nexit 91\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o700)
     result = subprocess.run(
         [str(LAUNCHER), "--question-file", str(question_file), "--max-rounds", "1"],
         cwd=REPO_ROOT,
         env={
-            "PATH": "/usr/bin:/bin",
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
             "HOME": str(tmp_path),
+            "PYTHONPATH": str(instrumentation),
+            "PROVIDER_CALL_MARKER": str(provider_call_marker),
+            "SUBSCRIPTION_CALL_MARKER": str(subscription_call_marker),
             "BUILDEROPS_PYTHON": sys.executable,
             "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
             "BUILDEROPS_VAULT_ROOT": str(vault),
@@ -137,10 +237,27 @@ def test_launcher_fails_closed_on_an_absent_declared_credential(
         check=False,
     )
 
-    assert result.returncode == 2
-    assert "anthropic.api-key" in result.stderr
-    assert "ANTHROPIC_API_KEY" not in result.stderr
-    assert not (vault / "model-inquiries").exists()
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["final_state"] == "provider_error"
+    assert payload["diagnostic"] == {
+        "adapter_id": "anthropic-claude-fable-5",
+        "adapter_failure_class": "credential_unavailable",
+        "credential_identity_ref": "anthropic.api-key",
+    }
+    trace = ModelInquiryService(vault).trace(payload["inquiry_id"])
+    assert trace["turns"] == []
+    terminal = next(
+        receipt
+        for receipt in trace["receipts"]
+        if receipt["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["details"]["diagnostic"] == payload["diagnostic"]
+    assert not provider_call_marker.exists()
+    assert not subscription_call_marker.exists()
+    serialized = result.stdout + result.stderr + json.dumps(trace)
+    assert "ANTHROPIC_API_KEY" not in serialized
+    assert "OPENAI_API_KEY" not in serialized
 
 
 def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:
@@ -221,11 +338,15 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "Do not register remote lock release until the launch outcome is known",
             "Do not release the remote lock after an ambiguous launcher outcome",
             "high-reasoning profile",
+            "exit status 1",
+            "credential_unavailable",
+            "`preflight` must be a JSON object",
         ):
             assert contract_field in skill
         for required_boundary in (
             "Do not run local BuilderOps, Python, Codex, or Claude commands",
-            "Do not install dependencies, run vault-init, configure adapters, or use API keys.",
+            "Do not install dependencies, run vault-init, configure adapters, or provision API keys.",
+            "host-secret bootstrap",
         ):
             assert required_boundary in skill
         for forbidden in (
@@ -264,7 +385,7 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
         "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
     }
     missing_vault = subprocess.run(
-        [str(LAUNCHER), "Question"],
+        [sys.executable, str(PYTHON_LAUNCHER), "Question"],
         cwd=REPO_ROOT,
         env=clean_env,
         capture_output=True,
@@ -277,7 +398,7 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     missing_adapters = subprocess.run(
-        [str(LAUNCHER), "Question"],
+        [sys.executable, str(PYTHON_LAUNCHER), "Question"],
         cwd=REPO_ROOT,
         env={**clean_env, "BUILDEROPS_VAULT_ROOT": str(vault)},
         capture_output=True,
@@ -289,7 +410,7 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
     assert not (vault / "model-inquiries").exists()
 
     missing_credential = subprocess.run(
-        [str(LAUNCHER), "Question"],
+        [sys.executable, str(PYTHON_LAUNCHER), "Question"],
         cwd=REPO_ROOT,
         env={
             **clean_env,
@@ -307,7 +428,6 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
 
 def test_desktop_preflight_resolves_declared_roles_without_a_session(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Preflight needs no host role entrypoint, provider CLI, or session lineage."""
     bin_dir = tmp_path / "bin"
@@ -340,13 +460,16 @@ def test_desktop_preflight_resolves_declared_roles_without_a_session(
             {key: value for key, value in env.items() if "HOST_SECRET" not in key},
             command_cwd=REPO_ROOT,
         )
-    mocked_census = census_with_role_targets(
-        tmp_path / "mock-census",
+    mocked_resolver = resolver_for_targets(
+        tmp_path / "mock-resolver",
         {"fable": ("mock", "mock-chat"), "gpt_codex": ("mock", "mock-chat")},
     )
-    monkeypatch.setenv("PROVIDER_CENSUS_PATH", str(mocked_census))
     with pytest.raises(BuilderOpsValidationError, match="mock"):
-        preflight_dependencies(env, command_cwd=REPO_ROOT)
+        preflight_dependencies(
+            env,
+            command_cwd=REPO_ROOT,
+            resolver=mocked_resolver,
+        )
 
 
 def _run_host_installer(

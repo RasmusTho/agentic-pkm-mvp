@@ -15,10 +15,13 @@ import pytest
 
 import app.ops.host_secret_bootstrap as host_secret_bootstrap
 from app.ops.host_secret_bootstrap import (
+    HOST_SECRET_BOOTSTRAP_FAILURE_REF,
+    HOST_SECRET_RUNTIME_ENV_FILE,
     HostSecretBootstrapError,
     HostSecretBootstrapTerminated,
     KeychainLookup,
     materialize_consumer_environment,
+    load_runtime_secret_values,
     run_with_host_secrets,
 )
 
@@ -134,6 +137,39 @@ def test_missing_model_provider_secret_fails_consumer_closed(
     assert "openai.api-key" in str(error.value)
     if missing_or_malformed:
         assert missing_or_malformed not in str(error.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_model_provider_failure_can_reach_typed_receipt_consumer(
+    tmp_path: Path,
+) -> None:
+    observed_env: dict[str, str] = {}
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":anthropic.api-key"):
+            return _ANTHROPIC_KEY
+        raise OSError("keychain item is absent")
+
+    def runner(_command: list[str], env: dict[str, str]) -> int:
+        observed_env.update(env)
+        return 19
+
+    result = run_with_host_secrets(
+        channel="dev",
+        consumer="builderops-model-inquiry",
+        command=["typed-receipt-consumer"],
+        keychain_lookup=lookup,
+        runner=runner,
+        directory=tmp_path,
+        run_on_credential_unavailable=True,
+    )
+
+    assert result == 19
+    assert observed_env[HOST_SECRET_BOOTSTRAP_FAILURE_REF] == "openai.api-key"
+    assert HOST_SECRET_RUNTIME_ENV_FILE not in observed_env
+    assert set(observed_env).isdisjoint(
+        {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HEIMDAL_RAW_STORE_KEY"}
+    )
     assert list(tmp_path.iterdir()) == []
 
 
@@ -335,6 +371,68 @@ def test_runtime_secret_file_is_mode_0600_and_cleaned_up(
     assert result == return_code
     assert observed_path is not None
     assert not observed_path.exists()
+
+
+def test_runtime_secret_reader_rejects_unsafe_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secure = tmp_path / "secure.env"
+    secure.write_text("OPENAI_API_KEY=" + _OPENAI_KEY + "\n", encoding="utf-8")
+    secure.chmod(0o600)
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(secure)}
+    ) == {"OPENAI_API_KEY": _OPENAI_KEY}
+
+    world_readable = tmp_path / "world-readable.env"
+    world_readable.write_text(secure.read_text(encoding="utf-8"), encoding="utf-8")
+    world_readable.chmod(0o644)
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(world_readable)}
+    ) == {}
+
+    symlink = tmp_path / "symlink.env"
+    symlink.symlink_to(secure)
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(symlink)}
+    ) == {}
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(tmp_path)}
+    ) == {}
+
+    real_uid = os.geteuid()
+    monkeypatch.setattr(
+        host_secret_bootstrap.os,
+        "geteuid",
+        lambda: real_uid + 1,
+    )
+    assert load_runtime_secret_values(
+        {HOST_SECRET_RUNTIME_ENV_FILE: str(secure)}
+    ) == {}
+
+
+def test_runtime_secret_reader_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    fifo = tmp_path / "runtime-secret.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    probe = (
+        "import json,sys; "
+        "from app.ops.host_secret_bootstrap import "
+        "HOST_SECRET_RUNTIME_ENV_FILE,load_runtime_secret_values; "
+        "print(json.dumps(load_runtime_secret_values("
+        "{HOST_SECRET_RUNTIME_ENV_FILE: sys.argv[1]}), sort_keys=True))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(fifo)],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=2,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "{}"
 
 
 def test_sigterm_forwards_to_consumer_and_cleans_runtime_secret_file(

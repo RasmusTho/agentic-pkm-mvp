@@ -1,6 +1,6 @@
 ---
 name: start-model-inquiry
-description: "Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured inquiry host through its subscription-authenticated launcher when a development question needs independent model review before ticket creation."
+description: "Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured inquiry host through its declared-credential launcher when a development question needs independent model review before ticket creation."
 ---
 
 # Start Model Inquiry
@@ -16,7 +16,7 @@ The host bridge has four fixed identities:
 - SSH alias: `Tailscale_macmini`
 - exclusive lock: `/tmp/yggdrasil-model-inquiry.lock`
 - staged question: `/tmp/model-inquiry-question.md`
-- subscription-authenticated launcher:
+- declared-credential launcher:
   `$HOME/.local/bin/yggdrasil-model-inquiry`
 
 Do not accept an environment variable, caller argument, inferred checkout path, or fallback command
@@ -129,11 +129,22 @@ Run exactly one route as a single-flight operation.
 
    Capture the launcher's exit status and stdout separately. Do not pipe the launcher through
    another command or let a formatter replace its exit status.
-6. Validate the response before releasing staging. A valid terminal response requires exit status
-   zero and non-empty stdout whose entire contents parse as exactly one JSON object. The object must
-   contain non-empty string values for `inquiry_id`, `final_state`, `terminal_receipt_id`, and
-   `human_readable_report`. Non-JSON prefixes or suffixes, an array or scalar, an empty required
-   value, or a missing required field is invalid.
+6. Validate the response before releasing staging. A valid terminal response requires non-empty
+   stdout whose entire contents parse as exactly one JSON object with non-empty string values for
+   `inquiry_id`, `final_state`, `terminal_receipt_id`, and `human_readable_report`, plus exactly one
+   of these status contracts:
+   - exit status zero; or
+   - exit status 1 with `final_state` equal to `provider_error` and a `diagnostic` object whose
+     exact fields are `adapter_id`, `adapter_failure_class`, and `credential_identity_ref`, with no
+     extras. `adapter_failure_class` must be `credential_unavailable`; `adapter_id` must match
+     `[A-Za-z0-9][A-Za-z0-9_.-]*`; and `credential_identity_ref` must match
+     `[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}`. This exit-1 object must contain exactly the
+     top-level fields `schema`, `inquiry_id`, `final_state`, `terminal_receipt_id`,
+     `human_readable_report`, `preflight`, and `diagnostic`, with `schema` equal to
+     `builderops.model-inquiry-desktop-launch.v1`; `preflight` must be a JSON object.
+   The second form is a valid durable terminal failure, not an ambiguous launch. Any other nonzero
+   status, non-JSON prefix or suffix, array or scalar, empty required value, or missing required
+   field is invalid.
 
 ## Cleanup Matrix
 
@@ -142,7 +153,7 @@ The launcher attempt begins at step 5. Apply exactly one row:
 | Outcome | Remote route | Proven-local route |
 | --- | --- | --- |
 | Failure after lock acquisition but before step 5 starts | Run the fixed remote release command below; report the original failure and any cleanup failure. | Run the fixed proven-local release procedure below; report the original failure and any cleanup failure. |
-| Valid terminal response | Preserve the response, then run the fixed remote release command. | Preserve the response, then run the fixed proven-local release procedure. |
+| Valid terminal response, including typed exit-1 `credential_unavailable` | Preserve the response, then run the fixed remote release command. | Preserve the response, then run the fixed proven-local release procedure. |
 | Ambiguous launcher outcome after step 5 starts | Preserve the remote staging file and lock. | Preserve the local staging file and lock. |
 
 Fixed remote release:
@@ -177,15 +188,18 @@ separately: a cleanup failure must not replace or reclassify the captured launch
 allowed staging/lock release fails, report it and do not start another inquiry. Never delete durable
 inquiry artifacts.
 
-The configured inquiry host owns the existing Claude and Codex subscription sessions, BuilderOps
-configuration, and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host
-alias. The launcher and pinned host identity are host-specific operator configuration outside Git.
+The configured inquiry host owns BuilderOps configuration, durable inquiry artifacts, and the
+host-local values declared by the repository's host-secret contract. `Tailscale_macmini` is an
+operator-configured SSH host alias. The launcher and pinned host identity are host-specific operator
+configuration outside Git.
 
-On the configured host, the Fable command may be mediated by a host-local, GUI-session proxy so a
-non-interactive SSH launch does not need direct login-keychain access. This is an internal remote-host
-authentication path, not a desktop-skill capability: do not configure it, read or copy its credentials
-or certificates, invoke it directly, or substitute a different provider path. If that host path is
-unavailable, preserve the established ambiguous-launcher failure handling below.
+The fixed host launcher invokes the repository-owned host-secret bootstrap before Model Inquiry
+starts. That bootstrap resolves the declared Anthropic and OpenAI logical identifiers from the
+host Keychain into a temporary owner-only runtime file, and removes it after the child terminates.
+The desktop skill must never provision, inspect, copy, print, or replace those values. If declared
+credential resolution is unavailable, accept only the exit-status-1 typed terminal contract above,
+release staging through the normal valid-terminal row, report the durable failure, and stop. Do not
+fall back to a subscription session or another provider.
 
 The configured host launcher owns the high-reasoning profile and extended per-role deadline for
 both independent roles. Do not lower or override that profile from the desktop skill, and do not
@@ -195,8 +209,10 @@ move its model or adapter configuration into the local workspace.
 
 - Treat every launcher SSH failure and every proven-local launcher failure after step 5 starts as
   ambiguous.
-- Treat a nonzero launcher status, empty stdout, malformed JSON, non-object JSON, or an invalid
-  required response field as an ambiguous launcher failure.
+- Treat a nonzero launcher status other than the exact exit-status-1 typed
+  `credential_unavailable` terminal contract, exit zero carrying a `credential_unavailable`
+  diagnostic, empty stdout, malformed JSON, non-object JSON, an incomplete/extended diagnostic, or
+  an invalid required response field as an ambiguous launcher failure.
 - On an ambiguous outcome, delete only the calling process's temporary question file. Do not
   release either route's lock or staged question. A later operator can decide whether the host
   launcher completed; do not make that decision from this skill.
@@ -212,10 +228,10 @@ move its model or adapter configuration into the local workspace.
 
 - Do not run local BuilderOps, Python, Codex, or Claude commands directly for this inquiry, and do
   not invoke providers or adapters directly. The proven-local route may invoke only the fixed
-  subscription-authenticated host launcher.
-- Do not install dependencies, run vault-init, configure adapters, or use API keys.
-- Do not configure, inspect, copy, or print remote-host proxy credentials, certificates, or endpoints.
+  declared-credential host launcher.
+- Do not install dependencies, run vault-init, configure adapters, or provision API keys.
+- Do not configure, inspect, copy, or print host-secret values or provider endpoints.
 - Do not create a GitHub Issue; use the separate promotion path after a ready receipt exists.
 - Do not automate another desktop app or copy turns between apps.
 - Do not write inquiry artifacts to Companion UI or a human knowledge vault.
-- Do not print subscription, adapter, or credential configuration while diagnosing a failure.
+- Do not print adapter or credential configuration while diagnosing a failure.

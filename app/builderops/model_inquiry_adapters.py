@@ -23,6 +23,7 @@ from app.builderops.model_access_resolver import (
 )
 from app.builderops.model_inquiry_contract import canonical_hash, canonical_json
 from app.builderops.models import BuilderOpsValidationError
+from app.ops.host_secret_bootstrap import HOST_SECRET_BOOTSTRAP_FAILURE_REF
 from llm_contract import (
     ADAPTER_FAILURE_CLASSES,
     AdapterResult,
@@ -40,6 +41,7 @@ SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
 SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE = 125
 CLEANUP_TIMEOUT_SECONDS = 2.0
 HTTP_ADAPTER_KIND = "http"
+MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS = 1200.0
 
 # Conventional exit codes the still-permitted interactive command path uses to
 # report the real cause. Without them an expired session and a genuine command
@@ -215,11 +217,24 @@ class HttpModelAdapter:
     model: str
     endpoint: str
     api_key: str
-    timeout_seconds: float = 60.0
+    intent: ModelAccessIntent
+    timeout_seconds: float = MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
             raise BuilderOpsValidationError("HTTP adapter timeout_seconds must be positive")
+        if self.intent.reasoning_effort != "xhigh":
+            raise BuilderOpsValidationError("HTTP adapter requires xhigh reasoning effort")
+        if self.intent.determinism_required:
+            raise BuilderOpsValidationError(
+                "HTTP adapter refuses deterministic Model Inquiry execution"
+            )
+        if self.intent.output_schema_ref != "builderops.model-turn-response.v1":
+            raise BuilderOpsValidationError(
+                "HTTP adapter requires the declared Model Inquiry response schema"
+            )
+        if self.intent.side_effect_class != "advisory_review":
+            raise BuilderOpsValidationError("HTTP adapter permits advisory review only")
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
         if not self.endpoint or not self.api_key:
@@ -243,6 +258,7 @@ class HttpModelAdapter:
                         {"role": "user", "content": canonical_json(request)},
                     ],
                     "response_format": {"type": "json_object"},
+                    "reasoning_effort": self.intent.reasoning_effort,
                 },
                 timeout=self.timeout_seconds,
             )
@@ -282,6 +298,7 @@ class HttpModelAdapter:
                     "max_tokens": 4096,
                     "system": str(request["system_prompt"]),
                     "messages": [{"role": "user", "content": canonical_json(request)}],
+                    "output_config": {"effort": self.intent.reasoning_effort},
                 },
                 timeout=self.timeout_seconds,
             )
@@ -517,6 +534,21 @@ def load_adapters(
     """
     source = dict(os.environ if env is None else env)
     selected, resolutions = resolve_inquiry_roles(source, resolver=resolver)
+    failure_ref = source.get(HOST_SECRET_BOOTSTRAP_FAILURE_REF, "").strip()
+    if failure_ref:
+        matches = [
+            resolution
+            for resolution in resolutions.values()
+            if resolution.credential_identity_ref == failure_ref
+        ]
+        if len(matches) != 1:
+            raise AdapterUnavailableError(
+                "host secret bootstrap failure handoff does not name one resolved role"
+            )
+        raise CredentialUnavailableError(
+            adapter_id=matches[0].adapter_id,
+            credential_identity_ref=failure_ref,
+        )
     descriptors = load_adapter_descriptors(source, resolver=selected)
     adapters: dict[str, ModelTurnAdapter] = {}
     for role in ROLE_NAMES:
@@ -539,6 +571,8 @@ def load_adapters(
             model=resolution.model,
             endpoint=selected.endpoint_for(resolution),
             api_key=api_key,
+            intent=resolution.request.intent,
+            timeout_seconds=MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS,
         )
     return adapters
 

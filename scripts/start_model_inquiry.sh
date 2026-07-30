@@ -17,4 +17,9 @@ fi
 
 cd "$APP_ROOT"
 export BUILDEROPS_PYTHON="$PYTHON"
-exec "$PYTHON" "$SCRIPT_DIR/start_model_inquiry.py" "$@"
+exec "$PYTHON" -m app.ops.host_secret_bootstrap \
+    --channel dev \
+    --consumer builderops-model-inquiry \
+    --run-on-credential-unavailable \
+    -- \
+    "$PYTHON" "$SCRIPT_DIR/start_model_inquiry.py" "$@"

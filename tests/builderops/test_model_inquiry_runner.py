@@ -15,6 +15,7 @@ from app.builderops.model_inquiry_adapters import (
     INQUIRY_INTENT_CONFIG_ENV,
     AdapterExecutionError,
     AdapterResult,
+    CredentialUnavailableError,
     ScriptedAdapter,
 )
 from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION, canonical_hash
@@ -197,6 +198,11 @@ class FailingAdapter:
     failure_class: str = "command_exit_nonzero"
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        if self.failure_class == "credential_unavailable":
+            raise CredentialUnavailableError(
+                adapter_id=self.adapter_id,
+                credential_identity_ref="anthropic.api-key",
+            )
         raise AdapterExecutionError(
             "classified fixture failure",
             failure_class=self.failure_class,
@@ -545,6 +551,40 @@ def test_unknown_failure_class_is_rejected_at_both_validators() -> None:
             {
                 "adapter_id": "fixture-adapter",
                 "adapter_failure_class": "provider_magic_failure",
+            }
+        )
+
+
+def test_credential_failure_identity_is_enforced_iff_at_persistence_boundary() -> None:
+    with pytest.raises(BuilderOpsValidationError, match="must appear together"):
+        _validate_adapter_failure_diagnostic(
+            {
+                "adapter_id": "fixture-adapter",
+                "adapter_failure_class": "credential_unavailable",
+            }
+        )
+    with pytest.raises(BuilderOpsValidationError, match="must appear together"):
+        _validate_adapter_failure_diagnostic(
+            {
+                "adapter_id": "fixture-adapter",
+                "adapter_failure_class": "command_timeout",
+                "credential_identity_ref": "anthropic.api-key",
+            }
+        )
+    _validate_adapter_failure_diagnostic(
+        {
+            "adapter_id": "fixture-adapter",
+            "adapter_failure_class": "credential_unavailable",
+            "credential_identity_ref": "anthropic.api-key",
+        }
+    )
+    with pytest.raises(BuilderOpsValidationError, match="exact typed field set"):
+        _validate_adapter_failure_diagnostic(
+            {
+                "adapter_id": "fixture-adapter",
+                "adapter_failure_class": "credential_unavailable",
+                "credential_identity_ref": "anthropic.api-key",
+                "adapter_exit_code": 1,
             }
         )
 

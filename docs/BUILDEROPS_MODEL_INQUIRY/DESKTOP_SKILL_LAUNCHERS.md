@@ -26,12 +26,13 @@ write the question verbatim to a mode-`0600` local Markdown file. Remote callers
 ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
 ```
 
-The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and the existing
-Claude and Codex subscription sessions. Its launcher settings, credentials, and executable paths
-are host-specific operator configuration and stay outside Git; the portable subscription adapter
-profile is versioned with the BuilderOps command. That profile gives both roles `xhigh` reasoning
-effort and a bounded extended deadline. Neither skill rebuilds that environment, configures
-providers, or reimplements orchestration in prompt prose.
+The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and the
+host-local values declared by the repository's host-secret contract. Its launcher settings,
+credential values, and executable paths are host-specific operator configuration and stay outside
+Git. The launcher invokes `app.ops.host_secret_bootstrap` for the `builderops-model-inquiry`
+consumer before Model Inquiry starts; the bootstrap materializes one owner-only runtime file and
+removes it after the child terminates. Neither desktop skill rebuilds that environment, configures
+providers, handles credential values, or reimplements orchestration in prompt prose.
 
 The repo-local Codex skill also supports a caller already running on the configured inquiry host. Before
 any connection attempt or lock mutation, it expands the fixed `Tailscale_macmini` alias with
@@ -48,13 +49,24 @@ route copies to the same fixed staging file and directly invokes only:
 "$HOME/.local/bin/yggdrasil-model-inquiry" --question-file /tmp/model-inquiry-question.md
 ```
 
-The operator machine needs the `Tailscale_macmini` SSH alias. The remote host may internally mediate
-the Fable command through a GUI-session proxy so the SSH child does not directly depend on
-login-keychain access. That authentication path is host-specific operator configuration outside Git;
-desktop skill packages neither configure it nor access its credentials, certificates, or endpoint.
-A failed copy or launcher command, empty stdout, malformed/non-object JSON, or absent/empty response
-field fails loudly: report the error and stop. Do not retry, inspect the vault for a substitute
-response, or fall back to an in-chat inquiry.
+The operator machine needs the `Tailscale_macmini` SSH alias. On the remote host, declared Anthropic
+and OpenAI API-key identities resolve through the host-secret bootstrap and Keychain contract; no
+headless route uses the legacy GUI-session proxy or an interactive subscription session. Desktop
+skill packages neither provision nor access credential values. If that bootstrap cannot resolve or
+validate a declared API credential, the fixed Model Inquiry launcher passes only the logical
+credential identifier to the runner. The runner then persists a terminal
+`provider_error`/`credential_unavailable` receipt before any adapter can run; no credential value,
+provider request, subscription command, or alternate provider participates in that handoff. The
+launcher returns that complete receipt JSON with exit status 1. Desktop skills accept only that
+exact status together with `final_state=provider_error`, a `credential_unavailable` diagnostic, and
+all required receipt fields as a valid terminal failure. The diagnostic has the exact persisted
+field set (`adapter_id`, `adapter_failure_class`, `credential_identity_ref`), validates the safe
+adapter ID and declared logical-secret grammars, and permits no extra field or adapter exit code.
+The exit-1 top-level object likewise uses only the declared desktop-launch schema fields. Only then
+do callers release single-flight staging, report the failure, and stop. A failed copy or any other launcher error,
+empty stdout, malformed/non-object JSON, or absent/empty response field fails loudly: report the
+error and stop. Do not retry, inspect the vault for a substitute response, or fall back to an
+in-chat inquiry.
 
 The established host command has one fixed `/tmp/model-inquiry-question.md` input path. Before
 copying the question, both packages acquire `/tmp/yggdrasil-model-inquiry.lock` atomically: through
@@ -64,25 +76,25 @@ boundary and cannot overwrite another inquiry's question.
 
 After lock acquisition, local temporary-file cleanup is a registered `finally` action. The remote
 or proven-local staged question and lock are released only when staging failed before the launcher
-attempt began, or when the launcher returned exit zero and exactly one non-empty JSON object with
-non-empty string values for `inquiry_id`, `final_state`, `terminal_receipt_id`, and
-`human_readable_report`. A transport or launcher failure, empty stdout, malformed/non-object JSON,
-or invalid required field after launch begins is ambiguous: the launcher may have created durable
-artifacts, so both routes leave the shared lock and staged question in place, report the error, and
-do not retry or infer completion. A valid terminal response and a pre-launch failure use the same
-route by which the lock was acquired for cleanup; cleanup failure is reported without masking the
-original outcome. Codex deletes its dynamic caller-temp file and any allowed proven-local fixed
-staging file through exact-target `apply_patch` deletion, never a shell `rm -f`; it removes the
-empty fixed lock directory only after staging deletion succeeded or the staged path was absent.
-Launcher status and JSON are captured and validated before cleanup, so a cleanup failure is reported
-separately and cannot erase or reclassify the launcher outcome.
+attempt began, when the launcher returned exit zero with one valid terminal JSON object, or when it
+returned exit status 1 with the exact typed `credential_unavailable` terminal JSON contract above.
+Any other transport or launcher failure, empty stdout, malformed/non-object JSON, or invalid required
+field after launch begins is ambiguous: the launcher may have created durable artifacts, so both
+routes leave the shared lock and staged question in place, report the error, and do not retry or
+infer completion. A valid terminal response and a pre-launch failure use the same route by which the
+lock was acquired for cleanup; cleanup failure is reported without masking the original outcome.
+Codex deletes its dynamic caller-temp file and any allowed proven-local fixed staging file through
+exact-target `apply_patch` deletion, never a shell `rm -f`; it removes the empty fixed lock directory
+only after staging deletion succeeded or the staged path was absent. Launcher status and JSON are
+captured and validated before cleanup, so a cleanup failure is reported separately and cannot erase
+or reclassify the launcher outcome.
 
 The SSH host must expose both durable role entrypoints before its launcher is considered ready.
 They are installed and checked with the repository-owned
 `scripts/install_model_inquiry_host.py` routine documented in the host agent playbook. This
 stabilizes the versioned command boundary across shell and reboot changes without moving provider
-credentials or subscription configuration into Git. The routine deliberately does not create a
-GUI-session proxy or alter authentication; those remain explicit host-operator setup when needed.
+credential values into Git. Each installed wrapper enters the same `run_with_host_secrets` boundary
+before executing the versioned provider-API adapter; it never launches a subscription CLI.
 
 ## Concretely
 
@@ -100,7 +112,7 @@ other.
 - [x] Both desktop skill packages preserve the exact remote-host bridge command and report its
   inquiry receipt fields. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
-- [x] Both packages reject local BuilderOps setup, provider configuration, API keys, and
+- [x] Both packages reject local BuilderOps setup, provider configuration, credential provisioning, and
   desktop-control automation. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages fail loudly for a copy/SSH failure, empty stdout, malformed JSON, or an absent
@@ -138,7 +150,7 @@ the operator. Generated archives are release artifacts and remain outside Git so
 - automating clicks or keystrokes in the other desktop app;
 - storing model transcripts in Companion UI or a human knowledge vault.
 - installing Python, BuilderOps, Codex, or Claude on the local machine;
-- changing authenticated subscription sessions or local desktop configuration.
+- provisioning or inspecting declared host-secret values.
 
 ## Related Docs
 

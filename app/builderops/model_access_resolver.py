@@ -57,6 +57,10 @@ _CAPABILITY_FIELDS = (
     "system_prompt_channel",
     "deterministic_execution",
 )
+_MODEL_INQUIRY_REASONING_EFFORT = "xhigh"
+_MODEL_INQUIRY_DETERMINISM_REQUIRED = False
+_MODEL_INQUIRY_OUTPUT_SCHEMA_REF = "builderops.model-turn-response.v1"
+_MODEL_INQUIRY_SIDE_EFFECT_CLASS = "advisory_review"
 
 
 class ModelAccessResolutionError(BuilderOpsValidationError):
@@ -87,7 +91,13 @@ class BuilderModelAccessResolver:
         census_path: Path | None = None,
         contract_path: Path | None = None,
     ) -> "BuilderModelAccessResolver":
-        """Load the declared census and host secret contract from repository state."""
+        """Load repository-declared sources, with explicit paths only as test seams.
+
+        The production call supplies the pinned repository paths explicitly so
+        ambient ``PROVIDER_CENSUS_PATH`` state cannot replace provider, model,
+        endpoint, or credential authority.  Tests may inject a different
+        declared document only through the named ``census_path`` argument.
+        """
         try:
             census = load_provider_census(census_path or _PROVIDER_CENSUS_PATH)
             contract = load_host_secret_contract(contract_path or _HOST_SECRET_CONTRACT_PATH)
@@ -218,6 +228,22 @@ class BuilderModelAccessResolver:
         if intent.capability_tier != profile.capability_tier:
             raise ModelAccessResolutionError(
                 "declared intent capability tier does not match the census role profile"
+            )
+        if intent.reasoning_effort != _MODEL_INQUIRY_REASONING_EFFORT:
+            raise ModelAccessResolutionError(
+                "Builder Model Inquiry policy requires xhigh reasoning effort"
+            )
+        if intent.determinism_required is not _MODEL_INQUIRY_DETERMINISM_REQUIRED:
+            raise ModelAccessResolutionError(
+                "Builder Model Inquiry policy refuses deterministic execution"
+            )
+        if intent.output_schema_ref != _MODEL_INQUIRY_OUTPUT_SCHEMA_REF:
+            raise ModelAccessResolutionError(
+                "Builder Model Inquiry policy requires the declared response schema"
+            )
+        if intent.side_effect_class != _MODEL_INQUIRY_SIDE_EFFECT_CLASS:
+            raise ModelAccessResolutionError(
+                "Builder Model Inquiry policy permits advisory review only"
             )
         if request.resolution_group_id != profile.resolution_group:
             raise ModelAccessResolutionError(

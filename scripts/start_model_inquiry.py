@@ -16,19 +16,45 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_inquiry import (
+    ModelInquiryService,
+    validate_adapter_failure_diagnostic,
+)
+from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.model_inquiry_adapters import (
     ADAPTER_FAILURE_CLASSES,
     AdapterExecutionError,
     AdapterUnavailableError,
+    CredentialUnavailableError,
     load_adapters,
     sanitized_adapter_identity,
+    sanitized_adapter_failure,
 )
 from app.builderops.models import BuilderOpsValidationError
+from app.ops.host_secret_bootstrap import HOST_SECRET_BOOTSTRAP_FAILURE_REF
 from scripts.install_model_inquiry_host import CREDENTIAL_RESOLUTION
 
 WORKFLOW = "fable-gpt-architecture"
 SOURCE_REF = "desktop_skill:start-model-inquiry"
+CREDENTIAL_UNAVAILABLE_EXIT_CODE = 1
+INVALID_TYPED_TERMINAL_EXIT_CODE = 2
+_TERMINAL_RESULT_FIELDS = frozenset(
+    {
+        "schema",
+        "inquiry_id",
+        "final_state",
+        "terminal_receipt_id",
+        "human_readable_report",
+        "preflight",
+        "diagnostic",
+    }
+)
+_TERMINAL_STRING_FIELDS = (
+    "inquiry_id",
+    "final_state",
+    "terminal_receipt_id",
+    "human_readable_report",
+)
 
 
 class LauncherError(RuntimeError):
@@ -39,6 +65,7 @@ def preflight_dependencies(
     env: Mapping[str, str],
     *,
     command_cwd: Path,
+    resolver: BuilderModelAccessResolver | None = None,
 ) -> dict[str, Any]:
     """Validate the durable store and the resolved role adapters without mutation.
 
@@ -48,7 +75,20 @@ def preflight_dependencies(
     subscription session is probed, required, or discovered.
     """
     ModelInquiryService.from_env(env)
-    adapters = load_adapters(env)
+    try:
+        adapters = load_adapters(env, resolver=resolver)
+    except CredentialUnavailableError as exc:
+        if not str(env.get(HOST_SECRET_BOOTSTRAP_FAILURE_REF, "")).strip():
+            raise
+        return {
+            "vault": "available",
+            "credential_resolution": CREDENTIAL_RESOLUTION,
+            "adapters": {},
+            "credential_failure": sanitized_adapter_failure(
+                exc,
+                adapter_id=exc.adapter_id,
+            ),
+        }
     return {
         "vault": "available",
         "credential_resolution": CREDENTIAL_RESOLUTION,
@@ -194,6 +234,70 @@ def _desktop_diagnostic(value: Any) -> dict[str, str | int] | None:
     return result
 
 
+def _launcher_exit_code(result: Mapping[str, Any]) -> int:
+    if _is_exact_credential_unavailable_terminal(result):
+        return CREDENTIAL_UNAVAILABLE_EXIT_CODE
+    if _looks_like_credential_unavailable_terminal(result):
+        return INVALID_TYPED_TERMINAL_EXIT_CODE
+    return 0
+
+
+def _looks_like_credential_unavailable_terminal(result: Mapping[str, Any]) -> bool:
+    diagnostic = result.get("diagnostic")
+    return (
+        isinstance(diagnostic, Mapping)
+        and diagnostic.get("adapter_failure_class") == "credential_unavailable"
+    )
+
+
+def _is_exact_credential_unavailable_terminal(result: Mapping[str, Any]) -> bool:
+    if set(result) != _TERMINAL_RESULT_FIELDS:
+        return False
+    if result.get("schema") != "builderops.model-inquiry-desktop-launch.v1":
+        return False
+    if any(
+        not isinstance(result.get(field), str) or not str(result[field]).strip()
+        for field in _TERMINAL_STRING_FIELDS
+    ):
+        return False
+    if result.get("final_state") != "provider_error":
+        return False
+    if not isinstance(result.get("preflight"), Mapping):
+        return False
+    diagnostic = result.get("diagnostic")
+    try:
+        validate_adapter_failure_diagnostic(diagnostic)
+    except BuilderOpsValidationError:
+        return False
+    return (
+        isinstance(diagnostic, Mapping)
+        and diagnostic.get("adapter_failure_class") == "credential_unavailable"
+    )
+
+
+def is_valid_desktop_terminal_response(exit_status: int, stdout: str) -> bool:
+    """Return whether desktop single-flight staging may be released."""
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    if exit_status == CREDENTIAL_UNAVAILABLE_EXIT_CODE:
+        return _is_exact_credential_unavailable_terminal(payload)
+    if exit_status != 0:
+        return False
+    if _looks_like_credential_unavailable_terminal(payload):
+        return False
+    return (
+        all(
+            isinstance(payload.get(field), str) and bool(str(payload[field]).strip())
+            for field in _TERMINAL_STRING_FIELDS
+        )
+        and payload.get("schema") == "builderops.model-inquiry-desktop-launch.v1"
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -226,7 +330,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"ERROR: model inquiry preflight/launch failed: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
-    return 0
+    return _launcher_exit_code(result)
 
 
 if __name__ == "__main__":

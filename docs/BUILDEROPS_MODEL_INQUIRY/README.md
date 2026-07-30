@@ -1,6 +1,7 @@
 State: BMI-01 through BMI-05 are implemented; parent end-to-end acceptance remains pending. The
-configured remote host owns credentials, subscription sessions, and host-specific launcher settings;
-the portable high-reasoning adapter profile is versioned in the repository.
+configured remote host owns Keychain credential values and host-specific launcher settings; the
+provider-free intent, declared provider-API adapters, and high-reasoning policy are versioned in the
+repository. Subscription sessions are not part of the headless path.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -30,7 +31,8 @@ its advisory claim files never guarantee exclusive ownership.
 - a deterministic readiness gate decides `issue_ready`, `needs_input`, or `not_ready`;
 - only an accepted promotion path may create a GitHub Issue through REST;
 - desktop skills transfer one question to the configured remote-host launcher, which owns the same
-  BuilderOps command, state, and subscription-authenticated model sessions.
+  BuilderOps command and state while resolving provider credentials through the declared host-secret
+  contract.
 
 ## Implementation Tasks
 
@@ -52,9 +54,11 @@ receipts, and no provider fallback.
 
 BMI-04 adds Codex and portable Claude bridge skills that transfer the question to a configured
 remote-host launcher. The configured remote host owns the BuilderOps command, configured role
-adapters, subscription sessions, and durable artifacts; its credentials and launcher-path settings
-remain outside Git. The versioned subscription adapter profile gives both roles explicit `xhigh`
-reasoning effort and a 1200-second inner deadline; the host wrapper permits 1500 seconds per role.
+adapters, Keychain credential values, and durable artifacts; its credential values and
+launcher-path settings remain outside Git. The versioned headless path submits provider-free intent,
+resolves distinct provider-API targets through the Builder census, and requires explicit `xhigh`
+reasoning. Missing or malformed credentials produce a durable typed terminal receipt before any
+adapter call, with no subscription or cross-provider fallback.
 BMI-05 adds the structured Issue proposal, readiness receipt, file-first
 PromotionIntent, REST-only Issue crossing, crash reconciliation marker, and append-only delivery
 references.
