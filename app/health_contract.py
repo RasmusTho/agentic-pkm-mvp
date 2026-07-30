@@ -268,8 +268,17 @@ class HealthStateMachine:
     bad_counter: int = 0
     good_counter: int = 0
     transition_history: list[dict[str, str]] = field(default_factory=list)
+    _lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
+    _next_sample_sequence: int = field(default=0, init=False, repr=False, compare=False)
+    _last_applied_sample_sequence: int = field(default=0, init=False, repr=False, compare=False)
 
     def reset(self) -> None:
+        with self._lock:
+            self._reset_unlocked()
+            # Invalidate evaluations that reserved a sample before this reset.
+            self._last_applied_sample_sequence = self._next_sample_sequence
+
+    def _reset_unlocked(self) -> None:
         self.state = "boot"
         self.reason = "initializing"
         self.since = datetime.now(timezone.utc)  # noqa: UP017
@@ -278,6 +287,77 @@ class HealthStateMachine:
         self.transition_history = []
 
     def update(
+        self,
+        age: float,
+        thresholds: HealthThresholds,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str, str, str]:
+        state, reason, since_ts, _, _ = self.update_with_transition(
+            age,
+            thresholds,
+            now=now,
+        )
+        return state, reason, since_ts
+
+    def update_with_transition(
+        self,
+        age: float,
+        thresholds: HealthThresholds,
+        *,
+        now: datetime | None = None,
+        sample_sequence: int | None = None,
+    ) -> tuple[str, str, str, bool, list[dict[str, str]]]:
+        with self._lock:
+            if sample_sequence is None:
+                self._next_sample_sequence += 1
+                sample_sequence = self._next_sample_sequence
+            if sample_sequence <= self._last_applied_sample_sequence:
+                state, reason, since_ts, transition_history = self._snapshot_unlocked()
+                return state, reason, since_ts, False, transition_history
+            previous_state = self.state
+            state, reason, since_ts = self._update_unlocked(
+                age,
+                thresholds,
+                now=now,
+            )
+            self._last_applied_sample_sequence = sample_sequence
+            return (
+                state,
+                reason,
+                since_ts,
+                state != previous_state,
+                list(self.transition_history),
+            )
+
+    def reserve_sample_sequence(self) -> int:
+        with self._lock:
+            self._next_sample_sequence += 1
+            return self._next_sample_sequence
+
+    def advance_sample_sequence(
+        self,
+        sample_sequence: int,
+    ) -> tuple[str, str, str, list[dict[str, str]]]:
+        """Discard older in-flight samples without mutating outbox state."""
+        with self._lock:
+            if sample_sequence > self._last_applied_sample_sequence:
+                self._last_applied_sample_sequence = sample_sequence
+            return self._snapshot_unlocked()
+
+    def snapshot(self) -> tuple[str, str, str, list[dict[str, str]]]:
+        with self._lock:
+            return self._snapshot_unlocked()
+
+    def _snapshot_unlocked(self) -> tuple[str, str, str, list[dict[str, str]]]:
+        return (
+            self.state,
+            self.reason,
+            self.since.isoformat(),
+            list(self.transition_history),
+        )
+
+    def _update_unlocked(
         self,
         age: float,
         thresholds: HealthThresholds,
@@ -353,13 +433,15 @@ class HealthContract:
         # readiness short-circuit without a real Postgres. Bounded by the caller's
         # connect_timeout so the health probe never hangs.
         self.db_ping_fn = db_ping_fn or ping_postgres
-        self._evaluation_lock = Lock()
+        self._dependency_incident_lock = Lock()
+        self._dependency_incident_reported = False
+        self._dependency_incident_sequence = 0
 
     def evaluate(self) -> dict[str, Any]:
-        with self._evaluation_lock:
-            return self._evaluate()
+        return self._evaluate()
 
     def _evaluate(self) -> dict[str, Any]:
+        sample_sequence = self.state_machine.reserve_sample_sequence()
         now = self.now_fn()
         try:
             vault_root = self.vault_root_fn()
@@ -397,7 +479,13 @@ class HealthContract:
                 outbox_path=outbox_path,
                 reason=db_down_reason,
                 resolution=resolution,
+                sample_sequence=sample_sequence,
             )
+        self._should_capture_dependency_incident(
+            sample_sequence=sample_sequence,
+            is_down=False,
+            current_state=self.state_machine.snapshot()[0],
+        )
 
         outbox_count = _count_outbox_lines(outbox_path, resolution)
         records = _read_tail_records(outbox_path)
@@ -409,11 +497,13 @@ class HealthContract:
         object_count, store_count_error = self._count_objects()
         latest_ts = self._latest_timestamp(records)
         age = self._compute_age(latest_ts, now)
-        prev_state = self.state_machine.state
-        state, reason, since_ts = self.state_machine.update(
-            age,
-            settings_result.settings.thresholds,
-            now=now,
+        state, reason, since_ts, transitioned, transition_history = (
+            self.state_machine.update_with_transition(
+                age,
+                settings_result.settings.thresholds,
+                now=now,
+                sample_sequence=sample_sequence,
+            )
         )
         catch_up_progress = self._catch_up_progress(
             outbox_count,
@@ -464,26 +554,26 @@ class HealthContract:
         )
 
         if settings_result.settings.incident_capture.enabled:
-            transitioned = state != prev_state
             if transitioned and state in INCIDENT_STATES:
-                    self._append_incident_log(
-                        path=settings_result.settings.incident_log_path,
-                        entry=self._incident_entry(
-                            now=now,
-                            state=state,
-                            reason=reason,
-                            since_ts=since_ts,
-                            settings_result=settings_result,
-                            outbox_count=outbox_count,
-                            outbox_recent_age_s=age,
-                            index_status=index_status,
-                            events_status=events_status,
-                            writes_allowed=writes_allowed,
-                            write_guard_reason=write_guard_reason,
-                            catch_up_progress=catch_up_progress,
-                            suggested_actions=suggested_actions,
-                        ),
-                    )
+                self._append_incident_log(
+                    path=settings_result.settings.incident_log_path,
+                    entry=self._incident_entry(
+                        now=now,
+                        state=state,
+                        reason=reason,
+                        since_ts=since_ts,
+                        settings_result=settings_result,
+                        outbox_count=outbox_count,
+                        outbox_recent_age_s=age,
+                        index_status=index_status,
+                        events_status=events_status,
+                        writes_allowed=writes_allowed,
+                        write_guard_reason=write_guard_reason,
+                        catch_up_progress=catch_up_progress,
+                        suggested_actions=suggested_actions,
+                        transition_history=transition_history,
+                    ),
+                )
 
         result = {
             "environment": active_environment(),
@@ -524,7 +614,7 @@ class HealthContract:
             "suggested_actions": suggested_actions,
         }
         if settings_result.settings.incident_capture.transition_history:
-            result["recent_transition_history"] = list(self.state_machine.transition_history)
+            result["recent_transition_history"] = transition_history
         return result
 
     def _db_down_snapshot(
@@ -535,6 +625,7 @@ class HealthContract:
         outbox_path: Path,
         reason: str,
         resolution: StoreBackendResolution | None = None,
+        sample_sequence: int,
     ) -> dict[str, Any]:
         """Build a complete `unhealthy` snapshot for a known DB-down stack.
 
@@ -582,8 +673,16 @@ class HealthContract:
         bootstrap_state, bootstrap_reason = self._bootstrap_state(
             object_count, outbox_count, store_error=store_error
         )
+        current_state, _, _, transition_history = self.state_machine.advance_sample_sequence(
+            sample_sequence
+        )
+        capture_dependency_incident = self._should_capture_dependency_incident(
+            sample_sequence=sample_sequence,
+            is_down=True,
+            current_state=current_state,
+        )
 
-        if settings_result.settings.incident_capture.enabled and state != self.state_machine.state:
+        if settings_result.settings.incident_capture.enabled and capture_dependency_incident:
             self._append_incident_log(
                 path=settings_result.settings.incident_log_path,
                 entry=self._incident_entry(
@@ -600,6 +699,7 @@ class HealthContract:
                     write_guard_reason=write_guard_reason,
                     catch_up_progress=catch_up_progress,
                     suggested_actions=suggested_actions,
+                    transition_history=transition_history,
                 ),
             )
 
@@ -640,8 +740,26 @@ class HealthContract:
             "suggested_actions": suggested_actions,
         }
         if settings_result.settings.incident_capture.transition_history:
-            result["recent_transition_history"] = list(self.state_machine.transition_history)
+            result["recent_transition_history"] = transition_history
         return result
+
+    def _should_capture_dependency_incident(
+        self,
+        *,
+        sample_sequence: int,
+        is_down: bool,
+        current_state: str,
+    ) -> bool:
+        with self._dependency_incident_lock:
+            if sample_sequence <= self._dependency_incident_sequence:
+                return False
+            self._dependency_incident_sequence = sample_sequence
+            if not is_down:
+                self._dependency_incident_reported = False
+                return False
+            capture = current_state != "unhealthy" and not self._dependency_incident_reported
+            self._dependency_incident_reported = True
+            return capture
 
     def _db_dependency_down_reason(
         self, resolution: StoreBackendResolution | None = None
@@ -803,6 +921,7 @@ class HealthContract:
         write_guard_reason: str | None,
         catch_up_progress: dict[str, Any] | None,
         suggested_actions: list[str],
+        transition_history: list[dict[str, str]],
     ) -> dict[str, Any]:
         entry: dict[str, Any] = {
             "ts": now.isoformat(),
@@ -821,15 +940,14 @@ class HealthContract:
             "suggested_actions": suggested_actions,
         }
         if settings_result.settings.incident_capture.transition_history:
-            entry["recent_transition_history"] = list(self.state_machine.transition_history)
+            entry["recent_transition_history"] = transition_history
         return entry
 
     def _append_incident_log(self, *, path: Path, entry: dict[str, Any]) -> None:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry, ensure_ascii=False))
-                handle.write("\n")
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
             # Intentional swallow: incident capture is best-effort and must not
             # break health evaluation — but losing an incident record silently

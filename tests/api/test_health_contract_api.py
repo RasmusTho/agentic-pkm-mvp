@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from anyio import to_thread
 from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.api.routes import health_contract as health_contract_route
 from app.health_contract import HealthContract, HealthStateMachine
+from app.settings.health_settings import HealthThresholds
 
 
 def _mock_snapshot(state: str, reason: str) -> dict[str, object]:
@@ -103,108 +105,251 @@ def test_readyz_status_do_not_block_event_loop(monkeypatch) -> None:
 
 
 def test_shared_health_contract_evaluation_is_serialized(monkeypatch) -> None:
-    evaluation_barrier = threading.Barrier(2, timeout=0.2)
-    state_lock = threading.Lock()
-    active_evaluations = 0
-    maximum_active_evaluations = 0
+    machine = HealthStateMachine()
+    thresholds = HealthThresholds.defaults()
+    first_update_started = threading.Event()
+    release_first_update = threading.Event()
+    second_lock_attempted = threading.Event()
+    counter_lock = threading.Lock()
+    active_updates = 0
+    maximum_active_updates = 0
+    lock_attempts = 0
 
-    def synchronized_evaluate() -> dict[str, object]:
-        nonlocal active_evaluations, maximum_active_evaluations
-        with state_lock:
-            active_evaluations += 1
-            maximum_active_evaluations = max(maximum_active_evaluations, active_evaluations)
+    class RecordingLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+
+        def __enter__(self) -> None:
+            nonlocal lock_attempts
+            with counter_lock:
+                lock_attempts += 1
+                if lock_attempts == 2:
+                    second_lock_attempted.set()
+            self._lock.acquire()
+
+        def __exit__(self, *exc_info) -> None:
+            self._lock.release()
+
+    original_update = machine._update_unlocked
+
+    def synchronized_update(age, thresholds, *, now=None):
+        nonlocal active_updates, maximum_active_updates
+        with counter_lock:
+            active_updates += 1
+            maximum_active_updates = max(maximum_active_updates, active_updates)
         try:
-            try:
-                evaluation_barrier.wait()
-            except threading.BrokenBarrierError:
-                pass
-            return _mock_snapshot("running", "ok")
+            if not first_update_started.is_set():
+                first_update_started.set()
+                assert release_first_update.wait(timeout=1)
+            return original_update(age, thresholds, now=now)
         finally:
-            with state_lock:
-                active_evaluations -= 1
+            with counter_lock:
+                active_updates -= 1
+
+    monkeypatch.setattr(machine, "_lock", RecordingLock())
+    monkeypatch.setattr(machine, "_update_unlocked", synchronized_update)
+    monkeypatch.setattr(health_contract_route.DEFAULT_CONTRACT, "state_machine", machine)
+
+    def evaluate_state_machine() -> dict[str, object]:
+        state, reason, _ = machine.update(0, thresholds)
+        return _mock_snapshot(state, reason)
 
     monkeypatch.setattr(
         health_contract_route.DEFAULT_CONTRACT,
         "_evaluate",
-        synchronized_evaluate,
+        evaluate_state_machine,
     )
 
     async def evaluate_both_routes() -> None:
-        await asyncio.gather(
-            health_contract_route.readyz(),
-            health_contract_route.health_status(),
-        )
+        readyz_task = asyncio.create_task(health_contract_route.readyz())
+        while not first_update_started.is_set():
+            await asyncio.sleep(0)
+        status_task = asyncio.create_task(health_contract_route.health_status())
+        while not second_lock_attempted.is_set():
+            await asyncio.sleep(0)
 
-    asyncio.run(evaluate_both_routes())
+        assert maximum_active_updates == 1
+        release_first_update.set()
+        await asyncio.gather(readyz_task, status_task)
 
-    assert maximum_active_evaluations == 1
+    asyncio.run(asyncio.wait_for(evaluate_both_routes(), timeout=1))
+
+    assert lock_attempts == 2
+    assert maximum_active_updates == 1
 
 
-def test_health_contract_evaluation_lock_releases_after_exception(monkeypatch) -> None:
-    contract = HealthContract()
+def test_blocked_health_diagnostic_does_not_queue_direct_consumers_on_transition_lock(
+    monkeypatch,
+) -> None:
     first_evaluation_started = threading.Event()
     release_first_evaluation = threading.Event()
     call_lock = threading.Lock()
-    call_count = 0
+    evaluation_count = 0
+    expected_evaluation_count = 0
 
-    def fail_then_succeed() -> dict[str, object]:
-        nonlocal call_count
+    def first_call_blocks() -> dict[str, object]:
+        nonlocal evaluation_count
         with call_lock:
-            call_count += 1
-            current_call = call_count
+            evaluation_count += 1
+            current_call = evaluation_count
         if current_call == 1:
             first_evaluation_started.set()
             assert release_first_evaluation.wait(timeout=1)
-            raise RuntimeError("health evaluation failed")
         return _mock_snapshot("running", "ok")
 
-    monkeypatch.setattr(contract, "_evaluate", fail_then_succeed)
+    monkeypatch.setattr(
+        health_contract_route.DEFAULT_CONTRACT,
+        "_evaluate",
+        first_call_blocks,
+    )
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        failing_evaluation = executor.submit(contract.evaluate)
-        assert first_evaluation_started.wait(timeout=1)
-        queued_evaluation = executor.submit(contract.evaluate)
-        time.sleep(0.01)
-        assert not queued_evaluation.done()
+    async def assert_shared_pool_remains_available() -> None:
+        nonlocal expected_evaluation_count
+        limiter = to_thread.current_default_thread_limiter()
+        expected_evaluation_count = limiter.total_tokens
+        active_route = asyncio.create_task(health_contract_route.health_status())
+        while not first_evaluation_started.is_set():
+            await asyncio.sleep(0)
 
+        direct_consumers = [
+            asyncio.create_task(
+                to_thread.run_sync(health_contract_route.DEFAULT_CONTRACT.evaluate)
+            )
+            for _ in range(limiter.total_tokens - 1)
+        ]
+        await asyncio.sleep(0)
+
+        assert await asyncio.wait_for(
+            to_thread.run_sync(lambda: "unrelated"),
+            timeout=0.5,
+        ) == "unrelated"
         release_first_evaluation.set()
+        await active_route
+        await asyncio.gather(*direct_consumers)
 
-        with pytest.raises(RuntimeError, match="health evaluation failed"):
-            failing_evaluation.result(timeout=1)
-        assert queued_evaluation.result(timeout=1)["state"] == "running"
+    asyncio.run(asyncio.wait_for(assert_shared_pool_remains_available(), timeout=1))
+
+    assert evaluation_count == expected_evaluation_count
 
 
-def test_health_contract_instances_do_not_share_evaluation_lock(monkeypatch) -> None:
-    first_contract = HealthContract()
-    second_contract = HealthContract()
-    evaluation_barrier = threading.Barrier(2, timeout=1)
-    state_lock = threading.Lock()
-    active_evaluations = 0
-    maximum_active_evaluations = 0
+def test_stale_health_evaluation_cannot_overwrite_newer_transition(
+    monkeypatch,
+) -> None:
+    machine = HealthStateMachine()
+    first_diagnostic_started = threading.Event()
+    release_first_diagnostic = threading.Event()
+    call_lock = threading.Lock()
+    age_calls = 0
+    now_values = iter(
+        [
+            datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+            datetime(2025, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        ]
+    )
+    contract = HealthContract(
+        state_machine=machine,
+        now_fn=lambda: next(now_values),
+        vault_root_fn=lambda: None,
+    )
 
-    def synchronized_evaluate() -> dict[str, object]:
-        nonlocal active_evaluations, maximum_active_evaluations
-        with state_lock:
-            active_evaluations += 1
-            maximum_active_evaluations = max(maximum_active_evaluations, active_evaluations)
-        try:
-            evaluation_barrier.wait()
-            return _mock_snapshot("running", "ok")
-        finally:
-            with state_lock:
-                active_evaluations -= 1
+    def overtaking_age(*_args) -> float:
+        nonlocal age_calls
+        with call_lock:
+            age_calls += 1
+            current_call = age_calls
+        if current_call == 1:
+            first_diagnostic_started.set()
+            assert release_first_diagnostic.wait(timeout=1)
+            return 30.0
+        return 0.0
 
-    monkeypatch.setattr(first_contract, "_evaluate", synchronized_evaluate)
-    monkeypatch.setattr(second_contract, "_evaluate", synchronized_evaluate)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(contract, "_compute_age", overtaking_age)
+    monkeypatch.setattr(
+        "app.health_contract.diagnose_index",
+        lambda: {
+            "backend": "memory",
+            "expected_identity": None,
+            "stored_identity": None,
+            "issues": [],
+            "warnings": [],
+        },
+    )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        first_evaluation = executor.submit(first_contract.evaluate)
-        second_evaluation = executor.submit(second_contract.evaluate)
+        older_evaluation = executor.submit(contract.evaluate)
+        assert first_diagnostic_started.wait(timeout=1)
+        newer_evaluation = executor.submit(contract.evaluate)
+        newer_snapshot = newer_evaluation.result(timeout=1)
+        release_first_diagnostic.set()
+        older_snapshot = older_evaluation.result(timeout=1)
 
-        assert first_evaluation.result(timeout=1)["state"] == "running"
-        assert second_evaluation.result(timeout=1)["state"] == "running"
+    assert newer_snapshot["state"] == "running"
+    assert older_snapshot["state"] == "running"
+    state, _, since_ts, transition_history = machine.snapshot()
+    assert state == "running"
+    assert since_ts == "2025-01-01T00:00:01+00:00"
+    assert [entry["state"] for entry in transition_history] == ["running"]
+    assert transition_history[0]["since_ts"] == since_ts
 
-    assert maximum_active_evaluations == 2
+
+def test_health_state_machine_lock_releases_after_exception(monkeypatch) -> None:
+    machine = HealthStateMachine()
+    thresholds = HealthThresholds.defaults()
+    original_update = machine._update_unlocked
+    call_count = 0
+
+    def fail_then_succeed(age, thresholds, *, now=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("health transition failed")
+        return original_update(age, thresholds, now=now)
+
+    monkeypatch.setattr(machine, "_update_unlocked", fail_then_succeed)
+
+    with pytest.raises(RuntimeError, match="health transition failed"):
+        machine.update(0, thresholds)
+    assert machine.update(0, thresholds)[0] == "running"
+
+
+def test_health_state_machine_instances_do_not_share_transition_lock(monkeypatch) -> None:
+    first_machine = HealthStateMachine()
+    second_machine = HealthStateMachine()
+    thresholds = HealthThresholds.defaults()
+    update_barrier = threading.Barrier(2, timeout=1)
+    counter_lock = threading.Lock()
+    active_updates = 0
+    maximum_active_updates = 0
+
+    def wrap_update(machine):
+        original_update = machine._update_unlocked
+
+        def synchronized_update(age, thresholds, *, now=None):
+            nonlocal active_updates, maximum_active_updates
+            with counter_lock:
+                active_updates += 1
+                maximum_active_updates = max(maximum_active_updates, active_updates)
+            try:
+                update_barrier.wait()
+                return original_update(age, thresholds, now=now)
+            finally:
+                with counter_lock:
+                    active_updates -= 1
+
+        return synchronized_update
+
+    monkeypatch.setattr(first_machine, "_update_unlocked", wrap_update(first_machine))
+    monkeypatch.setattr(second_machine, "_update_unlocked", wrap_update(second_machine))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_update = executor.submit(first_machine.update, 0, thresholds)
+        second_update = executor.submit(second_machine.update, 0, thresholds)
+
+        assert first_update.result(timeout=1)[0] == "running"
+        assert second_update.result(timeout=1)[0] == "running"
+
+    assert maximum_active_updates == 2
 
 
 def test_health_contract_degrades_on_stale_outbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
