@@ -181,7 +181,6 @@ prepare_instance_state_deployment() {
     if [ "${inventory_rc}" -ne 0 ]; then
       return "${inventory_rc}"
     fi
-    finish_args+=(--scalar-roll-forward-merged)
   fi
 
   # MVR-01C is an explicit authority cutover, never an inferred side effect of

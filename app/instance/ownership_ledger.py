@@ -341,6 +341,7 @@ class OwnershipLedger:
                 if (
                     binding_id != lease.vault_binding_id
                     or lease.state != "active"
+                    or not self._has_authenticated_stored_identity(lease, key)
                     or (
                         require_materialized_roots
                         and not self._has_complete_self_identity(lease, key)
@@ -394,6 +395,7 @@ class OwnershipLedger:
                 if (
                     binding_id != retired.vault_binding_id
                     or retired.state != "retired"
+                    or not self._has_authenticated_stored_identity(retired, key)
                     or (
                         require_materialized_roots
                         and not self._has_complete_self_identity(retired, key)
@@ -442,6 +444,9 @@ class OwnershipLedger:
                     or destination.root_fingerprint != item.root_fingerprint
                     or source.ancestor_fingerprints != item.ancestor_fingerprints
                     or destination.ancestor_fingerprints != item.ancestor_fingerprints
+                    or not self._has_authenticated_stored_identity(
+                        lineage_lease, key
+                    )
                     or (
                         require_materialized_roots
                         and not self._has_complete_self_identity(lineage_lease, key)
@@ -1056,6 +1061,28 @@ class OwnershipLedger:
             return self._matches_complete_root_identity(lease, root, key)
         except (FilesystemIdentityError, LedgerError, UnicodeError):
             return False
+
+    def _has_authenticated_stored_identity(
+        self,
+        lease: OwnershipLease,
+        key: _KeyMaterial,
+    ) -> bool:
+        """Authenticate stored identity fields without opening the content root."""
+
+        try:
+            root = Path(self._open_root(lease.sealed_root, key))
+        except (LedgerError, UnicodeError, ValueError):
+            return False
+        fingerprints = (lease.root_fingerprint, *lease.ancestor_fingerprints)
+        return (
+            root.is_absolute()
+            and bool(fingerprints)
+            and all(
+                len(value) == 64
+                and all(character in "0123456789abcdef" for character in value)
+                for value in fingerprints
+            )
+        )
 
     def _lease_for_root(
         self,

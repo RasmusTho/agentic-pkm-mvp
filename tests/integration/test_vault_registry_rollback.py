@@ -501,12 +501,7 @@ def test_rollback_mutations_round_trip_on_roll_forward(tmp_path) -> None:
     ).read_text(encoding="utf-8")
     assert "scalar-rollback-roll-forward" in deployment
     assert "MVR01C_ROLL_FORWARD_LEGACY_PATH" in deployment
-    assert "finish_args+=(--scalar-roll-forward-merged)" in deployment
-    assert deployment.index(
-        "scalar-rollback-roll-forward"
-    ) < deployment.index(
-        "finish_args+=(--scalar-roll-forward-merged)"
-    )
+    assert "--scalar-roll-forward-merged" not in deployment
     _finish_instance_state_deployment(
         channel=runtime.layout.channel_id,
         instance_state_root=runtime.layout.root.parent,

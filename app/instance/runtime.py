@@ -1013,6 +1013,97 @@ def _load_deployment_quiescence_proof(path: Path) -> DeploymentQuiescenceProof:
         ) from exc
 
 
+_SCALAR_ROLL_FORWARD_RECEIPT_SCHEMA = (
+    "agentic-pkm.scalar-roll-forward-deployment-receipt.v1"
+)
+
+
+def _scalar_roll_forward_receipt_matches_registry(
+    receipt: Mapping[str, object],
+    registry: RegistrySnapshot,
+) -> bool:
+    lineage = registry.extensions.get("scalarRollForwardLineage")
+    floor = registry.extensions.get("scalarRollback")
+    fork_revision = receipt.get("fork_registry_revision")
+    merged_revision = receipt.get("merged_registry_revision")
+    if (
+        receipt.get("schema") != _SCALAR_ROLL_FORWARD_RECEIPT_SCHEMA
+        or receipt.get("status") not in {"prepared", "merged"}
+        or not isinstance(receipt.get("deployment_nonce"), str)
+        or not isinstance(receipt.get("channel_id"), str)
+        or not isinstance(receipt.get("rollback_vault_binding_id"), str)
+        or not isinstance(fork_revision, int)
+        or not isinstance(merged_revision, int)
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(receipt.get("session_sha256") or ""),
+        )
+        is None
+        or merged_revision != fork_revision + 1
+    ):
+        return False
+    if receipt.get("status") == "prepared":
+        return registry.revision == fork_revision
+    if (
+        not isinstance(lineage, list)
+        or not lineage
+        or not isinstance(lineage[-1], dict)
+        or not isinstance(floor, dict)
+    ):
+        return False
+    latest = lineage[-1]
+    return (
+        registry.revision == merged_revision
+        and latest.get("vaultBindingId")
+        == receipt["rollback_vault_binding_id"]
+        and latest.get("forkRegistryRevision")
+        == fork_revision
+        and latest.get("mergedRegistryRevision")
+        == merged_revision
+        and floor.get("targetVaultBindingId")
+        == receipt["rollback_vault_binding_id"]
+        and floor.get("forkRegistryRevision")
+        == merged_revision
+    )
+
+
+def _write_scalar_roll_forward_receipt(
+    host_global_root: Path,
+    lease: Mapping[str, object],
+    receipt: Mapping[str, object],
+) -> dict[str, object]:
+    updated = dict(lease) | {"scalar_roll_forward": dict(receipt)}
+    _replace_private_json(_deployment_lease_path(host_global_root), updated)
+    _replace_private_json(
+        _legacy_deployment_lease_path(host_global_root),
+        _compatibility_block_payload(updated),
+    )
+    return updated
+
+
+def _scalar_roll_forward_receipt_can_advance(
+    previous: object,
+    current: object,
+) -> bool:
+    if not isinstance(current, dict):
+        return False
+    current_status = current.get("status")
+    if (
+        current.get("schema") != _SCALAR_ROLL_FORWARD_RECEIPT_SCHEMA
+        or current_status not in {"prepared", "merged"}
+    ):
+        return False
+    if previous is None:
+        return current_status == "prepared"
+    if not isinstance(previous, dict) or previous.get("status") != "prepared":
+        return False
+    return current_status == "merged" and {
+        key: value for key, value in current.items() if key != "status"
+    } == {
+        key: value for key, value in previous.items() if key != "status"
+    }
+
+
 def _roll_forward_scalar_rollback(
     *,
     channel: str,
@@ -1023,6 +1114,8 @@ def _roll_forward_scalar_rollback(
     quiescence_proof_path: Path,
 ) -> int:
     """Merge a scalar fork only inside the existing host-wide stopped window."""
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
     state_mount = _assert_mount_root(instance_state_root, "instance-state")
     ownership_root = _assert_mount_root(host_global_root, "host-global")
@@ -1043,13 +1136,132 @@ def _roll_forward_scalar_rollback(
                 initialize_layout=False,
             )
             current = runtime.registry.load()
+            lease = _read_deployment_lease(ownership_root)
+            _require_matching_compatibility_block(
+                ownership_root,
+                lease,
+                reconcile_from_previous_phase=True,
+            )
+            if (
+                lease.get("phase") != "proved"
+                or lease.get("channel_id") != channel
+                or lease.get("nonce") != proof.nonce
+            ):
+                raise InstanceStatePreflightError(
+                    "scalar roll-forward requires the proved deployment lease"
+                )
             runtime.ledger.require_scalar_rollback_ready(
                 channel_id=channel,
                 registrations={
                     binding_id: None for binding_id in current.registrations
                 },
             )
-            merged = runtime.merge_previous_scalar_image(legacy_path)
+            receipt_value = lease.get("scalar_roll_forward")
+            if receipt_value is None:
+                session_path = runtime.registry.scalar_rollback_session_path
+                if not session_path.is_file():
+                    raise RegistryError(
+                        "scalar roll-forward requires its authenticated session"
+                    )
+                payload, authentication = (
+                    runtime.registry.load_scalar_rollback_session()
+                )
+                runtime.ledger.verify_scalar_rollback_session(
+                    payload,
+                    authentication,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
+                binding_id = str(
+                    payload.get("rollbackVaultBindingId") or ""
+                )
+                if (
+                    not binding_id
+                    or payload.get("forkRegistryRevision") != current.revision
+                    or binding_id not in current.registrations
+                ):
+                    raise RegistryError(
+                        "scalar roll-forward session does not match the registry"
+                    )
+                receipt: dict[str, object] = {
+                    "schema": _SCALAR_ROLL_FORWARD_RECEIPT_SCHEMA,
+                    "status": "prepared",
+                    "deployment_nonce": proof.nonce,
+                    "channel_id": channel,
+                    "rollback_vault_binding_id": binding_id,
+                    "fork_registry_revision": current.revision,
+                    "merged_registry_revision": current.revision + 1,
+                    "session_sha256": hashlib.sha256(
+                        session_path.read_bytes()
+                    ).hexdigest(),
+                }
+                lease = _write_scalar_roll_forward_receipt(
+                    ownership_root,
+                    lease,
+                    receipt,
+                )
+            elif not isinstance(receipt_value, dict):
+                raise InstanceStatePreflightError(
+                    "scalar roll-forward deployment receipt is invalid"
+                )
+            else:
+                receipt = dict(receipt_value)
+
+            if (
+                receipt.get("deployment_nonce") != proof.nonce
+                or receipt.get("channel_id") != channel
+            ):
+                raise InstanceStatePreflightError(
+                    "scalar roll-forward deployment receipt changed"
+                )
+            if receipt.get("status") == "merged":
+                if not _scalar_roll_forward_receipt_matches_registry(
+                    receipt, current
+                ):
+                    raise RegistryError(
+                        "committed scalar roll-forward receipt is inconsistent"
+                    )
+                merged = current
+            elif receipt.get("status") == "prepared":
+                session_path = runtime.registry.scalar_rollback_session_path
+                if session_path.is_file():
+                    if (
+                        hashlib.sha256(session_path.read_bytes()).hexdigest()
+                        != receipt.get("session_sha256")
+                        or not _scalar_roll_forward_receipt_matches_registry(
+                            receipt, current
+                        )
+                    ):
+                        raise RegistryError(
+                            "prepared scalar roll-forward receipt is inconsistent"
+                        )
+                    merged = runtime.merge_previous_scalar_image(legacy_path)
+                else:
+                    committed_receipt = receipt | {"status": "merged"}
+                    if not _scalar_roll_forward_receipt_matches_registry(
+                        committed_receipt, current
+                    ):
+                        raise RegistryError(
+                            "prepared scalar roll-forward cannot recover its merge"
+                        )
+                    merged = current
+            else:
+                raise InstanceStatePreflightError(
+                    "scalar roll-forward deployment receipt status is invalid"
+                )
+
+            committed_receipt = receipt | {"status": "merged"}
+            if not _scalar_roll_forward_receipt_matches_registry(
+                committed_receipt, merged
+            ):
+                raise RegistryError(
+                    "scalar roll-forward commit does not match its receipt"
+                )
+            if receipt.get("status") != "merged":
+                _write_scalar_roll_forward_receipt(
+                    ownership_root,
+                    lease,
+                    committed_receipt,
+                )
     print(
         json.dumps(
             {
@@ -1313,6 +1525,7 @@ def _compatibility_block_payload(
         "inventory_digest",
         "all_consumers_stopped",
         "owner_receipt_digest",
+        "scalar_roll_forward",
         "result",
     ):
         if key in lease:
@@ -1382,6 +1595,13 @@ def _require_matching_compatibility_block(
                 root_authority.get("phase") == expected.get("phase")
                 and root_authority.get("owner_receipt_digest") is None
                 and expected.get("owner_receipt_digest") is not None
+            )
+            or (
+                root_authority.get("phase") == expected.get("phase") == "proved"
+                and _scalar_roll_forward_receipt_can_advance(
+                    root_authority.get("scalar_roll_forward"),
+                    expected.get("scalar_roll_forward"),
+                )
             )
         )
     ):
@@ -2070,7 +2290,6 @@ def _finish_instance_state_deployment(
     backup_root: Path,
     restore_root: Path | None,
     quiescence_proof: DeploymentQuiescenceProof | None,
-    scalar_roll_forward_merged: bool = False,
 ) -> dict[str, object]:
     """Serialize finalization against authority and other producer transitions."""
 
@@ -2089,7 +2308,6 @@ def _finish_instance_state_deployment(
                 backup_root=backup_root,
                 restore_root=restore_root,
                 quiescence_proof=quiescence_proof,
-                scalar_roll_forward_merged=scalar_roll_forward_merged,
             )
 
 
@@ -2168,7 +2386,6 @@ def _finish_instance_state_deployment_locked(
     backup_root: Path,
     restore_root: Path | None,
     quiescence_proof: DeploymentQuiescenceProof | None,
-    scalar_roll_forward_merged: bool = False,
 ) -> dict[str, object]:
     """Finalize legacy state while stopped, then clear the restart fence."""
 
@@ -2215,6 +2432,28 @@ def _finish_instance_state_deployment_locked(
     layout.ensure()
     ledger = OwnershipLedger(ownership_root)
     backup = InstanceStateBackup(layout, ledger)
+    store = VaultRegistryStore(layout.registry_path)
+    receipt_value = active_lease.get("scalar_roll_forward")
+    scalar_roll_forward_merged = False
+    if receipt_value is not None:
+        if (
+            not isinstance(receipt_value, dict)
+            or receipt_value.get("status") != "merged"
+            or receipt_value.get("deployment_nonce") != quiescence_proof.nonce
+            or receipt_value.get("channel_id") != channel
+            or not _scalar_roll_forward_receipt_matches_registry(
+                receipt_value,
+                store.load(),
+            )
+        ):
+            raise InstanceStatePreflightError(
+                "committed scalar roll-forward deployment receipt is invalid"
+            )
+        if restore_root is not None:
+            raise InstanceStatePreflightError(
+                "scalar roll-forward finalization cannot restore instance state"
+            )
+        scalar_roll_forward_merged = True
 
     if restore_root is not None:
         backup.restore(
@@ -2223,7 +2462,6 @@ def _finish_instance_state_deployment_locked(
             owner_receipt_path=inventory_path,
         )
 
-    store = VaultRegistryStore(layout.registry_path)
     has_registry_state = layout.registry_path.is_file() or (
         store.snapshot_path.is_file() and store.snapshot_checksum_path.is_file()
     )
@@ -2278,10 +2516,6 @@ def _finish_instance_state_deployment_locked(
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
     if scalar_roll_forward_merged:
-        if restore_root is not None:
-            raise InstanceStatePreflightError(
-                "scalar roll-forward finalization cannot restore instance state"
-            )
         ledger.require_scalar_rollback_ready(
             channel_id=channel,
             registrations={
@@ -2394,7 +2628,6 @@ def main(argv: list[str] | None = None) -> int:
     finish.add_argument("--backup-root", type=Path, required=True)
     finish.add_argument("--restore-root", type=Path)
     finish.add_argument("--quiescence-proof-path", type=Path, required=True)
-    finish.add_argument("--scalar-roll-forward-merged", action="store_true")
     prove = subparsers.add_parser("deployment-prove")
     prove.add_argument("--channel", required=True)
     prove.add_argument("--host-global-root", type=Path, required=True)
@@ -2496,7 +2729,6 @@ def main(argv: list[str] | None = None) -> int:
                     backup_root=args.backup_root,
                     restore_root=args.restore_root,
                     quiescence_proof=proof,
-                    scalar_roll_forward_merged=args.scalar_roll_forward_merged,
                 ),
                 sort_keys=True,
             )

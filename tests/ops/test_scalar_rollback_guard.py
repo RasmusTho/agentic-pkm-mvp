@@ -17,7 +17,10 @@ import app.instance.runtime as runtime_module
 from app.instance._storage_boundary import CapabilityNotReadyError
 from app.instance.filesystem_identity import FilesystemRootIdentity
 from app.instance.ownership_ledger import LedgerError, LedgerKeyError
-from app.instance.instance_state import InstanceStateLayout
+from app.instance.instance_state import (
+    InstanceStateLayout,
+    InstanceStatePreflightError,
+)
 from app.instance.runtime import (
     InstanceRegistryRuntime,
     _begin_instance_state_deployment,
@@ -785,6 +788,7 @@ def test_scalar_roll_forward_serializes_against_deployment_finish(
 
 def test_scalar_roll_forward_uses_lease_coverage_without_opening_vault_roots(
     tmp_path,
+    monkeypatch,
 ) -> None:
     runtime, registration, selected_root = _runtime(tmp_path)
     nonselected_root = tmp_path / "nonselected"
@@ -796,18 +800,95 @@ def test_scalar_roll_forward_uses_lease_coverage_without_opening_vault_roots(
     selected_root.rename(tmp_path / "selected-sealed")
     nonselected_root.rename(tmp_path / "nonselected-sealed")
 
-    result = _roll_forward_scalar_rollback(
-        channel="prod",
-        instance_state_root=runtime.layout.root.parent,
-        host_global_root=runtime.ledger.root,
-        legacy_path=rollback_path,
-        inventory_path=inventory,
-        quiescence_proof_path=(
-            runtime.ledger.root / "deployment-quiescence-proof.json"
-        ),
-    )
+    original_receipt_writer = runtime_module._write_scalar_roll_forward_receipt
 
-    assert result == 0
+    def interrupt_after_merge(host_global_root, lease, receipt):
+        if receipt.get("status") == "merged":
+            raise RuntimeError("simulated post-merge interruption")
+        return original_receipt_writer(host_global_root, lease, receipt)
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_write_scalar_roll_forward_receipt",
+        interrupt_after_merge,
+    )
+    with pytest.raises(RuntimeError, match="post-merge interruption"):
+        _roll_forward_scalar_rollback(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=inventory,
+            quiescence_proof_path=(
+                runtime.ledger.root / "deployment-quiescence-proof.json"
+            ),
+        )
+    assert not runtime.registry.scalar_rollback_session_path.exists()
+    monkeypatch.setattr(
+        runtime_module,
+        "_write_scalar_roll_forward_receipt",
+        original_receipt_writer,
+    )
+    assert (
+        _roll_forward_scalar_rollback(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=inventory,
+            quiescence_proof_path=(
+                runtime.ledger.root / "deployment-quiescence-proof.json"
+            ),
+        )
+        == 0
+    )
+    merged_registry = runtime.registry.load()
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="cannot restore instance state",
+    ):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=inventory,
+            backup_root=tmp_path / "rejected-restore-backup",
+            restore_root=tmp_path / "authority-backup",
+            quiescence_proof=proof,
+        )
+    assert runtime.registry.load() == merged_registry
+    assert not (tmp_path / "rejected-restore-backup").exists()
+
+    ledger_path = runtime.ledger.path
+    original_ledger = ledger_path.read_bytes()
+    corrupted_ledger = json.loads(original_ledger)
+    corrupted_ledger["leases"][registration.vault_binding_id][
+        "sealed_root"
+    ] = "not-an-authenticated-root"
+    ledger_path.write_text(
+        json.dumps(corrupted_ledger),
+        encoding="utf-8",
+    )
+    ledger_path.chmod(0o600)
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="backup registry/ledger consistency verification failed",
+    ):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=inventory,
+            backup_root=tmp_path / "rejected-corrupt-backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+    assert not (tmp_path / "rejected-corrupt-backup").exists()
+    ledger_path.write_bytes(original_ledger)
+    ledger_path.chmod(0o600)
+
     receipt = _finish_instance_state_deployment(
         channel="prod",
         instance_state_root=runtime.layout.root.parent,
@@ -817,7 +898,80 @@ def test_scalar_roll_forward_uses_lease_coverage_without_opening_vault_roots(
         backup_root=tmp_path / "backup",
         restore_root=None,
         quiescence_proof=proof,
-        scalar_roll_forward_merged=True,
+    )
+    assert receipt["scalar_roll_forward_merged"] is True
+
+
+def test_scalar_roll_forward_recovers_partial_receipt_persistence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime, registration, selected_root = _runtime(tmp_path)
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _scalar_preflight(runtime, registration, selected_root, rollback_path)
+    proof, inventory = establish_authority_window(runtime, tmp_path / "window")
+    root_lease_path = runtime_module._legacy_deployment_lease_path(
+        runtime.ledger.root
+    )
+    original_replace = runtime_module._replace_private_json
+    interrupted = False
+
+    def interrupt_root_receipt(path, payload):
+        nonlocal interrupted
+        receipt = payload.get("scalar_roll_forward")
+        if (
+            not interrupted
+            and path == root_lease_path
+            and isinstance(receipt, dict)
+            and receipt.get("status") == "prepared"
+        ):
+            interrupted = True
+            raise OSError("simulated compatibility-block interruption")
+        return original_replace(path, payload)
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_replace_private_json",
+        interrupt_root_receipt,
+    )
+    with pytest.raises(OSError, match="compatibility-block interruption"):
+        _roll_forward_scalar_rollback(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=inventory,
+            quiescence_proof_path=(
+                runtime.ledger.root / "deployment-quiescence-proof.json"
+            ),
+        )
+    monkeypatch.setattr(
+        runtime_module,
+        "_replace_private_json",
+        original_replace,
+    )
+    assert (
+        _roll_forward_scalar_rollback(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=inventory,
+            quiescence_proof_path=(
+                runtime.ledger.root / "deployment-quiescence-proof.json"
+            ),
+        )
+        == 0
+    )
+    receipt = _finish_instance_state_deployment(
+        channel="prod",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        inventory_path=inventory,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
     )
     assert receipt["scalar_roll_forward_merged"] is True
 
