@@ -134,6 +134,52 @@ _deploy_channel_needs_dev_capture_secret() {
   return 1
 }
 
+# The api process is a declared consumer of heimdal.raw-store-key (#4422): the
+# governed media/screen ingress lanes encrypt through the raw store. Bootstrap
+# fires whenever `up` includes the api service (named explicitly, or implied by
+# an un-filtered `up`). Posture is degrade-visibly, never fail-deploy:
+# --run-on-credential-unavailable launches the stack without the binding, and
+# the api startup preflight reports the ingress lanes unavailable.
+# The api ingress secret layer is additive and degrade-visibly: when the host
+# secret contract cannot be loaded or does not declare the api consumer in this
+# environment (e.g. a harness root without config/secrets), the deploy proceeds
+# WITHOUT the layer — loudly — and the api startup preflight reports the
+# ingress lanes unavailable. A deploy never fails because this layer could not
+# be prepared.
+_deploy_channel_api_ingress_bootstrap_available() {
+  local channel="${1:?channel required}"
+  if "${PYTHON:-python3}" - "${channel}" <<'PY' 2>/dev/null
+import sys
+from app.ops.host_secret_contract import load_host_secret_contract
+
+load_host_secret_contract().require_declared(
+    channel=sys.argv[1], consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+)
+PY
+  then
+    return 0
+  fi
+  echo "deploy: api ingress secret layer unavailable (contract missing or heimdal-api-ingress consumer undeclared); continuing without it — ingress lanes will report unavailable" >&2
+  return 1
+}
+
+_deploy_channel_needs_api_ingress_secret() {
+  local channel="${1:?channel required}"
+  shift
+  [ "${1:-}" = "up" ] || return 1
+  shift
+  local arg saw_service=0
+  for arg in "$@"; do
+    case "${arg}" in
+      -*) continue ;;
+    esac
+    saw_service=1
+    [ "${arg}" = "api" ] && return 0
+  done
+  [ "${saw_service}" = "0" ] && return 0
+  return 1
+}
+
 deploy_channel_compose() {
   local root="${1:?repo root required}"
   local channel="${2:?channel required}"
@@ -266,6 +312,25 @@ deploy_channel_compose() {
         --channel "${channel}"
         --consumer heimdal-capture-watch
         -- "${compose_command[@]}"
+      )
+    fi
+
+    if _deploy_channel_needs_api_ingress_secret "${channel}" "$@" \
+        && _deploy_channel_api_ingress_bootstrap_available "${channel}"; then
+      # Outer wrap: materialize the api consumer's secret env file, then
+      # re-export its handle under HOST_SECRET_RUNTIME_ENV_FILE_API before the
+      # (possibly nested) capture-watch bootstrap runs — that inner bootstrap
+      # scrubs the shared HOST_SECRET_RUNTIME_ENV_FILE name from the child
+      # environment, and the renamed handle is what the api service's
+      # env_file layer reads. Never echoes or logs a secret value; the file
+      # itself is bootstrap-owned and removed after Compose returns.
+      compose_command=(
+        "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
+        --channel "${channel}"
+        --consumer heimdal-api-ingress
+        --run-on-credential-unavailable
+        -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; exec "$@"' _
+        "${compose_command[@]}"
       )
     fi
 

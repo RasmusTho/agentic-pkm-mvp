@@ -73,12 +73,19 @@ promote public internet readiness.
   arrived. Watched-folder admissions are receipted through the same seam (content-hash keyed) but
   gain no receipt-gated retention — that stays an outbox-lane property owned by CDLM-03. This slice
   ships no session/segment ledger, no ASR or derivation, no streaming/resumable upload, no auth
-  keys, and no public ingress: both routes refuse peers outside loopback/LAN/tailnet. **Operator
-  precondition, not yet provisioned:** admission encrypts through the raw store, so the api process
-  needs `HEIMDAL_RAW_STORE_KEY`, which `config/secrets/host_secret_contract.json` currently declares
-  for the `heimdal-capture-watch` consumer only; without it every admission returns a named 500
-  `raw_store_key_unavailable` / `not_acknowledged` rather than failing silently. The pre-existing
-  `POST /api/heimdal/screen/capture` shares that gap. Contract detail
+  keys, and no public ingress: both routes refuse peers outside loopback/LAN/tailnet. **Key
+  provisioning is delivered (#4422):** the api process is a declared consumer of
+  `heimdal.raw-store-key` (`heimdal-api-ingress` in `config/secrets/host_secret_contract.json`,
+  dev/test/prod); the governed deploy wrapper bootstraps its secret layer for every `up` that
+  includes the api service (degrade-visibly — a missing Keychain item or contract never fails the
+  deploy) and the `api` Compose service consumes it via its own env-file handle, without changing
+  how `heimdal-capture-watch` is provisioned. An api startup preflight detects a missing
+  `HEIMDAL_RAW_STORE_KEY` before first use, logs it loudly, and reports the media and screen
+  ingress lanes `unavailable` on `/api/status` while every other API function keeps serving; the
+  request-time named 500 `raw_store_key_unavailable` / `not_acknowledged` contract is unchanged.
+  The one remaining operator step is placing the actual key material into the Keychain item for
+  the `heimdal-api-ingress` consumer per channel (`{channel}:heimdal-api-ingress:heimdal.raw-store-key`
+  under service `yggdrasil.host-secrets`). Contract detail
   is owned by `docs/EVENTS.md :: Heimdal governed media ingress + durable receipts` and
   `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`; promotion into
   `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 remains parent-acceptance work on #4383.
@@ -93,8 +100,8 @@ promote public internet readiness.
   emits `heimdal.meeting.segment.late_admitted` (the CDLM-06/08 re-derive trigger) without
   re-opening. Ledger state is durable — migration `a7c2e9f4b1d3` for Postgres/PDM, a file-backed
   SQLite lane for dev/test — so a hub restart rebuilds nothing from memory. The
-  `HEIMDAL_RAW_STORE_KEY` provisioning gap above bounds live use of the admission-fed segment path
-  the same way it bounds CDLM-01. Contract detail is owned by `docs/EVENTS.md` and
+  `HEIMDAL_RAW_STORE_KEY` posture above (provisioning delivered, key material an operator Keychain
+  step) bounds live use of the admission-fed segment path the same way it bounds CDLM-01. Contract detail is owned by `docs/EVENTS.md` and
   `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/TRACK_MEETING_SESSIONS_AND_SEGMENT_GAPS.md`.
 - Live meeting projections are shipped (CDLM-06, #4386): every admitted meeting segment derives ASR
   exactly once per content hash through the shared engine seam (`app.media.transcribe.run_asr`),

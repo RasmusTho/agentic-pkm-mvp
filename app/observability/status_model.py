@@ -180,6 +180,19 @@ class IntegratedRuntimeCapabilityStatus(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class HeimdalIngressStatus(BaseModel):
+    """Startup-preflight availability of the governed ingress lanes (#4422).
+
+    Carries availability only — never key material. ``lanes`` maps
+    media_ingress/screen_capture to "available" or "unavailable".
+    """
+
+    raw_store_key_available: bool
+    lanes: Dict[str, str] = Field(default_factory=dict)
+    detail: str = ""
+    checked_at: Optional[datetime] = None
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     environment: str
@@ -208,9 +221,11 @@ class SystemStatus(BaseModel):
     context_dimensions: Optional[ContextDimensionsStatus] = None
     v6_0_seams: Optional[Dict[str, str]] = None
     integrated_runtime_v1: Optional[Dict[str, IntegratedRuntimeCapabilityStatus]] = None
+    heimdal_ingress: Optional[HeimdalIngressStatus] = None
 
 
 __all__ = [
+    "HeimdalIngressStatus",
     "IngestionPlaneStatus",
     "StoreStatus",
     "IngestionStatus",

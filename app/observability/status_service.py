@@ -1235,6 +1235,30 @@ def _integrated_runtime_v1_matrix(
     return matrix
 
 
+def _get_heimdal_ingress_status():
+    """Project the startup ingress preflight (#4422) into /api/status.
+
+    Lazy import to keep observability decoupled from the heimdal package at
+    module import time; None before the lifespan preflight has run.
+    """
+    try:
+        from app.heimdal.ingress_preflight import current_ingress_status
+
+        result = current_ingress_status()
+    except Exception:  # pragma: no cover - status must never fail on this
+        return None
+    if result is None:
+        return None
+    from app.observability.status_model import HeimdalIngressStatus
+
+    return HeimdalIngressStatus(
+        raw_store_key_available=result.raw_store_key_available,
+        lanes=dict(result.lanes),
+        detail=result.detail,
+        checked_at=result.checked_at,
+    )
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -1255,6 +1279,7 @@ def get_system_status() -> SystemStatus:
         ingestion=ingestion,
         worker_queue=worker_queue,
     )
+    heimdal_ingress = _get_heimdal_ingress_status()
     return SystemStatus(
         timestamp=datetime.now(timezone.utc),
         environment=active_environment(),
@@ -1282,6 +1307,7 @@ def get_system_status() -> SystemStatus:
         instance_provenance=_get_instance_provenance_status(),
         context_dimensions=_status_context_dimensions(Path(INDEX_OUTBOX_PATH)),
         v6_0_seams=_get_v6_seams(),
+        heimdal_ingress=heimdal_ingress,
         integrated_runtime_v1=_integrated_runtime_v1_matrix(
             write_guard=write_guard,
             worker_queue=worker_queue,
