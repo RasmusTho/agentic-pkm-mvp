@@ -26,13 +26,12 @@ write the question verbatim to a mode-`0600` local Markdown file. Remote callers
 ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
 ```
 
-The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and the
-host-local values declared by the repository's host-secret contract. Its launcher settings,
-credential values, and executable paths are host-specific operator configuration and stay outside
-Git. The launcher invokes `app.ops.host_secret_bootstrap` for the `builderops-model-inquiry`
-consumer before Model Inquiry starts; the bootstrap materializes one owner-only runtime file and
-removes it after the child terminates. Neither desktop skill rebuilds that environment, configures
-providers, handles credential values, or reimplements orchestration in prompt prose.
+The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and sanctioned
+subscription session. Its launcher settings, authentication material, bridge, and executable paths
+are host-specific operator configuration and stay outside Git. Neither desktop skill rebuilds that
+environment, configures providers, handles authentication material, or reimplements orchestration
+in prompt prose. Under ADR-0064's 2026-07-30 owner-cost ruling,
+`yggdrasil-model-inquiry` is the operational host-local subscription launcher.
 
 The repo-local Codex skill also supports a caller already running on the configured inquiry host. Before
 any connection attempt or lock mutation, it expands the fixed `Tailscale_macmini` alias with
@@ -49,29 +48,15 @@ route copies to the same fixed staging file and directly invokes only:
 "$HOME/.local/bin/yggdrasil-model-inquiry" --question-file /tmp/model-inquiry-question.md
 ```
 
-The operator machine needs the `Tailscale_macmini` SSH alias. On the remote host, declared Anthropic
-and OpenAI API-key identities resolve through the host-secret bootstrap and Keychain contract; no
-headless route uses the legacy GUI-session proxy or an interactive subscription session. (Owner
-ruling 2026-07-30: this paragraph describes the delivered provider-API mechanism, not the
-operational host state — the declared identifiers are intentionally unprovisioned and the
-subscription-backed session remains the sanctioned operational auth; see
-`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
-model-inquiry path`.) Desktop
-skill packages neither provision nor access credential values. If that bootstrap cannot resolve or
-validate a declared API credential, the fixed Model Inquiry launcher passes only the logical
-credential identifier to the runner. The runner then persists a terminal
-`provider_error`/`credential_unavailable` receipt before any adapter can run; no credential value,
-provider request, subscription command, or alternate provider participates in that handoff. The
-launcher returns that complete receipt JSON with exit status 1. Desktop skills accept only that
-exact status together with `final_state=provider_error`, a `credential_unavailable` diagnostic, and
-all required receipt fields as a valid terminal failure. The diagnostic has the exact persisted
-field set (`adapter_id`, `adapter_failure_class`, `credential_identity_ref`), validates the safe
-adapter ID and declared logical-secret grammars, and permits no extra field or adapter exit code.
-The exit-1 top-level object likewise uses only the declared desktop-launch schema fields. Only then
-do callers release single-flight staging, report the failure, and stop. A failed copy or any other launcher error,
-empty stdout, malformed/non-object JSON, or absent/empty response field fails loudly: report the
-error and stop. Do not retry, inspect the vault for a substitute response, or fall back to an
-in-chat inquiry.
+The operator machine needs the `Tailscale_macmini` SSH alias. Desktop skill packages neither
+provision nor access metered credentials and never inspect or modify the subscription session or
+bridge. A valid terminal response is exit status zero plus one JSON object carrying non-empty
+`inquiry_id`, `final_state`, `terminal_receipt_id`, and `human_readable_report` strings. A failed
+copy, any nonzero launcher status, empty stdout, malformed/non-object JSON, or absent/empty response
+field fails loudly and remains ambiguous after launch begins. Do not retry, inspect the vault for a
+substitute response, invoke the dormant provider-API launcher, or fall back to an in-chat inquiry.
+The response is a Model Inquiry artifact only; it is not a provider-enabled MAS receipt or CKM
+credential evidence.
 
 The established host command has one fixed `/tmp/model-inquiry-question.md` input path. Before
 copying the question, both packages acquire `/tmp/yggdrasil-model-inquiry.lock` atomically: through
@@ -81,8 +66,7 @@ boundary and cannot overwrite another inquiry's question.
 
 After lock acquisition, local temporary-file cleanup is a registered `finally` action. The remote
 or proven-local staged question and lock are released only when staging failed before the launcher
-attempt began, when the launcher returned exit zero with one valid terminal JSON object, or when it
-returned exit status 1 with the exact typed `credential_unavailable` terminal JSON contract above.
+attempt began or when the launcher returned exit zero with one valid terminal JSON object.
 Any other transport or launcher failure, empty stdout, malformed/non-object JSON, or invalid required
 field after launch begins is ambiguous: the launcher may have created durable artifacts, so both
 routes leave the shared lock and staged question in place, report the error, and do not retry or
@@ -94,13 +78,13 @@ only after staging deletion succeeded or the staged path was absent. Launcher st
 captured and validated before cleanup, so a cleanup failure is reported separately and cannot erase
 or reclassify the launcher outcome.
 
-The SSH host must expose the repository-owned fixed launcher and both durable role entrypoints
-before its launcher is considered ready. All three are installed and content/lineage-checked with the repository-owned
-`scripts/install_model_inquiry_host.py` routine documented in the host agent playbook. This
-stabilizes the versioned command boundary across shell and reboot changes without moving provider
-credential values into Git. Each installed wrapper enters the same `run_with_host_secrets` boundary
-before executing the versioned provider-API adapter; it never launches a subscription CLI. A merely
-discoverable stale `yggdrasil-model-inquiry` is rejected.
+The operational `yggdrasil-model-inquiry` launcher is host-owned and outside the provider-API
+installer. The repository separately preserves a dormant declared-credential mechanism under the
+distinct `yggdrasil-model-inquiry-provider-api` name plus the two durable role entrypoints. The
+repository-owned `scripts/install_model_inquiry_host.py` routine installs and checks only those
+three provider-API wrappers. It must not inspect, overwrite, retire, or claim readiness for the
+sanctioned subscription launcher or bridge. Desktop skills never invoke the dormant provider-API
+identity.
 
 ## Concretely
 
@@ -138,9 +122,9 @@ other.
   single-flight lock, strictly validates the terminal response, and preserves staging after
   ambiguous outcomes. Verify:
   `tests/architecture/test_agent_skill_entrypoints.py::test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed`.
-- [x] A terminal `provider_error` returns one JSON response carrying the established receipt fields
-  and only an optional allowlisted diagnostic object. Verify:
-  `tests/governance/test_start_model_inquiry_skill.py::test_local_launcher_emits_terminal_provider_error_json`.
+- [x] Desktop packages accept only an exit-zero terminal JSON response from the sanctioned
+  subscription launcher and preserve staging after every nonzero/ambiguous result. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## How to Verify (Pre-Merge)
 
@@ -156,7 +140,7 @@ the operator. Generated archives are release artifacts and remain outside Git so
 - automating clicks or keystrokes in the other desktop app;
 - storing model transcripts in Companion UI or a human knowledge vault.
 - installing Python, BuilderOps, Codex, or Claude on the local machine;
-- provisioning or inspecting declared host-secret values.
+- provisioning or inspecting metered credentials or subscription-session material.
 
 ## Related Docs
 

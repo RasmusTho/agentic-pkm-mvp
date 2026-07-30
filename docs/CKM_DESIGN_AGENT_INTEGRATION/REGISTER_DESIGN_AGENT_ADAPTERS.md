@@ -18,10 +18,11 @@ exposing only sanitized descriptors to CKM.
 
 ## What This Task Does
 
-After parent #4286 records accepted
-`model_access_substrate.provider_enabled_noninteractive_inquiry.v1`, registers exactly `codex`,
-`claude-design-via-claude-code`, and `fable` as design-agent domain profiles. The receipt is a
-filing/pickup prerequisite only; runtime code never reads GitHub or the delivery receipt.
+After parent #4286 closes with its repo-verifiable Phase 1 acceptance ledger, registers exactly
+`codex`, `claude-design-via-claude-code`, and `fable` as design-agent domain profiles. The parent
+validation is a filing/pickup prerequisite only; runtime code never reads GitHub or delivery
+evidence. Withdrawn provider/bridge receipts and active provider-backed inference are not
+prerequisites.
 
 Each profile maps to a neutral role profile (`design.codex`, `design.claude`, `design.fable`) and
 constructs a `ModelResolutionRequest` with the provider-free seven-field intent and a design-run-bound
@@ -89,4 +90,5 @@ grammar, cockpit rendering, automatic provider choice, and subscription-session 
 
 ## Related GitHub Issues
 
-Create one child of #4131 after CDH-01 is terminal and #4286 carries the accepted Phase 1 receipt.
+Create one child of #4131 after CDH-01 is terminal and #4286 has terminally accepted the
+repo-verifiable Phase 1 ledger.

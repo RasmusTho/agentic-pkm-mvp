@@ -81,15 +81,18 @@ def test_installer_creates_both_role_entrypoints_and_exact_retry_is_noop(
         },
     }
     assert first_payload["launcher"] == {
-        "entrypoint": "yggdrasil-model-inquiry",
+        "entrypoint": "yggdrasil-model-inquiry-provider-api",
         "lineage": "repo-owned-declared-credential",
         "status": "installed",
     }
     assert second_payload["launcher"] == {
-        "entrypoint": "yggdrasil-model-inquiry",
+        "entrypoint": "yggdrasil-model-inquiry-provider-api",
         "lineage": "repo-owned-declared-credential",
         "status": "unchanged",
     }
+    assert host_installer.FIXED_LAUNCHER_NAME == "yggdrasil-model-inquiry-provider-api"
+    assert (bin_dir / "yggdrasil-model-inquiry-provider-api").is_file()
+    assert not (bin_dir / "yggdrasil-model-inquiry").exists()
     for name in ("fable-model-inquiry-role", "codex-model-inquiry-role"):
         path = bin_dir / name
         assert path.is_file()
@@ -121,7 +124,10 @@ def test_installer_rejects_conflicting_or_unsafe_destinations(tmp_path: Path) ->
     stale_conflict = _install(stale_launcher_bin)
 
     assert stale_conflict.returncode == 2
-    assert "conflicting entrypoint: yggdrasil-model-inquiry" in stale_conflict.stderr
+    assert (
+        "conflicting entrypoint: yggdrasil-model-inquiry-provider-api"
+        in stale_conflict.stderr
+    )
     assert "fable-subscription-cli" in stale_launcher.read_text(encoding="utf-8")
     assert not (stale_launcher_bin / "fable-model-inquiry-role").exists()
     assert not (stale_launcher_bin / "codex-model-inquiry-role").exists()
@@ -527,7 +533,7 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
         "schema": "builderops.model-inquiry-host-check.v1",
         "ok": True,
         "launcher": {
-            "command": "yggdrasil-model-inquiry",
+            "command": "yggdrasil-model-inquiry-provider-api",
             "lineage": "repo-owned-declared-credential",
             "status": "available",
         },
@@ -556,7 +562,7 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
 
     provider_bin = tmp_path / "provider-bin"
     provider_bin.mkdir()
-    for command in ("claude", "codex", "yggdrasil-model-inquiry"):
+    for command in ("claude", "codex", "yggdrasil-model-inquiry-provider-api"):
         executable = provider_bin / command
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o700)
@@ -581,7 +587,7 @@ def test_check_mode_is_sanitized_read_only_and_complete(tmp_path: Path) -> None:
     assert missing_payload["roles"]["gpt_codex"]["entrypoint_status"] == "unavailable"
 
 
-def test_check_rejects_discoverable_stale_subscription_launcher(
+def test_check_rejects_conflicting_command_at_provider_api_name(
     tmp_path: Path,
 ) -> None:
     bin_dir = tmp_path / "bin"
@@ -609,7 +615,7 @@ def test_check_rejects_discoverable_stale_subscription_launcher(
     assert result.returncode == 1
     payload = json.loads(result.stdout)
     assert payload["launcher"] == {
-        "command": "yggdrasil-model-inquiry",
+        "command": "yggdrasil-model-inquiry-provider-api",
         "lineage": "repo-owned-declared-credential",
         "status": "unavailable",
     }
@@ -814,7 +820,7 @@ def test_check_rejects_bin_directory_replacement_during_path_discovery(
                 "codex-model-inquiry-role",
                 "claude",
                 "codex",
-                "yggdrasil-model-inquiry",
+                "yggdrasil-model-inquiry-provider-api",
             ):
                 executable = bin_dir / name
                 executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -997,7 +1003,7 @@ def test_check_rejects_bin_replacement_during_launcher_discovery(
         path: str | None = None,
     ) -> str | None:
         nonlocal replaced
-        if command == "yggdrasil-model-inquiry" and not replaced:
+        if command == "yggdrasil-model-inquiry-provider-api" and not replaced:
             replaced = True
             bin_dir.rename(detached_bin)
             bin_dir.mkdir()
