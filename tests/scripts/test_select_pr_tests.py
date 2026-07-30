@@ -36,6 +36,15 @@ def test_canvas_chat_change_selects_chat_coverage() -> None:
     assert "tests/chat/test_session_log_writer.py" in selection.targets
 
 
+def test_briefing_change_selects_briefing_coverage() -> None:
+    selection = select_tests(["app/briefing/compose.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("briefing",)
+    assert selection.unowned_paths == ()
+    assert "tests/briefing" in selection.targets
+
+
 def test_instance_registry_change_selects_vault_coverage() -> None:
     selection = select_tests(
         ["app/instance/vault_registry.py", "tests/instance/test_vault_registry.py"]
