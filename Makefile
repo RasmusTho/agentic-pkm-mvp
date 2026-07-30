@@ -1,4 +1,4 @@
-.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap prepare-instance-ownership dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
+.PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap prepare-instance-ownership dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe live-prod-backup-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
 # Test vault root for bootstrap / seeded test startup lanes. Honors an
@@ -291,6 +291,13 @@ check-prod-channel:
 ## For the channel-isolation pytest suites, use check-prod-channel / check-test-channel.
 live-prod-probe:
 	@$(PYTHON) ops/host-setup/mac-mini/prod_probe.py
+
+## live-prod-backup-probe: invoke the prod-backup watcher once for a manual spot-check
+## Checks dump freshness on $$BACKUP_DIR, the FAIL/OK verdict, and status-file staleness.
+## Exits non-zero when the backup is failed or stale. Set PROD_BACKUP_PROBE_CHANNEL=none
+## for a dry run that logs the verdict without pushing.
+live-prod-backup-probe:
+	@$(PYTHON) ops/host-setup/mac-mini/prod_backup_probe.py
 
 alpha-e2e-smoke:
 	@$(PYTHON) - <<'PY'

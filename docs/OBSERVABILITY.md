@@ -62,6 +62,21 @@ Tests: `tests/api/test_health_failures.py::test_health_handles_malformed_heartbe
 
 Logs are the primary tracing surface; no external APM is required for the current MVP.
 
+## Scheduled host watchers (push alerts)
+Two launchd jobs on the mac mini are the only push-alerting surface; both are
+transition-based (one alert on entering a bad state, one recovery signal on the first
+healthy run) and both default to the same `NTFY_TOPIC` so the operator watches one topic.
+
+- `com.yggdrasil.prod-probe` — hard-down backstop for the running prod stack
+  (`/readyz`, `/api/health` `required_ok`, worker-heartbeat staleness).
+- `com.yggdrasil.prod-backup-probe` — the nightly prod DB dump. Alerts on a **stale**
+  backup as well as a failed one: a job that stops firing writes no `FAIL` line, so
+  dump-file freshness on `/Volumes/T7` is the load-bearing signal and the status file is
+  only a secondary reason. An unreadable signal alerts rather than passing.
+
+Both are documented in `docs/OPERATIONS.md :: Prod probe and push alert` and
+`:: Prod backup watcher`. Neither depends on the subsystem it watches.
+
 ## Incident-triage contract
 - `docs/OPERATIONS.md` remains the top-level operator routing surface.
 - `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md` is the canonical current-state incident workflow for watcher failures, panel runtime / panel intent failures, and CLI-first orchestrator failures.

@@ -74,6 +74,20 @@ class NotificationChannel(Protocol):
         ...
 
 
+def ascii_header(value: str) -> str:
+    """Make a string safe for an HTTP header.
+
+    httplib encodes headers as latin-1, so a single em-dash in the title raises
+    UnicodeEncodeError and the alert is lost. Observed on the mini 2026-07-29
+    the first time this channel was actually exercised. The body is a UTF-8
+    payload and is unaffected.
+    """
+    replacements = {"—": "-", "–": "-", "‘": "'", "’": "'", "…": "..."}
+    for bad, good in replacements.items():
+        value = value.replace(bad, good)
+    return value.encode("latin-1", "replace").decode("latin-1")
+
+
 class NtfyChannel:
     """ntfy.sh push via HTTP POST."""
 
@@ -85,14 +99,15 @@ class NtfyChannel:
         import urllib.request
 
         url = f"{self.server}/{self.topic}"
-        data = body.encode()
+        data = body.encode("utf-8")
         req = urllib.request.Request(
             url,
             data=data,
             headers={
-                "Title": subject,
+                "Title": ascii_header(subject),
                 "Priority": "high",
                 "Tags": "warning,robot",
+                "Content-Type": "text/plain; charset=utf-8",
             },
             method="POST",
         )
@@ -204,7 +219,7 @@ def _clear_alert_state() -> None:
 
 
 def _send_down_alert(channel: NotificationChannel, failures: list[str]) -> bool:
-    subject = "Prod down — Yggdrasil"
+    subject = "Prod down - Yggdrasil"
     body = "Failures detected:\n" + "\n".join(f"  - {f}" for f in failures)
     try:
         channel.send(subject, body)
@@ -217,7 +232,7 @@ def _send_down_alert(channel: NotificationChannel, failures: list[str]) -> bool:
 
 
 def _send_recovery_alert(channel: NotificationChannel) -> bool:
-    subject = "Prod recovered — Yggdrasil"
+    subject = "Prod recovered - Yggdrasil"
     body = "The prod probe saw a healthy run after a previous outage."
     try:
         channel.send(subject, body)
