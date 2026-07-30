@@ -80,6 +80,7 @@ onboarding beyond writing the `sources/*.md` filter notes.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import ctypes
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
@@ -88,11 +89,11 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
-import subprocess
+import stat
 import sys
 import tempfile
 import threading
+import unicodedata
 from typing import Any, Literal, Optional
 from collections.abc import Iterator
 from uuid import uuid4
@@ -371,29 +372,87 @@ def read_inflow_body(vault_root: Path, kind: InflowKind) -> str:
 POSTHOC_STEERING_VERBS = ("less_of_this", "mute", "wrong")
 
 
-def _steering_log_path(vault_root: Path) -> Path:
-    """Return the canonical lexical target, rejecting every path alias.
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+_FILE_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+_STEERING_PARENT, _STEERING_FILENAME = Path(note_rel_path(STEERING_LOG)).parts
 
-    Direct seed/bookkeeping I/O must name the same in-vault resource as the
-    governed append seam. Rejecting a symlink in any relative component
-    prevents a final-component split and a parent escape before mutation.
-    """
+
+@contextmanager
+def _open_steering_parent(vault_root: Path) -> Iterator[int]:
+    """Open/create the fixed parent through anchored, no-follow descriptors."""
     root = vault_root.expanduser().resolve()
-    relative = Path(note_rel_path(STEERING_LOG))
-    target = root / relative
-    cursor = root
-    for component in relative.parts:
-        cursor /= component
-        if cursor.is_symlink():
-            raise KnowledgeCapabilityError("steering log path must not contain symlinks")
+    root_fd = os.open(root, _DIRECTORY_OPEN_FLAGS)
+    parent_fd: int | None = None
     try:
-        target.resolve(strict=False).relative_to(root)
-    except ValueError as exc:
-        raise KnowledgeCapabilityError("steering log path escapes vault root") from exc
+        try:
+            parent_fd = os.open(_STEERING_PARENT, _DIRECTORY_OPEN_FLAGS, dir_fd=root_fd)
+        except FileNotFoundError:
+            os.mkdir(_STEERING_PARENT, mode=0o755, dir_fd=root_fd)
+            os.fsync(root_fd)
+            parent_fd = os.open(_STEERING_PARENT, _DIRECTORY_OPEN_FLAGS, dir_fd=root_fd)
+        except OSError as exc:
+            raise KnowledgeCapabilityError(
+                "steering log parent must be an in-vault non-symlink directory"
+            ) from exc
+        opened_parent = os.fstat(parent_fd)
+        yield parent_fd
+        current_parent = os.stat(
+            _STEERING_PARENT,
+            dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISDIR(current_parent.st_mode)
+            or (current_parent.st_dev, current_parent.st_ino)
+            != (opened_parent.st_dev, opened_parent.st_ino)
+        ):
+            raise KnowledgeCapabilityError(
+                "steering log parent changed during transaction"
+            )
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
+        os.close(root_fd)
+
+
+def _target_stat(parent_fd: int) -> os.stat_result:
+    try:
+        target = os.stat(_STEERING_FILENAME, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise KnowledgeCapabilityError(
+            "steering log target must be a regular non-symlink file"
+        ) from exc
+    if not stat.S_ISREG(target.st_mode):
+        raise KnowledgeCapabilityError(
+            "steering log target must be a regular non-symlink file"
+        )
     return target
 
 
-def _ensure_steering_log_seed(vault_root: Path, *, write_guard: WriteGuard) -> None:
+def _read_steering_target(parent_fd: int) -> tuple[bytes, tuple[int, int]]:
+    try:
+        target_fd = os.open(
+            _STEERING_FILENAME,
+            os.O_RDONLY | _FILE_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+    except OSError as exc:
+        raise KnowledgeCapabilityError(
+            "steering log target must be a regular non-symlink file"
+        ) from exc
+    with os.fdopen(target_fd, "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise KnowledgeCapabilityError("steering log target must be a regular file")
+        return handle.read(), (opened.st_dev, opened.st_ino)
+
+
+def _ensure_steering_log_seed(parent_fd: int, *, write_guard: WriteGuard) -> tuple[int, int]:
     """Create `steering.log.md` with its initial frontmatter+body if it does
     not exist yet.
 
@@ -401,50 +460,113 @@ def _ensure_steering_log_seed(vault_root: Path, *, write_guard: WriteGuard) -> N
     then installed by atomic replacement so an interrupted first write cannot
     leave a partial YAML document for a retry to mistake for a durable seed.
     """
-    path = _steering_log_path(vault_root)
-    if path.exists():
-        return
+    try:
+        existing = _target_stat(parent_fd)
+    except KnowledgeCapabilityError as exc:
+        try:
+            os.stat(_STEERING_FILENAME, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise exc
+    else:
+        return existing.st_dev, existing.st_ino
     write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
     note = SettingsNote(spec=STEERING_LOG, values={"entry_count": 0, "last_appended": None})
-    _atomic_replace_bytes(path, render_note(note).encode("utf-8"))
+    _atomic_replace_bytes(parent_fd, render_note(note).encode("utf-8"))
+    created = _target_stat(parent_fd)
+    return created.st_dev, created.st_ino
+
+
+def _copy_required_metadata(source_fd: int, staged_fd: int) -> None:
+    """Copy access-control metadata, failing closed if it cannot be proven."""
+    source = os.fstat(source_fd)
+    if sys.platform == "darwin":
+        fcopyfile = ctypes.CDLL(None, use_errno=True).fcopyfile
+        fcopyfile.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        fcopyfile.restype = ctypes.c_int
+        if fcopyfile(source_fd, staged_fd, None, 0b111) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+    else:
+        os.fchmod(staged_fd, stat.S_IMODE(source.st_mode))
+        staged = os.fstat(staged_fd)
+        if (staged.st_uid, staged.st_gid) != (source.st_uid, source.st_gid):
+            os.fchown(staged_fd, source.st_uid, source.st_gid)
+        required_xattr_apis = ("listxattr", "getxattr", "setxattr")
+        if not all(hasattr(os, name) for name in required_xattr_apis):
+            raise KnowledgeCapabilityError(
+                "platform cannot prove steering log ACL/xattr preservation"
+            )
+        for attribute in os.listxattr(source_fd):
+            os.setxattr(staged_fd, attribute, os.getxattr(source_fd, attribute))
+
+    staged = os.fstat(staged_fd)
+    if (
+        stat.S_IMODE(staged.st_mode) != stat.S_IMODE(source.st_mode)
+        or staged.st_uid != source.st_uid
+        or staged.st_gid != source.st_gid
+    ):
+        raise KnowledgeCapabilityError(
+            "steering log metadata could not be preserved exactly"
+        )
+
+
+def _write_all(fd: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("staged steering write made no progress")
+        view = view[written:]
 
 
 def _atomic_replace_bytes(
-    path: Path,
+    parent_fd: int,
     content: bytes,
     *,
-    preserve_metadata_from: Path | None = None,
+    preserve_metadata_fd: int | None = None,
+    expected_target_identity: tuple[int, int] | None = None,
 ) -> None:
-    """Durably install complete bytes at ``path`` using a sibling stage."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    staged = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    """Durably install bytes through one anchored parent descriptor."""
+    staged_name = f".{_STEERING_FILENAME}.{uuid4().hex}.tmp"
+    staged_owned = False
     try:
-        if preserve_metadata_from is not None:
-            if sys.platform == "darwin":
-                subprocess.run(
-                    ["/bin/cp", "-p", str(preserve_metadata_from), str(staged)],
-                    check=True,
-                    capture_output=True,
-                )
-            else:
-                shutil.copy2(preserve_metadata_from, staged, follow_symlinks=False)
-            stage_mode = "r+b"
-        else:
-            stage_mode = "xb"
-        with staged.open(stage_mode) as handle:
+        staged_fd = os.open(
+            staged_name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | _FILE_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        staged_owned = True
+        with os.fdopen(staged_fd, "r+b") as handle:
+            if preserve_metadata_fd is not None:
+                _copy_required_metadata(preserve_metadata_fd, handle.fileno())
             handle.seek(0)
             handle.truncate()
-            handle.write(content)
-            handle.flush()
+            _write_all(handle.fileno(), content)
             os.fsync(handle.fileno())
-        os.replace(staged, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        if expected_target_identity is not None:
+            current = _target_stat(parent_fd)
+            if (current.st_dev, current.st_ino) != expected_target_identity:
+                raise KnowledgeCapabilityError(
+                    "steering log target changed before bookkeeping replacement"
+                )
+        os.replace(
+            staged_name,
+            _STEERING_FILENAME,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        staged_owned = False
+        os.fsync(parent_fd)
     finally:
-        staged.unlink(missing_ok=True)
+        if staged_owned:
+            try:
+                os.unlink(staged_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except FileNotFoundError:
+                pass
 
 
 def _split_steering_log_bytes(raw: bytes) -> tuple[dict[str, Any], bytes]:
@@ -469,10 +591,11 @@ def _split_steering_log_bytes(raw: bytes) -> tuple[dict[str, Any], bytes]:
 
 
 def _patch_steering_log_frontmatter(
-    vault_root: Path,
+    parent_fd: int,
     patch: dict[str, Any],
     *,
     write_guard: WriteGuard,
+    expected_target_identity: tuple[int, int],
 ) -> None:
     """Rewrite only `steering.log.md`'s YAML frontmatter, preserving the
     body byte-for-byte through an atomic same-directory replacement.
@@ -486,22 +609,47 @@ def _patch_steering_log_frontmatter(
     the generic renderer to do so.
     """
     write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
-    path = _steering_log_path(vault_root)
-    fm, body_bytes = _split_steering_log_bytes(path.read_bytes())
-    fm.update(patch)
-    rendered_frontmatter = dump_frontmatter(fm, "").removesuffix("\n").encode("utf-8")
-    _atomic_replace_bytes(
-        path,
-        rendered_frontmatter + body_bytes,
-        preserve_metadata_from=path,
+    source_fd = os.open(
+        _STEERING_FILENAME,
+        os.O_RDONLY | _FILE_NOFOLLOW,
+        dir_fd=parent_fd,
     )
+    try:
+        source = os.fstat(source_fd)
+        if not stat.S_ISREG(source.st_mode):
+            raise KnowledgeCapabilityError("steering log target must be a regular file")
+        if (source.st_dev, source.st_ino) != expected_target_identity:
+            raise KnowledgeCapabilityError(
+                "steering log target changed before bookkeeping read"
+            )
+        with os.fdopen(os.dup(source_fd), "rb") as handle:
+            raw = handle.read()
+        fm, body_bytes = _split_steering_log_bytes(raw)
+        fm.update(patch)
+        rendered_frontmatter = dump_frontmatter(fm, "").removesuffix("\n").encode("utf-8")
+        _atomic_replace_bytes(
+            parent_fd,
+            rendered_frontmatter + body_bytes,
+            preserve_metadata_fd=source_fd,
+            expected_target_identity=(source.st_dev, source.st_ino),
+        )
+    finally:
+        os.close(source_fd)
 
 
 @contextmanager
 def _locked_steering_log(vault_root: Path) -> Iterator[None]:
-    """Serialize cooperating writers for one resolved steering-log path."""
-    target = _steering_log_path(vault_root)
-    lock_key = str(target)
+    """Serialize one filesystem resource across equivalent path spellings."""
+    root_fd = os.open(vault_root.expanduser().resolve(), _DIRECTORY_OPEN_FLAGS)
+    try:
+        root = os.fstat(root_fd)
+    finally:
+        os.close(root_fd)
+    normalized_relative = unicodedata.normalize(
+        "NFC",
+        note_rel_path(STEERING_LOG),
+    ).casefold()
+    lock_key = f"{root.st_dev}:{root.st_ino}:{normalized_relative}"
     with _STEERING_LOCKS_GUARD:
         process_lock = _STEERING_LOCKS.setdefault(lock_key, threading.RLock())
 
@@ -546,19 +694,25 @@ def _steering_log_entries(raw: bytes) -> list[_SteeringLogEntry]:
 
 
 def _reconcile_steering_log_bookkeeping(
-    vault_root: Path,
+    parent_fd: int,
     *,
     write_guard: WriteGuard,
+    expected_target_identity: tuple[int, int],
 ) -> None:
-    path = _steering_log_path(vault_root)
-    entries = _steering_log_entries(path.read_bytes())
+    raw, identity = _read_steering_target(parent_fd)
+    if identity != expected_target_identity:
+        raise KnowledgeCapabilityError(
+            "steering log target changed before bookkeeping reconciliation"
+        )
+    entries = _steering_log_entries(raw)
     _patch_steering_log_frontmatter(
-        vault_root,
+        parent_fd,
         {
             "entry_count": len(entries),
             "last_appended": entries[-1].timestamp if entries else None,
         },
         write_guard=write_guard,
+        expected_target_identity=identity,
     )
 
 
@@ -615,31 +769,51 @@ def append_steering_log(
 
     _assert_append_allowed(write_guard, POSTHOC_STEERING_WRITE_ACTION)
     with _locked_steering_log(vault_root):
-        _ensure_steering_log_seed(vault_root, write_guard=write_guard)
-        path = _steering_log_path(vault_root)
-        entries = _steering_log_entries(path.read_bytes())
-        matches = [
-            entry
-            for entry in entries
-            if entry.payload and entry.payload["operation_id"] == operation_id
-        ]
-        if len(matches) > 1:
-            raise RuntimeError(f"operation_id collision: duplicate durable entries for {operation_id}")
-        if matches:
-            if matches[0].payload != payload:
-                raise ValueError(f"operation_id collision for {operation_id}")
-            _reconcile_steering_log_bookkeeping(vault_root, write_guard=write_guard)
-            return matches[0].line
+        with _open_steering_parent(vault_root) as parent_fd:
+            target_identity = _ensure_steering_log_seed(
+                parent_fd,
+                write_guard=write_guard,
+            )
+            raw, observed_identity = _read_steering_target(parent_fd)
+            if observed_identity != target_identity:
+                raise KnowledgeCapabilityError(
+                    "steering log target changed after seed observation"
+                )
+            entries = _steering_log_entries(raw)
+            matches = [
+                entry
+                for entry in entries
+                if entry.payload and entry.payload["operation_id"] == operation_id
+            ]
+            if len(matches) > 1:
+                raise RuntimeError(
+                    f"operation_id collision: duplicate durable entries for {operation_id}"
+                )
+            if matches:
+                if matches[0].payload != payload:
+                    raise ValueError(f"operation_id collision for {operation_id}")
+                _reconcile_steering_log_bookkeeping(
+                    parent_fd,
+                    write_guard=write_guard,
+                    expected_target_identity=observed_identity,
+                )
+                return matches[0].line
 
-        append_note_relative(
-            note_rel_path(STEERING_LOG),
-            line,
-            vault_root=vault_root,
-            write_guard=write_guard,
-            action=POSTHOC_STEERING_WRITE_ACTION,
-        )
-        _reconcile_steering_log_bookkeeping(vault_root, write_guard=write_guard)
-        return line
+            append_note_relative(
+                note_rel_path(STEERING_LOG),
+                line,
+                vault_root=vault_root,
+                write_guard=write_guard,
+                action=POSTHOC_STEERING_WRITE_ACTION,
+                _anchored_parent_fd=parent_fd,
+                _expected_target_identity=target_identity,
+            )
+            _reconcile_steering_log_bookkeeping(
+                parent_fd,
+                write_guard=write_guard,
+                expected_target_identity=target_identity,
+            )
+            return line
 
 
 def read_steering_log_body(vault_root: Path) -> str:

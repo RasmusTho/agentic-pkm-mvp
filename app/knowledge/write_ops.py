@@ -10,7 +10,7 @@ import uuid
 
 from app.knowledge.adapters import _atomic_rename_noreplace_at
 from app.knowledge.contracts import WriteReceipt
-from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
 from app.knowledge.references import build_obsidian_advanced_uri
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
@@ -400,6 +400,8 @@ def append_note_relative(
     vault_root: Path | str,
     action: str = KNOWLEDGE_WRITE_ACTION,
     write_guard: "WriteGuard | None" = None,
+    _anchored_parent_fd: int | None = None,
+    _expected_target_identity: tuple[int, int] | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#3129): append-only writes share the same production
     # boundary as relative overwrites. Assert before resolving the port so an
@@ -412,6 +414,50 @@ def append_note_relative(
     guard.assert_writes_allowed(action)
     resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)
+    if _anchored_parent_fd is not None:
+        if _expected_target_identity is None:
+            raise ValueError("anchored append requires an expected target identity")
+        target_name = PurePosixPath(note_rel_path).name
+        try:
+            target_fd = os.open(
+                target_name,
+                os.O_WRONLY
+                | os.O_APPEND
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=_anchored_parent_fd,
+            )
+        except OSError as exc:
+            raise KnowledgeCapabilityError(
+                f"anchored append could not open regular target {note_rel_path}"
+            ) from exc
+        with os.fdopen(target_fd, "ab") as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode) or (
+                opened.st_dev,
+                opened.st_ino,
+            ) != _expected_target_identity:
+                raise KnowledgeWriteConflict(
+                    f"anchored append target changed for {note_rel_path}"
+                )
+            handle.write(content.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        current = os.stat(
+            target_name,
+            dir_fd=_anchored_parent_fd,
+            follow_symlinks=False,
+        )
+        if (current.st_dev, current.st_ino) != _expected_target_identity:
+            raise KnowledgeWriteConflict(
+                f"anchored append target changed during write for {note_rel_path}"
+            )
+        return WriteReceipt(
+            operation="append_note",
+            locator=locator,
+            adapter="fs_vault",
+            writer_identity="mimer.runtime",
+        )
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
     return port.append_note(locator, content)
 

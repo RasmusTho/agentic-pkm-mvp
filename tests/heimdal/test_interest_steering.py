@@ -512,32 +512,12 @@ def test_steering_log_retry_recovers_interrupted_states(
         write_guard=guard,
     )
 
-    real_path_open = Path.open
-
-    class _FailingStageFile:
-        def __init__(self, inner):  # type: ignore[no-untyped-def]
-            self._inner = inner
-
-        def __enter__(self):  # type: ignore[no-untyped-def]
-            self._inner.__enter__()
-            return self
-
-        def __exit__(self, *args):  # type: ignore[no-untyped-def]
-            return self._inner.__exit__(*args)
-
-        def write(self, _content):  # type: ignore[no-untyped-def]
-            raise RuntimeError("stage write")
-
-        def __getattr__(self, name):  # type: ignore[no-untyped-def]
-            return getattr(self._inner, name)
-
-    def fail_staged_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
-        opened = real_path_open(path, *args, **kwargs)
-        if path.name.startswith(f".{log_path.name}.") and path.suffix == ".tmp":
-            return _FailingStageFile(opened)
-        return opened
-
-    monkeypatch.setattr(Path, "open", fail_staged_open)
+    real_write_all = steering_module._write_all
+    monkeypatch.setattr(
+        steering_module,
+        "_write_all",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stage write")),
+    )
     with pytest.raises(RuntimeError, match="stage write"):
         append_steering_log(
             vault_root,
@@ -547,7 +527,7 @@ def test_steering_log_retry_recovers_interrupted_states(
             operation_id="recover-stage-write",
             write_guard=guard,
         )
-    monkeypatch.setattr(Path, "open", real_path_open)
+    monkeypatch.setattr(steering_module, "_write_all", real_write_all)
     stage_write_recovered = append_steering_log(
         vault_root,
         "wrong",
@@ -786,7 +766,7 @@ def test_steering_log_rejects_symlink_aliases_before_mutation(tmp_path: Path) ->
     escaped_vault.mkdir()
     (escaped_vault / "_heimdal").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(KnowledgeCapabilityError, match="must not contain symlinks"):
+    with pytest.raises(KnowledgeCapabilityError, match="symlink"):
         append_steering_log(
             escaped_vault,
             "wrong",
@@ -813,7 +793,7 @@ def test_steering_log_rejects_symlink_aliases_before_mutation(tmp_path: Path) ->
     alias_path.symlink_to(referent.name)
     before = referent.read_bytes()
 
-    with pytest.raises(KnowledgeCapabilityError, match="must not contain symlinks"):
+    with pytest.raises(KnowledgeCapabilityError, match="symlink"):
         append_steering_log(
             alias_vault,
             "mute",
@@ -824,6 +804,189 @@ def test_steering_log_rejects_symlink_aliases_before_mutation(tmp_path: Path) ->
         )
     assert alias_path.is_symlink()
     assert referent.read_bytes() == before
+
+
+def test_steering_log_case_aliases_share_one_lock(tmp_path: Path) -> None:
+    vault_root = _vault(tmp_path)
+    alias_root = vault_root.with_name(vault_root.name.swapcase())
+    try:
+        if not alias_root.samefile(vault_root):
+            pytest.skip("filesystem is case-sensitive")
+    except FileNotFoundError:
+        pytest.skip("filesystem is case-sensitive")
+
+    context = multiprocessing.get_context("fork")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+
+    def append_one(root: Path, operation_id: str) -> None:
+        barrier.wait()
+        try:
+            append_steering_log(
+                root,
+                "wrong",
+                operation_id,
+                source="chat",
+                operation_id=operation_id,
+                write_guard=_allowing_guard(),
+            )
+        except BaseException as exc:  # noqa: BLE001 - child evidence
+            results.put(("error", repr(exc)))
+            raise
+        results.put(("ok", operation_id))
+
+    processes = [
+        context.Process(target=append_one, args=(vault_root, "case-original")),
+        context.Process(target=append_one, args=(alias_root, "case-alias")),
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+    assert all(process.exitcode == 0 for process in processes)
+    assert [results.get(timeout=2)[0] for _index in range(2)] == ["ok", "ok"]
+
+    body = read_steering_log_body(vault_root)
+    assert body.count('"operation_id":"case-original"') == 1
+    assert body.count('"operation_id":"case-alias"') == 1
+    note = read_settings_note(vault_root, STEERING_LOG)
+    assert note is not None
+    assert note.values["entry_count"] == 2
+
+
+def test_steering_log_racing_aliases_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="race-seed",
+        write_guard=guard,
+    )
+    path = vault_root / note_rel_path(STEERING_LOG)
+    parked = path.with_name("steering-parked.md")
+    diverted = path.with_name("steering-diverted.md")
+    diverted.write_text("diverted sentinel\n", encoding="utf-8")
+    real_append = steering_module.append_note_relative
+
+    def swap_final_component(*args, **kwargs):  # type: ignore[no-untyped-def]
+        path.replace(parked)
+        path.symlink_to(diverted.name)
+        try:
+            return real_append(*args, **kwargs)
+        finally:
+            path.unlink(missing_ok=True)
+            parked.replace(path)
+
+    monkeypatch.setattr(steering_module, "append_note_relative", swap_final_component)
+    with pytest.raises(KnowledgeCapabilityError, match="anchored append"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "must-not-divert",
+            source="item",
+            operation_id="racing-final",
+            write_guard=guard,
+        )
+    assert diverted.read_text(encoding="utf-8") == "diverted sentinel\n"
+    assert '"operation_id":"racing-final"' not in read_steering_log_body(vault_root)
+
+    fresh_vault = tmp_path / "fresh-race-vault"
+    fresh_vault.mkdir()
+    outside = tmp_path / "race-outside"
+    outside.mkdir()
+    real_atomic = steering_module._atomic_replace_bytes
+    parked_parent = fresh_vault / "_heimdal-parked"
+    swapped = False
+
+    def swap_parent(parent_fd, content, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            (fresh_vault / "_heimdal").replace(parked_parent)
+            (fresh_vault / "_heimdal").symlink_to(outside, target_is_directory=True)
+        return real_atomic(parent_fd, content, **kwargs)
+
+    monkeypatch.setattr(steering_module, "_atomic_replace_bytes", swap_parent)
+    with pytest.raises(KnowledgeCapabilityError, match="parent changed"):
+        append_steering_log(
+            fresh_vault,
+            "wrong",
+            "must-not-escape",
+            source="chat",
+            operation_id="racing-parent",
+            write_guard=guard,
+        )
+    assert list(outside.iterdir()) == []
+
+
+def test_steering_log_metadata_clone_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "first",
+        source="chat",
+        operation_id="clone-first",
+        write_guard=_allowing_guard(),
+    )
+    path = vault_root / note_rel_path(STEERING_LOG)
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        steering_module,
+        "_copy_required_metadata",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("metadata clone failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="metadata clone failed"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "second",
+            source="item",
+            operation_id="clone-second",
+            write_guard=_allowing_guard(),
+        )
+    assert path.read_bytes().count(b'"operation_id":"clone-second"') == 1
+    note = read_settings_note(vault_root, STEERING_LOG)
+    assert note is not None
+    assert note.values["entry_count"] == 1
+    assert before != path.read_bytes()
+
+
+def test_steering_log_new_parent_is_durably_linked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    root_identity = (vault_root.stat().st_dev, vault_root.stat().st_ino)
+    synced_directories: list[tuple[int, int]] = []
+    real_fsync = steering_module.os.fsync
+
+    def record_fsync(fd: int) -> None:
+        current = os.fstat(fd)
+        if stat.S_ISDIR(current.st_mode):
+            synced_directories.append((current.st_dev, current.st_ino))
+        real_fsync(fd)
+
+    monkeypatch.setattr(steering_module.os, "fsync", record_fsync)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "fresh-parent",
+        source="chat",
+        operation_id="fresh-parent",
+        write_guard=_allowing_guard(),
+    )
+    assert root_identity in synced_directories
 
 
 def test_steering_log_operation_id_collision_fails_loud(tmp_path: Path) -> None:
