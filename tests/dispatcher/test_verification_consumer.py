@@ -2694,6 +2694,54 @@ def test_check_reduction_binds_both_app_slug_and_id() -> None:
     )
 
 
+def test_check_reduction_binds_distinct_workflow_identity() -> None:
+    checks = [
+        *green_checks(),
+        {
+            "id": 10,
+            "name": "Docs Guard",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 71},
+            "workflow_run": {
+                "id": 81,
+                "workflow_id": 111,
+                "path": ".github/workflows/docs-guard.yml",
+                "event": "pull_request",
+                "head_sha": HEAD,
+                "check_suite_id": 71,
+                "run_attempt": 1,
+            },
+            "status": "completed",
+            "conclusion": "failure",
+        },
+        {
+            "id": 11,
+            "name": "Docs Guard",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 72},
+            "workflow_run": {
+                "id": 82,
+                "workflow_id": 222,
+                "path": ".github/workflows/unrelated.yml",
+                "event": "pull_request",
+                "head_sha": HEAD,
+                "check_suite_id": 72,
+                "run_attempt": 1,
+            },
+            "status": "completed",
+            "conclusion": "success",
+        },
+    ]
+
+    assert (
+        verification_consumer._checks_rejection(
+            checks,
+            expected_head_sha=HEAD,
+        )
+        == "checks_not_green"
+    )
+
+
 def test_gh_source_attributes_null_rest_commit_with_exact_graphql_closer() -> None:
     padded_node_id = "MDU6SXNzdWUxMzI="
 

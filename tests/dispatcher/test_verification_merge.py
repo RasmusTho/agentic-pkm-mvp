@@ -1632,7 +1632,7 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "total_count": 5,
+                    "total_count": 6,
                     "check_runs": [
                         {
                             "id": 10,
@@ -1686,6 +1686,18 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
                                 "slug": "other-app",
                             },
                         },
+                        {
+                            "id": 15,
+                            "name": "Docs Guard",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "completed_at": "2026-07-30T10:02:00Z",
+                            "app": {
+                                "id": 7,
+                                "slug": "github-actions",
+                            },
+                            "check_suite": {"id": 72},
+                        },
                     ],
                 },
             )
@@ -1697,7 +1709,7 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
             return httpx.Response(
                 200,
                 json={
-                    "total_count": 2,
+                    "total_count": 3,
                     "workflow_runs": [
                         {
                             "id": 80,
@@ -1715,6 +1727,15 @@ def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
                             "check_suite_id": 71,
                             "path": ".github/workflows/docs-guard.yml",
                             "event": "push",
+                            "head_sha": HEAD,
+                        },
+                        {
+                            "id": 82,
+                            "workflow_id": 222,
+                            "run_attempt": 1,
+                            "check_suite_id": 72,
+                            "path": ".github/workflows/unrelated.yml",
+                            "event": "pull_request",
                             "head_sha": HEAD,
                         },
                     ],

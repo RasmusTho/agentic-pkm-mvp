@@ -700,7 +700,14 @@ class GitHubProtectedRepositoryAuthority:
             if workflow.get("event") == "pull_request"
         }
         check_history: dict[
-            tuple[str, str | None, int], list[Mapping[str, Any]]
+            tuple[
+                str,
+                str | None,
+                int,
+                int | None,
+                str | None,
+            ],
+            list[Mapping[str, Any]],
         ] = {}
         for row in rows:
             name = row.get("name")
@@ -754,9 +761,40 @@ class GitHubProtectedRepositoryAuthority:
                 and suite_id not in pull_request_workflow_suites
             ):
                 continue
-            check_history.setdefault((name, app_slug, app_id), []).append(
-                row
+            workflow = (
+                workflows_by_suite.get(suite_id)
+                if app_slug == "github-actions"
+                and isinstance(suite_id, int)
+                and not isinstance(suite_id, bool)
+                else None
             )
+            workflow_id = (
+                workflow.get("workflow_id")
+                if isinstance(workflow, Mapping)
+                else None
+            )
+            workflow_path = (
+                workflow.get("path")
+                if isinstance(workflow, Mapping)
+                else None
+            )
+            check_history.setdefault(
+                (
+                    name,
+                    app_slug,
+                    app_id,
+                    (
+                        workflow_id
+                        if isinstance(workflow_id, int)
+                        and not isinstance(workflow_id, bool)
+                        else None
+                    ),
+                    workflow_path
+                    if isinstance(workflow_path, str)
+                    else None,
+                ),
+                [],
+            ).append(row)
         latest_checks = {
             identity: _latest_github_result(history)
             for identity, history in check_history.items()
@@ -782,14 +820,26 @@ class GitHubProtectedRepositoryAuthority:
             candidates = (
                 [
                     row
-                    for (name, _candidate_slug, candidate_app_id), row
+                    for (
+                        name,
+                        _candidate_slug,
+                        candidate_app_id,
+                        _workflow_id,
+                        _workflow_path,
+                    ), row
                     in latest_checks.items()
                     if name == context and candidate_app_id == app_id
                 ]
                 if app_id is not None
                 else [
                     row
-                    for (name, _candidate_slug, _candidate_app), row
+                    for (
+                        name,
+                        _candidate_slug,
+                        _candidate_app,
+                        _workflow_id,
+                        _workflow_path,
+                    ), row
                     in latest_checks.items()
                     if name == context
                 ]

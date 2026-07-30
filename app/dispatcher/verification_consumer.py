@@ -3498,12 +3498,19 @@ def _checks_rejection(
         ):
             suite_id = _nested(check, "check_suite", "id")
             workflow_run_id = _nested(check, "workflow_run", "id")
+            workflow_id = _nested(check, "workflow_run", "workflow_id")
+            workflow_path = _nested(check, "workflow_run", "path")
             if (
                 _nested(check, "app", "slug") != "github-actions"
                 or not isinstance(suite_id, int)
                 or isinstance(suite_id, bool)
                 or not isinstance(workflow_run_id, int)
                 or isinstance(workflow_run_id, bool)
+                or not isinstance(workflow_id, int)
+                or isinstance(workflow_id, bool)
+                or workflow_id <= 0
+                or not isinstance(workflow_path, str)
+                or not workflow_path
                 or _nested(check, "workflow_run", "check_suite_id") != suite_id
                 or _nested(check, "workflow_run", "event") != "pull_request"
                 or _nested(check, "workflow_run", "head_sha") != expected_head_sha
@@ -3521,10 +3528,17 @@ def _checks_rejection(
         )
         app_slug = _nested(check, "app", "slug")
         app_id = _nested(check, "app", "id")
+        workflow_id = _nested(check, "workflow_run", "workflow_id")
+        workflow_path = _nested(check, "workflow_run", "path")
         app_identity = (
             (
                 f"slug:{app_slug}|id:"
                 f"{app_id if isinstance(app_id, int) and not isinstance(app_id, bool) else 'unknown'}"
+                + (
+                    f"|workflow:{workflow_id}|path:{workflow_path}"
+                    if app_slug == "github-actions"
+                    else ""
+                )
             )
             if isinstance(app_slug, str) and app_slug
             else (

@@ -181,10 +181,11 @@ def test_live_truth_uses_latest_check_rerun_by_name(tmp_path) -> None:
         {
             "id": 10,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             "check_suite": {"id": 10},
             "workflow_run": {
                 "id": 110,
+                "workflow_id": 198962230,
                 "path": ".github/workflows/ci-smoke.yaml",
                 "event": "pull_request",
                 "head_sha": HEAD,
@@ -196,10 +197,11 @@ def test_live_truth_uses_latest_check_rerun_by_name(tmp_path) -> None:
         {
             "id": 11,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             "check_suite": {"id": 11},
             "workflow_run": {
                 "id": 111,
+                "workflow_id": 198962230,
                 "path": ".github/workflows/ci-smoke.yaml",
                 "event": "pull_request",
                 "head_sha": HEAD,
