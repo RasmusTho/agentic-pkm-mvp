@@ -91,19 +91,46 @@ class MediaReceipt:
     sequence: int
 
 
+def canonical_capture_id(value: str) -> str:
+    """Canonical storage/lookup form of a capture id.
+
+    This module owns the rule, so no caller can key a receipt one way and look it
+    up another. A UUID collapses to its plain lowercase hyphenated form, because
+    `UUID()` accepts uppercase, braced, unhyphenated, and `urn:uuid:` spellings of
+    the same id — and clients really do differ here (Swift's
+    `UUID().uuidString` is uppercase). Keying on the spelling would mint a
+    receipt per spelling and, worse, answer `unknown` on the recovery query for a
+    capture that *is* durably admitted.
+
+    A value that is not a UUID is returned stripped and unchanged: the
+    watched-folder lane legitimately keys its receipts by content hash.
+    """
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    try:
+        return str(uuid_module.UUID(text))
+    except (ValueError, AttributeError, TypeError):
+        return text
+
+
 def derive_receipt_id(capture_id: str, content_sha256: str) -> str:
     """Derive the stable ``receipt_id`` for one transfer identity.
 
     Deterministic by construction: a resend of the same
     `(capture_id, content_sha256)` pair resolves to the same receipt identity
     without a prior read, which is what makes the idempotent-replay answer
-    correct even if a previous attempt crashed mid-flight.
+    correct even if a previous attempt crashed mid-flight. The capture id is
+    canonicalized first (:func:`canonical_capture_id`), so an equivalent spelling
+    is the same identity rather than a new one.
     """
     if not isinstance(capture_id, str) or not capture_id.strip():
         raise ValueError(f"capture_id must be a non-empty string, got {capture_id!r}")
     if not isinstance(content_sha256, str) or not content_sha256.strip():
         raise ValueError(f"content_sha256 must be a non-empty string, got {content_sha256!r}")
-    digest = uuid_module.uuid5(_RECEIPT_NAMESPACE, f"{capture_id}\x1f{content_sha256}")
+    digest = uuid_module.uuid5(
+        _RECEIPT_NAMESPACE, f"{canonical_capture_id(capture_id)}\x1f{content_sha256}"
+    )
     return f"{_RECEIPT_ID_PREFIX}{digest.hex}"
 
 
@@ -417,7 +444,7 @@ def append_media_receipt(
 
     receipt = MediaReceipt(
         receipt_id=derive_receipt_id(capture_id, content_sha256),
-        capture_id=capture_id,
+        capture_id=canonical_capture_id(capture_id),
         content_sha256=content_sha256,
         raw_ref=raw_ref,
         kind=kind,
@@ -431,7 +458,11 @@ def append_media_receipt(
 
 
 def get_media_receipt(capture_id: str, content_sha256: str) -> Optional[MediaReceipt]:
-    """Look up the receipt for one exact transfer identity (idempotency check)."""
+    """Look up the receipt for one transfer identity (idempotency check).
+
+    Keyed by the derived receipt id, which canonicalizes the capture id, so an
+    equivalent spelling resolves to the same receipt.
+    """
     return _backend().get_by_receipt_id(derive_receipt_id(capture_id, content_sha256))
 
 
@@ -440,14 +471,25 @@ def find_media_receipts_by_capture_ids(capture_ids: List[str]) -> Dict[str, Medi
 
     The recovery query carries `capture_id`s and not content hashes, so this is
     the lookup that answers `admitted` vs `unknown`. Ids with no receipt are
-    simply absent from the result — that absence is the `unknown` answer. A
-    client that reused one `capture_id` for different bytes gets the first
+    simply absent from the result — that absence is the `unknown` answer, and it
+    must mean "never arrived", never "you spelled your own id differently": each
+    id is canonicalized for the lookup and the result is keyed back by the
+    **requested** spelling so a caller can align answers with its own request.
+
+    A client that reused one `capture_id` for different bytes gets the first
     admission; the returned ``content_sha256`` is what lets it detect that reuse.
     """
-    wanted = [value for value in capture_ids if isinstance(value, str) and value.strip()]
+    wanted = {canonical_capture_id(value) for value in capture_ids}
+    wanted.discard("")
     if not wanted:
         return {}
-    return _backend().first_by_capture_ids(wanted)
+    found = _backend().first_by_capture_ids(sorted(wanted))
+    resolved: Dict[str, MediaReceipt] = {}
+    for value in capture_ids:
+        receipt = found.get(canonical_capture_id(value))
+        if receipt is not None:
+            resolved[value] = receipt
+    return resolved
 
 
 def all_media_receipts() -> List[MediaReceipt]:
@@ -461,6 +503,7 @@ __all__ = [
     "MediaReceiptSchemaMissingError",
     "all_media_receipts",
     "append_media_receipt",
+    "canonical_capture_id",
     "derive_receipt_id",
     "find_media_receipts_by_capture_ids",
     "get_media_receipt",

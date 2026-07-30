@@ -316,21 +316,68 @@ def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:
 
 
 def test_capture_id_spelling_does_not_mint_a_second_receipt(client: TestClient) -> None:
-    """One logical UUID is one transfer identity, whatever spelling arrives.
+    """One logical UUID is one transfer identity, on admission AND on recovery.
 
-    `UUID()` accepts uppercase, braced, and `urn:uuid:` forms of the same id, and
-    the receipt identity is derived from this string — so admitting a spelling
-    verbatim would mint a receipt per spelling and answer `unknown` for the rest.
+    `UUID()` accepts uppercase, braced, unhyphenated, and `urn:uuid:` forms of the
+    same id, and the receipt identity is derived from this string. Canonicalizing
+    only on the write path is worse than not canonicalizing at all: an uppercase
+    client (Swift's `UUID().uuidString`) would be told `unknown` for a capture
+    that IS durably admitted — precisely the reconnect answer it cannot verify any
+    other way, and the one case where it does not know the canonical form because
+    the response was lost.
     """
-    media = b"same-capture-id-two-spellings"
     canonical = str(uuid4())
-    first = _post_media(client, media, _sidecar(media, capture_id=canonical))
-    second = _post_media(client, media, _sidecar(media, capture_id=canonical.upper()))
-    assert first.status_code == 200 and second.status_code == 200, second.text
+    spellings = [
+        canonical,
+        canonical.upper(),
+        "{" + canonical + "}",
+        canonical.replace("-", ""),
+        f"urn:uuid:{canonical}",
+    ]
 
-    assert second.json()["receipt_id"] == first.json()["receipt_id"]
-    assert second.json()["idempotent_replay"] is True
-    assert second.json()["capture_id"] == canonical
+    media = b"same-capture-id-many-spellings"
+    first = _post_media(client, media, _sidecar(media, capture_id=canonical))
+    assert first.status_code == 200, first.text
+
+    for spelling in spellings:
+        resent = _post_media(client, media, _sidecar(media, capture_id=spelling))
+        assert resent.status_code == 200, resent.text
+        assert resent.json()["receipt_id"] == first.json()["receipt_id"]
+        assert resent.json()["idempotent_replay"] is True
+
+        answer = _get_receipts(client, spelling).json()["receipts"][0]
+        assert answer["outcome"] == "admitted", f"{spelling} queried as {answer['outcome']}"
+        assert answer["receipt_id"] == first.json()["receipt_id"]
+        # The answer echoes what the client asked, so it stays alignable.
+        assert answer["capture_id"] == spelling
+
+    assert len(all_media_receipts()) == 1
+    assert len(all_raw_records()) == 1
+
+
+def test_one_capture_id_spans_both_lanes(client: TestClient, tmp_path: Path) -> None:
+    """The sidecar's `capture_id` is why a client can query one id across lanes.
+
+    A watched-folder admission keyed on a differently-spelled UUID must not mint a
+    second receipt identity for content the governed lane then re-sends.
+    """
+    watch_dir = tmp_path / "watched"
+    watch_dir.mkdir()
+    memo = watch_dir / "memo-cross-lane.m4a"
+    payload = b"admitted-by-the-watcher-then-resent-over-http"
+    memo.write_bytes(payload)
+    canonical = str(uuid4())
+    memo.with_name(f"{memo.name}.capture.json").write_text(
+        json.dumps(
+            {"sidecar_version": 1, "device_id": "iphone-1", "capture_id": canonical.upper()}
+        ),
+        encoding="utf-8",
+    )
+    assert admit_capture_file(memo, key=_KEY, stability_delay=0.0).created
+
+    resent = _post_media(client, payload, _sidecar(payload, capture_id=canonical))
+    assert resent.status_code == 200, resent.text
+    assert resent.json()["idempotent_replay"] is True
     assert len(all_media_receipts()) == 1
     assert _get_receipts(client, canonical).json()["receipts"][0]["outcome"] == "admitted"
 
@@ -878,6 +925,52 @@ def test_media_receipt_store_rejects_a_second_receipt_for_the_same_identity() ->
     assert second.receipt_id == first.receipt_id
     assert second.admitted_at == first.admitted_at
     assert len(all_media_receipts()) == 1
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["upper", "braced", "unhyphenated", "urn", "padded"],
+)
+def test_receipt_identity_is_spelling_independent_in_the_store(spelling: str) -> None:
+    """The store owns canonicalization, so it holds regardless of the caller.
+
+    Asserted directly on `media_receipts`, not only through the route: this is the
+    rule every lane and every lookup depends on, and it must not rest on a
+    particular caller normalizing first.
+    """
+    canonical = str(uuid4())
+    variants = {
+        "upper": canonical.upper(),
+        "braced": "{" + canonical + "}",
+        "unhyphenated": canonical.replace("-", ""),
+        "urn": f"urn:uuid:{canonical}",
+        "padded": f"  {canonical}  ",
+    }
+    variant = variants[spelling]
+    content_sha256 = hashlib.sha256(f"identity-{spelling}".encode()).hexdigest()
+
+    assert media_receipts.canonical_capture_id(variant) == canonical
+    assert media_receipts.derive_receipt_id(variant, content_sha256) == (
+        media_receipts.derive_receipt_id(canonical, content_sha256)
+    )
+
+    stored, created = media_receipts.append_media_receipt(
+        capture_id=variant,
+        content_sha256=content_sha256,
+        raw_ref="heimraw:record-spelling",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        payload={},
+    )
+    assert created and stored.capture_id == canonical
+    assert media_receipts.get_media_receipt(canonical, content_sha256) is not None
+    # Both spellings resolve, and each answer is keyed back by what was asked.
+    found = media_receipts.find_media_receipts_by_capture_ids([variant, canonical])
+    assert set(found) == {variant, canonical}
+    assert {receipt.receipt_id for receipt in found.values()} == {stored.receipt_id}
+
+    # A non-UUID id (the watched-folder lane's content-hash key) passes through.
+    assert media_receipts.canonical_capture_id(content_sha256) == content_sha256
 
 
 def test_shared_seam_reports_an_already_acknowledged_identity_as_not_new() -> None:

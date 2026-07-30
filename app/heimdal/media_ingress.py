@@ -509,17 +509,20 @@ def record_watched_folder_admission(
     delete-after-confirmed-ingest behavior, which #4362 owns.
 
     ``capture_id`` comes from the HCAP-07 sidecar when it carries one; otherwise
-    the receipt is keyed by the content hash itself, so one query parameter
-    serves both lanes. A sidecar is untrusted client input whose values are not
-    type-validated upstream, so a non-string `capture_id` must degrade to the
-    content-hash key rather than raise -- everything here runs *after* the
-    durable write, and an exception escaping into `admit_capture_file` would
-    strand the source file as permanently "refused" on every tick.
+    the receipt is keyed by the content hash itself, so one query parameter serves
+    both lanes. `media_receipts` is the authority on canonicalizing a spelling, so
+    a sidecar UUID written differently than the client's HTTP request still
+    resolves to one transfer identity; `canonical_capture_id` is called here for
+    its other job -- a sidecar is untrusted client input whose values are not
+    type-validated upstream, and a non-string `capture_id` must degrade to the
+    content-hash key rather than raise. Everything here runs *after* the durable
+    write, so an exception escaping into `admit_capture_file` would strand the
+    source file as permanently "refused" on every tick.
     """
     content_sha256 = record.content_identity
     try:
         raw_ref = raw_ref_for(record)
-        sidecar_capture_id = capture_id.strip() if isinstance(capture_id, str) else ""
+        sidecar_capture_id = media_receipts.canonical_capture_id(capture_id)
         resolved_capture_id = sidecar_capture_id or content_sha256
         receipt, _newly_acknowledged = record_media_admission(
             capture_id=resolved_capture_id,
@@ -560,11 +563,16 @@ def receipt_answer(receipt: Optional[MediaReceipt], capture_id: str) -> Dict[str
     ``unknown`` is a first-class answer, not an error: it is how a client
     distinguishes "my response was lost" from "my capture never arrived"
     (INV-CDLM-3) after a crash or reconnect.
+
+    Both branches echo the ``capture_id`` the caller **asked** for, not the
+    canonical form, so answers stay positionally alignable with the request even
+    when the client spelled its own UUID differently. The stable identity to key
+    on is ``receipt_id``.
     """
     if receipt is None:
         return {"capture_id": capture_id, "outcome": "unknown"}
     return {
-        "capture_id": receipt.capture_id,
+        "capture_id": capture_id,
         "outcome": "admitted",
         "receipt_id": receipt.receipt_id,
         "content_sha256": receipt.content_sha256,

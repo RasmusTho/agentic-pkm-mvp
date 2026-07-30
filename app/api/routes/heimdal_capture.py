@@ -144,17 +144,17 @@ class MediaSidecar(BaseModel):
         Validated here and *not* on the receipt query: a watched-folder receipt
         is keyed by its content hash, so the query must accept that form too.
 
-        Canonicalized to the plain hyphenated lowercase form, because the receipt
-        identity is derived from this string: `UUID()` accepts uppercase, braced,
-        and `urn:uuid:` spellings of the same id, and admitting them verbatim
-        would mint a distinct receipt per spelling and answer `unknown` for the
-        others.
+        This validates only; it deliberately does not normalize. Canonicalizing
+        spellings is `app.heimdal.media_receipts.canonical_capture_id`'s single
+        responsibility, applied to the stored value, the derived receipt identity,
+        and the recovery lookup alike — so no route or lane can key a receipt one
+        way and look it up another.
         """
         try:
-            canonical = str(UUID(value))
+            UUID(value)
         except (ValueError, AttributeError, TypeError) as exc:
             raise ValueError("capture_id must be a client-minted UUID") from exc
-        return canonical
+        return value
 
     @field_validator("content_sha256")
     @classmethod
