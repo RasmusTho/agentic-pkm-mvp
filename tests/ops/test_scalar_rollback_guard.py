@@ -1311,6 +1311,73 @@ def test_scalar_deployment_begin_rejects_invalid_claimed_receipt_unchanged(
     } == before_split_receipt
 
 
+def test_non_scalar_reconciliation_preserves_exact_scalar_receipt(
+    tmp_path,
+) -> None:
+    cases = (
+        ("claim-to-proved", "claimed", "proved", False),
+        ("proved-to-cleanup", "proved", "cleanup", False),
+        ("owner-receipt", "proved", "proved", True),
+    )
+    for name, root_phase, public_phase, owner_receipt in cases:
+        ownership_root = tmp_path / name
+        ownership_root.mkdir()
+        public: dict[str, object] = {
+            "schema": "agentic-pkm.host-deployment-lease.v3",
+            "channel_id": "prod",
+            "nonce": f"nonce-{name}",
+            "phase": public_phase,
+            "controller": {
+                "pid": 999_999_987,
+                "start_token": "linux:" + "b" * 64,
+            },
+            "legacy_path": str(tmp_path / "legacy.md"),
+            "scalar_roll_forward": {
+                "schema": (
+                    "agentic-pkm.scalar-roll-forward-deployment-receipt.v1"
+                ),
+                "status": "merged",
+                "session_sha256": "a" * 64,
+            },
+        }
+        if owner_receipt:
+            public["owner_receipt_digest"] = "c" * 64
+        if public_phase == "cleanup":
+            public["result"] = {
+                "channel": "prod",
+                "restart_fence_cleared": True,
+            }
+        root = runtime_module._compatibility_block_payload(public)
+        root["phase"] = root_phase
+        root["scalar_roll_forward"] = {
+            **root["scalar_roll_forward"],
+            "session_sha256": "d" * 64,
+        }
+        if root_phase == "claimed":
+            root.pop("inventory_digest", None)
+            root.pop("all_consumers_stopped", None)
+        if public_phase == "cleanup":
+            root.pop("result", None)
+        if owner_receipt:
+            root.pop("owner_receipt_digest", None)
+        root_path = runtime_module._legacy_deployment_lease_path(
+            ownership_root
+        )
+        runtime_module._write_private_json(root_path, root)
+        before = root_path.read_bytes()
+
+        with pytest.raises(
+            InstanceStatePreflightError,
+            match="compatibility block does not match",
+        ):
+            runtime_module._require_matching_compatibility_block(
+                ownership_root,
+                public,
+                reconcile_from_previous_phase=True,
+            )
+        assert root_path.read_bytes() == before
+
+
 def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
     runtime = InstanceRegistryRuntime.for_paths(
         InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),

@@ -1019,6 +1019,20 @@ _SCALAR_ROLL_FORWARD_RECEIPT_SCHEMA = (
 _MISSING_SCALAR_ROLL_FORWARD_RECEIPT = object()
 
 
+def _same_optional_scalar_roll_forward_receipt(
+    left: Mapping[str, object],
+    right: Mapping[str, object],
+) -> bool:
+    return (
+        ("scalar_roll_forward" in left)
+        == ("scalar_roll_forward" in right)
+        and (
+            "scalar_roll_forward" not in left
+            or left["scalar_roll_forward"] == right["scalar_roll_forward"]
+        )
+    )
+
+
 def _scalar_roll_forward_receipt_matches_registry(
     receipt: Mapping[str, object],
     registry: RegistrySnapshot,
@@ -1580,14 +1594,9 @@ def _require_matching_compatibility_block(
             )
         )
         and root_authority.get("controller") != expected.get("controller")
-        and (
-            ("scalar_roll_forward" in root_authority)
-            == ("scalar_roll_forward" in expected)
-        )
-        and (
-            "scalar_roll_forward" not in root_authority
-            or root_authority["scalar_roll_forward"]
-            == expected["scalar_roll_forward"]
+        and _same_optional_scalar_roll_forward_receipt(
+            root_authority,
+            expected,
         )
         and not _controller_identity_is_live(root_authority.get("controller"))
     ):
@@ -1647,12 +1656,21 @@ def _require_matching_compatibility_block(
             )
         )
         and (
-            (root_authority.get("phase"), expected.get("phase"))
-            in {("claimed", "proved"), ("proved", "cleanup")}
-            or (
-                root_authority.get("phase") == expected.get("phase")
-                and root_authority.get("owner_receipt_digest") is None
-                and expected.get("owner_receipt_digest") is not None
+            (
+                (
+                    (root_authority.get("phase"), expected.get("phase"))
+                    in {("claimed", "proved"), ("proved", "cleanup")}
+                    or (
+                        root_authority.get("phase")
+                        == expected.get("phase")
+                        and root_authority.get("owner_receipt_digest") is None
+                        and expected.get("owner_receipt_digest") is not None
+                    )
+                )
+                and _same_optional_scalar_roll_forward_receipt(
+                    root_authority,
+                    expected,
+                )
             )
             or (
                     root_authority.get("phase") == expected.get("phase") == "proved"
