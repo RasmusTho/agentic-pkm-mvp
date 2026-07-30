@@ -762,6 +762,13 @@ def build_parser() -> argparse.ArgumentParser:
             "The /signboard board is served from the dispatcher store and no "
             "longer reads these files; kept for hosts with an existing board."
         ),
+        description=(
+            "[LEGACY] Export the dispatcher queue as a Signboard Markdown board. "
+            "Nothing reads this export any more: /signboard is served directly from "
+            "the dispatcher store (#4401). The command is kept working for builder "
+            "hosts that still hold a board directory; physical removal is a "
+            "separate follow-up."
+        ),
     )
     p.add_argument(
         "path",
@@ -790,6 +797,12 @@ def build_parser() -> argparse.ArgumentParser:
             "[LEGACY] Validate generated Signboard cards without changing the "
             "board or dispatcher store. Lints the legacy Markdown export only; "
             "the /signboard board is served from the store."
+        ),
+        description=(
+            "[LEGACY] Validate generated Signboard cards without changing the board "
+            "or the dispatcher store. Lints the legacy Markdown export only; the "
+            "/signboard board is served directly from the store (#4401) and cannot "
+            "be affected by anything this command reports."
         ),
     )
     p.add_argument(

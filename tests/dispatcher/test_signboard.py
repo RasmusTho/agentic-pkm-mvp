@@ -537,6 +537,25 @@ def test_export_remains_the_only_board_root_consumer(monkeypatch, tmp_path) -> N
     assert "SIGNBOARD_ROOT" not in route_source
 
 
+def test_export_and_validate_commands_announce_themselves_as_legacy() -> None:
+    """Both commands still work, and both say they are legacy (#4401).
+
+    Deprecation here is a `--help` promise made to operators with a live board;
+    ``docs/AGENT_ISSUE_DISPATCHER.md :: Signboard projection`` states it, so it
+    has to stay true.
+    """
+    from app.dispatcher.cli import build_parser
+
+    parser = build_parser()
+    top_level_help = parser.format_help()
+    subparsers = parser._subparsers._group_actions[0]  # type: ignore[union-attr]
+    for command in ("export-signboard", "signboard-validate"):
+        assert command in subparsers.choices
+        # The command listing and the command's own --help both say it.
+        assert "[LEGACY]" in top_level_help
+        assert "[LEGACY]" in subparsers.choices[command].format_help()
+
+
 def _write_stale_card(board: Path, template: Path, *, task_id: str, notes: str | None) -> Path:
     """Copy a generated card under a task id that is absent from the store.
 
