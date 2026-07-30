@@ -350,7 +350,10 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
             assert isinstance(owner, ast.FunctionDef)
             call_sites.append((str(path.relative_to(repo_root)), owner.name))
     assert call_sites == [
-        ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note")
+        # Meeting finalization (CDLM-08, #4388): create-once Sources-zone
+        # artifacts written atomically through the same O_EXCL primitive.
+        ("app/heimdal/meeting_finalization.py", "finalize_session"),
+        ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
     ]
 
     writeback_tree = ast.parse(writeback_path.read_text(encoding="utf-8"))
