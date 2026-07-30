@@ -82,6 +82,20 @@ promote public internet readiness.
   is owned by `docs/EVENTS.md :: Heimdal governed media ingress + durable receipts` and
   `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`; promotion into
   `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 remains parent-acceptance work on #4383.
+- The meeting session/segment ledger is shipped (CDLM-02, #4385): `POST /api/heimdal/meeting/session`
+  and `POST /api/heimdal/meeting/{session_id}/close` are idempotent by client-minted identity and
+  never fork or re-open a session; every governed media admission carrying `(session_id, session_seq)`
+  lands exactly one ledger row per pair referencing its CDLM-01 receipt, with a different content
+  hash for an existing pair failing closed (original preserved, conflict recorded once per logical
+  conflict, surfaced as needs-attention). `GET /api/heimdal/meeting/{session_id}/segments` names the
+  received and missing sequence numbers before and after close, and `complete` flips only when the
+  ledger covers the declared count. A late admission into a closed session updates the ledger and
+  emits `heimdal.meeting.segment.late_admitted` (the CDLM-06/08 re-derive trigger) without
+  re-opening. Ledger state is durable — migration `a7c2e9f4b1d3` for Postgres/PDM, a file-backed
+  SQLite lane for dev/test — so a hub restart rebuilds nothing from memory. The
+  `HEIMDAL_RAW_STORE_KEY` provisioning gap above bounds live use of the admission-fed segment path
+  the same way it bounds CDLM-01. Contract detail is owned by `docs/EVENTS.md` and
+  `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/TRACK_MEETING_SESSIONS_AND_SEGMENT_GAPS.md`.
 - The System Entry Point capability (#1782) is delivered. All twelve implementation children shipped: server-declared entry state (#1783/PR #1800), latency-ladder re-entry treatments (#1784/PR #1801), unified topbar/overlay host (#1785/PR #1802), the ⌘K Panel command palette (#1786/PR #1817), the system map overlay (#1787/PR #1846), the opt-in guidance layer (#1788/PR #1847), the settings drawer (#1789/PR #1834), governed capture append plus the ⌘N capture modal (#1790/PR #1799, #1791/PR #1816), memory review-queue endpoints plus drawer (#1792/PR #1798, #1793/PR #1818), and the read-only receipts history modal (#1794/PR #1833). The fixture-driven state-gallery validation harness (#1795, SEP-11; `tests/companion_ui/test_entry_state_gallery.py`) proves the composition: declared transitions render and undeclared transitions are rejected, cold/first-contact/no-vault render no re-entry overlay, the governed-vs-body-edit receipt asymmetry holds, no UI-derived authority classification renders, the display budget stays at or below the server caps, reduced-motion end-states are fully visible, and narrow mode preserves every critical affordance. The source-peek popover presentation and posture emphasis switch remain truthfully unshipped (declared overlay ids that do not mount); the context lane / place band stay parked under the gated decision issue #1796. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits
