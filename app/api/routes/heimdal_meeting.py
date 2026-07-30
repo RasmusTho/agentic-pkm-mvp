@@ -35,7 +35,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.routes.heimdal_capture import _assert_lan_posture, _trace_id
-from app.heimdal import meeting_ledger
+from app.heimdal import meeting_ledger, meeting_projection
 from app.heimdal.media_ingress import iso_timestamp
 from app.heimdal.meeting_ledger import MeetingSession, MeetingSessionNotFoundError
 
@@ -161,6 +161,27 @@ def close_session(
         # `meeting_ledger_failed` shape rather than an unnamed 500.
         raise _ledger_failed(exc, trace_id) from exc
     return _session_response(session, replay=not newly_closed, trace_id=trace_id)
+
+
+@router.get("/{session_id}/projection")
+def projection(request: Request, session_id: str) -> Dict[str, Any]:
+    """The iPad's poll target (CDLM-06): transcript + analysis projections.
+
+    Side-effect-free: assembles from the ledger and durable projection state,
+    derives nothing. Blocks are explicitly revisable projections, never
+    canonical truth (INV-CDLM-5) — every block carries revision, derived_from,
+    template, and engine provenance.
+    """
+    trace_id = _trace_id(request)
+    _assert_lan_posture(request, trace_id)
+    try:
+        report = meeting_projection.build_projection(session_id)
+    except MeetingSessionNotFoundError as exc:
+        raise _session_unknown(session_id, trace_id) from exc
+    except Exception as exc:
+        raise _ledger_failed(exc, trace_id) from exc
+    report["trace_id"] = trace_id
+    return report
 
 
 @router.get("/{session_id}/segments")
