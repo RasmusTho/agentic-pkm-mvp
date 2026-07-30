@@ -9,8 +9,9 @@ depends_on: [RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md]
 can_parallelize_with: []
 ---
 
-State: Authored task specification (child issue #4292, filed 2026-07-29). Closes the interim window
-opened by MAS-02. It follows accepted MAS-05 parent validation; the order does not swap.
+State: Re-scoped task specification (child issue #4292, filed 2026-07-29; owner-cost amendment
+applied 2026-07-30). Closes the interim window opened by MAS-02. It follows the delivered MAS-05
+mechanism and launcher-lineage repairs; the order does not swap.
 
 # Replace CKM Product Routing With Builder Adapter
 
@@ -24,18 +25,25 @@ candidate the router appends. That is the authority leakage ADR-0063 rejected it
 and `importlinter.ini` did not catch it because `app.builderops` and `app.components` sit on the same
 side of the only existing contract.
 
-ADR-0064 §8 **amends ADR-0063's sequencing**: CKM migrates after Model Inquiry proves the substrate,
+ADR-0064 §8 **amends ADR-0063's sequencing**: CKM migrates after the Model Inquiry mechanism,
 requiring credential resolution and the neutral intent/resolver/adapter contracts — not a complete
-Builder Capability Runtime.
+Builder Capability Runtime or a live metered-provider receipt.
 
 ## Position in the order
 
-The amended ADR-0064 §8 keeps Model Inquiry first and CKM migration at step 5. This issue remains
-blocked until `model_access_substrate.provider_enabled_noninteractive_inquiry.v1` is accepted on the
-parent. **Owner ruling 2026-07-30 (cost):** that receipt is withdrawn as a gate — metered provider
-API keys are not provisioned (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 —
-owner cost ruling on the model-inquiry path`); this task's entry gate must be re-scoped before it
-can become ready, and it stays `agent:blocked` until that re-scoping lands. A builder agent may read CKM evidence during the window; CKM itself remains projection-only.
+The amended ADR-0064 §8 keeps Model Inquiry first and CKM migration at step 5. The 2026-07-30 owner
+cost ruling withdraws `model_access_substrate.provider_enabled_noninteractive_inquiry.v1` and bridge
+retirement as gates. MAS-06's replacement entry gate is:
+
+1. the MAS-05 neutral resolver, declared-credential failure path, and launcher-lineage repairs are
+   merged; and
+2. the ADR-0064 cost amendment is merged and the live Issue contract states that CKM must not reuse
+   Model Inquiry's sanctioned subscription session.
+
+Those conditions are repo-verifiable and satisfied once this re-scope is merged. MAS-06 may then
+remove the Product authority leak, but with intentionally absent metered credentials its production
+association result is a visible zero-edge skip. It does not claim active provider-backed inference.
+A builder agent may read CKM evidence during the window; CKM itself remains projection-only.
 
 ## What this task does
 
@@ -43,7 +51,9 @@ can become ready, and it stays `agent:blocked` until that re-scoping lands. A bu
    (`app/builderops/ckm/semantic.py:104`) on top of the MAS-05 Builder resolver and kernel
    `ModelTurnAdapter`. It submits provider-free `ModelAccessIntent`, declares
    `fallback_forbidden`, and receives provider/model/capability/credential provenance only as a
-   resolved result.
+   resolved result. The production host's intentionally absent metered credential is an expected
+   unavailable state: it writes zero inferred edges and never selects Product policy or Model
+   Inquiry's subscription session.
 2. Remove `FabricSemanticAssociator` and both Product imports from `app/builderops/ckm/semantic.py`:
    `app.components.llm.fabric` (`LLMTaskIntent`, `get_chat_client`) and `app.components.llm.constrained`
    (`ConstrainedCompletionError`, `register_schema`, `validate_payload`). The schema-reference and
@@ -93,8 +103,8 @@ live; this task is the only thing that removes it.
 
 ## Acceptance criteria
 
-- [ ] CKM semantic association resolves its model through the kernel adapter with a contract-resolved
-      credential, and `FabricSemanticAssociator` no longer exists.
+- [ ] CKM semantic association resolves through the kernel adapter and declared credential identity,
+      fails closed when its value is unavailable, and `FabricSemanticAssociator` no longer exists.
       Verify: `tests/builderops/ckm/test_semantic.py::test_semantic_association_resolves_through_builder_adapter`
 - [ ] The production CKM call site submits no provider/model and resolves exclusively through the
       Builder runtime/channel census mapping.
@@ -150,9 +160,10 @@ the production import and exemption disappear together.
 
 ## Out of scope
 
-CKM dispatch, mutation, ranking, gating, prioritization, or decision authority. Changing the CKM
-object model, maturity engine, projections, or any other CKM surface. Deterministic linkers, migration
-steps 6 and 7, and Product routing remain unchanged.
+CKM dispatch, mutation, ranking, gating, prioritization, or decision authority. Active
+provider-backed CKM inference, provisioning metered credentials, or reusing Model Inquiry's
+subscription session. Changing the CKM object model, maturity engine, projections, or any other CKM
+surface. Deterministic linkers, migration steps 6 and 7, and Product routing remain unchanged.
 
 ## Related docs
 
@@ -168,10 +179,11 @@ steps 6 and 7, and Product routing remain unchanged.
 
 One issue. Title shape
 `[Model Access Substrate] replace-ckm-product-routing-with-builder-adapter: end the interim authority leak`.
-Its `Context` must state that amended ADR-0064 §8 keeps this after the accepted MAS-05 receipt, that
-the task removes the MAS-02 exemption, and that CKM remains projection-only. It stays
-`agent:blocked` until the parent records
-`model_access_substrate.provider_enabled_noninteractive_inquiry.v1`.
+Its `Context` must state that amended ADR-0064 keeps this after the delivered MAS-05 mechanism and
+the 2026-07-30 owner-cost ruling, that the task removes the MAS-02 exemption, that intentionally
+absent metered credentials produce a visible zero-edge skip, and that CKM remains projection-only.
+After this re-scope is merged, the old provider receipt is no longer a blocker and the live Issue may
+be made `agent:ready` through strict readiness validation.
 
 TCD capability recommendation for the implementing agent: **Opus / high reasoning** — authority-boundary
 work with a negative-proof requirement and a thirteen-test regression contract; the defect mode is a

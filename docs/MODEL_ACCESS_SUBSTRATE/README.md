@@ -5,25 +5,28 @@ subscription-backed session remains the sanctioned operational auth for host-loc
 (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
 model-inquiry path`). MAS-01..05 stay delivered as merged code; the parent live-proof receipt
 `provider_enabled_noninteractive_inquiry.v1` and the legacy-bridge retirement receipt are withdrawn
-as acceptance gates, and MAS-06's entry gate re-scopes with them. Capability re-scoping is pending.
+as acceptance gates. This specification re-scopes MAS-06 as an authority-leak removal: the CKM
+Builder path fails closed while the declared metered credentials remain intentionally absent and
+never substitutes the sanctioned Model Inquiry subscription session.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the task decomposition, execution order, cross-task invariants, and acceptance path for the model access substrate. Subordinate to `docs/adr/ADR-0064-model-access-substrate.md` (the decision), `docs/adr/ADR-0063-shared-llm-contract-kernel.md` (contract seam and fallback vocabulary), ADR-0062 (Builder credential/process separation), `docs/LOCAL_SECRET_PROVISIONING/README.md` (host secret boundary and INV-HSP-1..4), and `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` (provider census and egress posture). Owner docs win on disagreement.
 Owner: Architecture spine / LLM boundary
 Temporal class: strategic
 Review cadence: event-driven (task merge, ADR amendment, or a change in the CKM orchestration question)
 Source of truth: this directory for task shape and acceptance; ADR-0064 for the decision; `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md` for the evidence baseline
-Last reviewed: 2026-07-29
+Last reviewed: 2026-07-30
 
 # Model Access Substrate
 
 ## Outcome
 
 Model-provider **credential and session resolution becomes part of the model abstraction** rather than
-infrastructure around it, and **declared API keys become the default programmatic auth path**. When
-this capability is accepted, Model Inquiry and CKM obtain an authenticated model channel through one
-contract, without a human at a GUI login, without a per-provider hand-built bridge, and without caller
-code naming a provider. The neutral seam enables later CI, scheduled-job, and verification-closer
-migrations; this Phase 1 does not deliver those consumers.
+infrastructure around it, and **declared API keys remain the default programmatic mechanism when a
+metered path is authorized**. Under the 2026-07-30 owner cost ruling, host-local Model Inquiry keeps
+its sanctioned subscription session while CKM moves off Product routing and fails closed when its
+declared metered credential is unavailable. The neutral seam enables later CI, scheduled-job, and
+verification-closer migrations; this Phase 1 does not deliver those consumers or claim active
+provider-backed CKM inference.
 
 Three mechanisms already exist unfinished, and this capability finishes them rather than designing a
 fourth:
@@ -110,8 +113,8 @@ this substrate's authority.
 | 2 | [Make builder-to-product LLM dependency visible](MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md) | MAS-02 | MAS-01 | `importlinter` fails on `app.builderops -> app.components.llm` with exactly one named, dated exemption for `app/builderops/ckm/semantic.py`. |
 | 3 | [Extend credential contract to model providers](EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md) | MAS-03 | MAS-02 | Exact value-free model-key declarations join the existing contract; CI green-on-absent paths are removed. |
 | 4 | [Promote adapter contract to neutral kernel](PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md) | MAS-04 | MAS-03 | Neutral intent, resolution, capability, adapter/result, failure, fallback, and provenance contracts become importable by both runtimes. |
-| 5 | [Resolve model inquiry credentials through contract](RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md) | MAS-05 | MAS-04 | First beneficiary uses the Builder resolver and declared credentials; its PR hands the live proof to parent validation. |
-| 6 | [Replace CKM product routing with builder adapter](REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md) | MAS-06 | accepted MAS-05 parent receipt | CKM semantic association consumes the Builder resolver; Product fallback cannot execute the task and the transition exemption is removed. |
+| 5 | [Resolve model inquiry credentials through contract](RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md) | MAS-05 | MAS-04 | Delivers the Builder resolver, declared-credential mechanism, typed failure path, and repo-owned launcher lineage; the operational host remains on its sanctioned subscription session under the later owner ruling. |
+| 6 | [Replace CKM product routing with builder adapter](REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md) | MAS-06 | delivered MAS-05 mechanism + ADR-0064 owner-cost amendment | CKM semantic association consumes the Builder resolver; Product and subscription fallback cannot execute the task, absent metered credentials produce a visible zero-edge skip, and the transition exemption is removed. |
 
 Flat order: **MAS-01 → MAS-02 → MAS-03 → MAS-04 → MAS-05 → MAS-06.**
 
@@ -129,10 +132,12 @@ These hold *across* task boundaries. Each task names the ones it must preserve.
   provider is a census row plus a secret declaration; it is never a new bridge. Callers declare
   capability tier, reasoning effort, determinism, schema reference, independence, fallback
   requirement, and side-effect class; the owning runtime/channel resolver selects provider/model.
-- **INV-MAS-2 — credentials resolve only through the contract.** Every model-provider credential
-  consumer — host launcher, model inquiry, CKM, CI — obtains its value through
+- **INV-MAS-2 — metered credentials resolve only through the contract.** Every consumer of a raw
+  model-provider API key — CKM, CI, or a future metered Model Inquiry path — obtains its value through
   `app/ops/host_secret_contract.py` and `app/ops/host_secret_bootstrap.py`. INV-HSP-1..4 are inherited
   unchanged. No consumer reads a provider key from ambient process environment as its primary path.
+  ADR-0064's 2026-07-30 amendment permits the existing subscription session only for host-local
+  Model Inquiry; that exception is not a credential source or fallback for CKM.
 - **INV-MAS-3 — one failure vocabulary, two validators.** The adapter-side classification and the
   independent persistence-boundary re-validation both remain. They read one vocabulary source, so a
   member added in one place cannot be missing in the other.
@@ -155,13 +160,12 @@ These hold *across* task boundaries. Each task names the ones it must preserve.
 Each task is locally correct and can still lose truth in the seam. These are the seams and their
 invariants.
 
-- **Seam A — declaration lands before the value exists (MAS-03 → MAS-05/MAS-06).** MAS-03 may declare
-  `openai.api-key` / `anthropic.api-key` for a Builder consumer before any host holds the value. The
-  hazard is a consumer that finds no Keychain value and quietly reverts to the old subscription-session
-  path, restoring exactly the failure this capability exists to remove. **Invariant:** a declared
-  identifier whose value is absent or malformed fails the consuming process **closed** at startup,
-  names only the logical identifier, and never falls back to ambient environment or to an interactive
-  session. Verified inside each consuming task, not only in the contract task.
+- **Seam A — declaration lands while the value is intentionally absent (MAS-03 → MAS-05/MAS-06).**
+  The owner ruling leaves `openai.api-key` / `anthropic.api-key` unprovisioned. The hazard is a
+  consumer that treats this expected state as permission to select Product policy, an ambient value,
+  or the sanctioned Model Inquiry subscription session. **Invariant:** CKM and every metered path fail
+  **closed**, name only the logical identifier, and emit a visible zero-edge/unavailable outcome.
+  The subscription exception is confined to host-local Model Inquiry and is never a CKM fallback.
 - **Seam B — vocabulary added at the adapter but not at persistence (MAS-04 → MAS-05).** If
   `credential_unavailable` is emitted by an adapter but rejected by the persistence-boundary
   validator, a real authentication failure is recorded as a persistence failure and the diagnostic that
@@ -172,10 +176,12 @@ invariants.
   Removing it earlier reddens main; removing it later leaves a contract that passes for the wrong
   reason. **Invariant:** exemption removal and import removal are atomic, and the contract is never
   made to pass by widening `ignore_imports` or moving a module out of `source_modules`.
-- **Seam D — Model Inquiry proves the resolver while CKM remains on Product routing
-  (MAS-05 → MAS-06).** A successful Model Inquiry receipt proves the substrate, not CKM evidence
-  integrity. **Invariant:** CKM design-agent work remains blocked until the Phase 1 receipt is accepted;
-  the CKM semantic transition exemption is removed only with the production import.
+- **Seam D — the resolver mechanism is delivered while CKM remains on Product routing
+  (MAS-05 → MAS-06).** The withdrawn provider-enabled receipt is no longer an entry gate.
+  **Invariant:** MAS-06 may use the delivered neutral resolver/adapter mechanism, but it must treat the
+  intentionally absent metered credential as unavailable, write zero inferred edges, and never reuse
+  Model Inquiry's subscription session. The CKM semantic transition exemption is removed atomically
+  with the production Product import.
 - **Seam E — census declared, site not yet migrated (MAS-01 → everything).** A census projection that
   disagrees with a live site must fail, not be quietly widened. **Invariant:** the equality test's only
   escape hatch is a declared divergence entry carrying a linked issue number and a date; an entry
@@ -193,13 +199,11 @@ the per-task criteria live in the task files.
       contract, and a missing value fails the consumer closed while naming only the logical identifier.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_provider_identifiers_are_declared_data`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
-- [ ] No headless entrypoint depends on an interactive subscription CLI session.
-      Verify: `tests/governance/test_model_inquiry_host_install.py::test_headless_entrypoints_do_not_require_subscription_session`
-- [ ] A model inquiry completes over a fresh non-interactive session on the configured inquiry host,
-      with a provider-returned request id in the persisted turn receipt.
-      Verify: redacted operator receipt posted to the parent feature issue, compared against the
-      `final_state: provider_error` / `adapter_failure_class: command_exit_nonzero` failure recorded in
-      `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 3.1 What the substrate owns`
+- [ ] The repo-owned metered launcher and role entrypoints remain content/lineage verified and fail
+      closed without declared credentials; the operational host's sanctioned subscription launcher
+      is documented as a Model Inquiry-only owner exception, not accepted as CKM execution.
+      Verify: `tests/governance/test_model_inquiry_host_install.py::test_check_rejects_discoverable_stale_subscription_launcher`
+      Verify: `docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the model-inquiry path`
 - [ ] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`
@@ -217,17 +221,13 @@ the per-task criteria live in the task files.
 
 ## Validation and acceptance
 
-Each child PR proves its named tests and posts a receipt on the parent feature issue. Two pieces of
-evidence cannot live in a test and belong on the parent as redacted operator receipts:
-
-1. a model inquiry completing over a fresh non-interactive session on the configured inquiry host
-   (the reported failure, fixed as a consequence rather than patched); and
-2. retirement of the hand-built per-provider TLS bridge and its version-pinned CLI symlink dependency
-   on that host, which is host state and not repository state.
-
-Acceptance is those two receipts plus the capability criteria above. Post-acceptance owner-doc
-promotion updates `docs/LLM.md` and the already-named local capability owner docs; it does not touch
-`docs/SECURITY.md`, whose promotion remains owned by #3843.
+Each child PR proves its named tests and posts a receipt on the parent feature issue. The
+provider-enabled inquiry and legacy-bridge-retirement receipts were withdrawn by the 2026-07-30 owner
+cost ruling and are not acceptance gates. Phase 1 acceptance is repo-verifiable: the delivered
+mechanism and failure contracts plus MAS-06's removal of the Product authority leak, zero-exemption
+import boundary, and fail-closed zero-edge behavior while metered credentials are absent.
+Post-acceptance owner-doc promotion updates `docs/LLM.md` and the already-named local capability
+owner docs; it does not touch `docs/SECURITY.md`, whose promotion remains owned by #3843.
 
 ## Backlog reconciliation (2026-07-27)
 

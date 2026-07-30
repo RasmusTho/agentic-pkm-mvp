@@ -3,9 +3,11 @@ the strict serial execution chain. GitHub holds the live acceptance ledger; this
 repo-governed contract. **Owner ruling 2026-07-30 (cost):** the two live receipts below
 (`provider_enabled_noninteractive_inquiry.v1`, legacy-bridge retirement) are withdrawn as acceptance
 gates — metered provider API keys are not provisioned and the subscription-backed session remains
-the sanctioned operational auth for host-local model inquiry
+the sanctioned operational auth for host-local model inquiry. MAS-06 instead enters on the delivered
+neutral mechanism plus this ruling and must fail closed with zero inferred edges while credentials
+are absent
 (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
-model-inquiry path`). Parent acceptance re-scopes accordingly; a correction is posted on #4286.
+model-inquiry path`). Parent acceptance is repo-verifiable under the re-scoped criteria below.
 Doc role: Parent feature issue contract (live validation hub #4286)
 Authority: Owns the capability-level validation-hub contract and the acceptance ledger. Subordinate to
 `docs/MODEL_ACCESS_SUBSTRATE/README.md` for task shape and to `docs/adr/ADR-0064-model-access-substrate.md`
@@ -14,7 +16,7 @@ Owner: Architecture spine / LLM boundary
 Temporal class: active delivery contract
 Review cadence: event-driven (filing, each child merge, capability acceptance)
 Source of truth: `docs/MODEL_ACCESS_SUBSTRATE/README.md`
-Last reviewed: 2026-07-29
+Last reviewed: 2026-07-30
 
 # Parent feature issue — Model Access Substrate (steps 1-5)
 
@@ -32,7 +34,9 @@ pickup issue.
 PR #4180. It rules that credential and session resolution is part of the model abstraction, and that
 declared API keys are the default programmatic auth path — subscription CLI sessions become
 interactive-only and must not be a dependency of any headless path. Its acceptance authorizes
-specification and backlog decomposition, not implementation.
+specification and backlog decomposition, not implementation. The 2026-07-30 owner-cost amendment
+suspends that headless-session prohibition only for host-local Model Inquiry; no other Builder
+consumer inherits the exception.
 
 `docs/MODEL_ACCESS_SUBSTRATE/README.md` is that decomposition, covering **migration steps 1-5** of
 `docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md` §8. Steps 6 and 7 are out of scope.
@@ -46,9 +50,10 @@ model-provider credentials in another's out-of-scope.
 
 ## Scope
 
-The outcome, not one PR: a headless caller obtains an authenticated model channel through one contract,
-the provider set is defined once, and CKM stops resolving Builder inference through Product routing
-policy.
+The outcome, not one PR: the provider set and metered credential mechanism are defined once, the
+sanctioned host-local Model Inquiry subscription exception stays explicit, and CKM stops resolving
+Builder inference through Product routing policy. With metered credentials intentionally absent,
+CKM fails closed instead of claiming an authenticated inference channel.
 
 Six bounded tasks, specified in `docs/MODEL_ACCESS_SUBSTRATE/`. This issue is their validation hub and
 is never picked up directly.
@@ -87,20 +92,16 @@ These are the capability-level criteria. Per-task criteria live in the task spec
       contract, and a missing value fails the consumer closed while naming only the logical identifier.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_provider_identifiers_are_declared_data`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
-- [ ] No headless entrypoint depends on an interactive subscription CLI session.
-      Verify: `tests/governance/test_model_inquiry_host_install.py::test_headless_entrypoints_do_not_require_subscription_session`
+- [ ] The repo-owned metered launcher remains content/lineage verified and fail-closed, while the
+      sanctioned host subscription session is confined to Model Inquiry and is not a CKM fallback.
+      Verify: `tests/governance/test_model_inquiry_host_install.py::test_check_rejects_discoverable_stale_subscription_launcher`
+      Verify: `docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the model-inquiry path`
 - [ ] The production inquiry caller submits provider-free intent and resolves provider/model through
       the Builder runtime/channel census mapping after capability checks.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_provider_free_intent_through_builder_census`
 - [ ] The two neutral inquiry roles resolve as one independent group to distinct effective targets,
       and a colliding mapping is refused before provider execution.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_distinct_effective_targets_for_role_group`
-- [ ] A model inquiry completes over a fresh non-interactive session on the configured inquiry host,
-      with a provider-returned request id in the persisted turn receipt.
-      Verify: `runtime receipt: model_access_substrate.provider_enabled_noninteractive_inquiry.v1`
-- [ ] The hand-built per-provider TLS bridge and its version-pinned CLI symlink dependency are retired
-      recoverably on the configured inquiry host after the provider-enabled path is accepted.
-      Verify: `runtime receipt: model_access_substrate.legacy_subscription_bridge_retirement.v1`
 - [ ] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.
       Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`
@@ -125,10 +126,11 @@ Specification directory: `docs/MODEL_ACCESS_SUBSTRATE/`
 | 3 | `EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md` | MAS-03 | MAS-02 |
 | 4 | `PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md` | MAS-04 | MAS-03 |
 | 5 | `RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md` | MAS-05 | MAS-04 |
-| 6 | `REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md` | MAS-06 | accepted MAS-05 parent receipt |
+| 6 | `REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md` | MAS-06 | delivered MAS-05 mechanism + ADR-0064 owner-cost amendment |
 
-The chain is serial. MAS-06 remains blocked until the MAS-05 implementation merges and
-`model_access_substrate.provider_enabled_noninteractive_inquiry.v1` is accepted on this parent.
+The chain is serial. MAS-06 becomes executable after the MAS-05 mechanism and launcher-lineage
+repairs are merged and this owner-ruling re-scope is reflected in its live Issue contract. No live
+provider receipt or bridge retirement is required.
 
 ## Verification Path
 
@@ -139,10 +141,10 @@ importlinter.ini` is a proof surface for MAS-02, MAS-04, and MAS-06.
 
 ## Validation / Acceptance Path
 
-Each merged child posts one short validation receipt here before the next child is picked up. Two
-acceptance items cannot live in a test and arrive as redacted operator receipts on this issue: a real
-model inquiry completing over a fresh non-interactive session, and retirement of the hand-built
-per-provider bridge on the configured inquiry host. Neither receipt may contain a credential value or a
+Each merged child posts one short validation receipt here before the next child is picked up.
+The provider-enabled inquiry and bridge-retirement receipts are withdrawn by the 2026-07-30 owner
+cost ruling. Parent acceptance now uses the repo-verifiable child criteria, including MAS-06's
+Product-import removal and fail-closed zero-edge behavior. No receipt may contain a credential value or a
 host identifier.
 
 Owner-doc promotion triggers only after every acceptance criterion above is satisfied: one PR updating
