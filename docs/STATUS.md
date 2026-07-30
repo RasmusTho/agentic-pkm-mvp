@@ -335,7 +335,14 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   of their own, so with no vault selected there is no board root and the board reports an explicit
   error state rather than an empty one. `export-signboard --prune-absent` removes generated cards
   whose task id has left the dispatcher store, retaining any card that carries human-authored
-  `## Notes` or `## Receipts` text (#4198). The projection remains read-only for coordination fields
+  `## Notes` or `## Receipts` text (#4198). A board now also records which dispatcher store owns it:
+  every export writes a `.signboard-store.json` stamp carrying that store's durable identity (minted
+  into the store's own metadata, not derived from its path), and `--prune-absent` refuses non-zero,
+  before writing or unlinking anything, unless the stamp matches the store the process resolved —
+  the store resolves from the current working directory, so two checkouts on one host reached
+  opposite verdicts about the same board and one of them deleted 404 live cards on 2026-07-29
+  (#4370). `signboard-validate` reports a mismatch read-only as a `store_stamp_mismatch` finding.
+  The projection remains read-only for coordination fields
   and has no write path for claim, lease, or lock state; dispatcher SQLite remains sole claim/lease
   authority per ADR-0010.
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /

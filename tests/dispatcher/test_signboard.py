@@ -10,6 +10,8 @@ Covers:
 
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -17,9 +19,12 @@ import pytest
 from app.dispatcher import signboard as signboard_module
 from app.dispatcher.signboard import (
     DEFAULT_SIGNBOARD_SUBPATH,
+    STORE_STAMP_FILENAME,
     NoActiveVaultError,
+    SignboardStoreOwnershipError,
     default_signboard_root,
     export_signboard,
+    read_store_identity,
     validate_signboard,
 )
 from app.dispatcher.config import load_paths
@@ -646,3 +651,212 @@ def test_prune_retains_a_stale_card_carrying_human_receipts(
     assert result["retained_with_notes"] == [str(stale)]
     assert result["pruned"] == []
     assert "merged in PR #123" in stale.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# #4370: a board records the dispatcher store that owns it
+#
+# The store resolves from the current working directory
+# (``app/dispatcher/config.py :: load_paths`` -> ``_default_state_dir`` ->
+# ``discover_primary_worktree``), so two checkouts on one host have two
+# independent stores. On 2026-07-29 ``--prune-absent`` was run from the checkout
+# that did *not* own the board; every card looked absent and 404 live cards were
+# deleted. These tests fix the missing fact: which store owns the board.
+# ---------------------------------------------------------------------------
+
+
+def _independent_store(state_dir: Path) -> SqliteStore:
+    """A second dispatcher store — exactly like a second checkout on one host.
+
+    It shares no tasks and no identity with the ``store`` fixture, so every card
+    on the other store's board looks absent to it.
+    """
+    state_dir.mkdir(parents=True, exist_ok=True)
+    other = SqliteStore(
+        db_path=state_dir / "dispatcher.sqlite3",
+        event_writer=JsonlEventWriter(state_dir / "events.jsonl"),
+    )
+    other.initialize()
+    return other
+
+
+def test_export_writes_store_identity_stamp(tmp_env, store, tmp_path: Path) -> None:
+    seed_tasks(store)
+    board = tmp_path / "board"
+
+    result = export_signboard(store, board)
+
+    stamp = board / STORE_STAMP_FILENAME
+    assert stamp.is_file()
+    data = json.loads(stamp.read_text(encoding="utf-8"))
+    assert data["store_id"] == read_store_identity(store)
+    assert data["store_id"]
+    assert result["store_id"] == data["store_id"]
+    # The stamp lives outside the card namespace: not a ".md" file, and at the
+    # board root rather than inside a column, so no board consumer renders it.
+    assert stamp.suffix != ".md"
+    assert stamp.parent == board
+
+
+def test_prune_refuses_when_store_stamp_mismatches(tmp_env, store, tmp_path: Path) -> None:
+    seed_tasks(store)
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    foreign = _independent_store(tmp_path / "other-checkout")
+
+    with pytest.raises(SignboardStoreOwnershipError) as excinfo:
+        export_signboard(foreign, board, prune_absent=True)
+
+    assert "stamped by dispatcher store" in str(excinfo.value)
+
+
+def test_prune_mismatch_leaves_every_card_intact(tmp_env, store, tmp_path: Path) -> None:
+    """The 2026-07-29 incident in miniature: the refusal must be total.
+
+    The foreign store knows none of this board's tasks, so without the guard
+    every card is a prune candidate — and the export loop that runs *before*
+    the prune already unlinks generated cards of its own accord. Nothing on the
+    board may change.
+    """
+    seed_tasks(store)
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    before = {path: path.read_bytes() for path in sorted(board.rglob("*.md"))}
+    assert before
+
+    foreign = _independent_store(tmp_path / "other-checkout")
+    with pytest.raises(SignboardStoreOwnershipError):
+        export_signboard(foreign, board, prune_absent=True)
+
+    after = {path: path.read_bytes() for path in sorted(board.rglob("*.md"))}
+    assert after == before
+
+
+def test_validate_reports_foreign_store_distinctly(tmp_env, store, tmp_path: Path) -> None:
+    seed_tasks(store)
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    foreign = _independent_store(tmp_path / "other-checkout")
+
+    result = validate_signboard(foreign, board)
+
+    kinds = [finding["kind"] for finding in result["findings"]]
+    assert "store_stamp_mismatch" in kinds
+    # Distinct from stale_card, and named before the cards it explains.
+    assert kinds[0] == "store_stamp_mismatch"
+    assert kinds.count("store_stamp_mismatch") == 1
+    assert "stale_card" in kinds
+    # The read-only surface must not point the operator at the loaded gun.
+    assert "--prune-absent" not in result["repair"]
+
+
+def test_prune_unchanged_when_stamp_matches(tmp_env, store, tmp_path: Path) -> None:
+    tasks = seed_tasks(store)
+    ready = next(task for task in tasks if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    live_card = next(board.glob(f"**/{ready.task_id}--*.md"))
+    plain = _write_stale_card(board, live_card, task_id="task-gone-plain", notes=None)
+    noted = _write_stale_card(board, live_card, task_id="task-gone-noted", notes="Owner decision pending.")
+
+    result = export_signboard(store, board, prune_absent=True)
+
+    assert not plain.exists()
+    assert result["pruned"] == [str(plain)]
+    assert noted.exists()
+    assert result["retained_with_notes"] == [str(noted)]
+    assert live_card.exists()
+
+
+def test_stamp_is_identity_not_path(tmp_env, store, tmp_path: Path) -> None:
+    """A legitimate relocation of the store must not read as a foreign store."""
+    tasks = seed_tasks(store)
+    ready = next(task for task in tasks if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    stale = _write_stale_card(
+        board, next(board.glob(f"**/{ready.task_id}--*.md")), task_id="task-gone", notes=None
+    )
+    stamped_id = json.loads((board / STORE_STAMP_FILENAME).read_text(encoding="utf-8"))["store_id"]
+
+    relocated_dir = tmp_path / "relocated-dispatcher"
+    shutil.move(str(Path(tmp_env["DISPATCHER_STATE_DIR"])), str(relocated_dir))
+    relocated = SqliteStore(
+        db_path=relocated_dir / "dispatcher.sqlite3",
+        event_writer=JsonlEventWriter(relocated_dir / "events.jsonl"),
+    )
+
+    result = export_signboard(relocated, board, prune_absent=True)
+
+    assert read_store_identity(relocated) == stamped_id
+    assert not stale.exists()
+    assert result["pruned"] == [str(stale)]
+
+
+def test_prune_refuses_on_unstamped_board_that_holds_cards(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """Every board that exists today is unstamped; none may be silently adopted."""
+    seed_tasks(store)
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    (board / STORE_STAMP_FILENAME).unlink()
+    before = {path: path.read_bytes() for path in sorted(board.rglob("*.md"))}
+
+    with pytest.raises(SignboardStoreOwnershipError) as excinfo:
+        export_signboard(store, board, prune_absent=True)
+
+    assert "no store-identity stamp" in str(excinfo.value)
+    assert {path: path.read_bytes() for path in sorted(board.rglob("*.md"))} == before
+
+
+def test_prune_on_a_board_with_nothing_to_lose_still_works(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """A fresh board holds no cards, so a first export may prune in one command."""
+    seed_tasks(store)
+    board = tmp_path / "board"
+
+    result = export_signboard(store, board, prune_absent=True)
+
+    assert result["pruned"] == []
+    assert (board / STORE_STAMP_FILENAME).is_file()
+    assert any(board.rglob("*.md"))
+
+
+def test_export_does_not_restamp_a_board_owned_by_another_store(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """A plain export must not be the way the guard gets defeated."""
+    seed_tasks(store)
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    owner_id = json.loads((board / STORE_STAMP_FILENAME).read_text(encoding="utf-8"))["store_id"]
+    foreign = _independent_store(tmp_path / "other-checkout")
+
+    export_signboard(foreign, board)
+
+    still = json.loads((board / STORE_STAMP_FILENAME).read_text(encoding="utf-8"))["store_id"]
+    assert still == owner_id
+    with pytest.raises(SignboardStoreOwnershipError):
+        export_signboard(foreign, board, prune_absent=True)
+
+
+def test_cli_export_signboard_prune_exits_nonzero_on_foreign_board(
+    tmp_env, store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.dispatcher.cli import main
+
+    seed_tasks(store)
+    board = tmp_path / "board"
+    assert main(["export-signboard", str(board), "--json"]) == 0
+    before = {path: path.read_bytes() for path in sorted(board.rglob("*.md"))}
+
+    other_dir = tmp_path / "other-checkout"
+    _independent_store(other_dir)
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(other_dir))
+    monkeypatch.setenv("DISPATCHER_DB_PATH", str(other_dir / "dispatcher.sqlite3"))
+    monkeypatch.setenv("DISPATCHER_EVENTS_PATH", str(other_dir / "events.jsonl"))
+
+    assert main(["export-signboard", str(board), "--prune-absent", "--json"]) == 1
+    assert {path: path.read_bytes() for path in sorted(board.rglob("*.md"))} == before

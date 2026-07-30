@@ -516,7 +516,12 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
 def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
     from pathlib import Path
 
-    from app.dispatcher.signboard import NoActiveVaultError, default_signboard_root, export_signboard
+    from app.dispatcher.signboard import (
+        NoActiveVaultError,
+        SignboardStoreOwnershipError,
+        default_signboard_root,
+        export_signboard,
+    )
 
     if args.path:
         target_path = Path(args.path)
@@ -526,7 +531,11 @@ def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
         except NoActiveVaultError as exc:
             return _emit_error(str(exc), args.json)
 
-    result = export_signboard(store, target_path, prune_absent=args.prune_absent)
+    try:
+        result = export_signboard(store, target_path, prune_absent=args.prune_absent)
+    except SignboardStoreOwnershipError as exc:
+        # Fail closed and non-zero: nothing on the board was touched (#4370).
+        return _emit_error(str(exc), args.json)
     _emit({"ok": True, **result}, args.json)
     return 0
 
