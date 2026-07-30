@@ -207,6 +207,12 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     ]
     assert payload["consumers"] == [
         {
+            "consumer": "heimdal-api-ingress",
+            "channels": ["dev", "test", "prod"],
+            "secrets": ["heimdal.raw-store-key"],
+            "role_requirements": {},
+        },
+        {
             "consumer": "heimdal-capture-watch",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.raw-store-key"],
@@ -298,3 +304,24 @@ def test_channel_isolation_holds_for_model_provider_secrets() -> None:
             consumer="builderops-model-inquiry",
             secret="openai.api-key",
         )
+
+
+def test_api_consumer_declares_raw_store_key() -> None:
+    """#4422: the api process (consumer heimdal-api-ingress) is declared of heimdal.raw-store-key.
+
+    Loaded through the production loader with its existing validation, for
+    every channel the ingress lane serves — and the pre-existing
+    heimdal-capture-watch declaration is unchanged.
+    """
+    contract = load_host_secret_contract()
+    for channel in ("dev", "test", "prod"):
+        contract.require_declared(
+            channel=channel, consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+        )
+        contract.require_declared(
+            channel=channel,
+            consumer="heimdal-capture-watch",
+            secret="heimdal.raw-store-key",
+        )
+    with pytest.raises(UndeclaredSecretConsumerError):
+        contract.require_declared(channel="dev", consumer="heimdal-api-ingress", secret="openai.api-key")

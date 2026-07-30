@@ -124,6 +124,14 @@ services:
       - ./config/runtime.defaults.env
       - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
         required: false
+      # Governed host-secret layer for the declared `api` consumer (#4422):
+      # the deploy wrapper materializes the file from the Keychain and
+      # re-exports its handle as HOST_SECRET_RUNTIME_ENV_FILE_API (distinct
+      # from the capture-watch consumer's handle, which a nested bootstrap
+      # scrubs). Delivers HEIMDAL_RAW_STORE_KEY so the shipped media/screen
+      # ingress lanes can admit.
+      - path: ${HOST_SECRET_RUNTIME_ENV_FILE_API:-/dev/null}
+        required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
       # Dispatcher remains host-owned operational state. Mount its one shared

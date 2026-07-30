@@ -977,3 +977,123 @@ def test_same_target_retry_preserves_rollback_anchor(tmp_path: Path) -> None:
         "the rollback anchor must survive a same-target retry"
     )
     assert f"APP_IMAGE_TAG={target}" in (root / "config/deploy/dev.env").read_text(encoding="utf-8")
+
+
+def test_api_service_receives_raw_store_key() -> None:
+    """#4422: the deploy wrapper bootstraps the declared api consumer and the
+    api service consumes its materialized secret layer, without changing how
+    heimdal-capture-watch is provisioned."""
+    lib = (REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh").read_text(
+        encoding="utf-8"
+    )
+    # The api consumer bootstrap wrap exists, degrade-visibly, and re-exports
+    # its env-file handle under the api-specific name before any nested
+    # capture-watch bootstrap can scrub the shared one.
+    assert "_deploy_channel_needs_api_ingress_secret" in lib
+    assert "_deploy_channel_api_ingress_bootstrap_available" in lib
+    assert "--consumer heimdal-api-ingress" in lib
+    # Degrade-visibly: the precheck proves contract + Keychain item resolve
+    # before the wrap is added, so an unprovisioned key skips the layer
+    # loudly instead of failing the deploy (the bootstrap mechanism is
+    # fail-closed for kind raw-store-key).
+    assert "_security_keychain_lookup" in lib
+    assert "continuing without it" in lib
+    assert 'HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"' in lib
+    # The shim must also UNSET the shared handle: on a dev unfiltered `up`
+    # no inner capture-watch bootstrap runs to scrub it, and a lingering
+    # shared handle would deliver the api consumer's layer to the
+    # capture-watch service's env_file chain.
+    assert "unset HOST_SECRET_RUNTIME_ENV_FILE;" in lib
+    # The capture-watch provisioning is unchanged.
+    assert "--consumer heimdal-capture-watch" in lib
+    assert "_deploy_channel_needs_dev_capture_secret" in lib
+
+    syntax = subprocess.run(
+        ["bash", "-n", str(REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh")],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+    # The api service's env_file chain consumes the api consumer's layer.
+    import yaml
+
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8"))
+    env_files = compose["services"]["api"]["env_file"]
+    api_layers = [
+        entry
+        for entry in env_files
+        if isinstance(entry, dict)
+        and "HOST_SECRET_RUNTIME_ENV_FILE_API" in str(entry.get("path", ""))
+    ]
+    assert len(api_layers) == 1
+    assert api_layers[0].get("required") is False
+
+    # The gating helper fires for an unfiltered `up` and for `up api`, not for
+    # unrelated service-scoped ups, in every channel.
+    probe = (
+        'source "$1"; shift; '
+        "if _deploy_channel_needs_api_ingress_secret \"$@\"; then echo yes; else echo no; fi"
+    )
+    lib_path = str(REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh")
+
+    def gate(*args: str) -> str:
+        run = subprocess.run(
+            ["bash", "-c", probe, "_", lib_path, *args],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return run.stdout.strip().splitlines()[-1] if run.stdout.strip() else run.stderr
+
+    assert gate("prod", "up", "-d") == "yes"
+    assert gate("test", "up", "-d", "api") == "yes"
+    assert gate("dev", "up", "-d", "heimdal-capture-watch") == "no"
+    assert gate("dev", "logs") == "no"
+
+    # Functional proof of the handle-rename shim and its survival across the
+    # nested capture-watch bootstrap's environment scrub: the outer shim
+    # renames the shared handle, a simulated inner bootstrap unsets the shared
+    # name (exactly what _clean_child_environment does), and the final child
+    # still sees the renamed api handle.
+    shim = (
+        'export HOST_SECRET_RUNTIME_ENV_FILE_API='
+        '"${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; '
+        'unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"'
+    )
+    probe_env = (
+        'printf "%s|%s" "${HOST_SECRET_RUNTIME_ENV_FILE_API:-missing}" '
+        '"${HOST_SECRET_RUNTIME_ENV_FILE:-scrubbed}"'
+    )
+    # Without any inner bootstrap (the dev unfiltered-up shape): the shim
+    # itself must scrub the shared handle so it can never reach the
+    # capture-watch service's env_file chain.
+    run = subprocess.run(
+        [
+            "env", "HOST_SECRET_RUNTIME_ENV_FILE=/tmp/api-layer.env",
+            "sh", "-c", shim, "_",
+            "sh", "-c", probe_env,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert run.stdout == "/tmp/api-layer.env|scrubbed", run.stderr
+    # And with a simulated nested capture-watch bootstrap scrub in between,
+    # the renamed api handle still survives.
+    inner_scrub = 'unset HOST_SECRET_RUNTIME_ENV_FILE HEIMDAL_RAW_STORE_KEY; exec "$@"'
+    run = subprocess.run(
+        [
+            "env", "HOST_SECRET_RUNTIME_ENV_FILE=/tmp/api-layer.env",
+            "sh", "-c", shim, "_",
+            "sh", "-c", inner_scrub, "_",
+            "sh", "-c", probe_env,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert run.stdout == "/tmp/api-layer.env|scrubbed", run.stderr

@@ -235,11 +235,28 @@ def _ingest_settings_at_startup() -> None:
         logger.warning("Settings ingestion at API startup failed: %s", exc)
 
 
+def _run_ingress_key_preflight() -> None:
+    """Detect a missing HEIMDAL_RAW_STORE_KEY before first use (#4422).
+
+    Degrade-visibly, never fail-exit: the preflight records and logs the
+    ingress-lane availability (surfaced on /api/status) while every other API
+    function keeps serving; the request-time raw_store_key_unavailable
+    contract on the capture routes is unchanged.
+    """
+    try:
+        from app.heimdal.ingress_preflight import run_ingress_preflight
+
+        run_ingress_preflight()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Heimdal ingress preflight failed to run: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.agent_memory.ask_provenance_manifest import start_ask_provenance_runtime
 
     start_ask_provenance_runtime()
+    _run_ingress_key_preflight()
     await _run_index_preflight()
     _log_v6_seam_status()
     _ingest_settings_at_startup()

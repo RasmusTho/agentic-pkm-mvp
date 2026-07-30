@@ -1057,3 +1057,68 @@ def test_append_only_enforced_pg_media_receipt(monkeypatch: pytest.MonkeyPatch) 
         )
     finally:
         conn.close()
+
+
+def test_startup_preflight_reports_ingress_unavailable_without_exiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#4422 enforcement: with the key absent, the api LIFESPAN startup runs the
+    ingress preflight, the status surface reports both ingress lanes
+    unavailable before any request, the process serves unrelated routes, and
+    the request-time raw_store_key_unavailable contract is unchanged."""
+    from app.heimdal import ingress_preflight
+
+    monkeypatch.delenv("HEIMDAL_RAW_STORE_KEY", raising=False)
+    ingress_preflight.reset_ingress_preflight()
+    assert ingress_preflight.current_ingress_status() is None
+
+    # TestClient's context manager runs the real lifespan — the production
+    # startup path, not the helper in isolation.
+    with TestClient(app) as started:
+        recorded = ingress_preflight.current_ingress_status()
+        assert recorded is not None
+        assert recorded.raw_store_key_available is False
+        assert recorded.lanes == {
+            "media_ingress": "unavailable",
+            "screen_capture": "unavailable",
+        }
+
+        # Surfaced on the status endpoint before any ingress request was made.
+        status = started.get("/api/status")
+        assert status.status_code == 200
+        ingress = status.json()["heimdal_ingress"]
+        assert ingress["raw_store_key_available"] is False
+        assert ingress["lanes"]["media_ingress"] == "unavailable"
+        assert ingress["lanes"]["screen_capture"] == "unavailable"
+
+        # Unrelated routes keep serving: the process did not exit or degrade.
+        assert started.get("/api/health").status_code in (200, 503)
+
+        # The request-time named contract is unchanged.
+        media = b"still refused bytes"
+        refused = _post_media(started, media, _sidecar(media))
+        assert refused.status_code == 500
+        assert refused.json()["detail"]["error"] == "raw_store_key_unavailable"
+        assert refused.json()["detail"]["state"] == "not_acknowledged"
+
+
+def test_admission_succeeds_when_key_provisioned(client: TestClient) -> None:
+    """#4422: with the key present, the preflight passes and admission returns
+    a durable receipt through the production route."""
+    from app.heimdal import ingress_preflight
+
+    ingress_preflight.reset_ingress_preflight()
+    with TestClient(app) as started:
+        recorded = ingress_preflight.current_ingress_status()
+        assert recorded is not None
+        assert recorded.raw_store_key_available is True
+        assert recorded.lanes == {
+            "media_ingress": "available",
+            "screen_capture": "available",
+        }
+        media = b"provisioned admission bytes"
+        admitted = _post_media(started, media, _sidecar(media))
+        assert admitted.status_code == 200, admitted.text
+        body = admitted.json()
+        assert body["outcome"] == "admitted"
+        assert body["receipt_id"].startswith("rcp_")
