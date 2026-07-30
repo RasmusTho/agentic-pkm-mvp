@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -39,7 +40,6 @@ REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
     "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
     "export-signboard", "signboard-validate", "backup", "mode",
-    "verification-ingest", "verification-status",
 ])
 
 
@@ -386,22 +386,36 @@ def _compact_verification_run(
     }
 
 
-def _cmd_verification_ingest(args: argparse.Namespace, store: SqliteStore) -> int:
-    from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+def _cmd_verification_ingest(
+    args: argparse.Namespace, store: SqliteStore | None
+) -> int:
+    from app.builderops.control_plane.client import (
+        BuilderOpsControlPlaneClient,
+        ClientConfig,
+        ControlPlaneClientError,
+    )
+    from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 
     try:
         request = json.loads(Path(args.request).read_text(encoding="utf-8"))
         if not isinstance(request, dict):
             raise ValueError("request JSON must be an object")
-        ledger = VerificationDispatchLedger(store)
-        run = ledger.ingest(request)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        repository = request.get("repository")
+        if not isinstance(repository, str):
+            raise ValueError("verification request repository is required")
+        with BuilderOpsControlPlaneClient(ClientConfig.from_env()) as client:
+            ledger = BuilderOpsVerificationLedger(
+                client, repository=repository
+            )
+            run = ledger.ingest(request)
+            repair_budget = ledger.repair_budget_projection(run.run_id)
+    except (OSError, json.JSONDecodeError, ValueError, ControlPlaneClientError) as exc:
         return _emit_error(str(exc), args.json)
     _emit(
         {
             "ok": True,
             "run": _compact_verification_run(
-                run, repair_budget=ledger.repair_budget_projection(run.run_id)
+                run, repair_budget=repair_budget
             ),
         },
         args.json,
@@ -409,23 +423,48 @@ def _cmd_verification_ingest(args: argparse.Namespace, store: SqliteStore) -> in
     return 0
 
 
-def _cmd_verification_status(args: argparse.Namespace, store: SqliteStore) -> int:
-    from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+def _cmd_verification_status(
+    args: argparse.Namespace, store: SqliteStore | None
+) -> int:
+    from app.builderops.control_plane.client import (
+        BuilderOpsControlPlaneClient,
+        ClientConfig,
+        ControlPlaneClientError,
+    )
+    from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 
-    ledger = VerificationDispatchLedger(store)
-    runs = [
-        _compact_verification_run(
-            run, repair_budget=ledger.repair_budget_projection(run.run_id)
+    repository = (
+        args.repo
+        or os.getenv("BUILDEROPS_VERIFICATION_REPOSITORY", "").strip()
+    )
+    if not repository:
+        return _emit_error(
+            "--repo or BUILDEROPS_VERIFICATION_REPOSITORY is required",
+            args.json,
         )
-        for run in ledger.list(limit=args.limit)
-    ]
-    active = [
-        _compact_verification_run(
-            run, repair_budget=ledger.repair_budget_projection(run.run_id)
-        )
-        for status in ("claimed", "running")
-        for run in ledger.list(limit=args.limit, status=status)
-    ]
+    try:
+        with BuilderOpsControlPlaneClient(ClientConfig.from_env()) as client:
+            ledger = BuilderOpsVerificationLedger(
+                client, repository=repository
+            )
+            runs_raw = ledger.list(limit=args.limit)
+            runs = [
+                _compact_verification_run(
+                    run,
+                    repair_budget=ledger.repair_budget_projection(run.run_id),
+                )
+                for run in runs_raw
+            ]
+            active = [
+                _compact_verification_run(
+                    run,
+                    repair_budget=ledger.repair_budget_projection(run.run_id),
+                )
+                for run in runs_raw
+                if run.status in {"claimed", "running"}
+            ]
+    except (ValueError, ControlPlaneClientError) as exc:
+        return _emit_error(str(exc), args.json)
     _emit(
         {
             "ok": True,
@@ -744,6 +783,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("verification-status", help="Show durable verification-run status")
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--repo", default=None, help="Explicit owner/repo authority")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
@@ -824,6 +864,14 @@ def main(argv: list[str] | None = None) -> int:
                 getattr(args, "json", False),
                 1,
             )
+
+    # The verification commands are BuilderOps API/PostgreSQL consumers.
+    # Constructing even an unused dispatcher SQLite store here would create a
+    # second apparent authority and make API-unavailable behavior ambiguous.
+    if args.command == "verification-ingest":
+        return _cmd_verification_ingest(args, None)
+    if args.command == "verification-status":
+        return _cmd_verification_status(args, None)
 
     store = _make_store()
     return handler(args, store)

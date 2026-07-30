@@ -78,6 +78,27 @@ class TaskCompleteRequest(BaseModel):
     lease: LeaseInput
     idempotency_key: str
     request: dict[str, Any] = Field(default_factory=dict)
+    expected_version: int = Field(ge=1)
+
+
+class TaskReleaseRequest(BaseModel):
+    envelope: AuthorityEnvelopeInput
+    lease: LeaseInput
+    idempotency_key: str
+    request: dict[str, Any] = Field(default_factory=dict)
+    expected_version: int = Field(ge=1)
+
+
+class TaskTransitionRequest(BaseModel):
+    envelope: AuthorityEnvelopeInput
+    task_id: str
+    to_state: str
+    idempotency_key: str
+    request: dict[str, Any] = Field(default_factory=dict)
+    outbox: dict[str, Any] | None = None
+    lease: LeaseInput | None = None
+    expected_states: list[str] | None = None
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class AttemptCommitRequest(BaseModel):
@@ -89,6 +110,7 @@ class AttemptCommitRequest(BaseModel):
     idempotency_key: str
     lease: LeaseInput
     expected_states: list[str] | None = None
+    expected_task_version: int = Field(ge=1)
 
 
 class PromotionCommitRequest(BaseModel):
@@ -110,6 +132,35 @@ class OutboxClaimRequest(BaseModel):
     claim_ttl_seconds: int = Field(default=300, ge=1, le=3600)
 
 
+class OutboxRecoverRequest(BaseModel):
+    envelope: AuthorityEnvelopeInput
+    operation_key: str
+
+
+class OutboxClaimInput(BaseModel):
+    repository: str
+    operation_key: str
+    worker_id: str
+    fencing_token: int = Field(ge=1)
+    intent_lsn: str
+    claim_lsn: str
+    receipt_sequence: int = Field(ge=1)
+    expires_at: datetime
+
+
+class OutboxUnknownRequest(BaseModel):
+    envelope: AuthorityEnvelopeInput
+    claim: OutboxClaimInput
+    detail: str
+
+
+class OutboxReconcileRequest(BaseModel):
+    envelope: AuthorityEnvelopeInput
+    claim: OutboxClaimInput
+    observed_applied: bool
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 __all__ = [
     "AttemptCommitRequest",
     "AuthorityEnvelopeInput",
@@ -117,9 +168,15 @@ __all__ = [
     "LeaseClaimRequest",
     "LeaseInput",
     "OutboxClaimRequest",
+    "OutboxClaimInput",
+    "OutboxRecoverRequest",
+    "OutboxReconcileRequest",
+    "OutboxUnknownRequest",
     "PromotionCommitRequest",
     "RecordCommitRequest",
     "TaskClaimRequest",
     "TaskCompleteRequest",
     "TaskHeartbeatRequest",
+    "TaskReleaseRequest",
+    "TaskTransitionRequest",
 ]

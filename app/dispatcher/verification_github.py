@@ -1,0 +1,577 @@
+"""Live protected-repository and host-credential adapters for BCP-05."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Protocol
+
+import httpx
+
+from app.builderops.control_plane.routing import RepoRef
+from app.dispatcher.verification_merge import (
+    MergeAuthorityError,
+    ProtectedDeliveryManifest,
+)
+
+_DEFAULT_MANIFEST_PATH = ".builderops/delivery-manifest.json"
+_MAX_MANIFEST_BYTES = 65_536
+_REQUIRED_VERIFICATION_CHECK = "Unit tests (not pg)"
+_REQUIRED_VERIFICATION_WORKFLOW = ".github/workflows/ci-smoke.yaml"
+
+
+def _latest_github_result(
+    rows: list[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    """Select one authoritative rerun, failing closed on ambiguous history."""
+
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    ordered: list[tuple[str, int, Mapping[str, Any]]] = []
+    for row in rows:
+        timestamp = next(
+            (
+                row.get(field)
+                for field in (
+                    "completed_at",
+                    "updated_at",
+                    "started_at",
+                    "created_at",
+                )
+                if isinstance(row.get(field), str) and row.get(field)
+            ),
+            None,
+        )
+        row_id = row.get("id")
+        if (
+            not isinstance(timestamp, str)
+            or not isinstance(row_id, int)
+            or isinstance(row_id, bool)
+        ):
+            return None
+        ordered.append((timestamp, row_id, row))
+    return max(ordered, key=lambda item: (item[0], item[1]))[2]
+
+
+class ConditionalMergeTransport(Protocol):
+    """GitHub-enforced merge queue/conditional transport.
+
+    A direct REST merge implementation is intentionally not supplied because
+    GitHub's ordinary merge endpoint cannot atomically fence both protected
+    base OID and manifest blob OID. Deployments must provide a merge-queue
+    transport that revalidates the queue-selected base.
+    """
+
+    def merge(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        expected_head_sha: str,
+        expected_base_sha: str,
+        expected_manifest_blob_sha: str,
+        credential: object,
+    ) -> Mapping[str, object]: ...
+
+
+class GitHubProtectedRepositoryAuthority:
+    """REST read authority plus an explicitly injected conditional effect."""
+
+    def __init__(
+        self,
+        token: str,
+        *,
+        manifest_path: str = _DEFAULT_MANIFEST_PATH,
+        http_client: httpx.Client | None = None,
+        conditional_transport: ConditionalMergeTransport | None = None,
+    ) -> None:
+        if not token.strip():
+            raise MergeAuthorityError("GitHub read credential is unavailable")
+        if not manifest_path or manifest_path.startswith("/"):
+            raise MergeAuthorityError(
+                "protected delivery manifest path must be repository-relative"
+            )
+        self._token = token
+        self.manifest_path = manifest_path
+        self._owns_client = http_client is None
+        self._http = http_client or httpx.Client(
+            base_url="https://api.github.com", timeout=20.0
+        )
+        self.conditional_transport = conditional_transport
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._http.close()
+
+    def _get(self, path: str, **params: object) -> Mapping[str, Any]:
+        response = self._http.get(
+            path,
+            params={key: str(value) for key, value in params.items()},
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        if response.status_code >= 400:
+            raise MergeAuthorityError(
+                f"GitHub protected-repository read failed ({response.status_code})"
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise MergeAuthorityError("GitHub returned malformed JSON") from exc
+        if not isinstance(body, Mapping):
+            raise MergeAuthorityError("GitHub returned an unexpected response")
+        return body
+
+    def _repository(self, repository: str) -> Mapping[str, Any]:
+        canonical = RepoRef.parse(repository).canonical
+        return self._get(f"/repos/{canonical}")
+
+    def _default_branch(self, repository: str) -> str:
+        branch = self._repository(repository).get("default_branch")
+        if not isinstance(branch, str) or not branch:
+            raise MergeAuthorityError("GitHub default branch is unavailable")
+        return branch
+
+    def protected_base_sha(self, repository: str) -> str:
+        canonical = RepoRef.parse(repository).canonical
+        branch = self._default_branch(canonical)
+        ref = self._get(f"/repos/{canonical}/git/ref/heads/{branch}")
+        target = ref.get("object")
+        sha = target.get("sha") if isinstance(target, Mapping) else None
+        if not isinstance(sha, str) or len(sha) != 40:
+            raise MergeAuthorityError("protected default-branch OID is malformed")
+        return sha
+
+    def delivery_manifest(
+        self, repository: str, base_sha: str
+    ) -> ProtectedDeliveryManifest:
+        canonical = RepoRef.parse(repository).canonical
+        response = self._get(
+            f"/repos/{canonical}/contents/{self.manifest_path}",
+            ref=base_sha,
+        )
+        if (
+            response.get("type") != "file"
+            or response.get("encoding") != "base64"
+            or not isinstance(response.get("sha"), str)
+            or not isinstance(response.get("content"), str)
+        ):
+            raise MergeAuthorityError("protected delivery manifest is unavailable")
+        try:
+            content = base64.b64decode(
+                str(response["content"]), validate=True
+            )
+        except (ValueError, TypeError) as exc:
+            raise MergeAuthorityError(
+                "protected delivery manifest encoding is invalid"
+            ) from exc
+        if len(content) > _MAX_MANIFEST_BYTES:
+            raise MergeAuthorityError("protected delivery manifest is oversized")
+        try:
+            document = json.loads(content)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise MergeAuthorityError(
+                "protected delivery manifest is malformed"
+            ) from exc
+        if not isinstance(document, Mapping):
+            raise MergeAuthorityError(
+                "protected delivery manifest must be an object"
+            )
+        return ProtectedDeliveryManifest.from_document(
+            document,
+            repository=canonical,
+            base_sha=base_sha,
+            blob_sha=str(response["sha"]),
+        )
+
+    def _pull(self, repository: str, pr_number: int) -> Mapping[str, Any]:
+        canonical = RepoRef.parse(repository).canonical
+        return self._get(f"/repos/{canonical}/pulls/{pr_number}")
+
+    def current_pr_head(self, repository: str, pr_number: int) -> str:
+        pull = self._pull(repository, pr_number)
+        head = pull.get("head")
+        sha = head.get("sha") if isinstance(head, Mapping) else None
+        if not isinstance(sha, str) or len(sha) != 40:
+            raise MergeAuthorityError("pull request head OID is malformed")
+        return sha
+
+    def _check_runs(
+        self, repository: str, head_sha: str
+    ) -> list[Mapping[str, Any]]:
+        rows: list[Mapping[str, Any]] = []
+        for page in range(1, 11):
+            payload = self._get(
+                f"/repos/{repository}/commits/{head_sha}/check-runs",
+                per_page=100,
+                page=page,
+                filter="all",
+            )
+            batch = payload.get("check_runs")
+            total = payload.get("total_count")
+            if (
+                not isinstance(batch, list)
+                or not isinstance(total, int)
+                or isinstance(total, bool)
+                or total < len(rows) + len(batch)
+                or any(not isinstance(row, Mapping) for row in batch)
+            ):
+                raise MergeAuthorityError("GitHub check-run listing is malformed")
+            rows.extend(batch)
+            if len(rows) == total:
+                return rows
+            if len(batch) < 100:
+                raise MergeAuthorityError("GitHub check-run listing is incomplete")
+        raise MergeAuthorityError("GitHub check-run listing exceeds bounded scan")
+
+    def _commit_statuses(
+        self, repository: str, head_sha: str
+    ) -> list[Mapping[str, Any]]:
+        rows: list[Mapping[str, Any]] = []
+        for page in range(1, 11):
+            payload = self._get(
+                f"/repos/{repository}/commits/{head_sha}/status",
+                per_page=100,
+                page=page,
+            )
+            batch = payload.get("statuses")
+            total = payload.get("total_count")
+            if (
+                not isinstance(batch, list)
+                or not isinstance(total, int)
+                or isinstance(total, bool)
+                or total < len(rows) + len(batch)
+                or any(not isinstance(row, Mapping) for row in batch)
+            ):
+                raise MergeAuthorityError(
+                    "GitHub commit-status listing is malformed"
+                )
+            rows.extend(batch)
+            if len(rows) == total:
+                return rows
+            if len(batch) < 100:
+                raise MergeAuthorityError(
+                    "GitHub commit-status listing is incomplete"
+                )
+        raise MergeAuthorityError("GitHub commit-status listing exceeds bounded scan")
+
+    def _workflow_runs(
+        self, repository: str, head_sha: str
+    ) -> list[Mapping[str, Any]]:
+        rows: list[Mapping[str, Any]] = []
+        for page in range(1, 11):
+            payload = self._get(
+                f"/repos/{repository}/actions/runs",
+                head_sha=head_sha,
+                per_page=100,
+                page=page,
+            )
+            batch = payload.get("workflow_runs")
+            total = payload.get("total_count")
+            if (
+                not isinstance(batch, list)
+                or not isinstance(total, int)
+                or isinstance(total, bool)
+                or total < len(rows) + len(batch)
+                or any(not isinstance(row, Mapping) for row in batch)
+            ):
+                raise MergeAuthorityError(
+                    "GitHub workflow-run listing is malformed"
+                )
+            rows.extend(batch)
+            if len(rows) == total:
+                return rows
+            if len(batch) < 100:
+                raise MergeAuthorityError(
+                    "GitHub workflow-run listing is incomplete"
+                )
+        raise MergeAuthorityError(
+            "GitHub workflow-run listing exceeds bounded scan"
+        )
+
+    def required_gates(
+        self, repository: str, pr_number: int, head_sha: str
+    ) -> Mapping[str, bool]:
+        canonical = RepoRef.parse(repository).canonical
+        pull = self._pull(canonical, pr_number)
+        default_branch = self._default_branch(canonical)
+        head = pull.get("head")
+        base = pull.get("base")
+        base_repo = base.get("repo") if isinstance(base, Mapping) else None
+        base_ref = base.get("ref") if isinstance(base, Mapping) else None
+        observed_head = head.get("sha") if isinstance(head, Mapping) else None
+        base_full_name = (
+            base_repo.get("full_name") if isinstance(base_repo, Mapping) else None
+        )
+        rows = self._check_runs(canonical, head_sha)
+        statuses = self._commit_statuses(canonical, head_sha)
+        protection_document = self._get(
+            f"/repos/{canonical}/branches/{default_branch}/protection"
+        )
+        required_status_checks = protection_document.get(
+            "required_status_checks"
+        )
+        required: set[tuple[str, int | None]] = set()
+        if isinstance(required_status_checks, Mapping):
+            contexts = required_status_checks.get("contexts", [])
+            checks = required_status_checks.get("checks", [])
+            if not isinstance(contexts, list) or not isinstance(checks, list):
+                raise MergeAuthorityError(
+                    "GitHub required-status-check policy is malformed"
+                )
+            for context in contexts:
+                if not isinstance(context, str) or not context:
+                    raise MergeAuthorityError(
+                        "GitHub required status context is malformed"
+                    )
+                required.add((context, None))
+            for check in checks:
+                if (
+                    not isinstance(check, Mapping)
+                    or not isinstance(check.get("context"), str)
+                    or not check.get("context")
+                    or (
+                        check.get("app_id") is not None
+                        and (
+                            not isinstance(check.get("app_id"), int)
+                            or isinstance(check.get("app_id"), bool)
+                        )
+                    )
+                ):
+                    raise MergeAuthorityError(
+                        "GitHub required check policy is malformed"
+                    )
+                required.add((str(check["context"]), check.get("app_id")))
+        protected_required = bool(required)
+        # verification-and-closure retains this behavioral gate even if
+        # branch protection exposes it through the legacy contexts shape or
+        # is temporarily misconfigured. A legacy status can never substitute
+        # for the authenticated ci-smoke workflow run.
+        required.add((_REQUIRED_VERIFICATION_CHECK, None))
+        status_history: dict[str, list[Mapping[str, Any]]] = {}
+        for row in statuses:
+            context = row.get("context")
+            if isinstance(context, str):
+                status_history.setdefault(context, []).append(row)
+        latest_statuses = {
+            context: _latest_github_result(history)
+            for context, history in status_history.items()
+        }
+        check_history: dict[
+            tuple[str, int | None], list[Mapping[str, Any]]
+        ] = {}
+        for row in rows:
+            name = row.get("name")
+            app = row.get("app")
+            app_id = app.get("id") if isinstance(app, Mapping) else None
+            if isinstance(name, str):
+                check_history.setdefault((name, app_id), []).append(row)
+        latest_checks = {
+            identity: _latest_github_result(history)
+            for identity, history in check_history.items()
+        }
+        authenticated_workflow_suites: set[int] = set()
+        if any(
+            context == _REQUIRED_VERIFICATION_CHECK
+            for context, _app_id in required
+        ):
+            suite_candidates: dict[int, list[Mapping[str, Any]]] = {}
+            for workflow in self._workflow_runs(canonical, head_sha):
+                suite_id = workflow.get("check_suite_id")
+                if (
+                    isinstance(suite_id, int)
+                    and not isinstance(suite_id, bool)
+                    and workflow.get("path")
+                    == _REQUIRED_VERIFICATION_WORKFLOW
+                    and workflow.get("event") == "pull_request"
+                    and workflow.get("head_sha") == head_sha
+                ):
+                    suite_candidates.setdefault(suite_id, []).append(
+                        workflow
+                    )
+            authenticated_workflow_suites = {
+                suite_id
+                for suite_id, candidates in suite_candidates.items()
+                if len(candidates) == 1
+            }
+
+        def successful_status(context: str) -> bool:
+            row = latest_statuses.get(context)
+            return isinstance(row, Mapping) and row.get("state") == "success"
+
+        def successful_check(context: str, app_id: int | None) -> bool:
+            candidates = (
+                [latest_checks.get((context, app_id))]
+                if app_id is not None
+                else [
+                    row
+                    for (name, _candidate_app), row in latest_checks.items()
+                    if name == context
+                ]
+            )
+            return any(
+                isinstance(row, Mapping)
+                and row.get("status") == "completed"
+                and row.get("conclusion") == "success"
+                and (
+                    context != _REQUIRED_VERIFICATION_CHECK
+                    or (
+                        isinstance(row.get("app"), Mapping)
+                        and row["app"].get("slug") == "github-actions"
+                        and isinstance(row.get("check_suite"), Mapping)
+                        and row["check_suite"].get("id")
+                        in authenticated_workflow_suites
+                    )
+                )
+                for row in candidates
+            )
+
+        ci = bool(
+            required
+            and all(
+                (
+                    successful_check(context, app_id)
+                    if (
+                        app_id is not None
+                        or context == _REQUIRED_VERIFICATION_CHECK
+                    )
+                    else (
+                        successful_status(context)
+                        or successful_check(context, None)
+                    )
+                )
+                for context, app_id in required
+            )
+        )
+        protection = (
+            isinstance(required_status_checks, Mapping)
+            and protected_required
+        )
+        return {
+            "ci": ci,
+            # The executor independently requires ledger.closure_ready(); this
+            # flag records that the repository adapter did not weaken it.
+            "review": True,
+            "protection": protection,
+            "scope": (
+                isinstance(base_full_name, str)
+                and base_full_name.lower() == canonical
+                and base_ref == default_branch
+            ),
+            "current_head": observed_head == head_sha,
+        }
+
+    def conditional_merge(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        expected_head_sha: str,
+        expected_base_sha: str,
+        expected_manifest_blob_sha: str,
+        credential: object,
+    ) -> Mapping[str, object]:
+        if self.conditional_transport is None:
+            raise MergeAuthorityError(
+                "no GitHub-enforced merge-queue/conditional transport is configured"
+            )
+        return self.conditional_transport.merge(
+            repository,
+            pr_number,
+            expected_head_sha=expected_head_sha,
+            expected_base_sha=expected_base_sha,
+            expected_manifest_blob_sha=expected_manifest_blob_sha,
+            credential=credential,
+        )
+
+    def merge_readback(
+        self, repository: str, pr_number: int
+    ) -> Mapping[str, object]:
+        pull = self._pull(repository, pr_number)
+        head = pull.get("head")
+        return {
+            "merged": pull.get("merged") is True,
+            "head_sha": head.get("sha") if isinstance(head, Mapping) else None,
+            "merge_commit_sha": pull.get("merge_commit_sha"),
+            "merged_at": pull.get("merged_at"),
+        }
+
+
+class HostCredentialManifestResolver:
+    """Resolve an exact repo/id/generation binding from host-owned files."""
+
+    def __init__(self, manifest_file: str | Path) -> None:
+        self.manifest_file = Path(manifest_file)
+
+    @classmethod
+    def from_env(
+        cls, env: Mapping[str, str] | None = None
+    ) -> "HostCredentialManifestResolver":
+        source = os.environ if env is None else env
+        path = source.get(
+            "BUILDEROPS_EXECUTOR_CREDENTIAL_MANIFEST_FILE", ""
+        ).strip()
+        if not path:
+            raise MergeAuthorityError(
+                "BUILDEROPS_EXECUTOR_CREDENTIAL_MANIFEST_FILE is required"
+            )
+        return cls(path)
+
+    def resolve(
+        self,
+        *,
+        repository: str,
+        credential_id: str,
+        rotation_generation: int,
+    ) -> object:
+        canonical = RepoRef.parse(repository).canonical
+        try:
+            document = json.loads(
+                self.manifest_file.read_text(encoding="utf-8")
+            )
+            entries = document["credentials"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise MergeAuthorityError(
+                "host credential manifest is unavailable"
+            ) from exc
+        if not isinstance(entries, list):
+            raise MergeAuthorityError("host credential manifest is malformed")
+        matches = [
+            entry
+            for entry in entries
+            if isinstance(entry, Mapping)
+            and str(entry.get("repository", "")).lower() == canonical
+            and entry.get("credential_id") == credential_id
+            and entry.get("rotation_generation") == rotation_generation
+        ]
+        if len(matches) != 1:
+            raise MergeAuthorityError(
+                "host credential binding is missing or ambiguous"
+            )
+        secret_file = matches[0].get("secret_file")
+        if not isinstance(secret_file, str) or not secret_file:
+            raise MergeAuthorityError("host credential secret reference is missing")
+        try:
+            token = Path(secret_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise MergeAuthorityError(
+                "host credential secret is unavailable"
+            ) from exc
+        if not token:
+            raise MergeAuthorityError("host credential secret is empty")
+        return token
+
+
+__all__ = [
+    "ConditionalMergeTransport",
+    "GitHubProtectedRepositoryAuthority",
+    "HostCredentialManifestResolver",
+]

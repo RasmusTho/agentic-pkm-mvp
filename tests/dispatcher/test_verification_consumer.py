@@ -38,11 +38,47 @@ from app.dispatcher.verification_agent_loop import (
     valid_human_exception_packet,
 )
 from app.dispatcher.verification_dispatch import _authenticated_verification_request
+from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
     prepare_verified_merge,
 )
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
+from tests.dispatcher.builderops_verification_fakes import (
+    FakeBuilderOpsClient,
+    FakeVerificationOutbox,
+)
+
+
+def test_consumer_uses_builderops_api_for_durable_state() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    durable = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    consumer = VerificationConsumer(
+        durable,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        Launcher(),
+        holder="verification-host",
+    )
+
+    result = consumer.consume(request())
+
+    assert result.status == "needs_human"
+    call_names = [name for name, _values in api.calls]
+    assert "claim_task" in call_names
+    assert "heartbeat_task" in call_names
+    assert "transition_task" in call_names
+    assert any(
+        values.get("outbox", {}).get("effect_type")
+        == "model.verification_coordinator"
+        for name, values in api.calls
+        if name == "transition_task"
+    )
+    assert outbox.calls == ["status", "claim", "unknown", "reconcile"]
+    assert all("sqlite" not in name for name in call_names)
 
 
 @dataclass
@@ -5199,6 +5235,48 @@ def test_coordinator_launch_strips_ambient_host_credentials(tmp_path, monkeypatc
             "OPENAI_API_KEY",
         }
     )
+
+
+def test_host_fenced_coordinator_has_no_ambient_github_write_path(
+    tmp_path, monkeypatch
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("GH_TOKEN", "must-not-pass")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-pass")
+
+    launcher = _capturing_coordinator_launcher(tmp_path, calls)
+    launcher.launch(
+        {
+            "head_sha": HEAD,
+            "merge_execution_mode": "host_fenced_executor",
+        }
+    )
+
+    child_env = calls[0]["env"]
+    assert isinstance(child_env, dict)
+    assert "GH_TOKEN" not in child_env
+    assert "GITHUB_TOKEN" not in child_env
+    assert child_env["GH_CONFIG_DIR"] == str(
+        tmp_path / "gh-uncredentialed"
+    )
+    assert child_env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert child_env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert child_env["GIT_TERMINAL_PROMPT"] == "0"
+    assert child_env["GIT_SSH_COMMAND"] == "/usr/bin/false"
+    assert child_env["HOME"] == os.environ["HOME"]
+    command = launcher.command(host_fenced_merge=True)
+    assert "--ignore-user-config" in command
+    assert command.count("--disable") == 2
+    assert "js_repl" in command
+    assert "multi_agent" in command
+    assert any(
+        value.startswith("forced_login_method=") for value in command
+    )
+    assert any(
+        value.startswith("cli_auth_credentials_store=")
+        for value in command
+    )
+    assert "Perform no GitHub mutation" in command[-1]
 
 
 def test_coordinator_launch_uses_explicit_runtime_environment(tmp_path, monkeypatch) -> None:

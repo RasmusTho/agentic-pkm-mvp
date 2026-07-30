@@ -21,6 +21,8 @@ Issue #3603 owns Demerzel review/repair/verification/merge orchestration. PR #36
 and verification-gated merge baseline; later correctness repairs are also on `main`. That baseline
 extends dispatcher SQLite, which ADR-0062 retires as production authority. This task is the migration
 delta for delivered work, not a duplicate orchestrator and not a request to reopen the merged PR.
+The repo-side API/PostgreSQL/outbox adapter and privileged merge-effect fence are now implemented;
+the installed-main Demerzel cycle and its parent-hub receipt remain the final acceptance gate.
 
 ## What This Task Does
 
@@ -45,12 +47,13 @@ delta for delivered work, not a duplicate orchestrator and not a request to reop
 ## Concretely
 
 The delivered #3603 consumer is retained, but its dispatcher store port is replaced by an API client.
-It claims a task bound to issue/PR/SHA, runs its bounded reviewer and repair policy, persists each
-attempt through the API, re-resolves protected-base repo policy plus host credential mapping, binds a
-GitHub-enforced authorization fence over protected-base OID + manifest blob/hash + PR head OID +
-`RepoRef` + credential generation, and submits the gated merge intent through the repo's conditional
-or merge-queue path. The outbox executor reconciles GitHub and commits a readback receipt before
-completion.
+It claims a task bound to issue/PR/SHA, runs its bounded reviewer and repair policy without ambient
+GitHub write credentials, persists each attempt through the API, and commits a distinct exact-head
+`verified`/merge-ready receipt. The host executor then re-resolves protected-base repo policy plus
+host credential mapping, binds a GitHub-enforced authorization fence over protected-base OID +
+manifest blob/hash + PR head OID + `RepoRef` + credential generation, and submits the task-bound
+merge intent through the repo's conditional or merge-queue path. The outbox executor reconciles
+GitHub (including process-loss recovery) and commits a readback receipt before completion.
 
 ## Why This Matters
 
@@ -98,27 +101,27 @@ weaken them and does not enter Product Runtime.
 
 ## Acceptance Criteria
 
-- [ ] The existing verification consumer ingests, claims, heartbeats, records attempts, and resumes
+- [x] The existing verification consumer ingests, claims, heartbeats, records attempts, and resumes
   exclusively through BuilderOps API state, with no dispatcher SQLite ledger.
   Verify: `tests/dispatcher/test_verification_consumer.py::test_consumer_uses_builderops_api_for_durable_state`.
-- [ ] Restart after reviewer/repair success does not repeat a committed attempt and resumes unknown
+- [x] Restart after reviewer/repair success does not repeat a committed attempt and resumes unknown
   external effects through reconciliation.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_restart_resumes_from_api_receipts_without_duplicate_attempt`.
-- [ ] External-effect eligibility is the locally committed fenced pre-effect attempt (ADR-0062 A1):
+- [x] External-effect eligibility is the locally committed fenced pre-effect attempt (ADR-0062 A1):
   an uncommitted attempt performs no GitHub/model call, and a crash between claim and attempt-commit
   leaves the external system untouched.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_fenced_attempt_commit_gates_external_effect`.
-- [ ] Merge is rejected for stale SHA, missing required CI/review/protection gate, expired fencing,
+- [x] Merge is rejected for stale SHA, missing required CI/review/protection gate, expired fencing,
   repo scope mismatch, client-vs-protected manifest mismatch, stale base/manifest hash, or host
   credential mapping outside the target `RepoRef` policy.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_revalidates_protected_manifest_and_repo_credential_binding`.
-- [ ] Advancing the protected base or changing/revoking its delivery manifest after final validation
+- [x] Advancing the protected base or changing/revoking its delivery manifest after final validation
   but before the external effect invalidates the GitHub conditional/merge-group authorization fence
   and performs no merge; a new attempt requires fresh policy, credential, and gate validation.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_rejects_base_or_manifest_change_after_final_validation`.
-- [ ] A timed-out merge reconciles GitHub state before retry and emits one terminal readback receipt.
+- [x] A timed-out merge reconciles GitHub state before retry and emits one terminal readback receipt.
   Verify: `tests/dispatcher/test_verification_merge.py::test_timed_out_merge_reconciles_before_retry`.
-- [ ] Executor credentials are host-local and privileged-scope-only; API/status/logs and all durable
+- [x] Executor credentials are host-local and privileged-scope-only; API/status/logs and all durable
   state/backups contain only non-secret references/scope metadata, never token or model session
   material.
   Verify: `tests/security/test_builderops_executor_credentials.py::test_executor_secrets_are_referenced_not_persisted`.

@@ -191,6 +191,20 @@ class StorePort(Protocol):
 
     def readiness(self) -> dict[str, int]: ...
 
+    def get_task(self, repository: str, task_id: str) -> Mapping[str, Any]: ...
+
+    def list_tasks(
+        self, repository: str, *, task_prefix: str | None = None
+    ) -> list[Mapping[str, Any]]: ...
+
+    def list_attempts(
+        self, repository: str, task_id: str
+    ) -> list[Mapping[str, Any]]: ...
+
+    def outbox_intent(
+        self, repository: str, operation_key: str
+    ) -> Mapping[str, Any]: ...
+
     def commit_transition(
         self,
         *,
@@ -202,6 +216,7 @@ class StorePort(Protocol):
         outbox: Mapping[str, Any] | None = None,
         lease: Lease | None = None,
         expected_states: tuple[str, ...] | None = None,
+        expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult: ...
 
@@ -224,6 +239,7 @@ class StorePort(Protocol):
         lease: Lease,
         idempotency_key: str,
         request: Mapping[str, Any],
+        expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult: ...
 
@@ -234,6 +250,7 @@ class StorePort(Protocol):
         lease: Lease,
         idempotency_key: str,
         request: Mapping[str, Any],
+        expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult: ...
 
@@ -295,6 +312,7 @@ class StorePort(Protocol):
         idempotency_key: str,
         lease: Lease,
         expected_states: tuple[str, ...] | None = None,
+        expected_task_version: int | None = None,
         fault_at: str | None = None,
     ) -> AuthorityObjectResult: ...
 

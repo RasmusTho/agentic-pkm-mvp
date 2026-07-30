@@ -1,0 +1,11 @@
+{
+  "repository": "RasmusTho/agentic-pkm-mvp",
+  "allowed_effects": [
+    "github.merge",
+    "github.merge.dry_run"
+  ],
+  "github_credential": {
+    "credential_id": "github:agentic-pkm-mvp:merge",
+    "rotation_generation": 1
+  }
+}

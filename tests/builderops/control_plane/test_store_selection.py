@@ -77,6 +77,7 @@ def test_store_port_exposes_complete_recovery_and_durability_surface() -> None:
             "idempotency_key",
             "lease",
             "expected_states",
+            "expected_task_version",
             "fault_at",
         ),
         "commit_promotion": (
