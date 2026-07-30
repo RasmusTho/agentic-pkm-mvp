@@ -32,8 +32,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import multiprocessing
+import os
 from pathlib import Path
 import queue
+import stat
+import subprocess
+import sys
 
 import pytest
 
@@ -58,6 +62,7 @@ from app.heimdal.settings_notes import (
     note_rel_path,
     read_settings_note,
 )
+from app.knowledge.errors import KnowledgeCapabilityError
 from app.write_guard import WriteGuard, WritesBlockedError
 
 pytestmark = pytest.mark.not_pg
@@ -686,6 +691,139 @@ def test_steering_log_bookkeeping_preserves_existing_body_bytes(tmp_path: Path) 
     assert updated.count(b'"operation_id":"byte-preservation-first"') == 1
     assert updated.count(b'"operation_id":"byte-preservation-second"') == 1
     assert updated.decode("utf-8").count(impersonator_line) == 1
+
+
+def test_steering_log_reconciles_legacy_entries_during_upgrade(tmp_path: Path) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "current-entry",
+        source="chat",
+        operation_id="upgrade-current",
+        write_guard=guard,
+    )
+
+    path = vault_root / note_rel_path(STEERING_LOG)
+    raw = path.read_bytes()
+    closing = raw.index(b"\n---", 4) + len(b"\n---")
+    legacy_line = (
+        b"- [2026-07-01T09:00:00Z] verb=mute source=item "
+        b"target='legacy-entry' | pre-operation-id\n"
+    )
+    path.write_bytes(raw[:closing] + raw[closing:] + legacy_line)
+
+    append_steering_log(
+        vault_root,
+        "less_of_this",
+        "new-entry",
+        source="item",
+        operation_id="upgrade-new",
+        write_guard=guard,
+    )
+
+    updated = path.read_bytes()
+    note = read_settings_note(vault_root, STEERING_LOG)
+    assert note is not None
+    assert note.values["entry_count"] == 3
+    assert legacy_line in updated
+
+
+def test_steering_log_atomic_bookkeeping_preserves_restrictive_metadata(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "first",
+        source="chat",
+        operation_id="metadata-first",
+        write_guard=guard,
+    )
+
+    path = vault_root / note_rel_path(STEERING_LOG)
+    path.chmod(0o600)
+    attribute: str | None = None
+    if sys.platform == "darwin":
+        attribute = "com.agentic-pkm.test"
+        subprocess.run(
+            ["/usr/bin/xattr", "-w", attribute, "preserve-me", str(path)],
+            check=True,
+        )
+    elif hasattr(os, "setxattr"):
+        attribute = "user.agentic_pkm_test"
+        os.setxattr(path, attribute, b"preserve-me", follow_symlinks=False)
+
+    append_steering_log(
+        vault_root,
+        "mute",
+        "second",
+        source="item",
+        operation_id="metadata-second",
+        write_guard=guard,
+    )
+
+    assert stat.S_IMODE(path.stat(follow_symlinks=False).st_mode) == 0o600
+    if sys.platform == "darwin" and attribute is not None:
+        result = subprocess.run(
+            ["/usr/bin/xattr", "-p", attribute, str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.rstrip("\n") == "preserve-me"
+    elif attribute is not None:
+        assert os.getxattr(path, attribute, follow_symlinks=False) == b"preserve-me"
+
+
+def test_steering_log_rejects_symlink_aliases_before_mutation(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escaped_vault = tmp_path / "escaped-vault"
+    escaped_vault.mkdir()
+    (escaped_vault / "_heimdal").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(KnowledgeCapabilityError, match="must not contain symlinks"):
+        append_steering_log(
+            escaped_vault,
+            "wrong",
+            "escaped",
+            source="chat",
+            operation_id="escaped-parent",
+            write_guard=_allowing_guard(),
+        )
+    assert list(outside.iterdir()) == []
+
+    alias_vault = tmp_path / "alias-vault"
+    alias_vault.mkdir()
+    append_steering_log(
+        alias_vault,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="alias-seed",
+        write_guard=_allowing_guard(),
+    )
+    alias_path = alias_vault / note_rel_path(STEERING_LOG)
+    referent = alias_path.with_name("steering-referent.md")
+    alias_path.replace(referent)
+    alias_path.symlink_to(referent.name)
+    before = referent.read_bytes()
+
+    with pytest.raises(KnowledgeCapabilityError, match="must not contain symlinks"):
+        append_steering_log(
+            alias_vault,
+            "mute",
+            "aliased",
+            source="item",
+            operation_id="final-alias",
+            write_guard=_allowing_guard(),
+        )
+    assert alias_path.is_symlink()
+    assert referent.read_bytes() == before
 
 
 def test_steering_log_operation_id_collision_fails_loud(tmp_path: Path) -> None:

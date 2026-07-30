@@ -88,6 +88,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 from typing import Any, Literal, Optional
@@ -107,6 +110,7 @@ from app.heimdal.settings_notes import (
     render_note,
     write_settings_note,
 )
+from app.knowledge.errors import KnowledgeCapabilityError
 from app.knowledge.write_ops import append_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
@@ -367,6 +371,28 @@ def read_inflow_body(vault_root: Path, kind: InflowKind) -> str:
 POSTHOC_STEERING_VERBS = ("less_of_this", "mute", "wrong")
 
 
+def _steering_log_path(vault_root: Path) -> Path:
+    """Return the canonical lexical target, rejecting every path alias.
+
+    Direct seed/bookkeeping I/O must name the same in-vault resource as the
+    governed append seam. Rejecting a symlink in any relative component
+    prevents a final-component split and a parent escape before mutation.
+    """
+    root = vault_root.expanduser().resolve()
+    relative = Path(note_rel_path(STEERING_LOG))
+    target = root / relative
+    cursor = root
+    for component in relative.parts:
+        cursor /= component
+        if cursor.is_symlink():
+            raise KnowledgeCapabilityError("steering log path must not contain symlinks")
+    try:
+        target.resolve(strict=False).relative_to(root)
+    except ValueError as exc:
+        raise KnowledgeCapabilityError("steering log path escapes vault root") from exc
+    return target
+
+
 def _ensure_steering_log_seed(vault_root: Path, *, write_guard: WriteGuard) -> None:
     """Create `steering.log.md` with its initial frontmatter+body if it does
     not exist yet.
@@ -375,8 +401,7 @@ def _ensure_steering_log_seed(vault_root: Path, *, write_guard: WriteGuard) -> N
     then installed by atomic replacement so an interrupted first write cannot
     leave a partial YAML document for a retry to mistake for a durable seed.
     """
-    rel_path = note_rel_path(STEERING_LOG)
-    path = vault_root / rel_path
+    path = _steering_log_path(vault_root)
     if path.exists():
         return
     write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
@@ -384,12 +409,31 @@ def _ensure_steering_log_seed(vault_root: Path, *, write_guard: WriteGuard) -> N
     _atomic_replace_bytes(path, render_note(note).encode("utf-8"))
 
 
-def _atomic_replace_bytes(path: Path, content: bytes) -> None:
+def _atomic_replace_bytes(
+    path: Path,
+    content: bytes,
+    *,
+    preserve_metadata_from: Path | None = None,
+) -> None:
     """Durably install complete bytes at ``path`` using a sibling stage."""
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
-        with staged.open("xb") as handle:
+        if preserve_metadata_from is not None:
+            if sys.platform == "darwin":
+                subprocess.run(
+                    ["/bin/cp", "-p", str(preserve_metadata_from), str(staged)],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                shutil.copy2(preserve_metadata_from, staged, follow_symlinks=False)
+            stage_mode = "r+b"
+        else:
+            stage_mode = "xb"
+        with staged.open(stage_mode) as handle:
+            handle.seek(0)
+            handle.truncate()
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
@@ -442,18 +486,21 @@ def _patch_steering_log_frontmatter(
     the generic renderer to do so.
     """
     write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
-    rel_path = note_rel_path(STEERING_LOG)
-    path = vault_root / rel_path
+    path = _steering_log_path(vault_root)
     fm, body_bytes = _split_steering_log_bytes(path.read_bytes())
     fm.update(patch)
     rendered_frontmatter = dump_frontmatter(fm, "").removesuffix("\n").encode("utf-8")
-    _atomic_replace_bytes(path, rendered_frontmatter + body_bytes)
+    _atomic_replace_bytes(
+        path,
+        rendered_frontmatter + body_bytes,
+        preserve_metadata_from=path,
+    )
 
 
 @contextmanager
 def _locked_steering_log(vault_root: Path) -> Iterator[None]:
     """Serialize cooperating writers for one resolved steering-log path."""
-    target = (vault_root / note_rel_path(STEERING_LOG)).expanduser().resolve()
+    target = _steering_log_path(vault_root)
     lock_key = str(target)
     with _STEERING_LOCKS_GUARD:
         process_lock = _STEERING_LOCKS.setdefault(lock_key, threading.RLock())
@@ -493,7 +540,7 @@ def _steering_log_entries(raw: bytes) -> list[_SteeringLogEntry]:
             if not isinstance(payload, dict) or not isinstance(payload.get("operation_id"), str):
                 raise RuntimeError("structured steering log entry is missing operation_id")
             entries.append(_SteeringLogEntry(line=line, timestamp=timestamp, payload=payload))
-        elif " verb=" in payload_text and " source=" in payload_text:
+        elif payload_text.startswith("verb=") and " source=" in payload_text:
             entries.append(_SteeringLogEntry(line=line, timestamp=timestamp, payload=None))
     return entries
 
@@ -503,7 +550,7 @@ def _reconcile_steering_log_bookkeeping(
     *,
     write_guard: WriteGuard,
 ) -> None:
-    path = vault_root / note_rel_path(STEERING_LOG)
+    path = _steering_log_path(vault_root)
     entries = _steering_log_entries(path.read_bytes())
     _patch_steering_log_frontmatter(
         vault_root,
@@ -569,7 +616,7 @@ def append_steering_log(
     _assert_append_allowed(write_guard, POSTHOC_STEERING_WRITE_ACTION)
     with _locked_steering_log(vault_root):
         _ensure_steering_log_seed(vault_root, write_guard=write_guard)
-        path = vault_root / note_rel_path(STEERING_LOG)
+        path = _steering_log_path(vault_root)
         entries = _steering_log_entries(path.read_bytes())
         matches = [
             entry
