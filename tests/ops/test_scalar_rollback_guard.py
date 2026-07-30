@@ -90,10 +90,13 @@ def _resume_authority_window(
     runtime: InstanceRegistryRuntime,
     scratch_root: Path,
     inventory_path: Path,
+    *,
+    controller_pid: int = 999_999_997,
+    controller_token_digit: str = "1",
 ):
     controller = {
-        "pid": 999_999_997,
-        "start_token": "linux:" + "1" * 64,
+        "pid": controller_pid,
+        "start_token": "linux:" + controller_token_digit * 64,
     }
     _begin_instance_state_deployment(
         channel=runtime.layout.channel_id,
@@ -892,10 +895,73 @@ def test_scalar_roll_forward_uses_lease_coverage_without_opening_vault_roots(
         "_controller_identity_is_live",
         lambda controller: False,
     )
+    original_replace = runtime_module._replace_private_json
+    public_lease_path = runtime_module._deployment_lease_path(
+        runtime.ledger.root
+    )
+    fence_path = runtime_module._deployment_fence_path(
+        runtime.ledger.root,
+        "prod",
+    )
+
+    def interrupt_after_public_claim(path, payload):
+        result = original_replace(path, payload)
+        if (
+            path == public_lease_path
+            and payload.get("phase") == "claimed"
+            and isinstance(payload.get("scalar_roll_forward"), dict)
+        ):
+            raise OSError("simulated renewed public-claim interruption")
+        return result
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_replace_private_json",
+        interrupt_after_public_claim,
+    )
+    with pytest.raises(OSError, match="public-claim interruption"):
+        _resume_authority_window(
+            runtime,
+            tmp_path / "window",
+            inventory,
+            controller_pid=999_999_996,
+            controller_token_digit="2",
+        )
+
+    def interrupt_after_fence(path, payload):
+        result = original_replace(path, payload)
+        if (
+            path == fence_path
+            and payload.get("schema")
+            == "agentic-pkm.instance-state-deployment-fence.v1"
+        ):
+            raise OSError("simulated renewed fence interruption")
+        return result
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_replace_private_json",
+        interrupt_after_fence,
+    )
+    with pytest.raises(OSError, match="fence interruption"):
+        _resume_authority_window(
+            runtime,
+            tmp_path / "window",
+            inventory,
+            controller_pid=999_999_995,
+            controller_token_digit="3",
+        )
+    monkeypatch.setattr(
+        runtime_module,
+        "_replace_private_json",
+        original_replace,
+    )
     proof = _resume_authority_window(
         runtime,
         tmp_path / "window",
         inventory,
+        controller_pid=999_999_994,
+        controller_token_digit="4",
     )
     monkeypatch.setattr(
         runtime_module,

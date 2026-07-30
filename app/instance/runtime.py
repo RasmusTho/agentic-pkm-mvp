@@ -1594,6 +1594,38 @@ def _require_matching_compatibility_block(
         and reconcile_from_previous_phase
         and root_authority.get("schema")
         == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+        and root_authority.get("phase") == "proved"
+        and expected.get("phase") == "claimed"
+        and all(
+            root_authority.get(key) == expected.get(key)
+            for key in (
+                "channel_id",
+                "nonce",
+                "compatibility_v3_nonce",
+                "legacy_path",
+                "scalar_roll_forward",
+            )
+        )
+        and isinstance(expected.get("scalar_roll_forward"), dict)
+        and root_authority.get("controller") != expected.get("controller")
+        and not _controller_identity_is_live(
+            root_authority.get("controller")
+        )
+    ):
+        # A dead successor may have published the receipt-bound claimed lease
+        # before renewing the fence and root blocker. The proved predecessor,
+        # shared nonce, path, and exact scalar receipt authenticate this one
+        # backward phase transition without opening general phase rollback.
+        _replace_private_json(
+            _legacy_deployment_lease_path(host_global_root),
+            expected,
+        )
+        root_authority = expected
+    if (
+        root_authority != expected
+        and reconcile_from_previous_phase
+        and root_authority.get("schema")
+        == _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
         and all(
             root_authority.get(key) == expected.get(key)
             for key in (
@@ -1790,7 +1822,7 @@ def _begin_instance_state_deployment(
         if existing_lease is not None:
             receipt_value = existing_lease.get("scalar_roll_forward")
             if (
-                existing_lease.get("phase") == "proved"
+                existing_lease.get("phase") in {"claimed", "proved"}
                 and isinstance(receipt_value, dict)
                 and receipt_value.get("deployment_nonce")
                 == existing_lease.get("nonce")
@@ -1801,6 +1833,14 @@ def _begin_instance_state_deployment(
                 )
             ):
                 scalar_receipt_resume = dict(receipt_value)
+            if (
+                existing_lease.get("phase") == "proved"
+                and existing_lease.get("controller") == controller
+                and scalar_receipt_resume is not None
+            ):
+                raise InstanceStatePreflightError(
+                    "proved scalar deployment requires a successor controller"
+                )
             if (
                 existing_lease.get("phase") != "claimed"
                 and scalar_receipt_resume is None
@@ -1854,6 +1894,10 @@ def _begin_instance_state_deployment(
                 )
             if existing_lease.get("controller") != controller:
                 fence_path = _deployment_fence_path(ownership_root, channel)
+                if not fence_path.exists() and scalar_receipt_resume is not None:
+                    raise InstanceStatePreflightError(
+                        "resumed scalar deployment requires its restart fence"
+                    )
                 if fence_path.exists():
                     existing_fence = _read_deployment_fence(
                         ownership_root, channel
@@ -1871,8 +1915,22 @@ def _begin_instance_state_deployment(
                         and existing_fence.get("controller")
                         == legacy_lease.get("controller")
                     )
+                    fence_controller = existing_fence.get("controller")
+                    fence_matches_scalar_predecessor = (
+                        scalar_receipt_resume is not None
+                        and isinstance(fence_controller, dict)
+                        and existing_fence.get("deployment_nonce")
+                        == existing_lease.get("nonce")
+                        and not _controller_identity_is_live(
+                            fence_controller
+                        )
+                    )
                     if (
-                        not (fence_matches_existing or fence_matches_legacy)
+                        not (
+                            fence_matches_existing
+                            or fence_matches_legacy
+                            or fence_matches_scalar_predecessor
+                        )
                         or existing_fence.get("legacy_path") != str(source)
                     ):
                         raise InstanceStatePreflightError(
