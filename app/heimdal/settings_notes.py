@@ -288,9 +288,10 @@ STEERING_LOG = SettingsNoteSpec(
         "path (mirrors HEIM-1's append-only discipline, applied to a vault "
         "note instead of the DB-backed observation log). The frontmatter "
         "carries only agent-authored bookkeeping about the log itself; the "
-        "steering entries are body lines, appended via "
-        "`app.heimdal.interest_steering.append_steering_log_line` through "
-        "the governed `append_note_relative` seam, never through "
+        "steering entries are operation-identified body lines, serialized "
+        "and appended exactly once via "
+        "`app.heimdal.interest_steering.append_steering_log` through the "
+        "governed `append_note_relative` seam, never through "
         "`write_settings_note` (which replaces a note's full content and "
         "would violate append-only)."
     ),

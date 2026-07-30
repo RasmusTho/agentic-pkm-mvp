@@ -41,9 +41,12 @@ Four capabilities, four distinct write shapes:
    "mute" / "wrong" write append-only lines via :func:`append_steering_log`.
    Reuses the new A18 `STEERING_LOG` `SettingsNoteSpec` (append-only-log
    authority class) for path resolution. The entries themselves are body
-   lines written through `append_note_relative` and are **never** rewritten
-   once appended (mirrors HEIM-1's append-only discipline, applied to a
-   vault note instead of the DB-backed observation log). The note's
+   lines written exactly once per caller-stable operation identity through
+   `append_note_relative` and are **never** rewritten once appended (mirrors
+   HEIM-1's append-only discipline, applied to a vault note instead of the
+   DB-backed observation log). A per-log host lock serializes cooperating
+   writers, and retries reconcile any already-appended operation plus the
+   derived bookkeeping instead of duplicating it. The note's
    agent-authored frontmatter bookkeeping (`entry_count`/`last_appended`) is
    reconciled through `_patch_frontmatter_preserving_body`, a body-preserving
    frontmatter patch -- deliberately **not**
@@ -76,10 +79,19 @@ onboarding beyond writing the `sources/*.md` filter notes.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import fcntl
+import hashlib
+import os
 from pathlib import Path
+import re
+import tempfile
+import threading
 from typing import Any, Literal, Optional
+from collections.abc import Iterator
+from uuid import uuid4
 
 from app.heimdal.settings_notes import (
     INTERESTS,
@@ -109,6 +121,9 @@ INFLOW_APPEND_WRITE_ACTION = "heimdal.interest_steering.inflow_append"
 POSTHOC_STEERING_WRITE_ACTION = "heimdal.interest_steering.posthoc_append"
 INTEREST_WEIGHT_WRITE_ACTION = "heimdal.interest_steering.interest_update"
 SOURCE_FILTER_WRITE_ACTION = "heimdal.interest_steering.source_filter_update"
+_STEERING_OPERATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_STEERING_LOCKS_GUARD = threading.Lock()
+_STEERING_LOCKS: dict[str, threading.RLock] = {}
 
 # The two in-flow steering targets (J2/J3): "watch this" -> watchlist.md,
 # "never this" -> never.md. Kept as a closed Literal so a caller cannot
@@ -362,9 +377,14 @@ def _ensure_steering_log_seed(vault_root: Path, *, write_guard: WriteGuard) -> N
     write_settings_note(vault_root, note, write_guard=write_guard, action=POSTHOC_STEERING_WRITE_ACTION)
 
 
-def _patch_steering_log_frontmatter(vault_root: Path, patch: dict[str, Any]) -> None:
+def _patch_steering_log_frontmatter(
+    vault_root: Path,
+    patch: dict[str, Any],
+    *,
+    write_guard: WriteGuard,
+) -> None:
     """Rewrite only `steering.log.md`'s YAML frontmatter, preserving the
-    body byte-for-byte.
+    body byte-for-byte through an atomic same-directory replacement.
 
     Deliberately bypasses `write_settings_note`/`render_note` (which
     regenerate the full note, including a fresh static descriptive body)
@@ -374,12 +394,77 @@ def _patch_steering_log_frontmatter(vault_root: Path, patch: dict[str, Any]) -> 
     reconciliation must preserve the body explicitly instead of trusting
     the generic renderer to do so.
     """
+    write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
     rel_path = note_rel_path(STEERING_LOG)
     path = vault_root / rel_path
     text = path.read_text(encoding="utf-8")
     fm, body = load_frontmatter(text)
     fm.update(patch)
-    path.write_text(dump_frontmatter(fm, body), encoding="utf-8")
+    rendered = dump_frontmatter(fm, body)
+    staged = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with staged.open("x", encoding="utf-8") as handle:
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+@contextmanager
+def _locked_steering_log(vault_root: Path) -> Iterator[None]:
+    """Serialize cooperating writers for one resolved steering-log path."""
+    target = (vault_root / note_rel_path(STEERING_LOG)).expanduser().resolve()
+    lock_key = str(target)
+    with _STEERING_LOCKS_GUARD:
+        process_lock = _STEERING_LOCKS.setdefault(lock_key, threading.RLock())
+
+    lock_root = Path(tempfile.gettempdir()) / "agentic-pkm-heimdal-locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_name = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()
+    with process_lock, (lock_root / f"{lock_name}.lock").open("a+b") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+def _steering_log_entries(text: str) -> list[str]:
+    """Return durable steering body entries, including pre-operation-id lines."""
+    _frontmatter, body = load_frontmatter(text)
+    return [
+        line
+        for line in body.splitlines(keepends=True)
+        if line.startswith("- [") and "] " in line and " verb=" in line and " source=" in line
+    ]
+
+
+def _steering_entry_timestamp(line: str) -> str:
+    return line.split("]", 1)[0].removeprefix("- [")
+
+
+def _reconcile_steering_log_bookkeeping(
+    vault_root: Path,
+    *,
+    write_guard: WriteGuard,
+) -> None:
+    path = vault_root / note_rel_path(STEERING_LOG)
+    entries = _steering_log_entries(path.read_text(encoding="utf-8"))
+    _patch_steering_log_frontmatter(
+        vault_root,
+        {
+            "entry_count": len(entries),
+            "last_appended": _steering_entry_timestamp(entries[-1]) if entries else None,
+        },
+        write_guard=write_guard,
+    )
 
 
 def append_steering_log(
@@ -388,11 +473,17 @@ def append_steering_log(
     target: str,
     *,
     source: SteeringSource,
+    operation_id: str,
     note: str | None = None,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     at: datetime | None = None,
 ) -> str:
     """Append one immutable post-hoc steering line to `steering.log.md`.
+
+    ``operation_id`` is the caller-stable idempotency identity. Reusing it
+    with identical content returns the durable existing line and repairs any
+    pending frontmatter bookkeeping; reusing it with different content fails
+    loud. Cooperating processes serialize only this resolved steering log.
 
     "Less of this" / "mute" / "wrong" (or any other post-hoc verb) each
     become one line appended to the log's body via
@@ -406,32 +497,44 @@ def append_steering_log(
     `write_settings_note` are not used here because they would regenerate
     the note's full content and discard the append-only history.
     """
+    if not _STEERING_OPERATION_ID_RE.fullmatch(operation_id):
+        raise ValueError(
+            "operation_id must be 1-128 characters using letters, digits, '.', '_', ':', or '-'"
+        )
+
     timestamp = (at or datetime.now(timezone.utc)).isoformat().replace("+00:00", "Z")
     suffix = f" | {note}" if note else ""
-    line = f"- [{timestamp}] verb={verb} source={source} target={target!r}{suffix}\n"
+    payload = (
+        f"operation_id={operation_id} verb={verb} source={source} "
+        f"target={target!r}{suffix}"
+    )
+    line = f"- [{timestamp}] {payload}\n"
 
     _assert_append_allowed(write_guard, POSTHOC_STEERING_WRITE_ACTION)
-    _ensure_steering_log_seed(vault_root, write_guard=write_guard)
-    rel_path = note_rel_path(STEERING_LOG)
-    append_note_relative(
-        rel_path,
-        line,
-        vault_root=vault_root,
-        write_guard=write_guard,
-        action=POSTHOC_STEERING_WRITE_ACTION,
-    )
+    with _locked_steering_log(vault_root):
+        _ensure_steering_log_seed(vault_root, write_guard=write_guard)
+        path = vault_root / note_rel_path(STEERING_LOG)
+        entries = _steering_log_entries(path.read_text(encoding="utf-8"))
+        marker = f" operation_id={operation_id} "
+        matches = [entry for entry in entries if marker in entry]
+        if len(matches) > 1:
+            raise RuntimeError(f"operation_id collision: duplicate durable entries for {operation_id}")
+        if matches:
+            existing_payload = matches[0].split("] ", 1)[1].rstrip("\n")
+            if existing_payload != payload:
+                raise ValueError(f"operation_id collision for {operation_id}")
+            _reconcile_steering_log_bookkeeping(vault_root, write_guard=write_guard)
+            return matches[0]
 
-    existing = read_settings_note(vault_root, STEERING_LOG)
-    prior_count = 0
-    if existing is not None:
-        try:
-            prior_count = int(existing.values.get("entry_count") or 0)
-        except (TypeError, ValueError):
-            prior_count = 0
-    _patch_steering_log_frontmatter(
-        vault_root, {"entry_count": prior_count + 1, "last_appended": timestamp}
-    )
-    return line
+        append_note_relative(
+            note_rel_path(STEERING_LOG),
+            line,
+            vault_root=vault_root,
+            write_guard=write_guard,
+            action=POSTHOC_STEERING_WRITE_ACTION,
+        )
+        _reconcile_steering_log_bookkeeping(vault_root, write_guard=write_guard)
+        return line
 
 
 def read_steering_log_body(vault_root: Path) -> str:

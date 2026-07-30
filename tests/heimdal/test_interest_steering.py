@@ -30,7 +30,10 @@ network, no real Postgres, no real vault.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -201,8 +204,6 @@ def test_inflow_append_from_chat_and_item_produce_identical_durable_shape(tmp_pa
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
 
-    from datetime import datetime, timezone
-
     fixed_time = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
     chat_line = append_watch(vault_root, "same-target", source="chat", write_guard=guard, at=fixed_time)
     item_line = append_watch(vault_root, "same-target", source="item", write_guard=guard, at=fixed_time)
@@ -249,6 +250,7 @@ def test_injected_guard_is_preserved_through_append_seam(
         "mute",
         "sources/spam_feed",
         source="item",
+        operation_id="injected-guard-posthoc",
         write_guard=injected_guard,
     )
 
@@ -268,9 +270,31 @@ def test_posthoc_steering_is_append_only(tmp_path: Path) -> None:
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
 
-    line1 = append_steering_log(vault_root, "less_of_this", "sources/youtube:crypto", source="chat", write_guard=guard)
-    line2 = append_steering_log(vault_root, "mute", "sources/spam_feed", source="item", write_guard=guard)
-    line3 = append_steering_log(vault_root, "wrong", "battery_chemistry", source="chat", note="misattributed", write_guard=guard)
+    line1 = append_steering_log(
+        vault_root,
+        "less_of_this",
+        "sources/youtube:crypto",
+        source="chat",
+        operation_id="append-only-1",
+        write_guard=guard,
+    )
+    line2 = append_steering_log(
+        vault_root,
+        "mute",
+        "sources/spam_feed",
+        source="item",
+        operation_id="append-only-2",
+        write_guard=guard,
+    )
+    line3 = append_steering_log(
+        vault_root,
+        "wrong",
+        "battery_chemistry",
+        source="chat",
+        operation_id="append-only-3",
+        note="misattributed",
+        write_guard=guard,
+    )
 
     body = read_steering_log_body(vault_root)
     # All three lines present, in append order.
@@ -296,12 +320,33 @@ def test_posthoc_steering_prior_lines_survive_verbatim_across_appends(tmp_path: 
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
 
-    append_steering_log(vault_root, "wrong", "target-a", source="chat", write_guard=guard)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "target-a",
+        source="chat",
+        operation_id="verbatim-a",
+        write_guard=guard,
+    )
     rel_path = note_rel_path(STEERING_LOG)
     after_first = (vault_root / rel_path).read_text(encoding="utf-8")
 
-    append_steering_log(vault_root, "mute", "target-b", source="item", write_guard=guard)
-    append_steering_log(vault_root, "less_of_this", "target-c", source="chat", write_guard=guard)
+    append_steering_log(
+        vault_root,
+        "mute",
+        "target-b",
+        source="item",
+        operation_id="verbatim-b",
+        write_guard=guard,
+    )
+    append_steering_log(
+        vault_root,
+        "less_of_this",
+        "target-c",
+        source="chat",
+        operation_id="verbatim-c",
+        write_guard=guard,
+    )
     after_third = (vault_root / rel_path).read_text(encoding="utf-8")
 
     # `write_settings_note` rewrites frontmatter each time (that is expected
@@ -315,8 +360,145 @@ def test_posthoc_steering_prior_lines_survive_verbatim_across_appends(tmp_path: 
 def test_posthoc_steering_honors_write_guard_block(tmp_path: Path) -> None:
     vault_root = _vault(tmp_path)
     with pytest.raises(WritesBlockedError):
-        append_steering_log(vault_root, "mute", "blocked-target", source="chat", write_guard=_blocking_guard())
+        append_steering_log(
+            vault_root,
+            "mute",
+            "blocked-target",
+            source="chat",
+            operation_id="blocked-posthoc",
+            write_guard=_blocking_guard(),
+        )
     assert read_steering_log_body(vault_root) == ""
+
+
+def test_concurrent_steering_log_appends_preserve_all_entries_and_bookkeeping(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    writer_count = 12
+    barrier = threading.Barrier(writer_count)
+    start = datetime(2026, 7, 30, 9, 0, 0, tzinfo=timezone.utc)
+
+    def append_one(index: int) -> str:
+        barrier.wait()
+        return append_steering_log(
+            vault_root,
+            "wrong",
+            f"target-{index}",
+            source="chat",
+            operation_id=f"concurrent-{index}",
+            at=start + timedelta(microseconds=index),
+            write_guard=guard,
+        )
+
+    with ThreadPoolExecutor(max_workers=writer_count) as pool:
+        lines = list(pool.map(append_one, range(writer_count)))
+
+    body = read_steering_log_body(vault_root)
+    assert all(body.count(line) == 1 for line in lines)
+    assert body.count(" operation_id=concurrent-") == writer_count
+
+    note = read_settings_note(vault_root, STEERING_LOG)
+    assert note is not None
+    assert note.values["entry_count"] == writer_count
+    last_entry = [line for line in body.splitlines() if " operation_id=" in line][-1]
+    assert note.values["last_appended"] == last_entry.split("]", 1)[0].removeprefix("- [")
+
+
+def test_steering_log_retry_recovers_interrupted_states(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    real_append = steering_module.append_note_relative
+
+    monkeypatch.setattr(
+        steering_module,
+        "append_note_relative",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("before append")),
+    )
+    with pytest.raises(RuntimeError, match="before append"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "seed-only",
+            source="chat",
+            operation_id="recover-seed",
+            write_guard=guard,
+        )
+    monkeypatch.setattr(steering_module, "append_note_relative", real_append)
+
+    seed_recovered = append_steering_log(
+        vault_root,
+        "wrong",
+        "seed-only",
+        source="chat",
+        operation_id="recover-seed",
+        write_guard=guard,
+    )
+    assert read_steering_log_body(vault_root).count(seed_recovered) == 1
+
+    real_patch = steering_module._patch_steering_log_frontmatter
+    monkeypatch.setattr(
+        steering_module,
+        "_patch_steering_log_frontmatter",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("after append")),
+    )
+    with pytest.raises(RuntimeError, match="after append"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "bookkeeping-pending",
+            source="item",
+            operation_id="recover-bookkeeping",
+            write_guard=guard,
+        )
+    monkeypatch.setattr(steering_module, "_patch_steering_log_frontmatter", real_patch)
+
+    bookkeeping_recovered = append_steering_log(
+        vault_root,
+        "mute",
+        "bookkeeping-pending",
+        source="item",
+        operation_id="recover-bookkeeping",
+        write_guard=guard,
+    )
+    body = read_steering_log_body(vault_root)
+    assert body.count(bookkeeping_recovered) == 1
+    assert body.count(" operation_id=") == 2
+    note = read_settings_note(vault_root, STEERING_LOG)
+    assert note is not None
+    assert note.values["entry_count"] == 2
+
+
+def test_steering_log_operation_id_collision_fails_loud(tmp_path: Path) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+
+    first_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "first-target",
+        source="chat",
+        operation_id="collision",
+        write_guard=guard,
+    )
+    before_collision = read_steering_log_body(vault_root)
+
+    with pytest.raises(ValueError, match="operation_id collision"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "different-target",
+            source="item",
+            operation_id="collision",
+            write_guard=guard,
+        )
+
+    after_collision = read_steering_log_body(vault_root)
+    assert before_collision == after_collision
+    assert after_collision.count(first_line) == 1
 
 
 # ---------------------------------------------------------------------------
