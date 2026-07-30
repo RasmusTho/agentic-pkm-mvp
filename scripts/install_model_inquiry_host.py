@@ -274,6 +274,7 @@ def _launcher_content(
         f"# launcher-lineage={LAUNCHER_LINEAGE}\n"
         "set -eu\n"
         f"cd {shlex.quote(str(launcher.parents[1]))}\n"
+        f"export BUILDEROPS_PYTHON={shlex.quote(str(python))}\n"
         f"exec {shlex.quote(str(python))} -m app.ops.host_secret_bootstrap "
         "--channel dev --consumer builderops-model-inquiry "
         "--run-on-credential-unavailable -- "

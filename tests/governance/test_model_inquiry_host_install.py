@@ -1016,6 +1016,51 @@ def test_check_rejects_bin_replacement_during_launcher_discovery(
     assert not list(bin_dir.iterdir())
 
 
+def test_installed_launcher_pins_python_against_hostile_ambient_override(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    selected_python = tmp_path / "selected-python"
+    hostile_python = tmp_path / "hostile-python"
+    capture = tmp_path / "selected-environment"
+    hostile_marker = tmp_path / "hostile-executed"
+    selected_python.write_text(
+        '#!/bin/sh\nprintf "%s" "$BUILDEROPS_PYTHON" > "$CAPTURE_PATH"\n',
+        encoding="utf-8",
+    )
+    hostile_python.write_text(
+        '#!/bin/sh\nprintf "executed" > "$HOSTILE_MARKER"\n',
+        encoding="utf-8",
+    )
+    selected_python.chmod(0o700)
+    hostile_python.chmod(0o700)
+
+    installed = host_installer.install(
+        repo_root=REPO_ROOT,
+        bin_dir=bin_dir,
+        python=selected_python,
+    )
+    assert installed["ok"] is True
+
+    result = subprocess.run(
+        [str(bin_dir / host_installer.FIXED_LAUNCHER_NAME), "--help"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "BUILDEROPS_PYTHON": str(hostile_python),
+            "CAPTURE_PATH": str(capture),
+            "HOSTILE_MARKER": str(hostile_marker),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8") == str(selected_python.resolve())
+    assert not hostile_marker.exists()
+
+
 def test_headless_entrypoints_do_not_require_subscription_session(
     tmp_path: Path,
 ) -> None:
