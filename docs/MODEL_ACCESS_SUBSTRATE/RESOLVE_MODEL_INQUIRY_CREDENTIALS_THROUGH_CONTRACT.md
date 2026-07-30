@@ -9,9 +9,9 @@ depends_on: [PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md]
 can_parallelize_with: []
 ---
 
-State: Repair in progress on reopened issue #4291. The PR #4392 implementation is retained, but live
-parent validation proved that the host installer/check accepted a discoverable stale subscription
-launcher instead of binding the fixed launcher to repo-owned declared-credential lineage. The live
+State: Implemented. Delivered by repair PR #4392 (issue #4291, 2026-07-30) and repaired again by PR
+#4410 (issue #4291, 2026-07-30), which bound the fixed host launcher to repo-owned
+declared-credential lineage and rejected a discoverable-but-stale subscription launcher. The live
 provider run and legacy-bridge retirement remain parent validation on #4286. **This is the first
 task in the capability that changes runtime behaviour.**
 
