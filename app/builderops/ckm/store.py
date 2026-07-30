@@ -67,6 +67,10 @@ class CkmProjectionCaptureError(CkmValidationError):
         self.details = dict(details)
 
 
+class CkmWriteSnapshotChangedError(CkmValidationError):
+    """A model-input snapshot changed before its derived writes could commit."""
+
+
 @dataclass(frozen=True)
 class CkmProjectionBatch:
     state_identity: CkmStateIdentity
@@ -1717,6 +1721,8 @@ class CkmStore:
         self,
         writes: Sequence[CkmEvidenceEdgeWrite],
         *,
+        expected_artifacts: Sequence[CkmArtifact],
+        expected_capabilities: Sequence[CkmCapability],
         watermark_source: str,
         watermark_value: str,
     ) -> int:
@@ -1724,6 +1730,11 @@ class CkmStore:
 
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_evidence_write_snapshot(
+                conn,
+                expected_artifacts=expected_artifacts,
+                expected_capabilities=expected_capabilities,
+            )
             changed = False
             created = 0
             for write in writes:
@@ -1741,6 +1752,83 @@ class CkmStore:
                 self._advance_state_revision(conn)
             conn.commit()
         return created
+
+    @staticmethod
+    def _assert_evidence_write_snapshot(
+        conn: sqlite3.Connection,
+        *,
+        expected_artifacts: Sequence[CkmArtifact],
+        expected_capabilities: Sequence[CkmCapability],
+    ) -> None:
+        artifact_snapshot = {
+            item.id: (
+                item.public_id,
+                item.source_ref,
+                item.artifact_kind,
+                item.watermark,
+                item.provenance,
+            )
+            for item in expected_artifacts
+        }
+        capability_snapshot = {
+            item.id: (
+                item.public_id,
+                item.name,
+                item.definition,
+            )
+            for item in expected_capabilities
+        }
+        artifact_placeholders = ",".join("?" for _ in artifact_snapshot)
+        capability_placeholders = ",".join("?" for _ in capability_snapshot)
+        current_artifacts = {
+            str(row["id"]): (
+                str(row["public_id"]),
+                str(row["source_ref"]),
+                str(row["artifact_kind"]),
+                str(row["watermark"]),
+                str(row["provenance"]),
+            )
+            for row in conn.execute(
+                f"""
+                SELECT id, public_id, source_ref, artifact_kind, watermark, provenance
+                FROM ckm_artifact
+                WHERE id IN ({artifact_placeholders})
+                """,
+                tuple(artifact_snapshot),
+            )
+        }
+        current_capabilities = {
+            str(row["id"]): (
+                str(row["public_id"]),
+                str(row["name"]),
+                str(row["definition"]),
+            )
+            for row in conn.execute(
+                f"""
+                SELECT id, public_id, name, definition
+                FROM ckm_capability
+                WHERE id IN ({capability_placeholders})
+                """,
+                tuple(capability_snapshot),
+            )
+        }
+        linked_artifact = conn.execute(
+            f"""
+            SELECT 1
+            FROM ckm_evidence_edge
+            WHERE artifact_id IN ({artifact_placeholders})
+            LIMIT 1
+            """,
+            tuple(artifact_snapshot),
+        ).fetchone()
+        if (
+            current_artifacts != artifact_snapshot
+            or current_capabilities != capability_snapshot
+            or linked_artifact is not None
+        ):
+            raise CkmWriteSnapshotChangedError(
+                "semantic input snapshot changed before commit; rerun required"
+            )
 
     def _upsert_evidence_edge_in_connection(
         self,

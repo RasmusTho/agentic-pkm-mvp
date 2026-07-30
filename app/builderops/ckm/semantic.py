@@ -25,8 +25,11 @@ from app.builderops.ckm.models import (
     CkmValidationError,
     utc_now,
 )
-from app.builderops.ckm.store import CkmStore
-from app.builderops.ckm.store import CkmEvidenceEdgeWrite
+from app.builderops.ckm.store import (
+    CkmEvidenceEdgeWrite,
+    CkmStore,
+    CkmWriteSnapshotChangedError,
+)
 from app.builderops.model_access_resolver import (
     BUILDER_RUNTIME,
     CKM_SEMANTIC_CONSUMER,
@@ -287,14 +290,21 @@ class BuilderSemanticAssociator:
             "artifacts": [
                 {
                     "id": item.id,
+                    "public_id": item.public_id,
                     "source_ref": item.source_ref,
                     "artifact_kind": item.artifact_kind,
+                    "watermark": item.watermark,
                     "provenance": item.provenance[:1000],
                 }
                 for item in artifacts
             ],
             "capabilities": [
-                {"id": item.id, "name": item.name, "definition": item.definition}
+                {
+                    "id": item.id,
+                    "public_id": item.public_id,
+                    "name": item.name,
+                    "definition": item.definition,
+                }
                 for item in capabilities
             ],
         }
@@ -330,6 +340,72 @@ class BuilderSemanticAssociator:
 def _unlinked_artifacts(store: CkmStore, limit: int) -> list[CkmArtifact]:
     linked_ids = {edge.artifact_id for edge in store.list_evidence_edges()}
     return [item for item in store.list_artifacts() if item.id not in linked_ids][:limit]
+
+
+def _semantic_batch_watermark(
+    *,
+    artifacts: Sequence[CkmArtifact],
+    capabilities: Sequence[CkmCapability],
+    accepted: Sequence[CkmEvidenceEdgeWrite],
+    provider: str,
+    model: str,
+    confidence_floor: float,
+) -> str:
+    artifacts_by_id = {item.id: item for item in artifacts}
+    capabilities_by_id = {item.id: item for item in capabilities}
+    payload = {
+        "schema_ref": SEMANTIC_SCHEMA_REF,
+        "confidence_floor": confidence_floor,
+        "provider": provider,
+        "model": model,
+        "artifacts": sorted(
+            (
+                {
+                    "public_id": item.public_id,
+                    "source_ref": item.source_ref,
+                    "artifact_kind": item.artifact_kind,
+                    "watermark": item.watermark,
+                    "provenance": item.provenance[:1000],
+                }
+                for item in artifacts
+            ),
+            key=lambda item: item["public_id"],
+        ),
+        "capabilities": sorted(
+            (
+                {
+                    "public_id": item.public_id,
+                    "name": item.name,
+                    "definition": item.definition,
+                }
+                for item in capabilities
+            ),
+            key=lambda item: item["public_id"],
+        ),
+        "accepted_edges": sorted(
+            (
+                {
+                    "artifact_public_id": artifacts_by_id[item.artifact_id].public_id,
+                    "capability_public_id": capabilities_by_id[
+                        item.capability_id
+                    ].public_id,
+                    "evidence_kind": item.evidence_kind,
+                    "polarity": item.polarity,
+                    "maturity_dimension": item.maturity_dimension,
+                    "confidence": item.confidence,
+                    "extraction_method": item.extraction_method,
+                    "lifecycle": item.lifecycle,
+                    "source_ref": item.source_ref,
+                    "basis": item.basis,
+                    "provider": item.provider,
+                    "model": item.model,
+                }
+                for item in accepted
+            ),
+            key=_canonical_json,
+        ),
+    }
+    return "batch:" + sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
 def associate_unlinked_artifacts(
@@ -439,14 +515,32 @@ def associate_unlinked_artifacts(
             )
         )
 
-    watermark = sha256(
-        "\n".join(sorted(item.watermark for item in artifacts)).encode("utf-8")
-    ).hexdigest()
-    proposed = store.upsert_evidence_edges_with_watermark(
-        accepted,
-        watermark_source="semantic_association",
-        watermark_value=f"batch:{watermark}",
+    watermark = _semantic_batch_watermark(
+        artifacts=artifacts,
+        capabilities=capabilities,
+        accepted=accepted,
+        provider=batch.provider,
+        model=batch.model,
+        confidence_floor=confidence_floor,
     )
+    try:
+        proposed = store.upsert_evidence_edges_with_watermark(
+            accepted,
+            expected_artifacts=artifacts,
+            expected_capabilities=capabilities,
+            watermark_source="semantic_association",
+            watermark_value=watermark,
+        )
+    except CkmWriteSnapshotChangedError as exc:
+        return SemanticAssociationResult(
+            status="skipped",
+            proposed=0,
+            discarded=discarded,
+            no_match=len(artifacts),
+            provider=batch.provider,
+            model=batch.model,
+            reason=str(exc),
+        )
     return SemanticAssociationResult(
         status="ok",
         proposed=proposed,

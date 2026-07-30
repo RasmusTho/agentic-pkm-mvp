@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 from hashlib import sha256
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
 from typing import Any, Mapping
 
 import pytest
@@ -535,8 +535,129 @@ def test_concurrent_semantic_batches_converge_without_duplicate_edges(
     assert all(not thread.is_alive() for thread in threads)
     assert failures == []
     assert sorted(result.proposed for result in results) == [0, 1]
+    assert sorted(result.status for result in results) == ["ok", "skipped"]
     assert len(store.list_evidence_edges()) == 1
     assert store.get_watermark("semantic_association") is not None
+
+
+def test_semantic_snapshot_drift_during_propose_writes_nothing(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    proposing = Event()
+    resume = Event()
+    results: list[SemanticAssociationResult] = []
+
+    class PausingAssociator(StubAssociator):
+        def propose(self, *, artifacts, capabilities) -> SemanticBatch:
+            proposing.set()
+            assert resume.wait(timeout=5)
+            return super().propose(artifacts=artifacts, capabilities=capabilities)
+
+    thread = Thread(
+        target=lambda: results.append(
+            associate_unlinked_artifacts(
+                store,
+                client=PausingAssociator([_proposal(artifact.id, capability.id)]),
+            )
+        )
+    )
+    thread.start()
+    assert proposing.wait(timeout=5)
+    changed = store.upsert_artifact(
+        source_ref=artifact.source_ref,
+        artifact_kind=artifact.artifact_kind,
+        source=artifact.source,
+        watermark="commit:changed-during-propose",
+        provenance='{"source_ref":"docs/retrieval-notes.md","changed":true}',
+    )
+    assert changed.id == artifact.id
+    resume.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert results == [
+        SemanticAssociationResult(
+            status="skipped",
+            proposed=0,
+            discarded=0,
+            no_match=1,
+            provider="stub-provider",
+            model="stub-model",
+            reason="semantic input snapshot changed before commit; rerun required",
+        )
+    ]
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+def test_semantic_watermark_binds_input_batch_and_material_edge_state(
+    tmp_path: Path,
+) -> None:
+    def run(
+        name: str,
+        *,
+        source_ref: str,
+        rationale: str,
+    ) -> str:
+        candidate_store = CkmStore(tmp_path / f"{name}.sqlite3")
+        candidate_store.ensure_schema()
+        capability = _capability(candidate_store)
+        artifact = candidate_store.upsert_artifact(
+            source_ref=source_ref,
+            artifact_kind="document",
+            source="repo_docs",
+            watermark="commit:shared",
+            provenance=f'{{"source_ref":"{source_ref}"}}',
+        )
+        proposal = _proposal(artifact.id, capability.id)
+        proposal = SemanticProposal(
+            artifact_id=proposal.artifact_id,
+            capability_id=proposal.capability_id,
+            evidence_kind=proposal.evidence_kind,
+            maturity_dimension=proposal.maturity_dimension,
+            confidence=proposal.confidence,
+            rationale=rationale,
+        )
+        result = associate_unlinked_artifacts(
+            candidate_store,
+            client=StubAssociator([proposal]),
+        )
+        assert result.status == "ok"
+        watermark = candidate_store.get_watermark("semantic_association")
+        assert watermark is not None
+        return watermark
+
+    baseline = run(
+        "baseline",
+        source_ref="docs/retrieval-notes.md",
+        rationale="The artifact explicitly explains retrieval.",
+    )
+    assert (
+        run(
+            "idempotent",
+            source_ref="docs/retrieval-notes.md",
+            rationale="The artifact explicitly explains retrieval.",
+        )
+        == baseline
+    )
+    assert (
+        run(
+            "different-batch",
+            source_ref="docs/other-retrieval-notes.md",
+            rationale="The artifact explicitly explains retrieval.",
+        )
+        != baseline
+    )
+    assert (
+        run(
+            "different-edge",
+            source_ref="docs/retrieval-notes.md",
+            rationale="Materially different semantic evidence.",
+        )
+        != baseline
+    )
 
 
 def _append_confirmation_receipt(
