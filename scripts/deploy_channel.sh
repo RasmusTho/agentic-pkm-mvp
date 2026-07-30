@@ -177,6 +177,102 @@ mkdir -p "$(dirname "${pin_file}")"
 acquire_channel_mutation_lock
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
+scalar_rollback=0
+if [ "${action}" = "rollback" ] && \
+  ! git -C "${ROOT}" cat-file -e "${target_sha}:app/instance/runtime.py" 2>/dev/null; then
+  scalar_rollback=1
+fi
+
+prepare_scalar_rollback_environment() {
+  if [ -z "${current_sha}" ]; then
+    echo "scalar rollback requires a current image for the trusted guard" >&2
+    return 78
+  fi
+  if [ -z "${SCALAR_ROLLBACK_VAULT_BINDING_ID:-}" ]; then
+    echo "scalar rollback requires SCALAR_ROLLBACK_VAULT_BINDING_ID" >&2
+    return 78
+  fi
+  case "${SCALAR_ROLLBACK_VAULT_ROOT:-}" in
+    /*) ;;
+    *)
+      echo "scalar rollback requires an absolute SCALAR_ROLLBACK_VAULT_ROOT" >&2
+      return 78
+      ;;
+  esac
+  if [ ! -d "${SCALAR_ROLLBACK_VAULT_ROOT}" ]; then
+    echo "scalar rollback selected root is not a directory" >&2
+    return 78
+  fi
+  case "${SCALAR_ROLLBACK_HTPASSWD:-}" in
+    /*) ;;
+    *)
+      echo "scalar rollback requires an absolute SCALAR_ROLLBACK_HTPASSWD" >&2
+      return 78
+      ;;
+  esac
+  if [ ! -f "${SCALAR_ROLLBACK_HTPASSWD}" ]; then
+    echo "scalar rollback gateway credential file is missing" >&2
+    return 78
+  fi
+  if [ ! -s "${SCALAR_ROLLBACK_HTPASSWD}" ] || ! awk '
+    /^[^:[:space:]]+:[^[:space:]]+$/ { seen = 1; next }
+    { invalid = 1 }
+    END { exit (seen && !invalid) ? 0 : 1 }
+  ' "${SCALAR_ROLLBACK_HTPASSWD}"; then
+    echo "scalar rollback gateway credential file is empty or invalid" >&2
+    return 78
+  fi
+  case "${SCALAR_ROLLBACK_AUTH_NETRC:-}" in
+    /*) ;;
+    *)
+      echo "scalar rollback requires an absolute SCALAR_ROLLBACK_AUTH_NETRC" >&2
+      return 78
+      ;;
+  esac
+  if [ ! -f "${SCALAR_ROLLBACK_AUTH_NETRC}" ]; then
+    echo "scalar rollback authenticated probe credential file is missing" >&2
+    return 78
+  fi
+  if ! SCALAR_ROLLBACK_AUTH_PROBE_USER="$(
+    "${PYTHON}" - \
+      "${SCALAR_ROLLBACK_AUTH_NETRC}" \
+      "${SCALAR_ROLLBACK_HTPASSWD}" <<'PY'
+import netrc
+import os
+import stat
+import sys
+
+netrc_path, htpasswd_path = sys.argv[1:]
+if stat.S_IMODE(os.stat(netrc_path).st_mode) & 0o077:
+    raise SystemExit(1)
+credentials = netrc.netrc(netrc_path).authenticators("127.0.0.1")
+if credentials is None:
+    raise SystemExit(1)
+login, _, password = credentials
+if not login or not password:
+    raise SystemExit(1)
+with open(htpasswd_path, encoding="utf-8") as handle:
+    users = {line.split(":", 1)[0] for line in handle if ":" in line}
+if login not in users:
+    raise SystemExit(1)
+print(login)
+PY
+  )"; then
+    echo "scalar rollback authenticated probe credential is invalid or does not match htpasswd" >&2
+    return 78
+  fi
+  MVR01C_SCALAR_ROLLBACK=1
+  SCALAR_ROLLBACK_GUARD_IMAGE="${image_repository}:${current_sha}"
+  SCALAR_ROLLBACK_PREVIOUS_IMAGE="${image_repository}:${target_sha}"
+  PKM_ENVIRONMENT="${channel}"
+  SCALAR_ROLLBACK_PORT="${api_port}"
+  export MVR01C_SCALAR_ROLLBACK
+  export SCALAR_ROLLBACK_GUARD_IMAGE SCALAR_ROLLBACK_PREVIOUS_IMAGE
+  export SCALAR_ROLLBACK_VAULT_BINDING_ID SCALAR_ROLLBACK_VAULT_ROOT
+  export SCALAR_ROLLBACK_HTPASSWD SCALAR_ROLLBACK_AUTH_NETRC
+  export SCALAR_ROLLBACK_AUTH_PROBE_USER
+  export PKM_ENVIRONMENT SCALAR_ROLLBACK_PORT
+}
 
 read_pending_migration_field() {
   local field="$1"
@@ -346,8 +442,37 @@ embedding_provider_preflight_gate() {
   compose exec -T api python -m app.cli settings validate --json
 }
 
+retire_scalar_rollback_services() {
+  local service container_ids cid rc=0
+  for service in scalar-rollback-gateway scalar-rollback-guard; do
+    container_ids="$(
+      docker ps -aq \
+        --filter "label=com.docker.compose.project=${compose_project}" \
+        --filter "label=com.docker.compose.service=${service}"
+    )" || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+      echo "scalar rollback retirement: ${service} lookup failed" >&2
+      return "${rc}"
+    fi
+    while IFS= read -r cid; do
+      [ -n "${cid}" ] || continue
+      docker rm -f "${cid}" >/dev/null || return $?
+    done <<<"${container_ids}"
+  done
+}
+
 recreate_channel_services() {
   local rc=0
+  if [ "${scalar_rollback}" = "1" ]; then
+    compose stop api worker watcher heimdal-capture-watch companion-ui \
+      scalar-rollback-gateway || return $?
+    compose up -d --force-recreate \
+      scalar-rollback-guard api scalar-rollback-gateway
+    return $?
+  fi
+  if [ "${action}" != "deploy" ]; then
+    retire_scalar_rollback_services || return $?
+  fi
   if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then
     # During an acknowledged embedding-dimension cutover, /readyz must stay red
     # until the governed full rebuild completes. Start the runtime first, prove
@@ -365,6 +490,75 @@ recreate_channel_services() {
   fi
 
   compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+}
+
+scalar_rollback_gateway_auth_gate() {
+  local status body rc=0
+  status="$(
+    curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --max-time 3 \
+      --user "${SCALAR_ROLLBACK_AUTH_PROBE_USER}:definitely-invalid" \
+      "http://127.0.0.1:${api_port}/healthz"
+  )" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "scalar rollback gate: authenticated gateway is unreachable" >&2
+    return "${rc}"
+  fi
+  if [ "${status}" != "401" ]; then
+    echo "scalar rollback gate: authenticated gateway did not reject invalid credentials (status ${status})" >&2
+    return 1
+  fi
+  rc=0
+  body="$(
+    curl --noproxy '*' -fsS --max-time 3 \
+      --netrc-file "${SCALAR_ROLLBACK_AUTH_NETRC}" \
+      "http://127.0.0.1:${api_port}/healthz"
+  )" || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "scalar rollback gate: provisioned credential cannot authenticate" >&2
+    return "${rc}"
+  fi
+  if ! "${PYTHON}" -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+raise SystemExit(0 if isinstance(payload, dict) and payload.get("ok") is True else 1)
+' <<<"${body}"; then
+    echo "scalar rollback gate: authenticated gateway health response is invalid" >&2
+    return 1
+  fi
+}
+
+scalar_rollback_runtime_gate() {
+  local service cid status rc=0
+  for service in api scalar-rollback-gateway; do
+    cid="$(compose ps -q "${service}")" || rc=$?
+    if [ "${rc}" -ne 0 ] || [ -z "${cid}" ]; then
+      echo "scalar rollback gate: ${service} container is missing" >&2
+      if [ "${rc}" -ne 0 ]; then
+        return "${rc}"
+      fi
+      return 1
+    fi
+    rc=0
+    status="$(
+      docker inspect -f \
+        '{{if .State.Health}}{{.State.Health.Status}}{{else if .State.Running}}running{{else}}stopped{{end}}' \
+        "${cid}" 2>/dev/null
+    )" || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+      echo "scalar rollback gate: ${service} state is unreadable" >&2
+      return "${rc}"
+    fi
+    case "${status}" in
+      healthy|running) ;;
+      *)
+        echo "scalar rollback gate: ${service} is ${status}" >&2
+        return 1
+        ;;
+    esac
+  done
+  scalar_rollback_gateway_auth_gate
 }
 
 apply_changed_migrations() {
@@ -398,6 +592,10 @@ apply_changed_migrations() {
 
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
+  if [ "${scalar_rollback}" = "1" ]; then
+    echo "${reason} (status ${original_status}); retaining the current guard pin and scalar rollback target for a fail-closed retry" >&2
+    return 0
+  fi
   if [ -n "${MIGRATION_RECEIPT_JSON:-}" ]; then
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
@@ -430,7 +628,8 @@ rollback_failed_startup() {
       # interrupted deploy's ambiguous migration state.
       rm -f "${migration_pending_file}"
     fi
-    if ! INSTANCE_STATE_LEGACY_ROLLBACK=1 compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
+    if ! MVR01C_SCALAR_ROLLBACK=0 INSTANCE_STATE_LEGACY_ROLLBACK=1 \
+      compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
   else
@@ -740,6 +939,10 @@ if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   exit 86
 fi
 
+if [ "${scalar_rollback}" = "1" ]; then
+  prepare_scalar_rollback_environment || exit $?
+fi
+
 prepare_instance_ownership_host_state_dir
 
 if [ "${action}" = "rollback" ]; then
@@ -763,14 +966,22 @@ export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
 fi
-if [ -n "${current_sha}" ] && [ "${current_sha}" != "${target_sha}" ]; then
+if [ "${scalar_rollback}" = "1" ]; then
+  # Scalar compatibility mode is not a channel downgrade. Keep the capable
+  # current image pinned as the durable trusted guard and record the old target
+  # in the ordinary rollback anchor, so the same command can resume without an
+  # explicit SHA after a crash or partial container establishment.
+  write_pin "${previous_pin_file}" "${target_sha}"
+elif [ -n "${current_sha}" ] && [ "${current_sha}" != "${target_sha}" ]; then
   # A same-target retry (or same-SHA redeploy) reads current_sha == target_sha
   # because a prior failed attempt already advanced the pin; overwriting the
   # rollback anchor with the failed target would make the true last-known-good
   # SHA unrecoverable through the rollback contract.
   write_pin "${previous_pin_file}" "${current_sha}"
 fi
-write_pin "${pin_file}" "${target_sha}"
+if [ "${scalar_rollback}" != "1" ]; then
+  write_pin "${pin_file}" "${target_sha}"
+fi
 rollback_target_recreated=0
 
 postdeploy_smoke_gate() {
@@ -779,8 +990,17 @@ postdeploy_smoke_gate() {
     scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 }
 
-run_postmutation_gate "image pull failed" \
-  compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+if [ "${scalar_rollback}" = "1" ]; then
+  run_postmutation_gate "image pull failed" \
+    compose pull scalar-rollback-guard api scalar-rollback-gateway || exit $?
+else
+  run_postmutation_gate "image pull failed" \
+    compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+fi
+if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
+  run_postmutation_gate "scalar rollback service retirement failed" \
+    retire_scalar_rollback_services || exit $?
+fi
 if [ "${action}" = "deploy" ]; then
   if prepare_instance_state_deployment compose "${channel}"; then
     :
@@ -793,14 +1013,19 @@ run_postmutation_gate "migration execution failed" apply_changed_migrations || e
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?
 rollback_target_recreated=1
-run_postmutation_gate "embedding provider configuration preflight failed" \
-  embedding_provider_preflight_gate || exit $?
-run_postmutation_gate "health gate failed" health_gate || exit $?
-run_postmutation_gate "version gate failed" version_gate || exit $?
-run_postmutation_gate "fleet-model fitness gate failed" \
-  fleet_model_fitness_gate || exit $?
-run_postmutation_gate "companion UI post-deploy smoke failed" \
-  postdeploy_smoke_gate || exit $?
-run_postmutation_gate "required capture-watch gate failed" \
-  capture_watch_gate || exit $?
+if [ "${scalar_rollback}" = "1" ]; then
+  run_postmutation_gate "scalar rollback runtime gate failed" \
+    scalar_rollback_runtime_gate || exit $?
+else
+  run_postmutation_gate "embedding provider configuration preflight failed" \
+    embedding_provider_preflight_gate || exit $?
+  run_postmutation_gate "health gate failed" health_gate || exit $?
+  run_postmutation_gate "version gate failed" version_gate || exit $?
+  run_postmutation_gate "fleet-model fitness gate failed" \
+    fleet_model_fitness_gate || exit $?
+  run_postmutation_gate "companion UI post-deploy smoke failed" \
+    postdeploy_smoke_gate || exit $?
+  run_postmutation_gate "required capture-watch gate failed" \
+    capture_watch_gate || exit $?
+fi
 run_postmutation_gate "deploy receipt creation failed" record_receipt || exit $?

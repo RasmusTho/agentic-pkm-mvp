@@ -211,8 +211,20 @@ This slice promotes the existing seed without changing content-vault authority.
 - Enforce that target in deployment, not only in the legacy payload: the rollback compose overlay
   removes the old API's direct published port, exposes it only through an authenticated gateway
   that denies picker select/initialize mutations, and mounts only the chosen content root at the
-  canonical legacy path. Startup preflight proves the direct port is absent, the gateway policy is
+  canonical legacy path. The channel rollback wrapper selects that overlay for a target commit
+  without `app.instance.runtime`, validates the explicit binding/root/credential inputs before pin
+  mutation, keeps the capable current image pinned as the durable guard, records the scalar target
+  in the rollback anchor, and starts only the guard, old API, and restart-managed gateway. Failure
+  retains that retryable guarded mode instead of starting the broad stack against an active scalar
+  session; the guard adopts an existing session only after exact authenticated binding, revision,
+  root, export, and policy-hash validation. Startup preflight proves the direct port is absent, the gateway policy is
   active, and no broader host vault roots are mounted. A failed guard blocks rollback startup.
+  Rollback admission and deployment start serialize on one host-global lock. The old API takes a
+  shared runtime-admission lock from a key-free host-global control directory, checks the canonical
+  deployment lease, and carries the lock across exec; deployment proves quiescence only after
+  taking the exclusive side. A compatibility block occupies the shipped root-level v2 lease path
+  for the complete cutover/cleanup interval, so a still-running v2 helper cannot create overlapping
+  deployment authority.
 - Native-host scalar rollback is an equally constrained supported path, never an exemption from that
   fence: a root-owned launcher accepts only the validated binding's canonical root, applies a
   deny-by-default filesystem sandbox/allow-list before exec, removes picker select/initialize

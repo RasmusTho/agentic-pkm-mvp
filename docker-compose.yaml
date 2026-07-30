@@ -88,6 +88,14 @@ services:
         bind:
           create_host_path: false
       - "runtime-tmp:/app/tmp"
+      # MVR-01C roll-forward source. Only the one-shot deployment producer
+      # mounts it; current long-lived services never receive this scalar fork.
+      - "scalar-rollback-legacy:/app/scalar-rollback"
+      # Host artifacts that Docker Compose actually activates. MVR-01C hashes
+      # these mounted bytes instead of trusting image-local policy copies.
+      - "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro"
+      - "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro"
+      - "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro"
       - "/Users:/Users"
       - "/Volumes:/Volumes"
     command:
@@ -171,7 +179,9 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer api;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
-          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
         else
           echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
@@ -179,6 +189,8 @@ services:
         exec bash /app/scripts/start_api.sh
     environment:
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
+      INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
@@ -267,7 +279,9 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer worker;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
-          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
         else
           echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
@@ -275,6 +289,8 @@ services:
         exec python -m app.workers.outbox_worker
     environment:
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
+      INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
@@ -346,7 +362,9 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer watcher;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
-          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
         else
           echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
@@ -354,6 +372,8 @@ services:
         exec python -m app.cli watcher run
     environment:
       - INSTANCE_STATE_LEGACY_ROLLBACK=${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      - INSTANCE_VAULT_REGISTRY_PATH=/app/instance-state/agentic-pkm/vault-registry.md
+      - INSTANCE_OWNERSHIP_ROOT=/app/instance-ownership
       - DESIGN_HANDOFF_APP_LOCAL_SETTINGS=${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
       - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
@@ -422,7 +442,9 @@ services:
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer heimdal-capture-watch;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
-          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json ] || { echo 'legacy rollback requires the governed scalar overlay' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-public/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by host-global deployment lease' >&2; exit 75; };
+          [ ! -e /app/instance-ownership/deployment-host-global-lease.json ] || { echo 'legacy rollback blocked by legacy host-global deployment lease' >&2; exit 75; };
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
         else
           echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
@@ -430,6 +452,8 @@ services:
         exec python -m app.cli heimdal capture-watch
     environment:
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
+      INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
+      INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -488,3 +512,5 @@ volumes:
   # Durable channel-scoped MVR-01B registry state. Compose project namespacing
   # keeps dev/test/prod isolated while container recreation preserves state.
   instance-state:
+  # Previous-image scalar fork, imported only by the fenced deployment helper.
+  scalar-rollback-legacy:

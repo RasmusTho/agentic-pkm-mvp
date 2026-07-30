@@ -26,7 +26,10 @@ from app.instance.vault_registry import RegistryError, RegistrySnapshot, VaultRe
 _REQUIRED_CONSUMERS = frozenset({"api", "worker", "watcher", "heimdal-capture-watch"})
 _BACKUP_SCHEMA = "agentic-pkm.instance-state-backup.v1"
 _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
-_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v2"
+_DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
+_DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
+    "agentic-pkm.host-deployment-compatibility-block.v1"
+)
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _QUIESCENCE_INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 _FINAL_EXPORT_SEAL = os.urandom(32)
@@ -69,7 +72,7 @@ class DeploymentQuiescenceProof:
                     "start_token": self.controller_start_token,
                 }
             if (
-                payload.get("schema") != "agentic-pkm.host-deployment-lease.v2"
+                payload.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
                 or payload.get("channel_id") != self.channel_id
                 or payload.get("nonce") != self.nonce
                 or payload.get("phase") != "proved"
@@ -96,7 +99,12 @@ class DeploymentQuiescenceProof:
         """Authenticate the complete host-global deployment authority in place."""
 
         root = Path(host_global_root).expanduser().resolve(strict=False)
-        canonical_lease = root / "deployment-host-global-lease.json"
+        canonical_lease = (
+            root / "deployment-public" / "deployment-host-global-lease.json"
+        )
+        canonical_compatibility_block = (
+            root / "deployment-host-global-lease.json"
+        )
         canonical_inventory = root / "deployment-quiescence-inventory.json"
         canonical_receipt = root / "legacy-owner-inventory.json"
         canonical_fence = root / f"deployment-{channel_id}-restart-fence.json"
@@ -127,6 +135,9 @@ class DeploymentQuiescenceProof:
                 raise ValueError
             self.require_valid(channel_id=channel_id)
             lease = _read_private_json(canonical_lease)
+            compatibility_block = _read_private_json(
+                canonical_compatibility_block
+            )
             fence = _read_private_json(canonical_fence)
             inventory_bytes = _read_private_bytes(canonical_inventory)
             inventory = json.loads(inventory_bytes)
@@ -171,6 +182,22 @@ class DeploymentQuiescenceProof:
                 or lease.get("owner_receipt_digest") != self.owner_receipt_digest
                 or lease.get("controller") != controller
                 or lease.get("all_consumers_stopped") is not True
+                or compatibility_block.get("schema")
+                != _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA
+                or compatibility_block.get("channel_id") != channel_id
+                or compatibility_block.get("nonce") != self.nonce
+                or compatibility_block.get("compatibility_v3_nonce")
+                != self.nonce
+                or compatibility_block.get("phase") != "proved"
+                or compatibility_block.get("controller") != controller
+                or compatibility_block.get("legacy_path")
+                != lease.get("legacy_path")
+                or compatibility_block.get("inventory_digest")
+                != self.inventory_digest
+                or compatibility_block.get("all_consumers_stopped")
+                is not True
+                or compatibility_block.get("owner_receipt_digest")
+                != self.owner_receipt_digest
                 or fence.get("schema") != _DEPLOYMENT_FENCE_SCHEMA
                 or fence.get("channel_id") != channel_id
                 or fence.get("deployment_nonce") != self.nonce
@@ -540,6 +567,7 @@ class InstanceStateBackup:
         *,
         quiescence_proof: DeploymentQuiescenceProof | None,
         owner_receipt_path: Path | None = None,
+        require_materialized_owner_roots: bool = True,
     ) -> InstanceStateBackupReceipt:
         if quiescence_proof is None:
             raise InstanceStatePreflightError(
@@ -571,6 +599,7 @@ class InstanceStateBackup:
         ledger, _ = self._verify_staged_backup(
             payloads=payloads,
             owner_payload=owner_payload,
+            require_materialized_owner_roots=require_materialized_owner_roots,
         )
         checksums = {
             name: hashlib.sha256(payload).hexdigest()
@@ -729,6 +758,7 @@ class InstanceStateBackup:
         *,
         payloads: Mapping[str, bytes],
         owner_payload: Mapping[str, object],
+        require_materialized_owner_roots: bool = True,
     ) -> tuple[LedgerSnapshot, tuple[LegacyOwner, ...]]:
         try:
             with tempfile.TemporaryDirectory(
@@ -753,11 +783,17 @@ class InstanceStateBackup:
                     owner_payload=owner_payload,
                     registry=registry,
                     ledger=scratch_ledger,
+                    require_materialized_owner_roots=(
+                        require_materialized_owner_roots
+                    ),
                 )
                 ledger = self._require_registry_ledger_consistency(
                     registry=registry,
                     ledger=scratch_ledger,
                     global_live_owners=global_live_owners,
+                    require_materialized_owner_roots=(
+                        require_materialized_owner_roots
+                    ),
                 )
                 return ledger, global_live_owners
         except Exception as exc:
@@ -772,16 +808,25 @@ class InstanceStateBackup:
         registry: RegistrySnapshot,
         ledger: OwnershipLedger,
         global_live_owners: Sequence[LegacyOwner],
+        require_materialized_owner_roots: bool = True,
     ) -> LedgerSnapshot:
         try:
             return ledger.require_registry_consistency(
                 channel_id=self.layout.channel_id,
                 registrations={
-                    binding_id: Path(registration.path)
+                    binding_id: (
+                        Path(registration.path)
+                        if require_materialized_owner_roots
+                        else None
+                    )
                     for binding_id, registration in registry.registrations.items()
                 },
                 tombstones={
-                    binding_id: Path(tombstone.path)
+                    binding_id: (
+                        Path(tombstone.path)
+                        if require_materialized_owner_roots
+                        else None
+                    )
                     for binding_id, tombstone in registry.removal_tombstones.items()
                 },
                 transfer_lineage=tuple(
@@ -795,6 +840,7 @@ class InstanceStateBackup:
                     for item in registry.transfer_lineage
                 ),
                 global_live_owners=global_live_owners,
+                require_materialized_roots=require_materialized_owner_roots,
             )
         except LedgerError as exc:
             raise InstanceStatePreflightError(
@@ -807,6 +853,7 @@ class InstanceStateBackup:
         owner_payload: Mapping[str, object],
         registry: RegistrySnapshot,
         ledger: OwnershipLedger,
+        require_materialized_owner_roots: bool = True,
     ) -> tuple[LegacyOwner, ...]:
         raw_owners = owner_payload.get("owners")
         if not isinstance(raw_owners, list):
@@ -823,12 +870,25 @@ class InstanceStateBackup:
             root = Path(str(item.get("root") or "")).expanduser().resolve(
                 strict=False
             )
-            if not channel_id or not root.is_dir():
+            binding_id = str(item.get("vault_binding_id") or "").strip()
+            if (
+                not channel_id
+                or (
+                    require_materialized_owner_roots
+                    and not root.is_dir()
+                )
+                or (
+                    not require_materialized_owner_roots
+                    and not binding_id
+                )
+            ):
                 raise InstanceStatePreflightError(
                     "canonical global live-owner inventory is invalid"
                 )
-            binding_id = str(item.get("vault_binding_id") or "").strip()
-            if channel_id == self.layout.channel_id:
+            if (
+                require_materialized_owner_roots
+                and channel_id == self.layout.channel_id
+            ):
                 for registration in registry.registrations.values():
                     if same_filesystem_root(
                         resolve_filesystem_root_identity(root),

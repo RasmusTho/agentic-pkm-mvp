@@ -1,0 +1,142 @@
+# MVR-01C only: constrain a supported previous scalar image to one validated binding.
+services:
+  scalar-rollback-guard:
+    image: ${SCALAR_ROLLBACK_GUARD_IMAGE:?current guard image is required}
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    volumes:
+      - "instance-state:/app/instance-state"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}
+        target: /app/instance-ownership
+        # Trusted current-image guard signs the fork and takes the shared ledger
+        # lock. The previous-image API still receives no ownership/key mount.
+        read_only: false
+        bind:
+          create_host_path: false
+      - "scalar-rollback-legacy:/app/scalar-rollback"
+      - "./docker-compose.yaml:/run/scalar-rollback-policy/docker-compose.yaml:ro"
+      - "./docker-compose.scalar-rollback.yml:/run/scalar-rollback-policy/docker-compose.scalar-rollback.yml:ro"
+      - "./ops/scalar-rollback/nginx.conf:/run/scalar-rollback-policy/nginx.conf:ro"
+      - type: bind
+        source: ${SCALAR_ROLLBACK_VAULT_ROOT:?validated selected root is required}
+        target: /app/selected-vault
+        read_only: true
+        bind:
+          create_host_path: false
+    command:
+      - python
+      - -m
+      - app.instance.runtime
+      - scalar-rollback-preflight
+      - --channel
+      - ${PKM_ENVIRONMENT:-dev}
+      - --registry-path
+      - /app/instance-state/agentic-pkm/vault-registry.md
+      - --host-global-root
+      - /app/instance-ownership
+      - --rollback-vault-binding-id
+      - ${SCALAR_ROLLBACK_VAULT_BINDING_ID:?explicit rollback binding is required}
+      - --legacy-path
+      - /app/scalar-rollback/app-local.md
+      - --selected-root
+      - /app/selected-vault
+      - --compose-base
+      - /run/scalar-rollback-policy/docker-compose.yaml
+      - --compose-overlay
+      - /run/scalar-rollback-policy/docker-compose.scalar-rollback.yml
+      - --gateway-config
+      - /run/scalar-rollback-policy/nginx.conf
+      - --native-launcher
+      - /app/scripts/scalar_rollback_native.sh
+    restart: "no"
+
+  api:
+    image: ${SCALAR_ROLLBACK_PREVIOUS_IMAGE:?previous scalar image is required}
+    ports: !override []
+    command:
+      - python
+      - -c
+      - |
+        import fcntl
+        import os
+
+        try:
+            descriptor = os.open(
+                "/app/deployment-control/scalar-rollback-runtime.lock",
+                os.O_RDONLY,
+            )
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            if (
+                os.environ.get("INSTANCE_STATE_LEGACY_ROLLBACK") != "1"
+                or not os.path.isfile(
+                    "/app/instance-state/agentic-pkm/vault-registry.md.scalar-rollback-session.json"
+                )
+                or os.path.exists(
+                    "/app/deployment-control/deployment-host-global-lease.json"
+                )
+            ):
+                raise SystemExit(75)
+            os.set_inheritable(descriptor, True)
+            os.execv("/bin/bash", ["bash", "/app/scripts/start_api.sh"])
+        except OSError:
+            raise SystemExit(75)
+    volumes: !override
+      - "runtime-tmp:/app/tmp"
+      - "instance-state:/app/instance-state:ro"
+      - "scalar-rollback-legacy:/app/scalar-rollback"
+      - type: bind
+        source: ${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?absolute host-global state directory must be resolved by the launcher}/deployment-public
+        target: /app/deployment-control
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SCALAR_ROLLBACK_VAULT_ROOT:?validated selected root is required}
+        target: /app/selected-vault
+        bind:
+          create_host_path: false
+    environment:
+      INSTANCE_STATE_LEGACY_ROLLBACK: "1"
+      DESIGN_HANDOFF_APP_LOCAL_SETTINGS: /app/scalar-rollback/app-local.md
+      VAULT_ROOT: /app/selected-vault
+      VAULT_ROOT_DEV: /app/selected-vault
+      VAULT_ROOT_TEST: /app/selected-vault
+      WATCHER_VAULT_PATH: /app/selected-vault
+      API_HEALTHCHECK_URL: http://127.0.0.1:8000/readyz
+    depends_on: !override
+      scalar-rollback-guard:
+        condition: service_completed_successfully
+
+  scalar-rollback-gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SCALAR_ROLLBACK_PORT:-18000}:8080"
+    volumes:
+      - "./ops/scalar-rollback/nginx.conf:/etc/nginx/conf.d/default.conf:ro"
+      - type: bind
+        source: ${SCALAR_ROLLBACK_HTPASSWD:?gateway credential file is required}
+        target: /run/secrets/scalar-rollback.htpasswd
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker:
+    profiles: ["scalar-rollback-disabled"]
+
+  watcher:
+    profiles: ["scalar-rollback-disabled"]
+
+  heimdal-capture-watch:
+    profiles: ["scalar-rollback-disabled"]
+
+  companion-ui:
+    profiles: ["scalar-rollback-disabled"]
+    ports: !override []
+    depends_on: !override []
+
+volumes:
+  scalar-rollback-legacy:

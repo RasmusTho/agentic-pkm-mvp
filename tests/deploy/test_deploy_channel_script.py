@@ -37,6 +37,21 @@ def _compose(path: str) -> dict:
     return yaml.load((REPO_ROOT / path).read_text(encoding="utf-8"), Loader=_ComposeLoader)
 
 
+def _scalar_gateway_credentials(tmp_path: Path) -> tuple[Path, Path]:
+    htpasswd = tmp_path / "scalar.htpasswd"
+    htpasswd.write_text(
+        "operator:{SHA}5en6G6MezRroT3XKqkdPOmY/BfQ=\n",
+        encoding="utf-8",
+    )
+    auth_netrc = tmp_path / "scalar-auth.netrc"
+    auth_netrc.write_text(
+        "machine 127.0.0.1 login operator password secret\n",
+        encoding="utf-8",
+    )
+    auth_netrc.chmod(0o600)
+    return htpasswd, auth_netrc
+
+
 def _run_script(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(SCRIPT), *args],
@@ -189,6 +204,324 @@ def test_rollback_with_explicit_sha_still_allows_flags(tmp_path: Path) -> None:
     assert pin_path.read_text(encoding="utf-8") == original_pin
     assert not docker_marker.exists()
     assert not curl_marker.exists()
+
+
+def test_scalar_rollback_uses_guarded_overlay_and_only_safe_services(
+    tmp_path: Path,
+) -> None:
+    base = _compose("docker-compose.yaml")
+    scalar_overlay = (
+        REPO_ROOT / "docker-compose.scalar-rollback.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        "  scalar-rollback-gateway:\n"
+        "    image: nginx:1.27-alpine\n"
+        "    restart: unless-stopped\n"
+    ) in scalar_overlay
+    for service in ("api", "worker", "watcher", "heimdal-capture-watch"):
+        command = " ".join(base["services"][service]["command"])
+        assert (
+            "vault-registry.md.scalar-rollback-session.json" in command
+            and "requires the governed scalar overlay" in command
+        )
+
+    root, env, current_sha = _deploy_harness(tmp_path)
+    runtime_marker = root / "app/instance/runtime.py"
+    runtime_marker.unlink()
+    subprocess.run(
+        ["git", "add", "-u", "app/instance/runtime.py"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "previous scalar image"],
+        cwd=root,
+        check=True,
+    )
+    scalar_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    pin_path = _seed_previous_pin(root, current_sha)
+    selected_root = tmp_path / "selected-vault"
+    selected_root.mkdir()
+    htpasswd, auth_netrc = _scalar_gateway_credentials(tmp_path)
+    env.update(
+        {
+            "SCALAR_ROLLBACK_VAULT_BINDING_ID": "binding-explicit",
+            "SCALAR_ROLLBACK_VAULT_ROOT": str(selected_root),
+            "SCALAR_ROLLBACK_HTPASSWD": str(htpasswd),
+            "SCALAR_ROLLBACK_AUTH_NETRC": str(auth_netrc),
+            "http_proxy": "http://proxy.invalid:3128",
+            "HTTP_PROXY": "http://proxy.invalid:3128",
+            "ALL_PROXY": "http://proxy.invalid:3128",
+            "NO_PROXY": "",
+        }
+    )
+
+    result = _run_rollback(root, env, scalar_sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"APP_IMAGE_TAG={current_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={scalar_sha}" in (
+        root / "config/deploy/dev.previous.env"
+    ).read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    compose_events = [event for event in events if "docker compose " in event]
+    assert compose_events
+    assert all(
+        "-f " + str(root / "docker-compose.scalar-rollback.yml") in event
+        for event in compose_events
+    )
+    assert any(
+        event.endswith(
+            "stop api worker watcher heimdal-capture-watch companion-ui "
+            "scalar-rollback-gateway"
+        )
+        for event in events
+    )
+    assert any(
+        event.endswith(
+            "up -d --force-recreate scalar-rollback-guard api "
+            "scalar-rollback-gateway"
+        )
+        for event in events
+    )
+    assert any(
+        "--user operator:definitely-invalid" in event
+        for event in events
+    )
+    assert any(
+        f"--netrc-file {auth_netrc}" in event
+        for event in events
+    )
+    assert sum(
+        "--noproxy *" in event
+        for event in events
+        if "definitely-invalid" in event or f"--netrc-file {auth_netrc}" in event
+    ) == 2
+    assert not any(
+        "up -d --force-recreate api worker watcher "
+        "heimdal-capture-watch companion-ui" in event
+        for event in events
+    )
+
+    retry = subprocess.run(
+        ["bash", "scripts/deploy_channel.sh", "rollback", "dev"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    assert f"target={scalar_sha}" in retry.stdout
+    assert f"APP_IMAGE_TAG={current_sha}" in pin_path.read_text(encoding="utf-8")
+
+    bad_gateway_env = dict(env)
+    bad_gateway_env["FAKE_SCALAR_GATEWAY_HTTP_STATUS"] = "200"
+    bad_gateway = subprocess.run(
+        ["bash", "scripts/deploy_channel.sh", "rollback", "dev"],
+        cwd=root,
+        env=bad_gateway_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bad_gateway.returncode == 1
+    assert "did not reject invalid credentials" in bad_gateway.stderr
+
+    bad_auth_env = dict(env)
+    bad_auth_env["FAKE_SCALAR_GATEWAY_AUTH"] = "fail"
+    receipt_path = root / "ops/deployments/dev-latest.json"
+    receipt_before = receipt_path.read_bytes()
+    bad_auth = subprocess.run(
+        ["bash", "scripts/deploy_channel.sh", "rollback", "dev"],
+        cwd=root,
+        env=bad_auth_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bad_auth.returncode == 22
+    assert "provisioned credential cannot authenticate" in bad_auth.stderr
+    assert receipt_path.read_bytes() == receipt_before
+
+
+def test_scalar_rollback_rejects_invalid_gateway_credentials_before_mutation(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    (root / "app/instance/runtime.py").unlink()
+    subprocess.run(
+        ["git", "add", "-u", "app/instance/runtime.py"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "previous scalar image"],
+        cwd=root,
+        check=True,
+    )
+    scalar_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    _seed_previous_pin(root, current_sha)
+    selected_root = tmp_path / "selected-vault"
+    selected_root.mkdir()
+    htpasswd = tmp_path / "scalar.htpasswd"
+    htpasswd.write_text("", encoding="utf-8")
+    env.update(
+        {
+            "SCALAR_ROLLBACK_VAULT_BINDING_ID": "binding-explicit",
+            "SCALAR_ROLLBACK_VAULT_ROOT": str(selected_root),
+            "SCALAR_ROLLBACK_HTPASSWD": str(htpasswd),
+        }
+    )
+
+    result = _run_rollback(root, env, scalar_sha)
+
+    assert result.returncode == 78
+    assert "credential file is empty or invalid" in result.stderr
+    event_log = Path(env["FAKE_DEPLOY_EVENT_LOG"])
+    assert not event_log.exists() or not any(
+        event.startswith("docker ")
+        for event in event_log.read_text(encoding="utf-8").splitlines()
+    )
+
+    htpasswd, auth_netrc = _scalar_gateway_credentials(tmp_path)
+    auth_netrc.chmod(0o644)
+    env["SCALAR_ROLLBACK_HTPASSWD"] = str(htpasswd)
+    env["SCALAR_ROLLBACK_AUTH_NETRC"] = str(auth_netrc)
+    unsafe_netrc = _run_rollback(root, env, scalar_sha)
+
+    assert unsafe_netrc.returncode == 78
+    assert "probe credential is invalid" in unsafe_netrc.stderr
+
+
+def test_normal_roll_forward_retires_scalar_services_before_recreate(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_SCALAR_CONTAINERS"] = "1"
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    gateway_lookup = next(
+        index
+        for index, event in enumerate(events)
+        if "com.docker.compose.service=scalar-rollback-gateway" in event
+    )
+    gateway_remove = events.index("docker rm -f fake-scalar-gateway")
+    guard_remove = events.index("docker rm -f fake-scalar-guard")
+    instance_state_init = next(
+        index
+        for index, event in enumerate(events)
+        if "run --rm --no-deps -T instance-state-init" in event
+    )
+    normal_recreate = next(
+        index
+        for index, event in enumerate(events)
+        if event.endswith(
+            "up -d --force-recreate api worker watcher "
+            "heimdal-capture-watch companion-ui"
+        )
+    )
+    assert gateway_lookup < gateway_remove < instance_state_init < normal_recreate
+    assert guard_remove < instance_state_init
+
+
+def test_scalar_rollback_establishment_failure_retains_retryable_guarded_mode(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    (root / "app/instance/runtime.py").unlink()
+    subprocess.run(
+        ["git", "add", "-u", "app/instance/runtime.py"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "previous scalar image"],
+        cwd=root,
+        check=True,
+    )
+    scalar_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    pin_path = _seed_previous_pin(root, current_sha)
+    selected_root = tmp_path / "selected-vault"
+    selected_root.mkdir()
+    htpasswd, auth_netrc = _scalar_gateway_credentials(tmp_path)
+    env.update(
+        {
+            "SCALAR_ROLLBACK_VAULT_BINDING_ID": "binding-explicit",
+            "SCALAR_ROLLBACK_VAULT_ROOT": str(selected_root),
+            "SCALAR_ROLLBACK_HTPASSWD": str(htpasswd),
+            "SCALAR_ROLLBACK_AUTH_NETRC": str(auth_netrc),
+            "FAKE_DOCKER_FAIL_MATCH": (
+                "up -d --force-recreate scalar-rollback-guard"
+            ),
+        }
+    )
+
+    failed = _run_rollback(root, env, scalar_sha)
+
+    assert failed.returncode == 24
+    assert "retaining the current guard pin and scalar rollback target" in failed.stderr
+    assert f"APP_IMAGE_TAG={current_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"APP_IMAGE_TAG={scalar_sha}" in (
+        root / "config/deploy/dev.previous.env"
+    ).read_text(encoding="utf-8")
+    assert not any(
+        "up -d --force-recreate api worker watcher "
+        "heimdal-capture-watch companion-ui" in event
+        for event in _deploy_events(env)
+    )
+
+    retry_env = dict(env)
+    retry_env.pop("FAKE_DOCKER_FAIL_MATCH")
+    retry = subprocess.run(
+        ["bash", "scripts/deploy_channel.sh", "rollback", "dev"],
+        cwd=root,
+        env=retry_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    assert f"target={scalar_sha}" in retry.stdout
+    assert f"APP_IMAGE_TAG={current_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_scalar_rollback_fails_before_mutation_without_explicit_inputs(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    (root / "app/instance/runtime.py").unlink()
+    subprocess.run(
+        ["git", "add", "-u", "app/instance/runtime.py"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "previous scalar image"],
+        cwd=root,
+        check=True,
+    )
+    scalar_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    pin_path = _seed_previous_pin(root, current_sha)
+    before = pin_path.read_bytes()
+
+    result = _run_rollback(root, env, scalar_sha)
+
+    assert result.returncode == 78
+    assert "SCALAR_ROLLBACK_VAULT_BINDING_ID" in result.stderr
+    assert pin_path.read_bytes() == before
+    assert not (tmp_path / "docker-called").exists()
 
 
 def test_app_bind_mount_removed_and_version_authoritative() -> None:

@@ -1,16 +1,175 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 
 import app.instance.vault_registry as registry_module
-from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from app.instance.filesystem_identity import FilesystemRootIdentity
-from app.instance.vault_registry import RegistryMigrationError, VaultRegistryStore
+from app.instance.instance_state import InstanceStateLayout
+from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+from app.instance.runtime import InstanceRegistryRuntime, _preflight_scalar_rollback
+from app.instance.scalar_rollback_guard import preflight_scalar_rollback_guard
+from app.instance.vault_registry import (
+    AppLocalSettingsStore,
+    KnownVaultRef,
+    RegistryMigrationError,
+    RegistryRevisionConflict,
+    VaultRegistryStore,
+)
 from app.vault.markdown_settings import MarkdownSettingsStore
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+from tests.helpers.mvr01c_authority import (
+    establish_authority_window,
+    finish_authority_window,
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_legacy(path, frontmatter) -> None:
     MarkdownSettingsStore().write_frontmatter(path, frontmatter, body="# Legacy app-local settings\n")
+
+
+def test_parent_registry_acceptance(tmp_path) -> None:
+    """The MVR-01 parent composes migration, durability, and rollback authority."""
+
+    instance_root = tmp_path / "instance-state" / "agentic-pkm"
+    instance_root.mkdir(parents=True, mode=0o700)
+    instance_root.chmod(0o700)
+    path = instance_root / "vault-registry.md"
+    first_root = tmp_path / "vault-a"
+    first_root.mkdir()
+    _write_legacy(
+        path,
+        {
+            "schema": "design-handoff.app-local.v1",
+            "appInstallId": "app-parent-acceptance",
+            "lastActiveVaultRef": f"path:{first_root}",
+            "knownVaults": {
+                f"path:{first_root}": {
+                    "path": str(first_root),
+                    "vaultId": "vault-a",
+                    "localInstanceId": "clone-a",
+                    "futureRegistration": {"preserved": True},
+                }
+            },
+            "futureTopLevel": {"preserved": True},
+        },
+    )
+    migrated = VaultRegistryStore(path).load_or_migrate()
+
+    assert migrated.revision == 1
+    assert migrated.authority == "dormant"
+    assert migrated.extensions["futureTopLevel"] == {"preserved": True}
+    assert next(iter(migrated.registrations.values())).extensions["futureRegistration"] == {
+        "preserved": True
+    }
+    assert path.with_suffix(path.suffix + ".legacy-export").is_file()
+    assert path.with_suffix(path.suffix + ".last-good").is_file()
+
+    first = next(iter(migrated.registrations.values()))
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("prod", first.vault_binding_id, first_root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    runtime = InstanceRegistryRuntime(
+        InstanceStateLayout(instance_root, "prod", path),
+        ledger,
+        initialize_layout=False,
+    )
+    receipt = preflight_scalar_rollback_guard(
+        compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+        rollback_vault_binding_id=first.vault_binding_id,
+        selected_root=first_root,
+    )
+    proof, inventory = establish_authority_window(runtime, tmp_path)
+    activated = runtime.activate_authority(
+        guard_receipt=receipt,
+        inventory_path=inventory,
+        quiescence_proof=proof,
+    )
+    finish_authority_window(runtime, tmp_path, proof, inventory)
+    assert activated.authority == "active"
+    assert activated.extensions["futureTopLevel"] == {"preserved": True}
+
+    stale_revision = activated.revision
+    second_root = tmp_path / "vault-b"
+    second_root.mkdir()
+    second = runtime.production_register(second_root, producer="picker")
+    with pytest.raises(RegistryRevisionConflict):
+        runtime.registry.update_registration(
+            first,
+            expected_revision=stale_revision,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    assert second.vault_binding_id in runtime.registry.load().registrations
+
+    path.write_text("corrupt", encoding="utf-8")
+    recovered = runtime.registry.load()
+    assert recovered.revision > stale_revision
+    assert recovered.extensions["futureTopLevel"] == {"preserved": True}
+
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _preflight_scalar_rollback(
+        channel="prod",
+        registry_path=path,
+        host_global_root=ledger.root,
+        rollback_vault_binding_id=first.vault_binding_id,
+        legacy_path=rollback_path,
+        selected_root=first_root,
+        compose_base=REPO_ROOT / "docker-compose.yaml",
+        compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+    )
+    rollback = AppLocalSettingsStore(rollback_path)
+    scalar = rollback.load()
+    selected = scalar.known_vaults[first.ref]
+    scalar.known_vaults[first.ref] = KnownVaultRef(
+        ref=selected.ref,
+        path=selected.path,
+        vault_id=selected.vault_id,
+        vault_name="rollback-name",
+        local_instance_id=selected.local_instance_id,
+        last_opened_at=selected.last_opened_at,
+    )
+    rollback.save(scalar)
+    merged = runtime.merge_previous_scalar_image(rollback_path)
+    assert merged.revision == recovered.revision + 1
+    assert merged.registrations[first.vault_binding_id].vault_name == "rollback-name"
+    assert second.vault_binding_id in merged.registrations
+    assert merged.extensions["futureTopLevel"] == {"preserved": True}
+
+    delivered_proofs = [
+        "tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state",
+        "tests/integration/test_vault_registry_rollback.py::test_multi_binding_rollback_requires_one_safe_explicit_target",
+        "tests/integration/test_vault_registry_rollback.py::test_01c_unseals_second_registration_only_with_complete_rollback_floor",
+        "tests/integration/test_vault_registry_rollback.py::test_rollback_mutations_round_trip_on_roll_forward",
+        "tests/ops/test_scalar_rollback_guard.py::test_rollback_gateway_and_mounts_enforce_selected_binding",
+        "tests/ops/test_scalar_rollback_guard.py::test_native_scalar_rollback_launcher_enforces_selected_binding_or_fails_closed",
+        "tests/ops/test_scalar_rollback_guard.py::test_binding_keyed_database_floor_blocks_scalar_runtime",
+    ]
+    aggregate = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", *delivered_proofs],
+        cwd=REPO_ROOT,
+        env={**os.environ, "RUN_INTEGRATED_RUNTIME_UAT": "1"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert aggregate.returncode == 0, aggregate.stdout + aggregate.stderr
+    assert "7 passed" in aggregate.stdout
 
 
 def test_legacy_app_local_state_migrates_losslessly(tmp_path) -> None:

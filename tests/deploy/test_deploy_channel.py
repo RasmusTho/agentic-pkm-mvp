@@ -38,11 +38,65 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
+def _install_writer_inventory_harness(root: Path) -> None:
+    """Keep channel-flow tests independent of the shared runner process table.
+
+    The real helper's Linux race and fail-closed contracts are exercised in
+    test_instance_state_volume_contract.py. These tests instead verify the
+    deploy script's command ordering and failure routing, so inspecting every
+    unrelated GitHub-runner process would add nondeterminism without covering
+    another deploy-channel behavior.
+    """
+
+    _write_executable(
+        root / "scripts/instance_state_writer_inventory.py",
+        """#!/usr/bin/env python3
+import json
+from pathlib import Path
+import sys
+
+
+def _value(flag: str) -> str:
+    try:
+        return sys.argv[sys.argv.index(flag) + 1]
+    except (ValueError, IndexError):
+        raise SystemExit(f"missing required fixture argument: {flag}")
+
+
+command = sys.argv[1] if len(sys.argv) > 1 else ""
+if command == "controller-token":
+    int(_value("--pid"))
+    print("0" * 64)
+elif command in {
+    "produce-legacy-owners",
+    "prove-quiescent",
+    "validate-legacy-owners",
+}:
+    output = Path(_value("--output"))
+    output.write_text(
+        json.dumps(
+            {
+                "fixture": "deploy-channel-writer-inventory",
+                "inventory_complete": True,
+                "writers_drained": True,
+            },
+            sort_keys=True,
+        )
+        + "\\n",
+        encoding="utf-8",
+    )
+else:
+    raise SystemExit(f"unsupported writer-inventory fixture command: {command}")
+""",
+    )
+
+
 def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     root = tmp_path / "repo"
     (root / "scripts/lib").mkdir(parents=True)
     (root / "config/deploy").mkdir(parents=True)
     (root / "app/alembic/versions").mkdir(parents=True)
+    (root / "app/instance").mkdir(parents=True)
     (root / "app/ops").mkdir(parents=True)
     (root / "app/release_channels").mkdir(parents=True)
     (root / "config/secrets").mkdir(parents=True)
@@ -65,6 +119,20 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     ):
         destination = root / relative
         shutil.copy2(REPO_ROOT / relative, destination)
+    _install_writer_inventory_harness(root)
+    (root / "app/instance/runtime.py").write_text(
+        '"""Fixture marker for a target with the instance-state preflight."""\n',
+        encoding="utf-8",
+    )
+    shutil.copy2(
+        REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        root / "docker-compose.scalar-rollback.yml",
+    )
+    (root / "ops/scalar-rollback").mkdir(parents=True)
+    shutil.copy2(
+        REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        root / "ops/scalar-rollback/nginx.conf",
+    )
 
     # The deploy harness has no active-vault fixture. Keep that state explicit
     # and process-free so the host-wide writer inventory cannot race a
@@ -77,7 +145,18 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
-    subprocess.run(["git", "add", "scripts"], cwd=root, check=True)
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "scripts",
+            "app/instance/runtime.py",
+            "docker-compose.scalar-rollback.yml",
+            "ops/scalar-rollback/nginx.conf",
+        ],
+        cwd=root,
+        check=True,
+    )
     subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 
@@ -102,6 +181,12 @@ if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MA
   exit 24
 fi
 case "$*" in
+  *"ps -aq"*"com.docker.compose.service=scalar-rollback-gateway"*)
+    [ "${{FAKE_SCALAR_CONTAINERS:-0}}" = "1" ] && printf '%s\\n' fake-scalar-gateway
+    ;;
+  *"ps -aq"*"com.docker.compose.service=scalar-rollback-guard"*)
+    [ "${{FAKE_SCALAR_CONTAINERS:-0}}" = "1" ] && printf '%s\\n' fake-scalar-guard
+    ;;
   *" ps -q "*) printf '%s\\n' fake-capture-watch ;;
   inspect*) printf '%s\\n' "${{FAKE_CAPTURE_WATCH_STATUS:-healthy}}" ;;
 esac
@@ -114,6 +199,15 @@ exit 0
 set -eu
 printf 'curl %s\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
 case "$*" in
+  *"--user "*":definitely-invalid"*)
+    printf '%s' "${FAKE_SCALAR_GATEWAY_HTTP_STATUS:-401}"
+    ;;
+  *"--netrc-file "*)
+    if [ "${FAKE_SCALAR_GATEWAY_AUTH:-pass}" = "fail" ]; then
+      exit 22
+    fi
+    printf '{"ok":true}\n'
+    ;;
   *"/version"*)
     if [ "${FAKE_VERSION_CURL:-pass}" = "fail" ]; then
       echo 'fake version curl diagnostic' >&2

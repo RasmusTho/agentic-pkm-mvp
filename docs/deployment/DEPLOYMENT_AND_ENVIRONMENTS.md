@@ -93,12 +93,74 @@ start only when neither the host-global lease nor any channel restart fence exis
 always run the full authenticated runtime preflight; module absence outside explicit rollback fails
 closed.
 
-This 01B recovery boundary also includes canonical-root overlap rejection and dormant recoverable
-lifecycle lineage. It deliberately leaves `authority: dormant`: the production picker continues to
-read and write the legacy scalar app-local payload, second-registration and lifecycle producers
-remain sealed, and the independently durable legacy source must not be retired. MVR-01C alone owns
-the guarded rollback gateway and authority cutover; the presence of the 01B volume or prepared
-registry is never evidence that cutover has occurred.
+MVR-01C cuts registry authority over only by committing one complete rollback floor into the same
+locked registry generation. That generation names one validated scalar rollback binding, refreshes
+the current legacy projection, records the roll-forward fork revision, and proves both the
+authenticated mutation-filtering gateway and the deny-by-default native guard. A partial or missing
+proof leaves `authority: dormant` and every registration producer sealed.
+The cutover runs before deployment finalization clears the host-global lease/restart fence and
+requires the same bound quiescence proof, drained-owner inventory, producer-transition lock, and
+exact active ownership coverage. Pending ownership or an unmatched selected-root filesystem
+identity therefore blocks the authority revision.
+Deployment finalization takes that same producer-transition lock before it can clear the proof,
+lease, or fence, so it cannot race past the authority commit. Newly unsealed registration
+producers reuse a unique pending reservation for the same physical root and recover a
+registry-committed pending lease on retry; crashes on either side of the registry commit do not
+mint a second binding or strand ownership.
+
+Supported container rollback into a previous scalar image uses
+`docker-compose.scalar-rollback.yml`: the old API publishes no direct host port, the base
+companion UI is disabled, the real companion picker select/initialize routes are denied, and the
+old API is reachable from the host only through the authenticated gateway. It mounts only the
+selected content root at `/app/selected-vault`. `deploy_channel.sh rollback` detects a target
+commit that predates `app.instance.runtime`, requires the explicit binding, absolute selected root,
+gateway credential file, and a private `0600` netrc proof credential for one matching gateway user
+before changing the pin, derives the trusted-current and
+previous-image refs from the current/target pins, and then starts only the guard, old API, and
+gateway through that overlay. Scalar mode keeps the capable current-image pin as its durable guard
+identity and records the old target in the rollback anchor; a failed or restarted establishment
+therefore resumes the guarded mode instead of attempting a session-blocked broad-stack restart.
+The current guard adopts an existing authenticated session only when its binding, registry
+revision, selected root, export, and policy hashes exactly match the retry. The gateway uses the
+channel's managed restart posture; deployment records success only after the provisioned proof
+credential reaches the old API health endpoint through that live gateway. The legacy projection translates only that
+registration's host path to the container alias and authenticates both the canonical registry
+export and translated projection, so roll-forward restores the original binding identity rather
+than adopting a container path. The ledger validates that alias by its materialized physical-root
+fingerprint while separately authenticating the sealed host path and ancestor lineage; container
+ancestor names are never treated as host authority. A current guard image revalidates the host-mounted base, overlay,
+and nginx bytes that Docker actually activates (not image-local copies), materializes the exact
+legacy projection, and installs a host-key-authenticated scalar session before the old API starts. That
+trusted one-shot guard alone receives writable ownership state so it can take the shared lock and
+sign the session; the previous-image API receives no ownership/key mount. The durable session excludes
+current registry writers for the lifetime of the old image; the old image receives neither the
+host key nor a writable registry mount. Scalar admission and `deployment-begin` share one
+host-global lock. The canonical deployment lease and a runtime-admission lock live in a key-free
+host-global control directory mounted read-only into the old API. The old API takes the shared lock,
+checks that the lease is absent, and carries the lock across exec; deployment quiescence proof must
+take the exclusive side, which catches an API admitted before lease publication. Native rollback currently fails closed: the root-owned
+`scripts/scalar_rollback_native.sh` launcher never starts an old image until an authenticated
+mutation-filtering boundary equivalent to the Compose gateway exists. A filesystem sandbox alone
+is insufficient because it cannot exclude a bypass listener. A binding-keyed
+`minimumRuntimeSchema` floor blocks scalar API/worker startup before database or queue work. On
+roll-forward, the authenticated session and unchanged registry revision must agree before
+rollback-period metadata and last-active state become the next registry revision; divergence
+preserves both sides without recreate. The importer is not a free-standing runtime call:
+`MVR01C_ROLL_FORWARD_LEGACY_PATH` asks the normal deployment producer to run
+`scalar-rollback-roll-forward` only after its host-global lease, restart fence, stopped-writer
+proof, and drained-owner receipt are durable, and before `deployment-finish` permits recreate.
+Roll-forward and finalization use the same host-admission then channel-producer lock order.
+Deployment begin treats the claimed lease as the retry journal for an interrupted channel-fence
+projection. Finalization records its result in a cleanup-phase lease before removing the restart
+fence and proof. A root-level compatibility block occupies the exact shipped v2 lease path through
+cutover and cleanup, preventing a running v2 helper from creating overlapping authority; it is the
+last authority artifact removed. Registry generation and scalar-session retirement
+share their existing crash journal; interruption recovers the pre-merge session for retry or the
+complete committed generation without a stranded stale session.
+An already-durable root-level v2 lease remains a blocking authority during upgrade. Only a dead
+same-channel `claimed` controller is migrated by publishing the public v3 lease, matching fence,
+and root compatibility block without an absence gap; live or `proved` v2 state stays fail-closed on
+its original recovery path.
 
 ### Target
 

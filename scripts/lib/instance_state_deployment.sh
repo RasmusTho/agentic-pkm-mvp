@@ -161,7 +161,63 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
 
+  # An explicit scalar fork is imported only while the host-global lease,
+  # restart fence, stopped-writer proof, and drained-owner receipt are live.
+  # Ordinary deployments never infer a scalar fork.
+  if [ -n "${MVR01C_ROLL_FORWARD_LEGACY_PATH:-}" ]; then
+    if [ "${MVR01C_ROLL_FORWARD_LEGACY_PATH}" != "/app/scalar-rollback/app-local.md" ]; then
+      echo "MVR-01C roll-forward source must be the governed scalar volume" >&2
+      return 78
+    fi
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime scalar-rollback-roll-forward \
+        --channel "${channel}" \
+        --instance-state-root /app/instance-state \
+        --host-global-root /app/instance-ownership \
+        --legacy-path "${MVR01C_ROLL_FORWARD_LEGACY_PATH}" \
+        --inventory-path "${inventory_path}" \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      return "${inventory_rc}"
+    fi
+  fi
+
+  # MVR-01C is an explicit authority cutover, never an inferred side effect of
+  # deploying the capable image. Keep the deployment lease, restart fence,
+  # stopped-writer proof, and drained-owner receipt live through the one atomic
+  # authority commit; only deployment-finish may clear that stopped window.
+  if [ -n "${MVR01C_ROLLBACK_VAULT_BINDING_ID:-}" ] || [ -n "${MVR01C_ROLLBACK_VAULT_ROOT:-}" ]; then
+    if [ -z "${MVR01C_ROLLBACK_VAULT_BINDING_ID:-}" ] || [ -z "${MVR01C_ROLLBACK_VAULT_ROOT:-}" ]; then
+      echo "MVR-01C cutover requires both rollback binding and root" >&2
+      return 78
+    fi
+    "${compose_function}" run --rm --no-deps -T \
+      --volume "${MVR01C_ROLLBACK_VAULT_ROOT}:/app/selected-vault:ro" \
+      --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime authority-cutover \
+        --channel "${channel}" \
+        --instance-state-root /app/instance-state \
+        --host-global-root /app/instance-ownership \
+        --rollback-vault-binding-id "${MVR01C_ROLLBACK_VAULT_BINDING_ID}" \
+        --selected-root /app/selected-vault \
+        --compose-base /run/scalar-rollback-policy/docker-compose.yaml \
+        --compose-overlay /run/scalar-rollback-policy/docker-compose.scalar-rollback.yml \
+        --gateway-config /run/scalar-rollback-policy/nginx.conf \
+        --native-launcher /app/scripts/scalar_rollback_native.sh \
+        --inventory-path "${inventory_path}" \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      return "${inventory_rc}"
+    fi
+  fi
+
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime deployment-finish \
       "${finish_args[@]}"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    return "${inventory_rc}"
+  fi
 }
