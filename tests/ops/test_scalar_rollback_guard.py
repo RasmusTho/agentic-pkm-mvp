@@ -783,6 +783,33 @@ def test_scalar_roll_forward_serializes_against_deployment_finish(
     assert entered_finish.is_set()
 
 
+def test_scalar_roll_forward_uses_lease_coverage_without_opening_vault_roots(
+    tmp_path,
+) -> None:
+    runtime, registration, selected_root = _runtime(tmp_path)
+    nonselected_root = tmp_path / "nonselected"
+    nonselected_root.mkdir()
+    runtime.production_register(nonselected_root, producer="api")
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _scalar_preflight(runtime, registration, selected_root, rollback_path)
+    proof, inventory = establish_authority_window(runtime, tmp_path / "window")
+    selected_root.rename(tmp_path / "selected-sealed")
+    nonselected_root.rename(tmp_path / "nonselected-sealed")
+
+    result = _roll_forward_scalar_rollback(
+        channel="prod",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=rollback_path,
+        inventory_path=inventory,
+        quiescence_proof_path=(
+            runtime.ledger.root / "deployment-quiescence-proof.json"
+        ),
+    )
+
+    assert result == 0
+
+
 def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
     runtime = InstanceRegistryRuntime.for_paths(
         InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),
@@ -819,6 +846,41 @@ def test_authority_cutover_rejects_pending_ownership(tmp_path) -> None:
         )
 
     assert runtime.registry.load().authority == "dormant"
+
+
+def test_authority_cutover_uses_selected_alias_without_opening_registry_path(
+    tmp_path,
+) -> None:
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "instance-state", "prod"),
+        tmp_path / "host-global",
+    )
+    selected_root = tmp_path / "srv-selected"
+    selected_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=selected_root,
+        watcher_vault_path=selected_root,
+    )
+    proof, inventory = establish_authority_window(runtime, tmp_path)
+    selected_alias = tmp_path / "selected-container-alias"
+    selected_root.rename(selected_alias)
+    receipt = preflight_scalar_rollback_guard(
+        compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
+        gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
+        native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+        rollback_vault_binding_id=registration.vault_binding_id,
+        selected_root=selected_alias,
+    )
+
+    activated = runtime.activate_authority(
+        guard_receipt=receipt,
+        inventory_path=inventory,
+        quiescence_proof=proof,
+    )
+
+    assert activated.authority == "active"
+    assert not selected_root.exists()
+    assert selected_alias.is_dir()
 
 
 def test_authority_cutover_requires_stopped_window_at_core_boundary(

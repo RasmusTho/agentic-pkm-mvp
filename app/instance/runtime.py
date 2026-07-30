@@ -340,10 +340,6 @@ class InstanceRegistryRuntime:
             if (
                 target is None
                 or guard_receipt.rollback_vault_binding_id != target_id
-                or not same_filesystem_root(
-                    resolve_filesystem_root_identity(guard_receipt.selected_root),
-                    resolve_filesystem_root_identity(target.path),
-                )
                 or not guard_receipt.gateway_authenticated
                 or not guard_receipt.mutation_filtering
                 or not guard_receipt.direct_api_port_absent
@@ -353,14 +349,6 @@ class InstanceRegistryRuntime:
                 raise CapabilityNotReadyError(
                     "MVR-01C authority cutover guard receipt does not match the selected binding"
                 )
-            registrations: dict[str, Path | None] = {
-                binding_id: Path(registration.path)
-                for binding_id, registration in current.registrations.items()
-            }
-            self.ledger.require_scalar_rollback_ready(
-                channel_id=self.layout.channel_id,
-                registrations=registrations,
-            )
             self.ledger.require_scalar_rollback_ready(
                 channel_id=self.layout.channel_id,
                 registrations={
@@ -1058,8 +1046,7 @@ def _roll_forward_scalar_rollback(
             runtime.ledger.require_scalar_rollback_ready(
                 channel_id=channel,
                 registrations={
-                    binding_id: Path(registration.path)
-                    for binding_id, registration in current.registrations.items()
+                    binding_id: None for binding_id in current.registrations
                 },
             )
             merged = runtime.merge_previous_scalar_image(legacy_path)
