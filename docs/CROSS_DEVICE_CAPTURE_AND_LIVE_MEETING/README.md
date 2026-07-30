@@ -175,10 +175,12 @@ receipts are recorded on the parent issue.
   **superseded as the target contract** by CDLM-03's receipt-gated retention for everything the
   outbox carries. The watched-folder lane continues to exist as the phoneless/legacy floor without
   receipt-gated retention, stated honestly.
-- **bifrost#21 (HCAP-09 UAT)** remains later validation work and is blocked on this vertical's
-  foundation (its body carries the 2026-07-29 product-priority reconciliation); its journeys will
-  compose with the outbox and receipt states once CDLM-03/05 land. Its label was corrected
-  `agent:ready` → `agent:blocked` on 2026-07-29, naming bifrost#57/#59 and hub #4389 as blockers.
+- **bifrost#21 (HCAP-09 UAT)** is now the named remaining **human step** — the physical-device
+  walkthrough (locked-screen capture, real calls, wrist haptics, on-device app-lifecycle truths).
+  CDLM-10's scripted proof (#4389, `scripts/cdlm_roundtrip_proof.py`) covers the hub contract and
+  the simulator-verifiable composition only; those simulator-only limits are stated in its run
+  report on #4383. With CDLM-03/05/08/09 delivered and the CDLM-10 receipt posted, bifrost#21 is
+  unblocked for the operator's walkthrough.
 - **Execution gate G-CI is retired (2026-07-30).** This directory originally required bifrost#52
   to be fixed, or local `xcodebuild test` evidence attached, before any bifrost child could merge.
   That gate rested on a stale premise: all three defects bifrost#52 described had already been
