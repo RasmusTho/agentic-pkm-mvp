@@ -134,6 +134,12 @@ ALLOW_FILES = (
     # append-only receipt table, direct DSN connection, no ORM layer to
     # route through.
     'app/heimdal/retention.py',
+    # Media-admission receipt store (CDLM-01, #4384). Same bounded pattern as
+    # the raw-read receipt log above: a dedicated append-only receipt table
+    # (heimdal_media_receipt) with a self-contained dual memory/pg backend,
+    # direct DSN connection, and fail-loud schema preflight; no ORM layer to
+    # route through.
+    'app/heimdal/media_receipts.py',
     # YouTube Source Sync durable source registry (YSS-01, #3916). Same bounded
     # pattern as app/heimdal/cursor_store.py above: a dedicated table
     # (acquisition_source_registry) with a self-contained dual memory/pg

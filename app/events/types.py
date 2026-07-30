@@ -160,6 +160,20 @@ HEIMDAL_CONSENT_GRANTED = "heimdal.consent.granted"
 HEIMDAL_CONSENT_REVOKED = "heimdal.consent.revoked"
 HEIMDAL_OBSERVATION_CORRECTED = "heimdal.observation.corrected"
 
+# Governed media ingress admission event (CDLM-01, #4384).
+#
+# Emitted by `app.heimdal.media_ingress.record_media_admission` after the
+# original is durably in the encrypted raw store and *before* the receipt that
+# acknowledges it exists — the outbox-before-ack ordering INV-CDLM-1 requires
+# (`docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md`). Like the
+# register-mutation events above it is an audit/lineage event, not a dispatched
+# command: no `outbox_worker._dispatch_topic` branch and no topic-schema
+# registration. Its committed presence is a *precondition* of the receipt, so a
+# consumer must treat the receipt row
+# (`app.heimdal.media_receipts`) as the acknowledgement and this event as the
+# auditable record of how the admission happened.
+HEIMDAL_CAPTURE_MEDIA_ADMITTED = "heimdal.capture.media.admitted"
+
 __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
@@ -249,5 +263,6 @@ __all__ = [
     "HEIMDAL_CONSENT_GRANTED",
     "HEIMDAL_CONSENT_REVOKED",
     "HEIMDAL_OBSERVATION_CORRECTED",
+    "HEIMDAL_CAPTURE_MEDIA_ADMITTED",
     "EPISODE_CLOSED",
 ]

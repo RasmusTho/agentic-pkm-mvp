@@ -11,6 +11,13 @@ can_parallelize_with: []
 
 # Admit Media With Durable Receipts
 
+State: Delivered by hub issue #4384 (2026-07-30). `POST /api/heimdal/capture/media` and
+`GET /api/heimdal/capture/receipts` are live in `app/api/routes/heimdal_capture.py` over
+`app/heimdal/media_ingress.py` + `app/heimdal/media_receipts.py`; the event contract is recorded in
+`docs/EVENTS.md :: Heimdal governed media ingress + durable receipts`. Promotion of this lane into
+`docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 (closing client-contract gap F5 for the media lane)
+remains parent-acceptance work on #4383 and is deliberately not claimed here.
+
 ## Purpose
 
 Give every capture client one governed answer to "is my original durably accepted?". Today that
@@ -59,7 +66,7 @@ curl -s -X POST http://hub.local/api/heimdal/capture/media \
   -H 'x-trace-id: t-123' \
   -F media=@segment-000.m4a \
   -F 'sidecar={"capture_id":"9f7c…","content_sha256":"ab12…","kind":"audio","captured_at":"2026-07-29T12:00:00Z","device_id":"ipad-1","schema_version":1};type=application/json'
-# → 200 {"outcome":"admitted","capture_id":"9f7c…","receipt_id":"rcp_…","raw_ref":"raw_…","admitted_at":"…","trace_id":"t-123"}
+# → 200 {"outcome":"admitted","capture_id":"9f7c…","receipt_id":"rcp_…","raw_ref":"heimraw:…","admitted_at":"…","trace_id":"t-123"}
 # re-run the identical command
 # → 200 {…,"idempotent_replay":true}   # same receipt_id, raw store unchanged
 
@@ -77,26 +84,26 @@ exact guessing that lost the #4369 recordings.
 
 ## Acceptance Criteria
 
-- [ ] A successful admission returns the receipt only after the raw object is durably written and
+- [x] A successful admission returns the receipt only after the raw object is durably written and
   the admission event is committed; a forced event-commit failure yields a 500 with no acknowledged
   state and no orphaned acknowledged artifacts.
   - Verify: `tests/heimdal/test_media_ingress.py::test_ack_requires_raw_write_and_committed_event`
     (enforcement: asserts the ordering on the production route path by fault-injecting the event
     commit, not by unit-testing a helper in isolation).
-- [ ] Re-posting the same `(capture_id, content_sha256)` after a simulated lost response returns
+- [x] Re-posting the same `(capture_id, content_sha256)` after a simulated lost response returns
   the same `receipt_id`, leaves exactly one raw object, and emits no second admission event.
   - Verify: `tests/heimdal/test_media_ingress.py::test_resend_is_idempotent_end_to_end`
-- [ ] Each media kind admits within its configured cap and lands in the raw store with lineage
+- [x] Each media kind admits within its configured cap and lands in the raw store with lineage
   metadata; hash mismatch, unsupported kind, and oversize input return their named errors with
   nothing admitted.
   - Verify: `tests/heimdal/test_media_ingress.py::test_kind_caps_and_named_error_states`
-- [ ] The receipt query returns `admitted` for admitted ids and `unknown` for never-seen ids,
+- [x] The receipt query returns `admitted` for admitted ids and `unknown` for never-seen ids,
   through the production route.
   - Verify: `tests/heimdal/test_media_ingress.py::test_receipt_query_answers_recovery`
-- [ ] A watched-folder admission produces a queryable receipt through the same seam (content-hash
+- [x] A watched-folder admission produces a queryable receipt through the same seam (content-hash
   keyed; `capture_id` when the sidecar supplies one).
   - Verify: `tests/heimdal/test_media_ingress.py::test_watched_folder_admission_shares_receipt_seam`
-- [ ] The endpoint refuses operation on a non-loopback/LAN/tailnet binding consistent with the
+- [x] The endpoint refuses operation on a non-loopback/LAN/tailnet binding consistent with the
   client contract's v1 posture.
   - Verify: `tests/heimdal/test_media_ingress.py::test_ingress_refuses_public_binding`
 

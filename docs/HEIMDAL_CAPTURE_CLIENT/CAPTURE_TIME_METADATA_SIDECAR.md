@@ -41,13 +41,21 @@ delivered `foo.m4a`, an optional sibling `foo.m4a.capture.json`:
   "timezone": "Europe/Stockholm",
   "interruptions": 1,
   "source_surface": "iphone-app | watch-relay",
-  "location": {"lat": 0.0, "lon": 0.0, "precision_m": 100}
+  "location": {"lat": 0.0, "lon": 0.0, "precision_m": 100},
+  "capture_id": "<optional client-minted UUID>"
 }
 ```
 
 `location` present only when the operator has enabled it in the Heimdal client (off by default;
 mic-only permission posture stays the default). Unknown fields are ignored by the consumer;
 missing sidecar means v1 behavior exactly as today.
+
+`capture_id` is optional and was added by CDLM-01 (hub #4384) without a `sidecar_version` bump,
+since it is additive and absence keeps prior behavior. When present, the hub keys that file's
+durable-acceptance receipt by it instead of by content hash, so a client using both the
+watched-folder lane and `POST /api/heimdal/capture/media` can query one id across both
+(`docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`). It grants the
+legacy lane no receipt-gated retention — that remains an outbox-lane property (CDLM-03).
 
 - **Bifrost half:** assemble the sidecar from the session state machine (start/end/interruptions,
   source surface incl. watch relay), write it into the watched folder AFTER the audio's final
