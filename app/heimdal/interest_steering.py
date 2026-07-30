@@ -62,14 +62,12 @@ Four capabilities, four distinct write shapes:
 Every write in this module reaches the vault through the same governed
 seam every other Heimdal control note uses
 (`app.knowledge.write_ops.write_note_relative` / `append_note_relative` +
-`app.write_guard.DEFAULT_WRITE_GUARD`), mirroring
+the caller-selected `app.write_guard.WriteGuard`), mirroring
 `app.heimdal.settings_notes` and `app.heimdal.consent_surface` -- no
-hand-rolled YAML, no bypassed guard. `append_note_relative` itself does not
-assert the guard at its own seam (unlike `write_note_relative`); this
-module closes that gap the same way `app/api/routes/capture.py` does for
-its own append call site: :func:`_assert_append_allowed` calls
-`write_guard.assert_writes_allowed` explicitly before every append, so a
-health-blocked runtime cannot silently mutate a steering note either.
+hand-rolled YAML, no bypassed guard. This module asserts the capability
+action before every append, then passes the same guard and action through
+so `append_note_relative` reasserts the caller-authorized policy at its
+own seam.
 
 Out of scope (per the governing Issue): watch-as-selection cognition
 (Mimer's, §9-k(b)), native-app editor rendering, automatic source
@@ -129,12 +127,11 @@ def _now_iso() -> str:
 
 
 def _assert_append_allowed(write_guard: WriteGuard, action: str) -> None:
-    """Guard-at-call-site for the append path (Constraints: "no hand-rolled
-    writes, no bypassed guard"). `append_note_relative` itself does not
-    assert a `WriteGuard` (unlike `write_note_relative`) -- this closes that
-    gap the same way `app/api/routes/capture.py` already does for its own
-    append call site, rather than routing every in-flow/post-hoc append
-    through the heavier `issue_decision_token` ceremony that call site uses.
+    """Defense-in-depth guard at the capability call site.
+
+    The same guard and action are passed to ``append_note_relative`` so its
+    seam assertion preserves this caller's authorization instead of
+    reauthorizing through the unrelated default policy.
     """
     write_guard.assert_writes_allowed(action)
 
@@ -282,8 +279,8 @@ def append_inflow_steering(
     message or item click is transient; the note line is not). Uses
     `app.knowledge.write_ops.append_note_relative` directly (never
     `write_settings_note`, which would replace -- not append to -- the
-    note), guarded explicitly via `_assert_append_allowed` since
-    `append_note_relative` does not assert a `WriteGuard` at its own seam.
+    note). The capability guard is asserted here and propagated to the
+    append seam for its own assertion.
     """
     timestamp = (at or datetime.now(timezone.utc)).isoformat().replace("+00:00", "Z")
     suffix = f" | {note}" if note else ""
@@ -291,7 +288,13 @@ def append_inflow_steering(
 
     _assert_append_allowed(write_guard, INFLOW_APPEND_WRITE_ACTION)
     rel_path = _inflow_rel_path(kind)
-    append_note_relative(rel_path, line, vault_root=vault_root)
+    append_note_relative(
+        rel_path,
+        line,
+        vault_root=vault_root,
+        write_guard=write_guard,
+        action=INFLOW_APPEND_WRITE_ACTION,
+    )
     return line
 
 
@@ -410,7 +413,13 @@ def append_steering_log(
     _assert_append_allowed(write_guard, POSTHOC_STEERING_WRITE_ACTION)
     _ensure_steering_log_seed(vault_root, write_guard=write_guard)
     rel_path = note_rel_path(STEERING_LOG)
-    append_note_relative(rel_path, line, vault_root=vault_root)
+    append_note_relative(
+        rel_path,
+        line,
+        vault_root=vault_root,
+        write_guard=write_guard,
+        action=POSTHOC_STEERING_WRITE_ACTION,
+    )
 
     existing = read_settings_note(vault_root, STEERING_LOG)
     prior_count = 0

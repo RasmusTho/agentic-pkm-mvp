@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+from app.heimdal import interest_steering as steering_module
 from app.heimdal.interest_steering import (
     InterestDerivedUpdate,
     apply_interest_derived_updates,
@@ -216,6 +217,45 @@ def test_inflow_append_honors_write_guard_block(tmp_path: Path) -> None:
     with pytest.raises(WritesBlockedError):
         append_watch(vault_root, "blocked-target", source="chat", write_guard=_blocking_guard())
     assert read_inflow_body(vault_root, "watch") == ""
+
+
+def test_injected_guard_is_preserved_through_append_seam(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault_root = _vault(tmp_path)
+    injected_guard = _allowing_guard()
+    seam_calls: list[tuple[object, object]] = []
+    real_append = steering_module.append_note_relative
+
+    def recording_append(note_rel_path, content, **kwargs):  # type: ignore[no-untyped-def]
+        seam_calls.append((kwargs.get("write_guard"), kwargs.get("action")))
+        return real_append(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(
+        steering_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "safe_mode", "reason": "default guard must not be used"},
+    )
+    monkeypatch.setattr(steering_module, "append_note_relative", recording_append)
+
+    append_watch(
+        vault_root,
+        "sources/youtube:northvolt",
+        source="chat",
+        write_guard=injected_guard,
+    )
+    append_steering_log(
+        vault_root,
+        "mute",
+        "sources/spam_feed",
+        source="item",
+        write_guard=injected_guard,
+    )
+
+    assert seam_calls == [
+        (injected_guard, steering_module.INFLOW_APPEND_WRITE_ACTION),
+        (injected_guard, steering_module.POSTHOC_STEERING_WRITE_ACTION),
+    ]
 
 
 # ---------------------------------------------------------------------------
