@@ -44,7 +44,7 @@ from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_MEETING_USER_NOTE_WRITTEN
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services import outbox as outbox_service
-from app.heimdal import meeting_blocks, meeting_ledger, meeting_projection
+from app.heimdal import meeting_blocks, meeting_finalization, meeting_ledger, meeting_projection
 from app.heimdal.media_ingress import iso_timestamp
 from app.heimdal.meeting_ledger import MeetingSession, MeetingSessionNotFoundError
 
@@ -147,14 +147,10 @@ def open_session(request: Request, body: OpenSessionRequest) -> SessionResponse:
     return _session_response(session, replay=not created, trace_id=trace_id)
 
 
-@router.post(
-    "/{session_id}/close",
-    response_model=SessionResponse,
-    response_model_exclude_none=True,
-)
+@router.post("/{session_id}/close")
 def close_session(
     request: Request, session_id: str, body: CloseSessionRequest
-) -> SessionResponse:
+) -> Dict[str, Any]:
     """Close a session; a re-post replays the recorded close outcome."""
     trace_id = _trace_id(request)
     _assert_lan_posture(request, trace_id)
@@ -169,7 +165,30 @@ def close_session(
         # every failure on this surface must carry the named
         # `meeting_ledger_failed` shape rather than an unnamed 500.
         raise _ledger_failed(exc, trace_id) from exc
-    return _session_response(session, replay=not newly_closed, trace_id=trace_id)
+
+    # CDLM-08: session close triggers finalization. The close itself is
+    # ledger truth and already durable; a finalization problem is reported
+    # loudly in the response, never hidden and never a close failure.
+    try:
+        finalization = meeting_finalization.finalize_session(
+            session_id, trace_id=trace_id
+        )
+    except Exception as exc:
+        logger.error(
+            "meeting finalization failed on close session=%s trace=%s: %s",
+            session_id,
+            trace_id,
+            exc,
+        )
+        finalization = {
+            "status": "failed",
+            "error": type(exc).__name__,
+            "message": str(exc),
+        }
+    response = _session_response(session, replay=not newly_closed, trace_id=trace_id)
+    payload = response.model_dump(exclude_none=True)
+    payload["finalization"] = finalization
+    return payload
 
 
 class UserNoteRequest(BaseModel):
@@ -468,6 +487,7 @@ def projection(request: Request, session_id: str) -> Dict[str, Any]:
     _assert_lan_posture(request, trace_id)
     try:
         report = meeting_projection.build_projection(session_id)
+        report["finalization"] = meeting_finalization.latest_receipt(session_id)
     except MeetingSessionNotFoundError as exc:
         raise _session_unknown(session_id, trace_id) from exc
     except Exception as exc:

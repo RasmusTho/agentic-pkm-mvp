@@ -156,6 +156,11 @@ ALLOW_FILES = (
     # _block_refusal) with a self-contained dual sqlite/pg backend and fail-loud
     # schema preflight.
     'app/heimdal/meeting_blocks.py',
+    # Meeting finalization receipt store (CDLM-08, #4388). Same bounded
+    # pattern: a dedicated migration-owned table
+    # (heimdal_meeting_finalization_receipt) with a self-contained dual
+    # sqlite/pg backend and fail-loud schema preflight.
+    'app/heimdal/meeting_finalization.py',
     # YouTube Source Sync durable source registry (YSS-01, #3916). Same bounded
     # pattern as app/heimdal/cursor_store.py above: a dedicated table
     # (acquisition_source_registry) with a self-contained dual memory/pg

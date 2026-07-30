@@ -56,6 +56,7 @@ from app.events.types import HEIMDAL_CAPTURE_MEDIA_ADMITTED
 from app.heimdal import (
     capture_adapter,
     media_receipts,
+    meeting_finalization,
     meeting_ledger,
     meeting_projection,
     raw_store,
@@ -545,7 +546,7 @@ def _ledger_session_segment(
     """
     if session_id is None or session_seq is None:
         return
-    meeting_ledger.record_segment_admission(
+    segment_outcome = meeting_ledger.record_segment_admission(
         session_id=session_id,
         session_seq=session_seq,
         receipt_id=receipt.receipt_id,
@@ -568,6 +569,12 @@ def _ledger_session_segment(
             media_bytes=media_bytes,
             kind=kind,
         )
+    # CDLM-08: a late admission into a closed session triggers post-close
+    # reconciliation — re-finalization under the create-once re-derivation
+    # rule. Exception-isolated inside `maybe_refinalize`; the admission ack
+    # never depends on it.
+    if segment_outcome.late:
+        meeting_finalization.maybe_refinalize(session_id, trace_id=trace_id)
 
 
 def record_watched_folder_admission(

@@ -965,6 +965,23 @@ Payload fields (in addition to the envelope):
 - `content_sha256` (`string`): hash of the written note text (the bytes stay in
   the block registry, never duplicated into event logs).
 
+### `heimdal.meeting.finalized`
+
+Emitted by `app.heimdal.meeting_finalization.finalize_session` (CDLM-08, #4388)
+after the consolidated transcript, final derived analysis, and user-notes
+artifacts are materialized create-once into the Sources zone, and **before**
+the durable finalization receipt that is the finalized acknowledgement (the
+CDLM-01 ack-ordering family). Not dispatched; no topic schema. Completeness is
+read from the receipt/projection, never reconstructed from event counts.
+
+Payload fields (in addition to the envelope):
+- `session_id` (`string`), `finalization_state` (`string`: sha256 of the
+  ledger completeness state this finalization is idempotent over).
+- `complete` (`boolean`), `missing_seqs` (`array[integer]`).
+- `artifact_refs` (`object`): vault-relative paths of the three artifacts.
+- `supersedes` (`string|null`): the superseded finalization state on a
+  post-close reconciliation, or null for the first finalization.
+
 ### `panel.intent.created`
 
 Emitted when an AI panel is parsed for a note and actions are mapped.
