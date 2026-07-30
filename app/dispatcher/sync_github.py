@@ -310,6 +310,18 @@ def _ready_validation_failure(payload: dict[str, Any]) -> str | None:
     )
 
 
+def github_issue_task_id(repo: str, issue_number: int) -> str:
+    """Single source for the repo-qualified dispatcher task id.
+
+    Every consumer that needs the ``github-<owner>--<repo>-issue-<N>`` id —
+    including ``scripts/issue_pickup_claim.sh`` — must derive it through this
+    function; a second spelling silently splits the dispatcher join key
+    (INV-DG-2). The owner/name separator is doubled (``--``) so repo names
+    that themselves contain ``-`` cannot collapse two repos onto one id.
+    """
+    return f"github-{repo.replace('/', '--')}-issue-{issue_number}"
+
+
 def normalize_github_issue(
     payload: dict[str, Any], repo: str, now: str | None = None
 ) -> TaskRecord:
@@ -319,15 +331,9 @@ def normalize_github_issue(
     raw GitHub issue dicts (real or mocked) plus the ``owner/name`` *repo* the
     issue came from.
 
-    ``task_id`` is repo-qualified so that issue numbers colliding across repos
-    (both repos can have an issue #21) map to distinct rows instead of silently
-    clobbering each other. The owner/name separator is doubled (``--``) rather
-    than reusing the single ``-`` GitHub repo names may themselves contain —
-    a single-hyphen encoding lets two different repos collapse to the same
-    string (``"org/foo-bar"`` and ``"org-foo/bar"`` both become
-    ``"org-foo-bar"``); doubling the separator keeps them distinct
-    (``"org--foo-bar"`` vs ``"org-foo--bar"``) for any repo name that doesn't
-    itself contain a literal ``--``.
+    ``task_id`` is repo-qualified via :func:`github_issue_task_id` so that
+    issue numbers colliding across repos (both repos can have an issue #21)
+    map to distinct rows instead of silently clobbering each other.
 
     Priority defaults to ``med`` when no recognised priority label is present.
     Status defaults to ``ready`` when no recognised status label is present.
@@ -336,7 +342,7 @@ def normalize_github_issue(
         now = datetime.now(timezone.utc).isoformat()
 
     number = payload["number"]
-    task_id = f"github-{repo.replace('/', '--')}-issue-{number}"
+    task_id = github_issue_task_id(repo, number)
 
     labels = _label_names(payload)
 
