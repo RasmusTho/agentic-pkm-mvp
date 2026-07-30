@@ -1142,6 +1142,51 @@ def test_required_check_accepts_latest_authoritative_workflow_rerun() -> None:
     assert _checks_rejection(checks, expected_head_sha=HEAD) is None
 
 
+def test_repo_standard_check_rejects_green_push_masking_failed_pr_run() -> None:
+    failed_pr = {
+        "id": 30,
+        "name": "Docs Guard",
+        "app": {"slug": "github-actions"},
+        "check_suite": {"id": 130},
+        "workflow_run": {
+            "id": 1130,
+            "path": ".github/workflows/docs-guard.yml",
+            "event": "pull_request",
+            "head_sha": HEAD,
+            "check_suite_id": 130,
+        },
+        "status": "completed",
+        "conclusion": "failure",
+    }
+    green_push = {
+        "id": 31,
+        "name": "Docs Guard",
+        "app": {"slug": "github-actions"},
+        "check_suite": {"id": 131},
+        "workflow_run": {
+            "id": 1131,
+            "path": ".github/workflows/docs-guard.yml",
+            "event": "push",
+            "head_sha": HEAD,
+            "check_suite_id": 131,
+        },
+        "status": "completed",
+        "conclusion": "success",
+    }
+
+    assert (
+        _checks_rejection(
+            [
+                _check(check_id=29, conclusion="success", suite_id=129),
+                failed_pr,
+                green_push,
+            ],
+            expected_head_sha=HEAD,
+        )
+        == "checks_not_green"
+    )
+
+
 @pytest.mark.parametrize(
     "updates",
     [

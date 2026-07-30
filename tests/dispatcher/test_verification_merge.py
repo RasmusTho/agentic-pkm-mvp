@@ -17,8 +17,10 @@ from app.dispatcher.verification_merge import (
     VerificationMergeExecutor,
 )
 from app.dispatcher.verified_merge import (
+    FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
     VERIFIED_MERGE_READINESS_CONTRACT,
     build_verified_merge_phase,
+    fixed_verified_merge_commit_title,
     prepare_verified_merge,
 )
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
@@ -40,6 +42,8 @@ class RepositoryAuthority:
         transport_error: bool = False,
         merged: bool = True,
         prepared_gates: list[dict[str, object]] | None = None,
+        merge_commit_title: str | None = None,
+        merge_commit_message: str | None = None,
     ) -> None:
         self.base_reads = iter(base_reads or [BASE, BASE])
         self.manifest_blobs = iter(manifest_blobs or ["blob-1", "blob-1"])
@@ -66,6 +70,12 @@ class RepositoryAuthority:
                     "authority_sha256": "b" * 64,
                     "phase_sha256": "c" * 64,
                     "closing_reference_count": 0,
+                    "fixed_commit_title": fixed_verified_merge_commit_title(
+                        3603
+                    ),
+                    "fixed_commit_message": (
+                        FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+                    ),
                 }
             ]
             * 20
@@ -73,6 +83,16 @@ class RepositoryAuthority:
         self.timeout = timeout
         self.transport_error = transport_error
         self.merged = merged
+        self.merge_commit_title = (
+            fixed_verified_merge_commit_title(3603)
+            if merge_commit_title is None
+            else merge_commit_title
+        )
+        self.merge_commit_message = (
+            FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+            if merge_commit_message is None
+            else merge_commit_message
+        )
         self.calls: list[str] = []
         self.last_merge = None
 
@@ -124,6 +144,14 @@ class RepositoryAuthority:
             run_id=run_id,
             head_sha=head_sha,
         )
+        gate.setdefault(
+            "fixed_commit_title",
+            fixed_verified_merge_commit_title(pr_number),
+        )
+        gate.setdefault(
+            "fixed_commit_message",
+            FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+        )
         return gate
 
     def conditional_merge(self, *args, **kwargs):
@@ -141,6 +169,12 @@ class RepositoryAuthority:
             "merged": self.merged,
             "head_sha": HEAD,
             "merge_commit_sha": "d" * 40 if self.merged else None,
+            "merge_commit_title": (
+                self.merge_commit_title if self.merged else None
+            ),
+            "merge_commit_message": (
+                self.merge_commit_message if self.merged else None
+            ),
         }
 
 
@@ -335,7 +369,9 @@ def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> N
     assert repository.calls == []
     assert credentials.calls == []
 
-    repository = RepositoryAuthority()
+    repository = RepositoryAuthority(
+        manifest_blobs=["blob-1", "blob-1", "blob-1"],
+    )
     executor = VerificationMergeExecutor(
         ledger, outbox, repository, credentials
     )
@@ -350,6 +386,13 @@ def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> N
     assert repository.last_merge["expected_head_sha"] == HEAD
     assert repository.last_merge["expected_base_sha"] == BASE
     assert repository.last_merge["expected_manifest_blob_sha"] == "blob-1"
+    assert repository.last_merge[
+        "commit_title"
+    ] == fixed_verified_merge_commit_title(3603)
+    assert (
+        repository.last_merge["commit_message"]
+        == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+    )
     assert credentials.calls == [
         {
             "repository": REPO.lower(),
@@ -394,6 +437,59 @@ def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> N
             lease_id=missing_run.lease_id or "",
         )
     assert missing_ci.calls == []
+
+
+@pytest.mark.parametrize(
+    ("merge_commit_title", "merge_commit_message"),
+    (
+        ("Fixes #3603", FIXED_VERIFIED_MERGE_COMMIT_MESSAGE),
+        (
+            fixed_verified_merge_commit_title(3603),
+            "Exact-head delivery. Closes #3603.",
+        ),
+    ),
+)
+def test_merge_requires_fixed_non_closing_text_in_transport_and_readback(
+    merge_commit_title: str,
+    merge_commit_message: str,
+) -> None:
+    ledger, run, outbox = claimed_run()
+    repository = RepositoryAuthority(
+        merge_commit_title=merge_commit_title,
+        merge_commit_message=merge_commit_message,
+    )
+
+    with pytest.raises(
+        MergeAuthorityError,
+        match="not confirmed by exact-head GitHub readback",
+    ):
+        VerificationMergeExecutor(
+            ledger, outbox, repository, Credentials()
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert repository.last_merge["commit_title"] == (
+        fixed_verified_merge_commit_title(3603)
+    )
+    assert (
+        repository.last_merge["commit_message"]
+        == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+    )
+    assert outbox.state == "pending"
+    pending = ledger.pending_effect_binding(run.run_id)
+    assert pending is not None
+    payload = pending["payload"]
+    assert isinstance(payload, Mapping)
+    assert payload["fixed_commit_title"] == (
+        fixed_verified_merge_commit_title(3603)
+    )
+    assert (
+        payload["fixed_commit_message"]
+        == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+    )
 
 
 def test_merge_rejects_base_or_manifest_change_after_final_validation() -> None:
@@ -441,6 +537,37 @@ def test_real_merge_requires_stable_prepared_authority_before_any_effect() -> No
     assert missing.calls == []
     assert outbox.calls == []
     assert credentials.calls == []
+
+    text_ledger, text_run, text_outbox = claimed_run()
+    text_mismatch = RepositoryAuthority(
+        prepared_gates=[
+            {
+                "contract": "verified_merge_prepared_gate.v1",
+                "governing_issue": 3603,
+                "closing_issues": [3603],
+                "neutralized_body_sha256": "a" * 64,
+                "authority_sha256": "b" * 64,
+                "phase_sha256": "c" * 64,
+                "closing_reference_count": 0,
+                "fixed_commit_title": "Fixes #3603",
+                "fixed_commit_message": (
+                    FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+                ),
+            }
+        ]
+    )
+    with pytest.raises(
+        MergeAuthorityError, match="prepared authority does not match"
+    ):
+        VerificationMergeExecutor(
+            text_ledger, text_outbox, text_mismatch, Credentials()
+        ).execute(
+            text_run,
+            holder="verification-host",
+            lease_id=text_run.lease_id or "",
+        )
+    assert text_mismatch.calls == []
+    assert text_outbox.calls == []
 
     drift_ledger, drift_run, drift_outbox = claimed_run()
     prepared = {
@@ -512,6 +639,95 @@ def test_response_loss_reconciles_before_retry() -> None:
     assert outbox.state == "pending"
 
 
+@pytest.mark.parametrize(
+    ("merge_commit_title", "merge_commit_message"),
+    (
+        ("Fixes #3603", FIXED_VERIFIED_MERGE_COMMIT_MESSAGE),
+        ("", FIXED_VERIFIED_MERGE_COMMIT_MESSAGE),
+        (
+            fixed_verified_merge_commit_title(3603),
+            "Closes #3603",
+        ),
+        (fixed_verified_merge_commit_title(3603), ""),
+    ),
+)
+def test_crash_recovery_rejects_wrong_merge_text_before_base_drift(
+    merge_commit_title: str,
+    merge_commit_message: str,
+) -> None:
+    ledger, run, outbox = claimed_run()
+    repository = CrashOnceReadbackRepository()
+    repository.base_reads = iter([BASE, BASE, NEXT_BASE])
+    repository.merge_commit_title = merge_commit_title
+    repository.merge_commit_message = merge_commit_message
+    executor = VerificationMergeExecutor(
+        ledger, outbox, repository, Credentials()
+    )
+
+    with pytest.raises(SystemExit, match="before merge readback"):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert outbox.state == "claimed"
+    assert outbox.evidence is None
+    with pytest.raises(
+        MergeAuthorityError,
+        match="merged GitHub readback lacks exact governed commit text",
+    ):
+        executor.recover(run)
+
+    assert outbox.state == "claimed"
+    assert outbox.evidence is None
+    assert "reconcile" not in outbox.calls
+
+
+@pytest.mark.parametrize("outbox_status", ("pending", "succeeded"))
+def test_recovery_rejects_durable_wrong_text_merged_evidence(
+    outbox_status: str,
+) -> None:
+    ledger, run, outbox = claimed_run()
+    repository = RepositoryAuthority(
+        manifest_blobs=["blob-1", "blob-1", "blob-1"],
+    )
+    with pytest.raises(SystemExit, match="simulated host crash"):
+        VerificationMergeExecutor(
+            ledger, outbox, repository, CrashCredentials()
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+    outbox.state = outbox_status
+    outbox.evidence = {
+        "merged": True,
+        "head_sha": HEAD,
+        "merge_commit_sha": "d" * 40,
+        "merge_commit_title": "Fixes #3603",
+        "merge_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+    }
+
+    with pytest.raises(
+        MergeAuthorityError,
+        match="durable merge reconciliation lacks exact governed commit text",
+    ):
+        VerificationMergeExecutor(
+            BuilderOpsVerificationLedger(
+                ledger.client,
+                repository=REPO,
+                effect_outbox=outbox,
+            ),
+            outbox,
+            repository,
+            Credentials(),
+        ).recover(run)
+
+    assert outbox.state == outbox_status
+    assert outbox.evidence["merge_commit_title"] == "Fixes #3603"
+
+
 def test_pending_reconciliation_cannot_be_upgraded_to_merged_receipt() -> None:
     ledger, run, outbox = claimed_run()
     repository = RepositoryAuthority(
@@ -540,11 +756,15 @@ def test_pending_reconciliation_cannot_be_upgraded_to_merged_receipt() -> None:
         repository=REPO,
         effect_outbox=outbox,
     )
-    recovered = VerificationMergeExecutor(
-        restarted, outbox, repository, Credentials()
-    ).recover(run)
+    with pytest.raises(
+        MergeAuthorityError,
+        match="durable merge reconciliation lacks exact governed commit text",
+    ):
+        VerificationMergeExecutor(
+            restarted, outbox, repository, Credentials()
+        ).recover(run)
 
-    assert recovered.outcome == "retry_after_readback"
+    assert outbox.state == "pending"
 
 
 def test_expired_outbox_claim_performs_no_credential_or_merge_effect() -> None:
@@ -957,6 +1177,11 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
     assert gate["governing_issue"] == 3603
     assert gate["closing_issues"] == [3603]
     assert gate["closing_reference_count"] == 0
+    assert gate["fixed_commit_title"] == fixed_verified_merge_commit_title(3603)
+    assert (
+        gate["fixed_commit_message"]
+        == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+    )
 
 
 def test_live_adapter_rejects_failing_required_status_and_nondefault_base() -> None:
@@ -1113,6 +1338,178 @@ def test_live_adapter_paginates_required_check_runs() -> None:
     gates = authority.required_gates(REPO, 3603, HEAD)
 
     assert all(gates.values())
+
+
+def test_live_adapter_rejects_green_push_masking_failed_pr_check() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == f"/repos/{REPO.lower()}":
+            return httpx.Response(200, json={"default_branch": "main"})
+        if path.endswith("/pulls/3603"):
+            return httpx.Response(
+                200,
+                json={
+                    "head": {"sha": HEAD},
+                    "base": {
+                        "ref": "main",
+                        "repo": {"full_name": REPO},
+                    },
+                },
+            )
+        if path.endswith(f"/commits/{HEAD}/check-runs"):
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 4,
+                    "check_runs": [
+                        {
+                            "id": 10,
+                            "name": "verification",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "app": {"id": 7},
+                        },
+                        {
+                            "id": 11,
+                            "name": "Unit tests (not pg)",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "app": {
+                                "id": 7,
+                                "slug": "github-actions",
+                            },
+                            "check_suite": {"id": 70},
+                        },
+                        {
+                            "id": 12,
+                            "name": "Docs Guard",
+                            "status": "completed",
+                            "conclusion": "failure",
+                            "app": {
+                                "id": 7,
+                                "slug": "github-actions",
+                            },
+                            "check_suite": {"id": 70},
+                        },
+                        {
+                            "id": 13,
+                            "name": "Docs Guard",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "app": {
+                                "id": 7,
+                                "slug": "github-actions",
+                            },
+                            "check_suite": {"id": 71},
+                        },
+                    ],
+                },
+            )
+        if path.endswith(f"/commits/{HEAD}/status"):
+            return httpx.Response(
+                200, json={"total_count": 0, "statuses": []}
+            )
+        if path.endswith("/actions/runs"):
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 2,
+                    "workflow_runs": [
+                        {
+                            "id": 80,
+                            "check_suite_id": 70,
+                            "path": ".github/workflows/ci-smoke.yaml",
+                            "event": "pull_request",
+                            "head_sha": HEAD,
+                        },
+                        {
+                            "id": 81,
+                            "check_suite_id": 71,
+                            "path": ".github/workflows/docs-guard.yml",
+                            "event": "push",
+                            "head_sha": HEAD,
+                        },
+                    ],
+                },
+            )
+        if path.endswith("/branches/main/protection"):
+            return httpx.Response(
+                200,
+                json={
+                    "required_status_checks": {
+                        "contexts": [],
+                        "checks": [
+                            {"context": "verification", "app_id": 7}
+                        ],
+                    }
+                },
+            )
+        raise AssertionError(f"unexpected GitHub request: {request.url}")
+
+    authority = GitHubProtectedRepositoryAuthority(
+        "host-read-token",
+        http_client=httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    gates = authority.required_gates(REPO, 3603, HEAD)
+
+    assert gates["ci"] is False
+    assert all(
+        value for name, value in gates.items() if name != "ci"
+    )
+
+
+def test_live_adapter_reads_exact_merge_commit_title_and_message() -> None:
+    merge_sha = "d" * 40
+    expected_title = fixed_verified_merge_commit_title(3603)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/pulls/3603"):
+            return httpx.Response(
+                200,
+                json={
+                    "merged": True,
+                    "head": {"sha": HEAD},
+                    "merge_commit_sha": merge_sha,
+                    "merged_at": "2026-07-30T12:00:00Z",
+                },
+            )
+        if path.endswith(f"/commits/{merge_sha}"):
+            return httpx.Response(
+                200,
+                json={
+                    "commit": {
+                        "message": (
+                            f"{expected_title}\n\n"
+                            f"{FIXED_VERIFIED_MERGE_COMMIT_MESSAGE}"
+                        )
+                    }
+                },
+            )
+        raise AssertionError(f"unexpected GitHub request: {request.url}")
+
+    authority = GitHubProtectedRepositoryAuthority(
+        "host-read-token",
+        http_client=httpx.Client(
+            base_url="https://api.github.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+    readback = authority.merge_readback(REPO.lower(), 3603)
+
+    assert readback == {
+        "merged": True,
+        "head_sha": HEAD,
+        "merge_commit_sha": merge_sha,
+        "merge_commit_title": expected_title,
+        "merge_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+        "merged_at": "2026-07-30T12:00:00Z",
+    }
 
 
 def test_app_bound_required_check_rejects_same_name_legacy_status() -> None:

@@ -3317,11 +3317,17 @@ def _checks_rejection(
     if not checks:
         return "missing_checks"
     required_checks = {"Unit tests (not pg)": ".github/workflows/ci-smoke.yaml"}
-    latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
+    latest: dict[
+        tuple[str, str],
+        tuple[tuple[int, str, int], Mapping[str, object]],
+    ] = {}
     for index, check in enumerate(checks):
         name = check.get("name")
         required_workflow = required_checks.get(name) if isinstance(name, str) else None
-        if required_workflow is not None:
+        if (
+            _nested(check, "app", "slug") == "github-actions"
+            or required_workflow is not None
+        ):
             suite_id = _nested(check, "check_suite", "id")
             workflow_run_id = _nested(check, "workflow_run", "id")
             if (
@@ -3331,12 +3337,32 @@ def _checks_rejection(
                 or not isinstance(workflow_run_id, int)
                 or isinstance(workflow_run_id, bool)
                 or _nested(check, "workflow_run", "check_suite_id") != suite_id
-                or _nested(check, "workflow_run", "path") != required_workflow
                 or _nested(check, "workflow_run", "event") != "pull_request"
                 or _nested(check, "workflow_run", "head_sha") != expected_head_sha
+                or (
+                    required_workflow is not None
+                    and _nested(check, "workflow_run", "path")
+                    != required_workflow
+                )
             ):
                 continue
-        key = name if isinstance(name, str) and name else f"__unnamed_{index}"
+        key_name = (
+            name
+            if isinstance(name, str) and name
+            else f"__unnamed_{index}"
+        )
+        app_slug = _nested(check, "app", "slug")
+        app_id = _nested(check, "app", "id")
+        app_identity = (
+            f"slug:{app_slug}"
+            if isinstance(app_slug, str) and app_slug
+            else (
+                f"id:{app_id}"
+                if isinstance(app_id, int) and not isinstance(app_id, bool)
+                else f"unknown:{index}"
+            )
+        )
+        key = (key_name, app_identity)
         check_id = check.get("id")
         rank = (
             check_id if isinstance(check_id, int) and not isinstance(check_id, bool) else -1,
@@ -3345,9 +3371,12 @@ def _checks_rejection(
         )
         if key not in latest or rank > latest[key][0]:
             latest[key] = (rank, check)
-    if not required_checks.keys() <= latest.keys():
+    required_identities = {
+        (name, "slug:github-actions") for name in required_checks
+    }
+    if not required_identities <= latest.keys():
         return "missing_checks"
-    for required in required_checks:
+    for required in required_identities:
         check = latest[required][1]
         if check.get("status") != "completed" or check.get("conclusion") != "success":
             return "checks_not_green"

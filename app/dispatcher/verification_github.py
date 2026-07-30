@@ -22,6 +22,8 @@ from app.dispatcher.verification_contract import (
     resolve_neutralized_issue_authority,
 )
 from app.dispatcher.verified_merge import (
+    FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+    fixed_verified_merge_commit_title,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
 )
@@ -84,6 +86,8 @@ class ConditionalMergeTransport(Protocol):
         expected_head_sha: str,
         expected_base_sha: str,
         expected_manifest_blob_sha: str,
+        commit_title: str,
+        commit_message: str,
         credential: object,
     ) -> Mapping[str, object]: ...
 
@@ -422,6 +426,8 @@ class GitHubProtectedRepositoryAuthority:
             "authority_sha256": digest(authority),
             "phase_sha256": digest(phase),
             "closing_reference_count": 0,
+            "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
+            "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
         }
 
     def _check_runs(
@@ -585,6 +591,19 @@ class GitHubProtectedRepositoryAuthority:
             context: _latest_github_result(history)
             for context, history in status_history.items()
         }
+        workflow_rows = self._workflow_runs(canonical, head_sha)
+        workflows_by_suite: dict[int, list[Mapping[str, Any]]] = {}
+        for workflow in workflow_rows:
+            suite_id = workflow.get("check_suite_id")
+            if isinstance(suite_id, int) and not isinstance(suite_id, bool):
+                workflows_by_suite.setdefault(suite_id, []).append(workflow)
+        pull_request_workflow_suites = {
+            suite_id
+            for suite_id, candidates in workflows_by_suite.items()
+            if len(candidates) == 1
+            and candidates[0].get("event") == "pull_request"
+            and candidates[0].get("head_sha") == head_sha
+        }
         check_history: dict[
             tuple[str, int | None], list[Mapping[str, Any]]
         ] = {}
@@ -592,6 +611,16 @@ class GitHubProtectedRepositoryAuthority:
             name = row.get("name")
             app = row.get("app")
             app_id = app.get("id") if isinstance(app, Mapping) else None
+            suite = row.get("check_suite")
+            suite_id = (
+                suite.get("id") if isinstance(suite, Mapping) else None
+            )
+            if (
+                isinstance(app, Mapping)
+                and app.get("slug") == "github-actions"
+                and suite_id not in pull_request_workflow_suites
+            ):
+                continue
             if isinstance(name, str):
                 check_history.setdefault((name, app_id), []).append(row)
         latest_checks = {
@@ -603,24 +632,12 @@ class GitHubProtectedRepositoryAuthority:
             context == _REQUIRED_VERIFICATION_CHECK
             for context, _app_id in required
         ):
-            suite_candidates: dict[int, list[Mapping[str, Any]]] = {}
-            for workflow in self._workflow_runs(canonical, head_sha):
-                suite_id = workflow.get("check_suite_id")
-                if (
-                    isinstance(suite_id, int)
-                    and not isinstance(suite_id, bool)
-                    and workflow.get("path")
-                    == _REQUIRED_VERIFICATION_WORKFLOW
-                    and workflow.get("event") == "pull_request"
-                    and workflow.get("head_sha") == head_sha
-                ):
-                    suite_candidates.setdefault(suite_id, []).append(
-                        workflow
-                    )
             authenticated_workflow_suites = {
                 suite_id
-                for suite_id, candidates in suite_candidates.items()
-                if len(candidates) == 1
+                for suite_id, candidates in workflows_by_suite.items()
+                if suite_id in pull_request_workflow_suites
+                and candidates[0].get("path")
+                == _REQUIRED_VERIFICATION_WORKFLOW
             }
 
         def successful_status(context: str) -> bool:
@@ -709,6 +726,8 @@ class GitHubProtectedRepositoryAuthority:
         expected_head_sha: str,
         expected_base_sha: str,
         expected_manifest_blob_sha: str,
+        commit_title: str,
+        commit_message: str,
         credential: object,
     ) -> Mapping[str, object]:
         if self.conditional_transport is None:
@@ -721,6 +740,8 @@ class GitHubProtectedRepositoryAuthority:
             expected_head_sha=expected_head_sha,
             expected_base_sha=expected_base_sha,
             expected_manifest_blob_sha=expected_manifest_blob_sha,
+            commit_title=commit_title,
+            commit_message=commit_message,
             credential=credential,
         )
 
@@ -729,10 +750,30 @@ class GitHubProtectedRepositoryAuthority:
     ) -> Mapping[str, object]:
         pull = self._pull(repository, pr_number)
         head = pull.get("head")
+        merge_commit_sha = pull.get("merge_commit_sha")
+        merge_commit_title: str | None = None
+        merge_commit_message: str | None = None
+        if pull.get("merged") is True and isinstance(merge_commit_sha, str):
+            commit = self._get(
+                f"/repos/{repository}/commits/{merge_commit_sha}"
+            ).get("commit")
+            raw_message = (
+                commit.get("message")
+                if isinstance(commit, Mapping)
+                else None
+            )
+            if isinstance(raw_message, str):
+                title, separator, message = raw_message.partition("\n")
+                merge_commit_title = title
+                merge_commit_message = (
+                    message.lstrip("\n") if separator else ""
+                )
         return {
             "merged": pull.get("merged") is True,
             "head_sha": head.get("sha") if isinstance(head, Mapping) else None,
-            "merge_commit_sha": pull.get("merge_commit_sha"),
+            "merge_commit_sha": merge_commit_sha,
+            "merge_commit_title": merge_commit_title,
+            "merge_commit_message": merge_commit_message,
             "merged_at": pull.get("merged_at"),
         }
 

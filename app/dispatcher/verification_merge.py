@@ -23,6 +23,10 @@ from app.builderops.control_plane.client import (
 )
 from app.builderops.control_plane.routing import RepoRef
 from app.dispatcher.verification_dispatch import VerificationRun
+from app.dispatcher.verified_merge import (
+    FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+    fixed_verified_merge_commit_title,
+)
 
 
 class MergeAuthorityError(RuntimeError):
@@ -115,6 +119,8 @@ class ProtectedRepositoryAuthority(Protocol):
         expected_head_sha: str,
         expected_base_sha: str,
         expected_manifest_blob_sha: str,
+        commit_title: str,
+        commit_message: str,
         credential: object,
     ) -> Mapping[str, object]: ...
 
@@ -471,6 +477,8 @@ class VerificationMergeExecutor:
         if not self._required_gates_pass(gates):
             raise MergeAuthorityError("required CI/review/protection/scope gate is missing")
         prepared_gate: Mapping[str, object] | None = None
+        commit_title = fixed_verified_merge_commit_title(run.pr_number)
+        commit_message = FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
         repair_budget = self.ledger.repair_budget_projection(run.run_id)
         if not dry_run:
             prepared_gate = self.repository.verified_merge_prepared(
@@ -486,6 +494,8 @@ class VerificationMergeExecutor:
                 or prepared_gate.get("closing_issues")
                 != list(run.closing_authority)
                 or prepared_gate.get("closing_reference_count") != 0
+                or prepared_gate.get("fixed_commit_title") != commit_title
+                or prepared_gate.get("fixed_commit_message") != commit_message
             ):
                 raise MergeAuthorityError(
                     "verified-merge prepared authority does not match the run"
@@ -505,6 +515,8 @@ class VerificationMergeExecutor:
                     "manifest_sha256": manifest.content_sha256,
                     "credential_id": manifest.credential_id,
                     "rotation_generation": manifest.credential_generation,
+                    "fixed_commit_title": commit_title,
+                    "fixed_commit_message": commit_message,
                     "verified_merge_prepared": (
                         dict(prepared_gate)
                         if prepared_gate is not None
@@ -613,6 +625,8 @@ class VerificationMergeExecutor:
                 expected_head_sha=run.current_head_sha,
                 expected_base_sha=base_sha,
                 expected_manifest_blob_sha=manifest.blob_sha,
+                commit_title=commit_title,
+                commit_message=commit_message,
                 credential=credential,
             )
         except Exception:
@@ -685,6 +699,10 @@ class VerificationMergeExecutor:
             or payload.get("credential_id") != manifest.credential_id
             or payload.get("rotation_generation")
             != manifest.credential_generation
+            or payload.get("fixed_commit_title")
+            != fixed_verified_merge_commit_title(run.pr_number)
+            or payload.get("fixed_commit_message")
+            != FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
         ):
             raise MergeAuthorityError(
                 "merge recovery manifest binding is inconsistent"
@@ -700,6 +718,16 @@ class VerificationMergeExecutor:
             and isinstance(reconciliation_sequence, int)
             and not isinstance(reconciliation_sequence, bool)
         )
+        if (
+            not dry_run
+            and durable_reconciliation
+            and isinstance(reconciliation_evidence, Mapping)
+            and reconciliation_evidence.get("merged") is True
+            and not self._merged_exactly(reconciliation_evidence, run)
+        ):
+            raise MergeAuthorityError(
+                "durable merge reconciliation lacks exact governed commit text"
+            )
         if (
             pending.get("outbox_status") == "succeeded"
             and durable_reconciliation
@@ -780,6 +808,10 @@ class VerificationMergeExecutor:
                 manifest,
                 readback,
             )
+        if readback.get("merged") is True:
+            raise MergeAuthorityError(
+                "merged GitHub readback lacks exact governed commit text"
+            )
 
         current_base = self.repository.protected_base_sha(canonical)
         current_manifest = self.repository.delivery_manifest(
@@ -826,6 +858,10 @@ class VerificationMergeExecutor:
             and readback.get("head_sha") == run.current_head_sha
             and isinstance(readback.get("merge_commit_sha"), str)
             and readback.get("merge_commit_sha")
+            and readback.get("merge_commit_title")
+            == fixed_verified_merge_commit_title(run.pr_number)
+            and readback.get("merge_commit_message")
+            == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
         )
 
     @staticmethod

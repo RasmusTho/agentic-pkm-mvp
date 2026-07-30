@@ -102,8 +102,14 @@ weaken them and does not enter Product Runtime.
   its queue-selected base. If the base/manifest changes after final validation or while the
   pre-effect attempt becomes durable, GitHub must reject/invalidate the attempt; without an enforced
   conditional/queue path, direct merge fails closed.
-- A merge receipt binds the exact current SHA and GitHub readback; a local success return is
-  insufficient.
+- Check authority is selected by authenticated `pull_request` workflow-suite identity before
+  same-name/app reruns are reduced. A later `push` or `workflow_dispatch` suite cannot mask a failed
+  PR check in either the consumer or merge executor.
+- A merge receipt binds the exact current SHA, the plan's deterministic non-closing commit
+  title/message, and GitHub commit readback proving that exact text; a local success return or
+  exact-head-only readback is insufficient. Recovery treats `merged=true` with missing or mismatched
+  text as an authority failure before base/manifest drift classification and writes no
+  `terminal_no_effect` or succeeded reconciliation.
 - `terminal_unknown` is not a general executor escape hatch: the API/store rejects it for every
   GitHub effect and for any verification-model evidence not exactly bound to the scheduled head.
 - Existing CI + review + protection gates are not weakened by autonomous execution.
@@ -127,6 +133,8 @@ weaken them and does not enter Product Runtime.
   repo scope mismatch, client-vs-protected manifest mismatch, stale base/manifest hash, or host
   credential mapping outside the target `RepoRef` policy.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_revalidates_protected_manifest_and_repo_credential_binding`.
+  Verify: `tests/dispatcher/test_verification_merge.py::test_merge_requires_fixed_non_closing_text_in_transport_and_readback`.
+  Verify: `tests/dispatcher/test_verification_merge.py::test_live_adapter_rejects_green_push_masking_failed_pr_check`.
 - [x] Advancing the protected base or changing/revoking its delivery manifest after final validation
   but before the external effect invalidates the GitHub conditional/merge-group authorization fence
   and performs no merge; a new attempt requires fresh policy, credential, and gate validation.
