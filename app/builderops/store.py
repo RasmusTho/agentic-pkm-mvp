@@ -62,10 +62,17 @@ class SqliteBuilderOpsStore:
     migrations.
     """
 
-    def __init__(self, db_path: Path, *, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        *,
+        read_only: bool = False,
+        create_if_missing: bool = True,
+    ) -> None:
         validate_db_path_outside_vault(Path(db_path))
         self._db_path = Path(db_path)
         self._read_only = read_only
+        self._create_if_missing = create_if_missing
 
     @property
     def db_path(self) -> Path:
@@ -75,6 +82,9 @@ class SqliteBuilderOpsStore:
         validate_db_path_outside_vault(self._db_path)
         if self._read_only:
             uri = f"{self._db_path.absolute().as_uri()}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+        elif not self._create_if_missing:
+            uri = f"{self._db_path.absolute().as_uri()}?mode=rw"
             conn = sqlite3.connect(uri, uri=True)
         else:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)

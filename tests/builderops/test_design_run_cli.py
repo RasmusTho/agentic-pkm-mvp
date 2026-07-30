@@ -20,6 +20,7 @@ from app.builderops.ckm.overview_html import (
 from app.builderops.ckm.store import CkmStore
 from app.builderops.design_agent_adapters import ResolvedDesignAgentAdapter
 from app.builderops.design_run_contract import (
+    CuratedDesignBrief,
     DesignAgentAvailabilityDescriptor,
     DesignAgentDescriptor,
 )
@@ -297,7 +298,7 @@ def _admit_and_approve(
 
 
 def _exact_start_options(identities: Mapping[str, str]) -> list[str]:
-    return [
+    options = [
         "--request-id",
         identities["request_id"],
         "--request-hash",
@@ -306,11 +307,17 @@ def _exact_start_options(identities: Mapping[str, str]) -> list[str]:
         identities["admission_id"],
         "--admission-hash",
         identities["admission_hash"],
-        "--approval-id",
-        identities["approval_id"],
-        "--approval-hash",
-        identities["approval_hash"],
     ]
+    if "approval_id" in identities or "approval_hash" in identities:
+        options.extend(
+            [
+                "--approval-id",
+                identities["approval_id"],
+                "--approval-hash",
+                identities["approval_hash"],
+            ]
+        )
+    return options
 
 
 def test_cli_builds_only_explicit_bounded_briefs(
@@ -506,6 +513,116 @@ def test_cli_preview_precedes_exact_governed_start(
     assert late_approval.exit_code != 0
     assert len(store.list_records("BuilderOpsReceipt")) == receipt_count
     assert service.projection("run.cli.one").state == "succeeded"
+
+
+def test_cli_starts_approval_free_allow_and_rejects_one_sided_pair(
+    tmp_path: Path,
+    repo_root: Path,
+    store: SqliteBuilderOpsStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = repo_root / "config/builderops/design_run_policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["approval_required"] = False
+    policy_path.write_text(json.dumps(policy, sort_keys=True), encoding="utf-8")
+    service, registry, adapter = _service(store, repo_root)
+    _bind_service(monkeypatch, service)
+    request_file = _write_json(tmp_path / "request.json", _request_payload())
+
+    admitted = _invoke(
+        store,
+        "admit",
+        "--request-file",
+        str(request_file),
+        "--repo-root",
+        str(repo_root),
+        "--json",
+    )
+    assert admitted.exit_code == 0, admitted.output
+    payload = json.loads(admitted.output)
+    assert payload["admission"]["outcome"] == "allow"
+    identities = {
+        "request_id": payload["request"]["request_id"],
+        "request_hash": payload["request_hash"],
+        "admission_id": payload["admission"]["admission_id"],
+        "admission_hash": payload["admission_hash"],
+    }
+
+    one_sided = _invoke(
+        store,
+        "start",
+        "run.cli.one",
+        *_exact_start_options(identities),
+        "--approval-id",
+        "approval.must.not.be.one-sided",
+        "--started-at",
+        T2,
+        "--completed-at",
+        T3,
+        "--repo-root",
+        str(repo_root),
+        "--json",
+    )
+    assert one_sided.exit_code != 0
+    assert registry.selections == [] and adapter.calls == []
+
+    started = _invoke(
+        store,
+        "start",
+        "run.cli.one",
+        *_exact_start_options(identities),
+        "--started-at",
+        T2,
+        "--completed-at",
+        T3,
+        "--repo-root",
+        str(repo_root),
+        "--json",
+    )
+    assert started.exit_code == 0, started.output
+    assert json.loads(started.output)["result"]["final_status"] == "succeeded"
+    assert registry.selections == [("codex", "run.cli.one")]
+    assert len(adapter.calls) == 1
+
+
+def test_execute_exact_requires_runtime_request_and_admission_evidence(
+    repo_root: Path,
+    store: SqliteBuilderOpsStore,
+) -> None:
+    service, registry, adapter = _service(store, repo_root)
+    brief = CuratedDesignBrief.model_validate_json(
+        json.dumps(_brief_payload(), sort_keys=True)
+    )
+    service.admit(
+        run_id="run.cli.one",
+        request_id="request.cli.one",
+        brief=brief,
+        adapter_id="codex",
+        requested_at=T0,
+        evaluated_at=T1,
+    )
+    service.approve(
+        run_id="run.cli.one",
+        approval_id="approval.cli.real",
+        approved_at=T2,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="request identity mismatch",
+    ):
+        service.execute_exact(
+            run_id="run.cli.one",
+            started_at=T3,
+            completed_at=T4,
+            expected_request_id=None,  # type: ignore[arg-type]
+            expected_request_hash=None,  # type: ignore[arg-type]
+            expected_admission_id=None,  # type: ignore[arg-type]
+            expected_admission_hash=None,  # type: ignore[arg-type]
+            expected_approval_id="approval.foreign",
+            expected_approval_hash="0" * 64,
+        )
+    assert registry.selections == [] and adapter.calls == []
 
 
 def test_cli_approval_and_revocation_are_exact_and_actor_bound(
@@ -778,6 +895,136 @@ def test_read_only_commands_do_not_create_storage_or_leak_host_paths(
     assert status.exit_code != 0
     assert marker not in status.output
     assert "design-run evidence store does not exist" in status.output
+
+
+def test_status_and_result_use_sqlite_mode_ro_and_never_recreate(
+    repo_root: Path,
+    store: SqliteBuilderOpsStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _registry, _adapter = _service(store, repo_root)
+    brief = CuratedDesignBrief.model_validate_json(
+        json.dumps(_brief_payload(), sort_keys=True)
+    )
+    service.admit(
+        run_id="run.cli.one",
+        request_id="request.cli.one",
+        brief=brief,
+        adapter_id="codex",
+        requested_at=T0,
+        evaluated_at=T1,
+    )
+    durable_bytes = store.db_path.read_bytes()
+
+    real_store = cli_module.SqliteBuilderOpsStore
+    read_only_flags: list[bool] = []
+
+    def recording_store(
+        path: Path,
+        *,
+        read_only: bool = False,
+    ) -> SqliteBuilderOpsStore:
+        read_only_flags.append(read_only)
+        return real_store(path, read_only=read_only)
+
+    monkeypatch.setattr(
+        cli_module,
+        "SqliteBuilderOpsStore",
+        recording_store,
+    )
+    runner = CliRunner()
+    status = runner.invoke(
+        builderops,
+        [
+            "--db-path",
+            str(store.db_path),
+            "design-run",
+            "status",
+            "run.cli.one",
+            "--repo-root",
+            str(repo_root),
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+    assert status.exit_code == 0, status.output
+    assert read_only_flags == [True]
+
+    def deleting_store(
+        path: Path,
+        *,
+        read_only: bool = False,
+    ) -> SqliteBuilderOpsStore:
+        assert read_only is True
+        Path(path).unlink()
+        return real_store(path, read_only=read_only)
+
+    monkeypatch.setattr(
+        cli_module,
+        "SqliteBuilderOpsStore",
+        deleting_store,
+    )
+    result = runner.invoke(
+        builderops,
+        [
+            "--db-path",
+            str(store.db_path),
+            "design-run",
+            "result",
+            "run.cli.one",
+            "--repo-root",
+            str(repo_root),
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+    assert result.exit_code != 0
+    assert "design-run storage is unavailable" in result.output
+    assert not store.db_path.exists()
+
+    store.db_path.write_bytes(durable_bytes)
+
+    def deleting_write_store(
+        path: Path,
+        *,
+        read_only: bool = False,
+        create_if_missing: bool = True,
+    ) -> SqliteBuilderOpsStore:
+        assert read_only is False
+        assert create_if_missing is False
+        Path(path).unlink()
+        return real_store(
+            path,
+            read_only=read_only,
+            create_if_missing=create_if_missing,
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "SqliteBuilderOpsStore",
+        deleting_write_store,
+    )
+    approve = runner.invoke(
+        builderops,
+        [
+            "--db-path",
+            str(store.db_path),
+            "design-run",
+            "approve",
+            "run.cli.one",
+            "--approval-id",
+            "approval.cli.race",
+            "--approved-at",
+            T2,
+            "--repo-root",
+            str(repo_root),
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+    assert approve.exit_code != 0
+    assert "design-run storage is unavailable" in approve.output
+    assert not store.db_path.exists()
 
 
 def test_control_surface_stays_outside_static_cockpit(tmp_path: Path) -> None:

@@ -614,6 +614,7 @@ class DesignRunGovernance:
             run_id=run_id,
             started_at=started_at,
             completed_at=completed_at,
+            require_exact_evidence=False,
             expected_request_id=None,
             expected_request_hash=None,
             expected_admission_id=None,
@@ -632,8 +633,8 @@ class DesignRunGovernance:
         expected_request_hash: str,
         expected_admission_id: str,
         expected_admission_hash: str,
-        expected_approval_id: str,
-        expected_approval_hash: str,
+        expected_approval_id: str | None,
+        expected_approval_hash: str | None,
     ) -> DesignRunResult:
         """Execute only when caller-named evidence is still the exact current chain."""
 
@@ -641,6 +642,7 @@ class DesignRunGovernance:
             run_id=run_id,
             started_at=started_at,
             completed_at=completed_at,
+            require_exact_evidence=True,
             expected_request_id=expected_request_id,
             expected_request_hash=expected_request_hash,
             expected_admission_id=expected_admission_id,
@@ -655,6 +657,7 @@ class DesignRunGovernance:
         run_id: str,
         started_at: str,
         completed_at: str,
+        require_exact_evidence: bool,
         expected_request_id: str | None = None,
         expected_request_hash: str | None = None,
         expected_admission_id: str | None = None,
@@ -671,6 +674,7 @@ class DesignRunGovernance:
             initial = self._load_chain(run_id)
             self._require_exact_start_evidence(
                 initial,
+                require_exact_evidence=require_exact_evidence,
                 expected_request_id=expected_request_id,
                 expected_request_hash=expected_request_hash,
                 expected_admission_id=expected_admission_id,
@@ -694,6 +698,7 @@ class DesignRunGovernance:
                 chain = self._load_chain(run_id)
                 self._require_exact_start_evidence(
                     chain,
+                    require_exact_evidence=require_exact_evidence,
                     expected_request_id=expected_request_id,
                     expected_request_hash=expected_request_hash,
                     expected_admission_id=expected_admission_id,
@@ -903,6 +908,7 @@ class DesignRunGovernance:
         self,
         chain: Sequence[_ReceiptNode],
         *,
+        require_exact_evidence: bool,
         expected_request_id: str | None,
         expected_request_hash: str | None,
         expected_admission_id: str | None,
@@ -912,36 +918,50 @@ class DesignRunGovernance:
     ) -> None:
         """Bind an operator start to the exact durable evidence it names."""
 
-        if expected_request_id is not None:
-            request = self._bundle(chain).request
+        if not require_exact_evidence:
+            return
+        request = self._bundle(chain).request
+        if (
+            expected_request_id is None
+            or expected_request_hash is None
+            or request.request_id != expected_request_id
+            or request.content_hash != expected_request_hash
+        ):
+            raise DesignRunGovernanceError(
+                "design-run start request identity mismatch"
+            )
+        admission = self._admission(chain)
+        if (
+            expected_admission_id is None
+            or expected_admission_hash is None
+            or admission is None
+            or admission.admission_id != expected_admission_id
+            or admission.content_hash != expected_admission_hash
+        ):
+            raise DesignRunGovernanceError(
+                "design-run start admission identity mismatch"
+            )
+        approval = self._latest_approval(chain)
+        if expected_approval_id is None:
             if (
-                request.request_id != expected_request_id
-                or request.content_hash != expected_request_hash
-            ):
-                raise DesignRunGovernanceError(
-                    "design-run start request identity mismatch"
-                )
-        if expected_admission_id is not None:
-            admission = self._admission(chain)
-            if (
-                admission is None
-                or admission.admission_id != expected_admission_id
-                or admission.content_hash != expected_admission_hash
-            ):
-                raise DesignRunGovernanceError(
-                    "design-run start admission identity mismatch"
-                )
-        if expected_approval_id is not None:
-            approval = self._latest_approval(chain)
-            if (
-                approval is None
-                or approval.approval_id != expected_approval_id
-                or approval.content_hash != expected_approval_hash
-                or approval.state != "approved"
+                expected_approval_hash is not None
+                or admission is None
+                or admission.outcome != "allow"
+                or approval is not None
             ):
                 raise DesignRunApprovalRequiredError(
                     "design-run start approval identity mismatch"
                 )
+        elif (
+            expected_approval_hash is None
+            or approval is None
+            or approval.approval_id != expected_approval_id
+            or approval.content_hash != expected_approval_hash
+            or approval.state != "approved"
+        ):
+            raise DesignRunApprovalRequiredError(
+                "design-run start approval identity mismatch"
+            )
 
     @staticmethod
     def _validate_returned_handoff(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,23 @@ import app.builderops.config as builderops_config
 from app.builderops.models import BuilderOpsLeaseError
 from app.builderops.store import SqliteBuilderOpsStore
 from app.builderops.cutover_evidence import build_receipt, write_receipt
+
+
+def test_noncreating_modes_refuse_missing_database(tmp_path: Path) -> None:
+    path = tmp_path / "missing" / "builderops.sqlite3"
+
+    with pytest.raises(sqlite3.OperationalError):
+        SqliteBuilderOpsStore(path, read_only=True).list_records()
+    assert not path.exists()
+    assert not path.parent.exists()
+
+    with pytest.raises(sqlite3.OperationalError):
+        SqliteBuilderOpsStore(
+            path,
+            create_if_missing=False,
+        ).list_records()
+    assert not path.exists()
+    assert not path.parent.exists()
 
 
 def test_default_store_leases_coordinate_across_cwd(

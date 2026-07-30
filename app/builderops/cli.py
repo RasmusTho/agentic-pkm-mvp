@@ -823,18 +823,35 @@ def _design_run_governance(
     ctx: click.Context,
     *,
     repo_root: Path,
-    store_mode: Literal["write", "read_only", "existing"] = "write",
+    store_mode: Literal[
+        "write",
+        "read_only",
+        "existing_read",
+        "existing_write",
+    ] = "write",
 ) -> DesignRunGovernance:
     try:
         if store_mode == "write":
             store = _store(ctx)
         else:
             paths = _effective_paths(ctx)
-            if store_mode == "existing" and not paths.db_path.is_file():
+            if (
+                store_mode in {"existing_read", "existing_write"}
+                and not paths.db_path.is_file()
+            ):
                 raise DesignRunGovernanceError(
                     "design-run evidence store does not exist"
                 )
-            store = SqliteBuilderOpsStore(paths.db_path)
+            if store_mode == "existing_write":
+                store = SqliteBuilderOpsStore(
+                    paths.db_path,
+                    create_if_missing=False,
+                )
+            else:
+                store = SqliteBuilderOpsStore(
+                    paths.db_path,
+                    read_only=True,
+                )
         return DesignRunGovernance.from_declared_sources(
             store=store,
             channel="dev",
@@ -1226,7 +1243,7 @@ def design_run_approve(
         evidence = _design_run_governance(
             ctx,
             repo_root=repo_root,
-            store_mode="existing",
+            store_mode="existing_write",
         ).approve(
             run_id=run_id,
             approval_id=approval_id,
@@ -1274,7 +1291,7 @@ def design_run_revoke(
         evidence = _design_run_governance(
             ctx,
             repo_root=repo_root,
-            store_mode="existing",
+            store_mode="existing_write",
         ).revoke(
             run_id=run_id,
             revocation_id=revocation_id,
@@ -1305,8 +1322,8 @@ def design_run_revoke(
 @click.option("--request-hash", required=True)
 @click.option("--admission-id", required=True)
 @click.option("--admission-hash", required=True)
-@click.option("--approval-id", required=True)
-@click.option("--approval-hash", required=True)
+@click.option("--approval-id")
+@click.option("--approval-hash")
 @click.option("--started-at", required=True)
 @click.option("--completed-at", required=True)
 @_design_run_repo_root_option
@@ -1319,18 +1336,22 @@ def design_run_start(
     request_hash: str,
     admission_id: str,
     admission_hash: str,
-    approval_id: str,
-    approval_hash: str,
+    approval_id: str | None,
+    approval_hash: str | None,
     started_at: str,
     completed_at: str,
     repo_root: Path,
     as_json: bool,
 ) -> None:
+    if (approval_id is None) != (approval_hash is None):
+        raise click.UsageError(
+            "provide both --approval-id and --approval-hash, or neither"
+        )
     try:
         result = _design_run_governance(
             ctx,
             repo_root=repo_root,
-            store_mode="existing",
+            store_mode="existing_write",
         ).execute_exact(
             run_id=run_id,
             started_at=started_at,
@@ -1377,7 +1398,7 @@ def design_run_status(
         projection = _design_run_governance(
             ctx,
             repo_root=repo_root,
-            store_mode="existing",
+            store_mode="existing_read",
         ).projection(run_id)
     except (
         BuilderOpsValidationError,
@@ -1407,7 +1428,7 @@ def design_run_result(
         projection = _design_run_governance(
             ctx,
             repo_root=repo_root,
-            store_mode="existing",
+            store_mode="existing_read",
         ).projection(run_id)
     except (
         BuilderOpsValidationError,
