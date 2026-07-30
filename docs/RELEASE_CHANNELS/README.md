@@ -136,11 +136,23 @@ only the Compose-owned compatibility guard and only when the host-global lease a
 restart fence are absent; module absence during normal startup or deploy remains a fail-closed
 error.
 
-Those recovery facilities do not authorize cutover. The registry remains `authority: dormant`, the
-legacy scalar app-local store remains authoritative in every channel, and second-registration,
-transfer, relocation, and removal producers remain sealed. No release procedure may retire the
-durable legacy source or treat prepared registry state as authoritative until MVR-01C passes the
-previous-image guard and atomically installs the new authority floor.
+MVR-01C authorizes registry cutover only through one complete guarded authority revision. Until
+that revision atomically installs the explicit scalar target, authenticated mutation-filtering
+gateway, deny-by-default native guard, current legacy projection, minimum-runtime floor, and
+roll-forward lineage, the registry remains `authority: dormant` and every registration producer
+stays sealed. A complete revision makes the registry authoritative and unseals second-registration
+producers in the same commit; the legacy scalar app-local file then becomes an authenticated
+compatibility projection rather than independent authority. Transfer, relocation, and removal
+producers remain sealed for their later owner-defined activations.
+
+A supported previous scalar image may start only for the validated binding, with no direct host
+port or non-selected content mount, through the authenticated gateway; native rollback fails
+closed until it has an equivalent mutation-filtering boundary. Roll-forward runs inside the normal
+host-leased, restart-fenced stopped-writer deployment window and must merge the authenticated
+scalar session as the next registry revision before finalization permits recreate. Missing,
+partial, divergent, stale, or interrupted state remains fenced and retryable instead of silently
+falling back to either authority source. The detailed deployment mechanics are owned by
+[Deployment and Environments](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
 
 ## Invariants (MUST hold)
 
