@@ -5,8 +5,8 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-09
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/architecture/SBS_FITNESS_RULES.md, docs/architecture/SBS_OPERATING_MODEL.md, docs/development/DELIVERY_FEEDBACK_LOOP.md, docs/development/BUILDER_SYSTEM_PROCESS_MAP.md, app/vault/manager.py, app/watcher/registry.py, app/watcher/config.py
+Last reviewed: 2026-07-09 overall; D20 current-state writeback reviewed 2026-07-30
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/architecture/SBS_FITNESS_RULES.md, docs/architecture/SBS_OPERATING_MODEL.md, docs/development/DELIVERY_FEEDBACK_LOOP.md, docs/development/BUILDER_SYSTEM_PROCESS_MAP.md, app/vault/manager.py, app/watcher/registry.py, app/watcher/config.py; D20 additionally verified 2026-07-30 against docs/MODEL_ACCESS_SUBSTRATE/README.md, docs/MODEL_ACCESS_SUBSTRATE/REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md, app/builderops/ckm/semantic.py, importlinter.ini, and tests/architecture/test_import_boundary.py
 
 # SBS Transition Debt
 

@@ -3,9 +3,10 @@ the strict serial execution chain. GitHub holds the live acceptance ledger; this
 repo-governed contract. **Owner ruling 2026-07-30 (cost):** the two live receipts below
 (`provider_enabled_noninteractive_inquiry.v1`, legacy-bridge retirement) are withdrawn as acceptance
 gates — metered provider API keys are not provisioned and the subscription-backed session remains
-the sanctioned operational auth for host-local model inquiry. MAS-06 instead enters on the delivered
-neutral mechanism plus this ruling and must fail closed with zero inferred edges while credentials
-are absent
+the sanctioned operational auth for host-local model inquiry. MAS-06 was delivered by PR #4419 for
+issue #4292 on the delivered neutral mechanism plus this ruling; the PR remains in review until
+merge. Its CKM path fails closed with zero inferred edges while credentials are absent and never
+reuses the Model Inquiry subscription session
 (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
 model-inquiry path`). Parent acceptance is repo-verifiable under the re-scoped criteria below.
 Doc role: Parent feature issue contract (live validation hub #4286)
@@ -79,7 +80,7 @@ is never picked up directly.
 ## Constraints
 
 The nine fixed constraints in `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Fixed constraints` and the
-amended interim CKM posture apply to every child. The order does not swap.
+delivered CKM posture apply to every child. The order did not swap.
 
 ## Acceptance Criteria
 
@@ -128,9 +129,9 @@ Specification directory: `docs/MODEL_ACCESS_SUBSTRATE/`
 | 5 | `RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md` | MAS-05 | MAS-04 |
 | 6 | `REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md` | MAS-06 | delivered MAS-05 mechanism + ADR-0064 owner-cost amendment |
 
-The chain is serial. MAS-06 becomes executable after the MAS-05 mechanism and launcher-lineage
-repairs are merged and this owner-ruling re-scope is reflected in its live Issue contract. No live
-provider receipt or bridge retirement is required.
+The chain was serial. MAS-06 was delivered by PR #4419 for issue #4292 after the MAS-05 mechanism,
+launcher-lineage repairs, owner-cost amendment, and re-scoped live Issue contract were in place. No
+live provider receipt or bridge retirement was required.
 
 ## Verification Path
 
@@ -141,11 +142,11 @@ importlinter.ini` is a proof surface for MAS-02, MAS-04, and MAS-06.
 
 ## Validation / Acceptance Path
 
-Each merged child posts one short validation receipt here before the next child is picked up.
+Each delivered child posts one short validation receipt here before the next child is picked up.
 The provider-enabled inquiry and bridge-retirement receipts are withdrawn by the 2026-07-30 owner
 cost ruling. Parent acceptance now uses the repo-verifiable child criteria, including MAS-06's
-Product-import removal and fail-closed zero-edge behavior. No receipt may contain a credential value or a
-host identifier.
+Product-import removal and fail-closed zero-edge behavior. No real provider inquiry is requested,
+and no receipt may contain a credential value or a host identifier.
 
 Owner-doc promotion triggers only after every acceptance criterion above is satisfied: one PR updating
 `docs/LLM.md` and the capability owner docs named by the child specs. `docs/SECURITY.md` remains owned
@@ -167,8 +168,8 @@ discharging its two remaining acceptance gates.
 - `pytest -q tests/builderops tests/architecture tests/governance/test_model_inquiry_host_install.py`
 - `lint-imports --config importlinter.ini`
 - `python3 scripts/docs_guard.py && python3 scripts/public_seam_lint.py --mode gate`
-- Operator: one real inquiry over a fresh non-interactive session on the configured inquiry host;
-  redacted receipt posted here.
+- No real provider inquiry, credential provisioning, or subscription-bridge retirement is requested
+  under the 2026-07-30 owner-cost ruling.
 
 ## Source Docs
 

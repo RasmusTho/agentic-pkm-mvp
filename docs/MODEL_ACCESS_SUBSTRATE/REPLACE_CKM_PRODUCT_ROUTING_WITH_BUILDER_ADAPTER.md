@@ -166,7 +166,7 @@ unchanged.
 
 ## Related docs
 
-- `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Interim CKM posture`, Seams C and D
+- `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Delivered CKM posture`, Seams C and D
 - `docs/adr/ADR-0064-model-access-substrate.md :: 8. CKM sequencing — amends ADR-0063`
 - `docs/adr/ADR-0063-shared-llm-contract-kernel.md :: Separate runtime authority`
 - `docs/adr/ADR-0057-capability-knowledge-model-kvasir.md` — projection-only lock, candidate lifecycle

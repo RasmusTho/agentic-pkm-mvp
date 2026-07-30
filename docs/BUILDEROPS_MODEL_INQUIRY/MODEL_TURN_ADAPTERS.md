@@ -9,6 +9,11 @@ depends_on: [PRE_TICKET_INQUIRY_RECORDS.md]
 can_parallelize_with: []
 ---
 
+State: Implemented. The declared provider-API adapter mechanism remains versioned and fail-closed,
+but ADR-0064's 2026-07-30 owner-cost ruling leaves its metered API-key identifiers intentionally
+unprovisioned. Current host-local Builder model inquiry uses the sanctioned subscription-backed
+session instead. That exception is confined to Model Inquiry and is never a CKM source or fallback.
+
 # Model Turn Adapters
 
 ## Purpose
@@ -51,11 +56,14 @@ mock fallback. Since MAS-05 (ADR-0064), **the caller declares intent and resolve
   `run_with_host_secrets(channel="dev", consumer="builderops-model-inquiry", ...)` before the
   provider path starts. The consumer accepts only an absolute, owner-owned, single-link regular file
   with exact mode `0600`, opened without following its final path component.
-- A declared credential that is absent or malformed produces the typed `credential_unavailable`
-  failure class, fails the run closed before any adapter call, names only the logical identifier, and
-  never falls back to a subscription CLI, ambient environment, or another provider. An expired
-  session on the still-permitted interactive command path produces `session_expired`. Neither
-  collapses into `command_exit_nonzero`. The canonical launcher opts into the bootstrap's
+- On the declared provider-API path, a credential that is absent or malformed produces the typed
+  `credential_unavailable` failure class, fails the run closed before any adapter call, names only
+  the logical identifier, and never falls back to a subscription CLI, ambient environment, or
+  another provider. Under the owner-cost ruling this is the expected current result because the
+  metered identifiers are intentionally unprovisioned; it is not a request to provision them. An
+  expired session on the separately sanctioned host-local Model Inquiry path produces
+  `session_expired`. Neither collapses into `command_exit_nonzero`. The canonical provider-API
+  launcher opts into the bootstrap's
   value-free failure handoff: if Keychain resolution fails before the runner starts, the bootstrap
   removes every credential surface and passes only that logical identifier so the runner can create
   the same durable typed terminal receipt. Other host-secret consumers retain the strict default in
@@ -75,31 +83,37 @@ Production `HttpModelAdapter` instances use a 1200-second per-role request deadl
 `xhigh` turns. `load_adapters` binds that Builder-owned deadline explicitly for both roles, so the
 generic 60-second HTTP posture cannot truncate a production inquiry turn.
 
-`scripts/model_inquiry_subscription_adapter.py` remains for interactive, human-driven use. Its
-versioned profile uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 1200-second inner
-command deadline, and a 1500-second host adapter deadline. It is not reachable from any headless
-entrypoint: the inquiry-role intent surface cannot select a command transport, and the host installer
-does not install it.
+`scripts/model_inquiry_subscription_adapter.py` remains the sanctioned operational auth path for
+host-local Builder model inquiry under ADR-0064's 2026-07-30 owner-cost ruling. Its versioned profile
+uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 1200-second inner command deadline,
+and a 1500-second host adapter deadline. This is an explicit Model Inquiry-only exception to the
+general headless subscription prohibition, not a fallback selected by the declared provider-API
+resolver. CKM cannot select or reuse it.
 
 ## Host role-entrypoint lifecycle
 
-The repository owns the fixed launcher `yggdrasil-model-inquiry` plus the two stable headless role
-commands `fable-model-inquiry-role` and `codex-model-inquiry-role`. Run
+The repository also owns the fixed provider-API launcher `yggdrasil-model-inquiry` plus the two
+stable provider-API role commands `fable-model-inquiry-role` and `codex-model-inquiry-role`. They
+preserve the declared-credential mechanism for any future metered path; they are not the current
+host-local operational auth and do not replace or retire the sanctioned subscription bridge. Run
 `scripts/install_model_inquiry_host.py install` to create all three owner-only executable wrappers
 in an explicit host bin directory. The fixed launcher binds to the digest-pinned
 `scripts/start_model_inquiry.py` declared-credential path; each role wrapper binds exactly one role
 to the versioned `scripts/model_inquiry_role_adapter.py` through the host-secret bootstrap. None can
 select an interactive session. An exact reinstall is a no-op, while a symlink, unsafe directory,
-stale subscription launcher, or unrelated existing command fails closed without overwriting it.
+subscription command occupying one of these provider-API wrapper names, or unrelated existing
+command fails closed without overwriting it. That namespace check does not declare the separately
+sanctioned host subscription bridge stale.
 
 The companion `check` operation is read-only. It reports only whether all three installed
 entrypoints match the adapter/launcher digests committed into the installer in its own
 operator-authoritative checkout and Python interpreter, and whether the launch `PATH` resolves all
 three names to those exact files. Mere launcher discoverability is insufficient: a stale
-subscription-backed command with the fixed name is unavailable. It probes no provider CLI. Host-time
-validation does not invoke Git; an adapter or fixed-launcher change and its installer digest update
-are one repo change. The check does not run either provider, inspect subscription state, reveal
-paths, or create inquiry artifacts.
+subscription-backed command occupying the provider-API fixed name is unavailable for that mechanism.
+This says nothing about the separately sanctioned Model Inquiry subscription bridge. The check
+probes no provider CLI. Host-time validation does not invoke Git; an adapter or fixed-launcher change
+and its installer digest update are one repo change. The check does not run either provider, inspect
+subscription state, reveal paths, or create inquiry artifacts.
 
 ## Concretely
 
@@ -157,7 +171,8 @@ receipts or trace.
 - silent fallback from one provider to another;
 - direct automation of a desktop UI;
 - external browsing or product/runtime writes.
-- provider-enabled parent acceptance without an explicitly configured Fable adapter.
+- metered provider-API parent acceptance or API-key provisioning under the current owner-cost ruling;
+- reuse of the Model Inquiry subscription session by CKM or any other Builder consumer.
 
 ## Related Docs
 

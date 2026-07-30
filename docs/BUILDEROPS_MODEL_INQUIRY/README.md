@@ -1,7 +1,11 @@
 State: BMI-01 through BMI-05 are implemented; parent end-to-end acceptance remains pending. The
-configured remote host owns Keychain credential values and host-specific launcher settings; the
-provider-free intent, declared provider-API adapters, and high-reasoning policy are versioned in the
-repository. Subscription sessions are not part of the headless path.
+configured remote host owns its subscription session and host-specific launcher settings. Under
+ADR-0064's 2026-07-30 owner-cost ruling, that subscription-backed session is the sanctioned
+operational auth for host-local Builder model inquiry. The provider-free intent, declared
+provider-API adapters, and high-reasoning policy remain versioned for any future metered path, but
+their API-key identifiers are intentionally unprovisioned and currently fail closed as
+`credential_unavailable`. The Model Inquiry subscription exception is never a CKM source or
+fallback.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -31,8 +35,9 @@ its advisory claim files never guarantee exclusive ownership.
 - a deterministic readiness gate decides `issue_ready`, `needs_input`, or `not_ready`;
 - only an accepted promotion path may create a GitHub Issue through REST;
 - desktop skills transfer one question to the configured remote-host launcher, which owns the same
-  BuilderOps command and state while resolving provider credentials through the declared host-secret
-  contract.
+  BuilderOps command and state while using the sanctioned host-local subscription-backed session.
+  The separate declared provider-API mechanism remains fail-closed while its metered credentials are
+  intentionally unprovisioned.
 
 ## Implementation Tasks
 
@@ -54,11 +59,14 @@ receipts, and no provider fallback.
 
 BMI-04 adds Codex and portable Claude bridge skills that transfer the question to a configured
 remote-host launcher. The configured remote host owns the BuilderOps command, configured role
-adapters, Keychain credential values, and durable artifacts; its credential values and
-launcher-path settings remain outside Git. The versioned headless path submits provider-free intent,
-resolves distinct provider-API targets through the Builder census, and requires explicit `xhigh`
-reasoning. Missing or malformed credentials produce a durable typed terminal receipt before any
-adapter call, with no subscription or cross-provider fallback.
+adapters, subscription session, and durable artifacts; its authentication and launcher-path settings
+remain outside Git. The current host-local operational path uses the sanctioned subscription-backed
+session under the owner-cost ruling. The versioned provider-API path remains a separate mechanism:
+it submits provider-free intent, resolves distinct targets through the Builder census, and requires
+explicit `xhigh` reasoning, but intentionally absent metered credentials produce a durable typed
+`credential_unavailable` receipt before any adapter call. That failure does not select a subscription
+or cross-provider fallback. The explicit Model Inquiry subscription exception is confined to this
+host-local capability and cannot execute CKM semantic association.
 BMI-05 adds the structured Issue proposal, readiness receipt, file-first
 PromotionIntent, REST-only Issue crossing, crash reconciliation marker, and append-only delivery
 references.
@@ -122,6 +130,9 @@ merged, then become eligible in the listed dependency order.
 
 ## Validation / Acceptance Path
 
-After BMI-05, run a dry-run inquiry with deterministic adapters, then a provider-enabled inquiry
-with non-sensitive architecture input. Attach the run receipt, trace output, and any generated Issue
-to the parent feature Issue. Promote BuilderOps owner-doc claims only after that validation.
+After BMI-05, run the deterministic dry-run and the repo-verifiable contract checks. Under the
+ADR-0064 owner-cost ruling, parent acceptance does not request a metered provider-API inquiry,
+provision API keys, or retire the sanctioned subscription bridge. Ordinary host-local inquiries
+continue through the sanctioned subscription-backed session; that operational path is Model
+Inquiry-only and never a CKM credential source or fallback. Promote BuilderOps owner-doc claims only
+after the remaining parent validation is satisfied.
