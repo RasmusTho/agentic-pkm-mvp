@@ -37,6 +37,9 @@ separated APPEND-ONLY section below the P-2 content, so a concurrent sibling
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from tests.properties._machinery import (
@@ -93,9 +96,9 @@ def test_every_write_seam_asserts_writeguard() -> None:
         for key, value in WRITE_FRONTMATTER_SITE_CLASSIFICATION.items()
         if not (value.startswith("guarded") or value.startswith("out_of_scope"))
     ]
-    assert not bad_classification, (
-        f"Every classification must start with 'guarded' or 'out_of_scope': {bad_classification}"
-    )
+    assert (
+        not bad_classification
+    ), f"Every classification must start with 'guarded' or 'out_of_scope': {bad_classification}"
 
     write_missing_sites = find_write_missing_call_sites()
     assert write_missing_sites, "expected known production write_missing call sites"
@@ -110,8 +113,7 @@ def test_every_write_seam_asserts_writeguard() -> None:
         site for site in WRITE_MISSING_SITE_CLASSIFICATION if site not in set(write_missing_sites)
     ]
     assert not stale_write_missing, (
-        "WRITE_MISSING_SITE_CLASSIFICATION has stale entries: "
-        f"{stale_write_missing}"
+        "WRITE_MISSING_SITE_CLASSIFICATION has stale entries: " f"{stale_write_missing}"
     )
     invalid_write_missing = [
         (site, classification)
@@ -119,8 +121,7 @@ def test_every_write_seam_asserts_writeguard() -> None:
         if not classification.startswith(("guarded", "bootstrap"))
     ]
     assert not invalid_write_missing, (
-        "write_missing classifications must be guarded or bootstrap: "
-        f"{invalid_write_missing}"
+        "write_missing classifications must be guarded or bootstrap: " f"{invalid_write_missing}"
     )
 
 
@@ -190,6 +191,201 @@ def test_every_write_note_relative_seam_has_port_coverage(tmp_path) -> None:
         _assert_write_note_relative_census_is_closed(new_sites)
 
 
+def test_every_candidate_create_once_seam_has_port_coverage() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    write_ops_path = repo_root / "app" / "knowledge" / "write_ops.py"
+    writeback_path = repo_root / "app" / "knowledge_acquisition" / "candidate_writeback.py"
+    write_ops_tree = ast.parse(write_ops_path.read_text(encoding="utf-8"))
+    create = next(
+        node
+        for node in ast.walk(write_ops_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "create_candidate_note_once"
+    )
+    probe = next(
+        node
+        for node in ast.walk(write_ops_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "candidate_note_exists_durable"
+    )
+
+    def call_name(call: ast.Call) -> str | None:
+        if isinstance(call.func, ast.Name):
+            return call.func.id
+        if isinstance(call.func, ast.Attribute):
+            return call.func.attr
+        return None
+
+    calls = [node for node in ast.walk(create) if isinstance(node, ast.Call)]
+    guard_calls = [node for node in calls if call_name(node) == "assert_writes_allowed"]
+    assert len(guard_calls) == 1
+    mutation_names = {
+        "_atomic_rename_noreplace_at",
+        "mkdir",
+        "unlink",
+        "write",
+    }
+    mutation_calls = [node for node in calls if call_name(node) in mutation_names]
+    assert mutation_calls
+    assert guard_calls[0].lineno < min(node.lineno for node in mutation_calls)
+
+    forbidden_wrapper_names = {
+        "BufferedRandom",
+        "BufferedReader",
+        "BufferedRWPair",
+        "BufferedWriter",
+        "DupFd",
+        "FileIO",
+        "TextIOWrapper",
+        "callback",
+        "closing",
+        "dup",
+        "dup2",
+        "dup3",
+        "enter_async_context",
+        "enter_context",
+        "fcntl",
+        "fdopen",
+        "finalize",
+        "fromfd",
+        "partial",
+        "push",
+        "push_async_callback",
+        "register",
+    }
+
+    def assigned_names(target: ast.expr) -> list[str]:
+        if isinstance(target, ast.Name):
+            return [target.id]
+        if isinstance(target, (ast.List, ast.Tuple)):
+            return [name for element in target.elts for name in assigned_names(element)]
+        return []
+
+    def resolve_reference(
+        expression: ast.expr,
+        aliases: dict[str, str],
+    ) -> str | None:
+        if isinstance(expression, ast.Name):
+            return aliases.get(expression.id, expression.id)
+        if isinstance(expression, ast.Attribute):
+            owner = resolve_reference(expression.value, aliases)
+            return f"{owner}.{expression.attr}" if owner is not None else expression.attr
+        return None
+
+    def assert_no_fd_aliases(function: ast.FunctionDef) -> None:
+        aliases: dict[str, str] = {}
+        assignments = [
+            node for node in ast.walk(function) if isinstance(node, (ast.Assign, ast.AnnAssign))
+        ]
+        for _ in range(len(assignments) + 1):
+            changed = False
+            for assignment in assignments:
+                value = assignment.value
+                if value is None:
+                    continue
+                reference = resolve_reference(value, aliases)
+                if reference is None:
+                    continue
+                targets = (
+                    assignment.targets
+                    if isinstance(assignment, ast.Assign)
+                    else [assignment.target]
+                )
+                for target in targets:
+                    for name in assigned_names(target):
+                        if aliases.get(name) != reference:
+                            aliases[name] = reference
+                            changed = True
+            if not changed:
+                break
+
+        assert not any(
+            isinstance(node, (ast.With, ast.AsyncWith, ast.Lambda)) for node in ast.walk(function)
+        )
+        for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
+            resolved = resolve_reference(call.func, aliases)
+            resolved_tail = resolved.rsplit(".", 1)[-1] if resolved is not None else None
+            assert resolved_tail not in forbidden_wrapper_names
+            assert not (isinstance(call.func, ast.Name) and call.func.id == "open")
+            if isinstance(call.func, ast.Attribute) and call.func.attr == "open":
+                assert isinstance(call.func.value, ast.Name)
+                assert call.func.value.id == "os"
+            if isinstance(call.func, ast.Name) and call.func.id in aliases:
+                assert resolved not in {"os.close", "os.open"}
+
+    for function in (create, probe):
+        assert_no_fd_aliases(function)
+
+    alias_mutants = [
+        "def mutant(fd):\n    os.dup(fd)\n",
+        "def mutant(fd):\n    fcntl.fcntl(fd, fcntl.F_DUPFD, 0)\n",
+        "def mutant(fd):\n    io.FileIO(fd, closefd=False)\n",
+        "def mutant(fd):\n    io.TextIOWrapper(io.FileIO(fd, closefd=False))\n",
+        "def mutant(path):\n    pathlib.Path(path).open()\n",
+        "def mutant(fd):\n    weakref.finalize(fd, os.close, fd)\n",
+        "def mutant(fd):\n    stack = ExitStack()\n    stack.callback(os.close, fd)\n",
+        "def mutant(fd):\n    clone = os.dup\n    clone(fd)\n",
+        "def mutant(fd):\n    clone = os.dup\n    clone_again = clone\n    clone_again(fd)\n",
+        "def mutant(fd):\n    closer = os.close\n    closer(fd)\n",
+        "def mutant(fd):\n    callback = lambda: os.close(fd)\n",
+    ]
+    for source in alias_mutants:
+        mutant = next(
+            node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)
+        )
+        with pytest.raises(AssertionError):
+            assert_no_fd_aliases(mutant)
+
+    call_sites: list[tuple[str, str]] = []
+    for path in (repo_root / "app").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        parents: dict[ast.AST, ast.AST] = {}
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+            if call_name(call) != "create_candidate_note_once":
+                continue
+            owner: ast.AST | None = call
+            while owner is not None and not isinstance(owner, ast.FunctionDef):
+                owner = parents.get(owner)
+            assert isinstance(owner, ast.FunctionDef)
+            call_sites.append((str(path.relative_to(repo_root)), owner.name))
+    assert call_sites == [
+        ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note")
+    ]
+
+    writeback_tree = ast.parse(writeback_path.read_text(encoding="utf-8"))
+    write_candidate = next(
+        node
+        for node in ast.walk(writeback_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "write_candidate_note"
+    )
+    assert (
+        sum(
+            call_name(call) == "create_candidate_note_once"
+            for call in ast.walk(write_candidate)
+            if isinstance(call, ast.Call)
+        )
+        == 1
+    )
+
+    mutant_tree = ast.parse(
+        write_ops_path.read_text(encoding="utf-8").replace(
+            "guard.assert_writes_allowed(action)",
+            "guard_was_not_asserted = action",
+            1,
+        )
+    )
+    mutant_create = next(
+        node
+        for node in ast.walk(mutant_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "create_candidate_note_once"
+    )
+    assert not any(
+        isinstance(node, ast.Call) and call_name(node) == "assert_writes_allowed"
+        for node in ast.walk(mutant_create)
+    )
+
+
 def test_registered_write_seams_cover_the_named_gap1_and_gap2_sites() -> None:
     """The P-1/P-4 runtime property registry names exactly the four sites
     this issue and its predecessor scope: the knowledge write port,
@@ -213,7 +409,11 @@ def test_registered_write_seams_cover_the_named_gap1_and_gap2_sites() -> None:
 
 
 @given(seam_index=st.sampled_from(range(len(REGISTERED_WRITE_SEAMS))))
-@settings(max_examples=len(REGISTERED_WRITE_SEAMS), deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    max_examples=len(REGISTERED_WRITE_SEAMS),
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 def test_denying_guard_blocks_atomically(tmp_path_factory, seam_index: int) -> None:
     """``given(seam=sampled_from(REGISTERED_WRITE_SEAMS), guard_state=denying_guard())``
     (the spec's own vocabulary): a guard reporting a health-blocked state
@@ -233,7 +433,9 @@ def test_denying_guard_blocks_atomically(tmp_path_factory, seam_index: int) -> N
 
         guard_module = importlib.import_module(module_path)
         guard = getattr(guard_module, attr_name)
-        monkeypatch.setattr(guard, "snapshot_fn", lambda: {"state": "safe_mode", "reason": "p1-deny"})
+        monkeypatch.setattr(
+            guard, "snapshot_fn", lambda: {"state": "safe_mode", "reason": "p1-deny"}
+        )
         monkeypatch.setattr(guard, "bootstrap_actions", frozenset())
 
         from app.write_guard import WritesBlockedError
@@ -254,7 +456,11 @@ def test_denying_guard_blocks_atomically(tmp_path_factory, seam_index: int) -> N
 
 
 @given(seam_index=st.sampled_from(range(len(REGISTERED_WRITE_SEAMS))))
-@settings(max_examples=len(REGISTERED_WRITE_SEAMS), deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    max_examples=len(REGISTERED_WRITE_SEAMS),
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 def test_raising_guard_blocks_write(tmp_path_factory, seam_index: int) -> None:
     """``given(seam=sampled_from(REGISTERED_WRITE_SEAMS), guard=raising_guard())``:
     a WriteGuard whose evaluation itself errors (not merely denies) still

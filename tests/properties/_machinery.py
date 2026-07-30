@@ -757,11 +757,6 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "staged receipt and passes the same guard/action to the port, in "
         "addition to the port's own guard (#3719)."
     ),
-    ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note", 1): (
-        "guarded_by_caller: write_candidate_note asserts write_guard."
-        "assert_writes_allowed(CANDIDATE_WRITE_ACTION) immediately before "
-        "this call, in addition to the port's own guard (#2953)."
-    ),
     ("app/eval/failure_capture.py", "_write_draft", 1): (
         "guarded_by_caller: the shared draft-write helper asserts "
         "write_guard.assert_writes_allowed(FAILURE_CAPTURE_DRAFT_ACTION) "

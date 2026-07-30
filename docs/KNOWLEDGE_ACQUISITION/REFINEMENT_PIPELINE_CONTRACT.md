@@ -59,6 +59,16 @@ policy §3 mandates for AI-generated content, with full provenance, written back
 existing companion-note / vault mechanics named in the source spec. From this point the
 ingestion/triage policy governs; the pipeline is done.
 
+The shipped YouTube candidate writer preserves its deterministic path with a candidate-specific
+local create-once helper. Existing regular targets are durably observed before render and
+WriteGuard. Missing targets render without exclusion, then WriteGuard authorizes invocation-local
+parent preparation and one hidden raw-FD stage that is file-fsynced, closed once, atomically
+published without replacement, and parent-fsynced. Concurrent same-target attempts let the local
+filesystem select one winner; different targets and unrelated governed writes remain independent.
+Pre-publication failure is retryable from `raw`, while a post-rename fence failure preserves the
+complete target for the next durable probe. This is not a generic KnowledgePort contract, a global
+`Sources/` bootstrap invariant, or a migration of the Karakeep/Heimdal writers described below.
+
 **Karakeep handoff extension (contract selected, runtime pending).** KMA-01 / issue #3372 fixes the
 Mimer-side extension point as the shipped
 `app.heimdal.candidate_projection.project_pending_candidates` path with its existing

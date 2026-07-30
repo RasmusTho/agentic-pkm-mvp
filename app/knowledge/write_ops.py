@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
-from pathlib import Path
-from typing import TYPE_CHECKING
+from pathlib import Path, PurePosixPath
+import stat
+from typing import TYPE_CHECKING, Literal
+import uuid
 
+from app.knowledge.adapters import _atomic_rename_noreplace_at
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
@@ -27,6 +31,218 @@ if TYPE_CHECKING:
 # closes every one of those gaps in a single change, and is safe/idempotent
 # for callers that already asserted their own action.
 KNOWLEDGE_WRITE_ACTION = "knowledge.write_note"
+_DIRECTORY_OPEN_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+_CANDIDATE_STAGE_OPEN_FLAGS = (
+    os.O_WRONLY
+    | os.O_CREAT
+    | os.O_EXCL
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+CandidateCreateResult = Literal["written", "already_exists"]
+
+
+def _candidate_relative_parts(note_rel_path: str) -> tuple[str, ...]:
+    if not note_rel_path or "\x00" in note_rel_path or "\\" in note_rel_path:
+        raise ValueError("candidate note path must be a portable vault-relative POSIX path")
+    path = PurePosixPath(note_rel_path)
+    if path.is_absolute() or path.as_posix() != note_rel_path:
+        raise ValueError("candidate note path must be a normalized vault-relative POSIX path")
+    parts = path.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("candidate note path must stay inside the vault")
+    return parts
+
+
+def _require_regular_candidate_target(
+    parent_fd: int,
+    target_name: str,
+) -> None:
+    target_stat = os.stat(target_name, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise OSError(
+            errno.EINVAL,
+            "candidate target exists but is not a regular file",
+            target_name,
+        )
+
+
+def candidate_note_exists_durable(
+    note_rel_path: str,
+    *,
+    vault_root: Path | str,
+) -> bool:
+    """Durably observe a regular candidate target without mutating the vault."""
+
+    parts = _candidate_relative_parts(note_rel_path)
+    resolved_root = Path(vault_root).expanduser().resolve()
+    current_dir_fd: int | None = None
+    try:
+        current_dir_fd = os.open(resolved_root, _DIRECTORY_OPEN_FLAGS)
+        for component in parts[:-1]:
+            try:
+                child_fd = os.open(
+                    component,
+                    _DIRECTORY_OPEN_FLAGS,
+                    dir_fd=current_dir_fd,
+                )
+            except FileNotFoundError:
+                return False
+            superseded_fd = current_dir_fd
+            current_dir_fd = child_fd
+            os.close(superseded_fd)
+
+        try:
+            _require_regular_candidate_target(current_dir_fd, parts[-1])
+        except FileNotFoundError:
+            return False
+        os.fsync(current_dir_fd)
+        return True
+    finally:
+        if current_dir_fd is not None:
+            owned_fd = current_dir_fd
+            current_dir_fd = None
+            os.close(owned_fd)
+
+
+def create_candidate_note_once(
+    note_rel_path: str,
+    content: str,
+    *,
+    vault_root: Path | str,
+    action: str,
+    write_guard: "WriteGuard | None" = None,
+) -> CandidateCreateResult:
+    """Create one candidate atomically, preserving any existing target.
+
+    This is deliberately candidate-specific. It owns only invocation-local
+    parent preparation and one hidden stage; it does not change generic
+    ``KnowledgePort.write_note`` semantics or coordinate other writers.
+    """
+
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    parts = _candidate_relative_parts(note_rel_path)
+    resolved_root = Path(vault_root).expanduser().resolve()
+    guard = write_guard or DEFAULT_WRITE_GUARD
+    guard.assert_writes_allowed(action)
+    payload = content.encode("utf-8")
+
+    current_dir_fd: int | None = None
+    stage_fd: int | None = None
+    stage_name: str | None = None
+    stage_owned = False
+    stage_unlink_attempted = False
+    cleanup_error: BaseException | None = None
+
+    def record_cleanup_error(exc: BaseException) -> None:
+        nonlocal cleanup_error
+        if cleanup_error is None:
+            cleanup_error = exc
+
+    try:
+        current_dir_fd = os.open(resolved_root, _DIRECTORY_OPEN_FLAGS)
+        for component in parts[:-1]:
+            try:
+                os.mkdir(component, mode=0o777, dir_fd=current_dir_fd)
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise
+            os.fsync(current_dir_fd)
+            child_fd = os.open(
+                component,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=current_dir_fd,
+            )
+            superseded_fd = current_dir_fd
+            current_dir_fd = child_fd
+            os.close(superseded_fd)
+
+        stage_name = f".candidate-stage-{uuid.uuid4().hex}"
+        stage_fd = os.open(
+            stage_name,
+            _CANDIDATE_STAGE_OPEN_FLAGS,
+            0o600,
+            dir_fd=current_dir_fd,
+        )
+        stage_owned = True
+        offset = 0
+        while offset < len(payload):
+            written = os.write(stage_fd, payload[offset:])
+            if written <= 0:
+                raise OSError(
+                    errno.EIO,
+                    "candidate stage write made no progress",
+                    stage_name,
+                )
+            offset += written
+        os.fsync(stage_fd)
+        owned_stage_fd = stage_fd
+        stage_fd = None
+        os.close(owned_stage_fd)
+
+        try:
+            _atomic_rename_noreplace_at(
+                current_dir_fd,
+                stage_name,
+                current_dir_fd,
+                parts[-1],
+            )
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                raise
+            stage_unlink_attempted = True
+            os.unlink(stage_name, dir_fd=current_dir_fd)
+            stage_owned = False
+            os.fsync(current_dir_fd)
+            _require_regular_candidate_target(current_dir_fd, parts[-1])
+            return "already_exists"
+
+        stage_owned = False
+        os.fsync(current_dir_fd)
+        return "written"
+    finally:
+        if stage_fd is not None:
+            owned_stage_fd = stage_fd
+            stage_fd = None
+            try:
+                os.close(owned_stage_fd)
+            except BaseException as exc:  # noqa: BLE001 - preserve fail-closed cleanup
+                record_cleanup_error(exc)
+
+        if (
+            stage_owned
+            and not stage_unlink_attempted
+            and stage_name is not None
+            and current_dir_fd is not None
+        ):
+            stage_unlink_attempted = True
+            try:
+                os.unlink(stage_name, dir_fd=current_dir_fd)
+            except BaseException as exc:  # noqa: BLE001 - exact owned-stage cleanup
+                record_cleanup_error(exc)
+            else:
+                stage_owned = False
+                try:
+                    os.fsync(current_dir_fd)
+                except BaseException as exc:  # noqa: BLE001 - cleanup durability is required
+                    record_cleanup_error(exc)
+
+        if current_dir_fd is not None:
+            owned_dir_fd = current_dir_fd
+            current_dir_fd = None
+            try:
+                os.close(owned_dir_fd)
+            except BaseException as exc:  # noqa: BLE001 - every owner gets one close attempt
+                record_cleanup_error(exc)
+
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def default_vault_root_for_path(path: Path | str) -> Path:
@@ -107,15 +323,11 @@ def write_note_from_absolute(
         # different note. The filesystem adapter rejects an aliased
         # expected-version locator, while its descriptor/no-follow CAS protects
         # replacements after that check.
-        lexical_path = Path(
-            os.path.abspath(os.path.expanduser(os.fspath(path)))
-        )
+        lexical_path = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
         try:
             relative_path = lexical_path.relative_to(resolved_root)
         except ValueError:
-            lexical_root = Path(
-                os.path.abspath(os.path.expanduser(os.fspath(vault_root)))
-            )
+            lexical_root = Path(os.path.abspath(os.path.expanduser(os.fspath(vault_root))))
             relative_path = lexical_path.relative_to(lexical_root)
         locator = make_note_locator(relative_path.as_posix())
     # Absolute path writes target the local filesystem boundary directly.
@@ -215,9 +427,12 @@ def advanced_uri_from_vault_path(path: Path | str, *, vault_root: Path | str) ->
 
 
 __all__ = [
+    "CandidateCreateResult",
     "KNOWLEDGE_WRITE_ACTION",
     "advanced_uri_from_vault_path",
     "append_note_relative",
+    "candidate_note_exists_durable",
+    "create_candidate_note_once",
     "default_vault_root_for_path",
     "read_note_text_with_version",
     "write_note_from_absolute",

@@ -140,6 +140,15 @@ never silently rewrites the original. A Sources note becomes durable knowledge o
 governed candidate → proposal → human-confirm path (`WriteGuard` → `DecisionToken` →
 `AuthorityReceipt`). Moving or renaming the note into the knowledge tree is not a promotion.
 
+The shipped YouTube acquisition candidate is one narrow create-once producer in this zone. Long
+source work and rendering hold no zone-wide writer lock. After WriteGuard, it prepares only its own
+vault-relative parent chain, stages complete bytes under an extensionless hidden name, and uses the
+supported local filesystem's atomic no-replace operation plus parent durability fence. An existing
+regular target or atomic race winner is preserved byte-for-byte. A pre-publication failure remains
+rebuildable from retained raw evidence; a post-rename fence failure preserves the complete target
+for retry. This single-user macOS/Linux mechanism does not make `Sources/` a global initialized
+resource, coordinate other producers, or claim network/distributed semantics.
+
 The zone is attention-free by design: it is an archive, not an unread queue or processing
 obligation; material reaches the human only through governed Mimer proposals. The owner selected the
 default **Sources** on 2026-07-10 from the shortlist Observationer, Källor, Referenser, Corpus,

@@ -27,6 +27,23 @@ This contract follows:
 - `search_notes(vault, query, limit=20)`
 - `open_note(locator)`
 
+Approved candidate-only helpers, not new `KnowledgePort` methods:
+
+- `candidate_note_exists_durable(note_rel_path, vault_root=...)` walks an existing parent chain
+  descriptor-relative without following symlinks or mutating the vault. It returns true only for a
+  regular target after target-parent fsync; missing paths return false, and all other probe or close
+  failures are loud.
+- `create_candidate_note_once(note_rel_path, content, vault_root=..., action=..., write_guard=...)`
+  asserts WriteGuard before mutation, durably prepares only the target's local parent chain, writes
+  a complete hidden raw-FD stage, and publishes through the existing descriptor-relative atomic
+  no-replace primitive. `written` follows target-parent fsync; an `EEXIST` loser cleans only its own
+  stage, fences the parent, verifies the regular winner, and returns `already_exists`.
+
+These helpers are restricted to the shipped YouTube candidate writeback. They neither broaden
+generic port/adapter semantics nor migrate Heimdal, Karakeep, or other `Sources/` producers. Their
+guarantees assume one user on macOS/Linux and one local filesystem; they provide no global lock,
+fairness, network-filesystem, or distributed-writer contract.
+
 The `write_note` receipt above is the low-level port result. Production/service callers use
 `write_note_from_absolute` or `write_note_relative`; those helpers raise
 `KnowledgeWriteConflict` with the staged receipt attached when `outcome="conflict_staged"`.
