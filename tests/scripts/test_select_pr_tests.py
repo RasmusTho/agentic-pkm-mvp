@@ -26,6 +26,18 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     assert "not panel_llm_e2e" in selection.pytest_args
 
 
+def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
+    selection = select_tests(["app/web/static/cockpit.html", "app/web/static/signboard.js"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert "builder_system" in selection.subsystems
+    assert "companion_ui" in selection.subsystems
+    assert "tests/dispatcher" in selection.targets
+    assert "tests/builderops" in selection.targets
+    assert "tests/api" in selection.targets
+
+
 def test_canvas_chat_change_selects_chat_coverage() -> None:
     selection = select_tests(["app/chat/session_log.py", "tests/chat/test_session_log_writer.py"])
 

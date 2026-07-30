@@ -136,6 +136,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/builderops/",
             "app/dispatcher/",
+            # Static Builder surfaces (signboard, cockpit) render dispatcher/
+            # BuilderOps state; their regressions live in tests/dispatcher and
+            # tests/builderops. companion_ui co-owns this prefix because the
+            # API process mounts and serves it.
+            "app/web/",
             "tests/builderops/",
             "tests/dispatcher/",
             "tests/governance/",
@@ -224,6 +229,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # into app/api/app.py, and its x-trace-id propagation regression
             # lives in tests/api (test_ask_contract).
             "app/middleware/",
+            # Static assets are mounted and served by app/api/app.py; page
+            # handlers (/signboard, /cockpit) are API surface. builder_system
+            # co-owns this prefix for the Builder-state content it renders.
+            "app/web/",
             "api/",
             # FastAPI dependency providers (get_agent_repository / get_db)
             # consumed by app/api/routers/agent.py; exercised via tests/api.
