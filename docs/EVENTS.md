@@ -617,7 +617,8 @@ Contract:
   rather than re-admitting the original. Latent today — nothing schedules that job
   — but CDLM-03 deletes client originals against an `admitted` answer, so a
   receipt-aware retention interaction must land before that. Tracked as a deferred
-  defect on the Known Defects registry (#4172), not claimed as solved here.
+  defect on the Known Defects registry (#4172, `KD-4384-RETENTION`), not claimed as
+  solved here.
 - **Consent scope, stated honestly.** Every kind is admitted under the standing
   self-record grant the voice-memo lane uses
   (`consent_ledger.SELF_RECORD_SCOPE`), whose descriptive
