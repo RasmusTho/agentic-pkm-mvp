@@ -9,10 +9,10 @@
 <body>
   <main class="shell">
     <header class="topbar">
-      <div><p class="eyebrow">BuilderOps · local projection</p><h1>Signboard</h1></div>
-      <div class="actions"><input id="search" type="search" placeholder="Search title, issue, label…" aria-label="Search cards"><input id="api-key" type="password" placeholder="API key for remote moves" aria-label="API key for remote moves" autocomplete="off"><button id="refresh">Refresh projection</button></div>
+      <div><p class="eyebrow">BuilderOps · local board</p><h1>Signboard</h1></div>
+      <div class="actions"><input id="search" type="search" placeholder="Search title, issue, label…" aria-label="Search cards"><input id="api-key" type="password" placeholder="API key for remote moves" aria-label="API key for remote moves" autocomplete="off"><button id="refresh">Refresh board</button></div>
     </header>
-    <p class="authority">Cards are rendered from Markdown. Dispatcher remains the source of truth; moves are exported back into this projection.</p>
+    <p class="authority">Cards are read from the dispatcher store, which is the source of truth; moves are written straight back to it.</p>
     <div id="filters" class="filters" aria-label="Priority filters"></div>
     <div id="repo-filters" class="filters" aria-label="Repo filters"></div>
     <p id="notice" class="notice" role="status"></p>

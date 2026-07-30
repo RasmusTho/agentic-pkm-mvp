@@ -755,7 +755,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true")
 
-    p = sub.add_parser("export-signboard", help="Export dispatcher queue as a Signboard Markdown board")
+    p = sub.add_parser(
+        "export-signboard",
+        help=(
+            "[LEGACY] Export dispatcher queue as a Signboard Markdown board. "
+            "The /signboard board is served from the dispatcher store and no "
+            "longer reads these files; kept for hosts with an existing board."
+        ),
+    )
     p.add_argument(
         "path",
         nargs="?",
@@ -779,7 +786,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "signboard-validate",
-        help="Validate generated Signboard cards without changing the board or dispatcher store",
+        help=(
+            "[LEGACY] Validate generated Signboard cards without changing the "
+            "board or dispatcher store. Lints the legacy Markdown export only; "
+            "the /signboard board is served from the store."
+        ),
     )
     p.add_argument(
         "path",

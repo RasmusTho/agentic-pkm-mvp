@@ -743,6 +743,13 @@ reconciliation helper.
 
 ### Signboard projection
 
+> **Legacy surface.** `export-signboard` and `signboard-validate` are legacy operator commands. The
+> visual board at `/signboard` is served directly from the dispatcher store and reads no Markdown at
+> all (#4401), so nothing in the running system consumes this export. It is kept working for the
+> builder hosts that still hold a board directory today; both commands announce themselves as
+> `[LEGACY]` in `--help`. Physically removing the exporter, the prune, and the lint is a separate
+> follow-up, so nothing below is switched off yet — but do not build anything new on it.
+
 The dispatcher can export the active Builder Ops queue into a Signboard-compatible Markdown board.
 `export-signboard` takes an optional directory argument. When omitted, it resolves a default path
 from the existing active-vault-selection mechanism (`app.vault.manager.get_vault_manager`, the
@@ -858,32 +865,43 @@ ADR-0010.
 
 ### Local visual Signboard
 
-The FastAPI runtime also exposes a local visual board at `/signboard`. Its API reads only the
-generated Markdown files beneath the resolved board root and renders the six exporter columns. A
-refresh explicitly runs the normal exporter. Card moves are loopback/API-key protected and invoke
-dispatcher service operations (`move`, `block`, or `complete`) before immediately re-exporting the
-projection; the UI never writes card files or the SQLite database itself. The board root is
-operator configuration, not request input, and card reads are containment-checked after symlink
-resolution.
+The FastAPI runtime also exposes a local visual board at `/signboard`. **The board is served from the
+dispatcher store** (#4401): `/api/signboard/board` builds every card from `store.list_tasks()` on each
+request and reads no files. Column identity and order derive from
+`app/dispatcher/signboard.py :: STATUS_COLUMNS`, so the board cannot disagree with the dispatcher
+about where a status belongs, and the route holds no second copy of that table. Card moves are
+loopback/API-key protected and invoke dispatcher service operations (`move`, `block`, or `complete`);
+that store write *is* the durable change, so nothing is exported afterwards and the next read already
+reflects it. The UI never writes the SQLite database itself.
 
-The board root resolves from exactly one source. `SIGNBOARD_ROOT`, when set, is the operator/launcher
-override; otherwise the route falls back to `default_signboard_root()` in
-`app/dispatcher/signboard.py`, the same active-vault-relative default the CLI uses. Neither the API
-route nor the shell launchers carry a board-root literal of their own — that divergence is what let
-the projection root mean three different things at once.
+There is no board root on this path. `/api/signboard/board` carries no `root` field, its `authority`
+is `dispatcher_store`, and `SIGNBOARD_ROOT` has no effect on it — the route reads the store resolved
+by `app/dispatcher/config.py :: load_paths`, exactly like every other dispatcher caller. A projection
+directory left on the host is not board input; a stale board on disk can no longer be rendered as
+current work.
 
-When no root resolves at all (no forwarded `SIGNBOARD_ROOT` and no selected vault), or when the
-resolved root does not exist, `/api/signboard/board` returns `status: "error"` with an explicit
-message and the UI shows it as a notice. An unreadable root never renders as six empty columns:
-"no work" and "misconfigured" must not look the same.
+A store that cannot be read is still a visible error, never a healthy board. A missing dispatcher
+database returns HTTP 503 `dispatcher is not initialised`, and a database file that exists but
+carries no dispatcher schema returns 503 `dispatcher store is not readable`; the UI shows either as a
+notice. A task whose status the column table cannot place is reported in `errors` with
+`status: "error"` instead of being dropped. An initialised store with no tasks is the one case that
+legitimately renders six empty columns — because that is what the authority actually says. "No work"
+and "misconfigured" must not look the same; that invariant now keys on the store rather than on a
+resolved root.
 
-`make dev-start-full` and the prod full-stack launcher refresh the board as part of their existing
-BuilderOps dispatcher bootstrap. `scripts/start_full_system.sh` resolves the board root to an
-absolute host path (via `scripts/lib/signboard_root.sh`, which calls the same single source) and
+The board-root plumbing below now serves the legacy export only. It is unchanged and still correct
+for `export-signboard`, but nothing it forwards reaches the visual board any more; retiring it
+travels with the exporter's physical removal.
+
+`make dev-start-full` and the prod full-stack launcher refresh the legacy board export as part of
+their existing BuilderOps dispatcher bootstrap. `scripts/start_full_system.sh` resolves the board root
+to an absolute host path (via `scripts/lib/signboard_root.sh`, which calls the same single source) and
 `scripts/export_runtime_env.sh` forwards it into the generated runtime env consumed by the API
 container's `env_file` chain; `/Users` is mounted at the same path, so the host path is valid
 in-container. With no vault selected the variable stays unset and the bootstrap reports
-`signboard_root_missing` instead of writing to an invented location.
+`signboard_root_missing` instead of writing to an invented location. That degraded reason now means
+"no legacy export was written", not "the board is unavailable" — `/signboard` renders from the store
+regardless.
 
 The channel deploy wrappers (`scripts/deploy_channel.sh`) do **not** regenerate the runtime env.
 For each Compose invocation they resolve the board root through the same
@@ -896,8 +914,8 @@ existing directory that the runtime can read and search for column traversal. No
 unreadable, unreachable, or escaped roots fail closed. That deploy-only override wins over a
 missing or stale `SIGNBOARD_ROOT` in the existing runtime env without rewriting the file or
 disturbing its vault bindings. When no active vault resolves, the override removes any stale
-runtime-env value so the API keeps the explicit error state rather than serving an old projection
-or presenting misconfiguration as "no work". On a Mac mini develop stack, use the existing API
+runtime-env value so no export is written to a stale location. Since #4401 a stale value cannot make
+the board itself lie: the board never reads it. On a Mac mini develop stack, use the existing API
 port over Tailscale:
 `http://<mac-mini-tailnet-name>:18001/signboard`. Remote refreshes and moves require the configured
 `API_KEY`, entered into the Signboard session field and sent only as `X-API-Key`; it is not stored
@@ -905,7 +923,8 @@ in URLs or browser persistence. No separate Signboard process is started.
 
 #### The projection root is not the shared BuilderOps vault's `agent-delivery/`
 
-Two different directories are both called "agent-delivery", and they are not interchangeable:
+This distinction concerns the legacy export only — the visual board reads neither directory — but the
+two trees still exist on the builder hosts, and they are not interchangeable:
 
 | | Signboard projection root | Shared BuilderOps vault queue |
 | --- | --- | --- |

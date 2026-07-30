@@ -1,7 +1,15 @@
 """Signboard Markdown projection for dispatcher tasks.
 
-The dispatcher remains the operational source of truth. This module writes a
-one-way Markdown projection that lightweight kanban tools can render from disk.
+**Legacy.** The dispatcher remains the operational source of truth, and since
+#4401 the ``/signboard`` board is served directly from that store. This module
+writes a one-way Markdown projection nothing in the product reads any more; it
+is kept working for the builder hosts that still hold a board directory, behind
+the ``export-signboard`` / ``signboard-validate`` operator commands. Physical
+removal is a separate follow-up.
+
+``STATUS_COLUMNS`` and ``canonical_status`` are *not* legacy: they are the single
+source of the dispatcher's status/column vocabulary and the store-backed board
+route derives its columns from them.
 """
 
 from __future__ import annotations

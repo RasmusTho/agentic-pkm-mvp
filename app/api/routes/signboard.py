@@ -1,59 +1,44 @@
-"""Local Signboard API: a Markdown projection with dispatcher-backed mutations.
+"""Local Signboard API served from the dispatcher store.
 
-The board deliberately reads the generated Markdown projection for presentation,
-while lifecycle changes always go through dispatcher services and are re-exported.
+The dispatcher store is the board's only authority: every card is built from
+``list_tasks`` on read, and lifecycle changes go through dispatcher services on
+write. There is no Markdown projection in this path.
+
+The board used to read back from disk what it had just written to the database,
+and having a second copy to locate, reconcile, and prune is what #4279, #4293
+and #4370 were each filed against. Serving from the store removes the root, the
+drift, and the reconciliation together (#4401). ``export-signboard`` remains as
+a legacy operator command for hosts that still keep a board directory.
 """
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
-from pathlib import Path
+import sqlite3
 from typing import Any
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.auth import require_loopback_or_api_key
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
+from app.dispatcher.models import TaskRecord
 from app.dispatcher.queue import block, complete
 from app.dispatcher.services import move_task
-from app.dispatcher.signboard import (
-    STATUS_COLUMNS,
-    NoActiveVaultError,
-    canonical_status,
-    default_signboard_root,
-    export_signboard,
-)
+from app.dispatcher.signboard import STATUS_COLUMNS, canonical_status, column_for_status
 from app.dispatcher.store import SqliteStore
 
 router = APIRouter(prefix="/signboard", tags=["signboard"])
 
-COLUMNS = ("Backlog", "Ready", "In Progress", "Review", "Blocked", "Done")
+# Column identity and order both derive from the dispatcher's status -> column
+# table, so the board cannot disagree with the dispatcher about where a status
+# belongs. Two spellings of one mapping is the class of drift this route is
+# being taken out of.
+COLUMNS: tuple[str, ...] = tuple(dict.fromkeys(STATUS_COLUMNS.values()))
 
-
-@dataclass(frozen=True)
-class ParsedCard:
-    id: str
-    issue_number: int | None
-    title: str
-    status: str
-    column: str
-    priority: str
-    repo: str | None
-    labels: list[str]
-    blocked_reason: str | None
-    claimed_by: str | None
-    linked_pr: str | None
-    github_url: str | None
-    source_anchor_refs: list[str]
-    updated_at: str | None
-    body: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return self.__dict__.copy()
+# Synchronization metadata is stored as a task row for dispatcher
+# compatibility, but it is not a board card.
+_METADATA_STATUS = "_meta"
 
 
 class MoveRequest(BaseModel):
@@ -63,25 +48,6 @@ class MoveRequest(BaseModel):
     blocked_reason: str | None = Field(default=None, max_length=4_000)
 
 
-def signboard_root() -> Path:
-    """Return the operator-configured, local-only projection root.
-
-    No request controls this path. Resolving it once prevents a symlinked root
-    from turning a card read into arbitrary traversal later on.
-
-    The default is not spelled here: it comes from ``default_signboard_root``
-    in the dispatcher projection module, which is the single source for the
-    Signboard root (#4198). ``SIGNBOARD_ROOT`` is the launcher-forwarded
-    override; when it is absent and no vault is selected this raises
-    :class:`NoActiveVaultError` so the board can render a visible error state
-    rather than an empty, healthy-looking one.
-    """
-    raw = os.getenv("SIGNBOARD_ROOT", "")
-    if raw.strip():
-        return Path(raw).expanduser().resolve()
-    return default_signboard_root()
-
-
 def _store() -> SqliteStore:
     paths = load_paths()
     if not paths.db_path.exists():
@@ -89,142 +55,94 @@ def _store() -> SqliteStore:
     return SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
 
 
-def parse_signboard_markdown(markdown: str, *, expected_column: str) -> ParsedCard | None:
-    """Parse one generated Signboard card; non-cards and malformed cards return None."""
-    if not markdown.startswith("---\n"):
-        return None
-    end = markdown.find("\n---\n", 4)
-    if end < 0:
-        return None
+def _list_tasks(store: SqliteStore) -> list[TaskRecord]:
+    """Read the store's tasks, turning an unusable store into a visible error.
+
+    A store file that exists but carries no dispatcher schema would otherwise
+    surface as an internal error. The board's standing invariant is that a board
+    with no readable authority never renders as six healthy empty columns —
+    "no work" and "misconfigured" must not look the same (#4279).
+    """
+
     try:
-        metadata = yaml.safe_load(markdown[4:end])
-    except yaml.YAMLError:
-        return None
-    if not isinstance(metadata, dict) or metadata.get("generated_by") != "dispatcher.signboard":
-        return None
-    card_id = metadata.get("id")
-    if not isinstance(card_id, str) or not card_id or card_id == "_meta":
-        return None
-    status = metadata.get("status")
-    column = metadata.get("column")
-    if not isinstance(status, str) or not isinstance(column, str) or column != expected_column:
-        return None
-    try:
-        if STATUS_COLUMNS[canonical_status(status)] != expected_column:
-            return None
-    except ValueError:
-        return None
-
-    def text(key: str) -> str | None:
-        value = metadata.get(key)
-        return str(value) if value not in (None, "") else None
-
-    def strings(key: str) -> list[str]:
-        value = metadata.get(key)
-        return [str(item) for item in value] if isinstance(value, list) else []
-
-    issue = metadata.get("issue_number")
-    return ParsedCard(
-        id=card_id,
-        issue_number=issue if isinstance(issue, int) else None,
-        title=text("title") or card_id,
-        status=canonical_status(status),
-        column=column,
-        priority=text("priority") or "unspecified",
-        repo=text("repo"),
-        labels=strings("labels"),
-        blocked_reason=text("blocked_reason"),
-        claimed_by=text("claimed_by"),
-        linked_pr=text("linked_pr"),
-        github_url=text("github_url"),
-        source_anchor_refs=strings("source_anchor_refs"),
-        updated_at=text("updated_at"),
-        body=markdown[end + 5 :].strip(),
-    )
+        return store.list_tasks()
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=503, detail=f"dispatcher store is not readable: {exc}"
+        ) from exc
 
 
-def read_signboard(root: Path) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
-    """Read generated cards only, never following entries outside the board root."""
-    board: dict[str, list[dict[str, Any]]] = {column: [] for column in COLUMNS}
-    errors: list[str] = []
-    if not root.exists():
-        # An unreadable root used to render as six empty columns, which reads
-        # as "no work" instead of "misconfigured" (#4198). Report it.
-        errors.append(f"signboard root does not exist: {root}")
-        return board, errors
-    if not root.is_dir():
-        errors.append(f"signboard root is not a directory: {root}")
-        return board, errors
-    for column in COLUMNS:
-        directory = root / column
-        if not directory.exists():
-            continue
-        if not directory.is_dir():
-            errors.append(f"{column} is not a directory")
-            continue
-        for path in sorted(directory.glob("*.md")):
-            try:
-                resolved = path.resolve(strict=True)
-                resolved.relative_to(root)
-                if resolved.parent != directory.resolve():
-                    continue
-                card = parse_signboard_markdown(resolved.read_text(encoding="utf-8"), expected_column=column)
-            except (OSError, ValueError) as exc:
-                errors.append(f"could not read {column}/{path.name}: {exc}")
-                continue
-            if card is not None:
-                board[column].append(card.to_dict())
-    return board, errors
+def _card(task: TaskRecord) -> dict[str, Any]:
+    """Render one dispatcher task as a board card.
 
+    Raises :class:`ValueError` for a status the dispatcher's column table does
+    not know, so the caller can report that task instead of dropping it.
+    """
 
-def _board_payload(root: Path) -> dict[str, Any]:
-    board, errors = read_signboard(root)
+    sync_state = task.sync_state or {}
+    raw_labels = sync_state.get("labels")
+    github_url = str(sync_state.get("url") or "")
     return {
-        "root": str(root),
-        "columns": [{"name": column, "cards": board[column]} for column in COLUMNS],
-        "errors": errors,
-        "status": "error" if errors else "ok",
-        "authority": "dispatcher_projection",
+        "id": task.task_id,
+        "issue_number": task.issue_number,
+        "title": task.title or task.task_id,
+        "status": canonical_status(task.status),
+        "column": column_for_status(task.status),
+        "priority": task.priority or "unspecified",
+        "repo": task.repo or None,
+        "labels": [str(label) for label in raw_labels] if isinstance(raw_labels, list) else [],
+        "blocked_reason": task.blocked_reason or None,
+        "claimed_by": task.claimed_by or None,
+        "linked_pr": task.linked_pr or None,
+        "github_url": github_url or None,
+        "source_anchor_refs": [str(ref) for ref in (task.source_anchor_refs or [])],
+        "updated_at": task.updated_at or None,
     }
 
 
-def _unresolved_root_payload(detail: str) -> dict[str, Any]:
-    """Render an explicit error state when no projection root resolves at all."""
+def _board_payload(store: SqliteStore) -> dict[str, Any]:
+    cards: dict[str, list[dict[str, Any]]] = {column: [] for column in COLUMNS}
+    errors: list[str] = []
+    for task in _list_tasks(store):
+        if task.status == _METADATA_STATUS:
+            continue
+        try:
+            card = _card(task)
+        except ValueError as exc:
+            errors.append(f"could not place task {task.task_id}: {exc}")
+            continue
+        cards[card["column"]].append(card)
     return {
-        "root": None,
-        "columns": [{"name": column, "cards": []} for column in COLUMNS],
-        "errors": [f"signboard root is not configured: {detail}"],
-        "status": "error",
-        "authority": "dispatcher_projection",
+        "columns": [{"name": column, "cards": cards[column]} for column in COLUMNS],
+        "errors": errors,
+        "status": "error" if errors else "ok",
+        "authority": "dispatcher_store",
     }
 
 
 @router.get("/board")
 def get_board() -> dict[str, Any]:
-    try:
-        root = signboard_root()
-    except NoActiveVaultError as exc:
-        return _unresolved_root_payload(str(exc))
-    return _board_payload(root)
+    return _board_payload(_store())
 
 
 @router.post("/refresh", dependencies=[Depends(require_loopback_or_api_key)])
 def refresh_board() -> dict[str, Any]:
-    try:
-        root = signboard_root()
-    except NoActiveVaultError as exc:
-        raise HTTPException(status_code=503, detail=f"signboard root is not configured: {exc}") from exc
-    export_signboard(_store(), root)
-    return _board_payload(root)
+    """Re-read the board.
+
+    Kept as the UI's explicit reload. Every read already comes from the store,
+    so there is nothing left to re-materialize.
+    """
+
+    return _board_payload(_store())
 
 
 @router.post("/cards/{task_id}/move", dependencies=[Depends(require_loopback_or_api_key)])
 def move_card(task_id: str, request: MoveRequest) -> dict[str, Any]:
-    if task_id == "_meta" or "/" in task_id or "\\" in task_id or ".." in task_id:
+    if task_id == _METADATA_STATUS or "/" in task_id or "\\" in task_id or ".." in task_id:
         raise HTTPException(status_code=400, detail="invalid task id")
+    store = _store()
     try:
         next_status = canonical_status(request.status)
-        store = _store()
         if next_status == "blocked":
             if not request.blocked_reason or not request.blocked_reason.strip():
                 raise ValueError("blocked status requires blocked_reason")
@@ -238,19 +156,12 @@ def move_card(task_id: str, request: MoveRequest) -> dict[str, Any]:
             )
         else:
             task = move_task(store, task_id, next_status, request.actor, request.note)
-        try:
-            root = signboard_root()
-        except NoActiveVaultError as exc:
-            raise HTTPException(
-                status_code=503, detail=f"signboard root is not configured: {exc}"
-            ) from exc
-        export_signboard(store, root)
     except ValueError as exc:
         status_code = 404 if "not found" in str(exc).lower() else 409
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-    payload = _board_payload(root)
+    payload = _board_payload(store)
     payload["task"] = {"id": task.task_id, "status": task.status}
     return payload
 
 
-__all__ = ["router", "parse_signboard_markdown", "read_signboard", "signboard_root"]
+__all__ = ["COLUMNS", "router"]
