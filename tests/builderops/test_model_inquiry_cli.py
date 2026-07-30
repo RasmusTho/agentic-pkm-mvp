@@ -14,7 +14,7 @@ from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_root
 from app.builderops.model_inquiry import ModelInquiryService
-from app.builderops.model_inquiry_adapters import AdapterResult
+from app.builderops.model_inquiry_adapters import AdapterResult, INQUIRY_INTENT_CONFIG_ENV
 from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION
 from app.builderops.model_inquiry_promotion import ModelInquiryPromotionGateway
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
@@ -809,6 +809,7 @@ def test_turn_transaction_is_serialized_across_processes(tmp_path: Path) -> None
 
 def test_inquiry_run_dry_run_uses_common_runner(tmp_path: Path) -> None:
     env = _env(tmp_path)
+    env[INQUIRY_INTENT_CONFIG_ENV] = ""
     service = ModelInquiryService.from_env(env)
     service.start(
         question="Plan without provider calls",

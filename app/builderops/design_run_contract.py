@@ -6,6 +6,7 @@ command semantics.  It is the small vocabulary those later layers must agree on.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -20,6 +21,7 @@ from pydantic import (
     Field,
     StringConstraints,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -28,6 +30,9 @@ from app.builderops.delivery_orchestration_contracts import canonical_hash, cano
 DESIGN_RUN_CONTRACT_VERSION: Final[Literal["builderops.design-run-contract.v1"]] = (
     "builderops.design-run-contract.v1"
 )
+DESIGN_AGENT_HANDOFF_OUTPUT_VERSION: Final[
+    Literal["builderops.design-agent-turn.v1"]
+] = "builderops.design-agent-turn.v1"
 
 _UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _ID = r"^[a-z][a-z0-9_.:-]{2,127}$"
@@ -326,6 +331,7 @@ class DesignRunAdmission(CanonicalDesignRunContract):
     adapter_ref: ContractIdentityRef
     policy_ref: ContractIdentityRef
     evaluated_at: UtcTimestamp
+    repo_token_hash_observed: Sha256 | None = None
     outcome: Literal["allow", "deny", "approval_required"]
     refusal: "DesignRunRefusalDetail | None" = None
 
@@ -364,8 +370,9 @@ class DesignRunRefusalDetail(_StrictFrozen):
 
 _ALLOWED_TRANSITIONS: Final[dict[DesignRunStatusValue, frozenset[DesignRunStatusValue]]] = {
     "unknown": frozenset({"unavailable", "denied", "approval_pending", "malformed", "running"}),
+    "approval_pending": frozenset({"unavailable", "denied", "malformed", "running"}),
     "running": frozenset({"timed_out", "failed", "succeeded"}),
-    "unavailable": frozenset(), "denied": frozenset(), "approval_pending": frozenset(),
+    "unavailable": frozenset(), "denied": frozenset(),
     "malformed": frozenset(), "timed_out": frozenset(), "failed": frozenset(), "succeeded": frozenset(),
 }
 
@@ -405,6 +412,32 @@ class DesignHandoffRef(_StrictFrozen):
             raise ValueError("handoff source refs must use canonical sorted order")
         _require_sorted_unique(tuple(ref.identity for ref in self.source_refs), "handoff source refs")
         _require_sorted_unique(self.limitations, "handoff limitations")
+        return self
+
+
+class DesignAgentHandoffOutput(_StrictFrozen):
+    """One structured provider return whose artifact digest can be verified."""
+
+    schema_version: Literal["builderops.design-agent-turn.v1"] = (
+        DESIGN_AGENT_HANDOFF_OUTPUT_VERSION
+    )
+    artifact_content: str
+    handoff: DesignHandoffRef
+
+    @field_validator("artifact_content")
+    @classmethod
+    def _validate_non_blank_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("design-agent handoff content must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_artifact_digest(self) -> "DesignAgentHandoffOutput":
+        if (
+            hashlib.sha256(self.artifact_content.encode("utf-8")).hexdigest()
+            != self.handoff.content_hash
+        ):
+            raise ValueError("design-agent handoff content digest is invalid")
         return self
 
 
@@ -490,8 +523,16 @@ def validate_admission_bindings(
             raise ValueError("visual admission requires Yggdrasil receipt policy")
         if current_repo_token_hash is None or receipt.repo_token_hash != current_repo_token_hash:
             raise ValueError("visual admission Yggdrasil repo token hash drifted")
+        if admission.repo_token_hash_observed != current_repo_token_hash:
+            raise ValueError(
+                "visual admission does not bind the observed repo token hash"
+            )
         if not receipt.valid_at(admission.evaluated_at):
             raise ValueError("visual admission Yggdrasil receipt is stale")
+    elif admission.repo_token_hash_observed is not None:
+        raise ValueError(
+            "non-visual admission must not bind a repo token hash"
+        )
 
 
 def validate_approval_bindings(
@@ -543,6 +584,34 @@ def parse_design_run_contract(raw: str | bytes | bytearray | Mapping[str, Any]) 
         raise
 
 
+def parse_design_agent_handoff_output(
+    raw: str | bytes | bytearray | Mapping[str, Any],
+) -> DesignAgentHandoffOutput:
+    """Parse one strict, digest-verifiable design-agent return envelope."""
+
+    try:
+        if isinstance(raw, Mapping):
+            payload = dict(raw)
+        else:
+            source = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+            payload = json.loads(source, object_pairs_hook=_reject_duplicate_keys)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("design-agent handoff output must be one JSON object") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("design-agent handoff output must be one JSON object")
+    try:
+        output = DesignAgentHandoffOutput.model_validate_json(
+            canonical_json(payload)
+        )
+    except ValidationError:
+        raise
+    if output.model_dump(mode="json") != payload:
+        raise ValueError(
+            "design-agent handoff output must use exact canonical bindings"
+        )
+    return output
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -569,12 +638,14 @@ def _contract_type_from_payload(payload: Mapping[str, Any]) -> type[CanonicalDes
 
 __all__ = [
     "CanonicalDesignRunContract", "ContractIdentityRef", "CuratedDesignBrief",
-    "DESIGN_RUN_CONTRACT_VERSION", "DesignAgentAvailabilityDescriptor",
-    "DesignAgentDescriptor", "DesignAgentLimitationCode", "DesignDeliverableKind",
+    "DESIGN_AGENT_HANDOFF_OUTPUT_VERSION", "DESIGN_RUN_CONTRACT_VERSION",
+    "DesignAgentAvailabilityDescriptor", "DesignAgentDescriptor",
+    "DesignAgentHandoffOutput", "DesignAgentLimitationCode", "DesignDeliverableKind",
     "DesignHandoffRef", "DesignRunAdmission", "DesignRunApprovalEvidence",
     "DesignRunPolicyProfile", "DesignRunRefusalDetail", "DesignRunRequest", "DesignRunResult",
     "DesignRunStatus", "DigestBoundAttachmentRef", "DesignSourceRef", "YggdrasilGateReceipt",
-    "canonical_hash", "canonical_json", "contract_ref", "parse_design_run_contract",
+    "canonical_hash", "canonical_json", "contract_ref",
+    "parse_design_agent_handoff_output", "parse_design_run_contract",
     "is_safe_design_run_identifier",
     "validate_admission_bindings", "validate_approval_bindings", "validate_request_bindings",
 ]

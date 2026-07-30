@@ -24,10 +24,17 @@ Adds immutable provider-neutral domain contracts for `DesignAgentDescriptor`,
 handoff refs, and typed refusal detail. It reuses canonical JSON/hash mechanics without importing
 inquiry roles or runner semantics.
 
+`DesignAgentHandoffOutput` is the strict `builderops.design-agent-turn.v1` provider-return
+envelope. It carries transient artifact content only so the lifecycle can verify the returned
+digest before discarding the content and persisting the non-authoritative `DesignHandoffRef`.
+Unstructured prose is not a handoff.
+
 ## Concretely
 
 - Require explicit sorted source refs and digest-bound attachment refs.
 - Bind brief, request, adapter, policy, admission, and approval identities with canonical hashes.
+- Let visual admission bind the trusted repo-token digest observed by the lifecycle producer while
+  non-visual admission requires no token observation; callers do not supply that observation.
 - Require current exact Yggdrasil system/token parity evidence for typed visual deliverables while
   keeping typed non-visual deliverables explicitly exempt.
 - Reject ambient/unbounded context markers, unknown fields, malformed refs, duplicate identities,
