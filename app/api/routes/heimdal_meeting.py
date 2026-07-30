@@ -37,12 +37,7 @@ from pydantic import BaseModel, Field
 from app.api.routes.heimdal_capture import _assert_lan_posture, _trace_id
 from app.heimdal import meeting_ledger
 from app.heimdal.media_ingress import iso_timestamp
-from app.heimdal.meeting_ledger import (
-    MeetingLedgerPersistenceError,
-    MeetingLedgerSchemaMissingError,
-    MeetingSession,
-    MeetingSessionNotFoundError,
-)
+from app.heimdal.meeting_ledger import MeetingSession, MeetingSessionNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +130,10 @@ def open_session(request: Request, body: OpenSessionRequest) -> SessionResponse:
             template_selection=body.template_selection,
             trace_id=trace_id,
         )
-    except (MeetingLedgerPersistenceError, MeetingLedgerSchemaMissingError) as exc:
+    except Exception as exc:
+        # Raw driver errors (sqlite3/psycopg) propagate from the stores too;
+        # every failure on this surface must carry the named
+        # `meeting_ledger_failed` shape rather than an unnamed 500.
         raise _ledger_failed(exc, trace_id) from exc
     return _session_response(session, replay=not created, trace_id=trace_id)
 
@@ -157,7 +155,10 @@ def close_session(
         )
     except MeetingSessionNotFoundError as exc:
         raise _session_unknown(session_id, trace_id) from exc
-    except (MeetingLedgerPersistenceError, MeetingLedgerSchemaMissingError) as exc:
+    except Exception as exc:
+        # Raw driver errors (sqlite3/psycopg) propagate from the stores too;
+        # every failure on this surface must carry the named
+        # `meeting_ledger_failed` shape rather than an unnamed 500.
         raise _ledger_failed(exc, trace_id) from exc
     return _session_response(session, replay=not newly_closed, trace_id=trace_id)
 
@@ -171,7 +172,10 @@ def gap_report(request: Request, session_id: str) -> Dict[str, Any]:
         report = meeting_ledger.build_gap_report(session_id)
     except MeetingSessionNotFoundError as exc:
         raise _session_unknown(session_id, trace_id) from exc
-    except (MeetingLedgerPersistenceError, MeetingLedgerSchemaMissingError) as exc:
+    except Exception as exc:
+        # Raw driver errors (sqlite3/psycopg) propagate from the stores too;
+        # every failure on this surface must carry the named
+        # `meeting_ledger_failed` shape rather than an unnamed 500.
         raise _ledger_failed(exc, trace_id) from exc
     report["trace_id"] = trace_id
     return report

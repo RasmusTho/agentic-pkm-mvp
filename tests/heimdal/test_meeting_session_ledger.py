@@ -238,6 +238,18 @@ def test_seq_conflict_fails_closed(client: TestClient) -> None:
     assert conflict["reason"] == "sequence_content_conflict"
     assert conflict["attempted_content_sha256"] == attempted_sha
 
+    # A retry loop re-presenting the same conflicting bytes records ONE
+    # logical conflict, not one entry per resend.
+    retry = _admit_segment(
+        client,
+        session_id,
+        0,
+        b"different-bytes-entirely",
+        capture_id=conflicting.json()["capture_id"],
+    )
+    assert retry.status_code == 200
+    assert len(_gap_report(client, session_id).json()["needs_attention"]) == 1
+
 
 def test_late_segment_reconciliation(client: TestClient, _memory_runtime: Path) -> None:
     """Late admission into a closed session: ledger updates, event emits, no re-open."""

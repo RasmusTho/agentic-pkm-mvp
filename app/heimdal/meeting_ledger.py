@@ -51,10 +51,11 @@ import os
 import sqlite3
 import tempfile
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED
@@ -260,10 +261,18 @@ class _SqliteLedgerStore:
         with self._connect() as conn:
             conn.executescript(_SQLITE_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # Commit-on-success AND close: `sqlite3.Connection`'s own context
+        # manager only commits, and a connection left to the GC holds the file
+        # handle open for the rest of the process.
         conn = sqlite3.connect(self._path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def open_session(self, session: MeetingSession) -> tuple[MeetingSession, bool]:
         with self._connect() as conn:
@@ -375,7 +384,22 @@ class _SqliteLedgerStore:
         )
 
     def insert_conflict(self, conflict: SegmentConflict) -> None:
+        # Idempotent per logical conflict: a client retry loop re-presents the
+        # same (pair, attempted hash) on every resend, and each retry re-enters
+        # the conflict branch because its row never lands — without this guard
+        # one logical conflict would grow the needs-attention list unboundedly.
         with self._connect() as conn:
+            existing = conn.execute(
+                f"SELECT 1 FROM {_CONFLICT_TABLE} WHERE session_id = ? AND "
+                "session_seq = ? AND attempted_content_sha256 = ? LIMIT 1",
+                (
+                    conflict.session_id,
+                    conflict.session_seq,
+                    conflict.attempted_content_sha256,
+                ),
+            ).fetchone()
+            if existing is not None:
+                return
             conn.execute(
                 f"INSERT INTO {_CONFLICT_TABLE} "
                 "(session_id, session_seq, attempted_content_sha256, attempted_receipt_id, recorded_at) "
@@ -635,6 +659,18 @@ class _PgLedgerStore:
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
+            # Same idempotency-per-logical-conflict guard as the SQLite lane.
+            cur.execute(
+                f"SELECT 1 FROM {_CONFLICT_TABLE} WHERE session_id = %s AND "
+                "session_seq = %s AND attempted_content_sha256 = %s LIMIT 1",
+                (
+                    conflict.session_id,
+                    conflict.session_seq,
+                    conflict.attempted_content_sha256,
+                ),
+            )
+            if cur.fetchone() is not None:
+                return
             cur.execute(
                 f"INSERT INTO {_CONFLICT_TABLE} "
                 "(session_id, session_seq, attempted_content_sha256, attempted_receipt_id, recorded_at) "

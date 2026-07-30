@@ -522,8 +522,9 @@ def _ledger_session_segment(
     resend heals a ledger hole left by a crash between acknowledgement and
     ledger write. A no-op when the client sent no session fields.
 
-    A ledger persistence failure is raised (`MeetingLedgerPersistenceError`):
-    the receipt is already durable and remains valid, but the caller must not
+    A ledger persistence failure propagates (fail loud — whether it surfaces as
+    `MeetingLedgerPersistenceError` or a raw store/driver error): the receipt
+    is already durable and remains valid, but the caller must not
     report a fully recorded admission over a segment the ledger cannot answer
     for — the client's idempotent resend retries exactly this write. A recorded
     sequence *conflict* is not a failure: the admission acknowledged real
