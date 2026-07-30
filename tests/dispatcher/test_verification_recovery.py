@@ -112,6 +112,21 @@ class CrashAfterThreadStartLauncher(Launcher):
         raise RuntimeError("simulated response loss after thread start")
 
 
+class CrashBeforeThreadStartLauncher(Launcher):
+    def launch(
+        self,
+        context_pack,
+        *,
+        resume_session_id=None,
+        on_thread_started=None,
+        on_heartbeat=None,
+    ):
+        self.calls.append((context_pack, resume_session_id))
+        raise SystemExit(
+            "simulated host crash before thread-start persistence"
+        )
+
+
 class LostReconcileResponseOutbox(FakeVerificationOutbox):
     def reconcile(self, claim, *, observed_applied: bool, evidence):
         super().reconcile(
@@ -321,6 +336,60 @@ def test_unknown_model_effect_restart_resumes_same_session_after_reconciliation(
         == "01900000-0000-7000-8000-000000000099"
     )
     assert len(first_launcher.calls) == 1
+
+
+def test_pre_thread_start_crash_recovers_task_bound_model_effect() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    first_launcher = CrashBeforeThreadStartLauncher()
+    first = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        first_launcher,
+        holder="verification-host",
+    )
+
+    with pytest.raises(SystemExit, match="thread-start persistence"):
+        first.consume(request())
+
+    run_id = next(iter(api.tasks))
+    task = api.tasks[run_id]
+    assert task["state"] == "claimed"
+    assert task["payload"]["run"]["coordinator_session_id"] is None
+    assert task["payload"]["run"]["context_pack"] is None
+    operation_keys = list(outbox.states)
+    assert len(operation_keys) == 1
+    assert outbox.states[operation_keys[0]] == "claimed"
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+
+    restarted_launcher = VerifiedLauncher()
+    restarted = VerificationConsumer(
+        BuilderOpsVerificationLedger(
+            api, repository=REPO, effect_outbox=outbox
+        ),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        restarted_launcher,
+        holder="verification-host",
+    )
+    recovered = restarted.recover(run_id)
+
+    assert recovered.status == "running"
+    assert len(restarted_launcher.calls) == 1
+    assert restarted_launcher.calls[0][1] is None
+    assert list(outbox.states) == operation_keys
+    assert outbox.states[operation_keys[0]] == "succeeded"
+    effect_intents = [
+        values
+        for name, values in api.calls
+        if name == "transition_task"
+        and isinstance(values.get("outbox"), dict)
+    ]
+    assert len(effect_intents) == 1
 
 
 def test_recovery_reconciles_durable_model_attempt_without_relaunch() -> None:

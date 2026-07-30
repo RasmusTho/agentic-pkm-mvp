@@ -5002,11 +5002,34 @@ class VerificationConsumer:
 
     def recover(self, run_id: str) -> VerificationRun:
         run = self.ledger.get(run_id)
+        pending_reader = getattr(
+            self.ledger, "pending_effect_binding", None
+        )
+        pending = (
+            pending_reader(run_id)
+            if run is not None and callable(pending_reader)
+            else None
+        )
+        prestart_model_effect = bool(
+            isinstance(pending, Mapping)
+            and pending.get("effect_type")
+            == "model.verification_coordinator"
+            and isinstance(pending.get("operation_key"), str)
+            and run is not None
+            and pending.get("head_sha") == run.current_head_sha
+            and pending.get("outbox_status")
+            in {"pending", "claimed", "unknown"}
+        )
         if (
             run is None
             or run.status not in {"claimed", "running", "backoff"}
-            or not run.coordinator_session_id
-            or not run.context_pack
+            or (
+                (
+                    not run.coordinator_session_id
+                    or not run.context_pack
+                )
+                and not prestart_model_effect
+            )
         ):
             raise ValueError("verification run is not resumable")
         if self._lease_is_live(run):
@@ -5044,12 +5067,8 @@ class VerificationConsumer:
         claimed = self.ledger.claim(run.run_id, self.holder)
         recovered_operation_key: str | None = None
         recovered_attempt: Mapping[str, object] | None = None
-        pending_reader = getattr(
-            self.ledger, "pending_effect_binding", None
-        )
         recover_effect = getattr(self.ledger, "recover_effect", None)
-        if callable(pending_reader) and callable(recover_effect):
-            pending = pending_reader(run.run_id)
+        if callable(recover_effect):
             if (
                 isinstance(pending, Mapping)
                 and pending.get("effect_type")
