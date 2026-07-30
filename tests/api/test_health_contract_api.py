@@ -293,6 +293,58 @@ def test_stale_health_evaluation_cannot_overwrite_newer_transition(
     assert transition_history[0]["since_ts"] == since_ts
 
 
+def test_stale_healthy_evaluation_preserves_newer_dependency_failure(
+    monkeypatch,
+) -> None:
+    first_diagnostic_started = threading.Event()
+    release_first_diagnostic = threading.Event()
+    call_lock = threading.Lock()
+    dependency_checks = 0
+    contract = HealthContract(vault_root_fn=lambda: None)
+
+    def dependency_reason(*_args) -> str | None:
+        nonlocal dependency_checks
+        with call_lock:
+            dependency_checks += 1
+            current_call = dependency_checks
+        if current_call == 1:
+            return None
+        return "postgres unavailable"
+
+    def blocked_object_count() -> tuple[int, str | None]:
+        first_diagnostic_started.set()
+        assert release_first_diagnostic.wait(timeout=1)
+        return 0, None
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(contract, "_db_dependency_down_reason", dependency_reason)
+    monkeypatch.setattr(contract, "_count_objects", blocked_object_count)
+    monkeypatch.setattr(
+        "app.health_contract.diagnose_index",
+        lambda: {
+            "backend": "memory",
+            "expected_identity": None,
+            "stored_identity": None,
+            "issues": [],
+            "warnings": [],
+        },
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        older_healthy_evaluation = executor.submit(contract.evaluate)
+        assert first_diagnostic_started.wait(timeout=1)
+        newer_db_down_evaluation = executor.submit(contract.evaluate)
+        newer_snapshot = newer_db_down_evaluation.result(timeout=1)
+        release_first_diagnostic.set()
+        older_snapshot = older_healthy_evaluation.result(timeout=1)
+
+    assert newer_snapshot["state"] == "unhealthy"
+    assert newer_snapshot["writes_allowed"] is False
+    assert older_snapshot["state"] == "unhealthy"
+    assert older_snapshot["reason"] == newer_snapshot["reason"]
+    assert older_snapshot["writes_allowed"] is False
+
+
 def test_health_state_machine_lock_releases_after_exception(monkeypatch) -> None:
     machine = HealthStateMachine()
     thresholds = HealthThresholds.defaults()

@@ -293,7 +293,7 @@ class HealthStateMachine:
         *,
         now: datetime | None = None,
     ) -> tuple[str, str, str]:
-        state, reason, since_ts, _, _ = self.update_with_transition(
+        state, reason, since_ts, _, _, _ = self.update_with_transition(
             age,
             thresholds,
             now=now,
@@ -307,14 +307,14 @@ class HealthStateMachine:
         *,
         now: datetime | None = None,
         sample_sequence: int | None = None,
-    ) -> tuple[str, str, str, bool, list[dict[str, str]]]:
+    ) -> tuple[str, str, str, bool, list[dict[str, str]], bool]:
         with self._lock:
             if sample_sequence is None:
                 self._next_sample_sequence += 1
                 sample_sequence = self._next_sample_sequence
             if sample_sequence <= self._last_applied_sample_sequence:
                 state, reason, since_ts, transition_history = self._snapshot_unlocked()
-                return state, reason, since_ts, False, transition_history
+                return state, reason, since_ts, False, transition_history, False
             previous_state = self.state
             state, reason, since_ts = self._update_unlocked(
                 age,
@@ -328,6 +328,7 @@ class HealthStateMachine:
                 since_ts,
                 state != previous_state,
                 list(self.transition_history),
+                True,
             )
 
     def reserve_sample_sequence(self) -> int:
@@ -436,6 +437,7 @@ class HealthContract:
         self._dependency_incident_lock = Lock()
         self._dependency_incident_reported = False
         self._dependency_incident_sequence = 0
+        self._dependency_down_reason: str | None = None
 
     def evaluate(self) -> dict[str, Any]:
         return self._evaluate()
@@ -483,7 +485,7 @@ class HealthContract:
             )
         self._should_capture_dependency_incident(
             sample_sequence=sample_sequence,
-            is_down=False,
+            down_reason=None,
             current_state=self.state_machine.snapshot()[0],
         )
 
@@ -497,7 +499,7 @@ class HealthContract:
         object_count, store_count_error = self._count_objects()
         latest_ts = self._latest_timestamp(records)
         age = self._compute_age(latest_ts, now)
-        state, reason, since_ts, transitioned, transition_history = (
+        state, reason, since_ts, transitioned, transition_history, sample_applied = (
             self.state_machine.update_with_transition(
                 age,
                 settings_result.settings.thresholds,
@@ -505,6 +507,12 @@ class HealthContract:
                 sample_sequence=sample_sequence,
             )
         )
+        if not sample_applied:
+            dependency_override = self._dependency_override_after(sample_sequence)
+            if dependency_override is not None:
+                state = "unhealthy"
+                reason = dependency_override
+                since_ts = now.isoformat()
         catch_up_progress = self._catch_up_progress(
             outbox_count,
             age,
@@ -678,7 +686,7 @@ class HealthContract:
         )
         capture_dependency_incident = self._should_capture_dependency_incident(
             sample_sequence=sample_sequence,
-            is_down=True,
+            down_reason=reason,
             current_state=current_state,
         )
 
@@ -747,19 +755,26 @@ class HealthContract:
         self,
         *,
         sample_sequence: int,
-        is_down: bool,
+        down_reason: str | None,
         current_state: str,
     ) -> bool:
         with self._dependency_incident_lock:
             if sample_sequence <= self._dependency_incident_sequence:
                 return False
             self._dependency_incident_sequence = sample_sequence
-            if not is_down:
+            self._dependency_down_reason = down_reason
+            if down_reason is None:
                 self._dependency_incident_reported = False
                 return False
             capture = current_state != "unhealthy" and not self._dependency_incident_reported
             self._dependency_incident_reported = True
             return capture
+
+    def _dependency_override_after(self, sample_sequence: int) -> str | None:
+        with self._dependency_incident_lock:
+            if self._dependency_incident_sequence <= sample_sequence:
+                return None
+            return self._dependency_down_reason
 
     def _db_dependency_down_reason(
         self, resolution: StoreBackendResolution | None = None
