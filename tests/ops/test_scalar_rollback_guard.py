@@ -1132,7 +1132,7 @@ def test_scalar_deployment_begin_rejects_invalid_claimed_receipt_unchanged(
     runtime, registration, selected_root = _runtime(tmp_path)
     rollback_path = tmp_path / "rollback" / "app-local.md"
     _scalar_preflight(runtime, registration, selected_root, rollback_path)
-    _, inventory = establish_authority_window(runtime, tmp_path / "window")
+    proof, inventory = establish_authority_window(runtime, tmp_path / "window")
     assert (
         _roll_forward_scalar_rollback(
             channel="prod",
@@ -1146,6 +1146,62 @@ def test_scalar_deployment_begin_rejects_invalid_claimed_receipt_unchanged(
         )
         == 0
     )
+    public_path = runtime_module._deployment_lease_path(runtime.ledger.root)
+    root_path = runtime_module._legacy_deployment_lease_path(
+        runtime.ledger.root
+    )
+    fence_path = runtime_module._deployment_fence_path(
+        runtime.ledger.root,
+        "prod",
+    )
+    valid_authority = {
+        path: path.read_bytes() for path in (public_path, root_path)
+    }
+    for path in (public_path, root_path):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["scalar_roll_forward"] = None
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+    before_proved_null = {
+        path: path.read_bytes()
+        for path in (public_path, root_path, fence_path)
+    }
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="deployment receipt is invalid",
+    ):
+        _roll_forward_scalar_rollback(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=inventory,
+            quiescence_proof_path=(
+                runtime.ledger.root / "deployment-quiescence-proof.json"
+            ),
+        )
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="committed scalar roll-forward deployment receipt is invalid",
+    ):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=inventory,
+            backup_root=tmp_path / "rejected-null-backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+    assert {
+        path: path.read_bytes()
+        for path in (public_path, root_path, fence_path)
+    } == before_proved_null
+    for path, payload in valid_authority.items():
+        path.write_bytes(payload)
+        path.chmod(0o600)
+
     monkeypatch.setattr(
         runtime_module,
         "_controller_identity_is_live",
@@ -1160,14 +1216,6 @@ def test_scalar_deployment_begin_rejects_invalid_claimed_receipt_unchanged(
         controller_start_token="linux:" + "5" * 64,
     )
 
-    public_path = runtime_module._deployment_lease_path(runtime.ledger.root)
-    root_path = runtime_module._legacy_deployment_lease_path(
-        runtime.ledger.root
-    )
-    fence_path = runtime_module._deployment_fence_path(
-        runtime.ledger.root,
-        "prod",
-    )
     for path in (public_path, root_path):
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["scalar_roll_forward"]["merged_registry_revision"] += 1

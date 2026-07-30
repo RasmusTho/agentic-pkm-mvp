@@ -1016,6 +1016,7 @@ def _load_deployment_quiescence_proof(path: Path) -> DeploymentQuiescenceProof:
 _SCALAR_ROLL_FORWARD_RECEIPT_SCHEMA = (
     "agentic-pkm.scalar-roll-forward-deployment-receipt.v1"
 )
+_MISSING_SCALAR_ROLL_FORWARD_RECEIPT = object()
 
 
 def _scalar_roll_forward_receipt_matches_registry(
@@ -1109,7 +1110,7 @@ def _scalar_roll_forward_receipt_can_advance(
         or current_status not in {"prepared", "merged"}
     ):
         return False
-    if previous is None:
+    if previous is _MISSING_SCALAR_ROLL_FORWARD_RECEIPT:
         return current_status == "prepared"
     if not isinstance(previous, dict) or previous.get("status") != "prepared":
         return False
@@ -1173,7 +1174,7 @@ def _roll_forward_scalar_rollback(
                 },
             )
             receipt_value = lease.get("scalar_roll_forward")
-            if receipt_value is None:
+            if "scalar_roll_forward" not in lease:
                 session_path = runtime.registry.scalar_rollback_session_path
                 if not session_path.is_file():
                     raise RegistryError(
@@ -1645,11 +1646,19 @@ def _require_matching_compatibility_block(
                 and expected.get("owner_receipt_digest") is not None
             )
             or (
-                root_authority.get("phase") == expected.get("phase") == "proved"
-                and _scalar_roll_forward_receipt_can_advance(
-                    root_authority.get("scalar_roll_forward"),
-                    expected.get("scalar_roll_forward"),
-                )
+                    root_authority.get("phase") == expected.get("phase") == "proved"
+                    and _scalar_roll_forward_receipt_can_advance(
+                        (
+                            root_authority["scalar_roll_forward"]
+                            if "scalar_roll_forward" in root_authority
+                            else _MISSING_SCALAR_ROLL_FORWARD_RECEIPT
+                        ),
+                        (
+                            expected["scalar_roll_forward"]
+                            if "scalar_roll_forward" in expected
+                            else _MISSING_SCALAR_ROLL_FORWARD_RECEIPT
+                        ),
+                    )
             )
         )
     ):
@@ -2540,7 +2549,7 @@ def _finish_instance_state_deployment_locked(
     store = VaultRegistryStore(layout.registry_path)
     receipt_value = active_lease.get("scalar_roll_forward")
     scalar_roll_forward_merged = False
-    if receipt_value is not None:
+    if "scalar_roll_forward" in active_lease:
         if (
             not isinstance(receipt_value, dict)
             or receipt_value.get("status") != "merged"
