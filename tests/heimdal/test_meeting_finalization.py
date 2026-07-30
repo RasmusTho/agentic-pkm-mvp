@@ -341,9 +341,14 @@ def test_healed_asr_failure_supersedes_stale_artifacts(
         return {"text": Path(path_wav).read_bytes().decode(), "segments": [], "language": "en"}
 
     monkeypatch.setattr(transcribe_module, "run_asr", healthy)
+    # The healing resend ALONE re-finalizes (admission-path trigger fires on a
+    # replay into a closed, already-finalized session) — no re-close needed.
     assert _admit(client, session_id, 0, poison).status_code == 200
+    healed = meeting_finalization.latest_receipt(session_id)
+    assert healed is not None
+    assert healed["supersedes"] == first["finalization_state"]
     second = _close(client, session_id, 1).json()["finalization"]
-    assert second["status"] == "finalized"
+    assert second["status"] == "replayed"
     assert second["receipt"]["supersedes"] == first["finalization_state"]
     assert "poisoned segment." in (
         vault / second["receipt"]["artifact_refs"]["transcript"]

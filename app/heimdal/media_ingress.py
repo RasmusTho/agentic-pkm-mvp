@@ -569,11 +569,13 @@ def _ledger_session_segment(
             media_bytes=media_bytes,
             kind=kind,
         )
-    # CDLM-08: a late admission into a closed session triggers post-close
-    # reconciliation — re-finalization under the create-once re-derivation
-    # rule. Exception-isolated inside `maybe_refinalize`; the admission ack
-    # never depends on it.
-    if segment_outcome.late:
+    # CDLM-08: any admission touching a closed session — a genuinely late
+    # segment OR a replay-resend that just healed a failed derivation —
+    # triggers post-close reconciliation. `maybe_refinalize` is internally
+    # gated (closed session with an existing finalization only) and idempotent
+    # per finalization state, so an unchanged state is a cheap no-op; it is
+    # exception-isolated and the admission ack never depends on it.
+    if segment_outcome.late or segment_outcome.outcome == meeting_ledger.OUTCOME_REPLAY:
         meeting_finalization.maybe_refinalize(session_id, trace_id=trace_id)
 
 
