@@ -1,13 +1,13 @@
-State: Active filed specification under parent validation hub #4286. Children #4287–#4292 execute
-serially; only #4287 is initially `agent:ready`. No Phase 1 shipped behavior is claimed until parent
-acceptance. **Owner ruling 2026-07-30 (cost):** metered provider API keys are not provisioned; the
+State: Active validation specification under parent hub #4286. The serial MAS-01..06 implementation
+chain is delivered; MAS-06 was delivered by PR #4419 for child issue #4292. Parent acceptance remains
+separate. **Owner ruling 2026-07-30 (cost):** metered provider API keys are not provisioned; the
 subscription-backed session remains the sanctioned operational auth for host-local model inquiry
 (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
 model-inquiry path`). MAS-01..05 stay delivered as merged code; the parent live-proof receipt
 `provider_enabled_noninteractive_inquiry.v1` and the legacy-bridge retirement receipt are withdrawn
-as acceptance gates. This specification re-scopes MAS-06 as an authority-leak removal: the CKM
-Builder path fails closed while the declared metered credentials remain intentionally absent and
-never substitutes the sanctioned Model Inquiry subscription session.
+as acceptance gates. MAS-06 closed the authority leak through a Builder-owned, `fallback_forbidden`
+path that fails closed while the declared metered credentials remain intentionally absent and never
+substitutes the sanctioned Model Inquiry subscription session.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Owns the task decomposition, execution order, cross-task invariants, and acceptance path for the model access substrate. Subordinate to `docs/adr/ADR-0064-model-access-substrate.md` (the decision), `docs/adr/ADR-0063-shared-llm-contract-kernel.md` (contract seam and fallback vocabulary), ADR-0062 (Builder credential/process separation), `docs/LOCAL_SECRET_PROVISIONING/README.md` (host secret boundary and INV-HSP-1..4), and `docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md` (provider census and egress posture). Owner docs win on disagreement.
 Owner: Architecture spine / LLM boundary
@@ -20,22 +20,24 @@ Last reviewed: 2026-07-30
 
 ## Outcome
 
-Model-provider **credential and session resolution becomes part of the model abstraction** rather than
+Model-provider **credential and session resolution is part of the model abstraction** rather than
 infrastructure around it, and **declared API keys remain the default programmatic mechanism when a
 metered path is authorized**. Under the 2026-07-30 owner cost ruling, host-local Model Inquiry keeps
-its sanctioned subscription session while CKM moves off Product routing and fails closed when its
-declared metered credential is unavailable. The neutral seam enables later CI, scheduled-job, and
-verification-closer migrations; this Phase 1 does not deliver those consumers or claim active
-provider-backed CKM inference.
+its sanctioned subscription session while CKM is now off Product routing and fails closed when its
+declared metered credential is unavailable. CKM now uses the Builder-owned resolver, declares
+`fallback_forbidden`, and produces a visible zero-edge skip in that expected unavailable state. The
+neutral seam enables later CI, scheduled-job, and verification-closer migrations; this Phase 1 does
+not deliver those consumers. No active provider-backed CKM inference is claimed.
 
-Three mechanisms already exist unfinished, and this capability finishes them rather than designing a
+Three mechanisms existed unfinished, and this capability completed them rather than designing a
 fourth:
 
-- the **provider census** is fully specified as R4-1 and zero percent delivered;
-- the **credential contract** is delivered (HSP-01 #3845 / PR #3888, HSP-02 #3846 / PR #4008) for one
-  non-model secret and explicitly excludes model providers;
-- the **adapter protocol** `ModelTurnAdapter` is implemented and proven against two structurally
-  different transports, inside a BuilderOps-only module.
+- the **provider census** was specified as R4-1 and is delivered through MAS-01;
+- the existing **credential contract** baseline (HSP-01 #3845 / PR #3888, HSP-02 #3846 / PR #4008)
+  was extended to model-provider identifiers through MAS-03; and
+- the **adapter protocol** `ModelTurnAdapter`, already proven against two structurally different
+  transports in a BuilderOps-only module, was promoted to the neutral kernel and consumed through
+  the Builder-owned resolver.
 
 **Work classification (SBS operating model):** boundary work. `DEFINE_PROVIDER_CENSUS` and
 `EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS` touch Product/Runtime provider surfaces and the shared
@@ -87,19 +89,21 @@ Every task inherits these. A task specification that breaks one is wrong.
 9. **Mechanism in Git, values host-local.** ADR-0064 §7. Launcher, adapter, census, and contract are
    version-controlled; credential values, provider sessions, and host paths are not.
 
-## Interim CKM posture (ADR-0064 §8, amended)
+## Delivered CKM posture (MAS-06 / ADR-0064 §8)
 
-Through this migration window CKM semantic association still routes through Product policy. The
-current ADR-0064 ruling is explicit:
+MAS-06 is delivered by PR #4419 for issue #4292. CKM semantic association no longer routes through
+Product policy:
 
-- the order does **not** swap; Model Inquiry remains the first beneficiary and CKM migration remains
+- the order did **not** swap; Model Inquiry remained the first beneficiary and CKM migration remained
   migration step 5;
 - a builder agent may use the CKM projection as evidence when orchestrating work, but CKM itself
   remains projection-only and has no dispatch, ranking, gating, mutation, or decision authority;
-- the concrete integrity risk is a non-mock degraded Product route entering the CKM evidence graph
-  without visible degradation provenance;
-- `MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE` first makes the single transition import visible,
-  and `REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER` removes it after the substrate proof.
+- CKM submits provider-free intent through the Builder-owned resolver with `fallback_forbidden`;
+  Product policy, Model Inquiry's subscription session, mock identities, and degraded Builder routes
+  cannot execute the task;
+- the intentionally unprovisioned metered credential produces a visible zero-edge skip, so no active
+  provider-backed CKM inference is claimed; and
+- the Product imports and single MAS-02 transition exemption were removed together.
 
 #4169 belongs to the separate deterministic-delivery capability and is not part of this breakdown.
 #4131 consumes the accepted Phase 1 receipt for its design-agent adapter slice; it does not broaden
@@ -110,11 +114,11 @@ this substrate's authority.
 | Order | Task | ID | Prerequisite | Outcome |
 | --- | --- | --- | --- | --- |
 | 1 | [Define provider census](DEFINE_PROVIDER_CENSUS.md) | MAS-01 | — | `docs/settings/models/providers.yaml` is the single typed provider set, including capability declarations and per-runtime/channel tier resolution; static tests name drifted projections. |
-| 2 | [Make builder-to-product LLM dependency visible](MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md) | MAS-02 | MAS-01 | `importlinter` fails on `app.builderops -> app.components.llm` with exactly one named, dated exemption for `app/builderops/ckm/semantic.py`. |
+| 2 | [Make builder-to-product LLM dependency visible](MAKE_BUILDER_TO_PRODUCT_LLM_DEPENDENCY_VISIBLE.md) | MAS-02 | MAS-01 | Made `app.builderops -> app.components.llm` fail `importlinter` except for exactly one named, dated CKM semantic exemption; MAS-06 removed that exemption with the final Product import. |
 | 3 | [Extend credential contract to model providers](EXTEND_CREDENTIAL_CONTRACT_TO_MODEL_PROVIDERS.md) | MAS-03 | MAS-02 | Exact value-free model-key declarations join the existing contract; CI green-on-absent paths are removed. |
 | 4 | [Promote adapter contract to neutral kernel](PROMOTE_ADAPTER_CONTRACT_TO_NEUTRAL_KERNEL.md) | MAS-04 | MAS-03 | Neutral intent, resolution, capability, adapter/result, failure, fallback, and provenance contracts become importable by both runtimes. |
 | 5 | [Resolve model inquiry credentials through contract](RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md) | MAS-05 | MAS-04 | Delivers the Builder resolver, declared-credential mechanism, typed failure path, and repo-owned launcher lineage; the operational host remains on its sanctioned subscription session under the later owner ruling. |
-| 6 | [Replace CKM product routing with builder adapter](REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md) | MAS-06 | delivered MAS-05 mechanism + ADR-0064 owner-cost amendment | CKM semantic association consumes the Builder resolver; Product and subscription fallback cannot execute the task, absent metered credentials produce a visible zero-edge skip, and the transition exemption is removed. |
+| 6 | [Replace CKM product routing with builder adapter](REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md) | MAS-06 | delivered MAS-05 mechanism + ADR-0064 owner-cost amendment | Delivered by PR #4419 / issue #4292: CKM semantic association consumes the Builder resolver; Product and subscription fallback cannot execute the task, absent metered credentials produce a visible zero-edge skip, and the transition exemption is removed. |
 
 Flat order: **MAS-01 → MAS-02 → MAS-03 → MAS-04 → MAS-05 → MAS-06.**
 
@@ -150,10 +154,10 @@ These hold *across* task boundaries. Each task names the ones it must preserve.
 - **INV-MAS-6 — additive until the first beneficiary.** MAS-01 through MAS-04 leave observable runtime
   behaviour unchanged. Any behaviour change discovered in those four is a defect in the task, not a
   licensed consequence.
-- **INV-MAS-7 — the interim leak is visible, single, and time-boxed.** At most one
-  `app.builderops -> app.components.llm` exemption exists at any time; it carries a name and a date;
-  it is removed by MAS-06. A second exemption may not be added, and the contract may not be widened to
-  make an import pass.
+- **INV-MAS-7 — the interim leak was visible, single, and time-boxed.** MAS-02 introduced exactly one
+  named, dated `app.builderops -> app.components.llm` exemption; MAS-06 removed it with the final
+  Product import. A second exemption may not be added, and the contract may not be widened to make an
+  import pass.
 
 ### Partial-failure paths between tasks
 
@@ -176,12 +180,11 @@ invariants.
   Removing it earlier reddens main; removing it later leaves a contract that passes for the wrong
   reason. **Invariant:** exemption removal and import removal are atomic, and the contract is never
   made to pass by widening `ignore_imports` or moving a module out of `source_modules`.
-- **Seam D — the resolver mechanism is delivered while CKM remains on Product routing
-  (MAS-05 → MAS-06).** The withdrawn provider-enabled receipt is no longer an entry gate.
-  **Invariant:** MAS-06 may use the delivered neutral resolver/adapter mechanism, but it must treat the
-  intentionally absent metered credential as unavailable, write zero inferred edges, and never reuse
-  Model Inquiry's subscription session. The CKM semantic transition exemption is removed atomically
-  with the production Product import.
+- **Seam D — resolved by MAS-06 (MAS-05 → MAS-06, PR #4419 / issue #4292).** The withdrawn
+  provider-enabled receipt was not an entry gate. CKM now uses the delivered neutral
+  resolver/adapter mechanism, treats the intentionally absent metered credential as unavailable,
+  writes zero inferred edges, and never reuses Model Inquiry's subscription session. The CKM
+  semantic transition exemption was removed atomically with the production Product import.
 - **Seam E — census declared, site not yet migrated (MAS-01 → everything).** A census projection that
   disagrees with a live site must fail, not be quietly widened. **Invariant:** the equality test's only
   escape hatch is a declared divergence entry carrying a linked issue number and a date; an entry

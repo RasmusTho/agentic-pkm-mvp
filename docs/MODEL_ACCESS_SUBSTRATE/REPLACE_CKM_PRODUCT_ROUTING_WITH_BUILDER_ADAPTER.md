@@ -9,63 +9,63 @@ depends_on: [RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md]
 can_parallelize_with: []
 ---
 
-State: Re-scoped task specification (child issue #4292, filed 2026-07-29; owner-cost amendment
-applied 2026-07-30). Closes the interim window opened by MAS-02. It follows the delivered MAS-05
-mechanism and launcher-lineage repairs; the order does not swap.
+State: Implemented. Delivered by PR #4419 (child issue #4292, 2026-07-30) under the owner-cost
+amendment. It closed the interim window opened by MAS-02 without provisioning metered credentials or
+claiming active provider-backed CKM inference. It follows the delivered MAS-05 mechanism and
+launcher-lineage repairs; the order did not swap.
 
 # Replace CKM Product Routing With Builder Adapter
 
 ## Purpose
 
-CKM's only model path today resolves through the **Product** router.
-`app/builderops/ckm/semantic.py` constructs
-`get_chat_client(LLMTaskIntent(task_kind="classify", ...))` and rejects a `mock` route only *after*
-Product routing may already have constructed policy-defined fallback candidates, including the `mock`
-candidate the router appends. That is the authority leakage ADR-0063 rejected its Option A to prevent,
-and `importlinter.ini` did not catch it because `app.builderops` and `app.components` sit on the same
-side of the only existing contract.
+Before MAS-06, CKM's only model path resolved through the **Product** router:
+`app/builderops/ckm/semantic.py` constructed
+`get_chat_client(LLMTaskIntent(task_kind="classify", ...))` and rejected a `mock` route only *after*
+Product routing could already have constructed policy-defined fallback candidates. That was the
+authority leakage ADR-0063 rejected its Option A to prevent. PR #4419 replaced that path with the
+Builder-owned resolver, declared `fallback_forbidden`, and removed the transition exemption.
 
-ADR-0064 §8 **amends ADR-0063's sequencing**: CKM migrates after the Model Inquiry mechanism,
-requiring credential resolution and the neutral intent/resolver/adapter contracts — not a complete
-Builder Capability Runtime or a live metered-provider receipt.
+ADR-0064 §8 **amended ADR-0063's sequencing** so CKM followed the Model Inquiry mechanism and
+required credential resolution plus the neutral intent/resolver/adapter contracts — not a complete
+Builder Capability Runtime or a live metered-provider receipt. MAS-06 followed that sequence.
 
 ## Position in the order
 
-The amended ADR-0064 §8 keeps Model Inquiry first and CKM migration at step 5. The 2026-07-30 owner
-cost ruling withdraws `model_access_substrate.provider_enabled_noninteractive_inquiry.v1` and bridge
-retirement as gates. MAS-06's replacement entry gate is:
+The amended ADR-0064 §8 kept Model Inquiry first and CKM migration at step 5. The 2026-07-30 owner
+cost ruling withdrew `model_access_substrate.provider_enabled_noninteractive_inquiry.v1` and bridge
+retirement as gates. MAS-06 proceeded under this replacement entry gate:
 
-1. the MAS-05 neutral resolver, declared-credential failure path, and launcher-lineage repairs are
+1. the MAS-05 neutral resolver, declared-credential failure path, and launcher-lineage repairs had
    merged; and
-2. the ADR-0064 cost amendment is merged and the live Issue contract states that CKM must not reuse
+2. the ADR-0064 cost amendment had merged and the live Issue contract stated that CKM must not reuse
    Model Inquiry's sanctioned subscription session.
 
-Those conditions are repo-verifiable and satisfied once this re-scope is merged. MAS-06 may then
-remove the Product authority leak, but with intentionally absent metered credentials its production
-association result is a visible zero-edge skip. It does not claim active provider-backed inference.
-A builder agent may read CKM evidence during the window; CKM itself remains projection-only.
+Both conditions were satisfied before implementation. PR #4419 then removed the Product authority
+leak. With intentionally absent metered credentials, the production association result is a visible
+zero-edge skip; no active provider-backed CKM inference is claimed. A builder agent may read CKM
+evidence, but CKM itself remains projection-only.
 
-## What this task does
+## What this task delivered
 
-1. Add a Builder-side associator implementing the existing `SemanticAssociator` protocol
+1. Added a Builder-side associator implementing the existing `SemanticAssociator` protocol
    (`app/builderops/ckm/semantic.py:104`) on top of the MAS-05 Builder resolver and kernel
    `ModelTurnAdapter`. It submits provider-free `ModelAccessIntent`, declares
    `fallback_forbidden`, and receives provider/model/capability/credential provenance only as a
    resolved result. The production host's intentionally absent metered credential is an expected
    unavailable state: it writes zero inferred edges and never selects Product policy or Model
    Inquiry's subscription session.
-2. Remove `FabricSemanticAssociator` and both Product imports from `app/builderops/ckm/semantic.py`:
+2. Removed `FabricSemanticAssociator` and both Product imports from `app/builderops/ckm/semantic.py`:
    `app.components.llm.fabric` (`LLMTaskIntent`, `get_chat_client`) and `app.components.llm.constrained`
    (`ConstrainedCompletionError`, `register_schema`, `validate_payload`). The schema-reference and
    validation contract promoted by MAS-04 replaces the second import; `SEMANTIC_SCHEMA_REF` and the
    `builderops.ckm.semantic-association.v1` schema keep their current identity.
-3. Remove the interim exemption from `importlinter.ini` **in the same change** that removes the last
+3. Removed the interim exemption from `importlinter.ini` **in the same change** that removed the last
    import, so the contract is never made to pass by widening and never fails on main in between.
-4. Preserve every existing CKM semantic behaviour: candidate-only inferred edges, the confidence floor,
+4. Preserved every existing CKM semantic behaviour: candidate-only inferred edges, the confidence floor,
    confirmation-receipt integrity across rebuild, skip-on-unavailable, and the structured-output failure
    mapping. A degraded result is skipped with a visible reason and writes zero edges. The existing
    tests in `tests/builderops/ckm/test_semantic.py` are the regression contract.
-5. Update `docs/CAPABILITY_KNOWLEDGE_MODEL/SEMANTIC_EVIDENCE_ASSOCIATION.md` so it describes a
+5. Updated `docs/CAPABILITY_KNOWLEDGE_MODEL/SEMANTIC_EVIDENCE_ASSOCIATION.md` so it describes a
    Builder-side model path rather than the routed Product chat fabric.
 
 ## Concretely
@@ -91,15 +91,13 @@ $ builderops ckm associate --json
 
 ## Why this matters
 
-The owner's framing makes CKM the heaviest model caller in the Builder System. While it routes through
-Product policy, every CKM inference is governed by vault-compiled Product settings, Product fallback
-candidates, and Product registry authority — none of which the Builder System owns or should. The
-`mock` rejection in the current code is a check after the fact: the route has already been selected by
-the time it runs, and a Product policy edit could change what CKM executes without any Builder-side
-change.
+The owner's framing makes CKM the heaviest model caller in the Builder System. Before MAS-06, every
+CKM inference was governed by vault-compiled Product settings, Product fallback candidates, and
+Product registry authority — none of which the Builder System owns or should. The old `mock`
+rejection was a check after route selection, so a Product policy edit could change what CKM executed
+without any Builder-side change.
 
-This is also what ends the interim window. Every day the exemption exists is a day the accepted risk is
-live; this task is the only thing that removes it.
+MAS-06 ended that interim window by removing the Product imports and exemption together.
 
 ## Acceptance criteria
 
@@ -163,7 +161,8 @@ the production import and exemption disappear together.
 CKM dispatch, mutation, ranking, gating, prioritization, or decision authority. Active
 provider-backed CKM inference, provisioning metered credentials, or reusing Model Inquiry's
 subscription session. Changing the CKM object model, maturity engine, projections, or any other CKM
-surface. Deterministic linkers, migration steps 6 and 7, and Product routing remain unchanged.
+surface. Deterministic linkers, migration steps 6 and 7, and Product Runtime routing behaviour remain
+unchanged.
 
 ## Related docs
 
@@ -177,15 +176,11 @@ surface. Deterministic linkers, migration steps 6 and 7, and Product routing rem
 
 ## Related GitHub issues
 
-One issue. Title shape
-`[Model Access Substrate] replace-ckm-product-routing-with-builder-adapter: end the interim authority leak`.
-Its `Context` must state that amended ADR-0064 keeps this after the delivered MAS-05 mechanism and
-the 2026-07-30 owner-cost ruling, that the task removes the MAS-02 exemption, that intentionally
-absent metered credentials produce a visible zero-edge skip, and that CKM remains projection-only.
-After this re-scope is merged, the old provider receipt is no longer a blocker and the live Issue may
-be made `agent:ready` through strict readiness validation.
+Issue #4292 governed PR #4419. The delivered implementation follows the amended ADR-0064 ordering,
+removes the MAS-02 exemption, produces a visible zero-edge skip while metered credentials remain
+intentionally absent, and keeps CKM projection-only.
 
-TCD capability recommendation for the implementing agent: **Opus / high reasoning** — authority-boundary
-work with a negative-proof requirement and a thirteen-test regression contract; the defect mode is a
-silent Product route surviving the refactor (`AGENTS.md :: Total Cost of Development`). Non-binding;
-`issue-to-code` re-derives it.
+Historical TCD capability recommendation for the implementing agent: **Opus / high reasoning** —
+authority-boundary work with a negative-proof requirement and a thirteen-test regression contract;
+the defect mode was a silent Product route surviving the refactor (`AGENTS.md :: Total Cost of
+Development`).
