@@ -183,6 +183,13 @@ HEIMDAL_CAPTURE_MEDIA_ADMITTED = "heimdal.capture.media.admitted"
 # consumers recompute completeness from the ledger.
 HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED = "heimdal.meeting.segment.late_admitted"
 
+# Emitted by the user-note write endpoint (CDLM-07, #4387) after the note
+# block content is durably written and before the revision row that is the
+# acknowledgement — the CDLM-01 outbox-before-ack ordering family. Audit
+# lineage only: not dispatched, no topic-schema registration; the durable
+# note-revision row is the ack, this event is the record of how it happened.
+HEIMDAL_MEETING_USER_NOTE_WRITTEN = "heimdal.meeting.user_note.written"
+
 __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
@@ -274,5 +281,6 @@ __all__ = [
     "HEIMDAL_OBSERVATION_CORRECTED",
     "HEIMDAL_CAPTURE_MEDIA_ADMITTED",
     "HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED",
+    "HEIMDAL_MEETING_USER_NOTE_WRITTEN",
     "EPISODE_CLOSED",
 ]

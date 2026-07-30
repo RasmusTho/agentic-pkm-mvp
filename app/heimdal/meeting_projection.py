@@ -60,11 +60,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from app.heimdal import meeting_ledger
+from app.heimdal import meeting_blocks, meeting_ledger
 from app.heimdal._backend import resolve_heimdal_backend
 from app.media import transcribe as transcribe_module
 
 logger = logging.getLogger(__name__)
+
+_ANALYSIS_WRITER = meeting_blocks.WriterIdentity(
+    kind=meeting_blocks.WRITER_DERIVED,
+    engine=str("heimdal-meeting-analysis"),
+    role="analysis",
+)
+_ASR_WRITER = meeting_blocks.WriterIdentity(
+    kind=meeting_blocks.WRITER_DERIVED,
+    engine="app.media.transcribe.run_asr",
+    role="asr",
+)
 
 _DERIVATION_TABLE = "heimdal_meeting_asr_derivation"
 _REVISION_TABLE = "heimdal_meeting_analysis_revision"
@@ -935,6 +946,21 @@ def _derive_segment_inner(
         if stored is not None:
             derivation = stored
 
+    if derivation.status == DERIVATION_OK:
+        # Register the transcript block through the shared ownership guard
+        # (CDLM-07): the ASR derivation is the only writer of
+        # transcript_segment blocks, and even it goes through the guard seam.
+        meeting_blocks.apply_block_write(
+            session_id=session_id,
+            writer=_ASR_WRITER,
+            action=meeting_blocks.ACTION_CREATE,
+            block_id=f"{session_id}:transcript:{session_seq}",
+            block_type=meeting_blocks.TYPE_TRANSCRIPT_SEGMENT,
+            content=derivation.text,
+            position=session_seq,
+            provenance_extra={"content_sha256": content_sha256},
+        )
+
     try:
         _rederive_analysis(session_id)
     except Exception as exc:
@@ -1026,6 +1052,7 @@ def _rederive_analysis(session_id: str) -> Optional[AnalysisRevision]:
             derived_at=_utcnow(),
         )
         if store.insert_revision(revision):
+            _register_analysis_blocks(session_id, revision)
             return revision
     raise MeetingProjectionPersistenceError(
         f"analysis revision for session {session_id!r} could not be persisted after retries"
@@ -1035,6 +1062,50 @@ def _rederive_analysis(session_id: str) -> Optional[AnalysisRevision]:
 # ---------------------------------------------------------------------------
 # Projection read (side-effect-free)
 # ---------------------------------------------------------------------------
+
+
+def _register_analysis_blocks(session_id: str, revision: AnalysisRevision) -> None:
+    """Mirror the analysis revision into the block registry via the guard.
+
+    One stable block per analysis block type (`{session}:analysis:{type}`),
+    revised in place under the analysis writer's own provenance — the guard is
+    what makes it impossible for this path to land on a user_note target
+    (INV-CDLM-6): a wrong id refuses instead of overwriting.
+    """
+    for index, block in enumerate(revision.blocks):
+        block_id = f"{session_id}:analysis:{block['block_type']}"
+        content = json.dumps(block["content"], sort_keys=True)
+        extra = {"template_id": revision.template_id, "analysis_revision": revision.revision}
+        existing = meeting_blocks.get_block(block_id)
+        if existing is None:
+            outcome = meeting_blocks.apply_block_write(
+                session_id=session_id,
+                writer=_ANALYSIS_WRITER,
+                action=meeting_blocks.ACTION_CREATE,
+                block_id=block_id,
+                block_type=meeting_blocks.TYPE_DERIVED_PROJECTION,
+                content=content,
+                position=1_000_000 + index,
+                provenance_extra=extra,
+            )
+        elif existing.content != content:
+            outcome = meeting_blocks.apply_block_write(
+                session_id=session_id,
+                writer=_ANALYSIS_WRITER,
+                action=meeting_blocks.ACTION_REVISE,
+                block_id=block_id,
+                content=content,
+                provenance_extra=extra,
+            )
+        else:
+            continue
+        if not outcome.allowed:
+            logger.warning(
+                "analysis block registration refused session=%s block=%s: %s",
+                session_id,
+                block_id,
+                outcome.reason,
+            )
 
 
 def build_projection(session_id: str) -> Dict[str, Any]:
@@ -1146,6 +1217,21 @@ def build_projection(session_id: str) -> Dict[str, Any]:
     session = meeting_ledger.get_meeting_session(session_id)
     template = resolve_template(session.template_selection if session else None)
 
+    needs_attention.extend(meeting_blocks.refusals_for_session(session_id))
+    page_blocks = [
+        {
+            "block_id": blk.block_id,
+            "owner": blk.owner,
+            "type": blk.block_type,
+            "position": blk.position,
+            "revision": blk.revision,
+            "retired": blk.retired,
+            "content": blk.content,
+            "provenance": blk.provenance,
+        }
+        for blk in meeting_blocks.blocks_for_session(session_id)
+    ]
+
     return {
         "session_id": session_id,
         "closed": report["closed"],
@@ -1176,6 +1262,7 @@ def build_projection(session_id: str) -> Dict[str, Any]:
             for rev in revisions
         ],
         "needs_attention": needs_attention,
+        "page_blocks": page_blocks,
     }
 
 

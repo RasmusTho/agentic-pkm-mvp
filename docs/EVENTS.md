@@ -944,6 +944,27 @@ Payload fields (in addition to the envelope):
   count, recomputed at emission time.
 - `missing` (`array[integer]`): the sequence numbers still missing at emission time.
 
+### `heimdal.meeting.user_note.written`
+
+Emitted by `POST /api/heimdal/meeting/{session_id}/user-note` (CDLM-07, #4387)
+after the `user_note` block content is durably written and **before** the note
+revision row that is the acknowledgement — the same outbox-before-ack ordering
+family as `heimdal.capture.media.admitted`. Not a dispatched command: no
+`outbox_worker._dispatch_topic` branch and no registered topic schema. The
+durable `(note_block_id, revision)` row is the ack; this event is the auditable
+record of the write. No person attribution beyond the structural
+`editor_identity` provenance string (client-contract F2 owns cryptographic
+identity later; stated honestly).
+
+Payload fields (in addition to the envelope):
+- `session_id` (`string`): the meeting session the note belongs to.
+- `note_block_id` (`string`): the client-minted note block id.
+- `revision` (`integer`): the client-monotonic note revision.
+- `editor_identity` (`string`): the structural editor identity that passed the
+  ownership guard.
+- `content_sha256` (`string`): hash of the written note text (the bytes stay in
+  the block registry, never duplicated into event logs).
+
 ### `panel.intent.created`
 
 Emitted when an AI panel is parsed for a note and actions are mapped.

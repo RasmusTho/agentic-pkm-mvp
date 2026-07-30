@@ -151,6 +151,11 @@ ALLOW_FILES = (
     # tables (heimdal_meeting_asr_derivation/_analysis_revision) with a
     # self-contained dual sqlite/pg backend and fail-loud schema preflight.
     'app/heimdal/meeting_projection.py',
+    # Meeting block-ownership registry (CDLM-07, #4387). Same bounded pattern:
+    # dedicated migration-owned tables (heimdal_meeting_block/_user_note_revision/
+    # _block_refusal) with a self-contained dual sqlite/pg backend and fail-loud
+    # schema preflight.
+    'app/heimdal/meeting_blocks.py',
     # YouTube Source Sync durable source registry (YSS-01, #3916). Same bounded
     # pattern as app/heimdal/cursor_store.py above: a dedicated table
     # (acquisition_source_registry) with a self-contained dual memory/pg

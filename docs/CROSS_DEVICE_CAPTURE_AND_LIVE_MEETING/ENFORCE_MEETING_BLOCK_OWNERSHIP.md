@@ -11,6 +11,18 @@ can_parallelize_with: []
 
 # Enforce Meeting Block Ownership
 
+State: Delivered by hub issue #4387 (2026-07-30). The block model, the shared fail-closed
+ownership guard, and the durable block registry are implemented in `app/heimdal/meeting_blocks.py`
+(`apply_block_write` is the one seam); the user-note endpoint
+`POST /api/heimdal/meeting/{session_id}/user-note` is in `app/api/routes/heimdal_meeting.py` with
+CDLM-01 ack ordering and the `heimdal.meeting.user_note.written` event (`docs/EVENTS.md`); the
+CDLM-06 derivation and analysis writers register their transcript/analysis blocks through the same
+guard; refusals and the page-block composition surface on the projection read. The six acceptance
+criteria below are proven by `tests/heimdal/test_meeting_block_ownership.py`. Tables ship in
+migration `c9e4a1b6d3f5`, whose pg trigger additionally rejects any user_note content change that
+does not carry user-editor provenance — defense in depth under the guard. Editor identity remains
+structural (client-contract F2 owns cryptographic identity later), stated honestly.
+
 ## Purpose
 
 Make "the AI can never touch your notes" a mechanical property of the hub, not a UI promise. The
