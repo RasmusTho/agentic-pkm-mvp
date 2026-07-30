@@ -53,7 +53,13 @@ from typing import Any, Dict, List, Optional
 
 from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_CAPTURE_MEDIA_ADMITTED
-from app.heimdal import capture_adapter, media_receipts, meeting_ledger, raw_store
+from app.heimdal import (
+    capture_adapter,
+    media_receipts,
+    meeting_ledger,
+    meeting_projection,
+    raw_store,
+)
 from app.heimdal.capture_adapter import SensorIdentity
 from app.heimdal.consent_ledger import admit_raw_evidence
 from app.heimdal.media_receipts import MediaReceipt
@@ -403,6 +409,8 @@ def admit_media_bytes(
             session_seq=session_seq,
             receipt=existing,
             trace_id=trace_id,
+            media_bytes=media_bytes,
+            kind=kind,
         )
         return MediaAdmission(receipt=existing, idempotent_replay=True)
 
@@ -502,6 +510,8 @@ def admit_media_bytes(
         session_seq=session_seq,
         receipt=receipt,
         trace_id=trace_id,
+        media_bytes=media_bytes,
+        kind=kind,
     )
     # A concurrent request may have acknowledged this identity between the
     # short-circuit above and the seam's own guard; report that truthfully rather
@@ -515,6 +525,8 @@ def _ledger_session_segment(
     session_seq: Optional[int],
     receipt: MediaReceipt,
     trace_id: str,
+    media_bytes: Optional[bytes] = None,
+    kind: str = "",
 ) -> None:
     """Ledger one admission's `(session_id, session_seq)` (CDLM-02 hook).
 
@@ -541,6 +553,21 @@ def _ledger_session_segment(
         raw_ref=receipt.raw_ref,
         trace_id=trace_id,
     )
+    # CDLM-06: the recorded (or replayed) segment triggers per-segment ASR
+    # derivation and analysis re-derivation. Runs on both branches so a resend
+    # completes a derivation an earlier crash left unfinished; an
+    # already-derived content hash short-circuits on the durable derivation
+    # row, so replays and restarts re-derive nothing. Never raises into the
+    # admission path — a derivation problem is per-segment needs-attention
+    # projection state, not an admission failure.
+    if media_bytes is not None:
+        meeting_projection.derive_segment(
+            session_id=session_id,
+            session_seq=session_seq,
+            content_sha256=receipt.content_sha256,
+            media_bytes=media_bytes,
+            kind=kind,
+        )
 
 
 def record_watched_folder_admission(

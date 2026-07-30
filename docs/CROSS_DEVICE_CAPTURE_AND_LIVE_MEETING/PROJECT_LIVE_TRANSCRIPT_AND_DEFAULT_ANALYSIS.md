@@ -11,6 +11,16 @@ can_parallelize_with: [CAPTURE_PHOTOS_DOCUMENTS_AND_VIDEO.md, SHOW_DURABLE_TRANS
 
 # Project Live Transcript And Default Analysis
 
+State: Delivered by hub issue #4386 (2026-07-30). `GET /api/heimdal/meeting/{session_id}/projection`
+is implemented in `app/api/routes/heimdal_meeting.py` over `app/heimdal/meeting_projection.py`, with
+per-segment ASR triggered from the production admission path (`app/heimdal/media_ingress.py`)
+through the shared engine seam `app.media.transcribe.run_asr`, and the six acceptance criteria below
+proven by `tests/heimdal/test_meeting_projection.py`. Projection tables ship in migration
+`b8d3f0a5c2e4` (Postgres/PDM) with a file-backed SQLite dev/test lane. The analysis engine in this
+slice is deterministic (`heimdal-meeting-analysis v1`, no LLM), so convergence is structural;
+`generic-default@1` is the only shipped template. The `HEIMDAL_RAW_STORE_KEY` provisioning gap
+(KD-4384-RAWKEY, #4422) bounds live end-to-end derivation the same way it bounds admission.
+
 ## Purpose
 
 Turn durably admitted meeting segments into what the iPad shows live: a running transcript and a
