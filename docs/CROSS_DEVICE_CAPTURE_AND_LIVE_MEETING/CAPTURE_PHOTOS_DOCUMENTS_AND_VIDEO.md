@@ -69,8 +69,7 @@ modality a sidecar field, one outbox proof covers them all.
 
 ## How to Verify (Pre-Merge)
 
-- bifrost CI runs `MultiModalCaptureTests` on the iPhone destination; iPad destination builds.
-  **Execution gate G-CI:** bifrost#52 fixed, or local `xcodebuild test` output attached.
+- bifrost CI runs `MultiModalCaptureTests` on both the iPhone and iPad destinations.
 - `swiftlint --strict` clean.
 
 ## Out of Scope

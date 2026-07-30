@@ -76,8 +76,7 @@ unverifiable in daily use.
 
 ## How to Verify (Pre-Merge)
 
-- bifrost CI: `TransferQueueSurfaceTests` + the iPad-destination UI journey. **Execution gate
-  G-CI:** bifrost#52 fixed, or local `xcodebuild test` output attached.
+- bifrost CI: `TransferQueueSurfaceTests` + the iPad-destination UI journey.
 - `swiftlint --strict` clean.
 
 ## Out of Scope

@@ -84,9 +84,7 @@ on device.
 
 ## How to Verify (Pre-Merge)
 
-- bifrost CI runs the named XCTest targets on the iPhone destination. **Execution gate G-CI:**
-  bifrost#52 (CI runs the wrong scheme and masks xcodebuild failures) must be fixed first, or the
-  PR attaches local `xcodebuild test -only-testing:YggdrasilTests/TransferOutboxTests` output.
+- bifrost CI runs the named XCTest targets on both the iPhone and iPad destinations.
 - `swiftlint --strict` clean per bifrost conventions.
 
 ## Out of Scope
