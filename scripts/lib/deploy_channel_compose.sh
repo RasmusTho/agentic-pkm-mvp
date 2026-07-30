@@ -148,18 +148,40 @@ _deploy_channel_needs_dev_capture_secret() {
 # be prepared.
 _deploy_channel_api_ingress_bootstrap_available() {
   local channel="${1:?channel required}"
-  if "${PYTHON:-python3}" - "${channel}" <<'PY' 2>/dev/null
+  local root="${2:?repo root required}"
+  # Runs from ${root} with ${root} on PYTHONPATH: the contract path is
+  # repo-relative and the app package must be THIS deploy's, never whatever
+  # checkout the caller's shell happens to sit in.
+  # The precheck also proves the Keychain item is actually resolvable
+  # (value discarded, never printed): the bootstrap mechanism is fail-closed
+  # for kind raw-store-key, so wrapping compose while the item is missing
+  # would fail the whole deploy — the opposite of this slice's
+  # degrade-visibly posture. Missing item ⇒ skip the layer loudly; the api
+  # startup preflight then reports the ingress lanes unavailable.
+  if (
+    cd "${root}" \
+      && PYTHONPATH="${root}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON:-python3}" - "${channel}" <<'PY' 2>/dev/null
 import sys
+
+from app.ops.host_secret_bootstrap import _security_keychain_lookup
 from app.ops.host_secret_contract import load_host_secret_contract
 
-load_host_secret_contract().require_declared(
+contract = load_host_secret_contract()
+contract.require_declared(
     channel=sys.argv[1], consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
 )
+account = contract.keychain_account(
+    channel=sys.argv[1], consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+)
+value = _security_keychain_lookup(contract.keychain_service, account)
+if not value:
+    raise SystemExit(1)
 PY
+  )
   then
     return 0
   fi
-  echo "deploy: api ingress secret layer unavailable (contract missing or heimdal-api-ingress consumer undeclared); continuing without it — ingress lanes will report unavailable" >&2
+  echo "deploy: api ingress secret layer unavailable (contract missing, heimdal-api-ingress consumer undeclared, or Keychain item unresolvable); continuing without it — the api startup preflight will report the ingress lanes unavailable" >&2
   return 1
 }
 
@@ -316,19 +338,26 @@ deploy_channel_compose() {
     fi
 
     if _deploy_channel_needs_api_ingress_secret "${channel}" "$@" \
-        && _deploy_channel_api_ingress_bootstrap_available "${channel}"; then
+        && _deploy_channel_api_ingress_bootstrap_available "${channel}" "${root}"; then
       # Outer wrap: materialize the api consumer's secret env file, then
       # re-export its handle under HOST_SECRET_RUNTIME_ENV_FILE_API before the
       # (possibly nested) capture-watch bootstrap runs — that inner bootstrap
       # scrubs the shared HOST_SECRET_RUNTIME_ENV_FILE name from the child
       # environment, and the renamed handle is what the api service's
-      # env_file layer reads. Never echoes or logs a secret value; the file
-      # itself is bootstrap-owned and removed after Compose returns.
+      # env_file layer reads. The precheck above already proved the contract
+      # AND the Keychain item resolve, so a bootstrap failure here is a real
+      # fault, not the unprovisioned-key case (which skips the wrap). Runs
+      # from ${root} with ${root} on PYTHONPATH so the contract and app
+      # package are this deploy's; every compose path in the command is
+      # absolute or compose-file-relative, so the cd is inert for Compose.
+      # Never echoes or logs a secret value; the shim exports only a file
+      # path, and the file is bootstrap-owned and removed after Compose
+      # returns.
       compose_command=(
+        sh -c 'cd "$1" && export PYTHONPATH="$1${PYTHONPATH:+:${PYTHONPATH}}" && shift && exec "$@"' _ "${root}"
         "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
         --channel "${channel}"
         --consumer heimdal-api-ingress
-        --run-on-credential-unavailable
         -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; exec "$@"' _
         "${compose_command[@]}"
       )

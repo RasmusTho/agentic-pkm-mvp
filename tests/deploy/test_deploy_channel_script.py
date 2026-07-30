@@ -990,8 +990,14 @@ def test_api_service_receives_raw_store_key() -> None:
     # its env-file handle under the api-specific name before any nested
     # capture-watch bootstrap can scrub the shared one.
     assert "_deploy_channel_needs_api_ingress_secret" in lib
+    assert "_deploy_channel_api_ingress_bootstrap_available" in lib
     assert "--consumer heimdal-api-ingress" in lib
-    assert "--run-on-credential-unavailable" in lib
+    # Degrade-visibly: the precheck proves contract + Keychain item resolve
+    # before the wrap is added, so an unprovisioned key skips the layer
+    # loudly instead of failing the deploy (the bootstrap mechanism is
+    # fail-closed for kind raw-store-key).
+    assert "_security_keychain_lookup" in lib
+    assert "continuing without it" in lib
     assert 'HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"' in lib
     # The capture-watch provisioning is unchanged.
     assert "--consumer heimdal-capture-watch" in lib
@@ -1042,3 +1048,28 @@ def test_api_service_receives_raw_store_key() -> None:
     assert gate("test", "up", "-d", "api") == "yes"
     assert gate("dev", "up", "-d", "heimdal-capture-watch") == "no"
     assert gate("dev", "logs") == "no"
+
+    # Functional proof of the handle-rename shim and its survival across the
+    # nested capture-watch bootstrap's environment scrub: the outer shim
+    # renames the shared handle, a simulated inner bootstrap unsets the shared
+    # name (exactly what _clean_child_environment does), and the final child
+    # still sees the renamed api handle.
+    shim = (
+        'export HOST_SECRET_RUNTIME_ENV_FILE_API='
+        '"${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; exec "$@"'
+    )
+    inner_scrub = 'unset HOST_SECRET_RUNTIME_ENV_FILE HEIMDAL_RAW_STORE_KEY; exec "$@"'
+    run = subprocess.run(
+        [
+            "env", "HOST_SECRET_RUNTIME_ENV_FILE=/tmp/api-layer.env",
+            "sh", "-c", shim, "_",
+            "sh", "-c", inner_scrub, "_",
+            "sh", "-c",
+            'printf "%s|%s" "${HOST_SECRET_RUNTIME_ENV_FILE_API:-missing}" '
+            '"${HOST_SECRET_RUNTIME_ENV_FILE:-scrubbed}"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert run.stdout == "/tmp/api-layer.env|scrubbed", run.stderr

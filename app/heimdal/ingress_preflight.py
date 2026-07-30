@@ -60,12 +60,14 @@ def run_ingress_preflight() -> IngressPreflightResult:
         resolve_raw_store_key()
         available = True
         detail = ""
-    except RawStoreKeyMissingError as exc:
+    except RawStoreKeyMissingError:
         available = False
-        detail = str(exc)
+        detail = "raw_store_key_missing"
     except Exception as exc:  # malformed key material etc. — same degradation
+        # Named class only, never the exception text: a future error embedding
+        # env material must not flow to the status surface.
         available = False
-        detail = f"{type(exc).__name__}: {exc}"
+        detail = f"raw_store_key_invalid:{type(exc).__name__}"
 
     state = STATE_AVAILABLE if available else STATE_UNAVAILABLE
     result = IngressPreflightResult(
@@ -80,7 +82,7 @@ def run_ingress_preflight() -> IngressPreflightResult:
             "Heimdal ingress preflight: HEIMDAL_RAW_STORE_KEY is not available to "
             "this process — the media and screen ingress lanes will refuse every "
             "admission with the named raw_store_key_unavailable 500 until it is "
-            "provisioned (host secret contract consumer 'api'). All other API "
+            "provisioned (host secret contract consumer 'heimdal-api-ingress'). All other API "
             "functions keep serving. Detail: %s",
             detail,
         )
