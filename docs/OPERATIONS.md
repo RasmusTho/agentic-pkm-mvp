@@ -323,6 +323,108 @@ is rebuildable; delete it to reset the transition state manually.
 **Install:** See `ops/host-setup/mac-mini/install.sh` for how to register the launchd
 job. The plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist`.
 
+## Prod backup watcher (stale or failed nightly dump)
+
+`ops/host-setup/mac-mini/prod_backup_probe.py` is the watcher for the nightly prod DB
+dump (`local.prod-pgdump` on the mac mini, which runs `~/bin/prod-pgdump-run.sh`). It is
+installed as its own launchd job, `com.yggdrasil.prod-backup-probe`, and runs hourly.
+
+**Why it exists:** the dump job failed every night from 2026-07-06 to 2026-07-29 and the
+gap went unseen for three weeks, because nothing read its log. The underlying TCC
+permission bug is fixed; this watcher closes the detection gap that let it hide.
+
+**It does not depend on the backup job working.** The load-bearing signal is the dump
+directory itself, so a job that stops firing entirely — and therefore writes no `FAIL`
+line at all — is still caught. Three checks run on every pass and every failure is
+reported in one alert:
+
+| Check | Signal | Default budget |
+| --- | --- | --- |
+| Dump freshness | newest `prod-*.dump` in `BACKUP_DIR` (`/Volumes/T7/prod-db-backups`) | `BACKUP_MAX_AGE_HOURS=48` — tolerates one missed night |
+| Status verdict | last line of `BACKUP_STATUS_FILE` (`~/Library/Logs/prod-pgdump.status`) reports `OK`, not `FAIL` | — |
+| Status freshness | that line's own ISO-8601 timestamp | `BACKUP_STATUS_MAX_AGE_HOURS=30` — a job that did not fire |
+
+**Unverifiable is never healthy.** A missing or unmounted `/Volumes/T7`, an unreadable
+directory, an empty status file, or a garbled status line all alert. The watcher never
+reports green on a signal it could not read.
+
+### The TCC hop (one-time setup)
+
+launchd starts jobs unattributed, with no TCC grants, so it cannot read the removable
+volume holding the dumps. Verified on the mini 2026-07-29 — and the failure mode is
+deceptive:
+
+```
+py_isdir True                                        # stat is allowed
+py_listdir_ERR PermissionError [Errno 1] Operation not permitted
+```
+
+`Path.glob` silently swallows that `PermissionError` and yields nothing, so a naive
+implementation reports "no dumps found" forever instead of "I am blind". The watcher
+therefore uses `os.scandir` and separates *not mounted* from *permission denied*.
+
+The fix is the same loopback ssh hop the backup job itself uses, through this watcher's
+own key and its own read-only lister (`ops/host-setup/mac-mini/prod_backup_list.sh`,
+installed to `~/bin/prod-backup-list.sh`) — no credential or code path is shared with the
+backup job. `install.sh` wires the plist and prints these steps; run them once:
+
+```bash
+ssh-keygen -t ed25519 -N '' -C prod-backup-list -f ~/.ssh/id_ed25519_prod_backup_list
+```
+
+Then add the public key to `~/.ssh/authorized_keys` as a single line, locked to a forced
+command so it can only ever list dumps:
+
+```
+command="$HOME/bin/prod-backup-list.sh",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA... prod-backup-list
+```
+
+Until that is done the watcher sends **one** alert saying it cannot see the dump volume
+and naming the fix, then suppresses. The status-file checks keep working meanwhile, so a
+failed or non-firing backup is still caught. Verify the hop with:
+
+```bash
+ssh -F /dev/null -i ~/.ssh/id_ed25519_prod_backup_list -o IdentitiesOnly=yes -o BatchMode=yes localhost
+# → one "<epoch-mtime> <path>" line per dump, or MISSING / DENIED / EMPTY
+```
+
+**Transition / recovery guarantee:** identical to the prod probe — one alert on entering
+a bad state, suppressed while it persists, one recovery signal on the first healthy run,
+then re-armed for a later distinct failure. A failed push does *not* record the state, so
+a channel outage retries on the next run instead of swallowing the alert. The state
+marker (`PROD_BACKUP_PROBE_STATE_FILE`, default
+`/tmp/yggdrasil-prod-backup-probe.state`) is rebuildable; delete it to re-arm manually.
+
+The channel is pluggable via `PROD_BACKUP_PROBE_CHANNEL` (`ntfy` | `telegram` | `mail` |
+`none`) and defaults to the same `NTFY_TOPIC` the prod probe pushes to, so the operator
+watches one topic for both.
+
+```bash
+make live-prod-backup-probe                              # live spot-check; exit 1 = backup failed or stale
+PROD_BACKUP_PROBE_CHANNEL=none make live-prod-backup-probe   # dry run: log the verdict, push nothing
+launchctl list | grep prod-backup-probe                  # confirm the job is loaded
+```
+
+**Known current state:** prod is down entirely (issue #4282 — the `pkm-prod_pgdata`
+volume is gone), so the status file legitimately reports `FAIL pg_dump_failed` and the
+newest dump is from 2026-07-11. The watcher alerts on both facts, which is correct: there
+is no current prod backup. Expect it to stay in the alerted (suppressed) state until prod
+is restored and a dump lands.
+
+**Install:** `ops/host-setup/mac-mini/install.sh` step 4c registers the launchd job. The
+plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-backup-probe.plist`.
+
+The probe and its lister are installed to `~/bin/` and run under `/usr/bin/python3`, not
+out of the repo checkout and not under the gateway venv. Both are deliberate: the probe
+is stdlib-only, and a backup watcher must not go dark because the repo is parked on a
+feature branch or the gateway venv was never built. `install.sh` is the single producer
+of those copies, so the host and the repo cannot drift.
+
+**Status as of 2026-07-29:** both `com.yggdrasil.prod-backup-probe` and
+`com.yggdrasil.prod-probe` are loaded on the mini and have each pushed one live alert to
+the `yggdrasil-prod-alerts` ntfy topic. The backup watcher is in its suppressed
+alerted state pending the one-time key setup and the prod restore (#4282).
+
 ## Runtime health: watcher → DB outbox → worker
 - Watcher heartbeat: `WATCHER_HEARTBEAT_PATH` (default `/app/tmp/watcher_heartbeat.json` in containers, `tmp/watcher_heartbeat.json` on host).
 - Worker heartbeat: `WORKER_HEARTBEAT_PATH` (default `/app/tmp/worker_heartbeat.json`).
@@ -502,6 +604,9 @@ make db-dump-prod                           # → .db-snapshots/prod_20260628T..
 ```
 
 **Constraints:**
-- No scheduling, no off-host/cloud backup strategy, and no automated purge.
+- These `make` targets are unscheduled and manual; there is no off-host/cloud backup
+  strategy and no automated purge. Scheduling exists only for the separate nightly mac
+  mini job `local.prod-pgdump` (dumps to `/Volumes/T7/prod-db-backups`), which is watched
+  by `com.yggdrasil.prod-backup-probe` — see *Prod backup watcher* above.
 - These dumps must not become a production DR restore path.
 - pg_dump / pg_restore must be installed on the host (they are not bundled in containers).

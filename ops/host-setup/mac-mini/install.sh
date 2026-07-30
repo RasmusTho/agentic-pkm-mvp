@@ -50,6 +50,44 @@ launchctl unload "$PROBE_PLIST" 2>/dev/null || true
 launchctl load "$PROBE_PLIST"
 sleep 1
 
+# 4c. prod-backup watcher launchd service -----------------------------------
+# Watches the nightly prod DB dump (local.prod-pgdump) from the outside: dump
+# freshness on /Volumes/T7, the FAIL/OK verdict, and status-file staleness. It
+# does not depend on the backup job running, so a job that silently stops
+# firing still alerts.
+# The watcher is installed to ~/bin rather than run out of the repo checkout,
+# and uses the system interpreter rather than the gateway venv. It is
+# stdlib-only, and a backup watcher must not stop working because the repo is
+# on a feature branch or the gateway venv was never built. install.sh stays the
+# single producer of those copies, so host and repo cannot drift.
+mkdir -p "$HOME/bin"
+install -m 0755 "$HERE/prod_backup_list.sh" "$HOME/bin/prod-backup-list.sh"
+install -m 0755 "$HERE/prod_backup_probe.py" "$HOME/bin/prod-backup-probe.py"
+
+BACKUP_PROBE_PLIST="$HOME/Library/LaunchAgents/com.yggdrasil.prod-backup-probe.plist"
+BACKUP_LIST_KEY="$HOME/.ssh/id_ed25519_prod_backup_list"
+sed -e "s#__PYTHON__#/usr/bin/python3#g" \
+    -e "s#__BACKUP_PROBE__#$HOME/bin/prod-backup-probe.py#g" \
+    -e "s#__BACKUP_STATUS__#$HOME/Library/Logs/prod-pgdump.status#g" \
+    -e "s#__BACKUP_LIST_KEY__#$BACKUP_LIST_KEY#g" \
+    -e "s#__BACKUP_LIST_CMD__#$HOME/bin/prod-backup-list.sh#g" \
+    "$HERE/com.yggdrasil.prod-backup-probe.plist" >"$BACKUP_PROBE_PLIST"
+launchctl unload "$BACKUP_PROBE_PLIST" 2>/dev/null || true
+launchctl load "$BACKUP_PROBE_PLIST"
+sleep 1
+
+if [ ! -r "$BACKUP_LIST_KEY" ]; then
+  echo
+  echo "NOTE: the prod-backup watcher is loaded but cannot yet read /Volumes/T7."
+  echo "      launchd has no TCC grant for removable volumes, so it needs a"
+  echo "      loopback ssh hop. One-time setup (see docs/OPERATIONS.md ::"
+  echo "      Prod backup watcher) — it will alert once until this is done:"
+  echo "        ssh-keygen -t ed25519 -N '' -C prod-backup-list -f $BACKUP_LIST_KEY"
+  echo "        # then add to ~/.ssh/authorized_keys, on one line:"
+  echo "        #   command=\"\$HOME/bin/prod-backup-list.sh\",no-port-forwarding,\\"
+  echo "        #   no-agent-forwarding,no-X11-forwarding,no-pty <contents of $BACKUP_LIST_KEY.pub>"
+fi
+
 # 5. Verify + next steps ----------------------------------------------------
 echo
 echo "== Gateway health =="

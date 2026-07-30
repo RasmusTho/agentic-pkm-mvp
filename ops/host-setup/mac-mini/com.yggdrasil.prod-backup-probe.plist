@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Installed to ~/Library/LaunchAgents/ by install.sh (see install.sh for sed substitution).
+     Replaces __PYTHON__ with the absolute path to the venv python interpreter and
+     __BACKUP_PROBE__ with the absolute path to prod_backup_probe.py.
+
+     Watches the nightly prod DB dump (local.prod-pgdump) from the outside: it
+     checks dump freshness on /Volumes/T7, the FAIL/OK verdict in the status
+     file, and the status file's own staleness. It never invokes the backup job,
+     so it still alerts when that job stops firing entirely and writes nothing.
+
+     Runs hourly. The dump job is nightly, so hourly is frequent enough to bound
+     detection to about an hour while keeping the transition-based alert quiet. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yggdrasil.prod-backup-probe</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__BACKUP_PROBE__</string>
+  </array>
+
+  <!-- Hourly. -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
+
+  <!-- Run once at load so a freshly installed watcher reports immediately
+       rather than staying silent for the first hour. The probe is a one-shot
+       script: no KeepAlive. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Ground truth: the dumps on the external SSD -->
+    <key>BACKUP_DIR</key>
+    <string>/Volumes/T7/prod-db-backups</string>
+    <!-- Machine-readable single-line status written by the backup job -->
+    <key>BACKUP_STATUS_FILE</key>
+    <string>__BACKUP_STATUS__</string>
+    <!-- Newest dump older than this many hours = stale (nightly job, so 48h
+         tolerates one missed night) -->
+    <key>BACKUP_MAX_AGE_HOURS</key>
+    <string>48</string>
+    <!-- Status file older than this many hours = the job did not fire -->
+    <key>BACKUP_STATUS_MAX_AGE_HOURS</key>
+    <string>30</string>
+    <!-- Loopback ssh hop for reading the dump volume. launchd runs unattributed
+         with no TCC grants, so a direct read of /Volumes/T7 returns EPERM
+         (verified on this host 2026-07-29: stat succeeds, listdir does not).
+         Until the one-time key setup in docs/OPERATIONS.md is done, this path
+         will not exist and the watcher alerts once saying exactly that; the
+         status-file checks keep working meanwhile. -->
+    <key>BACKUP_LIST_SSH_KEY</key>
+    <string>__BACKUP_LIST_KEY__</string>
+    <key>BACKUP_LIST_REMOTE_CMD</key>
+    <string>__BACKUP_LIST_CMD__</string>
+    <!-- Alert state file (rebuildable; delete to re-arm the transition) -->
+    <key>PROD_BACKUP_PROBE_STATE_FILE</key>
+    <string>/tmp/yggdrasil-prod-backup-probe.state</string>
+    <!-- Notification channel: ntfy | telegram | mail | none -->
+    <key>PROD_BACKUP_PROBE_CHANNEL</key>
+    <string>ntfy</string>
+    <!-- ntfy topic (used when PROD_BACKUP_PROBE_CHANNEL=ntfy); shares the
+         operator's prod alert topic with com.yggdrasil.prod-probe -->
+    <key>NTFY_TOPIC</key>
+    <string>yggdrasil-prod-alerts</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/yggdrasil-prod-backup-probe.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/yggdrasil-prod-backup-probe.err</string>
+</dict>
+</plist>
