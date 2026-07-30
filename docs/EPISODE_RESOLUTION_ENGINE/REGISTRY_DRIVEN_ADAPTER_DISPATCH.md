@@ -78,7 +78,7 @@ The golden byte-identity check (AC3) captures the pre-refactor tick output as a 
 
 ## Restart / Durability Posture
 
-Not applicable in the user-facing-surface sense: this task ships no new user-facing surface and no new durable state. It preserves the existing durable state exactly — the Heimdal observation-log cursor, the `episode_engine_state` vault-activity cursor and `open_segment:` rows — with identical advance timing (INV-ERE-F crash ordering). Cursorless calendar re-polling is preserved. A process restart mid-tick behaves exactly as it does pre-refactor: the next tick reprocesses uncommitted work and reconverges, deduped by the retained `signal_ids` ledgers and the deterministic episode id.
+Not applicable in the user-facing-surface sense: this task ships no new user-facing surface. It preserves the Heimdal observation-log cursor, the `episode_engine_state` vault-activity cursor, and `open_segment:` rows with identical advance timing (INV-ERE-F crash ordering). Cursorless calendar re-polling is preserved with the later `calendar_consumed_signal:` closed-signal idempotency boundary: a restart reprocesses uncommitted open work through retained `signal_ids`, while a closed calendar signal remains filtered even if the next poll omits it. That calendar ledger is not ordinary resettable tick state; see `CALENDAR_STREAM_ADAPTER.md` and `docs/DB_SCHEMA.md` for its recovery boundary.
 
 ## Related Docs
 

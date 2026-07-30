@@ -803,7 +803,7 @@ class _CalendarStreamAdapter:
         """Calendar re-polls a fixed window; consumed signal identity is persisted by the tick."""
 
 
-def _calendar_consumed_signal_key(signal: SegmentationSignal) -> str:
+def _calendar_consumed_signal_key(scope: str, signal_id: str) -> str:
     """Return the durable idempotency-ledger key for one calendar signal.
 
     Scope is part of the boundary: the same external UID must never suppress
@@ -811,7 +811,7 @@ def _calendar_consumed_signal_key(signal: SegmentationSignal) -> str:
     recurrence identity and changes (``calendar_signal_id``), so an edited
     occurrence has a new key and remains eligible.
     """
-    return f"{_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX}{signal.scope}:{signal.signal_id}"
+    return f"{_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX}{scope}:{signal_id}"
 
 
 _STREAM_ADAPTERS: Final[Mapping[str, StreamAdapter]] = {
@@ -1404,15 +1404,16 @@ def run_segmentation_tick(
     # after its proposal output is durable.  Leaving still-open calendar
     # signals to the open-segment ledger preserves crash recovery: if this tick
     # fails before state replacement, a replay can still fold them as no-ops.
-    closed_calendar_provenance = {
-        provenance_ref
-        for closed in closed_segments
-        for provenance_ref in closed.derived_from
-        if provenance_ref.startswith("calendar:")
-    }
-    for signal in signals:
-        if signal.stream_id == CALENDAR_STREAM_ID and signal.provenance_ref in closed_calendar_provenance:
-            engine_state.set_state(_calendar_consumed_signal_key(signal), {"consumed": True})
+    for closed in closed_segments:
+        for provenance_ref in closed.derived_from:
+            if provenance_ref.startswith("calendar:"):
+                # A carried-open calendar signal can close on a later tick
+                # where CalDAV is empty or degraded.  Its durable provenance
+                # lives on the closed segment, not necessarily in this tick's
+                # raw rows, so derive the ledger identity here rather than
+                # requiring a contemporaneous calendar read.
+                signal_id = provenance_ref.removeprefix("calendar:")
+                engine_state.set_state(_calendar_consumed_signal_key(closed.scope, signal_id), {"consumed": True})
 
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())

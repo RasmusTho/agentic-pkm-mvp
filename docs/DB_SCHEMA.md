@@ -363,18 +363,22 @@ there is no `STORE_SCHEMA_AUTOCREATE` opt-in here, test fixtures run the migrati
       `outbox` table's vault-activity topics (independent of `outbox.delivered_at`, which the
       worker dispatcher owns);
     - `open_segment:<scope>` — one scope's currently-open (not yet proposed) segment state.
+    - `calendar_consumed_signal:<scope>:<signal_id>` — a closed calendar signal's durable
+      fixed-window idempotency boundary. It prevents a later poll from replaying evidence after
+      the originating open segment was deleted; changed calendar identities remain distinct.
   - (No `stream_watermark` row family: the quiescence-closure frontier is a per-scope
     read position computed fresh from each tick's own consumed signals, not carried durably.)
   - `value` (`jsonb`, `NOT NULL`)
   - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
 
 Interpretation:
-- pure rebuildable tick-runtime bookkeeping — never authoritative; Episode notes in the vault are
-  the source of record (ADR-0051 OD-1/OD-2) and the `episodes` table is a rebuildable projection;
-- recovery = reset this table's rows **together with** the `mimer.episode_resolution_engine` row in
-  `heimdal_observation_cursor` (full both-stream replay is deterministic and emission-deduped); a
-  single-stream reset is a skewed replay and is not a supported operator action (see the migration
-  docstring).
+- the cursor/open-segment rows are rebuildable tick-runtime bookkeeping; Episode notes in the vault
+  remain the source of record (ADR-0051 OD-1/OD-2) and the `episodes` table remains a rebuildable
+  projection;
+- `calendar_consumed_signal:` is a durable idempotency boundary, not ordinary resettable runtime
+  state. Recovery MUST preserve it: there is no supported blanket `episode_engine_state` reset or
+  paired cursor reset until an explicit full historical calendar rebuild exists. Clearing it can
+  replay stale fixed-window calendar evidence into a later segment (see the migration docstring).
 
 ## Episode-artifact binding ledger
 

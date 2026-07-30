@@ -25,23 +25,19 @@ Quiescence-closure frontiers are computed per-scope from each tick's own
 consumed signals (not carried across ticks), so there is no durable
 `stream_watermark` row family in this table.
 
-Never authoritative: this table is pure tick-runtime bookkeeping, fully
-replayable from the underlying streams (Heimdal observation log; DB outbox).
+The vault-activity cursor and open-segment row families are pure tick-runtime
+bookkeeping, replayable from their underlying streams. Later calendar work
+also uses this generic table for `calendar_consumed_signal:` rows: those are a
+durable idempotency boundary after a segment closes, not resettable cursor
+state.
 
 Recovery posture (deliberate, asymmetric with `heimdal_observation_cursor`):
-this table CO-LOCATES the vault-activity cursor with open-segment state while
-the Heimdal cursor lives in its own table, so wiping `episode_engine_state`
-alone resets ONE stream to event zero while the Heimdal cursor stays advanced
--- a skewed single-stream replay, NOT a symmetric rebuild, and not a
-supported operator action. Operator recovery = reset BOTH cursor families
-together (delete this table's rows AND the `mimer.episode_resolution_engine`
-row in `heimdal_observation_cursor`): the full both-stream replay from event
-zero is deterministic and cannot double-propose, because segments fold by key
-and every closed segment mints a deterministic episode_id whose
-already-written note is skipped at emission
-(`app/episodes/segmenter.py::_deterministic_episode_id` / `_emit_proposal`;
-asserted by
-`tests/episodes/test_segmentation_core.py::test_emission_idempotent_under_redelivery`).
+ordinary recovery MUST preserve `calendar_consumed_signal:` rows. There is no
+supported blanket `episode_engine_state` reset or paired cursor reset while
+that ledger exists, because the fixed calendar window cannot reconstruct all
+past closed identities and clearing it can replay stale evidence into a later
+segment. A future full historical calendar rebuild may define an explicit
+replacement procedure; until then, do not delete this table's rows.
 
 Forward-only, following the KERNEL-04/KERNEL-05/HEIM (`8b21e6a1f0c4`)/ERE-02
 (`e0f2a9c4b7d1`) precedent: schema-owning migrations in this repo have no

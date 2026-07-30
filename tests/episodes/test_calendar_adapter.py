@@ -626,6 +626,74 @@ def test_new_calendar_event_after_consumption_boundary_is_processed(
     assert state["open_segment:work"]["signal_ids"] == ["edited-event:etag-2"]
 
 
+def test_carried_open_calendar_signal_is_recorded_when_later_tick_is_degraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closure provenance, not only current CalDAV rows, drives the ledger."""
+    calendar_signal = segmenter.SegmentationSignal(
+        stream_id=CALENDAR_STREAM_ID,
+        signal_id="carried-event:etag-1",
+        observed_at=_dt(9, 0),
+        scope="work",
+        provenance_ref="calendar:carried-event:etag-1",
+    )
+    heimdal_signal = segmenter.SegmentationSignal(
+        stream_id=segmenter.HEIMDAL_STREAM_ID,
+        signal_id="obs-after-calendar",
+        observed_at=_dt(11, 0),
+        scope="work",
+        provenance_ref="heimdal.observations:obs-after-calendar",
+    )
+
+    class _SignalAdapter:
+        def __init__(self, polls: list[segmenter.ReadResult]) -> None:
+            self.polls = polls
+
+        def read(self, ctx: object) -> segmenter.ReadResult:
+            return self.polls.pop(0)
+
+        def normalize(self, row: segmenter.SegmentationSignal, ctx: object) -> segmenter.SegmentationSignal:
+            return row
+
+        def advance_cursor(self, rows: object, ctx: object) -> None:
+            return None
+
+    calendar_adapter = _SignalAdapter(
+        [
+            segmenter.ReadResult((calendar_signal,)),
+            segmenter.ReadResult((), ("calendar",)),
+            segmenter.ReadResult((calendar_signal,)),
+        ]
+    )
+    heimdal_adapter = _SignalAdapter(
+        [
+            segmenter.ReadResult(()),
+            segmenter.ReadResult((heimdal_signal,)),
+            segmenter.ReadResult(()),
+        ]
+    )
+    monkeypatch.setattr(
+        segmenter,
+        "enumerate_consumable_streams",
+        lambda *a, **k: (
+            SimpleNamespace(stream_id=CALENDAR_STREAM_ID),
+            SimpleNamespace(stream_id=segmenter.HEIMDAL_STREAM_ID),
+        ),
+    )
+    state = _stub_engine_state(monkeypatch)
+    _stub_assignment_io(monkeypatch)
+    adapters = {CALENDAR_STREAM_ID: calendar_adapter, segmenter.HEIMDAL_STREAM_ID: heimdal_adapter}
+
+    run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
+    degraded_close = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
+    replay = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
+
+    key = "calendar_consumed_signal:work:carried-event:etag-1"
+    assert degraded_close["degraded"] == ["calendar"]
+    assert state[key] == {"consumed": True}
+    assert replay["consumed"][CALENDAR_STREAM_ID] == 0
+
+
 # ---------------------------------------------------------------------------
 # AC6: per-calendar scope mapping respected (ERE-08 discipline)
 # ---------------------------------------------------------------------------
