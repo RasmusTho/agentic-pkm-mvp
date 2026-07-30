@@ -377,17 +377,37 @@ class _SqliteProjectionStore:
             )
             return cur.rowcount == 1
 
-    def delete_derivation(self, content_sha256: str) -> None:
-        """Remove a failed derivation so the retry path can derive again.
+    def replace_failed_derivation(self, derivation: AsrDerivation) -> bool:
+        """Atomically replace a `failed` row with a fresh derivation outcome.
 
-        Only the failed-retry path calls this; an `ok` derivation is never
-        deleted (each segment derives exactly once per content hash).
+        One transaction: the failed row is deleted (only a failed row — an
+        `ok` derivation is never deleted; derive once per content hash) and
+        the new row inserted, so no crash window can erase the durable failure
+        record without leaving its replacement. If a concurrent racer already
+        installed an `ok` row, the delete matches nothing and the insert is a
+        no-op — the stored row wins.
         """
         with self._connect() as conn:
             conn.execute(
                 f"DELETE FROM {_DERIVATION_TABLE} WHERE content_sha256 = ? AND status = ?",
-                (content_sha256, DERIVATION_FAILED),
+                (derivation.content_sha256, DERIVATION_FAILED),
             )
+            cur = conn.execute(
+                f"INSERT OR IGNORE INTO {_DERIVATION_TABLE} "
+                "(content_sha256, status, text, segments, language, error, engine, derived_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    derivation.content_sha256,
+                    derivation.status,
+                    derivation.text,
+                    json.dumps(derivation.segments),
+                    derivation.language,
+                    derivation.error,
+                    json.dumps(derivation.engine),
+                    _iso(derivation.derived_at),
+                ),
+            )
+            return cur.rowcount == 1
 
     def derivations_for(self, hashes: List[str]) -> Dict[str, AsrDerivation]:
         if not hashes:
@@ -605,13 +625,42 @@ class _PgProjectionStore:
         finally:
             conn.close()
 
-    def delete_derivation(self, content_sha256: str) -> None:
-        conn = _pg_connect()
+    def replace_failed_derivation(self, derivation: AsrDerivation) -> bool:
+        import psycopg
+
+        from app.db.dsn import resolve_dsn
+
+        url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
+        if not url:
+            raise RuntimeError("DATABASE_URL or DB_DSN not set")
+        # One explicit transaction (autocommit off) so the failed-row delete
+        # and its replacement commit together — no crash window can erase the
+        # durable failure record without leaving its replacement.
+        conn = psycopg.connect(resolve_dsn(url))
         try:
-            conn.cursor().execute(
-                f"DELETE FROM {_DERIVATION_TABLE} WHERE content_sha256 = %s AND status = %s",
-                (content_sha256, DERIVATION_FAILED),
-            )
+            with conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"DELETE FROM {_DERIVATION_TABLE} WHERE content_sha256 = %s AND status = %s",
+                    (derivation.content_sha256, DERIVATION_FAILED),
+                )
+                cur.execute(
+                    f"INSERT INTO {_DERIVATION_TABLE} "
+                    "(content_sha256, status, text, segments, language, error, engine, derived_at) "
+                    "VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s::jsonb, %s) "
+                    "ON CONFLICT (content_sha256) DO NOTHING",
+                    (
+                        derivation.content_sha256,
+                        derivation.status,
+                        derivation.text,
+                        json.dumps(derivation.segments),
+                        derivation.language,
+                        derivation.error,
+                        json.dumps(derivation.engine),
+                        derivation.derived_at,
+                    ),
+                )
+                return cur.rowcount == 1
         finally:
             conn.close()
 
@@ -783,14 +832,45 @@ def derive_segment(
     a derivation problem is per-segment needs-attention state, not an
     admission failure.
     """
+    try:
+        return _derive_segment_inner(
+            session_id=session_id,
+            session_seq=session_seq,
+            content_sha256=content_sha256,
+            media_bytes=media_bytes,
+            kind=kind,
+        )
+    except Exception as exc:
+        # Nothing in derivation — including a store or schema failure — may
+        # fail the admission that already acknowledged the capture. An
+        # unrecordable derivation is retried on the client's next resend, and
+        # the projection read surfaces the store problem loudly on its own
+        # surface.
+        logger.error(
+            "meeting projection derivation trigger failed session_id=%s seq=%s sha=%s: %s",
+            session_id,
+            session_seq,
+            content_sha256,
+            exc,
+        )
+        return None
+
+
+def _derive_segment_inner(
+    *,
+    session_id: str,
+    session_seq: int,
+    content_sha256: str,
+    media_bytes: bytes,
+    kind: str,
+) -> Optional[AsrDerivation]:
     if kind != "audio":
         return None
     store = _backend()
     existing = store.get_derivation(content_sha256)
     if existing is not None and existing.status == DERIVATION_OK:
         return existing
-    if existing is not None and existing.status == DERIVATION_FAILED:
-        store.delete_derivation(content_sha256)
+    retry_of_failed = existing is not None and existing.status == DERIVATION_FAILED
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -828,7 +908,13 @@ def derive_segment(
             derived_at=_utcnow(),
         )
 
-    created = store.insert_derivation(derivation)
+    if retry_of_failed:
+        # ASR ran first, so the durable failure record exists right up to the
+        # atomic delete+insert that replaces it — no crash window renders the
+        # failure illegible as a bare "pending" row.
+        created = store.replace_failed_derivation(derivation)
+    else:
+        created = store.insert_derivation(derivation)
     if not created:
         stored = store.get_derivation(content_sha256)
         if stored is not None:
@@ -889,40 +975,46 @@ def _rederive_analysis(session_id: str) -> Optional[AnalysisRevision]:
         for item in sorted(derived_from, key=lambda item: item["seq"])
         if derivations[item["content_sha256"]].text
     ).strip()
-
-    latest = store.latest_revision(session_id)
-    next_revision = (latest.revision + 1) if latest else 1
     payloads = _derive_analysis_blocks(transcript_text)
-    blocks = [
-        {
-            "block_id": f"{session_id}:{payload['block_type']}:{next_revision}",
-            "ownership": "derived_projection",
-            "revision": next_revision,
-            "derived_from": derived_from,
-            "template_id": template["template_id"],
-            "engine": dict(ANALYSIS_ENGINE),
-            **payload,
-        }
-        for payload in payloads
-    ]
-    revision = AnalysisRevision(
-        session_id=session_id,
-        revision=next_revision,
-        input_set_sha256=input_set,
-        derived_from=derived_from,
-        template_id=template["template_id"],
-        blocks=blocks,
-        engine=dict(ANALYSIS_ENGINE),
-        derived_at=_utcnow(),
-    )
-    if not store.insert_revision(revision):
-        # A concurrent derivation won the (session, revision) slot; return the
-        # stored row for this input set (or the latest, if the racer's set
-        # superseded ours).
-        return store.revision_by_input_set(session_id, input_set) or store.latest_revision(
-            session_id
+
+    # Bounded retry: losing the (session, revision) insert race must not drop
+    # this input set — the loser re-reads the latest revision and re-attempts
+    # with the next number until its set is persisted (or a racer persisted
+    # the identical set). Without this, two concurrent admissions could leave
+    # the analysis permanently excluding an admitted segment.
+    for _ in range(8):
+        existing = store.revision_by_input_set(session_id, input_set)
+        if existing is not None:
+            return existing
+        latest = store.latest_revision(session_id)
+        next_revision = (latest.revision + 1) if latest else 1
+        blocks = [
+            {
+                "block_id": f"{session_id}:{payload['block_type']}:{next_revision}",
+                "ownership": "derived_projection",
+                "revision": next_revision,
+                "derived_from": derived_from,
+                "template_id": template["template_id"],
+                "engine": dict(ANALYSIS_ENGINE),
+                **payload,
+            }
+            for payload in payloads
+        ]
+        revision = AnalysisRevision(
+            session_id=session_id,
+            revision=next_revision,
+            input_set_sha256=input_set,
+            derived_from=derived_from,
+            template_id=template["template_id"],
+            blocks=blocks,
+            engine=dict(ANALYSIS_ENGINE),
+            derived_at=_utcnow(),
         )
-    return revision
+        if store.insert_revision(revision):
+            return revision
+    raise MeetingProjectionPersistenceError(
+        f"analysis revision for session {session_id!r} could not be persisted after retries"
+    )
 
 
 # ---------------------------------------------------------------------------
