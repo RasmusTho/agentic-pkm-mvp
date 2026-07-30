@@ -628,7 +628,10 @@ Implementation surface:
   dispatcher store in one call; each repo's issues upsert independently and aggregate into one JSON
   receipt under `repos`. Task IDs are repo-qualified (`github-<owner>--<repo>-issue-<n>`) so the same
   issue number in two different repos never collides, and stale-ready reconciliation is scoped per
-  repo so pulling one repo cannot reconcile another repo's tasks. `make dispatcher-init` and
+  repo so pulling one repo cannot reconcile another repo's tasks. The id has exactly one
+  implementation — `app/dispatcher/sync_github.py::github_issue_task_id` — and every consumer,
+  including the pickup wrapper's default `TASK_ID`, derives through it rather than respelling the
+  format (INV-DG-2, #4440). `make dispatcher-init` and
   `make dispatcher-sync` pull both `RasmusTho/agentic-pkm-mvp` and `RasmusTho/bifrost` (the two live
   Yggdrasil-ecosystem repos with an active `agent:ready` backlog today); `app.ops.builderops_startup`
   defaults to the same pair (`DEFAULT_REPOS`) when the full-stack launcher doesn't override `--repo`.
