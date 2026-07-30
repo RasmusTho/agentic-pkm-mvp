@@ -821,6 +821,7 @@ def apply_block_write(
     content: str = "",
     position: Optional[int] = None,
     provenance_extra: Optional[Dict[str, Any]] = None,
+    verify_only: bool = False,
 ) -> BlockWriteOutcome:
     """The shared block-write guard. Every mutation goes through here.
 
@@ -989,6 +990,13 @@ def apply_block_write(
             action=action,
             reason=auth_refusal,
         )
+
+    # An authorization probe never writes: `verify_only` stops here after the
+    # full check chain, so a replay-acknowledgement path can prove the writer
+    # is entitled to the block without any race being able to turn the probe
+    # into a mutation.
+    if verify_only:
+        return BlockWriteOutcome(allowed=True, block=existing, replayed=True)
 
     # Same-content revise is a replay: fully authorized above, nothing to
     # write, no revision bump — this is how idempotent resends stay

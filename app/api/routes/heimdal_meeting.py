@@ -227,14 +227,15 @@ def write_user_note(
         # number carrying different text is a named conflict, not a false ack.
         existing = meeting_blocks.get_note_revision(body.note_block_id, body.revision)
         if existing is not None:
+            # verify_only: the probe runs the full authorization chain and can
+            # never mutate, so no concurrent revise race can turn this
+            # replay-acknowledgement into a write.
             replay_auth = meeting_blocks.apply_block_write(
                 session_id=session_id,
                 writer=writer,
                 action=meeting_blocks.ACTION_REVISE,
                 block_id=body.note_block_id,
-                content=meeting_blocks.get_block(body.note_block_id).content
-                if meeting_blocks.get_block(body.note_block_id)
-                else body.text,
+                verify_only=True,
             )
             if not replay_auth.allowed:
                 raise HTTPException(
@@ -269,6 +270,29 @@ def write_user_note(
                 trace_id=trace_id,
             )
 
+        # Authorization precedes revision-state disclosure: an unauthorized
+        # writer gets the refusal (and its audit row), never the note's latest
+        # revision number.
+        block = meeting_blocks.get_block(body.note_block_id)
+        if block is not None:
+            pre_auth = meeting_blocks.apply_block_write(
+                session_id=session_id,
+                writer=writer,
+                action=meeting_blocks.ACTION_REVISE,
+                block_id=body.note_block_id,
+                verify_only=True,
+            )
+            if not pre_auth.allowed:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "block_write_refused",
+                        "message": pre_auth.reason,
+                        "state": "not_acknowledged",
+                        "trace_id": trace_id,
+                    },
+                )
+
         # Client-monotonic revisions: a new write must advance past every
         # acknowledged revision of this note (gaps allowed); a lower or equal
         # number that is not an exact replay is stale.
@@ -288,7 +312,6 @@ def write_user_note(
                 },
             )
 
-        block = meeting_blocks.get_block(body.note_block_id)
         if block is None:
             outcome = meeting_blocks.apply_block_write(
                 session_id=session_id,
