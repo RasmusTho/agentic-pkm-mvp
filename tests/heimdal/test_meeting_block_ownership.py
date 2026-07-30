@@ -484,6 +484,33 @@ def test_replays_and_revisions_never_bypass_authorization(client: TestClient) ->
     assert prov["engine"] == "heimdal-meeting-analysis"
     assert prov["note"] == "kept"
 
+    # A verify_only probe mirrors the real create path exactly: a non-ASR
+    # derived writer probing a transcript_segment create is refused, and the
+    # probe never inserts anything.
+    probe_id = f"{session_id}:transcript:999"
+    probe = meeting_blocks.apply_block_write(
+        session_id=session_id,
+        writer=analysis,
+        action=meeting_blocks.ACTION_CREATE,
+        block_id=probe_id,
+        block_type=meeting_blocks.TYPE_TRANSCRIPT_SEGMENT,
+        content="probe",
+        verify_only=True,
+    )
+    assert probe.allowed is False
+    assert meeting_blocks.get_block(probe_id) is None
+    allowed_probe = meeting_blocks.apply_block_write(
+        session_id=session_id,
+        writer=analysis,
+        action=meeting_blocks.ACTION_CREATE,
+        block_id=f"{session_id}:analysis:probe",
+        block_type=meeting_blocks.TYPE_DERIVED_PROJECTION,
+        content="probe",
+        verify_only=True,
+    )
+    assert allowed_probe.allowed is True
+    assert meeting_blocks.get_block(f"{session_id}:analysis:probe") is None
+
 
 def test_editor_identity_required_for_user_notes(client: TestClient) -> None:
     """Only the user's editor identity passes; forged identities from derived contexts refuse."""

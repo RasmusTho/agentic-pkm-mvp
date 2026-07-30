@@ -890,6 +890,19 @@ def apply_block_write(
                     reason=f"{block_type} blocks are created only by derived writers "
                     "with engine provenance",
                 )
+            elif block_type == TYPE_TRANSCRIPT_SEGMENT and writer.role != "asr":
+                # The dry evaluation must refuse everything the real create
+                # refuses — a probe that authorizes what the write path would
+                # refuse breaks the fail-closed contract.
+                return _refuse(
+                    store,
+                    session_id=session_id,
+                    block_id=block_id,
+                    writer=writer,
+                    action=action,
+                    reason="transcript_segment blocks are created only by the ASR "
+                    "derivation (CDLM-06)",
+                )
             return BlockWriteOutcome(allowed=True)
         if existing is not None:
             # A create landing on an existing block is a replay only when the
