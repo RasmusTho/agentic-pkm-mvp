@@ -5241,6 +5241,14 @@ def test_host_fenced_coordinator_has_no_ambient_github_write_path(
     tmp_path, monkeypatch
 ) -> None:
     calls: list[dict[str, object]] = []
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'forced_login_method = "chatgpt"\n'
+        'cli_auth_credentials_store = "keyring"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("GH_TOKEN", "must-not-pass")
     monkeypatch.setenv("GITHUB_TOKEN", "must-not-pass")
 
