@@ -1067,6 +1067,22 @@ def _scalar_roll_forward_receipt_matches_registry(
     )
 
 
+def _scalar_roll_forward_receipt_can_resume(
+    receipt: Mapping[str, object],
+    registry: RegistrySnapshot,
+) -> bool:
+    return _scalar_roll_forward_receipt_matches_registry(
+        receipt,
+        registry,
+    ) or (
+        receipt.get("status") == "prepared"
+        and _scalar_roll_forward_receipt_matches_registry(
+            dict(receipt) | {"status": "merged"},
+            registry,
+        )
+    )
+
+
 def _write_scalar_roll_forward_receipt(
     host_global_root: Path,
     lease: Mapping[str, object],
@@ -1714,6 +1730,7 @@ def _begin_instance_state_deployment(
                 _require_matching_compatibility_block(
                     ownership_root,
                     existing_lease,
+                    reconcile_from_previous_phase=True,
                     reconcile_dead_claim_controller=True,
                 )
         compatibility_resume = (
@@ -1769,16 +1786,35 @@ def _begin_instance_state_deployment(
                 raise InstanceStatePreflightError(
                     "legacy host-global deployment controller is active"
                 )
+        scalar_receipt_resume: dict[str, object] | None = None
         if existing_lease is not None:
+            receipt_value = existing_lease.get("scalar_roll_forward")
+            if (
+                existing_lease.get("phase") == "proved"
+                and isinstance(receipt_value, dict)
+                and receipt_value.get("deployment_nonce")
+                == existing_lease.get("nonce")
+                and receipt_value.get("channel_id") == channel
+                and _scalar_roll_forward_receipt_can_resume(
+                    receipt_value,
+                    VaultRegistryStore(layout.registry_path).load(),
+                )
+            ):
+                scalar_receipt_resume = dict(receipt_value)
             if (
                 existing_lease.get("phase") != "claimed"
-                or existing_lease.get("channel_id") != channel
+                and scalar_receipt_resume is None
+            ) or (
+                existing_lease.get("channel_id") != channel
                 or existing_lease.get("legacy_path") != str(source)
             ):
                 raise InstanceStatePreflightError(
                     "another host-global deployment lease is active"
                 )
-            if existing_lease.get("controller") == controller:
+            if (
+                existing_lease.get("phase") == "claimed"
+                and existing_lease.get("controller") == controller
+            ):
                 existing_fence_path = _deployment_fence_path(
                     ownership_root, channel
                 )
@@ -1807,16 +1843,21 @@ def _begin_instance_state_deployment(
                                 root_lease_path, compatibility
                             )
                         return existing_fence
-            elif _controller_identity_is_live(existing_lease.get("controller")):
+            elif (
+                existing_lease.get("controller") != controller
+                and _controller_identity_is_live(
+                    existing_lease.get("controller")
+                )
+            ):
                 raise InstanceStatePreflightError(
                     "another host-global deployment controller is active"
                 )
-            elif (
-                existing_lease.get("controller") != controller
-            ):
+            if existing_lease.get("controller") != controller:
                 fence_path = _deployment_fence_path(ownership_root, channel)
                 if fence_path.exists():
-                    existing_fence = _read_deployment_fence(ownership_root, channel)
+                    existing_fence = _read_deployment_fence(
+                        ownership_root, channel
+                    )
                     fence_matches_existing = (
                         existing_fence.get("deployment_nonce")
                         == existing_lease.get("nonce")
@@ -1882,6 +1923,8 @@ def _begin_instance_state_deployment(
             "legacy_path": str(source),
             "diagnostic_fingerprint": diagnostic_fingerprint,
         }
+        if scalar_receipt_resume is not None:
+            lease["scalar_roll_forward"] = scalar_receipt_resume
         payload: dict[str, object] = {
             "schema": _DEPLOYMENT_FENCE_SCHEMA,
             "channel_id": channel,

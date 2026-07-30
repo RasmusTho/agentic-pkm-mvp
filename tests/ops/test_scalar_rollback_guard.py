@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,68 @@ def _scalar_preflight(runtime, registration, root, rollback_path) -> None:
         compose_overlay=REPO_ROOT / "docker-compose.scalar-rollback.yml",
         gateway_config=REPO_ROOT / "ops/scalar-rollback/nginx.conf",
         native_launcher=REPO_ROOT / "scripts/scalar_rollback_native.sh",
+    )
+
+
+def _resume_authority_window(
+    runtime: InstanceRegistryRuntime,
+    scratch_root: Path,
+    inventory_path: Path,
+):
+    controller = {
+        "pid": 999_999_997,
+        "start_token": "linux:" + "1" * 64,
+    }
+    _begin_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=scratch_root / "missing-legacy.md",
+        controller_pid=controller["pid"],
+        controller_start_token=controller["start_token"],
+    )
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    empty_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory = (
+        runtime.ledger.root / "deployment-quiescence-inventory.json"
+    )
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": controller,
+                "domains": domains,
+                "snapshot_digests": [empty_digest, empty_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    proof = runtime_module._prove_instance_state_quiescence(
+        channel=runtime.layout.channel_id,
+        host_global_root=runtime.ledger.root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    for field in (
+        "deployment_nonce",
+        "controller",
+        "quiescence_inventory_digest",
+        "receipt_digest",
+    ):
+        owner_inventory.pop(field, None)
+    inventory_path.write_text(json.dumps(owner_inventory), encoding="utf-8")
+    inventory_path.chmod(0o600)
+    return runtime_module._bind_legacy_owner_inventory_to_proof(
+        inventory_path=inventory_path,
+        quiescence_proof=proof,
+        channel=runtime.layout.channel_id,
+        host_global_root=runtime.ledger.root,
     )
 
 
@@ -826,6 +889,16 @@ def test_scalar_roll_forward_uses_lease_coverage_without_opening_vault_roots(
     assert not runtime.registry.scalar_rollback_session_path.exists()
     monkeypatch.setattr(
         runtime_module,
+        "_controller_identity_is_live",
+        lambda controller: False,
+    )
+    proof = _resume_authority_window(
+        runtime,
+        tmp_path / "window",
+        inventory,
+    )
+    monkeypatch.setattr(
+        runtime_module,
         "_write_scalar_roll_forward_receipt",
         original_receipt_writer,
     )
@@ -949,6 +1022,16 @@ def test_scalar_roll_forward_recovers_partial_receipt_persistence(
         runtime_module,
         "_replace_private_json",
         original_replace,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_controller_identity_is_live",
+        lambda controller: False,
+    )
+    proof = _resume_authority_window(
+        runtime,
+        tmp_path / "window",
+        inventory,
     )
     assert (
         _roll_forward_scalar_rollback(
