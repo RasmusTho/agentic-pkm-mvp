@@ -587,6 +587,17 @@ def _roots_from_values(
     return list(dict.fromkeys(roots))
 
 
+def _canonical_mounts(mounts: object) -> object:
+    # docker inspect does not guarantee an ordering for Mounts, and json.dumps
+    # sorts dict keys but not list elements. Hashing the array verbatim therefore
+    # makes the two-snapshot stability check in produce_legacy_owners fail on
+    # unchanged host state. Only the digest input is canonicalized; root
+    # translation keeps consuming the payload exactly as docker returned it.
+    if not isinstance(mounts, list):
+        return mounts
+    return sorted(mounts, key=lambda entry: json.dumps(entry, sort_keys=True))
+
+
 def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
     ids_output = _run_checked(
         ["docker", "ps", "-a", "--no-trunc", "--format", "{{.ID}}"],
@@ -641,7 +652,8 @@ def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
                 if channel == "test"
                 else "/app/tmp/agentic-pkm/app-local.md"
             )
-        store_key = (channel, store_path, json.dumps(mounts, sort_keys=True))
+        canonical_mounts = _canonical_mounts(mounts)
+        store_key = (channel, store_path, json.dumps(canonical_mounts, sort_keys=True))
         if store_key not in stores:
             stores[store_key] = _docker_copy_file(container_id, store_path)
         raw_store = stores[store_key]
@@ -658,7 +670,7 @@ def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
                         "channel": channel,
                         "service": service,
                         "env": values,
-                        "mounts": mounts,
+                        "mounts": canonical_mounts,
                         "store": None
                         if raw_store is None
                         else hashlib.sha256(raw_store).hexdigest(),
