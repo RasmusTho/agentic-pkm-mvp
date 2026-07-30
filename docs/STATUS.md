@@ -63,6 +63,25 @@ promote public internet readiness.
   undecided pending state, while an already-applied merge or reject remains an idempotent no-op for
   later undo. The bounded contract and authority details remain owned by
   `docs/MIMER_IPAD_THINKING_CANVAS/SIDE_BY_SIDE_ENTITY_CONFIRMATION_ON_IPAD.md`.
+- Governed media ingress with durable receipts is shipped (CDLM-01, #4384):
+  `POST /api/heimdal/capture/media` acknowledges a capture only after the original is durably in the
+  encrypted raw store **and** the `heimdal.capture.media.admitted` outbox event is committed, so a
+  2xx is a durable-acceptance receipt rather than transport success; a failed event commit returns
+  `500 not_acknowledged` and writes no receipt. Admission is idempotent on
+  `(capture_id, content_sha256)`, and `GET /api/heimdal/capture/receipts?capture_id=…` answers
+  `admitted` or `unknown` so a client can distinguish a lost response from a capture that never
+  arrived. Watched-folder admissions are receipted through the same seam (content-hash keyed) but
+  gain no receipt-gated retention — that stays an outbox-lane property owned by CDLM-03. This slice
+  ships no session/segment ledger, no ASR or derivation, no streaming/resumable upload, no auth
+  keys, and no public ingress: both routes refuse peers outside loopback/LAN/tailnet. **Operator
+  precondition, not yet provisioned:** admission encrypts through the raw store, so the api process
+  needs `HEIMDAL_RAW_STORE_KEY`, which `config/secrets/host_secret_contract.json` currently declares
+  for the `heimdal-capture-watch` consumer only; without it every admission returns a named 500
+  `raw_store_key_unavailable` / `not_acknowledged` rather than failing silently. The pre-existing
+  `POST /api/heimdal/screen/capture` shares that gap. Contract detail
+  is owned by `docs/EVENTS.md :: Heimdal governed media ingress + durable receipts` and
+  `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`; promotion into
+  `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 remains parent-acceptance work on #4383.
 - The System Entry Point capability (#1782) is delivered. All twelve implementation children shipped: server-declared entry state (#1783/PR #1800), latency-ladder re-entry treatments (#1784/PR #1801), unified topbar/overlay host (#1785/PR #1802), the ⌘K Panel command palette (#1786/PR #1817), the system map overlay (#1787/PR #1846), the opt-in guidance layer (#1788/PR #1847), the settings drawer (#1789/PR #1834), governed capture append plus the ⌘N capture modal (#1790/PR #1799, #1791/PR #1816), memory review-queue endpoints plus drawer (#1792/PR #1798, #1793/PR #1818), and the read-only receipts history modal (#1794/PR #1833). The fixture-driven state-gallery validation harness (#1795, SEP-11; `tests/companion_ui/test_entry_state_gallery.py`) proves the composition: declared transitions render and undeclared transitions are rejected, cold/first-contact/no-vault render no re-entry overlay, the governed-vs-body-edit receipt asymmetry holds, no UI-derived authority classification renders, the display budget stays at or below the server caps, reduced-motion end-states are fully visible, and narrow mode preserves every critical affordance. The source-peek popover presentation and posture emphasis switch remain truthfully unshipped (declared overlay ids that do not mount); the context lane / place band stay parked under the gated decision issue #1796. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits

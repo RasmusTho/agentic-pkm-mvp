@@ -534,6 +534,117 @@ Contract:
   Mimer projection of the memo into a candidate (A11); native-app receipt
   rendering (Obsidian-usable markdown only in v1).
 
+## Heimdal governed media ingress + durable receipts (CDLM-01 — delivered #4384)
+
+`app/heimdal/media_ingress.py` + `app/heimdal/media_receipts.py` +
+`app/api/routes/heimdal_capture.py` (#4384; specified by
+`docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`;
+bound by INV-CDLM-1/INV-CDLM-3 in that directory's `README.md`). Gives every
+capture client one governed answer to "is my original durably accepted?" —
+the question #4369 could not answer, when recordings that "should have landed"
+left an empty capture tree.
+
+Contract:
+
+- **A receipt means durable acceptance, not a successful HTTP call
+  (INV-CDLM-1).** `POST /api/heimdal/capture/media` returns 2xx only after (1)
+  the raw-store write is durable and (2) the `heimdal.capture.media.admitted`
+  outbox event is committed. The receipt row is written **last**, because the
+  receipt *is* the acknowledgement — the same outbox-before-ack ordering the
+  governed text capture enforces (`docs/contracts/MIMER_CLIENT_CONTRACT.md`
+  §4.1). A 2xx without both is a contract violation, not a receipt.
+- **The failure path acknowledges nothing.** A failed event commit returns
+  `500 {error: "admission_event_commit_failed", state: "not_acknowledged"}` and
+  writes no receipt, so `GET /api/heimdal/capture/receipts` still answers
+  `unknown`. The raw store is append-only, so a raw object written before the
+  failed commit survives; it is *not* an acknowledged artifact, and the client's
+  resend completes admission idempotently over it (partial-failure matrix,
+  "hub crash between raw write and outbox commit").
+- **Transfer identity is `(capture_id, content_sha256)` (INV-CDLM-3).**
+  `receipt_id` is derived (uuid5) from that pair and is the receipt table's
+  primary key, so a resend after a lost response returns the same receipt
+  identity and leaves one raw object. What is guaranteed exactly: one receipt
+  identity, one raw object, and one DB-outbox row per transfer identity (the
+  outbox idempotency key is derived from that identity, not from a per-emission
+  event id). An *already-acknowledged* identity emits no further admission event
+  at all — the guard lives in the shared `record_media_admission` seam, so it
+  also covers a watched-folder file re-admitted on every tick after a failed
+  source delete. The guard keys on *receipt existence*, so the JSONL audit log can
+  still record the same admission twice whenever no receipt yet exists: two
+  genuinely concurrent first admissions, or a retry after the event committed but
+  the receipt did not (500 `receipt_persistence_failed`). Under a pg backend the
+  derived idempotency key collapses those to one outbox row; the JSONL log is an
+  operational trace, not an acknowledgement, and the receipt stays single either
+  way. **A consumer keys on `receipt_id`, never on event arrival count.**
+- **Receipts are their own append-only store, not a raw-record field.** The raw
+  store holds one object per *content hash* while receipts are keyed by transfer
+  identity, and recovery queries by `capture_id` — a direction the raw store
+  cannot answer. `heimdal_media_receipt` (migration `e3c1a7f5d2b8`) carries the
+  same HEIM-1 append-only trigger as `heimdal_raw_record` /
+  `heimdal_raw_read_receipt`. Answering a receipt query never touches raw
+  evidence.
+- **Named error states, never blind-retryable.** 415 `unsupported_media_kind`,
+  413 `media_too_large` (with `max_bytes`) / `sidecar_part_too_large`, 422
+  `multipart_invalid` / `media_part_required` / `sidecar_part_required` /
+  `sidecar_schema_invalid` / `content_hash_mismatch`, 409 `consent_refused`
+  (HEIM-3), and a
+  `state: not_acknowledged` 500 family: `raw_write_failed`,
+  `admission_event_commit_failed`, `receipt_persistence_failed`,
+  `raw_store_key_unavailable`, `media_cap_misconfigured`, plus the
+  `admission_failed` catch-all — no reachable failure on this seam may surface as
+  an unnamed 500, because "never blind-retryable" only holds if the client always
+  has an `error` to branch on. The receipt query answers 503
+  `receipt_store_unavailable` rather than `unknown` when the store cannot be
+  read: `unknown` is an answer a client deletes originals against, so it is never
+  used to report a read failure. Per-kind caps default in
+  `media_ingress.DEFAULT_MEDIA_KIND_MAX_BYTES` and are overridable per kind via
+  `HEIMDAL_MEDIA_MAX_BYTES_<KIND>`; a present-but-unusable override fails loud
+  rather than admitting evidence the operator believed was bounded.
+- **Operator precondition.** Admission encrypts through
+  `app.heimdal.raw_store`, so `HEIMDAL_RAW_STORE_KEY` must be provisioned to the
+  process serving the API. Today `config/secrets/host_secret_contract.json`
+  declares that secret for the `heimdal-capture-watch` consumer only, so an api
+  process without it refuses every admission with 500
+  `raw_store_key_unavailable` / `not_acknowledged` — named and remediable, never
+  a silent or ambiguous failure. Provisioning it to the api consumer (which the
+  pre-existing `POST /api/heimdal/screen/capture` needs equally) is a deferred
+  defect on the Known Defects registry (#4172, `KD-4384-RAWKEY`), not claimed here.
+- **Receipts are not retention-aware, stated honestly.**
+  `app.heimdal.retention.enforce_hard_retention_bound` hard-deletes raw records
+  past the retention window without consulting receipts, so a receipt can outlive
+  the raw object it attests to: the query would still answer `admitted` with a
+  `raw_ref` that no longer resolves, and a resend short-circuits on that receipt
+  rather than re-admitting the original. Latent today — nothing schedules that job
+  — but CDLM-03 deletes client originals against an `admitted` answer, so a
+  receipt-aware retention interaction must land before that. Tracked as a deferred
+  defect on the Known Defects registry (#4172, `KD-4384-RETENTION`), not claimed as
+  solved here.
+- **Consent scope, stated honestly.** Every kind is admitted under the standing
+  self-record grant the voice-memo lane uses
+  (`consent_ledger.SELF_RECORD_SCOPE`), whose descriptive
+  `capture_profile.modalities` names `speech` only. No modality enforcement reads
+  that field today, so this is a provenance-accuracy gap rather than an
+  admission bypass; giving the media lane its own grant naming its modalities is
+  an owner decision, deferred on the Known Defects registry (#4172,
+  `KD-4384-MODALITY`).
+- **LAN/loopback/tailnet posture only.** Both routes refuse a peer outside
+  loopback, RFC1918/ULA, link-local, or the tailnet CGNAT range with 403
+  `public_ingress_refused`, judged on the immediate peer and never on
+  `X-Forwarded-For`. Public ingress is owner-reserved; per-agent keys are the
+  named next hardening slice (client-contract gap F2).
+- **Both lanes share the seam.** A watched-folder admission
+  (`app.heimdal.capture_adapter.admit_capture_file`) records a receipt through
+  the same `record_media_admission` call, keyed by the HCAP-07 sidecar's
+  optional `capture_id` when present and by content hash otherwise. It never
+  gates that lane's delete-after-confirmed-ingest: receipt-gated retention is an
+  outbox-lane property (CDLM-03), and claiming it for the legacy lane is the
+  forbidden outcome in the vertical's partial-failure matrix.
+- **Out of scope for this slice:** session/segment ledger semantics (CDLM-02 —
+  `session_id`/`session_seq` are stored opaquely alongside the admission), ASR
+  or any derivation (CDLM-06), streaming/resumable uploads, auth keys, public
+  ingress, and any change to the watched-folder watcher (#4362 owns its
+  env-delivery bug).
+
 ## Event catalog (selected)
 
 ## Interpretation rules
@@ -782,6 +893,35 @@ Every consumer of historical Heimdal events uses `resolve_redirects` for this, p
 Payload fields (in addition to the envelope):
 - `queried_entity_id` (`string`): the entity_id the caller asked to resolve.
 - `resolved_entity_id` (`string`): the current (non-merged) entity_id it resolves to.
+
+### `heimdal.capture.media.admitted`
+
+Emitted by `app.heimdal.media_ingress.record_media_admission` once one media
+original is durably in the encrypted raw store, and **before** the receipt that
+acknowledges it exists (INV-CDLM-1, #4384). Not a dispatched command: no
+`outbox_worker._dispatch_topic` branch and no registered topic schema. Its
+committed presence is a *precondition* of the receipt, so a consumer treats the
+`heimdal_media_receipt` row as the acknowledgement and this event as the
+auditable record of how the admission happened. Payload is metadata only — the
+bytes are durable in the encrypted raw store, never duplicated into event logs.
+
+Payload fields (in addition to the envelope):
+- `capture_id` (`string`): the client-minted transfer id; for a watched-folder
+  admission with no sidecar `capture_id`, the content hash itself.
+- `content_sha256` (`string`): the raw bytes' hash — the KAP-compatible join key
+  and the raw record's `content_identity`.
+- `raw_ref` (`string`): the opaque `heimraw:` handle, resolvable only through the
+  gated read path (`app.heimdal.raw_read_gate.read_raw_record`).
+- `kind` (`string`): one of `audio`, `image`, `video`, `document`.
+- `lane` (`string`): `media_ingress` (governed HTTP) or `watched_folder` (legacy
+  Model-1); the lane determines retention posture, not receipt shape.
+- `receipt_id` (`string`): the derived receipt identity this admission will
+  acknowledge under.
+- `device_id`, `captured_at`, `schema_version`: client lineage, governed lane only.
+- `session_id`, `session_seq`: **present only when the client sent them** — the
+  keys are omitted rather than emitted as null, so a consumer must use a
+  defaulting read. Carried opaquely for CDLM-02, which owns every ledger semantic
+  over them; this lane never interprets or orders them.
 
 ### `panel.intent.created`
 

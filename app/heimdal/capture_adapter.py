@@ -35,6 +35,13 @@ Pipeline for one candidate file, in order:
    `app.heimdal.raw_store.insert_raw_record` writes ciphertext +
    `content_identity` + `capture_chain` + `sensor` + `consent` in one
    statement -- there is no separate "stamp provenance later" step.
+4.5 **Receipt the admission through the shared media seam** (CDLM-01, #4384).
+   `app.heimdal.media_ingress.record_watched_folder_admission` records the
+   durable-acceptance receipt (keyed by the sidecar's `capture_id` when it
+   carries one, otherwise by content hash) so a Model-1 file is queryable
+   through `GET /api/heimdal/capture/receipts`. It never gates step 5:
+   receipt-gated retention is an outbox-lane property (CDLM-03) and is not
+   claimed for this lane, so a receipt failure is logged, not raised.
 5. **Delete-after-confirmed-ingest.** The source file is removed **only**
    after step 4 returns successfully (the row is durably persisted, or was
    already durably persisted on a prior crash-retry -- `insert_raw_record`
@@ -108,6 +115,12 @@ _CAPTURE_SIDECAR_FIELDS = {
     "interruptions",
     "source_surface",
     "location",
+    # CDLM-01 (#4384): an optional client-minted transfer id. When present, the
+    # admission receipt is keyed by it instead of the content hash, so a client
+    # that also uses the governed ingress lane can query one id across both
+    # lanes. Retained here rather than in a second sidecar schema -- the
+    # capture-time sidecar composes, it does not fork.
+    "capture_id",
 }
 
 # How long to wait between the two size reads in the still-downloading guard
@@ -417,6 +430,26 @@ def admit_capture_file(
             f"Capture refused: raw record could not be durably persisted for {path}: {exc}. "
             "Source file left in place (not deleted)."
         ) from exc
+
+    # Step 4.5 (CDLM-01, #4384): receipt the admission through the shared media
+    # seam so a Model-1 file is queryable via
+    # `GET /api/heimdal/capture/receipts` like any governed-lane capture. The
+    # import is function-local to break the cycle (`media_ingress` imports this
+    # module for the sensor/consent guards it reuses).
+    #
+    # This deliberately does NOT gate the delete below: receipt-gated retention
+    # is an outbox-lane property (CDLM-03), and claiming it for the legacy
+    # watched-folder lane is the forbidden outcome in the vertical's
+    # partial-failure matrix. `record_watched_folder_admission` logs and returns
+    # None on failure rather than raising, so this lane gains no new failure
+    # mode (#4362 owns its env-delivery bug).
+    from app.heimdal import media_ingress
+
+    media_ingress.record_watched_folder_admission(
+        record,
+        capture_id=(capture_sidecar or {}).get("capture_id"),
+        trace_id="",
+    )
 
     # Step 5: delete-after-confirmed-ingest. Only reached once insert_raw_record
     # has returned a row (either freshly created or the pre-existing row from

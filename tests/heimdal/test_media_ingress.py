@@ -1,0 +1,1059 @@
+"""Governed media ingress with durable receipts (CDLM-01, issue #4384).
+
+Every test here drives the **production route** (`app.api.app.app` through
+`TestClient`), not a helper in isolation: the acceptance criteria are about
+what an external capture client observes, and the load-bearing rule --
+INV-CDLM-1, "a receipt means durable acceptance" -- is only meaningful if it
+holds on the path a client actually calls.
+
+`test_ack_requires_raw_write_and_committed_event` is the enforcement AC: it
+fault-injects the real outbox commit primitive
+(`app.services.outbox.append_jsonl_outbox_event`, reached through the module
+attribute the ingress seam calls) and asserts both the ordering and that a
+failed commit leaves *no acknowledged state* -- no receipt, no 2xx, and a
+receipt query that still answers `unknown`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import secrets
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from starlette.datastructures import UploadFile
+
+from app.api.app import app
+from app.heimdal import media_ingress, media_receipts
+from app.heimdal.capture_adapter import admit_capture_file
+from app.heimdal.consent_ledger import (
+    SELF_RECORD_GRANT_REF,
+    reset_memory_consent_ledger,
+    revoke_consent,
+)
+from app.heimdal.media_receipts import (
+    all_media_receipts,
+    reset_memory_media_receipts,
+)
+from app.heimdal.raw_read_gate import raw_ref_for
+from app.heimdal.raw_store import all_raw_records, reset_memory_raw_store
+
+pytestmark = pytest.mark.not_pg
+
+_KEY = bytes.fromhex(secrets.token_hex(32))
+MEDIA_ADMITTED_EVENT = "heimdal.capture.media.admitted"
+
+
+@pytest.fixture(autouse=True)
+def _memory_runtime(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """Volatile Heimdal backend plus a per-test JSONL outbox sink.
+
+    `DATABASE_URL`/`DB_DSN` are removed explicitly rather than relying on the
+    root conftest's `-m "not pg"` normalization, so the suggested validation
+    command (which passes no marker expression) still resolves the memory
+    backend and the JSONL audit log as the single outbox sink.
+
+    A `pg`-marked test is left alone, mirroring the root conftest's
+    `force_memory_store_for_non_pg`: forcing the memory backend there would
+    defeat the point of exercising the Postgres one.
+    """
+    if request.node.get_closest_marker("pg") is None:
+        monkeypatch.setenv("STORE_BACKEND", "memory")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    reset_memory_raw_store()
+    reset_memory_consent_ledger()
+    reset_memory_media_receipts()
+    return outbox_path
+
+
+@pytest.fixture
+def client() -> TestClient:
+    """A loopback-posture client (`TestClient`'s default peer is loopback)."""
+    return TestClient(app)
+
+
+def _admitted_events(outbox_path: Path) -> list[dict[str, Any]]:
+    if not outbox_path.exists():
+        return []
+    records = [json.loads(line) for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [record for record in records if record.get("event") == MEDIA_ADMITTED_EVENT]
+
+
+def _sidecar(media: bytes, **overrides: Any) -> dict[str, Any]:
+    sidecar: dict[str, Any] = {
+        "capture_id": str(uuid4()),
+        "content_sha256": hashlib.sha256(media).hexdigest(),
+        "kind": "audio",
+        "captured_at": "2026-07-29T12:00:00Z",
+        "device_id": "ipad-1",
+        "schema_version": 1,
+    }
+    sidecar.update(overrides)
+    return sidecar
+
+
+def _post_media(client: TestClient, media: bytes, sidecar: dict[str, Any], **kwargs: Any):
+    return client.post(
+        "/api/heimdal/capture/media",
+        files={
+            "media": ("segment-000.m4a", media, "audio/m4a"),
+            "sidecar": ("sidecar.json", json.dumps(sidecar), "application/json"),
+        },
+        **kwargs,
+    )
+
+
+def _get_receipts(client: TestClient, *capture_ids: str):
+    return client.get(
+        "/api/heimdal/capture/receipts",
+        params=[("capture_id", capture_id) for capture_id in capture_ids],
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC1 (enforcement): the 2xx exists only after durable raw write + committed event
+# ---------------------------------------------------------------------------
+
+
+def test_ack_requires_raw_write_and_committed_event(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, _memory_runtime: Path
+) -> None:
+    media = b"durable-media-bytes"
+    sidecar = _sidecar(media)
+
+    # --- ordering on the production route ---------------------------------
+    order: list[str] = []
+    real_raw_write = media_ingress.raw_store.insert_raw_record
+    real_commit = media_ingress.outbox_service.append_jsonl_outbox_event
+    real_receipt_write = media_ingress.media_receipts.append_media_receipt
+
+    def traced_raw_write(**kwargs: Any):
+        order.append("raw-write")
+        return real_raw_write(**kwargs)
+
+    def traced_commit(*args: Any, **kwargs: Any):
+        order.append("event-commit")
+        return real_commit(*args, **kwargs)
+
+    def traced_receipt_write(**kwargs: Any):
+        order.append("receipt-write")
+        return real_receipt_write(**kwargs)
+
+    monkeypatch.setattr(media_ingress.raw_store, "insert_raw_record", traced_raw_write)
+    monkeypatch.setattr(media_ingress.outbox_service, "append_jsonl_outbox_event", traced_commit)
+    monkeypatch.setattr(media_ingress.media_receipts, "append_media_receipt", traced_receipt_write)
+
+    ok = _post_media(client, media, sidecar, headers={"x-trace-id": "t-cdlm01"})
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["outcome"] == "admitted"
+    assert body["capture_id"] == sidecar["capture_id"]
+    assert body["content_sha256"] == sidecar["content_sha256"]
+    assert body["receipt_id"] and body["raw_ref"] and body["admitted_at"]
+    assert body["trace_id"] == "t-cdlm01"
+    # The acknowledged receipt is backed by a durable row — asserted directly, so
+    # no code path can satisfy this test by returning a locally-built receipt.
+    persisted = media_receipts.get_media_receipt(
+        sidecar["capture_id"], sidecar["content_sha256"]
+    )
+    assert persisted is not None and persisted.receipt_id == body["receipt_id"]
+    assert persisted.raw_ref == body["raw_ref"]
+    # The acknowledgement is the LAST thing that happens: the raw object is
+    # durable and the admission event is committed before the receipt exists.
+    assert order == ["raw-write", "event-commit", "receipt-write"]
+
+    # --- forced event-commit failure leaves nothing acknowledged ----------
+    reset_memory_raw_store()
+    reset_memory_media_receipts()
+    order.clear()
+    # The JSONL sink is append-only across the test, so the fault path is
+    # judged against the event count the successful admission above left.
+    events_before_fault = len(_admitted_events(_memory_runtime))
+    faulted = _sidecar(b"faulted-media-bytes")
+    faulted_media = b"faulted-media-bytes"
+
+    def failing_commit(*args: Any, **kwargs: Any):
+        order.append("event-commit")
+        raise OSError("outbox sink unavailable")
+
+    monkeypatch.setattr(media_ingress.outbox_service, "append_jsonl_outbox_event", failing_commit)
+
+    failed = _post_media(client, faulted_media, faulted)
+    assert failed.status_code == 500, failed.text
+    detail = failed.json()["detail"]
+    assert detail["error"] == "admission_event_commit_failed"
+    assert detail["state"] == "not_acknowledged"
+
+    # Nothing acknowledged: the receipt was never written, and the recovery
+    # query still answers `unknown` for this capture.
+    assert order == ["raw-write", "event-commit"]
+    assert all_media_receipts() == []
+    assert len(_admitted_events(_memory_runtime)) == events_before_fault
+    unknown = _get_receipts(client, faulted["capture_id"]).json()["receipts"]
+    assert unknown == [{"capture_id": faulted["capture_id"], "outcome": "unknown"}]
+
+    # The raw object is append-only, so the un-acknowledged write survives —
+    # and the client's resend completes admission idempotently over it
+    # (partial-failure matrix: "hub crash between raw write and outbox commit").
+    assert len(all_raw_records()) == 1
+    monkeypatch.setattr(media_ingress.outbox_service, "append_jsonl_outbox_event", real_commit)
+    resent = _post_media(client, faulted_media, faulted)
+    assert resent.status_code == 200, resent.text
+    assert resent.json().get("idempotent_replay") is not True
+    assert len(all_raw_records()) == 1
+    assert len(_admitted_events(_memory_runtime)) == events_before_fault + 1
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        OSError("receipt store rejected the insert"),
+        # The store's own durability refusal: its pg backend raises this when a
+        # row was neither inserted nor readable back.
+        media_receipts.MediaReceiptPersistenceError("receipt not durable"),
+    ],
+    ids=["arbitrary-store-fault", "store-durability-refusal"],
+)
+def test_receipt_write_failure_acknowledges_nothing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, fault: Exception, _memory_runtime: Path
+) -> None:
+    """The receipt IS the acknowledgement, so a failed receipt write acknowledges nothing.
+
+    The other half of AC1's enforcement: `test_ack_requires_raw_write_and_committed_event`
+    fault-injects the event commit, this one fault-injects the final step. Without
+    it, a seam that returned a locally-built receipt instead of a persisted row
+    would answer 200 `admitted` with a `receipt_id` that has no durable row — and
+    CDLM-03 would delete the client's only copy against that 200. Both fault types
+    are exercised because the seam handles them on separate branches.
+    """
+    media = f"receipt-write-will-fail-{type(fault).__name__}".encode()
+    sidecar = _sidecar(media)
+
+    real_receipt_write = media_ingress.media_receipts.append_media_receipt
+
+    def failing_receipt_write(**_kwargs: Any):
+        raise fault
+
+    monkeypatch.setattr(
+        media_ingress.media_receipts, "append_media_receipt", failing_receipt_write
+    )
+
+    refused = _post_media(client, media, sidecar)
+    assert refused.status_code == 500, refused.text
+    detail = refused.json()["detail"]
+    assert detail["error"] == "receipt_persistence_failed"
+    assert detail["state"] == "not_acknowledged"
+
+    # Nothing acknowledged: no receipt row, and the recovery query says so.
+    # Restore only the injected fault — `monkeypatch.undo()` would also revert
+    # the fixture's backend env and leave no store configured at all.
+    monkeypatch.setattr(
+        media_ingress.media_receipts, "append_media_receipt", real_receipt_write
+    )
+    assert all_media_receipts() == []
+    answer = _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]
+    assert answer == {"capture_id": sidecar["capture_id"], "outcome": "unknown"}
+
+    # The event did commit before the receipt failed, so the resend completes
+    # admission over the same raw object and only then receives a receipt.
+    resent = _post_media(client, media, sidecar)
+    assert resent.status_code == 200, resent.text
+    assert len(all_raw_records()) == 1
+    assert len(all_media_receipts()) == 1
+
+
+def test_receipt_raw_ref_resolves_to_the_object_it_attests_to(client: TestClient) -> None:
+    """A receipt's `raw_ref` must be the handle of the record actually written."""
+    media = b"receipt-must-point-at-real-evidence"
+    sidecar = _sidecar(media)
+    admitted = _post_media(client, media, sidecar)
+    assert admitted.status_code == 200, admitted.text
+
+    record = all_raw_records()[0]
+    assert admitted.json()["raw_ref"] == raw_ref_for(record)
+    queried = _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]
+    assert queried["raw_ref"] == raw_ref_for(record)
+
+
+def test_receipt_identity_includes_the_capture_id(client: TestClient) -> None:
+    """INV-CDLM-3's identity is the *pair*, so identical bytes do not share a receipt.
+
+    Two clients that capture byte-identical content share one raw object but each
+    needs its own answer to "was my capture accepted?". A receipt identity derived
+    from the hash alone would hand the second client the first one's receipt and
+    answer `unknown` for its own id forever.
+    """
+    media = b"byte-identical-content-from-two-captures"
+    first_sidecar = _sidecar(media)
+    second_sidecar = _sidecar(media)
+    assert first_sidecar["capture_id"] != second_sidecar["capture_id"]
+
+    first = _post_media(client, media, first_sidecar)
+    second = _post_media(client, media, second_sidecar)
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["receipt_id"] != second.json()["receipt_id"]
+    assert second.json().get("idempotent_replay") is not True
+
+    # One object per content hash, one receipt per transfer identity.
+    assert len(all_raw_records()) == 1
+    assert len(all_media_receipts()) == 2
+    for sidecar in (first_sidecar, second_sidecar):
+        answer = _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]
+        assert answer["outcome"] == "admitted"
+        assert answer["capture_id"] == sidecar["capture_id"]
+
+
+def test_capture_id_spelling_does_not_mint_a_second_receipt(client: TestClient) -> None:
+    """One logical UUID is one transfer identity, on admission AND on recovery.
+
+    `UUID()` accepts uppercase, braced, unhyphenated, and `urn:uuid:` forms of the
+    same id, and the receipt identity is derived from this string. Canonicalizing
+    only on the write path is worse than not canonicalizing at all: an uppercase
+    client (Swift's `UUID().uuidString`) would be told `unknown` for a capture
+    that IS durably admitted — precisely the reconnect answer it cannot verify any
+    other way, and the one case where it does not know the canonical form because
+    the response was lost.
+    """
+    canonical = str(uuid4())
+    spellings = [
+        canonical,
+        canonical.upper(),
+        "{" + canonical + "}",
+        canonical.replace("-", ""),
+        f"urn:uuid:{canonical}",
+    ]
+
+    media = b"same-capture-id-many-spellings"
+    first = _post_media(client, media, _sidecar(media, capture_id=canonical))
+    assert first.status_code == 200, first.text
+
+    for spelling in spellings:
+        resent = _post_media(client, media, _sidecar(media, capture_id=spelling))
+        assert resent.status_code == 200, resent.text
+        assert resent.json()["receipt_id"] == first.json()["receipt_id"]
+        assert resent.json()["idempotent_replay"] is True
+
+        answer = _get_receipts(client, spelling).json()["receipts"][0]
+        assert answer["outcome"] == "admitted", f"{spelling} queried as {answer['outcome']}"
+        assert answer["receipt_id"] == first.json()["receipt_id"]
+        # The answer echoes what the client asked, so it stays alignable.
+        assert answer["capture_id"] == spelling
+
+    assert len(all_media_receipts()) == 1
+    assert len(all_raw_records()) == 1
+
+
+def test_one_capture_id_spans_both_lanes(client: TestClient, tmp_path: Path) -> None:
+    """The sidecar's `capture_id` is why a client can query one id across lanes.
+
+    A watched-folder admission keyed on a differently-spelled UUID must not mint a
+    second receipt identity for content the governed lane then re-sends.
+    """
+    watch_dir = tmp_path / "watched"
+    watch_dir.mkdir()
+    memo = watch_dir / "memo-cross-lane.m4a"
+    payload = b"admitted-by-the-watcher-then-resent-over-http"
+    memo.write_bytes(payload)
+    canonical = str(uuid4())
+    memo.with_name(f"{memo.name}.capture.json").write_text(
+        json.dumps(
+            {"sidecar_version": 1, "device_id": "iphone-1", "capture_id": canonical.upper()}
+        ),
+        encoding="utf-8",
+    )
+    assert admit_capture_file(memo, key=_KEY, stability_delay=0.0).created
+
+    resent = _post_media(client, payload, _sidecar(payload, capture_id=canonical))
+    assert resent.status_code == 200, resent.text
+    assert resent.json()["idempotent_replay"] is True
+    assert len(all_media_receipts()) == 1
+    assert _get_receipts(client, canonical).json()["receipts"][0]["outcome"] == "admitted"
+
+
+def test_consent_refusal_admits_nothing(client: TestClient) -> None:
+    """HEIM-3 is the one signal->raw gate, and its refusal is a named 409."""
+    revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="test-operator")
+
+    media = b"no-active-grant-covers-this"
+    refused = _post_media(client, media, _sidecar(media))
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["error"] == "consent_refused"
+    assert detail["state"] == "not_acknowledged"
+    assert all_raw_records() == []
+    assert all_media_receipts() == []
+
+
+def test_unregistered_sensor_admits_nothing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T5: an unregistered adapter identity cannot admit raw evidence.
+
+    `raw_store.insert_raw_record` only requires a non-empty sensor dict, so this
+    assert is the lane's only registration check.
+    """
+    monkeypatch.setattr(
+        media_ingress.capture_adapter, "is_sensor_registered", lambda *_a, **_k: False
+    )
+    media = b"admitted-by-an-unregistered-adapter"
+    refused = _post_media(client, media, _sidecar(media))
+    assert refused.status_code == 500
+    assert refused.json()["detail"]["state"] == "not_acknowledged"
+    assert all_raw_records() == []
+    assert all_media_receipts() == []
+
+
+# ---------------------------------------------------------------------------
+# AC2: end-to-end idempotency on (capture_id, content_sha256)
+# ---------------------------------------------------------------------------
+
+
+def test_resend_is_idempotent_end_to_end(client: TestClient, _memory_runtime: Path) -> None:
+    media = b"one-segment-of-audio"
+    sidecar = _sidecar(media)
+
+    first = _post_media(client, media, sidecar)
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body.get("idempotent_replay") is not True
+
+    # The client never saw the first response (lost response / reconnect) and
+    # resends the identical (capture_id, content_sha256) pair.
+    second = _post_media(client, media, sidecar)
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+
+    assert second_body["receipt_id"] == first_body["receipt_id"]
+    assert second_body["raw_ref"] == first_body["raw_ref"]
+    assert second_body["admitted_at"] == first_body["admitted_at"]
+    assert second_body["idempotent_replay"] is True
+
+    assert len(all_raw_records()) == 1
+    assert len(all_media_receipts()) == 1
+    assert len(_admitted_events(_memory_runtime)) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC3: per-kind caps, lineage metadata, and the named error states
+# ---------------------------------------------------------------------------
+
+
+def test_kind_caps_and_named_error_states(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, _memory_runtime: Path
+) -> None:
+    # Every configured kind admits within its cap and lands with lineage.
+    for index, kind in enumerate(media_ingress.MEDIA_KINDS):
+        media = f"payload-for-{kind}".encode()
+        sidecar = _sidecar(media, kind=kind, device_id=f"device-{index}")
+        response = _post_media(client, media, sidecar)
+        assert response.status_code == 200, response.text
+        record = next(row for row in all_raw_records() if row.content_identity == sidecar["content_sha256"])
+        assert record.payload["kind"] == kind
+        assert record.payload["capture_id"] == sidecar["capture_id"]
+        assert record.payload["device_id"] == f"device-{index}"
+        assert record.payload["captured_at"] == sidecar["captured_at"]
+        assert record.payload["schema_version"] == 1
+        assert record.payload["lane"] == media_ingress.LANE_MEDIA_INGRESS
+
+    admitted_raw = len(all_raw_records())
+    admitted_receipts = len(all_media_receipts())
+    assert admitted_raw == len(media_ingress.MEDIA_KINDS)
+
+    # Hash mismatch -> 422, nothing admitted.
+    media = b"bytes-that-do-not-match"
+    mismatch = _post_media(client, media, _sidecar(media, content_sha256="0" * 64))
+    assert mismatch.status_code == 422
+    assert mismatch.json()["detail"]["error"] == "content_hash_mismatch"
+
+    # Sidecar schema violations -> 422, nothing admitted. Both shapes are
+    # covered: a missing field (rejected by pydantic itself) and every
+    # custom-validator rejection. The latter must be asserted separately —
+    # pydantic attaches the raising exception to each error's `ctx`, so a
+    # response that carries the error list verbatim fails to encode and degrades
+    # into a bare 500 for exactly these inputs while a missing-field test stays
+    # green over the break.
+    incomplete = _sidecar(media)
+    incomplete.pop("device_id")
+    for invalid in (
+        incomplete,
+        _sidecar(media, capture_id="not-a-uuid"),
+        _sidecar(media, content_sha256="abc"),
+        _sidecar(media, captured_at="yesterday"),
+        _sidecar(media, schema_version=2),
+    ):
+        schema_violation = _post_media(client, media, invalid)
+        assert schema_violation.status_code == 422, schema_violation.text
+        assert schema_violation.headers["content-type"].startswith("application/json")
+        assert schema_violation.json()["detail"]["error"] == "sidecar_schema_invalid"
+
+    # Unsupported kind -> 415, nothing admitted.
+    unsupported = _post_media(client, media, _sidecar(media, kind="hologram"))
+    assert unsupported.status_code == 415
+    assert unsupported.json()["detail"]["error"] == "unsupported_media_kind"
+
+    # Over the configured per-kind cap -> 413, nothing admitted.
+    monkeypatch.setenv("HEIMDAL_MEDIA_MAX_BYTES_IMAGE", "8")
+    oversize_media = b"x" * 64
+    oversize = _post_media(client, oversize_media, _sidecar(oversize_media, kind="image"))
+    assert oversize.status_code == 413
+    oversize_detail = oversize.json()["detail"]
+    assert oversize_detail["error"] == "media_too_large"
+    assert oversize_detail["max_bytes"] == 8
+
+    # "nothing admitted" is asserted for the whole error set at once: no raw
+    # object and no receipt was created by any of the four refusals.
+    assert len(all_raw_records()) == admitted_raw
+    assert len(all_media_receipts()) == admitted_receipts
+
+
+# ---------------------------------------------------------------------------
+# AC4: the receipt query is the reconnect/recovery answer
+# ---------------------------------------------------------------------------
+
+
+def test_receipt_query_answers_recovery(client: TestClient) -> None:
+    media = b"admitted-then-queried"
+    sidecar = _sidecar(media)
+    admitted = _post_media(client, media, sidecar)
+    assert admitted.status_code == 200, admitted.text
+    receipt_id = admitted.json()["receipt_id"]
+
+    never_seen = str(uuid4())
+    response = _get_receipts(client, sidecar["capture_id"], never_seen)
+    assert response.status_code == 200, response.text
+    receipts = response.json()["receipts"]
+
+    # Answers stay positionally aligned with the requested ids so a client can
+    # reconcile its own queue without re-matching.
+    assert [entry["capture_id"] for entry in receipts] == [sidecar["capture_id"], never_seen]
+    assert receipts[0]["outcome"] == "admitted"
+    assert receipts[0]["receipt_id"] == receipt_id
+    assert receipts[0]["content_sha256"] == sidecar["content_sha256"]
+    assert receipts[0]["raw_ref"] and receipts[0]["admitted_at"]
+    assert receipts[1] == {"capture_id": never_seen, "outcome": "unknown"}
+
+    # The batch is bounded, and an id-less query is a named refusal rather
+    # than an unbounded table read.
+    assert _get_receipts(client).status_code == 422
+    too_many = _get_receipts(client, *[str(uuid4()) for _ in range(media_ingress.RECEIPT_QUERY_MAX_IDS + 1)])
+    assert too_many.status_code == 422
+    assert too_many.json()["detail"]["error"] == "too_many_capture_ids"
+
+
+# ---------------------------------------------------------------------------
+# AC5: the watched-folder lane shares the receipt seam
+# ---------------------------------------------------------------------------
+
+
+def test_watched_folder_admission_shares_receipt_seam(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _memory_runtime: Path
+) -> None:
+    watch_dir = tmp_path / "watched"
+    watch_dir.mkdir()
+
+    # The legacy lane runs through the same acknowledgement seam, so it owes the
+    # same ordering: event committed before the receipt exists. Asserted here and
+    # not only on the HTTP lane, or an inversion on this lane would go unseen.
+    order: list[str] = []
+    real_commit = media_ingress.outbox_service.append_jsonl_outbox_event
+    real_receipt_write = media_ingress.media_receipts.append_media_receipt
+    monkeypatch.setattr(
+        media_ingress.outbox_service,
+        "append_jsonl_outbox_event",
+        lambda *a, **k: (order.append("event-commit"), real_commit(*a, **k))[1],
+    )
+    monkeypatch.setattr(
+        media_ingress.media_receipts,
+        "append_media_receipt",
+        lambda **k: (order.append("receipt-write"), real_receipt_write(**k))[1],
+    )
+
+    # (a) sidecar supplies a capture_id -> the receipt is keyed by it.
+    with_sidecar = watch_dir / "memo-with-sidecar.m4a"
+    with_sidecar.write_bytes(b"watched-folder-memo-one")
+    capture_id = str(uuid4())
+    with_sidecar.with_name(f"{with_sidecar.name}.capture.json").write_text(
+        json.dumps(
+            {
+                "sidecar_version": 1,
+                "device_id": "iphone-1",
+                "capture_id": capture_id,
+                "recorded_start_at": "2026-07-29T11:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = admit_capture_file(with_sidecar, key=_KEY, stability_delay=0.0)
+    assert result.created
+
+    answered = _get_receipts(client, capture_id).json()["receipts"][0]
+    assert answered["outcome"] == "admitted"
+    assert answered["content_sha256"] == result.record.content_identity
+    assert answered["lane"] == media_ingress.LANE_WATCHED_FOLDER
+
+    # (b) no sidecar capture_id -> the receipt is keyed by the content hash,
+    # which is what the query accepts for the legacy lane.
+    plain = watch_dir / "memo-plain.m4a"
+    plain.write_bytes(b"watched-folder-memo-two")
+    plain_result = admit_capture_file(plain, key=_KEY, stability_delay=0.0)
+    assert plain_result.created
+    content_hash = plain_result.record.content_identity
+
+    hash_keyed = _get_receipts(client, content_hash).json()["receipts"][0]
+    assert hash_keyed["outcome"] == "admitted"
+    assert hash_keyed["capture_id"] == content_hash
+    assert hash_keyed["content_sha256"] == content_hash
+
+    assert len(_admitted_events(_memory_runtime)) == 2
+    assert order == ["event-commit", "receipt-write"] * 2
+
+
+def test_watched_folder_replay_emits_no_further_admission_event(
+    tmp_path: Path, _memory_runtime: Path
+) -> None:
+    """A re-admitted watched-folder file must not emit an event per watch tick.
+
+    `_delete_source_file` logs rather than raises, so a memo whose delete fails
+    stays in the folder and is re-admitted on every tick. The raw store is
+    idempotent by content hash, so without a replay guard in the shared
+    acknowledgement seam that one file would emit an unbounded number of
+    admission events against a single receipt — and CDLM-02/CDLM-06 would
+    double-count it.
+    """
+    watch_dir = tmp_path / "watched"
+    watch_dir.mkdir()
+    memo = watch_dir / "sticky-memo.m4a"
+    memo.write_bytes(b"a memo whose source delete keeps failing")
+
+    for tick in range(4):
+        memo.write_bytes(b"a memo whose source delete keeps failing")
+        result = admit_capture_file(memo, key=_KEY, stability_delay=0.0)
+        assert result.created is (tick == 0)
+
+    assert len(all_raw_records()) == 1
+    assert len(all_media_receipts()) == 1
+    assert len(_admitted_events(_memory_runtime)) == 1
+
+
+def test_watched_folder_sidecar_capture_id_of_the_wrong_type_is_not_a_new_failure_mode(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A malformed sidecar value must degrade, never break the legacy lane.
+
+    Sidecar values are untrusted and not type-validated upstream, and the receipt
+    call runs *after* the durable write and before delete-after-confirmed-ingest.
+    An exception escaping there would leave the memo admitted but undeleted and
+    "refused" on every later tick.
+    """
+    watch_dir = tmp_path / "watched"
+    watch_dir.mkdir()
+    memo = watch_dir / "memo-bad-sidecar.m4a"
+    memo.write_bytes(b"watched-folder-memo-with-a-numeric-capture-id")
+    memo.with_name(f"{memo.name}.capture.json").write_text(
+        json.dumps({"sidecar_version": 1, "device_id": "iphone-1", "capture_id": 12345}),
+        encoding="utf-8",
+    )
+
+    result = admit_capture_file(memo, key=_KEY, stability_delay=0.0)
+
+    assert result.created and result.source_deleted
+    assert not memo.exists()
+    # The receipt falls back to the content-hash key rather than being lost.
+    content_hash = result.record.content_identity
+    answered = _get_receipts(client, content_hash).json()["receipts"][0]
+    assert answered["outcome"] == "admitted"
+    assert answered["capture_id"] == content_hash
+
+
+# ---------------------------------------------------------------------------
+# AC6: LAN/loopback/tailnet posture only -- no public ingress
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "peer",
+    [
+        "192.168.1.20",
+        "100.101.102.103",  # tailnet CGNAT
+        "10.0.0.5",
+        "fd7a:115c:a1e0::1",  # tailnet ULA
+        "::ffff:192.168.1.20",  # a dual-stack listener's view of an IPv4 LAN peer
+    ],
+)
+def test_ingress_admits_lan_loopback_and_tailnet_peers(peer: str) -> None:
+    """The refusal below is specific to public peers, not a blanket refusal."""
+    lan_client = TestClient(app, client=(peer, 41000))
+    media = f"admitted-from-{peer}".encode()
+    assert _post_media(lan_client, media, _sidecar(media)).status_code == 200
+
+
+@pytest.mark.parametrize("peer", ["203.0.113.7", "8.8.8.8", "2001:db8::1", ""])
+def test_ingress_refuses_peers_it_cannot_place_inside_the_posture(peer: str) -> None:
+    """A public peer *and* an unidentifiable one both fail closed.
+
+    An empty host is not provably inside the posture, so it is refused rather
+    than treated as loopback the way the general-purpose auth helper does.
+    """
+    outside = TestClient(app, client=(peer, 41000))
+    media = f"never-admitted-from-{peer}".encode()
+    response = _post_media(outside, media, _sidecar(media))
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "public_ingress_refused"
+    assert all_raw_records() == []
+
+
+def test_media_over_every_cap_is_refused_before_the_kind_is_known(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The coarse bound limits resident memory before any per-kind cap applies."""
+    for kind in media_ingress.MEDIA_KINDS:
+        monkeypatch.setenv(f"HEIMDAL_MEDIA_MAX_BYTES_{kind.upper()}", "16")
+    oversize = b"y" * 128
+    response = _post_media(client, oversize, _sidecar(oversize, kind="video"))
+    assert response.status_code == 413
+    detail = response.json()["detail"]
+    assert detail["error"] == "media_too_large"
+    assert detail["max_bytes"] == 16
+    assert all_raw_records() == []
+
+
+@pytest.mark.asyncio
+async def test_part_read_is_bounded_rather_than_slurped() -> None:
+    """The part read passes its bound down, so resident memory is actually capped.
+
+    Asserted on `_part_bytes` directly: "how many bytes reached memory" has no
+    black-box signal — an unbounded read produces the identical 413 — so the
+    bound is pinned where it is owned.
+    """
+    from app.api.routes import heimdal_capture
+
+    requested: list[int | None] = []
+
+    class _RecordingPart(UploadFile):
+        def __init__(self) -> None:
+            super().__init__(file=io.BytesIO(b"z" * 4096), filename="big.bin")
+
+        async def read(self, size: int = -1) -> bytes:  # type: ignore[override]
+            requested.append(size)
+            return b"z" * (size if size and size > 0 else 4096)
+
+    with pytest.raises(HTTPException) as refusal:
+        await heimdal_capture._part_bytes("media", _RecordingPart(), "t-bound", max_bytes=64)
+
+    assert requested == [65]
+    assert refusal.value.status_code == 413
+    assert refusal.value.detail["max_bytes"] == 64
+
+
+def test_unusable_per_kind_cap_override_is_a_named_refusal(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An override on *any* kind must be named, not an unnamed 500.
+
+    The coarse bound resolves every kind, so a bad override on a kind the request
+    does not even use is still reached — and must still be branchable.
+    """
+    monkeypatch.setenv("HEIMDAL_MEDIA_MAX_BYTES_VIDEO", "not-a-number")
+    media = b"audio-post-with-a-broken-video-cap"
+    response = _post_media(client, media, _sidecar(media, kind="audio"))
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error"] == "media_cap_misconfigured"
+    assert detail["state"] == "not_acknowledged"
+    assert "HEIMDAL_MEDIA_MAX_BYTES_VIDEO" in detail["message"]
+    assert all_raw_records() == []
+
+    monkeypatch.setenv("HEIMDAL_MEDIA_MAX_BYTES_VIDEO", "0")
+    zero_cap = _post_media(client, media, _sidecar(media, kind="audio"))
+    assert zero_cap.status_code == 500
+    assert zero_cap.json()["detail"]["error"] == "media_cap_misconfigured"
+
+
+def test_ingress_refuses_public_binding(client: TestClient) -> None:
+    public_client = TestClient(app, client=("203.0.113.7", 41000))
+    media = b"never-admitted-from-the-public-internet"
+    sidecar = _sidecar(media)
+
+    refused = _post_media(public_client, media, sidecar)
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["error"] == "public_ingress_refused"
+
+    # The posture is judged on the immediate peer only. Honouring a forwarded
+    # header here would let any public caller behind a relay assert a local
+    # address — exactly the ingress this slice must not open.
+    spoofed = _post_media(
+        public_client, media, sidecar, headers={"x-forwarded-for": "127.0.0.1"}
+    )
+    assert spoofed.status_code == 403
+    assert spoofed.json()["detail"]["error"] == "public_ingress_refused"
+    spoofed_query = client.get(
+        "/api/heimdal/capture/receipts",
+        params=[("capture_id", sidecar["capture_id"])],
+        headers={"x-forwarded-for": "203.0.113.7"},
+    )
+    # ...and a *loopback* caller is not demoted by a forwarded header either.
+    assert spoofed_query.status_code == 200
+
+    # The receipt query discloses admission state, so it carries the same posture.
+    refused_query = _get_receipts(public_client, sidecar["capture_id"])
+    assert refused_query.status_code == 403
+    assert refused_query.json()["detail"]["error"] == "public_ingress_refused"
+
+    # Nothing was admitted, and the loopback client agrees it never arrived.
+    assert all_raw_records() == []
+    assert all_media_receipts() == []
+    assert _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]["outcome"] == "unknown"
+
+
+def test_no_reachable_failure_returns_an_unnamed_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Never blind-retryable" only holds if every failure carries a branchable `error`.
+
+    Two failures that bypass the specific handlers: the raw-store key precondition
+    (resolved before the guarded raw write) and an arbitrary store fault.
+    """
+    monkeypatch.delenv("HEIMDAL_RAW_STORE_KEY", raising=False)
+    media = b"cannot-be-encrypted-without-a-key"
+    keyless = _post_media(client, media, _sidecar(media))
+    assert keyless.status_code == 500
+    keyless_detail = keyless.json()["detail"]
+    assert keyless_detail["error"] == "raw_store_key_unavailable"
+    assert keyless_detail["state"] == "not_acknowledged"
+
+    monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", _KEY.hex())
+
+    def exploding_lookup(*_args: Any, **_kwargs: Any):
+        raise TimeoutError("receipt store went away mid-admission")
+
+    monkeypatch.setattr(media_ingress.media_receipts, "get_media_receipt", exploding_lookup)
+    other = b"an-unexpected-store-fault"
+    unexpected = _post_media(client, other, _sidecar(other))
+    assert unexpected.status_code == 500
+    unexpected_detail = unexpected.json()["detail"]
+    assert unexpected_detail["error"] == "admission_failed"
+    assert unexpected_detail["state"] == "not_acknowledged"
+    assert all_media_receipts() == []
+
+    # A receipt-store read failure must never be answered as `unknown`: a client
+    # deletes originals against that answer.
+    monkeypatch.setattr(
+        media_receipts, "find_media_receipts_by_capture_ids", exploding_lookup
+    )
+    degraded = _get_receipts(client, str(uuid4()))
+    assert degraded.status_code == 503
+    assert degraded.json()["detail"]["error"] == "receipt_store_unavailable"
+
+
+def test_committed_db_outbox_event_is_not_reread_as_uncommitted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A derived idempotency key makes an ON CONFLICT no-op *proof of commit*.
+
+    `write_outbox_event` returns "" when its ON CONFLICT swallowed a duplicate.
+    Because this lane's key is derived from the transfer identity (unlike the
+    governed text capture's random event_id), treating "" as "not committed"
+    would refuse an already-committed capture forever. The DB sink branch is
+    reached by configuring a DSN while the stores stay on the memory backend.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://unused:unused@db.invalid:5432/none")
+
+    def conflict_noop(*_args: Any, **_kwargs: Any) -> str:
+        return ""
+
+    def unwritable_jsonl(*_args: Any, **_kwargs: Any) -> bool:
+        raise OSError("jsonl sink unavailable")
+
+    monkeypatch.setattr(media_ingress.outbox_service, "write_outbox_event", conflict_noop)
+    monkeypatch.setattr(
+        media_ingress.outbox_service, "append_jsonl_outbox_event", unwritable_jsonl
+    )
+
+    media = b"already-committed-on-a-prior-attempt"
+    admitted = _post_media(client, media, _sidecar(media))
+    assert admitted.status_code == 200, admitted.text
+    assert len(all_media_receipts()) == 1
+
+    # A genuine sink failure (both sinks raising) still refuses to acknowledge.
+    def exploding_db(*_args: Any, **_kwargs: Any) -> str:
+        raise OSError("db outbox unavailable")
+
+    monkeypatch.setattr(media_ingress.outbox_service, "write_outbox_event", exploding_db)
+    other = b"neither-sink-accepted-this-one"
+    refused = _post_media(client, other, _sidecar(other))
+    assert refused.status_code == 500
+    assert refused.json()["detail"]["error"] == "admission_event_commit_failed"
+    assert len(all_media_receipts()) == 1
+
+
+def test_media_receipt_store_rejects_a_second_receipt_for_the_same_identity() -> None:
+    """The receipt identity is `(capture_id, content_sha256)`, storage-enforced."""
+    capture_id = str(uuid4())
+    content_sha256 = hashlib.sha256(b"identity-bytes").hexdigest()
+    first, created = media_receipts.append_media_receipt(
+        capture_id=capture_id,
+        content_sha256=content_sha256,
+        raw_ref="heimraw:record-1",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        trace_id="t-1",
+        payload={},
+    )
+    assert created
+    second, created_again = media_receipts.append_media_receipt(
+        capture_id=capture_id,
+        content_sha256=content_sha256,
+        raw_ref="heimraw:record-1",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        trace_id="t-2",
+        payload={},
+    )
+    assert not created_again
+    assert second.receipt_id == first.receipt_id
+    assert second.admitted_at == first.admitted_at
+    assert len(all_media_receipts()) == 1
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["upper", "braced", "unhyphenated", "urn", "padded"],
+)
+def test_receipt_identity_is_spelling_independent_in_the_store(spelling: str) -> None:
+    """The store owns canonicalization, so it holds regardless of the caller.
+
+    Asserted directly on `media_receipts`, not only through the route: this is the
+    rule every lane and every lookup depends on, and it must not rest on a
+    particular caller normalizing first.
+    """
+    canonical = str(uuid4())
+    variants = {
+        "upper": canonical.upper(),
+        "braced": "{" + canonical + "}",
+        "unhyphenated": canonical.replace("-", ""),
+        "urn": f"urn:uuid:{canonical}",
+        "padded": f"  {canonical}  ",
+    }
+    variant = variants[spelling]
+    content_sha256 = hashlib.sha256(f"identity-{spelling}".encode()).hexdigest()
+
+    assert media_receipts.canonical_capture_id(variant) == canonical
+    assert media_receipts.derive_receipt_id(variant, content_sha256) == (
+        media_receipts.derive_receipt_id(canonical, content_sha256)
+    )
+
+    stored, created = media_receipts.append_media_receipt(
+        capture_id=variant,
+        content_sha256=content_sha256,
+        raw_ref="heimraw:record-spelling",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        payload={},
+    )
+    assert created and stored.capture_id == canonical
+    assert media_receipts.get_media_receipt(canonical, content_sha256) is not None
+    # Both spellings resolve, and each answer is keyed back by what was asked.
+    found = media_receipts.find_media_receipts_by_capture_ids([variant, canonical])
+    assert set(found) == {variant, canonical}
+    assert {receipt.receipt_id for receipt in found.values()} == {stored.receipt_id}
+
+    # A non-UUID id (the watched-folder lane's content-hash key) passes through.
+    assert media_receipts.canonical_capture_id(content_sha256) == content_sha256
+
+
+def test_shared_seam_reports_an_already_acknowledged_identity_as_not_new() -> None:
+    """`record_media_admission` tells its caller whether *it* acknowledged.
+
+    This is what lets `idempotent_replay` stay truthful when a concurrent request
+    won the race between the pre-write short-circuit and the seam's own guard.
+    """
+    capture_id = str(uuid4())
+    content_sha256 = hashlib.sha256(b"seam-guard-bytes").hexdigest()
+    common = {
+        "capture_id": capture_id,
+        "content_sha256": content_sha256,
+        "raw_ref": "heimraw:record-seam",
+        "kind": "audio",
+        "lane": media_ingress.LANE_MEDIA_INGRESS,
+        "trace_id": "t-seam",
+        "event_payload": {"capture_id": capture_id, "content_sha256": content_sha256},
+    }
+    first, newly = media_ingress.record_media_admission(**common)
+    assert newly
+    second, newly_again = media_ingress.record_media_admission(**common)
+    assert not newly_again
+    assert second.receipt_id == first.receipt_id
+    assert len(all_media_receipts()) == 1
+
+
+@pytest.mark.pg
+def test_append_only_enforced_pg_media_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real Postgres trigger rejects UPDATE/DELETE against heimdal_media_receipt (HEIM-1).
+
+    Mirrors `test_raw_store.py::test_append_only_enforced_pg_read_receipt`: the
+    Python store exposes no mutation, and the database refuses one anyway. Also
+    exercises `_PgReceiptStore`'s insert/replay path, which the memory-backend
+    tests above cannot reach.
+    """
+    pytest.importorskip("psycopg")
+    del monkeypatch  # the root conftest's pg fixtures supply DSN + autocreate
+
+    content_sha256 = hashlib.sha256(f"pg-media-receipt-{secrets.token_hex(8)}".encode()).hexdigest()
+    receipt, created = media_receipts.append_media_receipt(
+        capture_id=str(uuid4()),
+        content_sha256=content_sha256,
+        raw_ref="heimraw:pg-record",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        trace_id="t-pg",
+        payload={"device_id": "ipad-pg"},
+    )
+    assert created
+    # The derived primary key makes a replay a no-op that returns the original
+    # row rather than an UPDATE the trigger would reject.
+    replayed, created_again = media_receipts.append_media_receipt(
+        capture_id=receipt.capture_id,
+        content_sha256=content_sha256,
+        raw_ref="heimraw:pg-record",
+        kind="audio",
+        lane=media_ingress.LANE_MEDIA_INGRESS,
+        trace_id="t-pg-2",
+        payload={},
+    )
+    assert not created_again and replayed.receipt_id == receipt.receipt_id
+    assert media_receipts.find_media_receipts_by_capture_ids([receipt.capture_id])[
+        receipt.capture_id
+    ].receipt_id == receipt.receipt_id
+
+    conn = media_receipts._pg_connect()
+    try:
+        cur = conn.cursor()
+        with pytest.raises(Exception) as excinfo:
+            cur.execute(
+                f"UPDATE {media_receipts._TABLE} SET kind = 'tampered' WHERE receipt_id = %s",
+                (receipt.receipt_id,),
+            )
+        assert "append-only" in str(excinfo.value).lower() or "HEIM-1" in str(excinfo.value)
+
+        with pytest.raises(Exception) as excinfo_del:
+            cur.execute(
+                f"DELETE FROM {media_receipts._TABLE} WHERE receipt_id = %s",
+                (receipt.receipt_id,),
+            )
+        assert "append-only" in str(excinfo_del.value).lower() or "HEIM-1" in str(
+            excinfo_del.value
+        )
+    finally:
+        conn.close()
