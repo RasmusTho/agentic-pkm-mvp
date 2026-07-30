@@ -12,15 +12,29 @@ from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ClientConfig,
     ControlPlaneConflictError,
+    ControlPlaneProtocolError,
     ControlPlaneScopeError,
+    StaleLeaseError,
 )
-from app.builderops.control_plane.models import StateConflict
+from app.builderops.control_plane.models import LeaseUnavailable, StateConflict
 from app.builderops.control_plane.service import create_app
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_merge import BuilderOpsOutboxExecutor
 from tests.dispatcher.verification_helpers import REPO, request
 
 pytestmark = pytest.mark.pg
+
+
+def _expire_outbox_claim(
+    store, repository: str, operation_key: str
+) -> None:
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_outbox SET claim_expires_at = "
+            "clock_timestamp() - interval '1 second' "
+            "WHERE repository = %s AND operation_key = %s",
+            (repository.lower(), operation_key),
+        )
 
 
 def test_concurrent_attempts_share_one_task_version_cas(
@@ -216,7 +230,24 @@ def test_verification_task_attempt_and_outbox_share_postgres_authority(
         worker_id="demerzel-verifier",
     )
     assert store.effect_eligible(claim) is True
-    recovered = store.outbox_claim(envelope.repository, transition.operation_key)
+    with pytest.raises(LeaseUnavailable, match="active claim"):
+        store.outbox_claim(
+            envelope=envelope,
+            operation_key=transition.operation_key,
+            worker_id="demerzel-recovery",
+        )
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_outbox SET claim_expires_at = "
+            "clock_timestamp() - interval '1 second' "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, transition.operation_key),
+        )
+    recovered = store.outbox_claim(
+        envelope=envelope,
+        operation_key=transition.operation_key,
+        worker_id="demerzel-recovery",
+    )
     reconciliation = store.reconcile_outbox(
         recovered,
         observed_applied=False,
@@ -331,6 +362,9 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
         repository=REPO,
         effect_outbox=outbox,
     )
+    _expire_outbox_claim(
+        control_plane_store, REPO, indeterminate_key
+    )
     restarted.recover_effect(
         indeterminate_key,
         run_id=run.run_id,
@@ -371,6 +405,7 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
         repository=REPO,
         effect_outbox=outbox,
     )
+    _expire_outbox_claim(control_plane_store, REPO, operation_key)
     restarted.recover_effect(
         operation_key,
         run_id=run.run_id,
@@ -383,6 +418,79 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
     )
 
     assert control_plane_store.outbox_status(REPO, operation_key) == "pending"
+
+
+def test_authenticated_recovery_claim_rejects_live_same_principal_task(
+    control_plane_store, tmp_path
+) -> None:
+    ledger, client, _outbox = _authenticated_api_ledger(
+        control_plane_store, tmp_path
+    )
+    run = ledger.ingest(request())
+    ledger.claim(run.run_id, "ignored-client-holder")
+    before = control_plane_store.get_task(REPO, run.run_id)
+
+    with pytest.raises(StaleLeaseError, match="LeaseUnavailable"):
+        client.claim_task(
+            envelope=ledger.envelope,
+            task_id=run.run_id,
+            idempotency_key="api-live-same-principal-recovery",
+            request={"must_not": "overwrite-live-owner"},
+            require_new_fence=True,
+        )
+
+    after = control_plane_store.get_task(REPO, run.run_id)
+    assert after["version"] == before["version"]
+    assert after["payload"] == before["payload"]
+    assert after["lease"] == before["lease"]
+
+
+@pytest.mark.parametrize("secret_field", ("worker_id", "source_refs"))
+def test_authenticated_outbox_recovery_rejects_durable_secret_fields(
+    control_plane_store, tmp_path, secret_field: str
+) -> None:
+    ledger, client, _outbox = _authenticated_api_ledger(
+        control_plane_store, tmp_path
+    )
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "ignored-client-holder")
+    assert claimed.lease_id is not None
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="github.merge",
+        payload={
+            "repository": REPO.lower(),
+            "pr_number": 3603,
+            "head_sha": "a" * 40,
+        },
+        holder="executor:demerzel-verifier",
+        lease_id=claimed.lease_id,
+        idempotency_key=f"secret-safe-recovery-{secret_field}",
+    )
+    _expire_outbox_claim(control_plane_store, REPO, operation_key)
+    envelope = dict(ledger.envelope)
+    worker_id = "demerzel-recovery"
+    if secret_field == "worker_id":
+        worker_id = "verification-executor-token"
+    else:
+        envelope["source_refs"] = ["verification-executor-token"]
+
+    with pytest.raises(ControlPlaneProtocolError):
+        client.recover_outbox(
+            envelope=envelope,
+            operation_key=operation_key,
+            worker_id=worker_id,
+        )
+
+    with control_plane_store._connect() as conn:
+        row = conn.execute(
+            "SELECT worker_id, authority_envelope::text AS envelope "
+            "FROM builderops_outbox WHERE repository = %s "
+            "AND operation_key = %s",
+            (REPO.lower(), operation_key),
+        ).fetchone()
+    assert row is not None
+    assert "verification-executor-token" not in str(row)
 
 
 def test_authenticated_api_rejects_github_terminal_unknown(
@@ -411,6 +519,7 @@ def test_authenticated_api_rejects_github_terminal_unknown(
         repository=REPO,
         effect_outbox=outbox,
     )
+    _expire_outbox_claim(control_plane_store, REPO, rejected_key)
     restarted.recover_effect(
         rejected_key,
         run_id=run.run_id,
@@ -465,6 +574,7 @@ def test_authenticated_api_rejects_sessionful_model_terminal_unknown(
         repository=REPO,
         effect_outbox=outbox,
     )
+    _expire_outbox_claim(control_plane_store, REPO, operation_key)
     restarted.recover_effect(
         operation_key,
         run_id=run.run_id,
@@ -695,6 +805,7 @@ def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(
         client_b.recover_outbox(
             envelope=envelope,
             operation_key=operation_key,
+            worker_id="executor:b",
         )
     with pytest.raises(ControlPlaneScopeError):
         client_b.mark_outbox_unknown(

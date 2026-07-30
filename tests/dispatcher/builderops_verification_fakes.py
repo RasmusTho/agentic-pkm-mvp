@@ -5,6 +5,11 @@ import hashlib
 import json
 from typing import Any
 
+from app.builderops.control_plane import (
+    LeaseUnavailable,
+    StaleFencingToken,
+)
+
 
 class FakeBuilderOpsClient:
     """In-memory transport double for the API adapter, never a store double."""
@@ -173,6 +178,7 @@ class FakeVerificationOutbox:
         self.states: dict[str, str] = {}
         self.evidence: dict[str, dict[str, Any]] = {}
         self.claims: dict[str, dict[str, Any]] = {}
+        self.recovered_claims: set[str] = set()
 
     def claim(self, operation_key: str):
         self.calls.append("claim")
@@ -203,9 +209,27 @@ class FakeVerificationOutbox:
 
     def recover(self, operation_key: str):
         self.calls.append("recover")
-        claim = self.claims[operation_key]
-        if self.states.get(operation_key) == "claimed":
-            self.states[operation_key] = "unknown"
+        claim = dict(self.claims[operation_key])
+        state = self.states.get(operation_key)
+        if state == "claimed" or operation_key in self.recovered_claims:
+            expires = datetime.fromisoformat(
+                str(claim["expires_at"]).replace("Z", "+00:00")
+            )
+            if expires > datetime.now(timezone.utc):
+                raise LeaseUnavailable(
+                    "outbox operation still has an active claim"
+                )
+        self.states[operation_key] = "unknown"
+        claim.update(
+            fencing_token=int(claim["fencing_token"]) + 1,
+            receipt_sequence=int(claim["receipt_sequence"]) + 1,
+            claim_lsn="0/30",
+            expires_at=(
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+        )
+        self.claims[operation_key] = claim
+        self.recovered_claims.add(operation_key)
         return dict(claim)
 
     def status(self, operation_key: str):
@@ -220,6 +244,7 @@ class FakeVerificationOutbox:
 
     def mark_unknown(self, claim, *, detail: str):
         self.calls.append("unknown")
+        self._assert_current_claim(claim)
         self.states[claim["operation_key"]] = "unknown"
 
     def reconcile(
@@ -231,6 +256,7 @@ class FakeVerificationOutbox:
         evidence,
     ):
         self.calls.append("reconcile")
+        self._assert_current_claim(claim)
         status = (
             "dead_letter"
             if terminal_unknown
@@ -239,3 +265,16 @@ class FakeVerificationOutbox:
         self.states[claim["operation_key"]] = status
         self.evidence[claim["operation_key"]] = dict(evidence)
         return {"status": status}
+
+    def _assert_current_claim(self, claim: dict[str, Any]) -> None:
+        current = self.claims[claim["operation_key"]]
+        expires = datetime.fromisoformat(
+            str(claim["expires_at"]).replace("Z", "+00:00")
+        )
+        if (
+            claim["worker_id"] != current["worker_id"]
+            or claim["fencing_token"] != current["fencing_token"]
+            or claim["receipt_sequence"] != current["receipt_sequence"]
+            or expires <= datetime.now(timezone.utc)
+        ):
+            raise StaleFencingToken("outbox claim is stale")

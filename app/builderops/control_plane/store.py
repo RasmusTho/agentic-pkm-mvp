@@ -562,6 +562,7 @@ class PostgresBuilderOpsStore:
         lease: Lease | None = None,
         claim_holder: str | None = None,
         claim_ttl_seconds: int = 5400,
+        require_new_fence: bool = False,
         release_on_commit: bool = False,
         expected_states: tuple[str, ...] | None = None,
         expected_version: int | None = None,
@@ -593,6 +594,10 @@ class PostgresBuilderOpsStore:
             "expected_states": list(expected_states) if expected_states is not None else None,
             "expected_version": expected_version,
         }
+        if claim_holder is not None and require_new_fence:
+            # Preserve the pre-BCP-05 request hash for ordinary/idempotent
+            # claims; only recovery's stricter semantic enters the hash.
+            request_document["require_new_fence"] = True
         request_hash = _hash(request_document)
         envelope_json = Jsonb(envelope.as_json())
         replayed = False
@@ -631,6 +636,7 @@ class PostgresBuilderOpsStore:
                         resource_id=task_id,
                         holder=claim_holder,
                         ttl_seconds=claim_ttl_seconds,
+                        require_new_fence=require_new_fence,
                     )
                 if lease is not None:
                     self._assert_lease(conn, envelope.repository, task_id, lease)
@@ -1448,6 +1454,7 @@ class PostgresBuilderOpsStore:
         idempotency_key: str,
         request: Mapping[str, Any],
         ttl_seconds: int = 5400,
+        require_new_fence: bool = False,
         fault_at: str | None = None,
     ) -> tuple[TransactionResult, Lease]:
         """Atomically bind task state, receipt, idempotency, and fenced ownership."""
@@ -1459,6 +1466,7 @@ class PostgresBuilderOpsStore:
             request=request,
             claim_holder=holder,
             claim_ttl_seconds=ttl_seconds,
+            require_new_fence=require_new_fence,
             expected_states=("ready", "claimed"),
             fault_at=fault_at,
         )
@@ -1746,6 +1754,7 @@ class PostgresBuilderOpsStore:
         holder: str,
         ttl_seconds: int,
         lease_kind: str = "task",
+        require_new_fence: bool = False,
     ) -> Lease:
         if not resource_id or not holder or ttl_seconds <= 0:
             raise ValueError("resource_id, holder, and positive ttl_seconds are mandatory")
@@ -1763,6 +1772,10 @@ class PostgresBuilderOpsStore:
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         expires_at = effective_now + timedelta(seconds=ttl_seconds)
         if row is not None and row["expires_at"] > effective_now:
+            if require_new_fence:
+                raise LeaseUnavailable(
+                    "active lease must expire before a recovery claim"
+                )
             if row["holder"] != holder:
                 raise LeaseUnavailable(f"active lease belongs to {row['holder']}")
             return Lease(
@@ -2088,7 +2101,8 @@ class PostgresBuilderOpsStore:
             receipt = conn.execute(
                 "SELECT recovery_lsn::text AS recovery_lsn FROM builderops_receipts "
                 "WHERE repository = %s AND receipt_sequence = %s "
-                "AND event_type = 'outbox.claimed' AND lease_holder = %s "
+                "AND event_type IN ('outbox.claimed', 'outbox.recovered') "
+                "AND lease_holder = %s "
                 "AND lease_fencing_token = %s FOR UPDATE",
                 (
                     repository,
@@ -2123,17 +2137,44 @@ class PostgresBuilderOpsStore:
                 (claim_lsn, repository, int(row["claim_receipt_sequence"])),
             )
 
-    def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim:
-        """Recover a process-lost attempt as unknown for mandatory readback."""
-        repository = canonical_repository(repository)
+    def outbox_claim(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        operation_key: str,
+        worker_id: str,
+        claim_ttl_seconds: int = 300,
+    ) -> OutboxClaim:
+        """Recover an expired/unknown attempt under a fresh fenced identity."""
+        if (
+            not operation_key
+            or not worker_id
+            or claim_ttl_seconds <= 0
+        ):
+            raise ValueError(
+                "operation_key, worker_id, and positive claim_ttl_seconds "
+                "are mandatory"
+            )
+        repository = canonical_repository(envelope.repository)
         self._repair_outbox_bindings(repository, operation_key)
         self._repair_outbox_claim_binding(repository, operation_key)
         with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
+            self._assert_executor_enabled(conn)
             row = conn.execute(
-                "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
-                "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at "
-                "FROM builderops_outbox WHERE repository = %s AND operation_key = %s "
-                "AND status IN ('claimed', 'unknown') FOR UPDATE",
+                "SELECT outbox.task_id, outbox.status, outbox.worker_id, "
+                "outbox.claim_fencing_token, "
+                "outbox.intent_lsn::text AS intent_lsn, "
+                "outbox.claim_lsn::text AS claim_lsn, "
+                "outbox.claim_receipt_sequence, outbox.claim_expires_at, "
+                "clock_timestamp() AS database_now, receipt.event_type AS claim_event_type "
+                "FROM builderops_outbox AS outbox "
+                "JOIN builderops_receipts AS receipt "
+                "ON receipt.repository = outbox.repository "
+                "AND receipt.receipt_sequence = outbox.claim_receipt_sequence "
+                "WHERE outbox.repository = %s AND outbox.operation_key = %s "
+                "AND outbox.status IN ('claimed', 'unknown') "
+                "FOR UPDATE OF outbox",
                 (repository, operation_key),
             ).fetchone()
             if (
@@ -2145,22 +2186,93 @@ class PostgresBuilderOpsStore:
                 raise KeyError(operation_key)
             if row["intent_lsn"] is None:
                 raise DurabilityPending("outbox intent durability binding is incomplete")
-            if row["status"] == "claimed":
-                conn.execute(
-                    "UPDATE builderops_outbox SET status = 'unknown', "
-                    "unknown_detail = 'worker process lost; external readback required', "
-                    "updated_at = clock_timestamp() WHERE repository = %s AND operation_key = %s",
-                    (repository, operation_key),
+            if (
+                row["claim_expires_at"] > row["database_now"]
+            ):
+                raise LeaseUnavailable(
+                    "outbox operation still has an active claim"
                 )
+            token = int(row["claim_fencing_token"]) + 1
+            expires_at = row["database_now"] + timedelta(
+                seconds=claim_ttl_seconds
+            )
+            receipt = conn.execute(
+                "INSERT INTO builderops_receipts("
+                "repository, task_id, event_type, idempotency_key, "
+                "lease_holder, lease_fencing_token, authority_envelope"
+                ") VALUES (%s, %s, 'outbox.recovered', %s, %s, %s, %s) "
+                "RETURNING receipt_sequence",
+                (
+                    repository,
+                    row["task_id"],
+                    f"outbox:{operation_key}:recover:{token}",
+                    worker_id,
+                    token,
+                    Jsonb(envelope.as_json()),
+                ),
+            ).fetchone()
+            assert receipt is not None
+            receipt_sequence = int(receipt["receipt_sequence"])
+            updated = conn.execute(
+                "UPDATE builderops_outbox SET status = 'unknown', "
+                "worker_id = %s, claim_fencing_token = %s, "
+                "claim_expires_at = %s, claim_lsn = NULL, "
+                "claim_receipt_sequence = %s, "
+                "unknown_detail = 'worker process lost; external readback "
+                "required', authority_envelope = %s, "
+                "updated_at = clock_timestamp() "
+                "WHERE repository = %s AND operation_key = %s "
+                "AND claim_fencing_token = %s RETURNING operation_key",
+                (
+                    worker_id,
+                    token,
+                    expires_at,
+                    receipt_sequence,
+                    Jsonb(envelope.as_json()),
+                    repository,
+                    operation_key,
+                    int(row["claim_fencing_token"]),
+                ),
+            ).fetchone()
+            if updated is None:
+                raise StaleFencingToken(
+                    "outbox recovery fence was superseded"
+                )
+        claim_lsn = self._flushed_lsn()
+        with self._connect() as conn:
+            finalized = conn.execute(
+                "UPDATE builderops_outbox SET claim_lsn = %s "
+                "WHERE repository = %s AND operation_key = %s "
+                "AND worker_id = %s AND claim_fencing_token = %s "
+                "AND claim_receipt_sequence = %s "
+                "RETURNING operation_key",
+                (
+                    claim_lsn,
+                    repository,
+                    operation_key,
+                    worker_id,
+                    token,
+                    receipt_sequence,
+                ),
+            ).fetchone()
+            if finalized is None:
+                raise StaleFencingToken(
+                    "outbox recovery was superseded before durability binding"
+                )
+            conn.execute(
+                "UPDATE builderops_receipts SET recovery_lsn = %s "
+                "WHERE repository = %s AND receipt_sequence = %s",
+                (claim_lsn, repository, receipt_sequence),
+            )
         return OutboxClaim(
             repository=repository,
             operation_key=operation_key,
-            worker_id=str(row["worker_id"]),
-            fencing_token=int(row["claim_fencing_token"]),
+            worker_id=worker_id,
+            fencing_token=token,
             intent_lsn=str(row["intent_lsn"]),
-            claim_lsn=str(row["claim_lsn"]),
-            receipt_sequence=int(row["claim_receipt_sequence"]),
-            expires_at=row["claim_expires_at"],
+            claim_lsn=claim_lsn,
+            receipt_sequence=receipt_sequence,
+            expires_at=expires_at,
         )
 
     def effect_eligible(
@@ -2189,7 +2301,9 @@ class PostgresBuilderOpsStore:
             row = conn.execute(
                 "UPDATE builderops_outbox SET status = 'unknown', unknown_detail = %s, updated_at = clock_timestamp() "
                 "WHERE repository = %s AND operation_key = %s AND status = 'claimed' "
-                "AND worker_id = %s AND claim_fencing_token = %s RETURNING operation_key",
+                "AND worker_id = %s AND claim_fencing_token = %s "
+                "AND claim_expires_at > clock_timestamp() "
+                "RETURNING operation_key",
                 (
                     detail,
                     claim.repository,
@@ -2281,7 +2395,8 @@ class PostgresBuilderOpsStore:
                     "WHERE repository = %s AND operation_key = %s AND status = 'unknown' "
                     "AND worker_id = %s AND claim_fencing_token = %s "
                     "AND claim_receipt_sequence = %s "
-                    "AND COALESCE(claim_lsn::text, '0/0') = %s FOR UPDATE",
+                    "AND COALESCE(claim_lsn::text, '0/0') = %s "
+                    "AND claim_expires_at > clock_timestamp() FOR UPDATE",
                     (
                         claim.repository,
                         claim.operation_key,

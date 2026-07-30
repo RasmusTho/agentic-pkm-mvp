@@ -5,8 +5,12 @@ import pytest
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_agent_loop import VerificationAgentLoop
-from app.dispatcher.verification_consumer import VerificationConsumer
+from app.dispatcher.verification_consumer import (
+    VerificationConsumer,
+    context_pack,
+)
 from app.dispatcher.verification_dispatch import (
+    VerificationSubscriptionBusy,
     _authenticated_verification_request,
     _live_observed_verification_request,
 )
@@ -19,7 +23,11 @@ from tests.dispatcher.test_verification_consumer import (
     GREEN,
     Launcher,
     Truth,
+    _merge_comments,
+    _merge_plan,
+    _open_neutralized_recovery_evidence,
     eligible_pr,
+    merged_pr,
 )
 from tests.dispatcher.verification_helpers import HEAD, REPO, request
 
@@ -56,6 +64,9 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
         lease_id=claimed.lease_id,
         idempotency_key="merge-after-verification",
     )
+    outbox.claims[operation_key][
+        "expires_at"
+    ] = "2000-01-01T00:00:00+00:00"
 
     restarted = BuilderOpsVerificationLedger(
         api, repository=REPO, effect_outbox=outbox
@@ -88,6 +99,57 @@ def test_restart_resumes_from_api_receipts_without_duplicate_attempt() -> None:
     assert len(api.attempt_rows[run.run_id]) == 1
     assert recovered["operation_key"] == operation_key
     assert outbox.calls[-2:] == ["recover", "reconcile"]
+
+
+def test_api_consumer_recovery_requires_a_fresh_task_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    consumer = VerificationConsumer(
+        ledger,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        VerifiedLauncher(),
+        holder="verification-host",
+    )
+    run = consumer.consume(request())
+    monkeypatch.setattr(consumer, "_lease_is_live", lambda _run: False)
+    monkeypatch.setattr(
+        ledger,
+        "claim",
+        lambda _run_id, _holder: run,
+    )
+    recover_calls = outbox.calls.count("recover")
+
+    with pytest.raises(
+        VerificationSubscriptionBusy, match="fresh recovery fence"
+    ):
+        consumer.recover(run.run_id)
+
+    assert outbox.calls.count("recover") == recover_calls
+
+
+def test_api_ledger_marks_every_active_recovery_as_new_fence_required() -> None:
+    api = FakeBuilderOpsClient()
+    ledger = BuilderOpsVerificationLedger(api, repository=REPO)
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "verification-host")
+    task = api.tasks[run.run_id]
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+
+    recovered = ledger.claim(run.run_id, "verification-host")
+
+    claim_calls = [
+        values for name, values in api.calls if name == "claim_task"
+    ]
+    assert claim_calls[0]["require_new_fence"] is False
+    assert claim_calls[1]["require_new_fence"] is True
+    assert recovered.lease_id != claimed.lease_id
 
 
 class FailingIntentClient(FakeBuilderOpsClient):
@@ -246,6 +308,128 @@ class VerifiedLauncher(Launcher):
         }
 
 
+@pytest.mark.parametrize(
+    "recovery_shape", ("merged", "open-neutralized")
+)
+@pytest.mark.parametrize("outbox_state", ("claimed", "unknown"))
+def test_special_merge_recovery_reconciles_retained_model_effect(
+    recovery_shape: str,
+    outbox_state: str,
+) -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "verification-host")
+    assert claimed.lease_id is not None
+    session_id = "01900000-0000-7000-8000-000000000077"
+    running = ledger.start(
+        run.run_id,
+        "verification-host",
+        claimed.lease_id,
+        session_id,
+        context_pack(
+            claimed,
+            eligible_pr(),
+            repair_budget=ledger.repair_budget_projection(run.run_id),
+        ),
+    )
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="model.verification_coordinator",
+        payload={
+            "repository": running.repository,
+            "governing_issue": running.request["linked_issue"],
+            "pr_number": running.pr_number,
+            "head_sha": running.current_head_sha,
+            "workflow_identity": running.request.get("source_workflow"),
+            "secret_ref": "host-secret:builderops/model-session",
+            "scopes": ["model:execute"],
+        },
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+        idempotency_key="retained-special-model-effect",
+    )
+    if outbox_state == "unknown":
+        ledger.abandon_effect(
+            operation_key, detail="simulated process loss"
+        )
+    task = api.tasks[run.run_id]
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    outbox.claims[operation_key][
+        "expires_at"
+    ] = "2000-01-01T00:00:00+00:00"
+
+    if recovery_shape == "merged":
+        plan = _merge_plan(HEAD, run_id=run.run_id)
+        live_pr = merged_pr(body=plan["neutralized_body"])
+        comments = _merge_comments(
+            live_pr, phase="prepared", run_id=run.run_id
+        )
+    else:
+        plan, live_pr, comments = (
+            _open_neutralized_recovery_evidence(run_id=run.run_id)
+        )
+
+    class RecoveryTruth(Truth):
+        recovery_comments = comments
+
+        def pull_request_comments(self, repository, pr_number):
+            return self.recovery_comments
+
+    truth = RecoveryTruth(live_pr, GREEN)
+
+    class RecoveryLauncher(Launcher):
+        def launch(
+            self,
+            context_pack,
+            *,
+            resume_session_id=None,
+            on_thread_started=None,
+            on_heartbeat=None,
+        ):
+            if recovery_shape == "open-neutralized":
+                truth.pr = eligible_pr(body=plan["original_body"])
+                truth._last_pr = truth.pr
+                return super().launch(
+                    context_pack,
+                    resume_session_id=resume_session_id,
+                    on_thread_started=on_thread_started,
+                    on_heartbeat=on_heartbeat,
+                )
+            return super().launch(
+                context_pack,
+                resume_session_id=resume_session_id,
+                on_thread_started=on_thread_started,
+                on_heartbeat=on_heartbeat,
+            )
+
+    launcher = RecoveryLauncher()
+    recovered = VerificationConsumer(
+        ledger,
+        truth,
+        Auth(),
+        launcher,
+        holder="verification-host",
+    ).recover(run.run_id)
+
+    assert recovered.status == (
+        "failed" if recovery_shape == "merged" else "needs_human"
+    ), recovered
+    if recovery_shape == "merged":
+        assert (
+            recovered.stop_reason
+            == "receipt_live_truth_closed_unmerged_or_merged"
+        )
+    assert launcher.calls[0][1] == session_id
+    assert list(outbox.states) == [operation_key]
+    assert outbox.states[operation_key] == "succeeded"
+    assert "recover" in outbox.calls
+
+
 def test_fenced_attempt_commit_gates_external_effect() -> None:
     api = FailingIntentClient()
     launcher = Launcher()
@@ -393,6 +577,9 @@ def test_pre_thread_start_crash_dead_letters_without_relaunch() -> None:
     operation_keys = list(outbox.states)
     assert len(operation_keys) == 1
     assert outbox.states[operation_keys[0]] == "claimed"
+    outbox.claims[operation_keys[0]][
+        "expires_at"
+    ] = "2000-01-01T00:00:00+00:00"
     assert task["lease"] is not None
     task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
 

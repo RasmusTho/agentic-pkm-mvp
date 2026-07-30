@@ -617,6 +617,7 @@ class BuilderOpsVerificationLedger:
             idempotency_key=f"verification-claim:{run_id}:{snapshot['version']}",
             request=_payload_for(snapshot, claimed),
             ttl_seconds=ttl_seconds,
+            require_new_fence=run.lease_id is not None,
         )
         lease = response.get("lease")
         if not isinstance(lease, Mapping):

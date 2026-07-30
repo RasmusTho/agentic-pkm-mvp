@@ -63,6 +63,7 @@ class TaskClaimRequest(BaseModel):
     idempotency_key: str
     request: dict[str, Any] = Field(default_factory=dict)
     ttl_seconds: int = Field(default=5400, ge=1, le=86400)
+    require_new_fence: bool = False
 
 
 class TaskHeartbeatRequest(BaseModel):
@@ -135,6 +136,8 @@ class OutboxClaimRequest(BaseModel):
 class OutboxRecoverRequest(BaseModel):
     envelope: AuthorityEnvelopeInput
     operation_key: str
+    worker_id: str
+    claim_ttl_seconds: int = Field(default=300, ge=1, le=3600)
 
 
 class OutboxClaimInput(BaseModel):

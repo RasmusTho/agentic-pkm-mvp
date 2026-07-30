@@ -161,6 +161,52 @@ def test_lock_wait_past_expiry_cannot_resurrect_lease(control_plane_store, envel
         pool.shutdown(wait=True)
 
 
+def test_recovery_claim_rejects_same_principal_live_task_without_mutation(
+    control_plane_store, envelope
+) -> None:
+    store = control_plane_store
+    task_id = "same-principal-live-recovery"
+    store.commit_transition(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="ready",
+        idempotency_key="same-principal-live-create",
+        request={"owner": "queued"},
+    )
+    _, lease = store.claim_task(
+        envelope=envelope,
+        task_id=task_id,
+        holder="verification-host",
+        idempotency_key="same-principal-live-first-claim",
+        request={"owner": "live"},
+    )
+    before = store.get_task(envelope.repository, task_id)
+
+    with pytest.raises(
+        LeaseUnavailable, match="expire before a recovery claim"
+    ):
+        store.claim_task(
+            envelope=envelope,
+            task_id=task_id,
+            holder=lease.holder,
+            idempotency_key="same-principal-live-recovery-claim",
+            request={"owner": "recovery-must-not-overwrite"},
+            require_new_fence=True,
+        )
+
+    after = store.get_task(envelope.repository, task_id)
+    assert after["version"] == before["version"]
+    assert after["payload"] == before["payload"]
+    assert after["lease"] == before["lease"]
+    assert (
+        store.replay(
+            envelope.repository,
+            "same-principal-live-recovery-claim",
+        )
+        is None
+    )
+
+
 def test_stale_fencing_token_cannot_mutate_after_reassignment(
     control_plane_store, envelope
 ) -> None:

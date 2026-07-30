@@ -293,6 +293,7 @@ class BuilderOpsControlPlaneClient:
         idempotency_key: str,
         request: Mapping[str, Any] | None = None,
         ttl_seconds: int = 5400,
+        require_new_fence: bool = False,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -303,6 +304,7 @@ class BuilderOpsControlPlaneClient:
                 "idempotency_key": idempotency_key,
                 "request": dict(request or {}),
                 "ttl_seconds": ttl_seconds,
+                "require_new_fence": require_new_fence,
             },
         )
 
@@ -537,6 +539,8 @@ class BuilderOpsControlPlaneClient:
         *,
         envelope: Mapping[str, Any],
         operation_key: str,
+        worker_id: str,
+        claim_ttl_seconds: int = 300,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -544,6 +548,8 @@ class BuilderOpsControlPlaneClient:
             json_body={
                 "envelope": dict(envelope),
                 "operation_key": operation_key,
+                "worker_id": worker_id,
+                "claim_ttl_seconds": claim_ttl_seconds,
             },
         )
 

@@ -9,6 +9,9 @@ from typing import Any
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_consumer import VerificationConsumer
+from app.dispatcher.verification_dispatch import (
+    VerificationSubscriptionBusy,
+)
 from app.dispatcher.verification_merge import (
     MergeEffectReceipt,
     VerificationMergeExecutor,
@@ -96,7 +99,26 @@ class HostFencedVerificationCycle:
                     "deferred verification cycle receipt is malformed"
                 )
             return dict(receipt)
+        if self._lease_is_live(run):
+            raise VerificationSubscriptionBusy(
+                f"verification cycle {run_id} still has a live task owner"
+            )
         pending = self.ledger.pending_effect_binding(run_id)
+        merge_ready = self.ledger.merge_ready_receipt(run_id)
+        if merge_ready is not None:
+            # A durable merge-ready marker means model work must not be
+            # relaunched. Rebind every remaining effect and settlement to a
+            # fresh task fence before touching the outbox.
+            prior_lease_id = run.lease_id
+            run = self.ledger.claim(run_id, self.holder)
+            if (
+                prior_lease_id is not None
+                and run.lease_id == prior_lease_id
+            ):
+                raise VerificationSubscriptionBusy(
+                    f"verification cycle {run_id} did not acquire a fresh "
+                    "task fence"
+                )
         if (
             isinstance(pending, Mapping)
             and pending.get("effect_type") == "github.merge.dry_run"
@@ -105,9 +127,32 @@ class HostFencedVerificationCycle:
                 run, dry_run=True
             )
             return self._settle(run_id, merge_receipt)
-        if self.ledger.merge_ready_receipt(run_id) is None:
+        if merge_ready is None:
             run = self.consumer.recover(run_id)
         return self._finish_ready_dry_cycle(run.run_id)
+
+    @staticmethod
+    def _lease_is_live(run: object) -> bool:
+        expires_at = getattr(run, "lease_expires_at", None)
+        if expires_at is None:
+            return False
+        if not isinstance(expires_at, str):
+            raise ValueError(
+                "verification cycle task lease expiry is malformed"
+            )
+        try:
+            expires = datetime.fromisoformat(
+                expires_at.replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "verification cycle task lease expiry is malformed"
+            ) from exc
+        if expires.tzinfo is None:
+            raise ValueError(
+                "verification cycle task lease expiry is malformed"
+            )
+        return expires.astimezone(timezone.utc) > datetime.now(timezone.utc)
 
     def _finish_ready_dry_cycle(
         self, run_id: str
