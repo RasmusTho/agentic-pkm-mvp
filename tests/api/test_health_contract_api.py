@@ -1,6 +1,8 @@
 import json
 import asyncio
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -98,6 +100,111 @@ def test_readyz_status_do_not_block_event_loop(monkeypatch) -> None:
 
     asyncio.run(assert_nonblocking(health_contract_route.readyz))
     asyncio.run(assert_nonblocking(health_contract_route.health_status))
+
+
+def test_shared_health_contract_evaluation_is_serialized(monkeypatch) -> None:
+    evaluation_barrier = threading.Barrier(2, timeout=0.2)
+    state_lock = threading.Lock()
+    active_evaluations = 0
+    maximum_active_evaluations = 0
+
+    def synchronized_evaluate() -> dict[str, object]:
+        nonlocal active_evaluations, maximum_active_evaluations
+        with state_lock:
+            active_evaluations += 1
+            maximum_active_evaluations = max(maximum_active_evaluations, active_evaluations)
+        try:
+            try:
+                evaluation_barrier.wait()
+            except threading.BrokenBarrierError:
+                pass
+            return _mock_snapshot("running", "ok")
+        finally:
+            with state_lock:
+                active_evaluations -= 1
+
+    monkeypatch.setattr(
+        health_contract_route.DEFAULT_CONTRACT,
+        "_evaluate",
+        synchronized_evaluate,
+    )
+
+    async def evaluate_both_routes() -> None:
+        await asyncio.gather(
+            health_contract_route.readyz(),
+            health_contract_route.health_status(),
+        )
+
+    asyncio.run(evaluate_both_routes())
+
+    assert maximum_active_evaluations == 1
+
+
+def test_health_contract_evaluation_lock_releases_after_exception(monkeypatch) -> None:
+    contract = HealthContract()
+    first_evaluation_started = threading.Event()
+    release_first_evaluation = threading.Event()
+    call_lock = threading.Lock()
+    call_count = 0
+
+    def fail_then_succeed() -> dict[str, object]:
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+            current_call = call_count
+        if current_call == 1:
+            first_evaluation_started.set()
+            assert release_first_evaluation.wait(timeout=1)
+            raise RuntimeError("health evaluation failed")
+        return _mock_snapshot("running", "ok")
+
+    monkeypatch.setattr(contract, "_evaluate", fail_then_succeed)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        failing_evaluation = executor.submit(contract.evaluate)
+        assert first_evaluation_started.wait(timeout=1)
+        queued_evaluation = executor.submit(contract.evaluate)
+        time.sleep(0.01)
+        assert not queued_evaluation.done()
+
+        release_first_evaluation.set()
+
+        with pytest.raises(RuntimeError, match="health evaluation failed"):
+            failing_evaluation.result(timeout=1)
+        assert queued_evaluation.result(timeout=1)["state"] == "running"
+
+
+def test_health_contract_instances_do_not_share_evaluation_lock(monkeypatch) -> None:
+    first_contract = HealthContract()
+    second_contract = HealthContract()
+    evaluation_barrier = threading.Barrier(2, timeout=1)
+    state_lock = threading.Lock()
+    active_evaluations = 0
+    maximum_active_evaluations = 0
+
+    def synchronized_evaluate() -> dict[str, object]:
+        nonlocal active_evaluations, maximum_active_evaluations
+        with state_lock:
+            active_evaluations += 1
+            maximum_active_evaluations = max(maximum_active_evaluations, active_evaluations)
+        try:
+            evaluation_barrier.wait()
+            return _mock_snapshot("running", "ok")
+        finally:
+            with state_lock:
+                active_evaluations -= 1
+
+    monkeypatch.setattr(first_contract, "_evaluate", synchronized_evaluate)
+    monkeypatch.setattr(second_contract, "_evaluate", synchronized_evaluate)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_evaluation = executor.submit(first_contract.evaluate)
+        second_evaluation = executor.submit(second_contract.evaluate)
+
+        assert first_evaluation.result(timeout=1)["state"] == "running"
+        assert second_evaluation.result(timeout=1)["state"] == "running"
+
+    assert maximum_active_evaluations == 2
 
 
 def test_health_contract_degrades_on_stale_outbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

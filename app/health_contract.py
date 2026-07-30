@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import timezone, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from app.config.environment import active_environment
@@ -352,8 +353,13 @@ class HealthContract:
         # readiness short-circuit without a real Postgres. Bounded by the caller's
         # connect_timeout so the health probe never hangs.
         self.db_ping_fn = db_ping_fn or ping_postgres
+        self._evaluation_lock = Lock()
 
     def evaluate(self) -> dict[str, Any]:
+        with self._evaluation_lock:
+            return self._evaluate()
+
+    def _evaluate(self) -> dict[str, Any]:
         now = self.now_fn()
         try:
             vault_root = self.vault_root_fn()
