@@ -17,10 +17,22 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
 
 ## What This Task Does
 
-- Implements `app/builderops/ckm/semantic.py`: takes the unlinked-artifact backlog from CKM-05, batches artifact summaries against the capability registry (names + definitions), and asks the configured LLM (routed via the repo's existing LLM routing, cheap-model tier) to propose `(artifact → capability, evidence_kind, maturity_dimension, confidence, one-line rationale)`.
+- Implements `app/builderops/ckm/semantic.py`: takes the unlinked-artifact backlog from CKM-05,
+  batches artifact summaries against the capability registry (names + definitions), and submits a
+  provider-free `ModelAccessIntent` through the Builder-owned resolver and neutral
+  `ModelTurnAdapter` contract. The request declares `fallback_forbidden`; provider, model, adapter,
+  effective identity, and credential identity are resolver outputs rather than caller fields.
+- The production path uses only the declared metered credential contract. Under ADR-0064's
+  2026-07-30 owner-cost ruling those credentials are intentionally unprovisioned, so the current
+  expected outcome is a visible `skipped` result with zero proposals and zero edge writes. Product
+  LLM policy, Model Inquiry's sanctioned subscription session, mock/fake/deterministic identities,
+  and degraded Builder routes are not fallback paths.
 - Every proposed edge is written with `extraction_method=inferred`, lifecycle `candidate` (OD-K5 / INV-CKM-3), model+provider provenance, and the rationale as `basis`.
 - Threshold discipline: proposals under a configurable confidence floor (default 0.6) are **discarded, not stored** — a low-confidence guess in the store is noise that projections would have to caveat forever.
-- Deterministic fallback (NFR-6): when no LLM is reachable, the stage reports `skipped (llm unavailable)` and exits 0 — the pipeline is complete without it, coverage is just lower.
+- Fail-closed unavailable behavior (NFR-6): when the declared credential or an acceptable Builder
+  route is unavailable, the stage names the safe reason, reports `proposals=0`, and exits 0 — the
+  pipeline is complete without semantic inference and coverage is simply lower. It never writes
+  degraded evidence.
 - Confirmation path: `python -m app.builderops ckm confirm-edge <edge-id>` flips a candidate edge to `confirmed` and writes a BuilderOps confirmation receipt (re-applied on rebuild per INV-CKM-4).
 - CLI: `python -m app.builderops ckm associate [--limit N]`.
 
@@ -28,7 +40,8 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
 
 ```bash
 python -m app.builderops ckm associate --limit 200
-# → "proposed 74 candidate edges (mean conf 0.78), discarded 41 below floor, 85 no-match; model=<provider:model>"
+# → "skipped: declared credential unavailable: openai.api-key; proposals=0"
+# Provider-backed proposal output is not claimed while metered credentials remain absent.
 python -m app.builderops ckm confirm-edge 8123
 # → "edge 8123 confirmed; receipt builderops://receipts/<id>"
 ```
@@ -50,8 +63,10 @@ This is where the CKM could silently rot (Critical Review §8.2): unlabeled infe
 
 ## How to Verify (Pre-Merge)
 
-- `python -m pytest tests/builderops/ckm/test_semantic.py -q` (stubbed LLM; no live calls in CI)
-- One live bounded run (`--limit 20`) locally; eyeball 5 proposals for sanity.
+- `python -m pytest tests/builderops/ckm/test_semantic.py -q` (injected adapter contract; no live
+  provider call and no mock provider identity)
+- Run the production CLI with intentionally absent metered credentials and verify the visible
+  zero-proposal skip. Do not provision or retry provider keys for this check.
 - Full `pytest -m "not pg"` before PR.
 
 ## Out of Scope

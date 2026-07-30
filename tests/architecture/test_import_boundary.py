@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import ast
 import configparser
-from datetime import date
 import importlib
 from pathlib import Path
 from typing import Set
@@ -228,13 +227,12 @@ def test_llm_contract_kernel_is_covered_by_import_boundary() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MAS-02 — the interim Builder -> Product LLM authority leak is one, visible,
-# and time-boxed until MAS-06 replaces CKM's Product routing.
+# MAS-06 — Builder CKM model access is fully separated from Product LLM policy.
 # ---------------------------------------------------------------------------
 
 
 def test_builder_does_not_import_product_llm_without_exemption() -> None:
-    """Only the two configured MAS-06 imports may cross the Builder/LLM boundary."""
+    """No Builder module may cross into the Product LLM authority."""
     contract = _builder_llm_authority_contract_section()
     assert contract["type"] == "forbidden"
     assert _module_list(contract["source_modules"]) == {"app.builderops"}
@@ -247,29 +245,19 @@ def test_builder_does_not_import_product_llm_without_exemption() -> None:
             encoding="utf-8"
         )
 
-    assert _builder_to_product_llm_imports() == {
-        ("app.builderops.ckm.semantic", "app.components.llm.constrained"),
-        ("app.builderops.ckm.semantic", "app.components.llm.fabric"),
-    }
+    assert _builder_to_product_llm_imports() == set()
 
 
-def test_interim_exemption_is_single_named_and_dated() -> None:
-    """Only MAS-06 may carry the one dated CKM authority-leak exception."""
+def test_interim_exemption_is_removed_with_last_import() -> None:
+    """The MAS-02 exemption disappears atomically with the Product imports."""
     raw = IMPORTLINTER_INI.read_text(encoding="utf-8")
     section = raw.split("[importlinter:contract:builder-llm-authority]", maxsplit=1)[1]
     section = section.split("[importlinter:contract:", maxsplit=1)[0]
 
-    assert section.count("ignore_imports =") == 1
-    assert "MAS-06" in section
-    granted_date = "2026-07-27"
-    assert granted_date in section
-    assert date.fromisoformat(granted_date) == date(2026, 7, 27)
-
+    assert "ignore_imports =" not in section
+    assert "MAS-06" not in section
     contract = _builder_llm_authority_contract_section()
-    assert _module_list(contract["ignore_imports"]) == {
-        "app.builderops.ckm.semantic -> app.components.llm.constrained",
-        "app.builderops.ckm.semantic -> app.components.llm.fabric",
-    }
+    assert "ignore_imports" not in contract
 
 
 def test_importlinter_header_states_blocking_gate_posture() -> None:

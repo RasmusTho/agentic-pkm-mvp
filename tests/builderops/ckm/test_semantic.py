@@ -5,25 +5,37 @@ import json
 from pathlib import Path
 import sqlite3
 from hashlib import sha256
+from typing import Any, Mapping
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
 from app.builderops.ckm.models import CkmValidationError
 from app.builderops.ckm.semantic import (
-    FabricSemanticAssociator,
+    BuilderSemanticAssociator,
+    CKM_SEMANTIC_CONSUMER,
+    CKM_SEMANTIC_RESOLUTION_GROUP,
+    CKM_SEMANTIC_ROLE,
+    SEMANTIC_SCHEMA_REF,
     SemanticAssociationError,
     SemanticAssociationResult,
     SemanticBatch,
     SemanticProposal,
+    SemanticProviderUnavailable,
     _binding_document,
     _canonical_json,
     associate_unlinked_artifacts,
     reapply_confirmation_receipts,
 )
 from app.builderops.ckm.store import CkmStore
-from app.components.llm.constrained import ConstrainedCompletionError
+from app.builderops.model_access_resolver import BuilderModelAccessResolver
+from llm_contract import AdapterResult, ModelCapabilities, ResolvedModelAccess
+
+
+PROVIDER_CENSUS_PATH = Path("docs/settings/models/providers.yaml")
+HOST_SECRET_CONTRACT_PATH = Path("config/secrets/host_secret_contract.json")
 
 
 @pytest.fixture()
@@ -77,6 +89,320 @@ def _proposal(artifact_id: str, capability_id: str, *, confidence: float = 0.9):
         confidence=confidence,
         rationale="The artifact explicitly explains the retrieval capability.",
     )
+
+
+class RecordingResolver:
+    def __init__(
+        self,
+        *,
+        provider: str = "openai",
+        model: str = "gpt-5.6-sol",
+        effective_identity: str = "openai/gpt-5.6-sol",
+        degraded: bool = False,
+        degradation_reason: str | None = None,
+        credential: str = "declared-openai-credential-0001",
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.effective_identity = effective_identity
+        self.degraded = degraded
+        self.degradation_reason = degradation_reason
+        self.credential = credential
+        self.calls: list[dict[str, Any]] = []
+
+    def resolve(self, request, *, runtime: str, channel: str, consumer: str):
+        self.calls.append(
+            {
+                "request": request,
+                "runtime": runtime,
+                "channel": channel,
+                "consumer": consumer,
+            }
+        )
+        return ResolvedModelAccess(
+            request=request,
+            provider=self.provider,
+            model=self.model,
+            adapter_id=f"{self.provider}-{self.model}",
+            effective_identity=self.effective_identity,
+            capabilities=ModelCapabilities(
+                structured_output=True,
+                system_prompt_channel=True,
+            ),
+            credential_identity_ref=f"{self.provider}.api-key",
+            degraded=self.degraded,
+            degradation_reason=self.degradation_reason,
+        )
+
+    def endpoint_for(self, resolved: ResolvedModelAccess) -> str:
+        return f"https://{resolved.provider}.example.invalid/model"
+
+    def credential_value(self, resolved: ResolvedModelAccess) -> str:
+        del resolved
+        return self.credential
+
+
+class RecordingAdapter:
+    adapter_id = "openai-gpt-5.6-sol"
+    provider = "openai"
+    model = "gpt-5.6-sol"
+
+    def __init__(self, response_text: str) -> None:
+        self.response_text = response_text
+        self.calls: list[dict[str, Any]] = []
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        self.calls.append(dict(request))
+        return AdapterResult(
+            response_text=self.response_text,
+            provider_request_id="provider-request-1",
+        )
+
+
+def _builder_associator(
+    resolver: RecordingResolver,
+    adapter: RecordingAdapter,
+) -> BuilderSemanticAssociator:
+    return BuilderSemanticAssociator(
+        resolver=resolver,
+        env={"PKM_ENVIRONMENT": "dev"},
+        adapter_factory=lambda _resolved, _endpoint, _credential: adapter,
+    )
+
+
+def _response(proposals: list[SemanticProposal]) -> str:
+    return json.dumps(
+        {
+            "proposals": [
+                {
+                    "artifact_id": item.artifact_id,
+                    "capability_id": item.capability_id,
+                    "evidence_kind": item.evidence_kind,
+                    "maturity_dimension": item.maturity_dimension,
+                    "confidence": item.confidence,
+                    "rationale": item.rationale,
+                }
+                for item in proposals
+            ]
+        }
+    )
+
+
+def test_semantic_association_resolves_through_builder_adapter(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    result = associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert result.proposed == 1
+    assert len(adapter.calls) == 1
+    assert store.list_evidence_edges()[0].provider == "openai"
+    assert "FabricSemanticAssociator" not in Path(
+        "app/builderops/ckm/semantic.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_semantic_production_call_uses_provider_free_builder_resolver(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert len(resolver.calls) == 1
+    call = resolver.calls[0]
+    request = call["request"]
+    assert call == {
+        "request": request,
+        "runtime": "builder",
+        "channel": "dev",
+        "consumer": CKM_SEMANTIC_CONSUMER,
+    }
+    assert request.role_profile == CKM_SEMANTIC_ROLE
+    assert request.resolution_group_id == CKM_SEMANTIC_RESOLUTION_GROUP
+    assert request.intent.output_schema_ref == SEMANTIC_SCHEMA_REF
+    assert {"provider", "model", "credential", "endpoint"}.isdisjoint(
+        request.model_dump(mode="json")
+    )
+
+
+def test_product_fallback_cannot_execute_builder_task(
+    store: CkmStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    product_calls: list[str] = []
+
+    def fail_product_route(*_args: object, **_kwargs: object) -> None:
+        product_calls.append("called")
+        raise AssertionError("Product routing must not execute CKM semantic association")
+
+    monkeypatch.setattr(
+        "app.components.llm.fabric.get_chat_client",
+        fail_product_route,
+    )
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    result = associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert result.proposed == 1
+    assert product_calls == []
+
+
+def test_semantic_request_declares_fallback_forbidden(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    resolver = RecordingResolver()
+    adapter = RecordingAdapter(_response([_proposal(artifact.id, capability.id)]))
+
+    associate_unlinked_artifacts(
+        store,
+        client=_builder_associator(resolver, adapter),
+    )
+
+    assert resolver.calls[0]["request"].intent.fallback_requirement == "fallback_forbidden"
+
+
+def test_mock_identity_is_refused_before_route_selection(
+    tmp_path: Path,
+) -> None:
+    payload = yaml.safe_load(PROVIDER_CENSUS_PATH.read_text(encoding="utf-8"))
+    payload["runtime_channels"]["builder"]["dev"]["frontier"] = {
+        "provider": "mock",
+        "model": "mock-chat",
+        "requires": ["structured_output", "deterministic_execution"],
+    }
+    census_path = tmp_path / "providers.yaml"
+    census_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    resolver = BuilderModelAccessResolver.from_declared_sources(
+        env={"PKM_ENVIRONMENT": "dev"},
+        census_path=census_path,
+        contract_path=HOST_SECRET_CONTRACT_PATH,
+    )
+    adapter_selected: list[str] = []
+
+    with pytest.raises(SemanticProviderUnavailable, match="mock identity"):
+        BuilderSemanticAssociator(
+            resolver=resolver,
+            env={"PKM_ENVIRONMENT": "dev"},
+            adapter_factory=lambda *_args: adapter_selected.append("selected"),
+        )
+
+    assert adapter_selected == []
+
+
+def test_credential_unavailable_skips_with_visible_reason(store: CkmStore) -> None:
+    _capability(store)
+    _artifact(store)
+
+    result = associate_unlinked_artifacts(
+        store,
+        client_factory=lambda: BuilderSemanticAssociator(
+            env={"PKM_ENVIRONMENT": "dev"}
+        ),
+    )
+
+    assert result.status == "skipped"
+    assert result.reason == "declared credential unavailable: openai.api-key"
+    assert result.proposed == 0
+    assert store.list_evidence_edges() == []
+    assert store.get_watermark("semantic_association") is None
+
+
+def test_subscription_session_cannot_execute_ckm_semantic_task(
+    store: CkmStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _capability(store)
+    _artifact(store)
+    subscription_calls: list[str] = []
+
+    def fail_subscription(*_args: object, **_kwargs: object) -> None:
+        subscription_calls.append("called")
+        raise AssertionError("subscription session must not execute CKM")
+
+    monkeypatch.setattr(
+        "app.builderops.model_inquiry_adapters.LocalCommandAdapter.execute",
+        fail_subscription,
+    )
+
+    result = associate_unlinked_artifacts(
+        store,
+        client_factory=lambda: BuilderSemanticAssociator(
+            env={"PKM_ENVIRONMENT": "dev"}
+        ),
+    )
+
+    assert result.status == "skipped"
+    assert result.proposed == 0
+    assert subscription_calls == []
+
+
+def test_degraded_builder_route_writes_zero_edges_with_visible_reason(
+    store: CkmStore,
+) -> None:
+    _capability(store)
+    _artifact(store)
+    resolver = RecordingResolver(
+        degraded=True,
+        degradation_reason="declared Builder route degraded",
+    )
+    adapter_selected: list[str] = []
+
+    result = associate_unlinked_artifacts(
+        store,
+        client_factory=lambda: BuilderSemanticAssociator(
+            resolver=resolver,
+            env={"PKM_ENVIRONMENT": "dev"},
+            adapter_factory=lambda *_args: adapter_selected.append("selected"),
+        ),
+    )
+
+    assert result.status == "skipped"
+    assert result.reason == "degraded Builder route: declared Builder route degraded"
+    assert result.proposed == 0
+    assert store.list_evidence_edges() == []
+    assert adapter_selected == []
+
+
+def test_existing_semantic_contract_regression_suite(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    accepted = _proposal(artifact.id, capability.id)
+    discarded = _proposal(artifact.id, capability.id, confidence=0.59)
+
+    result = associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([accepted, discarded]),
+    )
+
+    assert result == SemanticAssociationResult(
+        status="ok",
+        proposed=1,
+        discarded=1,
+        no_match=0,
+        provider="stub-provider",
+        model="stub-model",
+    )
+    edge = store.list_evidence_edges()[0]
+    assert edge.lifecycle == "candidate"
+    assert edge.extraction_method == "inferred"
 
 
 def test_inferred_edges_fenced_via_store_write_path(store: CkmStore) -> None:
@@ -229,31 +555,14 @@ def test_confirmation_rejects_invalid_or_forged_receipts(
     assert store.list_evidence_edges() == []
 
 
-class _FabricClient:
-    def __init__(self, *, response: str | None = None, error: Exception | None = None) -> None:
-        self.response = response
-        self.error = error
-
-    def chat(self, *args, **kwargs) -> str:
-        if self.error is not None:
-            raise self.error
-        assert self.response is not None
-        return self.response
-
-
 @pytest.mark.parametrize("failure", ["schema", "constrained"])
-def test_fabric_adapter_maps_structured_output_failures(failure: str) -> None:
-    associator = object.__new__(FabricSemanticAssociator)
-    associator.provider = "stub-provider"
-    associator.model = "stub-model"
-    if failure == "schema":
-        associator._client = _FabricClient(response='{"proposals": [{"artifact_id": "x"}]}')
-    else:
-        associator._client = _FabricClient(
-            error=ConstrainedCompletionError(
-                schema_ref="test", reason="schema violation"
-            )
-        )
+def test_builder_adapter_maps_structured_output_failures(failure: str) -> None:
+    resolver = RecordingResolver()
+    response = '{"proposals": [{"artifact_id": "x"}]}'
+    if failure == "constrained":
+        response = "not-json"
+    adapter = RecordingAdapter(response)
+    associator = _builder_associator(resolver, adapter)
 
     with pytest.raises(SemanticAssociationError, match="invalid semantic association response"):
         associator.propose(artifacts=[], capabilities=[])
