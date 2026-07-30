@@ -348,6 +348,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/relevance",),
     ),
     (
+        # Daily Briefing is a derived HIX read surface. Keep its composer,
+        # trigger, and focused contract suite together so a briefing change
+        # cannot fail CI selection before its behavioral Verify targets run.
+        "briefing",
+        ("app/briefing/", "tests/briefing/"),
+        ("tests/briefing",),
+    ),
+    (
         "curation",
         (
             "app/curation/",

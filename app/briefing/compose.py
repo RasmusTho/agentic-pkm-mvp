@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypeAlias, get_args
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -23,24 +24,41 @@ from app.domain.commitments import (
     CommitmentRecord,
     query_next_and_waiting_commitments,
 )
+from app.briefing.config import BRIEFING_TIMEZONE
+from app.episodes.calendar_stream import (
+    CalendarRawItem,
+    parse_vevent,
+    read_calendar_raw_items_for_tick,
+)
+from app.episodes.notes import EPISODE_NOTES_DIR, parse_validated_episode_note
+from app.episodes.schema import EpisodeSchemaValidationError
+from app.episodes.stream_registry import STATUS_LIVE, load_registry
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.write_ops import write_note_relative
 from app.receipts.decision_receipt_log import iter_decision_receipts
 from app.relevance.now_surface import collect_now_moments
 from app.relevance.schema import NeedBasis, URGENCY_ORDER
 from app.services.commitment_persistence import commitment_artifact_path, load_commitments
-from app.vault.manager import VaultContext
+from app.vault.manager import VaultContext, iter_vault_markdown_files
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 BRIEFING_ARTIFACT_CLASS = "daily_briefing"
-BRIEFING_SCHEMA_VERSION = 1
+BRIEFING_SCHEMA_VERSION = 2
 BRIEFING_WRITE_ACTION = "briefing.write_note"
 BRIEFINGS_DIR_NAME = "briefings"
 
-SectionName: TypeAlias = Literal["commitments", "moments", "decision_receipts"]
+SectionName: TypeAlias = Literal[
+    "commitments", "moments", "decision_receipts", "calendar_episodes"
+]
 SectionStatus: TypeAlias = Literal["available", "degraded"]
 SECTION_ORDER: tuple[SectionName, ...] = (
+    "commitments",
+    "moments",
+    "decision_receipts",
+    "calendar_episodes",
+)
+_V1_SECTION_ORDER: tuple[SectionName, ...] = (
     "commitments",
     "moments",
     "decision_receipts",
@@ -49,6 +67,7 @@ SECTION_TITLES: dict[SectionName, str] = {
     "commitments": "Commitments",
     "moments": "Moments",
     "decision_receipts": "Decision receipts",
+    "calendar_episodes": "Today's calendar / episodes",
 }
 NEED_BASIS_VALUES: tuple[str, ...] = get_args(NeedBasis)
 
@@ -90,8 +109,20 @@ class DecisionReceiptBriefingItem:
     receipt_path: str
 
 
+@dataclass(frozen=True)
+class CalendarEpisodeBriefingItem:
+    source: Literal["calendar", "episode"]
+    title: str
+    starts_at: str
+    ends_at: str | None
+    provenance_ref: str
+
+
 BriefingItem: TypeAlias = (
-    CommitmentBriefingItem | MomentBriefingItem | DecisionReceiptBriefingItem
+    CommitmentBriefingItem
+    | MomentBriefingItem
+    | DecisionReceiptBriefingItem
+    | CalendarEpisodeBriefingItem
 )
 
 
@@ -145,6 +176,9 @@ def compose_briefing(
                 for_date=for_date,
             )
         ),
+        "calendar_episodes": _read_section(
+            lambda: _read_calendar_episodes(vault_root=vault_root, for_date=for_date)
+        ),
     }
     degraded = tuple(
         section_name
@@ -190,7 +224,14 @@ def load_briefing(
             system_dir=system_dir,
         )
         # Canonical re-render makes frontmatter and body one tamper-evident projection.
-        if content != _render_note(note):
+        schema_version = frontmatter.get("schema_version")
+        if schema_version not in (1, BRIEFING_SCHEMA_VERSION):
+            raise BriefingReadError("briefing identity or schema is incompatible")
+        if content != _render_note(
+            note,
+            schema_version=schema_version,
+            section_order=_V1_SECTION_ORDER if schema_version == 1 else SECTION_ORDER,
+        ):
             raise BriefingReadError("briefing body disagrees with structured content")
         return note
     except BriefingReadError:
@@ -455,17 +496,103 @@ def _read_decision_receipts(
     return tuple(item for _created, item in timestamped_items)
 
 
-def _render_note(note: BriefingNote) -> str:
+def _read_calendar_episodes(
+    *, vault_root: Path, for_date: date
+) -> tuple[CalendarEpisodeBriefingItem, ...]:
+    """Read today's bounded entries through ERE's live interfaces only."""
+    calendar = load_registry().get("calendar")
+    if calendar is None or calendar.status != STATUS_LIVE:
+        raise _InvalidSourceRecord
+
+    briefing_zone = ZoneInfo(BRIEFING_TIMEZONE)
+    day_start = datetime.combine(for_date, time.min, tzinfo=briefing_zone).astimezone(timezone.utc)
+    day_end = datetime.combine(
+        for_date + timedelta(days=1), time.min, tzinfo=briefing_zone
+    ).astimezone(timezone.utc)
+    calendar_items, degraded = read_calendar_raw_items_for_tick()
+    if degraded:
+        raise RuntimeError("calendar stream degraded")
+
+    items: list[CalendarEpisodeBriefingItem] = []
+    for _binding, raw_item in calendar_items:
+        item = _calendar_item_for_day(raw_item, day_start=day_start, day_end=day_end)
+        if item is not None:
+            items.append(item)
+    items.extend(_episode_items_for_day(vault_root=vault_root, day_start=day_start, day_end=day_end))
+    return tuple(sorted(items, key=lambda item: (item.starts_at, item.source, item.provenance_ref)))
+
+
+def _calendar_item_for_day(
+    raw_item: CalendarRawItem, *, day_start: datetime, day_end: datetime
+) -> CalendarEpisodeBriefingItem | None:
+    event = parse_vevent(raw_item.ics_text)
+    if event is None or event.dtstart is None:
+        raise _InvalidSourceRecord
+    starts_at = event.dtstart.astimezone(timezone.utc)
+    ends_at = event.dtend.astimezone(timezone.utc) if event.dtend is not None else None
+    if ends_at is None:
+        if not day_start <= starts_at < day_end:
+            return None
+    elif starts_at >= day_end or ends_at <= day_start:
+        return None
+    if not raw_item.uid or not raw_item.etag:
+        raise _InvalidSourceRecord
+    title = _one_line(event.summary or raw_item.uid)
+    if not title or not title.isprintable():
+        raise _InvalidSourceRecord
+    return CalendarEpisodeBriefingItem(
+        source="calendar",
+        title=title,
+        starts_at=_format_utc(starts_at),
+        ends_at=_format_utc(ends_at) if ends_at is not None else None,
+        provenance_ref=f"calendar:{raw_item.uid}:{raw_item.etag}",
+    )
+
+
+def _episode_items_for_day(
+    *, vault_root: Path, day_start: datetime, day_end: datetime
+) -> tuple[CalendarEpisodeBriefingItem, ...]:
+    items: list[CalendarEpisodeBriefingItem] = []
+    for path in iter_vault_markdown_files(vault_root, subtree_root=vault_root / EPISODE_NOTES_DIR):
+        try:
+            fields = parse_validated_episode_note(path.read_text(encoding="utf-8"))
+        except EpisodeSchemaValidationError as exc:
+            raise _InvalidSourceRecord from exc
+        time_fields = fields["time"]
+        start = _parse_datetime(str(time_fields["start"]))
+        raw_end = time_fields.get("end")
+        end = _parse_datetime(str(raw_end)) if raw_end is not None else None
+        if start >= day_end or (end is not None and end <= day_start):
+            continue
+        episode_id = _required_canonical_text(fields, "episode_id")
+        items.append(
+            CalendarEpisodeBriefingItem(
+                source="episode",
+                title=_required_display_text(fields, "title"),
+                starts_at=_format_utc(start),
+                ends_at=_format_utc(end) if end is not None else None,
+                provenance_ref=episode_id,
+            )
+        )
+    return tuple(items)
+
+
+def _render_note(
+    note: BriefingNote,
+    *,
+    schema_version: int = BRIEFING_SCHEMA_VERSION,
+    section_order: tuple[SectionName, ...] = SECTION_ORDER,
+) -> str:
     frontmatter: dict[str, Any] = {
         "artifact_class": BRIEFING_ARTIFACT_CLASS,
-        "schema_version": BRIEFING_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "agent_maintained": True,
         "read_only": True,
         "authority_role": "derived",
         "briefing_date": note.briefing_date.isoformat(),
-        "degraded_sections": list(note.degraded_sections),
+        "degraded_sections": [name for name in section_order if name in note.degraded_sections],
         "sections": {
-            name: _section_to_mapping(note.sections[name]) for name in SECTION_ORDER
+            name: _section_to_mapping(note.sections[name]) for name in section_order
         },
     }
     body = [
@@ -473,7 +600,7 @@ def _render_note(note: BriefingNote) -> str:
         "",
         "> Derived, read-only briefing. Source artifacts remain authoritative.",
     ]
-    for name in SECTION_ORDER:
+    for name in section_order:
         section = note.sections[name]
         body.extend(["", f"## {SECTION_TITLES[name]}", ""])
         if section.status == "degraded":
@@ -523,6 +650,14 @@ def _item_to_mapping(item: BriefingItem) -> dict[str, Any]:
             "artifact_path": item.artifact_path,
             "surfaced_refs": [dict(ref) for ref in item.surfaced_refs],
         }
+    if isinstance(item, CalendarEpisodeBriefingItem):
+        return {
+            "source": item.source,
+            "title": item.title,
+            "starts_at": item.starts_at,
+            "ends_at": item.ends_at,
+            "provenance_ref": item.provenance_ref,
+        }
     return {
         "source": "decision_receipt",
         "object_id": item.object_id,
@@ -546,6 +681,9 @@ def _render_items(items: tuple[BriefingItem, ...]) -> list[str]:
             lines.append(f"  - Provenance: {item.artifact_path}")
             for ref in item.surfaced_refs:
                 lines.append(f"  - Surfaced ref: {ref['ref']} — {ref['why']}")
+        elif isinstance(item, CalendarEpisodeBriefingItem):
+            lines.append(f"- {item.title} ({item.starts_at})")
+            lines.append(f"  - Provenance: {item.provenance_ref}")
         else:
             lines.append(f"- {item.key} ({item.created_at})")
             lines.append(
@@ -578,9 +716,12 @@ def _note_from_frontmatter(
     vault_root: Path,
     system_dir: str,
 ) -> BriefingNote:
+    schema_version = frontmatter.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (1, BRIEFING_SCHEMA_VERSION):
+        raise BriefingReadError("briefing identity or schema is incompatible")
+    section_order = _V1_SECTION_ORDER if schema_version == 1 else SECTION_ORDER
     required_identity = {
         "artifact_class": BRIEFING_ARTIFACT_CLASS,
-        "schema_version": BRIEFING_SCHEMA_VERSION,
         "agent_maintained": True,
         "read_only": True,
         "authority_role": "derived",
@@ -596,11 +737,11 @@ def _note_from_frontmatter(
     sections_raw = frontmatter.get("sections")
     if not isinstance(degraded_raw, list) or not isinstance(sections_raw, dict):
         raise BriefingReadError("briefing sections are invalid")
-    if any(name not in SECTION_ORDER for name in degraded_raw):
+    if any(name not in section_order for name in degraded_raw):
         raise BriefingReadError("briefing degraded sections are invalid")
-    degraded = tuple(name for name in SECTION_ORDER if name in degraded_raw)
+    degraded = tuple(name for name in section_order if name in degraded_raw)
     sections: dict[SectionName, BriefingSection] = {}
-    for name in SECTION_ORDER:
+    for name in section_order:
         raw = sections_raw.get(name)
         if not isinstance(raw, dict):
             raise BriefingReadError("briefing section is missing")
@@ -628,11 +769,11 @@ def _note_from_frontmatter(
         elif reason is not None:
             raise BriefingReadError("available briefing section must have no reason")
         sections[name] = BriefingSection(status=status, items=items, reason=reason)
-    actual_degraded = tuple(
-        name for name in SECTION_ORDER if sections[name].status == "degraded"
-    )
+    actual_degraded = tuple(name for name in section_order if sections[name].status == "degraded")
     if actual_degraded != degraded or degraded_raw != list(actual_degraded):
         raise BriefingReadError("briefing degraded section markers disagree")
+    if schema_version == 1:
+        sections["calendar_episodes"] = BriefingSection(status="available", items=())
     return BriefingNote(
         briefing_date=expected_date,
         degraded_sections=degraded,
@@ -727,6 +868,29 @@ def _item_from_mapping(
                 created_at=created_at,
                 receipt_path=receipt_path,
             )
+        if name == "calendar_episodes" and raw.get("source") in {"calendar", "episode"}:
+            source = raw["source"]
+            starts_at = _required_canonical_text(raw, "starts_at")
+            parsed_starts_at = _parse_datetime(starts_at)
+            if starts_at != _format_utc(parsed_starts_at):
+                raise _InvalidSourceRecord
+            ends_at = _optional_canonical_text(raw, "ends_at")
+            if ends_at is not None:
+                parsed_ends_at = _parse_datetime(ends_at)
+                if ends_at != _format_utc(parsed_ends_at):
+                    raise _InvalidSourceRecord
+            provenance_ref = _required_canonical_text(raw, "provenance_ref")
+            if source == "calendar" and not provenance_ref.startswith("calendar:"):
+                raise _InvalidSourceRecord
+            if source == "episode" and not provenance_ref.startswith("ep-"):
+                raise _InvalidSourceRecord
+            return CalendarEpisodeBriefingItem(
+                source=source,
+                title=_required_display_text(raw, "title"),
+                starts_at=starts_at,
+                ends_at=ends_at,
+                provenance_ref=provenance_ref,
+            )
     except _InvalidSourceRecord as exc:
         raise BriefingReadError("briefing item shape is invalid") from exc
     raise BriefingReadError("briefing item discriminator is invalid")
@@ -807,6 +971,7 @@ __all__ = [
     "BriefingReadError",
     "BriefingSection",
     "CommitmentBriefingItem",
+    "CalendarEpisodeBriefingItem",
     "DecisionReceiptBriefingItem",
     "MomentBriefingItem",
     "compose_briefing",
