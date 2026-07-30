@@ -35,7 +35,13 @@ transition/refusal/failure/result as a prior-receipt-linked `BuilderOpsReceipt`.
 - Denied, pending, stale, or hash-mismatched admission invokes no adapter.
 - Missing, stale, revoked, foreign, or mismatched approval invokes no adapter.
 - Missing or token-drifted Yggdrasil evidence for a visual deliverable invokes no adapter.
+- Visual admission reads `companion-ui/companion-app/colors_and_type.css` from the explicit repo
+  root and binds the observed digest into admission; callers cannot supply or override current
+  token parity.
 - Accepted start is durable before provider execution.
+- Each receipt predecessor has one deterministic next-receipt slot, and accepted start binds one
+  unique execution actor; lease expiry cannot admit a second provider turn or sibling terminal
+  receipt.
 - Status is reconstructed from validated immutable artifacts and receipt ancestry.
 - Returned handoff refs are accepted only with stable identity, content digest, sources, and
   provider/run lineage.

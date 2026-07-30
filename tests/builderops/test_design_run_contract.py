@@ -116,6 +116,7 @@ def test_admission_and_approval_bind_the_exact_request() -> None:
         admission_id="admission.design.one", request_ref=contract_ref(request, request.request_id),
         brief_ref=contract_ref(brief, brief.brief_id), adapter_ref=contract_ref(adapter, adapter.descriptor_id),
         policy_ref=contract_ref(policy, policy.profile_id), evaluated_at=TS, outcome="approval_required",
+        repo_token_hash_observed=SHA_C,
         refusal=DesignRunRefusalDetail(code="approval_pending", public_message="Operator approval is required.", retryable=False),
     )
     validate_admission_bindings(admission, request=request, brief=brief, adapter=adapter, policy=policy, current_repo_token_hash=SHA_C)
@@ -137,10 +138,46 @@ def test_visual_deliverables_bind_current_yggdrasil_gate_receipt() -> None:
         admission_id="admission.visual.one", request_ref=contract_ref(request, request.request_id),
         brief_ref=contract_ref(brief, brief.brief_id), adapter_ref=contract_ref(adapter, adapter.descriptor_id),
         policy_ref=contract_ref(policy, policy.profile_id), evaluated_at=TS, outcome="allow",
+        repo_token_hash_observed=SHA_C,
     )
     validate_admission_bindings(admission, request=request, brief=brief, adapter=adapter, policy=policy, current_repo_token_hash=SHA_C)
     with pytest.raises(ValueError, match="token hash drifted"):
         validate_admission_bindings(admission, request=request, brief=brief, adapter=adapter, policy=policy, current_repo_token_hash=SHA_A)
+    with pytest.raises(ValueError, match="observed repo token hash"):
+        validate_admission_bindings(
+            admission.model_copy(
+                update={"repo_token_hash_observed": SHA_A}
+            ),
+            request=request,
+            brief=brief,
+            adapter=adapter,
+            policy=policy,
+            current_repo_token_hash=SHA_C,
+        )
+    non_visual = _brief(visual=False)
+    non_visual_request = _request(non_visual, adapter, policy)
+    non_visual_admission = admission.model_copy(
+        update={
+            "admission_id": "admission.nonvisual.one",
+            "request_ref": contract_ref(
+                non_visual_request,
+                non_visual_request.request_id,
+            ),
+            "brief_ref": contract_ref(
+                non_visual,
+                non_visual.brief_id,
+            ),
+            "repo_token_hash_observed": SHA_C,
+        }
+    )
+    with pytest.raises(ValueError, match="must not bind"):
+        validate_admission_bindings(
+            non_visual_admission,
+            request=non_visual_request,
+            brief=non_visual,
+            adapter=adapter,
+            policy=policy,
+        )
     assert _brief(visual=False).non_visual_exemption is True
 
 

@@ -1,0 +1,15 @@
+{
+  "allowed_deliverables": [
+    "content_review",
+    "interaction_specification",
+    "visual_handoff"
+  ],
+  "approval_required": true,
+  "contract_kind": "policy",
+  "max_attachment_refs": 8,
+  "max_source_refs": 16,
+  "profile_id": "design.policy.local",
+  "profile_version": "v1",
+  "schema_version": "builderops.design-run-contract.v1",
+  "visual_yggdrasil_receipt_required": true
+}

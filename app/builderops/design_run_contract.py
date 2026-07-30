@@ -326,6 +326,7 @@ class DesignRunAdmission(CanonicalDesignRunContract):
     adapter_ref: ContractIdentityRef
     policy_ref: ContractIdentityRef
     evaluated_at: UtcTimestamp
+    repo_token_hash_observed: Sha256 | None = None
     outcome: Literal["allow", "deny", "approval_required"]
     refusal: "DesignRunRefusalDetail | None" = None
 
@@ -364,8 +365,9 @@ class DesignRunRefusalDetail(_StrictFrozen):
 
 _ALLOWED_TRANSITIONS: Final[dict[DesignRunStatusValue, frozenset[DesignRunStatusValue]]] = {
     "unknown": frozenset({"unavailable", "denied", "approval_pending", "malformed", "running"}),
+    "approval_pending": frozenset({"unavailable", "denied", "malformed", "running"}),
     "running": frozenset({"timed_out", "failed", "succeeded"}),
-    "unavailable": frozenset(), "denied": frozenset(), "approval_pending": frozenset(),
+    "unavailable": frozenset(), "denied": frozenset(),
     "malformed": frozenset(), "timed_out": frozenset(), "failed": frozenset(), "succeeded": frozenset(),
 }
 
@@ -490,8 +492,16 @@ def validate_admission_bindings(
             raise ValueError("visual admission requires Yggdrasil receipt policy")
         if current_repo_token_hash is None or receipt.repo_token_hash != current_repo_token_hash:
             raise ValueError("visual admission Yggdrasil repo token hash drifted")
+        if admission.repo_token_hash_observed != current_repo_token_hash:
+            raise ValueError(
+                "visual admission does not bind the observed repo token hash"
+            )
         if not receipt.valid_at(admission.evaluated_at):
             raise ValueError("visual admission Yggdrasil receipt is stale")
+    elif admission.repo_token_hash_observed is not None:
+        raise ValueError(
+            "non-visual admission must not bind a repo token hash"
+        )
 
 
 def validate_approval_bindings(

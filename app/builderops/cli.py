@@ -58,6 +58,10 @@ from app.builderops.cutover_evidence import (
     build_receipt as build_cutover_receipt,
     write_receipt as write_cutover_receipt,
 )
+from app.builderops.design_run_governance import (
+    DesignRunGovernance,
+    DesignRunGovernanceError,
+)
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
     build_evidence_bridge_report,
@@ -797,6 +801,101 @@ def ckm_overview(
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
 def inquiry() -> None:
     """File-first inquiry start, trace, and restart planning."""
+
+
+@builderops.group(
+    "design-run",
+    help="Record authenticated local approval evidence for Builder design runs.",
+)
+def design_run() -> None:
+    """Approval evidence only; execution and downstream writeback stay separate."""
+
+
+def _design_run_governance(
+    ctx: click.Context,
+    *,
+    repo_root: Path,
+) -> DesignRunGovernance:
+    try:
+        return DesignRunGovernance.from_declared_sources(
+            store=_store(ctx),
+            channel="dev",
+            repo_root=repo_root,
+        )
+    except DesignRunGovernanceError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@design_run.command(
+    "approve",
+    help="Approve the exact current admission as the authenticated OS principal.",
+)
+@click.argument("run_id")
+@click.option("--approval-id", required=True)
+@click.option("--approved-at", required=True)
+@click.option(
+    "--repo-root",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_approve(
+    ctx: click.Context,
+    run_id: str,
+    approval_id: str,
+    approved_at: str,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        evidence = _design_run_governance(
+            ctx,
+            repo_root=repo_root,
+        ).approve(
+            run_id=run_id,
+            approval_id=approval_id,
+            approved_at=approved_at,
+        )
+    except (BuilderOpsValidationError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(evidence.model_dump(mode="json"), as_json)
+
+
+@design_run.command(
+    "revoke",
+    help="Revoke the exact current approval as the authenticated OS principal.",
+)
+@click.argument("run_id")
+@click.option("--revocation-id", required=True)
+@click.option("--revoked-at", required=True)
+@click.option(
+    "--repo-root",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def design_run_revoke(
+    ctx: click.Context,
+    run_id: str,
+    revocation_id: str,
+    revoked_at: str,
+    repo_root: Path,
+    as_json: bool,
+) -> None:
+    try:
+        evidence = _design_run_governance(
+            ctx,
+            repo_root=repo_root,
+        ).revoke(
+            run_id=run_id,
+            revocation_id=revocation_id,
+            revoked_at=revoked_at,
+        )
+    except (BuilderOpsValidationError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(evidence.model_dump(mode="json"), as_json)
 
 
 @inquiry.command("start", help="Persist an immutable inquiry question before model execution.")
