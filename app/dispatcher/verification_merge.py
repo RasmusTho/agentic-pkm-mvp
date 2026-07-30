@@ -250,6 +250,7 @@ class BuilderOpsOutboxExecutor:
         return self.client.recover_outbox(
             envelope=self.envelope,
             operation_key=operation_key,
+            worker_id=self.worker_id,
         )
 
     def status(self, operation_key: str) -> Mapping[str, object]:

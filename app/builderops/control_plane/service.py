@@ -658,6 +658,7 @@ def create_app(
                 idempotency_key=request.idempotency_key,
                 request=request.request,
                 ttl_seconds=request.ttl_seconds,
+                require_new_fence=request.require_new_fence,
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
@@ -1036,6 +1037,9 @@ def create_app(
     ) -> dict[str, Any]:
         _enforce_repo_scope(credential, request.envelope.repository)
         try:
+            _assert_durable_payload_safe(
+                request.model_dump(mode="json"), credentials
+            )
             intent = await run_in_threadpool(
                 store.outbox_intent,
                 request.envelope.repository,
@@ -1044,8 +1048,10 @@ def create_app(
             _enforce_outbox_principal(intent, credential)
             claim = await run_in_threadpool(
                 store.outbox_claim,
-                canonical_repository(request.envelope.repository),
-                request.operation_key,
+                envelope=_envelope(request.envelope, credential),
+                operation_key=request.operation_key,
+                worker_id=request.worker_id,
+                claim_ttl_seconds=request.claim_ttl_seconds,
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc

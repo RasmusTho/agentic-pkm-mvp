@@ -949,8 +949,12 @@ def test_merge_recovery_rejects_final_review_authority_drift(
         assert result.stop_reason == "final_review_authority_mismatch"
 
 
-def _open_neutralized_recovery_evidence(*, merge_commit_sha: object = None):
-    plan = _merge_plan(HEAD)
+def _open_neutralized_recovery_evidence(
+    *,
+    merge_commit_sha: object = None,
+    run_id: str | None = None,
+):
+    plan = _merge_plan(HEAD, run_id=run_id)
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = eligible_pr(
@@ -1685,10 +1689,11 @@ def _merge_plan(
     ),
     authenticated_supporting: tuple[int, ...] = (),
     repair_budget: Mapping[str, object] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, object]:
     context = {
         "contract": "verification_closer_dispatch_context.v2",
-        "run_id": _verification_run_id(),
+        "run_id": run_id or _verification_run_id(),
         "repository": REPO,
         "pr_number": 3603,
         "governing_issue": 3603,
@@ -1728,6 +1733,7 @@ def _merge_comments(
     authenticated_supporting: tuple[int, ...] = (),
     reopened_unauthorized: tuple[int, ...] = (),
     repair_budget: Mapping[str, object] | None = None,
+    run_id: str | None = None,
 ) -> list[dict[str, object]]:
     head_sha = pr.get("head", {}).get("sha") if isinstance(pr.get("head"), Mapping) else None
     assert isinstance(head_sha, str)
@@ -1743,6 +1749,7 @@ def _merge_comments(
         ),
         authenticated_supporting=authenticated_supporting,
         repair_budget=repair_budget,
+        run_id=run_id,
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)

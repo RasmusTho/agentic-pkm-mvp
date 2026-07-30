@@ -79,10 +79,33 @@ def test_unknown_external_effect_requires_readback_before_retry(
         claim_ttl_seconds=1,
     )
     restarted_store = type(control_plane_store)(control_plane_store.dsn)
-    orphaned_claim = restarted_store.outbox_claim(envelope.repository, result.operation_key)
+    with pytest.raises(LeaseUnavailable, match="active claim"):
+        restarted_store.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="recovery-executor",
+        )
+    _expire_outbox_claim(
+        restarted_store, envelope.repository, result.operation_key
+    )
+    orphaned_claim = restarted_store.outbox_claim(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="recovery-executor",
+    )
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
-    assert orphaned_claim == first_claim
+    assert orphaned_claim.operation_key == first_claim.operation_key
+    assert orphaned_claim.worker_id == "recovery-executor"
+    assert orphaned_claim.fencing_token > first_claim.fencing_token
+    assert orphaned_claim.receipt_sequence > first_claim.receipt_sequence
+    assert orphaned_claim.claim_lsn != first_claim.claim_lsn
     assert restarted_store.effect_eligible(first_claim) is False
+    with pytest.raises(StaleFencingToken):
+        restarted_store.reconcile_outbox(
+            first_claim,
+            observed_applied=True,
+            evidence={"readback": "stale-worker-forged"},
+        )
     with pytest.raises(StaleFencingToken):
         restarted_store.reconcile_outbox(
             replace(orphaned_claim, worker_id="wrong-holder"),
@@ -146,6 +169,42 @@ def test_unknown_external_effect_requires_readback_before_retry(
             worker_id="executor-3",
         )
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "succeeded"
+
+
+def test_live_unknown_claim_cannot_be_stolen_during_readback(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="live-unknown-readback",
+        key="live-unknown-readback",
+        effect_type="github.merge",
+        payload={"pr": 4000},
+    )
+    original = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="readback-owner",
+    )
+    control_plane_store.mark_effect_unknown(
+        original, detail="transport outcome requires readback"
+    )
+
+    with pytest.raises(LeaseUnavailable, match="active claim"):
+        control_plane_store.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="concurrent-recovery",
+        )
+
+    reconciliation = control_plane_store.reconcile_outbox(
+        original,
+        observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+    assert reconciliation.status == "pending"
+    assert reconciliation.fencing_token == original.fencing_token
 
 
 def test_indeterminate_effect_dead_letters_without_retry(
@@ -492,7 +551,14 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
         )
 
     recovered = type(control_plane_store)(control_plane_store.dsn)
-    orphaned_claim = recovered.outbox_claim(envelope.repository, result.operation_key)
+    _expire_outbox_claim(
+        recovered, envelope.repository, result.operation_key
+    )
+    orphaned_claim = recovered.outbox_claim(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="recovery-executor",
+    )
     assert orphaned_claim.claim_lsn != "0/0"
     claim_receipt = recovered.receipt(envelope.repository, orphaned_claim.receipt_sequence)
     assert claim_receipt["recovery_lsn"] == orphaned_claim.claim_lsn
@@ -541,6 +607,9 @@ def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
 
     recovering = type(control_plane_store)(control_plane_store.dsn)
     contender = type(control_plane_store)(control_plane_store.dsn)
+    _expire_outbox_claim(
+        recovering, envelope.repository, result.operation_key
+    )
     sampling_started = Event()
     release_sampling = Event()
     contender_started = Event()
@@ -554,11 +623,19 @@ def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
     monkeypatch.setattr(recovering, "_flushed_lsn", delayed_flushed_lsn)
 
     def recover_first():
-        return recovering.outbox_claim(envelope.repository, result.operation_key)
+        return recovering.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="recovery-executor",
+        )
 
     def recover_concurrently():
         contender_started.set()
-        return contender.outbox_claim(envelope.repository, result.operation_key)
+        return contender.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="recovery-executor",
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_future = pool.submit(recover_first)
@@ -568,9 +645,9 @@ def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
         assert contender_future.done() is False
         release_sampling.set()
         first_claim = first_future.result(timeout=10)
-        same_claim = contender_future.result(timeout=10)
+        with pytest.raises(LeaseUnavailable, match="active claim"):
+            contender_future.result(timeout=10)
 
-    assert same_claim == first_claim
     assert first_claim.claim_lsn != "0/0"
     reconciliation = recovering.reconcile_outbox(
         first_claim,
@@ -617,9 +694,13 @@ def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelo
             operation_key=result.operation_key,
             worker_id="replacement-executor",
         )
-    recovered = control_plane_store.outbox_claim(envelope.repository, result.operation_key)
+    recovered = control_plane_store.outbox_claim(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="recovery-executor",
+    )
     assert recovered.operation_key == first.operation_key
-    assert recovered.worker_id == first.worker_id
-    assert recovered.fencing_token == first.fencing_token
-    assert recovered.receipt_sequence == first.receipt_sequence
+    assert recovered.worker_id == "recovery-executor"
+    assert recovered.fencing_token > first.fencing_token
+    assert recovered.receipt_sequence > first.receipt_sequence
     assert control_plane_store.outbox_status(envelope.repository, result.operation_key) == "unknown"

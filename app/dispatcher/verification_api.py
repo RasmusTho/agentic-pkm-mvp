@@ -617,6 +617,7 @@ class BuilderOpsVerificationLedger:
             idempotency_key=f"verification-claim:{run_id}:{snapshot['version']}",
             request=_payload_for(snapshot, claimed),
             ttl_seconds=ttl_seconds,
+            require_new_fence=run.lease_id is not None,
         )
         lease = response.get("lease")
         if not isinstance(lease, Mapping):
@@ -1219,29 +1220,64 @@ class BuilderOpsVerificationLedger:
         if not repairs and not verifications:
             return False
         anchor = (repairs[-1] if repairs else verifications[-1]).get("attempt_id")
-        reviews: builtins.list[dict[str, object]] = []
+        try:
+            self._selected_clean_review_rounds(
+                run,
+                attempts,
+                anchor_id=anchor,
+            )
+        except ValueError:
+            return False
+        return True
+
+    def _selected_clean_review_rounds(
+        self,
+        run: VerificationRun,
+        attempts: Sequence[Mapping[str, object]],
+        *,
+        anchor_id: object,
+    ) -> builtins.list[Mapping[str, object]]:
+        """Return the final consecutive clean authority for one anchor.
+
+        A blocking review remains authoritative until a repair creates a new
+        anchor. Never recover merge authority by filtering that blocker out
+        and reusing older clean rows.
+        """
+        required = self._required_clean_review_rounds(run, attempts)
+        reviews: builtins.list[Mapping[str, object]] = []
         for row in attempts:
             review_receipt = row.get("receipt")
             if (
                 row.get("kind") == "review"
-                and row.get("outcome") == "clean"
                 and isinstance(review_receipt, Mapping)
-                and review_receipt.get("reviewed_attempt_id") == anchor
-                and review_receipt.get("head_sha") == run.current_head_sha
+                and review_receipt.get("reviewed_attempt_id") == anchor_id
             ):
                 reviews.append(row)
-        required = self._required_clean_review_rounds(run, attempts)
-        return (
-            len(reviews) >= required
-            and len(
-                {
-                    row.get("session_id")
-                    for row in reviews[-required:]
-                    if row.get("session_id")
-                }
+        selected = reviews[-required:]
+        if (
+            len(selected) != required
+            or any(row.get("outcome") != "clean" for row in reviews)
+            or any(
+                not isinstance(row.get("attempt_id"), str)
+                or not isinstance(row.get("session_id"), str)
+                or not row.get("session_id")
+                for row in selected
             )
-            == required
-        )
+            or len({row["session_id"] for row in selected}) != required
+        ):
+            raise ValueError(
+                "merge readiness lacks final consecutive clean review rounds"
+            )
+        for row in selected:
+            receipt = row.get("receipt")
+            if (
+                not isinstance(receipt, Mapping)
+                or receipt.get("head_sha") != run.current_head_sha
+            ):
+                raise ValueError(
+                    "merge readiness lacks final consecutive clean review rounds"
+                )
+        return selected
 
     def _merge_ready_authority(
         self, run: VerificationRun
@@ -1260,23 +1296,11 @@ class BuilderOpsVerificationLedger:
         anchor = repairs[-1] if repairs else verifications[-1]
         anchor_id = anchor.get("attempt_id")
         required = self._required_clean_review_rounds(run, attempts)
-        reviews: builtins.list[dict[str, object]] = []
-        for row in attempts:
-            review_receipt = row.get("receipt")
-            if (
-                row.get("kind") == "review"
-                and row.get("outcome") == "clean"
-                and isinstance(review_receipt, Mapping)
-                and review_receipt.get("reviewed_attempt_id") == anchor_id
-                and review_receipt.get("head_sha") == run.current_head_sha
-            ):
-                reviews.append(row)
-        selected = reviews[-required:]
-        if (
-            len(selected) != required
-            or any(not isinstance(row.get("attempt_id"), str) for row in selected)
-        ):
-            raise ValueError("merge readiness lacks required clean review rounds")
+        selected = self._selected_clean_review_rounds(
+            run,
+            attempts,
+            anchor_id=anchor_id,
+        )
         return {
             "governing_issue": run.request.get("linked_issue"),
             "closing_issues": list(run.closing_authority),

@@ -4019,10 +4019,21 @@ class VerificationConsumer:
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
-        return self._launch_after_open_neutralized_fence(claimed)
+        recovered_key, recovered_attempt = (
+            self._recover_sessionful_model_effect(run)
+        )
+        return self._launch_after_open_neutralized_fence(
+            claimed,
+            recovered_effect_operation_key=recovered_key,
+            recovered_attempt=recovered_attempt,
+        )
 
     def _launch_after_open_neutralized_fence(
-        self, claimed: VerificationRun
+        self,
+        claimed: VerificationRun,
+        *,
+        recovered_effect_operation_key: str | None = None,
+        recovered_attempt: Mapping[str, object] | None = None,
     ) -> VerificationRun:
         try:
             pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
@@ -4047,6 +4058,10 @@ class VerificationConsumer:
             pr,
             pack_override=pack,
             merge_authority_repair_budget=authority_repair_budget,
+            recovered_effect_operation_key=(
+                recovered_effect_operation_key
+            ),
+            recovered_attempt=recovered_attempt,
         )
 
     def _recover_merged_run(
@@ -4059,12 +4074,111 @@ class VerificationConsumer:
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
+        recovered_key, recovered_attempt = (
+            self._recover_sessionful_model_effect(run)
+        )
         return self._launch(
             claimed,
             pr,
             pack_override=pack,
             merge_authority_repair_budget=authority_repair_budget,
+            recovered_effect_operation_key=recovered_key,
+            recovered_attempt=recovered_attempt,
         )
+
+    def _recover_sessionful_model_effect(
+        self, run: VerificationRun
+    ) -> tuple[str | None, Mapping[str, object] | None]:
+        """Rebind a retained model effect before special merge recovery.
+
+        Merged and open-neutralized recovery enter before the ordinary
+        recovery block, but they retain the same coordinator session and
+        outbox authority. Reconcile that authority first so `_launch` resumes
+        the existing session instead of attempting a conflicting new effect.
+        """
+        pending_reader = getattr(
+            self.ledger, "pending_effect_binding", None
+        )
+        pending = (
+            pending_reader(run.run_id)
+            if callable(pending_reader)
+            else None
+        )
+        if (
+            not isinstance(pending, Mapping)
+            or pending.get("effect_type")
+            != "model.verification_coordinator"
+            or not isinstance(pending.get("operation_key"), str)
+            or pending.get("head_sha") != run.current_head_sha
+        ):
+            return None, None
+        if (
+            run.coordinator_session_id is None
+            or run.context_pack is None
+        ):
+            raise ValueError(
+                "special merge recovery requires a durable model session"
+            )
+        attempt_reader = getattr(self.ledger, "attempts", None)
+        attempts = (
+            attempt_reader(run.run_id)
+            if callable(attempt_reader)
+            else []
+        )
+        matching_attempts = [
+            attempt
+            for attempt in attempts
+            if isinstance(attempt, Mapping)
+            and attempt.get("kind") == "verification"
+            and attempt.get("session_id")
+            == run.coordinator_session_id
+            and isinstance(attempt.get("receipt"), Mapping)
+            and attempt["receipt"].get("head_sha")
+            == run.current_head_sha
+        ]
+        if len(matching_attempts) > 1:
+            raise ValueError(
+                "verification run has conflicting durable model attempts"
+            )
+        outbox_status = pending.get("outbox_status")
+        operation_key = str(pending["operation_key"])
+        if outbox_status in {"claimed", "unknown"}:
+            recover_effect = getattr(self.ledger, "recover_effect", None)
+            if not callable(recover_effect):
+                raise RuntimeError(
+                    "verification effect recovery is unavailable"
+                )
+            recover_effect(
+                operation_key,
+                run_id=run.run_id,
+                effect_type="model.verification_coordinator",
+            )
+            return (
+                operation_key,
+                matching_attempts[0] if matching_attempts else None,
+            )
+        if outbox_status == "succeeded":
+            evidence = pending.get("reconciliation_evidence")
+            if (
+                len(matching_attempts) != 1
+                or not isinstance(evidence, Mapping)
+                or evidence.get("outcome")
+                != "model_receipt_durably_recorded"
+                or evidence.get("head_sha")
+                != run.current_head_sha
+                or evidence.get("session_id")
+                != matching_attempts[0].get("session_id")
+            ):
+                raise ValueError(
+                    "succeeded model effect lacks its durable attempt"
+                )
+            return None, matching_attempts[0]
+        if outbox_status == "dead_letter":
+            raise ValueError(
+                "verification model effect is terminal without applicable "
+                "review evidence"
+            )
+        return None, None
 
     def _terminal_event_application_failure(
         self,
@@ -5304,6 +5418,14 @@ class VerificationConsumer:
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
+        if (
+            run.lease_id is not None
+            and claimed.lease_id == run.lease_id
+        ):
+            raise VerificationSubscriptionBusy(
+                f"verification run {run_id} did not acquire a fresh "
+                "recovery fence"
+            )
         recovered_operation_key: str | None = None
         recovered_attempt: Mapping[str, object] | None = None
         recover_effect = getattr(self.ledger, "recover_effect", None)

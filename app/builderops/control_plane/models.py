@@ -229,6 +229,7 @@ class StorePort(Protocol):
         idempotency_key: str,
         request: Mapping[str, Any],
         ttl_seconds: int = 5400,
+        require_new_fence: bool = False,
         fault_at: str | None = None,
     ) -> tuple[TransactionResult, Lease]: ...
 
@@ -356,7 +357,14 @@ class StorePort(Protocol):
         claim: OutboxClaim,
     ) -> bool: ...
 
-    def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim: ...
+    def outbox_claim(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        operation_key: str,
+        worker_id: str,
+        claim_ttl_seconds: int = 300,
+    ) -> OutboxClaim: ...
 
     def mark_effect_unknown(self, claim: OutboxClaim, *, detail: str) -> None: ...
 
