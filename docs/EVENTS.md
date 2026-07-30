@@ -584,8 +584,10 @@ Contract:
   `heimdal_raw_read_receipt`. Answering a receipt query never touches raw
   evidence.
 - **Named error states, never blind-retryable.** 415 `unsupported_media_kind`,
-  413 `media_too_large` (with `max_bytes`), 422 `sidecar_schema_invalid` /
-  `content_hash_mismatch`, 409 `consent_refused` (HEIM-3), and a
+  413 `media_too_large` (with `max_bytes`) / `sidecar_part_too_large`, 422
+  `multipart_invalid` / `media_part_required` / `sidecar_part_required` /
+  `sidecar_schema_invalid` / `content_hash_mismatch`, 409 `consent_refused`
+  (HEIM-3), and a
   `state: not_acknowledged` 500 family: `raw_write_failed`,
   `admission_event_commit_failed`, `receipt_persistence_failed`,
   `raw_store_key_unavailable`, `media_cap_misconfigured`, plus the
@@ -605,8 +607,8 @@ Contract:
   process without it refuses every admission with 500
   `raw_store_key_unavailable` / `not_acknowledged` — named and remediable, never
   a silent or ambiguous failure. Provisioning it to the api consumer (which the
-  pre-existing `POST /api/heimdal/screen/capture` needs equally) is tracked
-  separately, not claimed here.
+  pre-existing `POST /api/heimdal/screen/capture` needs equally) is a deferred
+  defect on the Known Defects registry (#4172, `KD-4384-RAWKEY`), not claimed here.
 - **Receipts are not retention-aware, stated honestly.**
   `app.heimdal.retention.enforce_hard_retention_bound` hard-deletes raw records
   past the retention window without consulting receipts, so a receipt can outlive
@@ -622,7 +624,8 @@ Contract:
   `capture_profile.modalities` names `speech` only. No modality enforcement reads
   that field today, so this is a provenance-accuracy gap rather than an
   admission bypass; giving the media lane its own grant naming its modalities is
-  an owner decision tracked separately.
+  an owner decision, deferred on the Known Defects registry (#4172,
+  `KD-4384-MODALITY`).
 - **LAN/loopback/tailnet posture only.** Both routes refuse a peer outside
   loopback, RFC1918/ULA, link-local, or the tailnet CGNAT range with 403
   `public_ingress_refused`, judged on the immediate peer and never on

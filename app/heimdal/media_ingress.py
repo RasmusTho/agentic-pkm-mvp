@@ -145,9 +145,12 @@ class MediaAdmissionEventPersistenceError(RuntimeError):
 class MediaAdmission:
     """The outcome of one media admission attempt.
 
-    ``idempotent_replay`` is True exactly when this transfer identity was
-    already acknowledged: the receipt is the pre-existing one, no raw object was
-    written, and no second admission event was emitted.
+    ``idempotent_replay`` is True exactly when this transfer identity was already
+    acknowledged: the receipt is the pre-existing one and no raw object was
+    written. It does **not** promise nothing was appended to the audit log — a
+    replay detected at the shared seam rather than at the pre-write short-circuit
+    has already emitted its event. The invariant is one receipt identity, not one
+    audit line.
     """
 
     receipt: MediaReceipt
@@ -161,6 +164,10 @@ def resolve_media_kind_max_bytes(kind: str) -> int:
     :data:`MEDIA_KINDS` and :class:`MediaCapConfigError` for a present-but-
     unusable override -- a silently ignored cap would admit oversize evidence
     the operator believed was bounded.
+
+    The route resolves every kind up front to derive its coarse read bound, so in
+    practice a `MediaCapConfigError` surfaces there rather than from an admission;
+    both paths render the same named refusal.
     """
     if kind not in DEFAULT_MEDIA_KIND_MAX_BYTES:
         raise MediaKindUnsupportedError(

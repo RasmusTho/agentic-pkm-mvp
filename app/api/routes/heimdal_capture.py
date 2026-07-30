@@ -27,7 +27,10 @@ Named error states, never blind-retryable — the client must branch on `error`:
 | --- | --- | --- |
 | 403 | `public_ingress_refused` | Peer is outside the LAN/loopback/tailnet posture |
 | 415 | `unsupported_media_kind` | `kind` outside {audio, image, video, document} |
-| 413 | `media_too_large` | Over the configured per-kind cap (`max_bytes` included) |
+| 413 | `media_too_large` | Over the per-kind cap, or over the coarse `max(caps)` bound |
+| 413 | `sidecar_part_too_large` | Sidecar part beyond any legitimate metadata size |
+| 422 | `multipart_invalid` | Body is not a readable multipart form |
+| 422 | `media_part_required` / `sidecar_part_required` | A required part is absent |
 | 422 | `sidecar_schema_invalid` | Sidecar missing/malformed against the admission schema |
 | 422 | `content_hash_mismatch` | Received bytes do not hash to `content_sha256` |
 | 422 | `capture_id_required` / `too_many_capture_ids` | Receipt query outside its bounds |
@@ -180,8 +183,9 @@ class MediaReceiptResponse(BaseModel):
 
     ``idempotent_replay`` is present and True only when this exact
     ``(capture_id, content_sha256)`` pair was already acknowledged: the receipt
-    identity, raw ref, and ``admitted_at`` are the original ones, the raw store
-    still holds a single object, and no second admission event was emitted.
+    identity, raw ref, and ``admitted_at`` are the original ones and the raw store
+    still holds a single object. Branch on the receipt identity, not on how many
+    admission events the audit log recorded.
     """
 
     outcome: Literal["admitted"] = "admitted"
@@ -343,7 +347,9 @@ async def _part_bytes(name: str, part: Any, trace_id: str, *, max_bytes: int) ->
                 "error": "media_too_large" if name == "media" else f"{name}_part_too_large",
                 "message": (
                     f"The {name!r} part exceeds the largest configured bound of {max_bytes} "
-                    "bytes; nothing was admitted."
+                    "bytes; nothing was admitted. This is the coarse bound across every "
+                    "kind — the cap for this kind may be lower, so do not treat max_bytes "
+                    "as a size that would be accepted."
                 ),
                 "max_bytes": max_bytes,
                 "trace_id": trace_id,
@@ -508,8 +514,6 @@ async def admit_media(request: Request) -> MediaReceiptResponse:
                 "trace_id": trace_id,
             },
         ) from exc
-    except MediaCapConfigError as exc:
-        raise _cap_misconfigured(exc, trace_id) from exc
     except RawStoreKeyMissingError as exc:
         # Operator precondition, not a client error: without the raw-store key
         # nothing can be encrypted, so nothing can be admitted. Named and
