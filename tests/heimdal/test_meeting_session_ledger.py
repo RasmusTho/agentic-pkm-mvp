@@ -24,6 +24,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.heimdal import meeting_ledger
 from app.heimdal.consent_ledger import reset_memory_consent_ledger
 from app.heimdal.media_receipts import reset_memory_media_receipts
 from app.heimdal.raw_store import reset_memory_raw_store
@@ -286,6 +287,41 @@ def test_late_segment_reconciliation(client: TestClient, _memory_runtime: Path) 
     )
     assert replay.status_code == 200
     assert len(_events(_memory_runtime, LATE_ADMITTED_EVENT)) == 1
+
+
+def test_session_field_bounds_refused_at_the_boundary(client: TestClient) -> None:
+    """Values the ledger would refuse are 422s at the input boundary, nothing admitted.
+
+    Admitting first and refusing at the ledger would strand an acknowledged
+    capture that can never stop returning 500 (second-round review P1), and an
+    unbounded declared count would turn the immutable close into a permanent
+    OOM trigger in the gap report.
+    """
+    session_id = f"mtg-{uuid4()}"
+    assert _open_session(client, session_id).status_code == 200
+
+    media = b"bounds-check-bytes"
+    for bad_seq in (-5, meeting_ledger.MAX_SESSION_SEQ + 1):
+        response = _admit_segment(client, session_id, bad_seq, media)
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "sidecar_schema_invalid"
+    # Nothing was admitted: the receipt query still answers unknown-shaped
+    # state via an empty ledger for this session.
+    assert _gap_report(client, session_id).json()["received"] == []
+
+    blank = _admit_segment(client, "   ", 0, media)
+    assert blank.status_code == 422
+
+    huge_close = _close_session(client, session_id, meeting_ledger.MAX_SESSION_SEQ + 1)
+    assert huge_close.status_code == 422
+
+    # The maximum itself is admitted and reported without materializing more
+    # than the declared bound.
+    assert _close_session(client, session_id, meeting_ledger.MAX_SESSION_SEQ).status_code == 200
+    report = _gap_report(client, session_id).json()
+    assert report["closed"] is True
+    assert report["complete"] is False
+    assert len(report["missing"]) == meeting_ledger.MAX_SESSION_SEQ
 
 
 def test_ledger_survives_restart(client: TestClient) -> None:

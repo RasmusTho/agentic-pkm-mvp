@@ -71,7 +71,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from starlette.datastructures import UploadFile
 
 from app.events.models import new_trace_id
-from app.heimdal import media_ingress, media_receipts
+from app.heimdal import media_ingress, media_receipts, meeting_ledger
 from app.heimdal.consent_ledger import ConsentRefusedError
 from app.heimdal.media_ingress import (
     MediaAdmissionError,
@@ -133,8 +133,22 @@ class MediaSidecar(BaseModel):
     captured_at: str
     device_id: str = Field(min_length=1)
     schema_version: int
-    session_id: str | None = None
-    session_seq: int | None = None
+    # Session fields are ledgered by CDLM-02 *after* the receipt is durable, so
+    # a value the ledger would refuse must be rejected here at the boundary
+    # (422, nothing admitted). Admitting first and refusing at the ledger would
+    # strand an acknowledged capture that can never stop returning 500: every
+    # resend takes the idempotent-replay branch and re-fails the same way.
+    session_id: str | None = Field(default=None, min_length=1)
+    session_seq: int | None = Field(
+        default=None, ge=0, le=meeting_ledger.MAX_SESSION_SEQ
+    )
+
+    @field_validator("session_id")
+    @classmethod
+    def _non_blank_session_id(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("session_id must not be blank when present")
+        return value
 
     @field_validator("capture_id")
     @classmethod

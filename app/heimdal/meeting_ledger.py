@@ -79,6 +79,14 @@ _MIGRATION_HINT = (
 
 _LEDGER_PATH_ENV = "HEIMDAL_MEETING_LEDGER_PATH"
 
+# Upper bound on sequence numbers and declared final counts. A meeting emits
+# segments at human-time scale (seconds each), so six figures is far past any
+# real session; without a bound, one huge declared count makes every later gap
+# report materialize `range(count)` and turns the immutable close into a
+# permanent crash trigger (second-round review P1). Enforced at every input
+# boundary: the sidecar schema, the close route, and this module's validators.
+MAX_SESSION_SEQ = 100_000
+
 # Segment outcomes, returned by `record_segment_admission`.
 OUTCOME_RECORDED = "recorded"
 OUTCOME_REPLAY = "replay"
@@ -174,9 +182,14 @@ def _validate_session_id(session_id: Any) -> str:
 
 
 def _validate_seq(session_seq: Any) -> int:
-    if isinstance(session_seq, bool) or not isinstance(session_seq, int) or session_seq < 0:
+    if (
+        isinstance(session_seq, bool)
+        or not isinstance(session_seq, int)
+        or session_seq < 0
+        or session_seq > MAX_SESSION_SEQ
+    ):
         raise ValueError(
-            f"session_seq must be a non-negative integer, got {session_seq!r}"
+            f"session_seq must be an integer in [0, {MAX_SESSION_SEQ}], got {session_seq!r}"
         )
     return session_seq
 
@@ -827,9 +840,15 @@ def close_meeting_session(
     close, which is a fork.
     """
     session_id = _validate_session_id(session_id)
-    if isinstance(final_seq_count, bool) or not isinstance(final_seq_count, int) or final_seq_count < 0:
+    if (
+        isinstance(final_seq_count, bool)
+        or not isinstance(final_seq_count, int)
+        or final_seq_count < 0
+        or final_seq_count > MAX_SESSION_SEQ
+    ):
         raise ValueError(
-            f"final_seq_count must be a non-negative integer, got {final_seq_count!r}"
+            f"final_seq_count must be an integer in [0, {MAX_SESSION_SEQ}], "
+            f"got {final_seq_count!r}"
         )
     store = _backend()
     if store.get_session(session_id) is None:
@@ -1008,6 +1027,7 @@ def build_gap_report(session_id: str) -> Dict[str, Any]:
 
 __all__ = [
     "LATE_ADMITTED_EVENT",
+    "MAX_SESSION_SEQ",
     "OUTCOME_CONFLICT",
     "OUTCOME_RECORDED",
     "OUTCOME_REPLAY",

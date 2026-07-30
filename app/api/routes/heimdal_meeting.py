@@ -55,7 +55,7 @@ class OpenSessionRequest(BaseModel):
 class CloseSessionRequest(BaseModel):
     """The client's declared final segment count for the session."""
 
-    final_seq_count: int = Field(ge=0)
+    final_seq_count: int = Field(ge=0, le=meeting_ledger.MAX_SESSION_SEQ)
 
 
 class SessionResponse(BaseModel):
