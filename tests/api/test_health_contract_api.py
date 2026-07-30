@@ -298,9 +298,14 @@ def test_stale_healthy_evaluation_preserves_newer_dependency_failure(
 ) -> None:
     first_diagnostic_started = threading.Event()
     release_first_diagnostic = threading.Event()
+    dependency_advance_started = threading.Event()
+    release_dependency_publish = threading.Event()
+    stale_diagnostic_started = threading.Event()
+    release_stale_diagnostic = threading.Event()
     call_lock = threading.Lock()
     dependency_checks = 0
     contract = HealthContract(vault_root_fn=lambda: None)
+    original_dependency_capture = contract._should_capture_dependency_incident
 
     def dependency_reason(*_args) -> str | None:
         nonlocal dependency_checks
@@ -316,26 +321,39 @@ def test_stale_healthy_evaluation_preserves_newer_dependency_failure(
         assert release_first_diagnostic.wait(timeout=1)
         return 0, None
 
-    monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.setattr(contract, "_db_dependency_down_reason", dependency_reason)
-    monkeypatch.setattr(contract, "_count_objects", blocked_object_count)
-    monkeypatch.setattr(
-        "app.health_contract.diagnose_index",
-        lambda: {
+    def delayed_dependency_capture(**kwargs) -> bool:
+        if kwargs["down_reason"] is not None:
+            dependency_advance_started.set()
+            assert release_dependency_publish.wait(timeout=1)
+        return original_dependency_capture(**kwargs)
+
+    def blocked_index_diagnostic() -> dict[str, object]:
+        stale_diagnostic_started.set()
+        assert release_stale_diagnostic.wait(timeout=1)
+        return {
             "backend": "memory",
             "expected_identity": None,
             "stored_identity": None,
             "issues": [],
             "warnings": [],
-        },
-    )
+        }
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(contract, "_db_dependency_down_reason", dependency_reason)
+    monkeypatch.setattr(contract, "_count_objects", blocked_object_count)
+    monkeypatch.setattr(contract, "_should_capture_dependency_incident", delayed_dependency_capture)
+    monkeypatch.setattr("app.health_contract.diagnose_index", blocked_index_diagnostic)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         older_healthy_evaluation = executor.submit(contract.evaluate)
         assert first_diagnostic_started.wait(timeout=1)
         newer_db_down_evaluation = executor.submit(contract.evaluate)
-        newer_snapshot = newer_db_down_evaluation.result(timeout=1)
+        assert dependency_advance_started.wait(timeout=1)
         release_first_diagnostic.set()
+        assert stale_diagnostic_started.wait(timeout=1)
+        release_dependency_publish.set()
+        newer_snapshot = newer_db_down_evaluation.result(timeout=1)
+        release_stale_diagnostic.set()
         older_snapshot = older_healthy_evaluation.result(timeout=1)
 
     assert newer_snapshot["state"] == "unhealthy"

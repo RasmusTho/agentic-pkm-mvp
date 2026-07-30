@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from copy import deepcopy
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import timezone, datetime, timedelta
@@ -438,6 +439,9 @@ class HealthContract:
         self._dependency_incident_reported = False
         self._dependency_incident_sequence = 0
         self._dependency_down_reason: str | None = None
+        self._completion_lock = Lock()
+        self._latest_completed_sequence = 0
+        self._latest_completed_snapshot: dict[str, Any] | None = None
 
     def evaluate(self) -> dict[str, Any]:
         return self._evaluate()
@@ -623,7 +627,7 @@ class HealthContract:
         }
         if settings_result.settings.incident_capture.transition_history:
             result["recent_transition_history"] = transition_history
-        return result
+        return self._complete_snapshot(sample_sequence, result)
 
     def _db_down_snapshot(
         self,
@@ -749,7 +753,7 @@ class HealthContract:
         }
         if settings_result.settings.incident_capture.transition_history:
             result["recent_transition_history"] = transition_history
-        return result
+        return self._complete_snapshot(sample_sequence, result)
 
     def _should_capture_dependency_incident(
         self,
@@ -775,6 +779,20 @@ class HealthContract:
             if self._dependency_incident_sequence <= sample_sequence:
                 return None
             return self._dependency_down_reason
+
+    def _complete_snapshot(
+        self,
+        sample_sequence: int,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Publish one canonical full snapshot without waiting on diagnostics."""
+        with self._completion_lock:
+            if sample_sequence < self._latest_completed_sequence:
+                assert self._latest_completed_snapshot is not None
+                return deepcopy(self._latest_completed_snapshot)
+            self._latest_completed_sequence = sample_sequence
+            self._latest_completed_snapshot = deepcopy(snapshot)
+            return snapshot
 
     def _db_dependency_down_reason(
         self, resolution: StoreBackendResolution | None = None
