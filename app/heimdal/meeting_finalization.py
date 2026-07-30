@@ -63,7 +63,7 @@ from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_MEETING_FINALIZED
 from app.heimdal import meeting_blocks, meeting_ledger, meeting_projection
 from app.heimdal._backend import resolve_heimdal_backend
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import create_candidate_note_once
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services import outbox as outbox_service
 
@@ -78,6 +78,20 @@ _MIGRATION_HINT = (
 _FINALIZATION_PATH_ENV = "HEIMDAL_MEETING_FINALIZATION_PATH"
 _VAULT_ROOT_ENV = "HEIMDAL_MEETING_VAULT_ROOT"
 _EVENT_SOURCE = "heimdal.meeting.finalization"
+FINALIZATION_WRITE_ACTION = "heimdal.meeting_finalization.write"
+
+# Path-safe charset for the session's directory component. Session ids are
+# client-minted opaque strings (CDLM-02); one that is not path-safe is mapped
+# to a deterministic digest slug instead of ever reaching path construction —
+# no dot-segment or separator a client mints can move an artifact outside the
+# Meetings zone.
+_SAFE_SESSION_COMPONENT = __import__("re").compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _session_path_component(session_id: str) -> str:
+    if _SAFE_SESSION_COMPONENT.fullmatch(session_id) and session_id not in {".", ".."} and ".." not in session_id:
+        return session_id
+    return "sess-" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:16]
 
 # Settings-resolved default per MIMER_CLIENT_CONTRACT §5 — writers must not
 # hardcode displayed names beyond the default relative root convention.
@@ -215,7 +229,7 @@ class _SqliteReceiptStore:
             row = conn.execute(
                 f"SELECT session_id, state_sha256, complete, missing_seqs, artifact_refs, "
                 f"supersedes, finalized_at FROM {_RECEIPT_TABLE} "
-                "WHERE session_id = ? ORDER BY finalized_at DESC, state_sha256 DESC LIMIT 1",
+                "WHERE session_id = ? ORDER BY rowid DESC LIMIT 1",
                 (session_id,),
             ).fetchone()
         return self._from_row(row) if row else None
@@ -378,7 +392,24 @@ def _backend() -> "_SqliteReceiptStore | _PgReceiptStore":
 # ---------------------------------------------------------------------------
 
 
-def _state_identity(report: Dict[str, Any]) -> str:
+def _state_identity(report: Dict[str, Any], projection: Dict[str, Any]) -> str:
+    """Identity of the state a finalization's artifact bytes derive from.
+
+    The ledger set alone is not enough: a failed ASR derivation later healed
+    by a resend changes the rendered transcript and analysis without changing
+    the ledger, and finalization must supersede rather than replay stale
+    "derivation failed" artifacts forever. So the identity covers the ledger
+    completeness state AND each segment's derivation outcome.
+    """
+    derivations = []
+    for row in projection["transcript"]:
+        kind = row.get("kind")
+        if kind == "segment":
+            derivations.append(
+                (row["seq"], "ok", hashlib.sha256(row["text"].encode("utf-8")).hexdigest())
+            )
+        elif kind in ("needs_attention", "pending"):
+            derivations.append((row["seq"], kind, ""))
     canonical = json.dumps(
         {
             "segments": sorted(
@@ -386,6 +417,7 @@ def _state_identity(report: Dict[str, Any]) -> str:
             ),
             "missing": report["missing"],
             "final_seq_count": report["final_seq_count"],
+            "derivations": derivations,
         },
         sort_keys=True,
     )
@@ -521,7 +553,10 @@ def _render_user_notes(
         lines.append(f"<!-- user_note {note.block_id} revision {note.revision} -->")
         lines.append(note.content)
         lines.append("")
-    return _frontmatter(front) + "\n".join(lines).rstrip() + "\n"
+    # No rstrip: the last note's trailing whitespace and blank lines are part
+    # of its verbatim bytes. Each block is bounded by its marker comment and a
+    # single separating newline, never altered.
+    return _frontmatter(front) + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -606,7 +641,7 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
 
     projection = meeting_projection.build_projection(session_id)
     report = meeting_ledger.build_gap_report(session_id)
-    state_sha256 = _state_identity(report)
+    state_sha256 = _state_identity(report, projection)
 
     store = _backend()
     existing = store.get(session_id, state_sha256)
@@ -617,7 +652,7 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
     supersedes = previous.state_sha256 if previous else None
 
     short = state_sha256[:8]
-    base = f"{meetings_dir_rel()}/{session_id}"
+    base = f"{meetings_dir_rel()}/{_session_path_component(session_id)}"
     artifact_refs = {
         "transcript": f"{base}/transcript-{short}.md",
         "analysis": f"{base}/analysis-{short}.md",
@@ -636,19 +671,23 @@ def finalize_session(session_id: str, *, trace_id: str = "") -> Dict[str, Any]:
         "user_notes": _render_user_notes(projection, notes, state_sha256, supersedes),
     }
 
-    # Create-once: an already-existing artifact at the deterministic path for
-    # this exact state is this finalization's own durable replay result — it is
-    # never rewritten. (A different state gets different paths by construction.)
+    # Create-once, atomically: `create_candidate_note_once` opens the target
+    # with O_EXCL, so an already-existing artifact at the deterministic path
+    # for this exact state is preserved untouched (this finalization's durable
+    # replay result) even under concurrent triggers — never rewritten, never
+    # raced. Its path validation also rejects any dot-segment outright,
+    # defense in depth under the sanitized session component above.
     for name, rel_path in artifact_refs.items():
-        target = vault_root / rel_path
-        if target.exists():
-            continue
-        write_note_relative(
+        result = create_candidate_note_once(
             rel_path,
             contents[name],
             vault_root=vault_root,
-            writer_identity="heimdal-meeting-finalization",
+            action=FINALIZATION_WRITE_ACTION,
         )
+        if result not in ("written", "already_exists"):
+            raise MeetingFinalizationError(
+                f"artifact {name} could not be materialized at {rel_path!r}: {result!r}"
+            )
 
     # Finalization's own block write goes through the CDLM-07 guard as the
     # derived finalization writer — the same seam that structurally refuses it

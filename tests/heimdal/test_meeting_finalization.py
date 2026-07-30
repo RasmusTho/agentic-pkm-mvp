@@ -288,6 +288,68 @@ def test_user_notes_materialize_verbatim_via_guard(client: TestClient, vault: Pa
     assert block_after.revision == block_before.revision
 
 
+def test_unsafe_session_ids_never_reach_path_construction(
+    client: TestClient, vault: Path
+) -> None:
+    """A path-hostile session id maps to a digest slug inside the Meetings zone."""
+    from app.heimdal import meeting_ledger
+
+    # The sanitizer itself: every hostile shape maps to the digest namespace.
+    for hostile in ("../evil", "..", "a/../../b", "evil/", ".hidden", "a\\b", "x" * 200):
+        component = meeting_finalization._session_path_component(hostile)
+        assert component.startswith("sess-"), hostile
+        assert "/" not in component and ".." not in component
+    assert meeting_finalization._session_path_component("mtg-42") == "mtg-42"
+
+    # End to end below the HTTP layer (URL normalization would otherwise mask
+    # the id before it reaches the route): a hostile id finalizes into the
+    # digest directory, never outside the Meetings zone.
+    session_id = "../evil"
+    meeting_ledger.open_meeting_session(session_id=session_id, device_id="ipad-1")
+    assert _admit(client, session_id, 0, b"segment zero.").status_code == 200
+    meeting_ledger.close_meeting_session(session_id=session_id, final_seq_count=1)
+    outcome = meeting_finalization.finalize_session(session_id)
+    assert outcome["status"] == "finalized"
+    for rel in outcome["receipt"]["artifact_refs"].values():
+        assert rel.startswith("Sources/Meetings/sess-")
+        assert ".." not in rel
+        assert (vault / rel).resolve().is_relative_to(vault / "Sources" / "Meetings")
+
+
+def test_healed_asr_failure_supersedes_stale_artifacts(
+    client: TestClient, vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed→ok derivation retry changes the finalization state (not just the ledger)."""
+    poison = b"poisoned segment."
+
+    def flaky(path_wav: Path, **_: Any) -> dict[str, Any]:
+        data = Path(path_wav).read_bytes()
+        if data == poison:
+            raise RuntimeError("engine down")
+        return {"text": data.decode(), "segments": [], "language": "en"}
+
+    monkeypatch.setattr(transcribe_module, "run_asr", flaky)
+    session_id = f"mtg-{uuid4()}"
+    assert _open_session(client, session_id).status_code == 200
+    assert _admit(client, session_id, 0, poison).status_code == 200
+    first = _close(client, session_id, 1).json()["finalization"]["receipt"]
+    assert "derivation failed" in (vault / first["artifact_refs"]["transcript"]).read_text()
+
+    # Heal the derivation via a resend, then re-trigger close: the state
+    # identity changed, so finalization supersedes instead of replaying.
+    def healthy(path_wav: Path, **_: Any) -> dict[str, Any]:
+        return {"text": Path(path_wav).read_bytes().decode(), "segments": [], "language": "en"}
+
+    monkeypatch.setattr(transcribe_module, "run_asr", healthy)
+    assert _admit(client, session_id, 0, poison).status_code == 200
+    second = _close(client, session_id, 1).json()["finalization"]
+    assert second["status"] == "finalized"
+    assert second["receipt"]["supersedes"] == first["finalization_state"]
+    assert "poisoned segment." in (
+        vault / second["receipt"]["artifact_refs"]["transcript"]
+    ).read_text()
+
+
 def test_receipt_and_event_before_finalized_ack(
     client: TestClient, _memory_runtime: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
