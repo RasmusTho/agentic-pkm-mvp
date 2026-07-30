@@ -67,11 +67,10 @@ mock fallback. Since MAS-05 (ADR-0064), **the caller declares intent and resolve
   value-free failure handoff: if Keychain resolution fails before the runner starts, the bootstrap
   removes every credential surface and passes only that logical identifier so the runner can create
   the same durable typed terminal receipt. Other host-secret consumers retain the strict default in
-  which bootstrap failure does not launch the child. The canonical launcher emits the completed
-  receipt JSON with exit status 1; desktop callers recognize that exact typed terminal combination,
-  including the persisted diagnostic's exact three-field set and identifier grammars, release
-  single-flight staging, report the failure, and stop. Incomplete, extended, path-/secret-shaped,
-  malformed, or wrong-status forms remain ambiguous and preserve staging.
+  which bootstrap failure does not launch the child. The dormant provider-API launcher emits the
+  completed receipt JSON with exit status 1 for direct mechanism callers. Operational desktop
+  skills do not invoke that launcher; they use the sanctioned subscription launcher and treat every
+  nonzero result as ambiguous.
 
 Role identity remains attested: each role resolves to a distinct `adapter_id` and a distinct
 runtime-target fingerprint, and a mock, fake, or deterministic identity is refused as a
@@ -92,7 +91,8 @@ resolver. CKM cannot select or reuse it.
 
 ## Host role-entrypoint lifecycle
 
-The repository also owns the fixed provider-API launcher `yggdrasil-model-inquiry` plus the two
+The repository also owns the distinct provider-API launcher
+`yggdrasil-model-inquiry-provider-api` plus the two
 stable provider-API role commands `fable-model-inquiry-role` and `codex-model-inquiry-role`. They
 preserve the declared-credential mechanism for any future metered path; they are not the current
 host-local operational auth and do not replace or retire the sanctioned subscription bridge. Run
@@ -103,14 +103,15 @@ to the versioned `scripts/model_inquiry_role_adapter.py` through the host-secret
 select an interactive session. An exact reinstall is a no-op, while a symlink, unsafe directory,
 subscription command occupying one of these provider-API wrapper names, or unrelated existing
 command fails closed without overwriting it. That namespace check does not declare the separately
-sanctioned host subscription bridge stale.
+sanctioned `yggdrasil-model-inquiry` host subscription launcher or bridge stale.
 
 The companion `check` operation is read-only. It reports only whether all three installed
 entrypoints match the adapter/launcher digests committed into the installer in its own
 operator-authoritative checkout and Python interpreter, and whether the launch `PATH` resolves all
-three names to those exact files. Mere launcher discoverability is insufficient: a stale
-subscription-backed command occupying the provider-API fixed name is unavailable for that mechanism.
-This says nothing about the separately sanctioned Model Inquiry subscription bridge. The check
+three names to those exact files. Mere launcher discoverability is insufficient: a
+subscription-backed command occupying the distinct provider-API name is unavailable for that
+mechanism. This says nothing about the separately sanctioned Model Inquiry subscription launcher or
+bridge. The check
 probes no provider CLI. Host-time validation does not invoke Git; an adapter or fixed-launcher change
 and its installer digest update are one repo change. The check does not run either provider, inspect
 subscription state, reveal paths, or create inquiry artifacts.

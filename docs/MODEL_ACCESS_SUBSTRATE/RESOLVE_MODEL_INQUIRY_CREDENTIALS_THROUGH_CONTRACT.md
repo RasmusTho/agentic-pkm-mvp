@@ -1,6 +1,6 @@
 ---
 name: Resolve Model Inquiry Credentials Through Contract
-description: Make BuilderOps Model Inquiry the first beneficiary of the substrate — adapters resolve declared credentials through the host secret contract, and no headless entrypoint depends on an interactive subscription session.
+description: Preserve the delivered declared-credential provider mechanism while the sanctioned host-local Model Inquiry path remains subscription-backed under the owner cost ruling.
 task_id: MAS-05
 source_anchor: docs/audits/MODEL_ACCESS_SUBSTRATE_2026-07-27.md :: 8. Migration (step 4)
 parent_capability: Model Access Substrate
@@ -18,20 +18,23 @@ metered provider API keys are not provisioned, the declared identifiers stay int
 unprovisioned, and the subscription-backed session remains the sanctioned operational auth on the
 inquiry host (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost
 ruling on the model-inquiry path`). The delivered code stays merged as the required mechanism for
-any future metered path; "Provisioning credential values, which is an owner action" under
-`Out of scope` reads under that ruling — the owner has declined it, so it is not a pending
+any future metered path. The owner has declined credential provisioning, so it is not a pending
 prerequisite.
 
 # Resolve Model Inquiry Credentials Through Contract
 
 ## Purpose
 
-This is the reported failure, fixed as a consequence rather than patched. A model inquiry run failed
+This task historically addressed the reported failure with a versioned declared-credential
+provider-API mechanism. A model inquiry run failed
 with `final_state: provider_error` and `adapter_failure_class: command_exit_nonzero` because a
 subscription CLI over a fresh non-interactive session cannot reach the login keychain of the configured
 inquiry host, while the same command inside that host's GUI-session pane succeeds. ADR-0064 §4 rules
-that declared API keys are the default programmatic auth path and that subscription CLI sessions **must
-not be a dependency of any headless path**.
+that declared API keys are the default programmatic auth path. ADR-0064's 2026-07-30 amendment is the
+later and controlling operational ruling: metered keys remain intentionally unprovisioned and the
+existing subscription session is sanctioned only for host-local Builder Model Inquiry. Therefore
+the mechanism below is retained for a possible future metered path, not promoted as current host
+authentication and not a parent-acceptance gate.
 
 Model inquiry is chosen as the first beneficiary because it is the smaller, already-adapter-shaped
 consumer: `HttpModelAdapter` (`app/builderops/model_inquiry_adapters.py:175-278`) is fully implemented
@@ -50,12 +53,11 @@ and is unexercised. Switching to it is a configuration and resolution change, no
    `HttpModelAdapter` takes `api_key` as an injected field and reads no environment itself, so
    `load_adapter_descriptors` no longer accepts provider/model/`api_key_env` from inquiry caller
    configuration or ambient environment.
-3. Make the installed headless entrypoints use provider-API adapters. The host installer owns the
-   fixed `yggdrasil-model-inquiry` launcher plus both role wrappers, pins the repo launcher/adapter
-   content, and rejects a stale but discoverable subscription launcher. Headless role installation
-   requires no subscription session. Both `xhigh` provider-API roles use the extended 1200-second
-   per-role request deadline; the generic 60-second HTTP posture must not truncate production Model
-   Inquiry turns.
+3. Preserve distinct installed provider-API entrypoints. The host installer owns the dormant
+   `yggdrasil-model-inquiry-provider-api` launcher plus both role wrappers and pins their repo
+   launcher/adapter content. It does not install, inspect, overwrite, or retire the sanctioned
+   `yggdrasil-model-inquiry` subscription launcher. Both `xhigh` provider-API roles retain the
+   extended 1200-second per-role request deadline.
 4. Replace the provider-bearing `BUILDEROPS_INQUIRY_ADAPTERS_JSON` mechanism with a value-free
    inquiry-role intent configuration. The committed example contains the seven neutral intent fields,
    role independence requirement, channel/consumer references, and no provider, model, credential
@@ -66,25 +68,28 @@ and is unexercised. Switching to it is a configuration and resolution change, no
    must preserve that typed outcome even when host bootstrap fails before the runner starts: it
    hands the runner only the declared logical credential identifier, with no credential bindings,
    so the durable terminal receipt is written before any adapter or fallback path can run. The
-   canonical launcher returns that complete JSON receipt with exit status 1; desktop callers treat
-   only that exact typed status/JSON combination—with complete desktop fields, the exact persisted
-   three-field diagnostic, safe adapter ID, and canonical logical-secret identifier—as a valid
-   terminal failure and release their single-flight staging. Malformed or extended forms preserve
-   staging as ambiguous.
-6. Keep `scripts/model_inquiry_subscription_adapter.py` for interactive, human-driven use. It must
-   remain unreachable from any headless entrypoint.
+   dormant provider-API launcher returns that complete JSON receipt with exit status 1 for direct
+   mechanism callers. Operational desktop skills do not invoke that launcher; they use the
+   sanctioned subscription launcher and treat every nonzero result as ambiguous.
+6. Keep `scripts/model_inquiry_subscription_adapter.py` as the sanctioned operational auth path for
+   host-local Builder Model Inquiry. It remains unreachable from the dormant provider-API launcher
+   and from CKM.
 
 ## Concretely
 
+The commands below document the dormant mechanism's contract shape. They are not the current
+operational path or an instruction to provision credentials or run a provider under the owner-cost
+ruling.
+
 ```
 # on the configured inquiry host, over a fresh non-interactive session:
-$ ssh <configured inquiry host> 'yggdrasil-model-inquiry --inquiry <id> --json'
+$ ssh <configured inquiry host> 'yggdrasil-model-inquiry-provider-api --inquiry <id> --json'
 {"final_state": "completed", "rounds": 2, "roles": {
    "fable":     {"provider": "anthropic", "provider_request_id": "req_...", "adapter_id": "fable-primary"},
    "gpt_codex": {"provider": "openai",    "provider_request_id": "resp_...", "adapter_id": "codex-primary"}}}
 
 # with the declared credential absent from the Keychain:
-$ ssh <configured inquiry host> 'yggdrasil-model-inquiry --inquiry <id> --json'
+$ ssh <configured inquiry host> 'yggdrasil-model-inquiry-provider-api --inquiry <id> --json'
 {"final_state": "provider_error", "adapter_failure_class": "credential_unavailable",
  "detail": "openai.api-key"}
 $ echo $?
@@ -103,8 +108,10 @@ defined in Git, and whose `CLAUDE_PATH` points at a version-pinned symlink that 
 breaks. Patching the second provider the same way would double that surface. Resolving both through one
 declared-credential contract removes the failure class instead of relocating it.
 
-It also unblocks CI reaching a provider for the first time, which is the argument that decided
-ADR-0064's option analysis.
+It does not establish current provider reachability. Under the owner-cost ruling, parent acceptance
+is repo-verifiable and the dormant mechanism's expected current result is
+`credential_unavailable`; no provider run, bridge-retirement proof, or credential provisioning is
+required.
 
 ## Acceptance criteria
 
@@ -118,8 +125,8 @@ ADR-0064's option analysis.
       independent group with distinct effective targets; a colliding policy mapping fails before any
       model call.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_distinct_effective_targets_for_role_group`
-- [ ] No installed headless entrypoint requires an interactive subscription session, asserted where the
-      installer actually builds its role entrypoints.
+- [ ] No installed provider-API entrypoint requires or occupies the sanctioned subscription
+      launcher's identity, asserted where the installer builds its distinct dormant entrypoints.
       Verify: `tests/governance/test_model_inquiry_host_install.py::test_headless_entrypoints_do_not_require_subscription_session`
       — the test drives `scripts/install_model_inquiry_host.py`'s installation path and asserts the
       produced role entrypoints resolve credentials rather than a CLI session.
@@ -142,9 +149,10 @@ ADR-0064's option analysis.
 - [ ] A committed inquiry-role intent example is value-free, provider-free, model-free, and
       host-identifier-free, and validates through the production resolver path.
       Verify: `tests/builderops/test_model_inquiry_adapters.py::test_committed_inquiry_intent_config_is_provider_free_and_value_free`
-- [ ] The implementation posts a parent-validation handoff naming the exact live receipt identities
-      still required; it does not claim the provider run or host retirement happened pre-merge.
-      Verify: `runtime receipt: model_access_substrate.mas05_validation_handoff.v1`
+- [x] ADR-0064's owner-cost amendment withdraws the provider-enabled inquiry, bridge-retirement, and
+      credential-provisioning evidence from parent acceptance; this task creates no replacement
+      provider or owner receipt.
+      Verify: `docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the model-inquiry path`
 - [ ] `docs/BUILDEROPS_MODEL_INQUIRY/MODEL_TURN_ADAPTERS.md` describes credential resolution through the
       contract rather than through a machine-local environment value.
       Verify: `doc writeback at docs/BUILDEROPS_MODEL_INQUIRY/MODEL_TURN_ADAPTERS.md :: What This Task Does`
@@ -157,9 +165,8 @@ ADR-0064's option analysis.
 - `python3 scripts/public_seam_lint.py --mode gate` — the example config and any new docs must carry no
   host identifier
 - `python3 scripts/docs_guard.py`
-- Before merge, post `model_access_substrate.mas05_validation_handoff.v1` to the parent. The live
-  non-interactive inquiry and recoverable retirement of the legacy bridge occur only in parent
-  validation after this implementation merges.
+- Parent validation uses repository evidence under the amended ADR. Do not run a provider, provision
+  a metered credential, retire the sanctioned subscription bridge, or create a replacement receipt.
 
 ## Cross-task invariants preserved
 
@@ -173,10 +180,11 @@ INV-MAS-6 no longer applies from this task onward; this is the intended first be
 
 ## Out of scope
 
-CKM's migration, which is MAS-06 and follows accepted parent validation. The verification closer's duplicated
+CKM's migration, which is MAS-06 and follows the delivered MAS-05 mechanism rather than a live
+provider receipt. The verification closer's duplicated
 model literals at `app/dispatcher/verification_consumer.py:2325-2341`, which is migration step 6. The
 brokered-session backend, which ADR-0064 permits but does not build. Provisioning credential values,
-which is an owner action. Changing the response or consensus contract, the round limits, or the
+which the owner has explicitly declined. Changing the response or consensus contract, the round limits, or the
 independent-review requirements. Product resolver migration.
 
 ## Related docs
@@ -192,12 +200,11 @@ independent-review requirements. Product resolver migration.
 
 One issue. Title shape
 `[Model Access Substrate] resolve-model-inquiry-credentials-through-contract: first beneficiary`.
-Its `Context` must name the original `provider_error` / `command_exit_nonzero` failure as the parent
-acceptance target. The child is mergeable from pre-merge tests plus the validation-handoff receipt;
-the live provider run and legacy-bridge retirement remain parent acceptance and cannot be discharged
-by tests. It stays `agent:blocked` until MAS-04 merges.
+Its `Context` records the original `provider_error` / `command_exit_nonzero` failure as historical
+mechanism context. The 2026-07-30 owner ruling withdraws the live provider run,
+credential-provisioning, and legacy-bridge retirement from parent acceptance.
 
 TCD capability recommendation for the implementing agent: **Opus / xhigh reasoning** — auth,
-external-API, and host-launcher work that carries the capability's first behaviour change and an
-operator-verified receipt; a wrong direction here is expensive and partly host-visible
+external-API, and host-launcher work that carries the capability's first behaviour change and
+mechanism contract; a wrong direction here is expensive and partly host-visible
 (`AGENTS.md :: Total Cost of Development`). Non-binding; `issue-to-code` re-derives it.

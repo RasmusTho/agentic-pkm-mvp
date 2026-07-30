@@ -3,9 +3,9 @@ the strict serial execution chain. GitHub holds the live acceptance ledger; this
 repo-governed contract. **Owner ruling 2026-07-30 (cost):** the two live receipts below
 (`provider_enabled_noninteractive_inquiry.v1`, legacy-bridge retirement) are withdrawn as acceptance
 gates — metered provider API keys are not provisioned and the subscription-backed session remains
-the sanctioned operational auth for host-local model inquiry. MAS-06 was delivered by PR #4419 for
-issue #4292 on the delivered neutral mechanism plus this ruling; the PR remains in review until
-merge. Its CKM path fails closed with zero inferred edges while credentials are absent and never
+the sanctioned operational auth for host-local model inquiry. MAS-06 implementation PR #4419 for
+issue #4292 is in verification and is not merged. Its candidate CKM path uses the delivered neutral
+mechanism, fails closed with zero inferred edges while credentials are absent, and never
 reuses the Model Inquiry subscription session
 (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
 model-inquiry path`). Parent acceptance is repo-verifiable under the re-scoped criteria below.
@@ -80,7 +80,7 @@ is never picked up directly.
 ## Constraints
 
 The nine fixed constraints in `docs/MODEL_ACCESS_SUBSTRATE/README.md :: Fixed constraints` and the
-delivered CKM posture apply to every child. The order did not swap.
+verification-stage CKM posture apply to every child. The order did not swap.
 
 ## Acceptance Criteria
 
@@ -93,10 +93,10 @@ These are the capability-level criteria. Per-task criteria live in the task spec
       contract, and a missing value fails the consumer closed while naming only the logical identifier.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_provider_identifiers_are_declared_data`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
-- [ ] The repo-owned metered launcher remains content/lineage verified and fail-closed, while the
-      sanctioned host subscription session is confined to Model Inquiry and is not a CKM fallback.
-      Verify: `tests/governance/test_model_inquiry_host_install.py::test_check_rejects_discoverable_stale_subscription_launcher`
-      Verify: `docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the model-inquiry path`
+- [ ] The repo-owned `yggdrasil-model-inquiry-provider-api` launcher remains content/lineage
+      verified and fail-closed, while the sanctioned `yggdrasil-model-inquiry` host subscription
+      launcher is confined to Model Inquiry and is not a CKM fallback.
+      Verify: `tests/governance/test_model_inquiry_host_install.py::test_check_rejects_conflicting_command_at_provider_api_name`
 - [ ] The production inquiry caller submits provider-free intent and resolves provider/model through
       the Builder runtime/channel census mapping after capability checks.
       Verify: `tests/builderops/test_model_inquiry_runner.py::test_production_inquiry_resolves_provider_free_intent_through_builder_census`
@@ -129,9 +129,10 @@ Specification directory: `docs/MODEL_ACCESS_SUBSTRATE/`
 | 5 | `RESOLVE_MODEL_INQUIRY_CREDENTIALS_THROUGH_CONTRACT.md` | MAS-05 | MAS-04 |
 | 6 | `REPLACE_CKM_PRODUCT_ROUTING_WITH_BUILDER_ADAPTER.md` | MAS-06 | delivered MAS-05 mechanism + ADR-0064 owner-cost amendment |
 
-The chain was serial. MAS-06 was delivered by PR #4419 for issue #4292 after the MAS-05 mechanism,
-launcher-lineage repairs, owner-cost amendment, and re-scoped live Issue contract were in place. No
-live provider receipt or bridge retirement was required.
+The chain remains serial. MAS-06 implementation PR #4419 for issue #4292 is in verification and is
+not merged. It follows the delivered MAS-05 mechanism, launcher-lineage repairs, owner-cost
+amendment, and re-scoped live Issue contract. No live provider receipt or bridge retirement is
+required.
 
 ## Verification Path
 
@@ -142,7 +143,8 @@ importlinter.ini` is a proof surface for MAS-02, MAS-04, and MAS-06.
 
 ## Validation / Acceptance Path
 
-Each delivered child posts one short validation receipt here before the next child is picked up.
+Each merged child posts one short validation receipt here before the next child is picked up.
+MAS-06 remains in verification on PR #4419 and has no merged-child acceptance receipt yet.
 The provider-enabled inquiry and bridge-retirement receipts are withdrawn by the 2026-07-30 owner
 cost ruling. Parent acceptance now uses the repo-verifiable child criteria, including MAS-06's
 Product-import removal and fail-closed zero-edge behavior. No real provider inquiry is requested,

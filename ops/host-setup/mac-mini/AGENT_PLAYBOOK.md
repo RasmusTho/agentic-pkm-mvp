@@ -54,13 +54,14 @@ sanctioned operational auth. Metered provider API keys are intentionally
 unprovisioned. This Model Inquiry-only subscription path is never a CKM
 credential source or fallback.
 
-The repository also owns the fixed provider-API launcher
-`yggdrasil-model-inquiry` plus two stable provider-API role commands:
+The repository also owns the distinct dormant provider-API launcher
+`yggdrasil-model-inquiry-provider-api` plus two stable provider-API role commands:
 `fable-model-inquiry-role` and `codex-model-inquiry-role`. They preserve the
 declared-credential mechanism for any future metered path, but they are not the
 current operational auth and do not replace or retire the sanctioned
-subscription bridge. Install or verify these owner-only wrappers only to
-validate that versioned mechanism against the current repository checkout:
+subscription bridge or its `yggdrasil-model-inquiry` launcher. Install or verify
+these owner-only wrappers only to validate that versioned mechanism against the
+current repository checkout:
 
 ```bash
 repo_root="$(git rev-parse --show-toplevel)"
@@ -70,12 +71,12 @@ python3 "$repo_root/scripts/install_model_inquiry_host.py" install \
   --python "$repo_root/.venv/bin/python3"
 ```
 
-The operation is idempotent. An exact rerun reports the launcher and both role
+The operation is idempotent. An exact rerun reports the provider-API launcher and both role
 entrypoints as `unchanged`; an unrelated existing file, subscription command
 occupying one of these provider-API wrapper names, symlinked bin directory, or
 unsafe permissions fails closed and must be inspected rather than overwritten.
-That namespace check does not declare the separately sanctioned subscription
-bridge stale.
+The installer does not inspect, overwrite, or declare stale the separately
+sanctioned subscription launcher or bridge.
 If an I/O failure interrupts the two-role install, an exact first wrapper may
 remain while the second is absent. Do not delete it as rollback: rerun the same
 command, which validates the retained wrapper and converges the missing role.
@@ -95,7 +96,8 @@ python3 "$repo_root/scripts/install_model_inquiry_host.py" check \
 
 The check succeeds only when all three wrappers match the selected checkout and
 interpreter and the current `PATH` resolves all three names to those exact
-files. Discoverability alone is not sufficient for `yggdrasil-model-inquiry`;
+files. Discoverability alone is not sufficient for
+`yggdrasil-model-inquiry-provider-api`;
 its exact repo-owned declared-credential lineage/content must match. It probes
 no provider CLI, does not invoke a provider, and does not inspect
 authentication.

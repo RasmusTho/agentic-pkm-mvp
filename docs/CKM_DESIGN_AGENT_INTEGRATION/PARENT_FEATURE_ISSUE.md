@@ -37,8 +37,9 @@ acceptance. Preserve the CKM/Builder System/BuilderOps authority split.
 
 ## Constraints
 
-- CDH-02 and every execution slice remain blocked until #4286 records
-  `model_access_substrate.provider_enabled_noninteractive_inquiry.v1`.
+- CDH-02 and every execution slice remain blocked until #4286 closes with its repo-verifiable Phase
+  1 acceptance ledger. Withdrawn provider-enabled inquiry and bridge-retirement receipts, metered
+  credentials, and active provider-backed inference are not prerequisites.
 - Generated Direction B HTML remains inert, local, deterministic, JS-off complete, and printable.
 - No provider ranking, automatic selection/fallback, GitHub mutation, Product/Runtime write, release,
   or promotion.

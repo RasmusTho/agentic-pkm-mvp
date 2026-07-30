@@ -202,10 +202,11 @@ the per-task criteria live in the task files.
       contract, and a missing value fails the consumer closed while naming only the logical identifier.
       Verify: `tests/ops/test_host_secret_contract.py::test_model_provider_identifiers_are_declared_data`
       Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_model_provider_secret_fails_consumer_closed`
-- [ ] The repo-owned metered launcher and role entrypoints remain content/lineage verified and fail
-      closed without declared credentials; the operational host's sanctioned subscription launcher
-      is documented as a Model Inquiry-only owner exception, not accepted as CKM execution.
-      Verify: `tests/governance/test_model_inquiry_host_install.py::test_check_rejects_discoverable_stale_subscription_launcher`
+- [ ] The repo-owned `yggdrasil-model-inquiry-provider-api` launcher and role entrypoints remain
+      content/lineage verified and fail closed without declared credentials; the operational host's
+      sanctioned `yggdrasil-model-inquiry` subscription launcher is documented as a Model
+      Inquiry-only owner exception, not accepted as CKM execution.
+      Verify: `tests/governance/test_model_inquiry_host_install.py::test_check_rejects_conflicting_command_at_provider_api_name`
       Verify: `docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the model-inquiry path`
 - [ ] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.

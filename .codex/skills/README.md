@@ -98,8 +98,9 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - before coding, use its pickup wrapper to acquire the available dispatcher lease or durable
     GitHub-label-only fallback and remove `agent:ready`
 - `start-model-inquiry`
-  - launch a durable pre-ticket Fable/GPT inquiry through the shared BuilderOps command after
-    fail-closed vault and adapter preflight; issue promotion remains a separate governed step
+  - launch a durable pre-ticket Fable/GPT inquiry exactly once through the sanctioned host-local
+    subscription launcher; the dormant provider-API launcher has a distinct identity, and issue
+    promotion remains a separate governed step
 - `issue-maintenance-change-control`
   - repair stale or false Issue / PR / label state before or during execution, plus optional
     Project projection when explicitly in scope

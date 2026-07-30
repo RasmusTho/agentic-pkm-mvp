@@ -61,7 +61,8 @@ BMI-04 adds Codex and portable Claude bridge skills that transfer the question t
 remote-host launcher. The configured remote host owns the BuilderOps command, configured role
 adapters, subscription session, and durable artifacts; its authentication and launcher-path settings
 remain outside Git. The current host-local operational path uses the sanctioned subscription-backed
-session under the owner-cost ruling. The versioned provider-API path remains a separate mechanism:
+session through `yggdrasil-model-inquiry` under the owner-cost ruling. The versioned provider-API
+path remains a separate dormant mechanism under `yggdrasil-model-inquiry-provider-api`:
 it submits provider-free intent, resolves distinct targets through the Builder census, and requires
 explicit `xhigh` reasoning, but intentionally absent metered credentials produce a durable typed
 `credential_unavailable` receipt before any adapter call. That failure does not select a subscription
@@ -117,8 +118,9 @@ Partial failure examples:
 - [x] Desktop launcher instructions transfer the question to the configured remote-host launcher rather
   than starting local BuilderOps or automating a desktop app. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
-- [x] A terminal adapter failure produces a secret-safe diagnostic receipt and one desktop-launch
-  JSON result without fallback or retry. Verify:
+- [x] The dormant provider-API mechanism produces a secret-safe diagnostic receipt and one
+  desktop-launch JSON result without fallback or retry; operational desktop skills never invoke
+  that mechanism. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_local_launcher_emits_terminal_provider_error_json`.
 
 ## Relationship To GitHub Issues

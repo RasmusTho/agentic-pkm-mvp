@@ -320,6 +320,7 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
     codex = (REPO_ROOT / ".codex/skills/start-model-inquiry/SKILL.md").read_text()
     claude = (REPO_ROOT / "claude-skills/start-model-inquiry/SKILL.md").read_text()
     for skill in (codex, claude):
+        normalized_skill = " ".join(skill.split())
         for contract_field in (
             "mode `0600`",
             "scp \"$QUESTION_FILE\" Tailscale_macmini:/tmp/model-inquiry-question.md",
@@ -338,17 +339,20 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "Do not register remote lock release until the launch outcome is known",
             "Do not release the remote lock after an ambiguous launcher outcome",
             "high-reasoning profile",
-            "exit status 1",
-            "credential_unavailable",
-            "`preflight` must be a JSON object",
+            "status zero",
+            "sanctioned subscription session",
+            "nonzero status",
+            "does not satisfy the withdrawn",
+            "inq_20260730T075136Z_b73ed0da",
         ):
-            assert contract_field in skill
+            assert contract_field in normalized_skill
         for required_boundary in (
             "Do not run local BuilderOps, Python, Codex, or Claude commands",
             "Do not install dependencies, run vault-init, configure adapters, or provision API keys.",
-            "host-secret bootstrap",
+            "Do not configure, inspect, copy, or print subscription-session material",
+            "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`",
         ):
-            assert required_boundary in skill
+            assert required_boundary in normalized_skill
         for forbidden in (
             "scripts/start_model_inquiry.sh",
             "BUILDEROPS_VAULT_ROOT",
