@@ -1,10 +1,16 @@
-"""Regression tests for the legacy-owner source inventory (Issue #4423).
+"""Regression tests for the instance-state writer inventory.
 
-`produce_legacy_owners` requires two consecutive snapshots of unchanged host state
-to be byte-identical. The per-container fingerprint embeds the `Mounts` array from
-`docker inspect`, and Docker does not guarantee that array's ordering. These tests
-pin the fingerprint to mount *content* rather than to Docker's arbitrary ordering,
-while keeping the guard's ability to detect a genuine change.
+Issue #4423: `produce_legacy_owners` requires two consecutive snapshots of
+unchanged host state to be byte-identical. The per-container fingerprint embeds
+the `Mounts` array from `docker inspect`, and Docker does not guarantee that
+array's ordering. Those tests pin the fingerprint to mount *content* rather than
+to Docker's arbitrary ordering, while keeping the guard's ability to detect a
+genuine change.
+
+Issue #4434: `ps`'s `command=` column is a display string — argv joined with
+single spaces — not shell syntax. Those tests pin the macOS row parser to that
+reading, so an ordinary quoted command line cannot abort the whole native
+inventory and thereby fail-close a deploy.
 """
 
 import json
@@ -145,3 +151,91 @@ def test_produce_legacy_owners_still_detects_real_race(
         )
 
     assert not output.exists()
+
+
+# --- Issue #4434: macOS ps row parsing --------------------------------------
+
+LSTART = "Thu Jul 30 16:59:37 2026"
+
+
+def _ps_row(command, pid=98262, ppid=98128, pgid=98262):
+    return f"{pid} {ppid} {pgid} {LSTART} {command}"
+
+
+def test_parse_macos_ps_row_accepts_unbalanced_quotes():
+    """An ordinary command line with an odd apostrophe count must still parse.
+
+    This is the exact shape that aborted a real deploy: one agent process whose
+    natural-language prompt contained three apostrophes.
+    """
+
+    command = "claude --flag You are the hub coordinator. Don't stop; it's fine"
+    record = writer_inventory._parse_macos_ps_row(_ps_row(command))
+
+    assert record.pid == 98262
+    assert record.argv[0] == "claude"
+    assert record.argv == tuple(command.split())
+
+
+def test_parse_macos_ps_row_preserves_literal_quotes():
+    """Quote characters are argument content here, not syntax to be consumed."""
+
+    command = "python -c print('hi') \"double\""
+    record = writer_inventory._parse_macos_ps_row(_ps_row(command))
+
+    assert "print('hi')" in record.argv
+    assert '"double"' in record.argv
+
+
+def test_enumerate_macos_survives_quoted_command_row(monkeypatch):
+    """One quoted row must not abort the whole native inventory."""
+
+    rows = [
+        _ps_row("/sbin/launchd", pid=1, ppid=0, pgid=1),
+        _ps_row("claude --flag it's a prompt", pid=98262),
+        _ps_row("python -m app.cli watcher run", pid=4242, ppid=1, pgid=4242),
+    ]
+
+    def fake_run_checked(command, *, label, env=None):
+        assert list(command)[:1] == ["ps"]
+        return "\n".join(rows) + "\n"
+
+    monkeypatch.setattr(writer_inventory, "_run_checked", fake_run_checked)
+
+    records = writer_inventory._enumerate_macos()
+
+    assert [record.pid for record in records] == [1, 98262, 4242]
+
+
+def test_native_role_classifies_known_writers():
+    """Whitespace splitting must not lose any writer shape the guard detects."""
+
+    cases = {
+        ("python", "-m", "app.cli", "watcher", "run"): "watcher",
+        ("python3", "-m", "app.cli", "heimdal", "capture-watch"): "heimdal-capture-watch",
+        ("python", "-m", "app.workers.outbox_worker"): "outbox-worker",
+        ("python", "-m", "uvicorn", "app.api.app:app"): "uvicorn",
+        ("python", "-m", "celery", "worker"): "celery",
+        ("/usr/bin/uvicorn", "app.api.app:app"): "uvicorn",
+        ("/bin/bash", "scripts/deploy_channel.sh", "deploy"): "deploy_channel",
+    }
+    for argv, expected in cases.items():
+        assert writer_inventory._native_role(argv) == expected, argv
+
+    assert writer_inventory._native_role(("claude", "--flag", "it's")) is None
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "not a ps row at all",
+        f"98262 98128 98262 {LSTART}",
+        f"0 1 1 {LSTART} /sbin/launchd",
+        "98262 98128 98262 Thu Jul 30 16:59:37 /sbin/launchd",
+    ],
+)
+def test_parse_macos_ps_row_still_rejects_malformed_rows(row):
+    """Structurally malformed rows must keep failing closed."""
+
+    with pytest.raises(InventoryError):
+        writer_inventory._parse_macos_ps_row(row)

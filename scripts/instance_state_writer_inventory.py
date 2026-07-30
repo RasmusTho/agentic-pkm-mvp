@@ -16,7 +16,6 @@ import json
 import os
 import posixpath
 import re
-import shlex
 import stat
 import subprocess
 import sys
@@ -329,7 +328,14 @@ def _parse_macos_ps_row(line: str) -> ProcessRecord:
     pid_text, ppid_text, pgid_text, started, command = match.groups()
     try:
         dt.datetime.strptime(started, "%a %b %d %H:%M:%S %Y")
-        argv = tuple(shlex.split(command, posix=True))
+        # ps renders `command=` as argv joined with single spaces. It is display
+        # text, not shell syntax, so whitespace splitting is its faithful
+        # inverse. A shell lexer here both raises on any argument carrying an
+        # unbalanced quote — aborting the whole inventory over one unrelated
+        # process — and silently strips quote characters that are literal
+        # argument content. Only whitespace-free tokens are consumed downstream
+        # by _native_role.
+        argv = tuple(command.split())
         pid, ppid, pgid = int(pid_text), int(ppid_text), int(pgid_text)
     except (ValueError, TypeError) as exc:
         raise InventoryError("native process inventory row is malformed") from exc
