@@ -359,7 +359,7 @@ deploy_channel_compose() {
         "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
         --channel "${channel}"
         --consumer heimdal-api-ingress
-        -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; exec "$@"' _
+        -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
         "${compose_command[@]}"
       )
     fi

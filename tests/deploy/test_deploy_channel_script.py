@@ -999,6 +999,11 @@ def test_api_service_receives_raw_store_key() -> None:
     assert "_security_keychain_lookup" in lib
     assert "continuing without it" in lib
     assert 'HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"' in lib
+    # The shim must also UNSET the shared handle: on a dev unfiltered `up`
+    # no inner capture-watch bootstrap runs to scrub it, and a lingering
+    # shared handle would deliver the api consumer's layer to the
+    # capture-watch service's env_file chain.
+    assert "unset HOST_SECRET_RUNTIME_ENV_FILE;" in lib
     # The capture-watch provisioning is unchanged.
     assert "--consumer heimdal-capture-watch" in lib
     assert "_deploy_channel_needs_dev_capture_secret" in lib
@@ -1056,17 +1061,36 @@ def test_api_service_receives_raw_store_key() -> None:
     # still sees the renamed api handle.
     shim = (
         'export HOST_SECRET_RUNTIME_ENV_FILE_API='
-        '"${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; exec "$@"'
+        '"${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; '
+        'unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"'
     )
+    probe_env = (
+        'printf "%s|%s" "${HOST_SECRET_RUNTIME_ENV_FILE_API:-missing}" '
+        '"${HOST_SECRET_RUNTIME_ENV_FILE:-scrubbed}"'
+    )
+    # Without any inner bootstrap (the dev unfiltered-up shape): the shim
+    # itself must scrub the shared handle so it can never reach the
+    # capture-watch service's env_file chain.
+    run = subprocess.run(
+        [
+            "env", "HOST_SECRET_RUNTIME_ENV_FILE=/tmp/api-layer.env",
+            "sh", "-c", shim, "_",
+            "sh", "-c", probe_env,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert run.stdout == "/tmp/api-layer.env|scrubbed", run.stderr
+    # And with a simulated nested capture-watch bootstrap scrub in between,
+    # the renamed api handle still survives.
     inner_scrub = 'unset HOST_SECRET_RUNTIME_ENV_FILE HEIMDAL_RAW_STORE_KEY; exec "$@"'
     run = subprocess.run(
         [
             "env", "HOST_SECRET_RUNTIME_ENV_FILE=/tmp/api-layer.env",
             "sh", "-c", shim, "_",
             "sh", "-c", inner_scrub, "_",
-            "sh", "-c",
-            'printf "%s|%s" "${HOST_SECRET_RUNTIME_ENV_FILE_API:-missing}" '
-            '"${HOST_SECRET_RUNTIME_ENV_FILE:-scrubbed}"',
+            "sh", "-c", probe_env,
         ],
         check=False,
         capture_output=True,
