@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
+
+from app.dispatcher.sync_github import github_issue_task_id
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -239,6 +242,78 @@ def test_default_task_id_is_repo_qualified_to_match_dispatcher_pull(tmp_path: Pa
     assert "task_id=github-RasmusTho--bifrost-issue-21" in result.stdout
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
     assert "dispatcher -m app.dispatcher claim github-RasmusTho--bifrost-issue-21" in commands
+
+
+def test_explicit_task_id_override_still_wins(tmp_path: Path) -> None:
+    """``--task-id`` bypasses the derived default so multi-repo edge cases keep
+    an escape hatch (#4440)."""
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=json.dumps(
+            {
+                "ok": True,
+                "task": {
+                    "task_id": "custom-task-id-3301",
+                    "issue_number": 3301,
+                    "status": "claimed",
+                    "claimed_by": "codex-3301",
+                    "lease_id": "lease-3301",
+                },
+                "lease": {
+                    "lease_id": "lease-3301",
+                    "resource": "issue:3301",
+                    "holder": "codex-3301",
+                    "expires_at": "2099-07-10T01:00:00Z",
+                    "released_at": None,
+                },
+            }
+        ),
+    )
+
+    result = _run(worktree, env, "--task-id", "custom-task-id-3301")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "task_id=custom-task-id-3301" in result.stdout
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher claim custom-task-id-3301" in commands
+
+
+def test_default_task_id_derived_from_python_single_source(tmp_path: Path) -> None:
+    """The wrapper derives its default task id from
+    ``app.dispatcher.sync_github.github_issue_task_id`` and carries no
+    independent spelling of the format string (INV-DG-2, #4440)."""
+    script_text = SCRIPT.read_text(encoding="utf-8")
+    assert "github_issue_task_id" in script_text
+    assert re.search(r"github-.*-issue-", script_text) is None
+
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=_dispatcher_claim(),
+    )
+
+    result = _run(worktree, env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = github_issue_task_id("RasmusTho/agentic-pkm-mvp", 3301)
+    assert f"task_id={expected}" in result.stdout
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert f"dispatcher -m app.dispatcher claim {expected}" in commands
 
 
 def test_dispatcher_availability_is_not_reported_as_acquired_claim(tmp_path: Path) -> None:

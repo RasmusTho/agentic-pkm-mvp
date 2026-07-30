@@ -18,6 +18,7 @@ from app.dispatcher.sync_github import (
     GitHubIssueSource,
     PullSyncAdapter,
     get_sync_meta,
+    github_issue_task_id,
     normalize_github_issue,
     record_sync_failure,
     record_sync_success,
@@ -126,6 +127,20 @@ def test_pull_sync_adapter_interface() -> None:
 # ---------------------------------------------------------------------------
 # AC: normalize_github_issue maps fields correctly
 # ---------------------------------------------------------------------------
+
+def test_github_issue_task_id_single_source_format_pinned() -> None:
+    """The repo-qualified task id has exactly one implementation with a pinned
+    byte format, including the doubled ``--`` owner/repo separator that keeps
+    ``org/foo-bar`` and ``org-foo/bar`` distinct (INV-DG-2, #4440)."""
+    assert github_issue_task_id("org/foo-bar", 21) == "github-org--foo-bar-issue-21"
+    assert github_issue_task_id("org-foo/bar", 21) == "github-org-foo--bar-issue-21"
+    assert (
+        github_issue_task_id("RasmusTho/agentic-pkm-mvp", 4440)
+        == "github-RasmusTho--agentic-pkm-mvp-issue-4440"
+    )
+    task = normalize_github_issue({"number": 4440, "title": "t"}, "RasmusTho/agentic-pkm-mvp")
+    assert task.task_id == github_issue_task_id("RasmusTho/agentic-pkm-mvp", 4440)
+
 
 def test_normalize_github_issue_to_task() -> None:
     """normalize_github_issue converts sample GitHub payload to TaskRecord."""

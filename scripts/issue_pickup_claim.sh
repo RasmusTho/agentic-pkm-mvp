@@ -101,10 +101,31 @@ if [[ "$REPO" != */* ]]; then
   exit 2
 fi
 
-# Match app/dispatcher/sync_github.py::normalize_github_issue's repo-qualified
-# task_id scheme (doubled "--" separator, not a single "-", so that e.g.
-# "org/foo-bar" and "org-foo/bar" can't collapse to the same id).
-TASK_ID="${TASK_ID:-github-${REPO//\//--}-issue-$ISSUE_NUMBER}"
+# The default task id is derived from the single Python source
+# (app/dispatcher/sync_github.py::github_issue_task_id), so this wrapper can
+# never drift from the id `dispatcher pull` assigns (INV-DG-2). python3 is
+# already a hard dependency of every wrapper path via JSON parsing.
+if [[ -z "$TASK_ID" ]]; then
+  script_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if ! TASK_ID="$(
+    TASK_ID_REPO="$REPO" \
+    TASK_ID_ISSUE="$ISSUE_NUMBER" \
+    TASK_ID_REPO_ROOT="$script_repo_root" \
+    "$JSON_PYTHON_BIN" - <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.environ["TASK_ID_REPO_ROOT"])
+
+from app.dispatcher.sync_github import github_issue_task_id
+
+print(github_issue_task_id(os.environ["TASK_ID_REPO"], int(os.environ["TASK_ID_ISSUE"])))
+PY
+  )"; then
+    echo "could not derive task_id via app.dispatcher.sync_github.github_issue_task_id; pass --task-id explicitly" >&2
+    exit 2
+  fi
+fi
 
 detect_coordination_receipt() {
   local status_json
