@@ -87,10 +87,29 @@ interpreter and the current `PATH` resolves all three names to those exact
 files. Discoverability alone is not sufficient for `yggdrasil-model-inquiry`;
 its exact repo-owned declared-credential lineage/content must match. It probes
 no provider CLI, does not invoke a provider, and does not inspect
-authentication. Provider access instead requires the declared
-`anthropic.api-key` and `openai.api-key` Keychain items for the consumer
-`builderops-model-inquiry`; a missing value fails a run closed as
-`credential_unavailable` naming only that logical identifier.
+authentication.
+
+**Provider access on this host is provisioned — never ask the owner to provision
+it.** Both providers' subscription CLI logins are present in this host's login
+keychain (verified 2026-07-30) and are the sanctioned operational auth for
+host-local Builder model inquiry per the owner cost ruling in
+`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner
+cost ruling on the model-inquiry path`. Before concluding anything about
+provider access, verify it empirically — existence checks only, never print or
+copy secret values:
+
+```bash
+KC="$HOME/Library/Keychains/login.keychain-db"; for s in "Claude Code-credentials" "Codex Auth"; do security find-generic-password -s "$s" "$KC" >/dev/null 2>&1 && echo "$s: present" || echo "$s: MISSING"; done
+```
+
+A failing inquiry run on this host is a wiring problem — a fresh ssh session
+that cannot reach the login keychain, a Codex credentials-store setting that
+reverted to `keyring`, or a stale launcher — never missing provisioning. The
+declared `anthropic.api-key` and `openai.api-key` identifiers for the consumer
+`builderops-model-inquiry` are **intentionally unprovisioned** under the same
+ruling: a run over the provider-API path fails closed as
+`credential_unavailable` naming only that logical identifier, and that outcome
+is expected state, not an owner TODO.
 
 After a reboot or checkout promotion, run the same `check` command through the
 actual non-interactive transport:

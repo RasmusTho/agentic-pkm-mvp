@@ -51,7 +51,12 @@ route copies to the same fixed staging file and directly invokes only:
 
 The operator machine needs the `Tailscale_macmini` SSH alias. On the remote host, declared Anthropic
 and OpenAI API-key identities resolve through the host-secret bootstrap and Keychain contract; no
-headless route uses the legacy GUI-session proxy or an interactive subscription session. Desktop
+headless route uses the legacy GUI-session proxy or an interactive subscription session. (Owner
+ruling 2026-07-30: this paragraph describes the delivered provider-API mechanism, not the
+operational host state — the declared identifiers are intentionally unprovisioned and the
+subscription-backed session remains the sanctioned operational auth; see
+`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the
+model-inquiry path`.) Desktop
 skill packages neither provision nor access credential values. If that bootstrap cannot resolve or
 validate a declared API credential, the fixed Model Inquiry launcher passes only the logical
 credential identifier to the runner. The runner then persists a terminal

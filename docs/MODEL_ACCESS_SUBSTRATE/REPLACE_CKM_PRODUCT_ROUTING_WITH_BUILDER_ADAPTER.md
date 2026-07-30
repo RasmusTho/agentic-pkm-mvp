@@ -32,7 +32,10 @@ Builder Capability Runtime.
 
 The amended ADR-0064 §8 keeps Model Inquiry first and CKM migration at step 5. This issue remains
 blocked until `model_access_substrate.provider_enabled_noninteractive_inquiry.v1` is accepted on the
-parent. A builder agent may read CKM evidence during the window; CKM itself remains projection-only.
+parent. **Owner ruling 2026-07-30 (cost):** that receipt is withdrawn as a gate — metered provider
+API keys are not provisioned (`docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 —
+owner cost ruling on the model-inquiry path`); this task's entry gate must be re-scoped before it
+can become ready, and it stays `agent:blocked` until that re-scoping lands. A builder agent may read CKM evidence during the window; CKM itself remains projection-only.
 
 ## What this task does
 
