@@ -71,12 +71,12 @@ pack is supporting input.
 | Order | Task | task_id | Issue | State |
 |---|---|---|---|---|
 | 1 | [REGISTRY_READ_TIME_JOIN](REGISTRY_READ_TIME_JOIN.md) | BOPS-COCKPIT-01 | #4438 | Delivered |
-| 2 | [INDUCED_FAILURE_JOURNEYS](INDUCED_FAILURE_JOURNEYS.md) | BOPS-COCKPIT-02 | #4448 | Ready |
-| 2 (par) | [COGNITIVE_LOAD_SIBLING](COGNITIVE_LOAD_SIBLING.md) | BOPS-COCKPIT-07 | #4449 | Ready |
+| 2 | [INDUCED_FAILURE_JOURNEYS](INDUCED_FAILURE_JOURNEYS.md) | BOPS-COCKPIT-02 | #4448 | Delivered #4458 |
+| 2 (par) | [COGNITIVE_LOAD_SIBLING](COGNITIVE_LOAD_SIBLING.md) | BOPS-COCKPIT-07 | #4449 | Delivered #4467 |
 | 3 | [GITHUB_LIVE_PLANE](GITHUB_LIVE_PLANE.md) | BOPS-COCKPIT-03 | #4450 | Delivered |
 | 3 (par) | [DOCS_PLANE_CAPABILITY_LANES](DOCS_PLANE_CAPABILITY_LANES.md) | BOPS-COCKPIT-05 | #4451 | Delivered |
 | 4 | [CHAIN_DERIVED_STATES](CHAIN_DERIVED_STATES.md) | BOPS-COCKPIT-04 | #4452 | Delivered |
-| 5 | [SURFACE_LENSES](SURFACE_LENSES.md) | BOPS-COCKPIT-06 | #4453 | Blocked on 02+04+05 |
+| 5 | [SURFACE_LENSES](SURFACE_LENSES.md) | BOPS-COCKPIT-06 | #4453 | Delivered #4478 |
 
 Flat order: journeys and the docs sibling first (they harden and govern what exists), then the two
 independent planes in parallel, then chain semantics over the joined planes, then the lenses.
@@ -121,12 +121,24 @@ automated stand-in; the "tried by you" tier renders its absence until INV-DG-7 e
 The capability may be claimed as supported when all of these hold (mirrored by the parent feature
 issue, which is where progress is checked off):
 
-- [ ] All seven task rows above are Delivered with their per-AC `Verify:` targets green on merged SHAs
+- [x] All seven task rows above are Delivered with their per-AC `Verify:` targets green on merged SHAs
 - [ ] The induced dead-source journey runs in the post-merge browser lane and proves red-not-calm
-- [ ] Every plane the surface reads has fresh/stale/unavailable pill states with its own threshold
+      — **not yet true**: `.github/workflows/browser-runtime.yml` does not include a step for
+      `tests/companion_ui/test_cockpit_journeys.py` (it currently runs only
+      `test_runtime_unavailable_browser.py` and `test_overlay_history_browser.py`). BOPS-COCKPIT-02
+      named wiring the journey file into that lane as its own step; that wiring was never done. A
+      Builder System workflow-file change is out of scope for this presentation-only slice (#4453
+      touches `cockpit.html|css|js` and the test file only) — flagged as a follow-up.
+- [x] Every plane the surface reads has fresh/stale/unavailable pill states with its own threshold
 - [ ] The five chain-derived states and the flaw predicates render from live data on the host, with
       every unreadable predicate named as unread
-- [ ] This README's task table, coordination constraints, and decision ledger reflect delivered
+      — **partially true**: the chain-derived bands and flaw predicates do render from live data
+      (proven by `test_cockpit_journeys.py` and `test_cockpit_chain_states.py`), but the flaws
+      band's own `header.not_evaluated`/`header.unread` fields — distinct from the coarser
+      `unread_planes` list `cockpit.js` already renders — are not yet surfaced anywhere on the
+      served surface. Adding that rendering is beyond #4453's five lens/scale/print ACs — flagged
+      as a follow-up.
+- [x] This README's task table, coordination constraints, and decision ledger reflect delivered
       reality (no stale "pending" rows)
 
 ## Authority boundaries (binding)
