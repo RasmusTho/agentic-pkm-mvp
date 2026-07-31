@@ -3743,15 +3743,12 @@ def _ddo4_profile(
 def _ddo4_state(
     plan: DeliveryPlan,
     profile: DeliveryAcceptanceProfile,
-    *,
-    max_repair_rounds: int = 1,
 ) -> DeliveryRunState:
     return initial_delivery_run_state(
         run_id=DDO4_RUN,
         plan=plan,
         acceptance_profile=profile,
         authorized_control_scopes=(DDO4_CONTROL_SCOPE,),
-        max_repair_rounds=max_repair_rounds,
     )
 
 
@@ -3999,12 +3996,10 @@ class _DdoRun:
         self,
         plan: DeliveryPlan,
         profile: DeliveryAcceptanceProfile,
-        *,
-        max_repair_rounds: int = 1,
     ) -> None:
         self.plan = plan
         self.profile = profile
-        self.state = _ddo4_state(plan, profile, max_repair_rounds=max_repair_rounds)
+        self.state = _ddo4_state(plan, profile)
         self.sequence = 0
         self.events: list[ReducerEvent] = []
         self.effects: list[ReducerEffect] = []
@@ -5772,11 +5767,11 @@ def test_replayed_worker_sidecars_require_strict_canonical_revalidation() -> Non
 
 
 def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
-    """Finding 2: a repair round may move the head but never the PR identity."""
+    """Finding 2: the authorized PR identity binds once and is never rewritable."""
 
     issue = _issue(4167, SHA_A)
     plan = _ddo4_plan(((issue,),))
-    run = _DdoRun(plan, _ddo4_profile(), max_repair_rounds=1)
+    run = _DdoRun(plan, _ddo4_profile())
     claimed = _claimed_authority(issue)
     started = run.start()
     run.succeed(
@@ -5829,69 +5824,19 @@ def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
     )
 
     first = run.apply(first_admitted)
-    assert run.state.issue_state(issue.scope_key).authorized_pull_request == DDO4_PR
-    assert run.state.issue_state(issue.scope_key).authorized_head_sha == DDO4_HEAD
+    bound = run.state.issue_state(issue.scope_key)
+    assert bound.authorized_pull_request == DDO4_PR
+    assert bound.authorized_head_sha == DDO4_HEAD
 
-    # CI fails, so the run enters a budgeted repair round.
-    run.fail(first.effects[0], run.events[-1], subject=claimed, label="await-ci")
-    repairing = run.state.issue_state(issue.scope_key)
-    assert repairing.phase == "repairing"
-    assert repairing.repair_rounds == 1
-    # Head-bound acceptance evidence is invalidated by the failure.
-    assert "required_checks_green" not in repairing.acceptance_evidence
-
-    # A worker result cannot re-enter the run straight from repairing: the
-    # repair must first be re-launched under its own attempt identity.
-    assert not REDUCER_TRANSITION_MATRIX[
-        ("repairing", "worker_result_recorded")
-    ].legal
-
-    # The tick authorizes a genuinely new launch, not a replay of the first one.
-    relaunch = run.tick()
-    assert [item.effect_class for item in relaunch.effects] == ["launch_worker"]
-    assert relaunch.effects[0].worker_attempt == 1
-    repair_launch = run.materialize(relaunch.effects[0], run.events[-1])
-    assert repair_launch.idempotency_key != launch_effect.idempotency_key
-    assert repair_launch.expected_outcome_keys != launch_effect.expected_outcome_keys
-    assert repair_launch.expected_outcome_keys[0].endswith(":repair-1")
-
-    relaunched_event = _ddo4_effect_outcome_event(
-        plan,
-        repair_launch,
-        subject=claimed,
-        outcome_state="worker_launched",
-        sequence=run.next_sequence(),
-        correlation_id="event-relaunch",
-    )
-    run.apply(run.admit(relaunched_event, effect=repair_launch))
-    assert run.state.issue_state(issue.scope_key).phase == "working"
-    assert (
-        run.state.issue_state(issue.scope_key).authorized_invocation_effect_key
-        == repair_launch.idempotency_key
-    )
-
-    # The repair invocation identity differs from the first, so the runtime port
-    # is never asked to restart a terminal invocation.
-    repair_pack, repair_invocation, repaired = _ddo4_worker_bundle(
-        issue,
-        plan,
-        repair_launch,
-        result_id="worker-result-v2-repaired",
-        domain_result_id="worker-result-repaired",
-        head=DDO4_REPAIRED_HEAD,
-        base_head=DDO4_HEAD,
-    )
-    assert repair_invocation.idempotency_key != invocation.idempotency_key
-
-    # A repair result that moves to another pull request is refused outright.
+    # The fence itself: with the pull request already bound, a worker result for
+    # a different pull request is refused rather than allowed to move the run.
     _p, _i, hijacked = _ddo4_worker_bundle(
         issue,
         plan,
-        repair_launch,
+        launch_effect,
         result_id="worker-result-v2-hijack",
         domain_result_id="worker-result-hijack",
         head=DDO4_REPAIRED_HEAD,
-        base_head=DDO4_HEAD,
         pull_request_number=DDO4_PR + 7,
     )
     run.worker_results.append(hijacked.delivery_result)
@@ -5905,64 +5850,53 @@ def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
         ),
         correlation_id="event-worker-hijack",
     )
-    hijack = reduce_delivery_run(
+    hijack_admitted = run.admit(
+        hijack_event,
+        worker_result=hijacked,
+        context_pack=pack,
+        invocation=invocation,
+        launch_effect=launch_effect,
+    )
+    # Re-enter working with the pull request and launch already authorized, which
+    # is the exact state any later result - repaired or replayed - arrives into.
+    working_again = dataclass_replace(
         run.state,
-        run.admit(
-            hijack_event,
-            worker_result=hijacked,
-            context_pack=repair_pack,
-            invocation=repair_invocation,
-            launch_effect=repair_launch,
+        issues=tuple(
+            dataclass_replace(item, phase="working") for item in run.state.issues
         ),
     )
+    hijack = reduce_delivery_run(working_again, hijack_admitted)
     assert hijack.refusal == "pull_request_identity_conflict"
-    assert hijack.state == run.state
+    assert hijack.state == working_again
     assert not hijack.effects
     run.worker_results.pop()
 
-    # The honest repair keeps the pull request and advances only the head.
-    run.worker_results.append(repaired.delivery_result)
-    repaired_event = _ddo4_event(
-        plan,
-        sequence=run.next_sequence(),
-        event_type="worker_result_recorded",
-        subject=claimed,
-        result_ref=_ddo4_ref(
-            repaired.delivery_result, repaired.delivery_result.result_id
-        ),
-        correlation_id="event-worker-repaired",
+    # A red required check routes to the typed terminal repair deferral. The
+    # autonomous retry loop needs a durable, replayable effect and invocation
+    # identity, which is DDO-05 durable effect binding and Out of Scope here, so
+    # this slice fails closed instead of starting a second worker.
+    deferred = run.fail(
+        first.effects[0], run.events[-1], subject=claimed, label="await-ci"
     )
-    accepted = run.apply(
-        run.admit(
-            repaired_event,
-            worker_result=repaired,
-            context_pack=repair_pack,
-            invocation=repair_invocation,
-            launch_effect=repair_launch,
-        )
+    repairing = deferred.state.issue_state(issue.scope_key)
+    assert repairing.phase == "repairing"
+    assert repairing.blocked_reason == "ci_failed_repair_deferred"
+    assert not deferred.effects
+    # Head-bound acceptance evidence is invalidated by the failure.
+    assert "required_checks_green" not in repairing.acceptance_evidence
+    # The deferral is terminal, so no signal can restart a worker from it.
+    assert "repairing" in TERMINAL_PHASES
+    for signal in REDUCER_SIGNALS:
+        assert not REDUCER_TRANSITION_MATRIX[("repairing", signal)].legal
+    # The failed await_ci is still an obligation-free resolved entry: a truthful
+    # failure proved the guarded authority never moved.
+    failed_entry = next(
+        entry
+        for entry in repairing.effect_ledger
+        if entry.effect_class == "await_ci"
     )
-    repaired_state = run.state.issue_state(issue.scope_key)
-    assert repaired_state.authorized_pull_request == DDO4_PR
-    assert repaired_state.authorized_head_sha == DDO4_REPAIRED_HEAD
-    assert [item.effect_class for item in accepted.effects] == ["await_ci"]
-    assert accepted.effects[0].pull_request_number == DDO4_PR
-    assert accepted.effects[0].exact_head_sha == DDO4_REPAIRED_HEAD
-
-    # The repaired await_ci is a distinct reducer-authorized effect identity.
-    repaired_effect = run.materialize(accepted.effects[0], run.events[-1])
-    first_ci = next(
-        effect for effect in run.effects if effect.effect_class == "await_ci"
-    )
-    assert repaired_effect.idempotency_key != first_ci.idempotency_key
-    assert repaired_effect.pull_request_number == first_ci.pull_request_number
-
-    # Exhausting the repair budget blocks instead of repairing forever.
-    exhausted = run.fail(
-        accepted.effects[0], run.events[-1], subject=claimed, label="await-ci-2"
-    )
-    blocked_state = exhausted.state.issue_state(issue.scope_key)
-    assert blocked_state.phase == "blocked"
-    assert blocked_state.blocked_reason == "repair_budget_exhausted"
+    assert failed_entry.outcome_state == "failed"
+    assert failed_entry.is_resolved_uncommitted
 
 
 def test_worktree_preparation_follows_the_full_worker_authority_chain() -> None:
@@ -6197,6 +6131,56 @@ def test_cancellation_records_obligations_instead_of_claiming_compensation() -> 
     assert orphaned.last_observed_outcome_state is None
     assert orphaned.outcome_keys == authorized_claim.expected_outcome_keys
     assert orphaned.reconciliation_owner == "builderops_reconciliation"
+
+    # Resume is the one path that authorizes effects without reducing an event,
+    # so it must ledger them too. Otherwise a pause/resume before the first tick
+    # authorizes a claim that removes agent:ready and takes a lease, and the
+    # following cancel reports nothing outstanding.
+    resumable = _DdoRun(_ddo4_plan(((inflight_issue,),)), _ddo4_profile())
+    paused_early = reduce_lifecycle_command(
+        resumable.state,
+        LifecycleCommand(
+            command="pause",
+            command_id="cmd-pause-early",
+            run_id=DDO4_RUN,
+            expected_run_version=resumable.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    resumed_early = reduce_lifecycle_command(
+        paused_early.state,
+        LifecycleCommand(
+            command="resume",
+            command_id="cmd-resume-early",
+            run_id=DDO4_RUN,
+            expected_run_version=paused_early.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    assert [item.effect_class for item in resumed_early.effects] == ["claim_issue"]
+    resumed_ledger = resumed_early.state.issue_state(
+        inflight_issue.scope_key
+    ).effect_ledger
+    assert [entry.effect_class for entry in resumed_ledger] == ["claim_issue"]
+    assert resumed_ledger[0].outcome_state is None
+    after_resume = reduce_lifecycle_command(
+        resumed_early.state,
+        LifecycleCommand(
+            command="cancel",
+            command_id="cmd-cancel-after-resume",
+            run_id=DDO4_RUN,
+            expected_run_version=resumed_early.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    assert [item.effect_class for item in after_resume.obligations] == [
+        "claim_issue"
+    ]
+    assert after_resume.obligations[0].last_observed_outcome_state is None
+    assert after_resume.effects == ()
 
     # A truthful failure proves the guarded authority never moved, so that one
     # effect is the only kind excluded from the obligation set.

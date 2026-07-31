@@ -231,7 +231,8 @@ The renderer does not infer which label applies.
    [PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252): the pure reducer, the
    acceptance-profile and worker-runtime contracts, `DeliveryReceipt.v2`, and the bounded authority
    adapters. Cancellation records committed-effect obligations for DDO-05 rather than compensating
-   them, per INV-DDO-15.
+   them, per INV-DDO-15, and a red required check routes to a typed terminal repair deferral whose
+   autonomous retry loop is [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466).
 5. [Bind Delivery Effects to BuilderOps Reconciliation](BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md)
    ([#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168)) — depends on task 4 and reuses #3792.
 6. [Connect CKM Initiation and Delivery Receipts](CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md) ([#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169)) —
@@ -241,7 +242,9 @@ The renderer does not infer which label applies.
 
 DDO-01 through DDO-04 are delivered. #4168 becomes the next eligible slice once its own strict
 readiness reconciliation, including the #3793 timing dependency, passes. #4169–#4170 remain serially
-dependency-blocked.
+dependency-blocked. [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) carries the
+autonomous CI-failure retry loop, which DDO-04 defers because a retry needs the durable, replayable
+effect identity that DDO-05 delivers; it is blocked on #4168.
 
 ## Architecture reconciliation after DDO-03
 

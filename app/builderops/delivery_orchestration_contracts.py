@@ -1214,52 +1214,6 @@ def delivery_effect_idempotency_key(input_hash: str) -> str:
     return f"builderops.delivery-effect.v1:{input_hash}"
 
 
-def worker_launch_outcome_key(
-    *,
-    run_id: str,
-    issue: IssueScope,
-    worker_attempt: int = 0,
-) -> str:
-    """Derive the logical outcome identity of one worker launch attempt.
-
-    Attempt 0 keeps the original identity byte-for-byte. A repair retry is a
-    distinct reducer-authorized launch - the delivery contract requires a new
-    effect and invocation identity per retry - so later attempts carry an
-    explicit, bounded suffix instead of colliding with the first launch.
-    """
-
-    if worker_attempt < 0:
-        raise ValueError("worker launch attempt cannot be negative")
-    base = f"builderops:worker:{run_id}:{issue.authority_id}"
-    return base if worker_attempt == 0 else f"{base}:repair-{worker_attempt}"
-
-
-_WORKER_LAUNCH_REPAIR_SUFFIX = re.compile(r":repair-([1-9][0-9]*)$")
-
-
-def resolve_worker_launch_attempt(
-    outcome_keys: tuple[str, ...],
-    *,
-    run_id: str,
-    issue: IssueScope,
-) -> int:
-    """Resolve which launch attempt an outcome-key tuple names, fail-closed."""
-
-    base = f"builderops:worker:{run_id}:{issue.authority_id}"
-    if outcome_keys == (base,):
-        return 0
-    if len(outcome_keys) == 1 and outcome_keys[0].startswith(f"{base}:"):
-        match = _WORKER_LAUNCH_REPAIR_SUFFIX.fullmatch(
-            outcome_keys[0][len(base) :]
-        )
-        if match is not None:
-            return int(match.group(1))
-    raise ValueError(
-        "worker launch outcome keys must name this run and Issue with an "
-        "explicit attempt identity"
-    )
-
-
 def delivery_effect_expected_outcome_keys(
     *,
     effect_class: EffectClass,
@@ -1269,22 +1223,13 @@ def delivery_effect_expected_outcome_keys(
     required_check_names: tuple[str, ...],
     known_defect_registry_ref: str | None = None,
     known_defect_finding_hash: str | None = None,
-    worker_attempt: int = 0,
 ) -> tuple[str, ...]:
     """Derive carrier-neutral logical outcome identities for an effect."""
 
-    if worker_attempt != 0 and effect_class != "launch_worker":
-        raise ValueError(
-            "only a worker launch carries a launch-attempt identity"
-        )
     if effect_class == "claim_issue":
         return (f"{issue.authority_id}#claimed",)
     if effect_class == "launch_worker":
-        return (
-            worker_launch_outcome_key(
-                run_id=run_id, issue=issue, worker_attempt=worker_attempt
-            ),
-        )
+        return (f"builderops:worker:{run_id}:{issue.authority_id}",)
     if effect_class == "await_ci":
         return tuple(
             f"check-name:{name}" for name in sorted(required_check_names)
@@ -1777,19 +1722,6 @@ def validate_reducer_effect_evidence(
         raise ValueError("reducer effect issue is outside exact plan scope")
     if effect.effect_class not in plan.effect_allowlist:
         raise ValueError("reducer effect class is outside the plan allowlist")
-    # A worker launch carries an explicit attempt identity so a repair retry is a
-    # distinct reducer-authorized effect rather than a replay of the first
-    # launch. The attempt is resolved from the effect's own keys and re-derived,
-    # so a malformed or foreign key is still rejected.
-    worker_attempt = (
-        resolve_worker_launch_attempt(
-            effect.expected_outcome_keys,
-            run_id=effect.run_id,
-            issue=effect.issue,
-        )
-        if effect.effect_class == "launch_worker"
-        else 0
-    )
     expected_outcome_keys = delivery_effect_expected_outcome_keys(
         effect_class=effect.effect_class,
         run_id=effect.run_id,
@@ -1798,7 +1730,6 @@ def validate_reducer_effect_evidence(
         required_check_names=plan.policy_profile.required_check_names,
         known_defect_registry_ref=effect.known_defect_registry_ref,
         known_defect_finding_hash=effect.known_defect_finding_hash,
-        worker_attempt=worker_attempt,
     )
     if effect.expected_outcome_keys != expected_outcome_keys:
         raise ValueError(
@@ -3994,7 +3925,6 @@ __all__ = [
     "normalized_worker_delivery_result",
     "parse_delivery_contract",
     "resolve_current_authority",
-    "resolve_worker_launch_attempt",
     "validate_delivery_plan_evidence",
     "validate_delivery_receipt_evidence",
     "validate_delivery_receipt_v2_evidence",
@@ -4004,5 +3934,4 @@ __all__ = [
     "worker_conformance_key",
     "worker_invocation_idempotency_key",
     "worker_invocation_input_hash",
-    "worker_launch_outcome_key",
 ]

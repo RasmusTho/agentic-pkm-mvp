@@ -125,6 +125,7 @@ TERMINAL_PHASES: Final[frozenset[RunPhase]] = frozenset(
     {
         "delivered",
         "blocked",
+        "repairing",
         "owner_decision",
         "system_blocked",
         "cancelled",
@@ -249,15 +250,13 @@ def _build_transition_matrix() -> (
         "claim_issue succeeded with a truthful ready-to-claimed readback",
         emits=("launch_worker",),
     )
-    worker_launch_phases: tuple[RunPhase, ...] = ("launching", "repairing")
-    for launch_phase in worker_launch_phases:
-        matrix[(launch_phase, "worker_launched")] = _legal(
-            "working",
-            "launch_worker succeeded for the authorized invocation identity",
-        )
+    matrix[("launching", "worker_launched")] = _legal(
+        "working",
+        "launch_worker succeeded for the authorized invocation identity",
+    )
     # A worker result is admissible only from working. A repair must first be
     # re-launched under its own attempt identity, so a result cannot re-enter the
-    # run straight from repairing without a new reducer-authorized launch.
+    # run straight from a terminal deferral.
     matrix[("working", "worker_result_recorded")] = _legal(
         None,
         "the worker result resolves the full pack/invocation/effect chain",
@@ -316,14 +315,7 @@ def _build_transition_matrix() -> (
             "the typed exception kind selects owner-decision, system-block, "
             "or block",
         )
-        if phase == "repairing":
-            matrix[(phase, "timer_elapsed")] = _legal(
-                phase,
-                "a budgeted repair round is open for this Issue",
-                "the repair launch carries its own attempt identity",
-                emits=("launch_worker",),
-            )
-        elif phase != "admitted":
+        if phase != "admitted":
             matrix[(phase, "timer_elapsed")] = _legal(
                 phase,
                 "a timer tick re-derives due effects and never invents evidence",
@@ -374,7 +366,6 @@ class IssueRunState:
     pending_known_defect_finding_hash: str | None = None
     acceptance_evidence: tuple[AcceptanceEvidenceKind, ...] = ()
     effect_ledger: tuple[EffectLedgerEntry, ...] = ()
-    repair_rounds: int = 0
     blocked_reason: str | None = None
 
     @property
@@ -408,7 +399,6 @@ class DeliveryRunState:
     required_acceptance_evidence: tuple[AcceptanceEvidenceKind, ...]
     required_check_names: tuple[str, ...]
     authorized_control_scopes: tuple[str, ...]
-    max_repair_rounds: int
     version: int = 0
     lifecycle: LifecycleState = "active"
     issues: tuple[IssueRunState, ...] = ()
@@ -440,7 +430,6 @@ class EffectProposal:
     exact_head_sha: str | None = None
     known_defect_registry_ref: str | None = None
     known_defect_finding_hash: str | None = None
-    worker_attempt: int = 0
 
 
 @dataclass(frozen=True)
@@ -705,12 +694,9 @@ def initial_delivery_run_state(
     plan: DeliveryPlan,
     acceptance_profile: DeliveryAcceptanceProfile,
     authorized_control_scopes: Sequence[str],
-    max_repair_rounds: int,
 ) -> DeliveryRunState:
     """Bind one plan and one acceptance profile into immutable initial state."""
 
-    if max_repair_rounds < 0:
-        raise ValueError("repair budget cannot be negative")
     if not authorized_control_scopes:
         raise ValueError("a run must bind at least one lifecycle control scope")
     plan_ref = ContractRef(
@@ -751,7 +737,6 @@ def initial_delivery_run_state(
         required_acceptance_evidence=acceptance_profile.required_evidence,
         required_check_names=plan.policy_profile.required_check_names,
         authorized_control_scopes=tuple(sorted(set(authorized_control_scopes))),
-        max_repair_rounds=max_repair_rounds,
         issues=tuple(sorted(issues, key=lambda item: item.issue.scope_key)),
     )
 
@@ -851,7 +836,6 @@ def proposal_effect_identity(
         required_check_names=state.required_check_names,
         known_defect_registry_ref=proposal.known_defect_registry_ref,
         known_defect_finding_hash=proposal.known_defect_finding_hash,
-        worker_attempt=proposal.worker_attempt,
     )
     input_hash = delivery_effect_input_hash(
         run_id=state.run_id,
@@ -898,11 +882,19 @@ def _record_authorizations(
         if issue_state is None:
             continue
         identity = proposal_effect_identity(state, proposal)
-        if any(
-            entry.idempotency_key == identity.idempotency_key
-            for entry in issue_state.effect_ledger
-        ):
+        existing = next(
+            (
+                entry
+                for entry in issue_state.effect_ledger
+                if entry.idempotency_key == identity.idempotency_key
+            ),
+            None,
+        )
+        if existing is not None and not existing.is_resolved_uncommitted:
             continue
+        # Re-authorizing a key whose previous attempt truthfully failed reopens
+        # that entry. Leaving it resolved would let a genuinely in-flight effect
+        # inherit the earlier failure and vanish from cancellation obligations.
         entry = EffectLedgerEntry(
             effect_class=proposal.effect_class,
             idempotency_key=identity.idempotency_key,
@@ -914,7 +906,14 @@ def _record_authorizations(
                 issue_state,
                 effect_ledger=tuple(
                     sorted(
-                        (*issue_state.effect_ledger, entry),
+                        (
+                            *(
+                                item
+                                for item in issue_state.effect_ledger
+                                if item.idempotency_key != entry.idempotency_key
+                            ),
+                            entry,
+                        ),
                         key=lambda item: item.idempotency_key,
                     )
                 ),
@@ -988,37 +987,11 @@ def reduce_delivery_run(
     return _ISSUE_HANDLERS[admitted.signal](state, admitted, issue_state)
 
 
-def _due_repair_launches(
-    issues: tuple[IssueRunState, ...],
-    signal: ReducerSignal,
-) -> tuple[EffectProposal, ...]:
-    """Return the repair launches a tick is due to authorize.
-
-    A repair launch has no issue-scoped cause it could legally bind, so the
-    subjectless tick authorizes it. The attempt identity comes from the run's
-    own repair counter, so the port is never asked to restart a terminal
-    invocation identity.
-    """
-
-    return tuple(
-        EffectProposal(
-            effect_class="launch_worker",
-            issue=item.issue,
-            expected_authorities=(item.current_authority,),
-            worker_attempt=item.repair_rounds,
-        )
-        for item in issues
-        if item.phase == "repairing"
-        and REDUCER_TRANSITION_MATRIX[(item.phase, signal)].legal
-    )
-
-
 def _reduce_tick(
     state: DeliveryRunState,
     admitted: AdmittedEvent,
 ) -> Reduction:
-    issues, claims = _open_due_claims(state.issues, admitted.signal)
-    proposals = claims + _due_repair_launches(issues, admitted.signal)
+    issues, proposals = _open_due_claims(state.issues, admitted.signal)
     return _advance(state, admitted, issues, proposals)
 
 
@@ -1137,7 +1110,7 @@ def _reduce_worker_result(
 ) -> Reduction:
     result = admitted.worker_result
     assert result is not None
-    # working and repairing are reachable only through a committed launch, so a
+    # working is reachable only through a committed launch, so a
     # result must name the exact launch effect this run authorized. Treating an
     # unset key as permissive would leave a hole rather than a defensive branch.
     if (
@@ -1480,29 +1453,22 @@ def _reduce_effect_failed(
             current_authority=authority,
         )
         return _advance(state, admitted, _replace_issue(state.issues, updated))
-    if issue_state.repair_rounds >= state.max_repair_rounds:
-        updated = replace(
-            issue_state,
-            phase="blocked",
-            blocked_reason="repair_budget_exhausted",
-            effect_ledger=ledger,
-            current_authority=authority,
-        )
-        return _advance(state, admitted, _replace_issue(state.issues, updated))
-    # A repair retry is a new reducer-authorized launch with its own attempt
-    # identity, per the DDO-04 constraint that the same invocation identity
-    # starts at most once: the runtime port refuses to restart a terminal
-    # invocation, so re-proposing the first launch would deadlock the run.
+    # A red required check routes to the typed terminal `repairing` deferral, not
+    # to an autonomous retry loop.
     #
-    # The launch is not emitted here. A launch effect carries no pull request or
-    # head, while this causal event resolves the failed await_ci evidence, and a
-    # delivered effect must match its causal evidence's PR and head. The next
-    # subjectless timer tick is therefore the only legitimate cause, exactly as
-    # for opening a dependency wave.
+    # An autonomous retry needs a durable, replayable effect and invocation
+    # identity: `ReducerEffect.content_hash` binds the causal event and
+    # provenance, and `WorkerInvocation` binds the effect reference, so an effect
+    # re-derived on a later tick or after a restart yields a different start-once
+    # identity and could start a second worker against the same Issue. Making
+    # that safe requires persisting and replaying the authorized effect, which is
+    # durable effect binding - DDO-05 (#4168), and named Out of Scope for this
+    # slice. Deferring is therefore fail-closed and honest; the retry loop lands
+    # with the durability that makes it correct.
     updated = replace(
         issue_state,
         phase="repairing",
-        repair_rounds=issue_state.repair_rounds + 1,
+        blocked_reason="ci_failed_repair_deferred",
         acceptance_evidence=tuple(
             kind
             for kind in issue_state.acceptance_evidence
@@ -1586,7 +1552,6 @@ def outstanding_effect_obligations(
 _RESUMABLE_EFFECT_BY_PHASE: Final[dict[RunPhase, EffectClass]] = {
     "claiming": "claim_issue",
     "launching": "launch_worker",
-    "repairing": "launch_worker",
     "awaiting_ci": "await_ci",
     "awaiting_review": "request_review",
     "recording_defect": "record_known_defect",
@@ -1643,11 +1608,6 @@ def pending_effect_proposals(
                 known_defect_finding_hash=item.pending_known_defect_finding_hash
                 if effect_class == "record_known_defect"
                 else None,
-                # A resumed repair re-proposes its own attempt, never the first
-                # launch, so the port is not asked to restart a terminal identity.
-                worker_attempt=item.repair_rounds
-                if item.phase == "repairing"
-                else 0,
             )
         )
     return tuple(proposals)
@@ -1704,7 +1664,18 @@ def reduce_lifecycle_command(
             lifecycle="active",
             seen_command_ids=seen,
         )
-        return Reduction(state=resumed, effects=pending_effect_proposals(resumed))
+        # Resume is the one path that authorizes effects without reducing an
+        # event, so it must ledger them itself. Without this an effect resume
+        # authorized would be invisible to cancellation, which is exactly the
+        # orphaned-pickup-authority failure the ledger exists to prevent.
+        proposals = pending_effect_proposals(resumed)
+        return Reduction(
+            state=replace(
+                resumed,
+                issues=_record_authorizations(resumed, resumed.issues, proposals),
+            ),
+            effects=proposals,
+        )
 
     is_cancel = command.command == "cancel"
     terminal_lifecycle: LifecycleState = "cancelled" if is_cancel else "superseded"
