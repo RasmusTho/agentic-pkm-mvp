@@ -4339,13 +4339,38 @@ def test_reducer_transition_matrix_is_exhaustive() -> None:
     run = _drive_to_delivered(issue)
     assert run.state.issue_state(issue.scope_key).phase == "delivered"
 
+    # The matrix is what refuses an otherwise well-formed event, and it is the
+    # only thing that makes a terminal phase terminal for events. Prove that
+    # with a genuinely FRESH event - a duplicate would be refused earlier and
+    # would prove nothing about the matrix.
+    merge_effect = next(
+        effect
+        for effect in run.effects
+        if effect.effect_class == "merge_pull_request"
+    )
+    replayed_merge = _ddo4_effect_outcome_event(
+        run.plan,
+        merge_effect,
+        subject=_claimed_authority(issue),
+        outcome_state="merged",
+        sequence=run.next_sequence(),
+        correlation_id="event-merge-after-delivered",
+    )
+    assert replayed_merge.event_id not in run.state.seen_event_ids
+    refused = reduce_delivery_run(
+        run.state, run.admit(replayed_merge, effect=merge_effect)
+    )
+    assert refused.refusal == "illegal_transition"
+    assert refused.state == run.state
+    assert not refused.effects
+    assert run.state.issue_state(issue.scope_key).phase == "delivered"
+
     # A refused pair leaves state byte-identical and reports a typed reason.
     fresh = _DdoRun(_ddo4_plan(((issue,),)), _ddo4_profile())
     fresh.start()
-    stray_effect = fresh.effects
-    assert not stray_effect
+    assert not fresh.effects
     claim_effect = fresh.materialize(fresh.last.effects[0], fresh.events[-1])
-    merged_event = _ddo4_effect_outcome_event(
+    claimed_event = _ddo4_effect_outcome_event(
         fresh.plan,
         claim_effect,
         subject=_claimed_authority(issue),
@@ -4353,10 +4378,9 @@ def test_reducer_transition_matrix_is_exhaustive() -> None:
         sequence=fresh.next_sequence(),
         correlation_id="event-claim-matrix",
     )
-    admitted = fresh.admit(merged_event, effect=claim_effect)
+    admitted = fresh.admit(claimed_event, effect=claim_effect)
     before = fresh.state
     fresh.apply(admitted)
-    # Re-applying the same admitted event from a phase the matrix refuses.
     repeat = reduce_delivery_run(fresh.state, admitted)
     assert repeat.refusal == "duplicate_event"
     assert repeat.state == fresh.state
@@ -5345,11 +5369,38 @@ def test_lifecycle_controls_are_typed_fenced_and_effect_safe() -> None:
     assert repeat.refusal == "duplicate_command"
     assert repeat.state == paused.state
 
-    # A paused run admits no reducer events at all.
-    stalled = reduce_delivery_run(
-        paused.state, run.admit(run.events[-1], effect=run.effects[-1])
+    # A paused run admits no reducer event at all, and the proof must use a
+    # genuinely FRESH event: a duplicate would be refused earlier and would say
+    # nothing about the pause gate. Without it a paused run would accept this
+    # verdict and authorize a merge.
+    paused_verdict = _ddo4_review(
+        issue,
+        run.plan,
+        result_id="review-while-paused",
+        disposition="accept",
     )
-    assert stalled.refusal in {"paused_run", "duplicate_event"}
+    run.review_results.append(paused_verdict)
+    paused_event = _ddo4_event(
+        run.plan,
+        sequence=run.next_sequence(),
+        event_type="review_result_recorded",
+        subject=_claimed_authority(issue),
+        result_ref=_ddo4_ref(paused_verdict, paused_verdict.result_id),
+        correlation_id="event-review-while-paused",
+    )
+    paused_admitted = run.admit(paused_event, review_result=paused_verdict)
+    assert paused_event.event_id not in paused.state.seen_event_ids
+    stalled = reduce_delivery_run(paused.state, paused_admitted)
+    assert stalled.refusal == "paused_run"
+    assert stalled.state == paused.state
+    assert not stalled.effects
+    # The identical event on the active run does authorize the merge, so the
+    # pause gate is the only thing that stopped it.
+    unpaused = reduce_delivery_run(run.state, paused_admitted)
+    assert [item.effect_class for item in unpaused.effects] == [
+        "merge_pull_request"
+    ]
+    run.review_results.pop()
 
     resumed = reduce_lifecycle_command(
         paused.state,
@@ -6423,6 +6474,50 @@ def test_cancellation_records_obligations_instead_of_claiming_compensation() -> 
         ),
     )
     assert resolved.obligations == ()
+
+    # A reported failure is not by itself proof of non-commitment. Only classes
+    # whose truthful failure requires the guarded authority to be unchanged, or
+    # that mutate nothing at all, are excluded. A merge GitHub may already have
+    # completed stays an obligation.
+    merging_run, _merge_event, _merge_launch = _drive_to_awaiting_review(issue)
+    merge_accepted = _record_review(
+        merging_run,
+        _ddo4_review(
+            issue,
+            merging_run.plan,
+            result_id="review-merge-failure",
+            disposition="accept",
+        ),
+        subject=_claimed_authority(issue),
+    )
+    merging_run.fail(
+        merge_accepted.effects[0],
+        merging_run.events[-1],
+        subject=_claimed_authority(issue),
+        label="merge",
+    )
+    merge_cancelled = reduce_lifecycle_command(
+        merging_run.state,
+        LifecycleCommand(
+            command="cancel",
+            command_id="cmd-cancel-after-merge-failure",
+            run_id=DDO4_RUN,
+            expected_run_version=merging_run.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    merge_obligation = next(
+        item
+        for item in merge_cancelled.obligations
+        if item.effect_class == "merge_pull_request"
+    )
+    assert merge_obligation.last_observed_outcome_state == "failed"
+    # A failed await_ci mutates nothing external, so it is genuinely resolved.
+    assert not any(
+        item.effect_class == "await_ci" and item.last_observed_outcome_state == "failed"
+        for item in resolved.obligations
+    )
 
     # A cancelled run's obligations can only be carried by a receipt that is not
     # marked delivered, so a false clean receipt is unconstructable.

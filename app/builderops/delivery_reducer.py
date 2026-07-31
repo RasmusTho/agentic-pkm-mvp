@@ -162,6 +162,15 @@ _SYSTEM_BLOCK_EXCEPTIONS: Final[frozenset[str]] = frozenset(
     {"dependency_blocked", "external_state_unknown"}
 )
 
+#: Effect classes whose reported failure genuinely proves nothing committed:
+#: ``claim_issue`` and ``close_issue`` because truthful failure evidence requires
+#: the guarded Issue authority to be unchanged, and ``await_ci`` because waiting
+#: on checks mutates no external state. Every other class can commit externally
+#: and then report failure, so its failure is still an obligation.
+_FAILURE_PROVES_UNCOMMITTED: Final[frozenset[EffectClass]] = frozenset(
+    {"claim_issue", "await_ci", "close_issue"}
+)
+
 #: Evidence that only survives while the reviewed head is unchanged (INV-DDO-7).
 _HEAD_BOUND_EVIDENCE: Final[frozenset[AcceptanceEvidenceKind]] = frozenset(
     {"required_checks_green", "review_accepted"}
@@ -365,9 +374,21 @@ class EffectLedgerEntry:
 
     @property
     def is_resolved_uncommitted(self) -> bool:
-        """True only when a truthful failure proved the effect did not commit."""
+        """True only when a failure genuinely proves nothing was committed.
 
-        return self.outcome_state == "failed"
+        A reported failure is not by itself proof. It proves non-commitment only
+        for ``claim_issue`` and ``close_issue``, whose truthful failure evidence
+        requires the guarded Issue authority to be unchanged (INV-DDO-6), and for
+        ``await_ci``, which mutates no external state at all. Every other class
+        may have committed externally before reporting failure - a merge that
+        GitHub completed, a worker whose runtime started, a registry or receipt
+        write that landed - so it stays an obligation for reconciliation.
+        """
+
+        return (
+            self.outcome_state == "failed"
+            and self.effect_class in _FAILURE_PROVES_UNCOMMITTED
+        )
 
 
 @dataclass(frozen=True)
