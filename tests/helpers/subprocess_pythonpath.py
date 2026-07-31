@@ -4,7 +4,7 @@ importability without shadowing the interpreter's own ``sitecustomize.py``
 
 Putting the repository root itself on a subprocess ``PYTHONPATH`` makes
 Python's site machinery import the repo's own root-level ``sitecustomize.py``
-(kept for the decision-receipt hook) instead of the *real* one the
+(removed in #4366 — it was inert) instead of the *real* one the
 interpreter would otherwise load -- e.g. Homebrew's, whose only load-bearing
 line wires up the actual third-party site-packages directory via
 ``site.addsitedir(...)``. Python's site initialization imports only the FIRST
