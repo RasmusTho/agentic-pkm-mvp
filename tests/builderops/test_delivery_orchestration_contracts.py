@@ -4433,6 +4433,34 @@ def test_duplicate_and_stale_events_cannot_advance() -> None:
     assert other.refusal == "pull_request_identity_conflict"
     run.review_results.pop()
 
+    # The exact-head fence guards every effect-outcome handler, not only the
+    # review verdict. With the run's authorized head moved, a genuine
+    # checks_passed outcome for the old head is refused.
+    ci_run, _ci_event, _ci_launch = _drive_to_awaiting_ci(_issue(4167, SHA_A))
+    ci_effect = ci_run.materialize(ci_run.last.effects[0], ci_run.events[-1])
+    ci_success = _ddo4_effect_outcome_event(
+        ci_run.plan,
+        ci_effect,
+        subject=claimed,
+        outcome_state="checks_passed",
+        sequence=ci_run.next_sequence(),
+        correlation_id="event-ci-head-fence",
+    )
+    ci_admitted = ci_run.admit(ci_success, effect=ci_effect)
+    moved_head = dataclass_replace(
+        ci_run.state,
+        issues=tuple(
+            dataclass_replace(item, authorized_head_sha=SHA_F)
+            for item in ci_run.state.issues
+        ),
+    )
+    fenced = reduce_delivery_run(moved_head, ci_admitted)
+    assert fenced.refusal == "head_evidence_conflict"
+    assert fenced.state == moved_head
+    # The identical outcome on the unmoved head does advance, so the fence is
+    # what stopped it.
+    assert reduce_delivery_run(ci_run.state, ci_admitted).refusal is None
+
     # An event bound to a different run never resolves against this state.
     foreign = dataclass_replace(run.state, run_id="run-other")
     assert (
@@ -4512,6 +4540,31 @@ def test_effects_require_exact_prerequisites() -> None:
     assert unauthorized.refusal == "unauthorized_effect"
     assert unauthorized.state == unledgered
     assert not unauthorized.effects
+
+    # The gate matches the exact identity, not merely the class: a ledger that
+    # holds a different claim_issue key still refuses this outcome.
+    wrong_key = dataclass_replace(
+        run.state,
+        issues=tuple(
+            dataclass_replace(
+                item,
+                effect_ledger=tuple(
+                    dataclass_replace(
+                        entry,
+                        idempotency_key=(
+                            "builderops.delivery-effect.v1:" + SHA_F
+                        ),
+                    )
+                    for entry in item.effect_ledger
+                ),
+            )
+            for item in run.state.issues
+        ),
+    )
+    assert (
+        reduce_delivery_run(wrong_key, claim_admitted).refusal
+        == "unauthorized_effect"
+    )
 
     # launch_worker is not proposed until a truthful claim readback exists.
     ordered: list[tuple[str, tuple[str, ...]]] = []
@@ -4723,6 +4776,70 @@ def test_review_severity_routes_fail_closed() -> None:
         assert issue_state.blocked_reason == "review_blocking"
         assert not blocked.effects
 
+    # Severity routing is enforced at the layer that owns it: a protected, P0,
+    # P1, or false-green finding cannot ride any disposition but reject, so no
+    # such verdict can reach the reducer wearing a mergeable disposition. This
+    # is the half of "every protected/P0/P1 outcome blocks" that the reducer's
+    # own blocking term is defence-in-depth for.
+    for label, blocking_finding in (
+        (
+            "p0",
+            ReviewFinding(
+                finding_id="finding-contract-p0",
+                severity="P0",
+                summary="A delivery-blocking defect remains.",
+                protected_risk=False,
+                false_green=False,
+                evidence_refs=("review:4200:contract-p0",),
+            ),
+        ),
+        (
+            "p1",
+            ReviewFinding(
+                finding_id="finding-contract-p1",
+                severity="P1",
+                summary="An authority-integrity defect remains.",
+                protected_risk=False,
+                false_green=False,
+                evidence_refs=("review:4200:contract-p1",),
+            ),
+        ),
+        (
+            "protected",
+            ReviewFinding(
+                finding_id="finding-contract-protected",
+                severity="P2",
+                summary="A protected authority path is affected.",
+                protected_risk=True,
+                false_green=False,
+                evidence_refs=("review:4200:contract-protected",),
+            ),
+        ),
+        (
+            "false-green",
+            ReviewFinding(
+                finding_id="finding-contract-false-green",
+                severity="P2",
+                summary="A verify target passes without proving its claim.",
+                protected_risk=False,
+                false_green=True,
+                evidence_refs=("review:4200:contract-false-green",),
+            ),
+        ),
+    ):
+        for disposition in ("accept", "accept_with_risk"):
+            with pytest.raises(ValidationError, match="blocking review evidence"):
+                _ddo4_review(
+                    issue,
+                    run.plan,
+                    result_id=f"review-contract-{label}-{disposition}",
+                    disposition=disposition,
+                    findings=(blocking_finding,),
+                    known_defect_refs=(DDO4_DEFECT_REF,)
+                    if disposition == "accept_with_risk"
+                    else (),
+                )
+
     # Low confidence cannot be expressed as anything but a reject verdict, so
     # the contract layer itself refuses to produce a mergeable low-confidence
     # result and the reducer never sees one.
@@ -4734,6 +4851,22 @@ def test_review_severity_routes_fail_closed() -> None:
             disposition="accept",
             confidence_basis_points=10,
         )
+
+    # And a reject verdict blocks in the reducer even when it carries no
+    # findings at all, so the block does not depend on reading severities.
+    bare_run, _bare_event, _bare_launch = _drive_to_awaiting_review(issue)
+    bare = _record_review(
+        bare_run,
+        _ddo4_review(
+            issue,
+            bare_run.plan,
+            result_id="review-bare-reject",
+            disposition="reject",
+        ),
+        subject=claimed,
+    )
+    assert bare.state.issue_state(issue.scope_key).phase == "blocked"
+    assert not bare.effects
 
     # More than one deferred P2 is not a single deferred disposition.
     multi_run, _event, _launch_effect = _drive_to_awaiting_review(issue)
@@ -5008,6 +5141,70 @@ def test_worker_contracts_bind_one_authority_chain() -> None:
     with pytest.raises(ValidationError, match="one run, plan, Issue"):
         parse_delivery_contract(hijacked)
 
+    # Every reference in the chain is load-bearing, including the base head the
+    # acceptance criterion names by word and the effect class that makes this a
+    # worker launch at all.
+    drifted_payload = result.model_dump(mode="json")
+    drifted_payload["result_id"] = "worker-result-v2-drifted-base"
+    drifted_payload["base_head_sha"] = SHA_F
+    drifted_head = parse_delivery_contract(drifted_payload)
+    assert isinstance(drifted_head, WorkerResultV2)
+    with pytest.raises(ValueError, match="exactly one base head"):
+        validate_worker_authority_chain(
+            drifted_head,
+            context_pack=pack,
+            invocation=invocation,
+            effect=launch_effect,
+            plan=plan,
+        )
+
+    claim_effect = next(
+        effect for effect in run.effects if effect.effect_class == "claim_issue"
+    )
+    with pytest.raises(ValueError, match="launch-worker effect"):
+        validate_worker_authority_chain(
+            result,
+            context_pack=pack,
+            invocation=invocation,
+            effect=claim_effect,
+            plan=plan,
+        )
+
+    # A result citing an invocation that is not the one this pack authorized is
+    # rejected rather than resolved by version alone.
+    other_input_hash = worker_invocation_input_hash(
+        run_id=DDO4_RUN,
+        plan_ref=_ddo4_ref(plan, plan.plan_id),
+        effect_ref=_ddo4_ref(launch_effect, launch_effect.effect_id),
+        issue=issue,
+        base_head_sha=DDO4_BASE_HEAD,
+        context_pack_ref=_ddo4_ref(pack, pack.context_pack_id),
+        runtime_target="a-different-bounded-runtime",
+    )
+    other_invocation = WorkerInvocation(
+        invocation_id=worker_invocation_idempotency_key(other_input_hash),
+        run_id=DDO4_RUN,
+        plan_ref=_ddo4_ref(plan, plan.plan_id),
+        effect_ref=_ddo4_ref(launch_effect, launch_effect.effect_id),
+        issue=issue,
+        base_head_sha=DDO4_BASE_HEAD,
+        context_pack_ref=_ddo4_ref(pack, pack.context_pack_id),
+        context_pack_hash=pack.content_hash,
+        runtime_target="a-different-bounded-runtime",
+        idempotency_key=worker_invocation_idempotency_key(other_input_hash),
+        input_hash=other_input_hash,
+        provenance=_provenance("invocation-other"),
+    )
+    assert other_invocation.idempotency_key != invocation.idempotency_key
+    with pytest.raises(ValueError, match="one invocation"):
+        validate_worker_authority_chain(
+            result,
+            context_pack=pack,
+            invocation=other_invocation,
+            effect=launch_effect,
+            plan=plan,
+        )
+
     mismatched_pack = WorkerContextPack(
         context_pack_id="pack-mismatched",
         run_id="run-other",
@@ -5178,6 +5375,20 @@ def test_worker_runtime_port_is_provider_neutral_and_exhaustive() -> None:
             _RecordingPort(),
             invocation,
             _observation("not_started", key="builderops.worker-invocation.v1:other"),
+        )
+
+    # And a port that answers about a different invocation is refused too, so a
+    # response cannot silently rebind the run to another worker.
+    class _WrongIdentityPort(_RecordingPort):
+        def start(self, invocation: WorkerInvocation) -> WorkerRuntimeObservation:
+            self.calls.append("start")
+            return _observation(
+                "running", key="builderops.worker-invocation.v1:elsewhere"
+            )
+
+    with pytest.raises(WorkerRuntimeUnknownError, match="does not bind"):
+        resolve_worker_start(
+            _WrongIdentityPort(), invocation, _observation("not_started")
         )
 
     # A non-terminal observation may not smuggle a recorded result, and a
@@ -6513,6 +6724,40 @@ def test_cancellation_records_obligations_instead_of_claiming_compensation() -> 
         if item.effect_class == "merge_pull_request"
     )
     assert merge_obligation.last_observed_outcome_state == "failed"
+    # Only a red required check defers to repair. Any other failed effect blocks
+    # with its own typed reason, so the deferral is pinned in both directions.
+    merge_failed_state = merging_run.state.issue_state(issue.scope_key)
+    assert merge_failed_state.phase == "blocked"
+    assert merge_failed_state.blocked_reason == (
+        "effect_failed:merge_pull_request"
+    )
+
+    # A failed launch is likewise not proof the runtime never started, so it
+    # stays an obligation.
+    launch_run, _launch_event, launch_proposal = _drive_to_launching(issue)
+    launch_run.fail(
+        launch_proposal,
+        launch_run.events[-1],
+        subject=_claimed_authority(issue),
+        label="launch",
+    )
+    launch_cancelled = reduce_lifecycle_command(
+        launch_run.state,
+        LifecycleCommand(
+            command="cancel",
+            command_id="cmd-cancel-after-launch-failure",
+            run_id=DDO4_RUN,
+            expected_run_version=launch_run.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    launch_obligation = next(
+        item
+        for item in launch_cancelled.obligations
+        if item.effect_class == "launch_worker"
+    )
+    assert launch_obligation.last_observed_outcome_state == "failed"
     # A failed await_ci mutates nothing external, so it is genuinely resolved.
     assert not any(
         item.effect_class == "await_ci" and item.last_observed_outcome_state == "failed"

@@ -1,4 +1,4 @@
-State: Active target-state specification. Parent #4163 owns live validation state. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is the next serial implementation slice after contract reconciliation; #4168–#4170 remain dependency-blocked.
+State: Active target-state specification. Parent #4163 owns live validation state. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is delivered by PR #4252, which defers the autonomous CI-failure retry loop to #4466; #4168–#4170 and #4466 remain dependency-blocked.
 Doc role: Builder System capability specification
 Authority: Owns the bounded target, decomposition, cross-task invariants, verification path, and acceptance path for deterministic issue-set delivery. GitHub Issues own executable task state after filing.
 Owner: Builder System governance
@@ -362,8 +362,8 @@ bounded residual work, and triggers owner-doc promotion only when the capability
 | DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | delivered and closed |
 | DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | delivered by [PR #4176](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4176) and closed |
 | DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | delivered by [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226) |
-| DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | next serial slice; remains blocked until this reconciliation is on `main` and strict readiness passes |
-| DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | blocked on #4167; timing reconciles with #3793 |
+| DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | delivered by [PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252); autonomous CI retry deferred to [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) |
+| DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | next serial slice; timing reconciles with #3793; unblocks [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) |
 | DDO-06 CKM bridge | [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169) | blocked on #4168 |
 | DDO-07 acceptance | [#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170) | blocked on #4167–#4169 |
 

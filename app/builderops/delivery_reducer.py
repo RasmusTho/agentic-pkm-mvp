@@ -1290,6 +1290,13 @@ def _reduce_review_result(
         # INV-DDO-8: P0/P1, protected risk, false-green, malformed, and
         # low-confidence verdicts block. Repairing a blocking verdict is
         # governed work outside this reducer, not a transition it may take.
+        #
+        # The `blocking` term is deliberate defence in depth and is unreachable
+        # through a valid contract: `ReviewResult` already refuses to carry a
+        # P0/P1, protected, or false-green finding on any disposition but
+        # reject, and that rule is the one the acceptance test pins. The term
+        # keeps this branch correct if a future path ever hands the reducer a
+        # verdict whose disposition and findings disagree.
         updated = replace(
             issue_state,
             phase="blocked",

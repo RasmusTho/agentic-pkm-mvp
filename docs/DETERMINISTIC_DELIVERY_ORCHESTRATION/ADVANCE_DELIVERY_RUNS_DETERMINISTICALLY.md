@@ -127,8 +127,10 @@ full durable outbox binding.
 
 ## Related GitHub Issues
 
-Live task: [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167). DDO-01
+Live task: [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167), delivered by
+[PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252). DDO-01
 [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) and DDO-03
-[#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) are delivered. #4167 is the next
-serial implementation slice after this exact contract is merged, reconciled to the live Issue body,
-and strict readiness validation passes.
+[#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) are delivered. The autonomous
+CI-failure retry loop is carried by
+[#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466), blocked on DDO-05
+[#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168).
