@@ -153,6 +153,32 @@ function laneCardsMarkup(items) {
   return `${cards}<div class="thread-rows">${rows}</div>`;
 }
 
+// The flaws band's own honesty header (app/builderops/cockpit_chain.py
+// ::flaws_band_header): which flaw predicates this render could not evaluate
+// because their required source wasn't fresh (`not_evaluated`), and which
+// flaw types v1 never reads at all (`unread`) — distinct from and more
+// specific than the capability-wide `#unread-planes` list, which names
+// planes the whole surface never reads, not individual flaw predicates.
+function flawsHeaderMarkup(header) {
+  if (!header) return "";
+  const notEvaluated = header.not_evaluated || [];
+  const unread = header.unread || [];
+  let html = "";
+  if (notEvaluated.length) {
+    const items = notEvaluated
+      .map((entry) => `${esc(entry.predicate)} (${esc(entry.reason)})`)
+      .join(" · ");
+    html += `<p class="mono flaws-not-evaluated" style="color:var(--fg-3)">not evaluated this read (source not fresh): ${items}</p>`;
+  }
+  if (unread.length) {
+    const items = unread
+      .map((entry) => `${esc(entry.predicate)} (${esc(entry.plane)})`)
+      .join(" · ");
+    html += `<p class="mono flaws-unread" style="color:var(--fg-3)">flaw types v1 never reads: ${items}</p>`;
+  }
+  return html;
+}
+
 function bandMarkup(band) {
   const count = band.countable
     ? `<span class="band-count">${band.count}</span>`
@@ -160,6 +186,12 @@ function bandMarkup(band) {
   let bodyHtml = "";
   if (!band.countable) {
     bodyHtml = "";
+  } else if (band.key === "flawed") {
+    bodyHtml =
+      flawsHeaderMarkup(band.header) +
+      (band.items.length === 0
+        ? `<p class="mono" style="color:var(--fg-3)">0 — counted, not assumed</p>`
+        : `<div class="lane"><div class="lane-cards">${laneCardsMarkup(band.items)}</div></div>`);
   } else if (band.key === "done") {
     const cards = laneCardsMarkup(band.items);
     bodyHtml =
