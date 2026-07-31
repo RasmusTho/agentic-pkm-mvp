@@ -58,6 +58,15 @@ jobs:
         run: |
           pytest -q tests/companion_ui/test_overlay_history_browser.py
 
+      # BOPS-COCKPIT-02 (#4448): induced-failure journeys against the served
+      # /cockpit surface — a dead dispatcher source must render refused-not-calm,
+      # never a calm zero. Deterministic and offline (real production join code
+      # served over a local HTTP server, no live vault), so this is a real
+      # regression gate too — NOT continue-on-error.
+      - name: Run cockpit induced-failure browser journeys (BOPS-COCKPIT-02)
+        run: |
+          pytest -q tests/companion_ui/test_cockpit_journeys.py
+
       # Mermaid runtime rendering depends on heavier vendored ESM and is kept
       # advisory (step-level continue-on-error) so its flakiness cannot block a PR.
       - name: Run mermaid browser-runtime test (advisory)
