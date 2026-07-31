@@ -7,6 +7,7 @@ from threading import Barrier
 import pytest
 
 from app.builderops.control_plane import IdempotencyConflict, LeaseRequired
+from app.builderops.control_plane.migrations import SCHEMA_VERSION
 
 pytestmark = pytest.mark.pg
 
@@ -64,7 +65,10 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
 
     result = _commit(store, envelope, lease=lease)
     assert result.state == "effect_pending"
-    assert store.readiness() == {"authority_epoch": 1, "schema_version": 2}
+    assert store.readiness() == {
+        "authority_epoch": 1,
+        "schema_version": SCHEMA_VERSION,
+    }
     assert store.authority_counts(envelope.repository) == {
         "tasks": 1,
         "attempts": 0,

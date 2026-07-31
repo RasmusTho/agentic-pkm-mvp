@@ -9,6 +9,7 @@ import pytest
 from app.builderops.control_plane import (
     IdempotencyConflict,
     LeaseUnavailable,
+    StateConflict,
     StaleFencingToken,
     UnknownEffectNeedsReconciliation,
 )
@@ -26,7 +27,14 @@ def _expire_outbox_claim(store, repository: str, operation_key: str) -> None:
 
 
 def _commit_outbox_task(
-    store, envelope, *, task_id: str, key: str, effect_type: str, payload: dict
+    store,
+    envelope,
+    *,
+    task_id: str,
+    key: str,
+    effect_type: str,
+    payload: dict,
+    task_payload: dict | None = None,
 ):
     store.commit_transition(
         envelope=envelope,
@@ -47,7 +55,7 @@ def _commit_outbox_task(
         task_id=task_id,
         to_state="effect_pending",
         idempotency_key=key,
-        request={"command": "schedule-effect"},
+        request=task_payload or {"command": "schedule-effect"},
         outbox={"effect_type": effect_type, "payload": payload},
         lease=lease,
     )
@@ -71,10 +79,33 @@ def test_unknown_external_effect_requires_readback_before_retry(
         claim_ttl_seconds=1,
     )
     restarted_store = type(control_plane_store)(control_plane_store.dsn)
-    orphaned_claim = restarted_store.outbox_claim(envelope.repository, result.operation_key)
+    with pytest.raises(LeaseUnavailable, match="active claim"):
+        restarted_store.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="recovery-executor",
+        )
+    _expire_outbox_claim(
+        restarted_store, envelope.repository, result.operation_key
+    )
+    orphaned_claim = restarted_store.outbox_claim(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="recovery-executor",
+    )
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
-    assert orphaned_claim == first_claim
+    assert orphaned_claim.operation_key == first_claim.operation_key
+    assert orphaned_claim.worker_id == "recovery-executor"
+    assert orphaned_claim.fencing_token > first_claim.fencing_token
+    assert orphaned_claim.receipt_sequence > first_claim.receipt_sequence
+    assert orphaned_claim.claim_lsn != first_claim.claim_lsn
     assert restarted_store.effect_eligible(first_claim) is False
+    with pytest.raises(StaleFencingToken):
+        restarted_store.reconcile_outbox(
+            first_claim,
+            observed_applied=True,
+            evidence={"readback": "stale-worker-forged"},
+        )
     with pytest.raises(StaleFencingToken):
         restarted_store.reconcile_outbox(
             replace(orphaned_claim, worker_id="wrong-holder"),
@@ -138,6 +169,321 @@ def test_unknown_external_effect_requires_readback_before_retry(
             worker_id="executor-3",
         )
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "succeeded"
+
+
+def test_live_unknown_claim_cannot_be_stolen_during_readback(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="live-unknown-readback",
+        key="live-unknown-readback",
+        effect_type="github.merge",
+        payload={"pr": 4000},
+    )
+    original = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="readback-owner",
+    )
+    control_plane_store.mark_effect_unknown(
+        original, detail="transport outcome requires readback"
+    )
+
+    with pytest.raises(LeaseUnavailable, match="active claim"):
+        control_plane_store.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="concurrent-recovery",
+        )
+
+    reconciliation = control_plane_store.reconcile_outbox(
+        original,
+        observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+    assert reconciliation.status == "pending"
+    assert reconciliation.fencing_token == original.fencing_token
+
+
+def test_indeterminate_effect_dead_letters_without_retry(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="task-indeterminate-model-effect",
+        key="indeterminate-model-effect",
+        effect_type="model.verification_coordinator",
+        payload={"head_sha": "a" * 40},
+        task_payload={
+            "contract_version": "builderops_verification_run.v1",
+            "run": {
+                "coordinator_session_id": None,
+                "context_pack": None,
+            },
+        },
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="provider session identity was not durably observed"
+    )
+    evidence = {
+        "head_sha": "a" * 40,
+        "outcome": "indeterminate_pre_session_model_effect",
+        "provider_session_id": None,
+        "relaunch_performed": False,
+    }
+
+    terminal = control_plane_store.reconcile_outbox(
+        claim,
+        observed_applied=False,
+        terminal_unknown=True,
+        evidence=evidence,
+    )
+    replay = control_plane_store.reconcile_outbox(
+        claim,
+        observed_applied=False,
+        terminal_unknown=True,
+        evidence=evidence,
+    )
+
+    assert terminal.status == "dead_letter"
+    assert replay.status == "dead_letter"
+    assert replay.replayed is True
+    receipt = control_plane_store.receipt(
+        envelope.repository, terminal.receipt_sequence
+    )
+    assert receipt["event_type"] == "outbox.reconciled.dead_letter"
+    assert receipt["recovery_lsn"] == terminal.recovery_lsn
+    with control_plane_store._connect() as conn:
+        dead_letter = conn.execute(
+            "SELECT outcome FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letter is not None
+    assert dead_letter["outcome"] == evidence
+    with pytest.raises(LeaseUnavailable, match="dead_letter"):
+        control_plane_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="replacement-verifier",
+        )
+    with pytest.raises(ValueError, match="cannot claim an applied effect"):
+        control_plane_store.reconcile_outbox(
+            claim,
+            observed_applied=True,
+            terminal_unknown=True,
+            evidence=evidence,
+        )
+
+
+def test_terminal_unknown_rejects_github_effect_without_mutation(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="task-github-effect-cannot-dead-letter",
+        key="github-effect-cannot-dead-letter",
+        effect_type="github.merge",
+        payload={"head_sha": "a" * 40, "pr": 3852},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="merge-executor",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="merge response was not durably observed"
+    )
+
+    with pytest.raises(StateConflict, match="restricted"):
+        control_plane_store.reconcile_outbox(
+            claim,
+            observed_applied=False,
+            terminal_unknown=True,
+            evidence={
+                "head_sha": "a" * 40,
+                "outcome": "indeterminate_pre_session_model_effect",
+                "provider_session_id": None,
+                "relaunch_performed": False,
+            },
+        )
+
+    assert (
+        control_plane_store.outbox_status(envelope.repository, result.operation_key)
+        == "unknown"
+    )
+    with control_plane_store._connect() as conn:
+        dead_letters = conn.execute(
+            "SELECT count(*) AS count FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+        reconciliations = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letters is not None and dead_letters["count"] == 0
+    assert reconciliations is not None and reconciliations["count"] == 0
+
+
+def test_terminal_unknown_requires_exact_model_evidence_without_mutation(
+    control_plane_store, envelope
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id="task-model-effect-exact-evidence",
+        key="model-effect-exact-evidence",
+        effect_type="model.verification_coordinator",
+        payload={"head_sha": "a" * 40},
+        task_payload={
+            "contract_version": "builderops_verification_run.v1",
+            "run": {
+                "coordinator_session_id": None,
+                "context_pack": None,
+            },
+        },
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="provider session identity was not durably observed"
+    )
+    exact = {
+        "head_sha": "a" * 40,
+        "outcome": "indeterminate_pre_session_model_effect",
+        "provider_session_id": None,
+        "relaunch_performed": False,
+    }
+    invalid_evidence = (
+        {key: value for key, value in exact.items() if key != "head_sha"},
+        {**exact, "unexpected": True},
+        {**exact, "head_sha": "b" * 40},
+        {**exact, "provider_session_id": "thread-123"},
+        {**exact, "relaunch_performed": True},
+    )
+
+    for evidence in invalid_evidence:
+        with pytest.raises(StateConflict, match="exact"):
+            control_plane_store.reconcile_outbox(
+                claim,
+                observed_applied=False,
+                terminal_unknown=True,
+                evidence=evidence,
+            )
+
+    assert (
+        control_plane_store.outbox_status(envelope.repository, result.operation_key)
+        == "unknown"
+    )
+    with control_plane_store._connect() as conn:
+        dead_letters = conn.execute(
+            "SELECT count(*) AS count FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+        reconciliations = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letters is not None and dead_letters["count"] == 0
+    assert reconciliations is not None and reconciliations["count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("case", "run_state"),
+    (
+        (
+            "sessionful",
+            {
+                "coordinator_session_id": "01900000-0000-7000-8000-000000000099",
+                "context_pack": {"head_sha": "a" * 40},
+            },
+        ),
+        (
+            "session_without_context",
+            {
+                "coordinator_session_id": "01900000-0000-7000-8000-000000000099",
+                "context_pack": None,
+            },
+        ),
+        (
+            "context_without_session",
+            {
+                "coordinator_session_id": None,
+                "context_pack": {"head_sha": "a" * 40},
+            },
+        ),
+    ),
+)
+def test_terminal_unknown_rejects_session_bound_task_without_mutation(
+    control_plane_store, envelope, case: str, run_state: dict
+) -> None:
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id=f"task-model-effect-{case}",
+        key=f"model-effect-{case}",
+        effect_type="model.verification_coordinator",
+        payload={"head_sha": "a" * 40},
+        task_payload={
+            "contract_version": "builderops_verification_run.v1",
+            "run": run_state,
+        },
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="verification-host",
+    )
+    control_plane_store.mark_effect_unknown(
+        claim, detail="provider session state requires fail-closed recovery"
+    )
+
+    with pytest.raises(StateConflict, match="restricted"):
+        control_plane_store.reconcile_outbox(
+            claim,
+            observed_applied=False,
+            terminal_unknown=True,
+            evidence={
+                "head_sha": "a" * 40,
+                "outcome": "indeterminate_pre_session_model_effect",
+                "provider_session_id": None,
+                "relaunch_performed": False,
+            },
+        )
+
+    assert (
+        control_plane_store.outbox_status(envelope.repository, result.operation_key)
+        == "unknown"
+    )
+    with control_plane_store._connect() as conn:
+        dead_letters = conn.execute(
+            "SELECT count(*) AS count FROM builderops_dead_letters "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+        reconciliations = conn.execute(
+            "SELECT count(*) AS count FROM builderops_outbox_reconciliations "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, result.operation_key),
+        ).fetchone()
+    assert dead_letters is not None and dead_letters["count"] == 0
+    assert reconciliations is not None and reconciliations["count"] == 0
 
 
 @pytest.mark.parametrize(
@@ -205,7 +551,14 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
         )
 
     recovered = type(control_plane_store)(control_plane_store.dsn)
-    orphaned_claim = recovered.outbox_claim(envelope.repository, result.operation_key)
+    _expire_outbox_claim(
+        recovered, envelope.repository, result.operation_key
+    )
+    orphaned_claim = recovered.outbox_claim(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="recovery-executor",
+    )
     assert orphaned_claim.claim_lsn != "0/0"
     claim_receipt = recovered.receipt(envelope.repository, orphaned_claim.receipt_sequence)
     assert claim_receipt["recovery_lsn"] == orphaned_claim.claim_lsn
@@ -254,6 +607,9 @@ def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
 
     recovering = type(control_plane_store)(control_plane_store.dsn)
     contender = type(control_plane_store)(control_plane_store.dsn)
+    _expire_outbox_claim(
+        recovering, envelope.repository, result.operation_key
+    )
     sampling_started = Event()
     release_sampling = Event()
     contender_started = Event()
@@ -267,11 +623,19 @@ def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
     monkeypatch.setattr(recovering, "_flushed_lsn", delayed_flushed_lsn)
 
     def recover_first():
-        return recovering.outbox_claim(envelope.repository, result.operation_key)
+        return recovering.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="recovery-executor",
+        )
 
     def recover_concurrently():
         contender_started.set()
-        return contender.outbox_claim(envelope.repository, result.operation_key)
+        return contender.outbox_claim(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="recovery-executor",
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_future = pool.submit(recover_first)
@@ -281,9 +645,9 @@ def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
         assert contender_future.done() is False
         release_sampling.set()
         first_claim = first_future.result(timeout=10)
-        same_claim = contender_future.result(timeout=10)
+        with pytest.raises(LeaseUnavailable, match="active claim"):
+            contender_future.result(timeout=10)
 
-    assert same_claim == first_claim
     assert first_claim.claim_lsn != "0/0"
     reconciliation = recovering.reconcile_outbox(
         first_claim,
@@ -330,9 +694,13 @@ def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelo
             operation_key=result.operation_key,
             worker_id="replacement-executor",
         )
-    recovered = control_plane_store.outbox_claim(envelope.repository, result.operation_key)
+    recovered = control_plane_store.outbox_claim(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="recovery-executor",
+    )
     assert recovered.operation_key == first.operation_key
-    assert recovered.worker_id == first.worker_id
-    assert recovered.fencing_token == first.fencing_token
-    assert recovered.receipt_sequence == first.receipt_sequence
+    assert recovered.worker_id == "recovery-executor"
+    assert recovered.fencing_token > first.fencing_token
+    assert recovered.receipt_sequence > first.receipt_sequence
     assert control_plane_store.outbox_status(envelope.repository, result.operation_key) == "unknown"

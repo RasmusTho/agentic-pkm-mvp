@@ -77,6 +77,7 @@ def test_store_port_exposes_complete_recovery_and_durability_surface() -> None:
             "idempotency_key",
             "lease",
             "expected_states",
+            "expected_task_version",
             "fault_at",
         ),
         "commit_promotion": (
@@ -103,7 +104,13 @@ def test_store_port_exposes_complete_recovery_and_durability_surface() -> None:
             "fault_at",
         ),
         "effect_eligible": ("self", "claim"),
-        "outbox_claim": ("self", "repository", "operation_key"),
+        "outbox_claim": (
+            "self",
+            "envelope",
+            "operation_key",
+            "worker_id",
+            "claim_ttl_seconds",
+        ),
         "mark_effect_unknown": ("self", "claim", "detail"),
         "outbox_status": ("self", "repository", "operation_key"),
     }

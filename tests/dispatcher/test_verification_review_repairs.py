@@ -249,6 +249,53 @@ def test_declared_high_risk_requires_two_clean_reviews(tmp_path) -> None:
     assert loop.closure_ready()
 
 
+def test_late_blocking_review_revokes_sqlite_adapter_closure(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request(final_review_rounds=2))
+    claimed = state.claim(run.run_id, "host")
+    state.record_attempt(
+        run.run_id,
+        "verification",
+        "verification-1",
+        "terra",
+        "high",
+        {"head": run.head_sha},
+        "passed",
+        {"head_sha": run.head_sha},
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+    loop = VerificationAgentLoop(
+        state,
+        run.run_id,
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+    context = {"head": run.head_sha}
+    for review_number in (1, 2):
+        loop.review(
+            session_id=f"review-{review_number}",
+            capability="sol",
+            reasoning_effort="xhigh",
+            context=context,
+            outcome="clean",
+        )
+    assert loop.closure_ready()
+
+    loop.review(
+        finding_id="F-late",
+        failure_domain="review_code_correctness",
+        mechanism_id="merge-authority",
+        session_id="review-3",
+        capability="sol",
+        reasoning_effort="xhigh",
+        context=context,
+        outcome="blocking",
+    )
+
+    assert not loop.closure_ready()
+
+
 def test_v2_request_retains_conservative_two_review_requirement(tmp_path) -> None:
     payload = request()
     payload["contract_version"] = "verification_dispatch_request.v2"

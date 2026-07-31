@@ -22,6 +22,8 @@ Issue #3603 owns Demerzel review/repair/verification/merge orchestration. PR #36
 and verification-gated merge baseline; later correctness repairs are also on `main`. That baseline
 extends dispatcher SQLite, which ADR-0062 retires as production authority. This task is the migration
 delta for delivered work, not a duplicate orchestrator and not a request to reopen the merged PR.
+The repo-side API/PostgreSQL/outbox adapter and privileged merge-effect fence are now implemented;
+the installed-main Demerzel cycle and its parent-hub receipt remain the final acceptance gate.
 
 ## What This Task Does
 
@@ -46,12 +48,27 @@ delta for delivered work, not a duplicate orchestrator and not a request to reop
 ## Concretely
 
 The delivered #3603 consumer is retained, but its dispatcher store port is replaced by an API client.
-It claims a task bound to issue/PR/SHA, runs its bounded reviewer and repair policy, persists each
-attempt through the API, re-resolves protected-base repo policy plus host credential mapping, binds a
-GitHub-enforced authorization fence over protected-base OID + manifest blob/hash + PR head OID +
-`RepoRef` + credential generation, and submits the gated merge intent through the repo's conditional
-or merge-queue path. The outbox executor reconciles GitHub and commits a readback receipt before
-completion.
+It claims a task bound to issue/PR/SHA, runs its bounded reviewer and repair policy without ambient
+GitHub write credentials, persists each attempt through the API, and commits a distinct exact-head
+`verified`/merge-ready receipt. The host executor then re-resolves protected-base repo policy plus
+host credential mapping, binds a GitHub-enforced authorization fence over protected-base OID +
+manifest blob/hash + PR head OID + `RepoRef` + credential generation, and submits the task-bound
+merge intent through the repo's conditional or merge-queue path. The outbox executor reconciles
+GitHub (including process-loss recovery) and commits a readback receipt before completion.
+For model execution, a sessionless `pending` intent may be claimed once; a `claimed` or `unknown`
+intent without a durable provider session identity is indeterminate, is reconciled to
+`dead_letter`, and never launches a replacement coordinator. The central PostgreSQL authority
+accepts that terminal path only for `model.verification_coordinator` with the exact pre-session
+outcome, null provider session, no-relaunch flag, head SHA matching the scheduled payload, and a
+task payload whose durable session identity and context are both absent. One-sided or empty session
+state fails closed without reconciliation or relaunch.
+GitHub effects remain `unknown` until authoritative GitHub readback reconciles them.
+The merge-ready review frontier is hash-bound to the outbox payload and an
+`builderops_attempt_write_seal.v1` marker in the same task transition that creates the merge
+intent. The task-version compare-and-swap serializes a late blocking review against that intent:
+the blocker wins and the intent is not committed, or the intent wins and PostgreSQL rejects later
+attempt writes for that run. A head takeover clears the seal together with the obsolete effect and
+merge-ready bindings.
 
 ## Why This Matters
 
@@ -92,34 +109,50 @@ weaken them and does not enter Product Runtime.
   its queue-selected base. If the base/manifest changes after final validation or while the
   pre-effect attempt becomes durable, GitHub must reject/invalidate the attempt; without an enforced
   conditional/queue path, direct merge fails closed.
-- A merge receipt binds the exact current SHA and GitHub readback; a local success return is
-  insufficient.
+- Check authority is selected by authenticated `pull_request` workflow-suite identity before
+  same-name/app reruns are reduced. A later `push` or `workflow_dispatch` suite cannot mask a failed
+  PR check in either the consumer or merge executor.
+- A merge receipt binds the exact current SHA, the plan's deterministic non-closing commit
+  title/message, and GitHub commit readback proving that exact text; a local success return or
+  exact-head-only readback is insufficient. Recovery treats `merged=true` with missing or mismatched
+  text as an authority failure before base/manifest drift classification and writes no
+  `terminal_no_effect` or succeeded reconciliation.
+- `terminal_unknown` is not a general executor escape hatch: the API/store rejects it for every
+  GitHub effect and for any verification-model evidence not exactly bound to the scheduled head.
 - Existing CI + review + protection gates are not weakened by autonomous execution.
+- Review authority remains fenced through the privileged effect. The exact current review frontier,
+  its attempt-write seal, and the merge outbox intent commit atomically; a task-version advance
+  invalidates the intent, while a committed seal rejects later review/repair attempts until the run
+  completes or an authorized head takeover establishes a new frontier.
 - Rate limiting/backoff follows the shared API-budget contract; no tight GraphQL polling.
 
 ## Acceptance Criteria
 
-- [ ] The existing verification consumer ingests, claims, heartbeats, records attempts, and resumes
+- [x] The existing verification consumer ingests, claims, heartbeats, records attempts, and resumes
   exclusively through BuilderOps API state, with no dispatcher SQLite ledger.
   Verify: `tests/dispatcher/test_verification_consumer.py::test_consumer_uses_builderops_api_for_durable_state`.
-- [ ] Restart after reviewer/repair success does not repeat a committed attempt and resumes unknown
-  external effects through reconciliation.
+- [x] Restart after reviewer/repair success does not repeat a committed attempt and resumes unknown
+  external effects through reconciliation. A pre-session indeterminate model effect fails closed
+  to a durable dead letter without a second launcher invocation.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_restart_resumes_from_api_receipts_without_duplicate_attempt`.
-- [ ] External-effect eligibility is the locally committed fenced pre-effect attempt (ADR-0062 A1):
+  Verify: `tests/dispatcher/test_verification_recovery.py::test_pre_thread_start_crash_dead_letters_without_relaunch`.
+- [x] External-effect eligibility is the locally committed fenced pre-effect attempt (ADR-0062 A1):
   an uncommitted attempt performs no GitHub/model call, and a crash between claim and attempt-commit
   leaves the external system untouched.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_fenced_attempt_commit_gates_external_effect`.
-- [ ] Merge is rejected for stale SHA, missing required CI/review/protection gate, expired fencing,
+- [x] Merge is rejected for stale SHA, missing required CI/review/protection gate, expired fencing,
   repo scope mismatch, client-vs-protected manifest mismatch, stale base/manifest hash, or host
   credential mapping outside the target `RepoRef` policy.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_revalidates_protected_manifest_and_repo_credential_binding`.
-- [ ] Advancing the protected base or changing/revoking its delivery manifest after final validation
+  Verify: `tests/dispatcher/test_verification_merge.py::test_merge_requires_fixed_non_closing_text_in_transport_and_readback`.
+  Verify: `tests/dispatcher/test_verification_merge.py::test_live_adapter_rejects_green_push_masking_failed_pr_check`.
+- [x] Advancing the protected base or changing/revoking its delivery manifest after final validation
   but before the external effect invalidates the GitHub conditional/merge-group authorization fence
   and performs no merge; a new attempt requires fresh policy, credential, and gate validation.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_rejects_base_or_manifest_change_after_final_validation`.
-- [ ] A timed-out merge reconciles GitHub state before retry and emits one terminal readback receipt.
+- [x] A timed-out merge reconciles GitHub state before retry and emits one terminal readback receipt.
   Verify: `tests/dispatcher/test_verification_merge.py::test_timed_out_merge_reconciles_before_retry`.
-- [ ] Executor credentials are host-local and privileged-scope-only; API/status/logs and all durable
+- [x] Executor credentials are host-local and privileged-scope-only; API/status/logs and all durable
   state/backups contain only non-secret references/scope metadata, never token or model session
   material.
   Verify: `tests/security/test_builderops_executor_credentials.py::test_executor_secrets_are_referenced_not_persisted`.

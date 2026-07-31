@@ -18,11 +18,16 @@ from app.builderops.control_plane.api_models import (
     LeaseClaimRequest,
     LeaseInput,
     OutboxClaimRequest,
+    OutboxRecoverRequest,
+    OutboxReconcileRequest,
+    OutboxUnknownRequest,
     PromotionCommitRequest,
     RecordCommitRequest,
     TaskClaimRequest,
     TaskCompleteRequest,
     TaskHeartbeatRequest,
+    TaskReleaseRequest,
+    TaskTransitionRequest,
 )
 from app.builderops.control_plane.auth import (
     Credential,
@@ -39,6 +44,7 @@ from app.builderops.control_plane.models import (
     Lease,
     LeaseRequired,
     LeaseUnavailable,
+    OutboxClaim,
     StaleFencingToken,
     StateConflict,
     StorePort,
@@ -80,7 +86,9 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
 # raw credential can never satisfy the int check regardless of path.
 _STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
 _STRUCTURAL_SAFE_FIELD_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
-    "fencing_token": frozenset({("lease", "fencing_token")})
+    "fencing_token": frozenset(
+        {("lease", "fencing_token"), ("claim", "fencing_token")}
+    )
 }
 _FORBIDDEN_COMPACT_DURABLE_KEYS = frozenset(
     {
@@ -350,15 +358,61 @@ def _enforce_repo_scope(credential: Credential, repository: str) -> None:
         )
 
 
-def _lease_from_input(repository: str, lease: LeaseInput) -> Lease:
+def _enforce_outbox_principal(
+    intent: Mapping[str, Any], credential: Credential
+) -> None:
+    """Bind recovery and reconciliation to the credential that claimed it."""
+
+    envelope = intent.get("authority_envelope")
+    if (
+        not isinstance(envelope, Mapping)
+        or envelope.get("actor") != credential.principal
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "outbox claim does not belong to the authenticated principal"
+            ),
+        )
+
+
+def _lease_from_input(
+    repository: str, lease: LeaseInput, credential: Credential
+) -> Lease:
     """Reconstruct a fenced :class:`Lease` from client-echoed lease fields."""
+    if lease.holder != credential.principal:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="lease holder is not the authenticated principal",
+        )
     return Lease(
         repository=repository,
         resource_id=lease.resource_id,
-        holder=lease.holder,
+        holder=credential.principal,
         fencing_token=lease.fencing_token,
         expires_at=lease.expires_at,
         lease_kind=lease.lease_kind,
+    )
+
+
+def _outbox_claim_from_input(
+    request: Any, *, repository: str
+) -> OutboxClaim:
+    canonical = canonical_repository(repository)
+    if canonical_repository(request.repository) != canonical:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="outbox claim repository does not match authenticated envelope",
+        )
+    return OutboxClaim(
+        repository=canonical,
+        operation_key=request.operation_key,
+        worker_id=request.worker_id,
+        fencing_token=request.fencing_token,
+        intent_lsn=request.intent_lsn,
+        claim_lsn=request.claim_lsn,
+        receipt_sequence=request.receipt_sequence,
+        expires_at=request.expires_at,
     )
 
 
@@ -604,10 +658,47 @@ def create_app(
                 idempotency_key=request.idempotency_key,
                 request=request.request,
                 ttl_seconds=request.ttl_seconds,
+                require_new_fence=request.require_new_fence,
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return {"result": _transition_response(result), "lease": _lease_response(lease)}
+
+    @application.get("/v1/tasks/{task_id}")
+    async def read_task(
+        task_id: str,
+        repository: str,
+        credential: Credential = Depends(receipt_read),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, repository)
+        try:
+            row = await run_in_threadpool(
+                store.get_task, canonical_repository(repository), task_id
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="task not found"
+            ) from exc
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return dict(row)
+
+    @application.get("/v1/tasks")
+    async def list_tasks(
+        repository: str,
+        task_prefix: str | None = None,
+        credential: Credential = Depends(receipt_read),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, repository)
+        try:
+            rows = await run_in_threadpool(
+                store.list_tasks,
+                canonical_repository(repository),
+                task_prefix=task_prefix,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"tasks": [dict(row) for row in rows]}
 
     @application.post("/v1/tasks/heartbeat")
     async def heartbeat_task(
@@ -622,7 +713,9 @@ def create_app(
             result, lease = await run_in_threadpool(
                 store.heartbeat_lease,
                 envelope=envelope,
-                lease=_lease_from_input(envelope.repository, request.lease),
+                lease=_lease_from_input(
+                    envelope.repository, request.lease, credential
+                ),
                 idempotency_key=request.idempotency_key,
                 request=request.request,
                 ttl_seconds=request.ttl_seconds,
@@ -630,6 +723,85 @@ def create_app(
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return {"result": _transition_response(result), "lease": _lease_response(lease)}
+
+    @application.post("/v1/tasks/release")
+    async def release_task(
+        request: TaskReleaseRequest,
+        credential: Credential = Depends(task_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            envelope = _envelope(request.envelope, credential)
+            result = await run_in_threadpool(
+                store.release_task,
+                envelope=envelope,
+                lease=_lease_from_input(
+                    envelope.repository, request.lease, credential
+                ),
+                expected_version=request.expected_version,
+                idempotency_key=request.idempotency_key,
+                request=request.request,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"result": _transition_response(result)}
+
+    @application.post("/v1/tasks/transition")
+    async def transition_task(
+        request: TaskTransitionRequest,
+        credential: Credential = Depends(task_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            if request.lease is None:
+                if (
+                    request.to_state != "ready"
+                    or request.outbox is not None
+                    or request.expected_states is not None
+                    or request.expected_version is not None
+                ):
+                    raise StateConflict(
+                        "unleased task transition is restricted to initial ready creation"
+                    )
+            elif (
+                request.to_state != "claimed"
+                or request.expected_states != ["claimed"]
+                or request.expected_version is None
+            ):
+                raise StateConflict(
+                    "leased generic transition must retain claimed state with "
+                    "exact state and version guards"
+                )
+            envelope = _envelope(request.envelope, credential)
+            result = await run_in_threadpool(
+                store.commit_transition,
+                envelope=envelope,
+                task_id=request.task_id,
+                to_state=request.to_state,
+                idempotency_key=request.idempotency_key,
+                request=request.request,
+                outbox=request.outbox,
+                lease=(
+                    _lease_from_input(
+                        envelope.repository, request.lease, credential
+                    )
+                    if request.lease is not None
+                    else None
+                ),
+                expected_states=(
+                    tuple(request.expected_states)
+                    if request.expected_states is not None
+                    else None
+                ),
+                expected_version=request.expected_version,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"result": _transition_response(result)}
 
     @application.post("/v1/tasks/complete")
     async def complete_task(
@@ -644,7 +816,10 @@ def create_app(
             result = await run_in_threadpool(
                 store.complete_task,
                 envelope=envelope,
-                lease=_lease_from_input(envelope.repository, request.lease),
+                lease=_lease_from_input(
+                    envelope.repository, request.lease, credential
+                ),
+                expected_version=request.expected_version,
                 idempotency_key=request.idempotency_key,
                 request=request.request,
             )
@@ -670,16 +845,34 @@ def create_app(
                 state=request.state,
                 payload=request.payload,
                 idempotency_key=request.idempotency_key,
-                lease=_lease_from_input(envelope.repository, request.lease),
+                lease=_lease_from_input(
+                    envelope.repository, request.lease, credential
+                ),
                 expected_states=(
                     tuple(request.expected_states)
                     if request.expected_states is not None
                     else None
                 ),
+                expected_task_version=request.expected_task_version,
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return _authority_object_response(result)
+
+    @application.get("/v1/tasks/{task_id}/attempts")
+    async def list_attempts(
+        task_id: str,
+        repository: str,
+        credential: Credential = Depends(receipt_read),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, repository)
+        try:
+            rows = await run_in_threadpool(
+                store.list_attempts, canonical_repository(repository), task_id
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"attempts": [dict(row) for row in rows]}
 
     @application.post("/v1/promotions")
     async def commit_promotion(
@@ -699,7 +892,9 @@ def create_app(
                 payload=request.payload,
                 idempotency_key=request.idempotency_key,
                 lease=(
-                    _lease_from_input(envelope.repository, request.lease)
+                    _lease_from_input(
+                        envelope.repository, request.lease, credential
+                    )
                     if request.lease is not None
                     else None
                 ),
@@ -784,6 +979,12 @@ def create_app(
                 worker_id=request.worker_id,
                 claim_ttl_seconds=request.claim_ttl_seconds,
             )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            eligible = await run_in_threadpool(store.effect_eligible, claim)
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return {
@@ -795,6 +996,152 @@ def create_app(
             "claim_lsn": claim.claim_lsn,
             "receipt_sequence": claim.receipt_sequence,
             "expires_at": claim.expires_at.isoformat(),
+            "task_id": intent["task_id"],
+            "effect_type": intent["effect_type"],
+            "payload": intent["payload"],
+            "effect_eligible": eligible,
+        }
+
+    @application.post("/v1/executor/outbox/unknown")
+    async def mark_outbox_unknown(
+        request: OutboxUnknownRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            claim = _outbox_claim_from_input(
+                request.claim, repository=request.envelope.repository
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
+            await run_in_threadpool(
+                store.mark_effect_unknown,
+                claim,
+                detail=request.detail,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {"status": "unknown"}
+
+    @application.post("/v1/executor/outbox/recover")
+    async def recover_outbox(
+        request: OutboxRecoverRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(
+                request.model_dump(mode="json"), credentials
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                request.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
+            claim = await run_in_threadpool(
+                store.outbox_claim,
+                envelope=_envelope(request.envelope, credential),
+                operation_key=request.operation_key,
+                worker_id=request.worker_id,
+                claim_ttl_seconds=request.claim_ttl_seconds,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {
+            "repository": claim.repository,
+            "operation_key": claim.operation_key,
+            "worker_id": claim.worker_id,
+            "fencing_token": claim.fencing_token,
+            "intent_lsn": claim.intent_lsn,
+            "claim_lsn": claim.claim_lsn,
+            "receipt_sequence": claim.receipt_sequence,
+            "expires_at": claim.expires_at.isoformat(),
+            "task_id": intent["task_id"],
+            "effect_type": intent["effect_type"],
+            "payload": intent["payload"],
+        }
+
+    @application.get("/v1/executor/outbox/{operation_key}")
+    async def read_outbox_status(
+        operation_key: str,
+        repository: str,
+        credential: Credential = Depends(outbox_write),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, repository)
+        try:
+            canonical = canonical_repository(repository)
+            outbox_status = await run_in_threadpool(
+                store.outbox_status, canonical, operation_key
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent, canonical, operation_key
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="outbox intent not found",
+            ) from exc
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {
+            "repository": canonical,
+            "operation_key": operation_key,
+            "status": outbox_status,
+            "task_id": intent["task_id"],
+            "effect_type": intent["effect_type"],
+            "payload": intent["payload"],
+            "reconciliation_evidence": intent.get("reconciliation_evidence"),
+            "reconciliation_receipt_sequence": intent.get(
+                "reconciliation_receipt_sequence"
+            ),
+        }
+
+    @application.post("/v1/executor/outbox/reconcile")
+    async def reconcile_outbox(
+        request: OutboxReconcileRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            claim = _outbox_claim_from_input(
+                request.claim, repository=request.envelope.repository
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
+            result = await run_in_threadpool(
+                store.reconcile_outbox,
+                claim,
+                observed_applied=request.observed_applied,
+                terminal_unknown=request.terminal_unknown,
+                evidence=request.evidence,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {
+            "repository": result.repository,
+            "operation_key": result.operation_key,
+            "task_id": result.task_id,
+            "status": result.status,
+            "worker_id": result.worker_id,
+            "fencing_token": result.fencing_token,
+            "claim_receipt_sequence": result.claim_receipt_sequence,
+            "receipt_sequence": result.receipt_sequence,
+            "recovery_lsn": result.recovery_lsn,
+            "replayed": result.replayed,
         }
 
     return application

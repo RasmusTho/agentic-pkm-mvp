@@ -61,7 +61,28 @@ def test_repository_case_aliases_share_one_authority_namespace(
         worker_id="case-stable-executor",
     )
     assert control_plane_store.outbox_status(raw_alias, first.operation_key) == "claimed"
-    assert control_plane_store.outbox_claim(raw_alias, first.operation_key) == outbox_claim
+    with pytest.raises(LeaseUnavailable, match="active claim"):
+        control_plane_store.outbox_claim(
+            envelope=mixed_case,
+            operation_key=first.operation_key,
+            worker_id="case-stable-recovery",
+        )
+    with control_plane_store._connect() as conn:
+        conn.execute(
+            "UPDATE builderops_outbox SET claim_expires_at = "
+            "clock_timestamp() - interval '1 second' "
+            "WHERE repository = %s AND operation_key = %s",
+            (envelope.repository, first.operation_key),
+        )
+    recovered_claim = control_plane_store.outbox_claim(
+        envelope=mixed_case,
+        operation_key=first.operation_key,
+        worker_id="case-stable-recovery",
+    )
+    assert recovered_claim.operation_key == outbox_claim.operation_key
+    assert recovered_claim.worker_id == "case-stable-recovery"
+    assert recovered_claim.fencing_token > outbox_claim.fencing_token
+    assert recovered_claim.receipt_sequence > outbox_claim.receipt_sequence
     assert control_plane_store.outbox_status(raw_alias, first.operation_key) == "unknown"
 
     record = control_plane_store.commit_record(

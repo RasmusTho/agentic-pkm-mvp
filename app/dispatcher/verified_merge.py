@@ -32,6 +32,10 @@ VERIFIED_MERGE_AUTHORITY_MARKER = "verified issue-set merge authority:"
 VERIFIED_MERGE_PHASE_CONTRACT = "verified_issue_set_merge_phase.v1"
 VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
 VERIFIED_MERGE_READINESS_CONTRACT = "verified_issue_set_merge_readiness.v1"
+FIXED_VERIFIED_MERGE_COMMIT_MESSAGE = (
+    "Exact-head delivery; issue closure is performed explicitly from the "
+    "authenticated issue-set receipt."
+)
 NEUTRALIZED_BODY_RESTORATION_CONTRACT = (
     "verified_issue_set_neutralized_body_restoration.v1"
 )
@@ -44,6 +48,14 @@ _CANONICAL_UTC_TIMESTAMP_PATTERN = re.compile(
 _TRUSTED_AUTHOR_ASSOCIATIONS: Final = frozenset(
     {"OWNER", "MEMBER", "COLLABORATOR"}
 )
+
+
+def fixed_verified_merge_commit_title(pr_number: object) -> str:
+    if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number < 1:
+        raise ValueError("verified merge PR number is malformed")
+    return f"PR #{pr_number} verified delivery"
+
+
 _PHASES: Final = ("prepared", "merged", "reconciled", "restored")
 _LEGACY_TERMINAL_LF_CUTOFF: Final = datetime(
     2026, 7, 21, 16, 32, 11, tzinfo=timezone.utc
@@ -1139,11 +1151,8 @@ def prepare_verified_merge(
         "authority_receipt_comment": (
             f"{VERIFIED_MERGE_AUTHORITY_MARKER}\n```json\n{receipt_json}\n```"
         ),
-        "fixed_commit_message": (
-            "Exact-head delivery; issue closure is performed explicitly from the "
-            "authenticated issue-set receipt."
-        ),
-        "fixed_commit_title": f"PR #{pr_number} verified delivery",
+        "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+        "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
         "neutralized_body": neutralized_body,
         "original_body": body,
     }

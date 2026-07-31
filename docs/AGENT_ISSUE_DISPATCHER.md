@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-07-17
-Last verified against: #3821, PR #3949 delivery diff, `app/dispatcher/schema.py`, `app/dispatcher/verification_dispatch.py`, `app/dispatcher/verification_consumer.py`, `app/dispatcher/verified_merge.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
+Last reviewed: 2026-07-30
+Last verified against: #3603 BCP-05 migration branch, `app/dispatcher/verification_api.py`, `app/dispatcher/verification_merge.py`, `app/dispatcher/verification_consumer.py`, `app/builderops/control_plane/{client,service,store}.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -35,22 +35,32 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Three adoption receipts verified and logged on parent feature issue (#636).
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
 
-**Verification dispatch consumer: SHIPPED IN REPO (host enablement is separate)**
+**Verification dispatch consumer: API MIGRATION SHIPPED IN REPO (installed-main pilot pending)**
 
 - The artifact-only producer, ledger, and host-local consumer authenticate the same `CI Smoke`
   pull-request source workflow at `.github/workflows/ci-smoke.yaml`; a retired `CI` identity or
   mismatched path is rejected before verification work can start.
 
-- `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
-  idempotent PR/head verification runs, one global active subscription slot, exact lease-token
-  fencing, durable retry timestamps, attempts, receipts, and deduplicated Human Exception packets.
-  `SCHEMA_VERSION = 6`: schema v4 assigns new runs repair-budget policy `v2`; schema v5 adds the
-  exact `closing_authority_json` projection; and schema v6 adds immutable same-head legacy-recovery
-  audit. Each additive migration validates the complete inherited schema before committing its
-  marker and never resets or reinterprets an attempt or consumed 2+2 repair budget.
-- Initial verification claims acquire the authoritative SQLite write lock before sampling both
-  eligibility time and lease expiry. Token-authorized mutations use the same post-lock authority
-  clock, so lock waits cannot create already-expired leases or revive expired coordinators.
+- `app.dispatcher.verification_api.BuilderOpsVerificationLedger` is the production durable port:
+  runs are BuilderOps tasks, review/repair/verification events are BuilderOps attempts, and every
+  model or merge effect first commits a task/receipt/outbox intent through the authenticated API.
+  Claims, heartbeats, retry state, terminal receipts, and restart recovery use the same PostgreSQL
+  authority epoch and fencing tokens. The adapter has no SQLite/PostgreSQL/filesystem store access
+  and fails closed when either API or privileged outbox execution is unavailable.
+- `app.dispatcher.verification_dispatch.VerificationDispatchLedger` and dispatcher schema v6 remain
+  as the delivered #3620 compatibility/import and test baseline until BCP-06 retires legacy
+  producers. They are not selected by `verification-ingest` or `verification-status`; the detailed
+  SQLite lifecycle paragraphs below document that preserved legacy behavior and migration evidence,
+  not the new production authority port. Its compatibility marker remains `SCHEMA_VERSION = 6`.
+- `app.dispatcher.verification_merge.VerificationMergeExecutor` re-resolves the protected base,
+  repository delivery-manifest blob/hash, exact PR head, required gates, and host credential
+  generation after the durable intent and before a GitHub-enforced conditional/merge-queue effect.
+  In the API-backed lane the closer has uncredentialed GitHub/git mutation configuration and may
+  emit only a distinct `verified` receipt; the exact run/repo/PR/head, issue sets, review anchor,
+  final-round count, and repair-budget projection are committed as `builderops_merge_ready.v1`.
+  The host executor is the only merge authority. It keeps raw credentials host-local, binds its
+  operation in task metadata, and records exact-head GitHub readback or crash recovery through
+  outbox reconciliation before success or retry.
 - `app.dispatcher.verification_consumer` re-fetches live PR/check truth, requires a successful
   ChatGPT/keyring auth preflight, builds a minimal immutable context pack, and launches only the
   registered `verification_closer` adapter with its pinned model, reasoning, sandbox, and developer
@@ -390,8 +400,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   receipt, or a receipt for another PR is not one, and verification cannot emit its delivery receipt
   until every required owner-doc receipt is read back.
 
-- `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
-  Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
+- `verification-ingest` and `verification-status` are host-neutral command names backed exclusively
+  by the authenticated BuilderOps API. They require explicit RepoRef plus host-owned API
+  configuration and create no dispatcher SQLite authority when the service is unavailable. The
+  Demerzel enable/disable/poll wrapper, scoped credentials, and service configuration remain
+  host-local outside Git.
 - GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond
   `.codex/skills/verification-and-closure/SKILL.md`.
 
@@ -400,6 +413,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 | Surface | Role in MVP | Authority |
 | --- | --- | --- |
 | GitHub Issues / PRs / CI | Durable delivery lifecycle and merge truth | Hard authority |
+| BuilderOps API / PostgreSQL / outbox | Verification runs, attempts, fenced external-effect intents, and readback receipts | BuilderOps execution authority |
 | Dispatcher SQLite | Volatile operational coordination (queue, claims, leases, heartbeats, local progress) | Operational authority only |
 | external BuilderOps Vault | Durable BuilderOps Markdown artifacts plus shared advisory TTL claims; never SQLite or authoritative leases | BuilderOps artifact authority |
 | GitHub Project / Signboard / external boards | Human-facing views | Optional projection, not hot path |

@@ -872,12 +872,16 @@ def _check(
         "conclusion": conclusion,
     }
     if app_slug is not None:
-        check["app"] = {"slug": app_slug}
+        check["app"] = {
+            "id": 7 if app_slug == "github-actions" else 999,
+            "slug": app_slug,
+        }
     if suite_id is not None:
         check["check_suite"] = {"id": suite_id}
     if workflow_path is not None:
         check["workflow_run"] = {
             "id": 1000 + check_id,
+            "workflow_id": 198962230,
             "path": workflow_path,
             "event": workflow_event,
             "head_sha": workflow_head_sha,
@@ -1140,6 +1144,53 @@ def test_required_check_accepts_latest_authoritative_workflow_rerun() -> None:
     ]
 
     assert _checks_rejection(checks, expected_head_sha=HEAD) is None
+
+
+def test_repo_standard_check_rejects_green_push_masking_failed_pr_run() -> None:
+    failed_pr = {
+        "id": 30,
+        "name": "Docs Guard",
+        "app": {"id": 7, "slug": "github-actions"},
+        "check_suite": {"id": 130},
+        "workflow_run": {
+            "id": 1130,
+            "workflow_id": 198962231,
+            "path": ".github/workflows/docs-guard.yml",
+            "event": "pull_request",
+            "head_sha": HEAD,
+            "check_suite_id": 130,
+        },
+        "status": "completed",
+        "conclusion": "failure",
+    }
+    green_push = {
+        "id": 31,
+        "name": "Docs Guard",
+        "app": {"id": 7, "slug": "github-actions"},
+        "check_suite": {"id": 131},
+        "workflow_run": {
+            "id": 1131,
+            "workflow_id": 198962231,
+            "path": ".github/workflows/docs-guard.yml",
+            "event": "push",
+            "head_sha": HEAD,
+            "check_suite_id": 131,
+        },
+        "status": "completed",
+        "conclusion": "success",
+    }
+
+    assert (
+        _checks_rejection(
+            [
+                _check(check_id=29, conclusion="success", suite_id=129),
+                failed_pr,
+                green_push,
+            ],
+            expected_head_sha=HEAD,
+        )
+        == "checks_not_green"
+    )
 
 
 @pytest.mark.parametrize(

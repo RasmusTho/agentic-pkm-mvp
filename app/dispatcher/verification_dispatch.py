@@ -2455,8 +2455,6 @@ class VerificationDispatchLedger:
             if row["kind"] == "review"
             and isinstance(row["receipt"], Mapping)
             and row["receipt"].get("reviewed_attempt_id") == final_anchor
-            and row["receipt"].get("head_sha") == current_head_sha
-            and row["outcome"] == "clean"
         ]
         request_row = conn.execute(
             "SELECT request_json FROM verification_runs WHERE run_id=?", (run_id,)
@@ -2536,9 +2534,18 @@ class VerificationDispatchLedger:
                 == final_key
             ):
                 required_reviews = 2
+        selected_reviews = reviews[-required_reviews:]
+        for review in selected_reviews:
+            receipt = review["receipt"]
+            if (
+                not isinstance(receipt, Mapping)
+                or receipt.get("head_sha") != current_head_sha
+            ):
+                return False
         return (
             len(reviews) >= required_reviews
-            and len({row["session_id"] for row in reviews[-required_reviews:]})
+            and all(row["outcome"] == "clean" for row in reviews)
+            and len({row["session_id"] for row in selected_reviews})
             == required_reviews
         )
 

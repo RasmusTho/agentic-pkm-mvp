@@ -327,6 +327,7 @@ _MAX_ARTIFACT_LISTING_ROWS = 1_000
 # runs from that window, which scales with current dispatch *rate*, not with
 # all-time repository history.
 _MAX_VERIFICATION_REQUEST_RUN_ROWS = 1_000
+_MAX_GITHUB_CHECK_AUTHORITY_ROWS = 1_000
 _VERIFICATION_REQUEST_RUN_LOOKBACK = timedelta(hours=48)
 _MAX_REQUEST_BYTES = 1_000_000
 _MAX_CLOSURE_CANDIDATES = 20
@@ -471,11 +472,11 @@ def validate_verification_closer_receipt(
         raise jsonschema.ValidationError(
             "only a needs_human receipt may carry a Human Exception packet"
         )
-    if receipt.get("verdict") == "delivered" and (
+    if receipt.get("verdict") in {"verified", "delivered"} and (
         not isinstance(review_events, list) or len(review_events) < 1
     ):
         raise jsonschema.ValidationError(
-            "a delivered receipt requires at least one review event"
+            "a verified or delivered receipt requires at least one review event"
         )
     if not isinstance(review_events, list):
         return
@@ -717,6 +718,141 @@ class GhCliVerificationSource:
                     raise RuntimeError("GitHub workflow run listing is incomplete")
                 return rows
         raise RuntimeError("GitHub workflow run listing exceeds bounded scan")
+
+    def _counted_mapping_pages(
+        self,
+        endpoint: str,
+        *,
+        collection_key: str,
+        label: str,
+        limit: int = _MAX_GITHUB_CHECK_AUTHORITY_ROWS,
+    ) -> list[Mapping[str, object]]:
+        """Read a bounded GitHub counted listing only when it is complete."""
+
+        rows: list[Mapping[str, object]] = []
+        seen_ids: set[int] = set()
+        expected_total: int | None = None
+        separator = "&" if "?" in endpoint else "?"
+        for page in range(1, (limit // 100) + 1):
+            page_endpoint = (
+                endpoint if page == 1 else f"{endpoint}{separator}page={page}"
+            )
+            payload = self._json(page_endpoint)
+            batch = (
+                payload.get(collection_key)
+                if isinstance(payload, Mapping)
+                else None
+            )
+            total = (
+                payload.get("total_count")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            if (
+                not isinstance(batch, list)
+                or not isinstance(total, int)
+                or isinstance(total, bool)
+                or total < 0
+                or len(batch) > 100
+                or any(not isinstance(row, Mapping) for row in batch)
+            ):
+                raise RuntimeError(f"malformed GitHub {label} response")
+            if expected_total is None:
+                expected_total = total
+                if expected_total > limit:
+                    raise RuntimeError(
+                        f"GitHub {label} listing exceeds bounded scan"
+                    )
+            elif total != expected_total:
+                raise RuntimeError(
+                    f"GitHub {label} total changed during bounded scan"
+                )
+            for row in batch:
+                assert isinstance(row, Mapping)
+                row_id = row.get("id")
+                if (
+                    not isinstance(row_id, int)
+                    or isinstance(row_id, bool)
+                    or row_id <= 0
+                    or row_id in seen_ids
+                ):
+                    raise RuntimeError(
+                        f"malformed GitHub {label} response"
+                    )
+                seen_ids.add(row_id)
+                rows.append(row)
+            if len(rows) > expected_total:
+                raise RuntimeError(f"malformed GitHub {label} response")
+            if len(rows) == expected_total:
+                return rows
+            if len(batch) < 100:
+                raise RuntimeError(f"GitHub {label} listing is incomplete")
+        raise RuntimeError(f"GitHub {label} listing exceeds bounded scan")
+
+    def _workflow_rows_by_suite(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        head_sha: str,
+    ) -> dict[int, Mapping[str, object]]:
+        """Resolve one unambiguous exact-head workflow run per suite."""
+
+        candidates_by_suite: dict[int, list[Mapping[str, object]]] = {}
+        for row in rows:
+            suite_id = row.get("check_suite_id")
+            workflow_id = row.get("workflow_id")
+            path = row.get("path")
+            event = row.get("event")
+            run_attempt = row.get("run_attempt")
+            if (
+                not isinstance(suite_id, int)
+                or isinstance(suite_id, bool)
+                or suite_id <= 0
+                or not isinstance(workflow_id, int)
+                or isinstance(workflow_id, bool)
+                or workflow_id <= 0
+                or not isinstance(path, str)
+                or not path
+                or not isinstance(event, str)
+                or not event
+                or row.get("head_sha") != head_sha
+                or not isinstance(run_attempt, int)
+                or isinstance(run_attempt, bool)
+                or run_attempt <= 0
+            ):
+                raise RuntimeError(
+                    "GitHub workflow-suite provenance is malformed"
+                )
+            candidates_by_suite.setdefault(suite_id, []).append(row)
+
+        resolved: dict[int, Mapping[str, object]] = {}
+        for suite_id, candidates in candidates_by_suite.items():
+            if len(candidates) > 1:
+                identities = {
+                    (
+                        candidate.get("workflow_id"),
+                        candidate.get("path"),
+                        candidate.get("event"),
+                        candidate.get("head_sha"),
+                        candidate.get("check_suite_id"),
+                    )
+                    for candidate in candidates
+                }
+                attempts = [
+                    candidate.get("run_attempt") for candidate in candidates
+                ]
+                if (
+                    len(identities) != 1
+                    or len(set(attempts)) != len(attempts)
+                ):
+                    raise RuntimeError(
+                        "GitHub workflow-suite provenance is ambiguous"
+                    )
+            resolved[suite_id] = max(
+                candidates,
+                key=lambda candidate: cast(int, candidate["run_attempt"]),
+            )
+        return resolved
 
     def _artifact_bytes(self, endpoint: str, artifact_id: int) -> bytes:
         if self.runner is not subprocess.run:
@@ -1611,43 +1747,75 @@ class GhCliVerificationSource:
         }
 
     def checks(self, repository: str, head_sha: str) -> Sequence[Mapping[str, object]]:
-        payload = self._json(f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100")
-        if not isinstance(payload, Mapping) or not isinstance(payload.get("check_runs"), list):
-            raise RuntimeError("malformed GitHub check-runs response")
-        workflow_payload = self._json(
-            f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100"
+        check_rows = self._counted_mapping_pages(
+            f"repos/{repository}/commits/{head_sha}/check-runs"
+            "?per_page=100&filter=all",
+            collection_key="check_runs",
+            label="check-runs",
         )
-        if not isinstance(workflow_payload, Mapping) or not isinstance(
-            workflow_payload.get("workflow_runs"), list
-        ):
-            raise RuntimeError("malformed GitHub workflow-runs response")
-        workflows_by_suite: dict[int, list[Mapping[str, object]]] = {}
-        for workflow in workflow_payload["workflow_runs"]:
-            if not isinstance(workflow, Mapping):
-                continue
-            suite_id = workflow.get("check_suite_id")
-            if (
-                not isinstance(suite_id, int)
-                or isinstance(suite_id, bool)
-                or workflow.get("head_sha") != head_sha
-            ):
-                continue
-            workflows_by_suite.setdefault(suite_id, []).append(workflow)
+        workflow_rows = self._counted_mapping_pages(
+            f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100",
+            collection_key="workflow_runs",
+            label="workflow-runs",
+        )
+        workflows_by_suite = self._workflow_rows_by_suite(
+            workflow_rows,
+            head_sha=head_sha,
+        )
 
         checks: list[Mapping[str, object]] = []
-        for row in payload["check_runs"]:
-            if not isinstance(row, Mapping):
-                continue
+        for row in check_rows:
+            name = row.get("name")
+            app = row.get("app")
+            app_slug = app.get("slug") if isinstance(app, Mapping) else None
+            app_id = app.get("id") if isinstance(app, Mapping) else None
+            status = row.get("status")
+            conclusion = row.get("conclusion")
             authenticated = dict(row)
             authenticated.pop("workflow_run", None)
             suite_id = _nested(row, "check_suite", "id")
-            candidates = (
-                workflows_by_suite.get(suite_id, [])
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(app, Mapping)
+                or not isinstance(app_id, int)
+                or isinstance(app_id, bool)
+                or app_id <= 0
+                or (
+                    app_slug is not None
+                    and (
+                        not isinstance(app_slug, str)
+                        or not app_slug
+                    )
+                )
+                or not isinstance(status, str)
+                or not status
+                or (
+                    conclusion is not None
+                    and not isinstance(conclusion, str)
+                )
+            ):
+                raise RuntimeError(
+                    "GitHub check-run evidence is malformed"
+                )
+            if (
+                app_slug == "github-actions"
+                and (
+                    not isinstance(suite_id, int)
+                    or isinstance(suite_id, bool)
+                    or suite_id <= 0
+                    or suite_id not in workflows_by_suite
+                )
+            ):
+                raise RuntimeError(
+                    "GitHub Actions check-suite evidence is malformed"
+                )
+            workflow = (
+                workflows_by_suite.get(suite_id)
                 if isinstance(suite_id, int) and not isinstance(suite_id, bool)
-                else []
+                else None
             )
-            if len(candidates) == 1:
-                workflow = candidates[0]
+            if isinstance(workflow, Mapping):
                 authenticated["workflow_run"] = {
                     "id": workflow.get("id"),
                     "workflow_id": workflow.get("workflow_id"),
@@ -1815,7 +1983,7 @@ _SAFE_EVENT_OUTCOMES = frozenset(
     {"blocking", "clean", "fixed", "repaired", "unrecognized-outcome"}
 )
 _SAFE_RECEIPT_VERDICTS = frozenset(
-    {"delivered", "blocked", "needs_human", "retry"}
+    {"verified", "delivered", "blocked", "needs_human", "retry"}
 )
 _SAFE_REVIEW_EVENT_KINDS = frozenset({"repair", "review"})
 _CANONICAL_HUMAN_ACTION_COPY = {
@@ -2567,7 +2735,12 @@ class CodexExecLauncher:
             developer_instructions=instructions.strip(),
         )
 
-    def command(self, resume_session_id: str | None = None) -> list[str]:
+    def command(
+        self,
+        resume_session_id: str | None = None,
+        *,
+        host_fenced_merge: bool = False,
+    ) -> list[str]:
         command = [
             "codex",
             "exec",
@@ -2581,14 +2754,67 @@ class CodexExecLauncher:
             "--output-schema",
             str(self.receipt_schema),
         ]
+        if host_fenced_merge:
+            source_codex_home = Path(
+                os.environ.get("CODEX_HOME")
+                or Path(os.environ.get("HOME", "")) / ".codex"
+            )
+            try:
+                source_config = tomllib.loads(
+                    (source_codex_home / "config.toml").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                login_method = source_config["forced_login_method"]
+                credential_store = source_config[
+                    "cli_auth_credentials_store"
+                ]
+            except (
+                OSError,
+                KeyError,
+                TypeError,
+                tomllib.TOMLDecodeError,
+            ) as exc:
+                raise RuntimeError(
+                    "host-fenced Codex auth profile is unavailable"
+                ) from exc
+            if (
+                login_method != "chatgpt"
+                or credential_store != "keyring"
+            ):
+                raise RuntimeError(
+                    "host-fenced Codex auth profile changed after preflight"
+                )
+            command += [
+                "--ignore-user-config",
+                "-c",
+                f"forced_login_method={json.dumps(login_method)}",
+                "-c",
+                (
+                    "cli_auth_credentials_store="
+                    f"{json.dumps(credential_store)}"
+                ),
+                "--disable",
+                "js_repl",
+                "--disable",
+                "multi_agent",
+            ]
         if resume_session_id:
             command += ["resume", resume_session_id]
+        fenced_instruction = (
+            "\nThis run uses host_fenced_executor mode. Perform no GitHub "
+            "mutation and return verdict verified after the local "
+            "verification/review gates."
+            if host_fenced_merge
+            else ""
+        )
         return command + [
             f"Use the registered {self.config.adapter_name} adapter.\n"
             f"{self.config.developer_instructions}\n"
             "Read the immutable "
             f"dispatch context at {self.context_path}; load and obey "
             ".codex/skills/verification-and-closure/SKILL.md."
+            f"{fenced_instruction}"
         ]
 
     def launch(
@@ -2612,7 +2838,27 @@ class CodexExecLauncher:
         self.context_path.write_text(
             json.dumps(context_pack, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
+        host_fenced_merge = (
+            context_pack.get("merge_execution_mode")
+            == "host_fenced_executor"
+        )
         base_env = _coordinator_environment(os.environ)
+        if host_fenced_merge:
+            # Remove ambient gh/git mutation authority from the model child.
+            # The host has already supplied authenticated read snapshots and
+            # owns the separately fenced merge effect.
+            gh_config = self.context_path.parent / "gh-uncredentialed"
+            gh_config.mkdir(mode=0o700, parents=True, exist_ok=True)
+            base_env.update(
+                {
+                    "GH_CONFIG_DIR": str(gh_config),
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_ASKPASS": "/usr/bin/false",
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "GIT_SSH_COMMAND": "/usr/bin/false",
+                }
+            )
         try:
             containment = self.containment_factory()
             cleanup_tracker = (
@@ -2744,7 +2990,12 @@ class CodexExecLauncher:
 
         if self.runner is subprocess.run:
             process = subprocess.Popen(
-                self.command(resume_session_id), cwd=self.worktree, env=env,
+                self.command(
+                    resume_session_id,
+                    host_fenced_merge=host_fenced_merge,
+                ),
+                cwd=self.worktree,
+                env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 start_new_session=True,
             )
@@ -2824,7 +3075,12 @@ class CodexExecLauncher:
                     ) from None
         else:
             result = self.runner(
-                self.command(resume_session_id), cwd=self.worktree, env=env,
+                self.command(
+                    resume_session_id,
+                    host_fenced_merge=host_fenced_merge,
+                ),
+                cwd=self.worktree,
+                env=env,
                 capture_output=True, text=True, check=False,
             )
             lines = result.stdout.splitlines()
@@ -3229,26 +3485,69 @@ def _checks_rejection(
     if not checks:
         return "missing_checks"
     required_checks = {"Unit tests (not pg)": ".github/workflows/ci-smoke.yaml"}
-    latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
+    latest: dict[
+        tuple[str, str],
+        tuple[tuple[int, str, int], Mapping[str, object]],
+    ] = {}
     for index, check in enumerate(checks):
         name = check.get("name")
         required_workflow = required_checks.get(name) if isinstance(name, str) else None
-        if required_workflow is not None:
+        if (
+            _nested(check, "app", "slug") == "github-actions"
+            or required_workflow is not None
+        ):
             suite_id = _nested(check, "check_suite", "id")
             workflow_run_id = _nested(check, "workflow_run", "id")
+            workflow_id = _nested(check, "workflow_run", "workflow_id")
+            workflow_path = _nested(check, "workflow_run", "path")
             if (
                 _nested(check, "app", "slug") != "github-actions"
                 or not isinstance(suite_id, int)
                 or isinstance(suite_id, bool)
                 or not isinstance(workflow_run_id, int)
                 or isinstance(workflow_run_id, bool)
+                or not isinstance(workflow_id, int)
+                or isinstance(workflow_id, bool)
+                or workflow_id <= 0
+                or not isinstance(workflow_path, str)
+                or not workflow_path
                 or _nested(check, "workflow_run", "check_suite_id") != suite_id
-                or _nested(check, "workflow_run", "path") != required_workflow
                 or _nested(check, "workflow_run", "event") != "pull_request"
                 or _nested(check, "workflow_run", "head_sha") != expected_head_sha
+                or (
+                    required_workflow is not None
+                    and _nested(check, "workflow_run", "path")
+                    != required_workflow
+                )
             ):
                 continue
-        key = name if isinstance(name, str) and name else f"__unnamed_{index}"
+        key_name = (
+            name
+            if isinstance(name, str) and name
+            else f"__unnamed_{index}"
+        )
+        app_slug = _nested(check, "app", "slug")
+        app_id = _nested(check, "app", "id")
+        workflow_id = _nested(check, "workflow_run", "workflow_id")
+        workflow_path = _nested(check, "workflow_run", "path")
+        app_identity = (
+            (
+                f"slug:{app_slug}|id:"
+                f"{app_id if isinstance(app_id, int) and not isinstance(app_id, bool) else 'unknown'}"
+                + (
+                    f"|workflow:{workflow_id}|path:{workflow_path}"
+                    if app_slug == "github-actions"
+                    else ""
+                )
+            )
+            if isinstance(app_slug, str) and app_slug
+            else (
+                f"slug:unknown|id:{app_id}"
+                if isinstance(app_id, int) and not isinstance(app_id, bool)
+                else f"unknown:{index}"
+            )
+        )
+        key = (key_name, app_identity)
         check_id = check.get("id")
         rank = (
             check_id if isinstance(check_id, int) and not isinstance(check_id, bool) else -1,
@@ -3257,11 +3556,20 @@ def _checks_rejection(
         )
         if key not in latest or rank > latest[key][0]:
             latest[key] = (rank, check)
-    if not required_checks.keys() <= latest.keys():
-        return "missing_checks"
-    for required in required_checks:
-        check = latest[required][1]
-        if check.get("status") != "completed" or check.get("conclusion") != "success":
+    for required_name in required_checks:
+        candidates = [
+            check
+            for (name, app_identity), (_rank, check) in latest.items()
+            if name == required_name
+            and app_identity.startswith("slug:github-actions|id:")
+        ]
+        if not candidates:
+            return "missing_checks"
+        if not any(
+            check.get("status") == "completed"
+            and check.get("conclusion") == "success"
+            for check in candidates
+        ):
             return "checks_not_green"
     for _, check in latest.values():
         if check.get("status") != "completed" or check.get("conclusion") not in {
@@ -3380,6 +3688,9 @@ class VerificationConsumer:
             ledger, truth, auth, launcher, holder
         )
         self.receipt_schema = receipt_schema or CANONICAL_RECEIPT_SCHEMA_PATH
+        self.host_fenced_merge = callable(
+            getattr(ledger, "mark_merge_ready", None)
+        )
 
     @staticmethod
     def _lease_is_live(run: VerificationRun) -> bool:
@@ -3708,10 +4019,21 @@ class VerificationConsumer:
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
-        return self._launch_after_open_neutralized_fence(claimed)
+        recovered_key, recovered_attempt = (
+            self._recover_sessionful_model_effect(run)
+        )
+        return self._launch_after_open_neutralized_fence(
+            claimed,
+            recovered_effect_operation_key=recovered_key,
+            recovered_attempt=recovered_attempt,
+        )
 
     def _launch_after_open_neutralized_fence(
-        self, claimed: VerificationRun
+        self,
+        claimed: VerificationRun,
+        *,
+        recovered_effect_operation_key: str | None = None,
+        recovered_attempt: Mapping[str, object] | None = None,
     ) -> VerificationRun:
         try:
             pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
@@ -3736,6 +4058,10 @@ class VerificationConsumer:
             pr,
             pack_override=pack,
             merge_authority_repair_budget=authority_repair_budget,
+            recovered_effect_operation_key=(
+                recovered_effect_operation_key
+            ),
+            recovered_attempt=recovered_attempt,
         )
 
     def _recover_merged_run(
@@ -3748,12 +4074,111 @@ class VerificationConsumer:
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
+        recovered_key, recovered_attempt = (
+            self._recover_sessionful_model_effect(run)
+        )
         return self._launch(
             claimed,
             pr,
             pack_override=pack,
             merge_authority_repair_budget=authority_repair_budget,
+            recovered_effect_operation_key=recovered_key,
+            recovered_attempt=recovered_attempt,
         )
+
+    def _recover_sessionful_model_effect(
+        self, run: VerificationRun
+    ) -> tuple[str | None, Mapping[str, object] | None]:
+        """Rebind a retained model effect before special merge recovery.
+
+        Merged and open-neutralized recovery enter before the ordinary
+        recovery block, but they retain the same coordinator session and
+        outbox authority. Reconcile that authority first so `_launch` resumes
+        the existing session instead of attempting a conflicting new effect.
+        """
+        pending_reader = getattr(
+            self.ledger, "pending_effect_binding", None
+        )
+        pending = (
+            pending_reader(run.run_id)
+            if callable(pending_reader)
+            else None
+        )
+        if (
+            not isinstance(pending, Mapping)
+            or pending.get("effect_type")
+            != "model.verification_coordinator"
+            or not isinstance(pending.get("operation_key"), str)
+            or pending.get("head_sha") != run.current_head_sha
+        ):
+            return None, None
+        if (
+            run.coordinator_session_id is None
+            or run.context_pack is None
+        ):
+            raise ValueError(
+                "special merge recovery requires a durable model session"
+            )
+        attempt_reader = getattr(self.ledger, "attempts", None)
+        attempts = (
+            attempt_reader(run.run_id)
+            if callable(attempt_reader)
+            else []
+        )
+        matching_attempts = [
+            attempt
+            for attempt in attempts
+            if isinstance(attempt, Mapping)
+            and attempt.get("kind") == "verification"
+            and attempt.get("session_id")
+            == run.coordinator_session_id
+            and isinstance(attempt.get("receipt"), Mapping)
+            and attempt["receipt"].get("head_sha")
+            == run.current_head_sha
+        ]
+        if len(matching_attempts) > 1:
+            raise ValueError(
+                "verification run has conflicting durable model attempts"
+            )
+        outbox_status = pending.get("outbox_status")
+        operation_key = str(pending["operation_key"])
+        if outbox_status in {"claimed", "unknown"}:
+            recover_effect = getattr(self.ledger, "recover_effect", None)
+            if not callable(recover_effect):
+                raise RuntimeError(
+                    "verification effect recovery is unavailable"
+                )
+            recover_effect(
+                operation_key,
+                run_id=run.run_id,
+                effect_type="model.verification_coordinator",
+            )
+            return (
+                operation_key,
+                matching_attempts[0] if matching_attempts else None,
+            )
+        if outbox_status == "succeeded":
+            evidence = pending.get("reconciliation_evidence")
+            if (
+                len(matching_attempts) != 1
+                or not isinstance(evidence, Mapping)
+                or evidence.get("outcome")
+                != "model_receipt_durably_recorded"
+                or evidence.get("head_sha")
+                != run.current_head_sha
+                or evidence.get("session_id")
+                != matching_attempts[0].get("session_id")
+            ):
+                raise ValueError(
+                    "succeeded model effect lacks its durable attempt"
+                )
+            return None, matching_attempts[0]
+        if outbox_status == "dead_letter":
+            raise ValueError(
+                "verification model effect is terminal without applicable "
+                "review evidence"
+            )
+        return None, None
 
     def _terminal_event_application_failure(
         self,
@@ -4187,7 +4612,13 @@ class VerificationConsumer:
             return current
         return self._launch_after_live_fence(claimed)
 
-    def _launch_after_live_fence(self, claimed: VerificationRun) -> VerificationRun:
+    def _launch_after_live_fence(
+        self,
+        claimed: VerificationRun,
+        *,
+        recovered_effect_operation_key: str | None = None,
+        recovered_attempt: Mapping[str, object] | None = None,
+    ) -> VerificationRun:
         """Re-read authority after auth and claim, immediately before launch."""
         try:
             pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
@@ -4223,7 +4654,12 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=claimed.lease_id or "",
             )
-        return self._launch(claimed, pr)
+        return self._launch(
+            claimed,
+            pr,
+            recovered_effect_operation_key=recovered_effect_operation_key,
+            recovered_attempt=recovered_attempt,
+        )
 
     def _launch(
         self,
@@ -4232,6 +4668,8 @@ class VerificationConsumer:
         *,
         pack_override: Mapping[str, object] | None = None,
         merge_authority_repair_budget: Mapping[str, object] | None = None,
+        recovered_effect_operation_key: str | None = None,
+        recovered_attempt: Mapping[str, object] | None = None,
     ) -> VerificationRun:
         lease_id = claimed.lease_id
         if not lease_id:
@@ -4247,6 +4685,8 @@ class VerificationConsumer:
                 ),
             )
         )
+        if self.host_fenced_merge:
+            pack["merge_execution_mode"] = "host_fenced_executor"
 
         def started(session_id: str) -> None:
             safe_session_id = bounded_coordinator_session_id(session_id)
@@ -4265,6 +4705,29 @@ class VerificationConsumer:
         def heartbeat() -> None:
             self.ledger.heartbeat(claimed.run_id, self.holder, lease_id)
 
+        effect_operation_key = recovered_effect_operation_key
+
+        def abandon_effect(detail: str) -> None:
+            if effect_operation_key is None:
+                return
+            abandon = getattr(self.ledger, "abandon_effect", None)
+            if callable(abandon):
+                abandon(effect_operation_key, detail=detail)
+
+        def finish_known_effect(evidence: Mapping[str, object]) -> None:
+            nonlocal effect_operation_key
+            if effect_operation_key is None:
+                return
+            finish = getattr(self.ledger, "finish_effect", None)
+            if callable(finish):
+                finish(
+                    effect_operation_key,
+                    observed_applied=True,
+                    evidence=evidence,
+                )
+            effect_operation_key = None
+
+        attempt_already_durable = recovered_attempt is not None
         try:
             resume_session_id = bounded_coordinator_session_id(
                 claimed.coordinator_session_id
@@ -4274,41 +4737,127 @@ class VerificationConsumer:
                 and resume_session_id is None
             ):
                 raise ValueError("invalid stored coordinator session identity")
-            session_id, receipt = self.launcher.launch(
-                pack,
-                resume_session_id=resume_session_id,
-                on_thread_started=started,
-                on_heartbeat=heartbeat,
-            )
-            receipt = load_and_validate_verification_closer_receipt(
-                receipt,
-                self.receipt_schema,
-                trusted_repository=claimed.repository,
-                trusted_evidence_urls=_trusted_evidence_urls(claimed),
-                repair_budget_policy=claimed.repair_budget_policy,
-            )
-            safe_session_id = bounded_coordinator_session_id(session_id)
-            if safe_session_id is None:
-                raise ValueError("invalid returned coordinator session identity")
-            current = self.ledger.get(claimed.run_id)
-            if current is not None and current.status == "claimed":
-                started(safe_session_id)
+            if recovered_attempt is not None:
+                stored_receipt = recovered_attempt.get("receipt")
+                stored_session = recovered_attempt.get("session_id")
+                if (
+                    recovered_attempt.get("kind") != "verification"
+                    or not isinstance(stored_receipt, Mapping)
+                    or not isinstance(stored_session, str)
+                    or stored_session != resume_session_id
+                ):
+                    raise ValueError(
+                        "durable model attempt does not match recovery authority"
+                    )
+                session_id = stored_session
+                started(session_id)
+                receipt = load_and_validate_verification_closer_receipt(
+                    stored_receipt,
+                    self.receipt_schema,
+                    trusted_repository=claimed.repository,
+                    trusted_evidence_urls=_trusted_evidence_urls(claimed),
+                    repair_budget_policy=claimed.repair_budget_policy,
+                )
+            else:
+                begin_effect = getattr(self.ledger, "begin_effect", None)
+                if effect_operation_key is None and callable(begin_effect):
+                    attempt_reader = getattr(self.ledger, "attempts", None)
+                    prior_attempts = (
+                        attempt_reader(claimed.run_id)
+                        if callable(attempt_reader)
+                        else []
+                    )
+                    verification_ordinal = 1 + sum(
+                        1
+                        for attempt in prior_attempts
+                        if isinstance(attempt, Mapping)
+                        and attempt.get("kind") == "verification"
+                    )
+                    effect_operation_key = begin_effect(
+                        claimed.run_id,
+                        effect_type="model.verification_coordinator",
+                        payload={
+                            "repository": claimed.repository,
+                            "governing_issue": claimed.request["linked_issue"],
+                            "pr_number": claimed.pr_number,
+                            "head_sha": claimed.current_head_sha,
+                            "workflow_identity": claimed.request.get(
+                                "source_workflow"
+                            ),
+                            "secret_ref": (
+                                "host-secret:builderops/model-session"
+                            ),
+                            "scopes": ["model:execute"],
+                        },
+                        holder=self.holder,
+                        lease_id=lease_id,
+                        idempotency_key=(
+                            f"{claimed.run_id}:model:"
+                            f"{claimed.current_head_sha}:"
+                            f"attempt-{verification_ordinal}"
+                        ),
+                    )
+                session_id, receipt = self.launcher.launch(
+                    pack,
+                    resume_session_id=resume_session_id,
+                    on_thread_started=started,
+                    on_heartbeat=heartbeat,
+                )
+                receipt = load_and_validate_verification_closer_receipt(
+                    receipt,
+                    self.receipt_schema,
+                    trusted_repository=claimed.repository,
+                    trusted_evidence_urls=_trusted_evidence_urls(claimed),
+                    repair_budget_policy=claimed.repair_budget_policy,
+                )
+                safe_session_id = bounded_coordinator_session_id(session_id)
+                if safe_session_id is None:
+                    raise ValueError(
+                        "invalid returned coordinator session identity"
+                    )
                 current = self.ledger.get(claimed.run_id)
-            if (
-                current is not None
-                and current.coordinator_session_id != safe_session_id
-            ):
-                raise ValueError("coordinator session identity mismatch")
-            session_id = safe_session_id
+                if current is not None and current.status == "claimed":
+                    started(safe_session_id)
+                    current = self.ledger.get(claimed.run_id)
+                if (
+                    current is not None
+                    and current.coordinator_session_id != safe_session_id
+                ):
+                    raise ValueError(
+                        "coordinator session identity mismatch"
+                    )
+                session_id = safe_session_id
         except ReceiptContractError as exc:
             cause = exc.__cause__
+            failure = {
+                "outcome": "invalid_verification_receipt",
+                "error_type": type(cause).__name__ if cause else type(exc).__name__,
+            }
+            try:
+                finish_known_effect(
+                    {
+                        **failure,
+                        "effect_outcome": "executed_invalid_receipt",
+                    }
+                )
+            except Exception:
+                abandon_effect("invalid model receipt reconciliation failed")
+                retry_after = _retry_at()
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    {
+                        **failure,
+                        "effect_outcome": "unknown",
+                        "retry_after": retry_after,
+                    },
+                    retry_after=retry_after,
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
             return self.ledger.terminal(
                 claimed.run_id,
                 "failed",
-                {
-                    "outcome": "invalid_verification_receipt",
-                    "error_type": type(cause).__name__ if cause else type(exc).__name__,
-                },
+                failure,
                 reason="invalid_receipt_contract",
                 holder=self.holder,
                 lease_id=lease_id,
@@ -4322,6 +4871,48 @@ class VerificationConsumer:
                 failure_class="rate_limit" if rate_limited else None,
             )
             failed_session = failure_receipt.get("session_id")
+            if isinstance(failed_session, str) and failed_session:
+                try:
+                    self.ledger.record_attempt(
+                        claimed.run_id,
+                        "verification",
+                        failed_session,
+                        self.launcher.config.model,
+                        self.launcher.config.reasoning_effort,
+                        pack,
+                        "rate_limited" if rate_limited else "launch_failed",
+                        failure_receipt,
+                        holder=self.holder,
+                        lease_id=lease_id,
+                    )
+                except ValueError:
+                    if not str(
+                        failure_receipt.get("outcome", "")
+                    ).endswith("_authority_lost"):
+                        raise
+            try:
+                finish_known_effect(
+                    {
+                        "outcome": failure_receipt.get("outcome"),
+                        "effect_outcome": "executed_process_failure",
+                        "rate_limited": rate_limited,
+                        "session_id": failed_session,
+                    }
+                )
+            except Exception:
+                abandon_effect("model process failure reconciliation failed")
+                retry_after = _retry_at()
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    {
+                        **failure_receipt,
+                        "effect_outcome": "unknown",
+                        "retry_after": retry_after,
+                    },
+                    retry_after=retry_after,
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
             if str(failure_receipt.get("outcome", "")).endswith("_authority_lost"):
                 retry_after = _retry_at()
                 failure_receipt = {
@@ -4347,19 +4938,6 @@ class VerificationConsumer:
                         if current is not None:
                             return current
                         raise
-            if isinstance(failed_session, str) and failed_session:
-                self.ledger.record_attempt(
-                    claimed.run_id,
-                    "verification",
-                    failed_session,
-                    self.launcher.config.model,
-                    self.launcher.config.reasoning_effort,
-                    pack,
-                    "rate_limited" if rate_limited else "launch_failed",
-                    failure_receipt,
-                    holder=self.holder,
-                    lease_id=lease_id,
-                )
             if rate_limited:
                 retry_after = _retry_at(retry_hint)
                 return self.ledger.backoff(
@@ -4383,6 +4961,7 @@ class VerificationConsumer:
                 lease_id=lease_id,
             )
         except Exception as exc:
+            abandon_effect("model effect outcome is unknown; readback required")
             # A zero-exit launcher can still fail its terminal contract (for
             # example, no thread identity, a process OS error, or no
             # schema-valid final receipt).
@@ -4417,24 +4996,51 @@ class VerificationConsumer:
         structured_rate_limit = (
             receipt.get("verdict") == "retry" and self._rate_limited(receipt)
         )
-        self.ledger.record_attempt(
-            claimed.run_id,
-            "verification",
-            session_id,
-            config.model,
-            config.reasoning_effort,
-            pack,
-            "rate_limited" if structured_rate_limit else "launched",
-            receipt,
-            holder=self.holder,
-            lease_id=lease_id,
-            idempotency_key=verification_attempt_idempotency_key(
-                session_id,
-                config.model,
-                config.reasoning_effort,
-                receipt,
-            ),
-        )
+        if not attempt_already_durable:
+            try:
+                self.ledger.record_attempt(
+                    claimed.run_id,
+                    "verification",
+                    session_id,
+                    config.model,
+                    config.reasoning_effort,
+                    pack,
+                    "rate_limited" if structured_rate_limit else "launched",
+                    receipt,
+                    holder=self.holder,
+                    lease_id=lease_id,
+                    idempotency_key=verification_attempt_idempotency_key(
+                        session_id,
+                        config.model,
+                        config.reasoning_effort,
+                        receipt,
+                    ),
+                )
+            except Exception:
+                abandon_effect(
+                    "model receipt was not durably recorded; readback required"
+                )
+                raise
+        finish_effect = getattr(self.ledger, "finish_effect", None)
+        if effect_operation_key is not None and callable(finish_effect):
+            try:
+                finish_effect(
+                    effect_operation_key,
+                    observed_applied=True,
+                    evidence={
+                        "outcome": "model_receipt_durably_recorded",
+                        "verdict": receipt.get("verdict"),
+                        "head_sha": receipt.get("head_sha"),
+                        "session_id": session_id,
+                    },
+                )
+            except Exception:
+                abandon_effect(
+                    "model receipt is durable but effect reconciliation failed; "
+                    "readback required"
+                )
+                raise
+            effect_operation_key = None
         if structured_rate_limit:
             return self.ledger.backoff(
                 claimed.run_id,
@@ -4491,6 +5097,15 @@ class VerificationConsumer:
         # stale receipt heads never reach the review ledger.
         expected_merge_repair_budget = None
         if verdict == "delivered":
+            if self.host_fenced_merge:
+                return self.ledger.terminal(
+                    claimed.run_id,
+                    "failed",
+                    dict(receipt),
+                    reason="coordinator_bypassed_host_fenced_merge",
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
             expected_merge_repair_budget = (
                 merge_authority_repair_budget
                 if merge_authority_repair_budget is not None
@@ -4673,6 +5288,27 @@ class VerificationConsumer:
             if terminal is None:
                 raise RuntimeError("verification exception terminal state was not persisted")
             return terminal
+        if verdict == "verified":
+            if not self.host_fenced_merge:
+                return self.ledger.terminal(
+                    claimed.run_id,
+                    "failed",
+                    dict(receipt),
+                    reason="verified_requires_host_fenced_merge",
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            mark_merge_ready = getattr(self.ledger, "mark_merge_ready", None)
+            if not callable(mark_merge_ready):
+                raise RuntimeError(
+                    "host-fenced merge receipt writer is unavailable"
+                )
+            return mark_merge_ready(
+                claimed.run_id,
+                dict(receipt),
+                holder=self.holder,
+                lease_id=lease_id,
+            )
         status = (
             {
                 "delivered": "completed",
@@ -4700,11 +5336,53 @@ class VerificationConsumer:
 
     def recover(self, run_id: str) -> VerificationRun:
         run = self.ledger.get(run_id)
+        pending_reader = getattr(
+            self.ledger, "pending_effect_binding", None
+        )
+        pending = (
+            pending_reader(run_id)
+            if run is not None and callable(pending_reader)
+            else None
+        )
+        prestart_model_effect = bool(
+            isinstance(pending, Mapping)
+            and pending.get("effect_type")
+            == "model.verification_coordinator"
+            and isinstance(pending.get("operation_key"), str)
+            and run is not None
+            and pending.get("head_sha") == run.current_head_sha
+            and pending.get("outbox_status")
+            in {"pending", "claimed", "unknown", "dead_letter"}
+        )
+        invalid_model_session = bool(
+            run is not None
+            and (
+                (run.coordinator_session_id is None)
+                != (run.context_pack is None)
+                or (
+                    run.coordinator_session_id is not None
+                    and not run.coordinator_session_id.strip()
+                )
+                or (
+                    run.context_pack is not None
+                    and not run.context_pack
+                )
+            )
+        )
+        if invalid_model_session:
+            raise ValueError(
+                "verification run is not resumable: partial_model_session_state"
+            )
         if (
             run is None
             or run.status not in {"claimed", "running", "backoff"}
-            or not run.coordinator_session_id
-            or not run.context_pack
+            or (
+                (
+                    run.coordinator_session_id is None
+                    and run.context_pack is None
+                )
+                and not prestart_model_effect
+            )
         ):
             raise ValueError("verification run is not resumable")
         if self._lease_is_live(run):
@@ -4740,4 +5418,146 @@ class VerificationConsumer:
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
-        return self._launch_after_live_fence(claimed)
+        if (
+            run.lease_id is not None
+            and claimed.lease_id == run.lease_id
+        ):
+            raise VerificationSubscriptionBusy(
+                f"verification run {run_id} did not acquire a fresh "
+                "recovery fence"
+            )
+        recovered_operation_key: str | None = None
+        recovered_attempt: Mapping[str, object] | None = None
+        recover_effect = getattr(self.ledger, "recover_effect", None)
+        if callable(recover_effect):
+            if (
+                isinstance(pending, Mapping)
+                and pending.get("effect_type")
+                == "model.verification_coordinator"
+                and isinstance(pending.get("operation_key"), str)
+                and pending.get("head_sha") == run.current_head_sha
+            ):
+                outbox_status = pending.get("outbox_status")
+                sessionless = (
+                    run.coordinator_session_id is None
+                    and run.context_pack is None
+                )
+                if (
+                    sessionless
+                    and outbox_status in {"claimed", "unknown"}
+                ):
+                    operation_key = str(pending["operation_key"])
+                    recover_effect(
+                        operation_key,
+                        run_id=run.run_id,
+                        effect_type="model.verification_coordinator",
+                    )
+                    terminalize_effect = getattr(
+                        self.ledger, "finish_effect", None
+                    )
+                    if not callable(terminalize_effect):
+                        raise RuntimeError(
+                            "verification effect reconciliation is unavailable"
+                        )
+                    terminalize_effect(
+                        operation_key,
+                        observed_applied=False,
+                        terminal_unknown=True,
+                        evidence={
+                            "outcome": (
+                                "indeterminate_pre_session_model_effect"
+                            ),
+                            "head_sha": run.current_head_sha,
+                            "provider_session_id": None,
+                            "relaunch_performed": False,
+                        },
+                    )
+                    return self.ledger.terminal(
+                        claimed.run_id,
+                        "failed",
+                        {
+                            "outcome": (
+                                "indeterminate_pre_session_model_effect"
+                            ),
+                            "reason": (
+                                "provider_session_identity_unavailable"
+                            ),
+                            "head_sha": run.current_head_sha,
+                        },
+                        reason="model_effect_identity_unavailable",
+                        holder=self.holder,
+                        lease_id=claimed.lease_id or "",
+                    )
+                if sessionless and outbox_status == "dead_letter":
+                    return self.ledger.terminal(
+                        claimed.run_id,
+                        "failed",
+                        {
+                            "outcome": (
+                                "indeterminate_pre_session_model_effect"
+                            ),
+                            "reason": "effect_already_dead_lettered",
+                            "head_sha": run.current_head_sha,
+                        },
+                        reason="model_effect_identity_unavailable",
+                        holder=self.holder,
+                        lease_id=claimed.lease_id or "",
+                    )
+                attempt_reader = getattr(self.ledger, "attempts", None)
+                attempts = (
+                    attempt_reader(run.run_id)
+                    if callable(attempt_reader)
+                    else []
+                )
+                matching_attempts = [
+                    attempt
+                    for attempt in attempts
+                    if isinstance(attempt, Mapping)
+                    and attempt.get("kind") == "verification"
+                    and attempt.get("session_id")
+                    == run.coordinator_session_id
+                    and isinstance(attempt.get("receipt"), Mapping)
+                    and attempt["receipt"].get("head_sha")
+                    == run.current_head_sha
+                ]
+                if len(matching_attempts) > 1:
+                    raise ValueError(
+                        "verification run has conflicting durable model attempts"
+                    )
+                if outbox_status in {"claimed", "unknown"}:
+                    recovered_operation_key = str(
+                        pending["operation_key"]
+                    )
+                    recover_effect(
+                        recovered_operation_key,
+                        run_id=run.run_id,
+                        effect_type="model.verification_coordinator",
+                    )
+                    if matching_attempts:
+                        recovered_attempt = matching_attempts[0]
+                elif outbox_status == "succeeded":
+                    evidence = pending.get("reconciliation_evidence")
+                    if (
+                        len(matching_attempts) != 1
+                        or not isinstance(evidence, Mapping)
+                        or evidence.get("outcome")
+                        != "model_receipt_durably_recorded"
+                        or evidence.get("head_sha")
+                        != run.current_head_sha
+                        or evidence.get("session_id")
+                        != matching_attempts[0].get("session_id")
+                    ):
+                        raise ValueError(
+                            "succeeded model effect lacks its durable attempt"
+                        )
+                    recovered_attempt = matching_attempts[0]
+                elif outbox_status == "dead_letter":
+                    raise ValueError(
+                        "verification model effect is terminal without "
+                        "applicable review evidence"
+                    )
+        return self._launch_after_live_fence(
+            claimed,
+            recovered_effect_operation_key=recovered_operation_key,
+            recovered_attempt=recovered_attempt,
+        )

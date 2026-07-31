@@ -2,6 +2,13 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": ".codex/agents/verification-closer.toml",
+      "category": "iii",
+      "why_load_bearing": "The BCP-05 verification adapter names the accepted Demerzel execution host so the installed-main pilot and privileged boundary remain explicit.",
+      "disposition": "stay",
+      "issue": "#3603"
+    },
+    {
       "artifact": ".codex/skills/mimer-governed-boundary/SKILL.md",
       "category": "iv",
       "why_load_bearing": "Builder workflow instruction records the existing operator-bound vault or host convention.",
@@ -2072,6 +2079,20 @@
       "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
       "disposition": "parameterize",
       "issue": "#2892"
+    },
+    {
+      "artifact": "tests/builderops/control_plane/test_verification_api_kernel.py",
+      "category": "iii",
+      "why_load_bearing": "BCP-05 API-kernel fixtures bind the privileged verifier identity to the accepted Demerzel execution role.",
+      "disposition": "stay",
+      "issue": "#3603"
+    },
+    {
+      "artifact": "tests/dispatcher/test_verification_merge.py",
+      "category": "iii",
+      "why_load_bearing": "BCP-05 merge fencing fixtures bind the scoped executor principal to the accepted Demerzel execution role.",
+      "disposition": "stay",
+      "issue": "#3603"
     },
     {
       "artifact": "tests/ops/test_startup_uninitialized_vault_message.py",

@@ -46,6 +46,47 @@ def _operation_key(repository: str, idempotency_key: str, effect_type: str) -> s
     )
 
 
+def _assert_terminal_unknown_model_evidence(
+    *,
+    effect_type: str,
+    effect_payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+) -> None:
+    expected_keys = {
+        "head_sha",
+        "outcome",
+        "provider_session_id",
+        "relaunch_performed",
+    }
+    head_sha = evidence.get("head_sha")
+    run = task_payload.get("run")
+    durable_pre_session = bool(
+        task_payload.get("contract_version") == "builderops_verification_run.v1"
+        and isinstance(run, Mapping)
+        and "coordinator_session_id" in run
+        and run.get("coordinator_session_id") is None
+        and "context_pack" in run
+        and run.get("context_pack") is None
+    )
+    if (
+        effect_type != "model.verification_coordinator"
+        or not durable_pre_session
+        or set(evidence) != expected_keys
+        or evidence.get("outcome") != "indeterminate_pre_session_model_effect"
+        or evidence.get("provider_session_id") is not None
+        or evidence.get("relaunch_performed") is not False
+        or not isinstance(head_sha, str)
+        or len(head_sha) != 40
+        or any(character not in "0123456789abcdef" for character in head_sha)
+        or effect_payload.get("head_sha") != head_sha
+    ):
+        raise StateConflict(
+            "terminal-unknown reconciliation is restricted to an exact "
+            "pre-session verification-model effect receipt"
+        )
+
+
 class PostgresBuilderOpsStore:
     """Single-authority kernel; it never performs an external side effect."""
 
@@ -389,6 +430,98 @@ class PostgresBuilderOpsStore:
         if row is None or not bool(row["executor_enabled"]):
             raise DurabilityPending("executor is fenced pending post-restore reconciliation")
 
+    def get_task(self, repository: str, task_id: str) -> Mapping[str, Any]:
+        canonical = canonical_repository(repository)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT task.repository, task.task_id, task.state, task.payload, "
+                "task.authority_envelope, task.version, task.updated_at, "
+                "lease.holder AS lease_holder, lease.fencing_token, "
+                "lease.expires_at, lease.lease_kind "
+                "FROM builderops_tasks AS task LEFT JOIN builderops_leases AS lease "
+                "ON lease.repository = task.repository "
+                "AND lease.resource_id = task.task_id "
+                "WHERE task.repository = %s AND task.task_id = %s",
+                (canonical, task_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError(task_id)
+        return self._task_snapshot(row)
+
+    def list_tasks(
+        self, repository: str, *, task_prefix: str | None = None
+    ) -> list[Mapping[str, Any]]:
+        canonical = canonical_repository(repository)
+        with self._connect() as conn:
+            if task_prefix is None:
+                rows = conn.execute(
+                    "SELECT task.repository, task.task_id, task.state, task.payload, "
+                    "task.authority_envelope, task.version, task.updated_at, "
+                    "lease.holder AS lease_holder, lease.fencing_token, "
+                    "lease.expires_at, lease.lease_kind "
+                    "FROM builderops_tasks AS task LEFT JOIN builderops_leases AS lease "
+                    "ON lease.repository = task.repository "
+                    "AND lease.resource_id = task.task_id "
+                    "WHERE task.repository = %s "
+                    "ORDER BY task.updated_at DESC, task.task_id",
+                    (canonical,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT task.repository, task.task_id, task.state, task.payload, "
+                    "task.authority_envelope, task.version, task.updated_at, "
+                    "lease.holder AS lease_holder, lease.fencing_token, "
+                    "lease.expires_at, lease.lease_kind "
+                    "FROM builderops_tasks AS task LEFT JOIN builderops_leases AS lease "
+                    "ON lease.repository = task.repository "
+                    "AND lease.resource_id = task.task_id "
+                    "WHERE task.repository = %s AND task.task_id LIKE %s "
+                    "ORDER BY task.updated_at DESC, task.task_id",
+                    (canonical, f"{task_prefix}%"),
+                ).fetchall()
+        return [self._task_snapshot(row) for row in rows]
+
+    @staticmethod
+    def _task_snapshot(row: Mapping[str, Any]) -> Mapping[str, Any]:
+        snapshot = {
+            key: row[key]
+            for key in (
+                "repository",
+                "task_id",
+                "state",
+                "payload",
+                "authority_envelope",
+                "version",
+                "updated_at",
+            )
+        }
+        if row.get("lease_holder") is not None:
+            snapshot["lease"] = {
+                "repository": row["repository"],
+                "resource_id": row["task_id"],
+                "holder": row["lease_holder"],
+                "fencing_token": row["fencing_token"],
+                "expires_at": row["expires_at"],
+                "lease_kind": row["lease_kind"],
+            }
+        else:
+            snapshot["lease"] = None
+        return snapshot
+
+    def list_attempts(
+        self, repository: str, task_id: str
+    ) -> list[Mapping[str, Any]]:
+        canonical = canonical_repository(repository)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT repository, task_id, attempt_id, state, payload, "
+                "authority_envelope, updated_at FROM builderops_attempts "
+                "WHERE repository = %s AND task_id = %s "
+                "ORDER BY updated_at, attempt_id",
+                (canonical, task_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def commit_transition(
         self,
         *,
@@ -400,9 +533,10 @@ class PostgresBuilderOpsStore:
         outbox: Mapping[str, Any] | None = None,
         lease: Lease | None = None,
         expected_states: tuple[str, ...] | None = None,
+        expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult:
-        """Commit a guarded transition without exposing lifecycle-only controls."""
+        """Commit a guarded transition through the shared task kernel."""
         return self._commit_transition(
             envelope=envelope,
             task_id=task_id,
@@ -412,6 +546,7 @@ class PostgresBuilderOpsStore:
             outbox=outbox,
             lease=lease,
             expected_states=expected_states,
+            expected_version=expected_version,
             fault_at=fault_at,
         )
 
@@ -427,8 +562,10 @@ class PostgresBuilderOpsStore:
         lease: Lease | None = None,
         claim_holder: str | None = None,
         claim_ttl_seconds: int = 5400,
+        require_new_fence: bool = False,
         release_on_commit: bool = False,
         expected_states: tuple[str, ...] | None = None,
+        expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult:
         if not task_id or not to_state or not idempotency_key:
@@ -437,8 +574,11 @@ class PostgresBuilderOpsStore:
             raise ValueError("claim_holder and an existing lease are mutually exclusive")
         if release_on_commit and lease is None:
             raise ValueError("release_on_commit requires an existing fenced lease")
-        if to_state == "claimed" and claim_holder is None:
-            raise LeaseRequired("claimed task state requires atomically bound fenced ownership")
+        if to_state == "claimed" and claim_holder is None and lease is None:
+            raise LeaseRequired(
+                "claimed task state requires atomically bound fenced ownership "
+                "or an exact retained fenced lease"
+            )
         if outbox is not None and lease is None and claim_holder is None:
             raise LeaseRequired("outbox intent requires atomically fenced task ownership")
         request_document = {
@@ -452,7 +592,12 @@ class PostgresBuilderOpsStore:
             "release_on_commit": release_on_commit,
             "lease_identity": self._lease_identity_json(lease) if lease is not None else None,
             "expected_states": list(expected_states) if expected_states is not None else None,
+            "expected_version": expected_version,
         }
+        if claim_holder is not None and require_new_fence:
+            # Preserve the pre-BCP-05 request hash for ordinary/idempotent
+            # claims; only recovery's stricter semantic enters the hash.
+            request_document["require_new_fence"] = True
         request_hash = _hash(request_document)
         envelope_json = Jsonb(envelope.as_json())
         replayed = False
@@ -491,18 +636,31 @@ class PostgresBuilderOpsStore:
                         resource_id=task_id,
                         holder=claim_holder,
                         ttl_seconds=claim_ttl_seconds,
+                        require_new_fence=require_new_fence,
                     )
                 if lease is not None:
                     self._assert_lease(conn, envelope.repository, task_id, lease)
                     self._assert_task_lease_provenance(conn, envelope.repository, task_id, lease)
                 previous = conn.execute(
-                    "SELECT state FROM builderops_tasks WHERE repository = %s AND task_id = %s FOR UPDATE",
+                    "SELECT state, version FROM builderops_tasks "
+                    "WHERE repository = %s AND task_id = %s FOR UPDATE",
                     (envelope.repository, task_id),
                 ).fetchone()
                 previous_state = str(previous["state"]) if previous is not None else None
+                previous_version = (
+                    int(previous["version"]) if previous is not None else None
+                )
                 if expected_states is not None and previous_state not in expected_states:
                     raise StateConflict(
                         f"expected task state in {expected_states!r}, observed {previous_state!r}"
+                    )
+                if (
+                    expected_version is not None
+                    and previous_version != expected_version
+                ):
+                    raise StateConflict(
+                        f"expected task version {expected_version}, "
+                        f"observed {previous_version}"
                     )
                 if previous is not None and lease is None and claim_holder is None:
                     raise LeaseRequired("an existing task mutation requires a fenced lease")
@@ -789,6 +947,7 @@ class PostgresBuilderOpsStore:
         idempotency_key: str,
         lease: Lease,
         expected_states: tuple[str, ...] | None = None,
+        expected_task_version: int | None = None,
         fault_at: str | None = None,
     ) -> AuthorityObjectResult:
         return self._commit_authority_object(
@@ -804,6 +963,7 @@ class PostgresBuilderOpsStore:
             lease_resource_id=task_id,
             require_lease_on_create=True,
             expected_states=expected_states,
+            expected_task_version=expected_task_version,
             fault_at=fault_at,
         )
 
@@ -847,6 +1007,7 @@ class PostgresBuilderOpsStore:
         lease_resource_id: str,
         require_lease_on_create: bool = False,
         expected_states: tuple[str, ...] | None = None,
+        expected_task_version: int | None = None,
         fault_at: str | None = None,
     ) -> AuthorityObjectResult:
         if not object_id or not state or not idempotency_key:
@@ -862,6 +1023,7 @@ class PostgresBuilderOpsStore:
                 "secondary_id": secondary_id,
                 "lease_identity": self._lease_identity_json(lease) if lease is not None else None,
                 "expected_states": list(expected_states) if expected_states is not None else None,
+                "expected_task_version": expected_task_version,
             }
         )
         envelope_json = Jsonb(envelope.as_json())
@@ -899,12 +1061,66 @@ class PostgresBuilderOpsStore:
                         (f"task:{envelope.repository}:{primary_id}",),
                     )
                     task = conn.execute(
-                        "SELECT state FROM builderops_tasks WHERE repository = %s "
+                        "SELECT state, version, payload FROM builderops_tasks WHERE repository = %s "
                         "AND task_id = %s FOR UPDATE",
                         (envelope.repository, primary_id),
                     ).fetchone()
                     if task is None or task["state"] != "claimed":
                         raise StateConflict("attempt writes require an existing claimed task")
+                    if (
+                        expected_task_version is not None
+                        and int(task["version"]) != expected_task_version
+                    ):
+                        raise StateConflict(
+                            f"expected task version {expected_task_version}, "
+                            f"observed {int(task['version'])}"
+                        )
+                    task_payload = task["payload"]
+                    seal = (
+                        task_payload.get("attempt_write_seal")
+                        if isinstance(task_payload, Mapping)
+                        else None
+                    )
+                    if seal is not None:
+                        if (
+                            not isinstance(seal, Mapping)
+                            or seal.get("contract")
+                            != "builderops_attempt_write_seal.v1"
+                            or not isinstance(
+                                seal.get("operation_key"), str
+                            )
+                            or seal.get("effect_type")
+                            not in {
+                                "github.merge",
+                                "github.merge.dry_run",
+                            }
+                        ):
+                            raise StateConflict(
+                                "task attempt-write seal is malformed"
+                            )
+                        sealed_effect = conn.execute(
+                            "SELECT task_id, effect_type, status "
+                            "FROM builderops_outbox WHERE repository = %s "
+                            "AND operation_key = %s",
+                            (
+                                envelope.repository,
+                                seal["operation_key"],
+                            ),
+                        ).fetchone()
+                        if (
+                            sealed_effect is None
+                            or sealed_effect["task_id"] != primary_id
+                            or sealed_effect["effect_type"]
+                            != seal["effect_type"]
+                        ):
+                            raise StateConflict(
+                                "task attempt-write seal is not bound to its "
+                                "privileged merge intent"
+                            )
+                        raise StateConflict(
+                            "attempt writes are sealed by privileged "
+                            "merge authority"
+                        )
                 previous = self._authority_object_row(
                     conn,
                     object_kind=object_kind,
@@ -938,6 +1154,12 @@ class PostgresBuilderOpsStore:
                         assert primary_id is not None
                         self._assert_task_lease_provenance(
                             conn, envelope.repository, primary_id, lease
+                        )
+                        conn.execute(
+                            "UPDATE builderops_tasks SET version = version + 1, "
+                            "updated_at = clock_timestamp() "
+                            "WHERE repository = %s AND task_id = %s",
+                            (envelope.repository, primary_id),
                         )
                 self._write_authority_object(
                     conn,
@@ -1278,6 +1500,7 @@ class PostgresBuilderOpsStore:
         idempotency_key: str,
         request: Mapping[str, Any],
         ttl_seconds: int = 5400,
+        require_new_fence: bool = False,
         fault_at: str | None = None,
     ) -> tuple[TransactionResult, Lease]:
         """Atomically bind task state, receipt, idempotency, and fenced ownership."""
@@ -1289,6 +1512,7 @@ class PostgresBuilderOpsStore:
             request=request,
             claim_holder=holder,
             claim_ttl_seconds=ttl_seconds,
+            require_new_fence=require_new_fence,
             expected_states=("ready", "claimed"),
             fault_at=fault_at,
         )
@@ -1316,6 +1540,7 @@ class PostgresBuilderOpsStore:
         lease: Lease,
         idempotency_key: str,
         request: Mapping[str, Any],
+        expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult:
         """Atomically return task state and terminate the exact fenced ownership."""
@@ -1328,6 +1553,7 @@ class PostgresBuilderOpsStore:
             lease=lease,
             release_on_commit=True,
             expected_states=("claimed",),
+            expected_version=expected_version,
             fault_at=fault_at,
         )
 
@@ -1338,6 +1564,7 @@ class PostgresBuilderOpsStore:
         lease: Lease,
         idempotency_key: str,
         request: Mapping[str, Any],
+        expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult:
         """Atomically record terminal state/receipt and terminate ownership."""
@@ -1350,6 +1577,7 @@ class PostgresBuilderOpsStore:
             lease=lease,
             release_on_commit=True,
             expected_states=("claimed",),
+            expected_version=expected_version,
             fault_at=fault_at,
         )
 
@@ -1572,6 +1800,7 @@ class PostgresBuilderOpsStore:
         holder: str,
         ttl_seconds: int,
         lease_kind: str = "task",
+        require_new_fence: bool = False,
     ) -> Lease:
         if not resource_id or not holder or ttl_seconds <= 0:
             raise ValueError("resource_id, holder, and positive ttl_seconds are mandatory")
@@ -1589,6 +1818,10 @@ class PostgresBuilderOpsStore:
         effective_now = PostgresBuilderOpsStore._database_now(conn)
         expires_at = effective_now + timedelta(seconds=ttl_seconds)
         if row is not None and row["expires_at"] > effective_now:
+            if require_new_fence:
+                raise LeaseUnavailable(
+                    "active lease must expire before a recovery claim"
+                )
             if row["holder"] != holder:
                 raise LeaseUnavailable(f"active lease belongs to {row['holder']}")
             return Lease(
@@ -1877,6 +2110,27 @@ class PostgresBuilderOpsStore:
             expires_at,
         )
 
+    def outbox_intent(
+        self, repository: str, operation_key: str
+    ) -> Mapping[str, Any]:
+        canonical = canonical_repository(repository)
+        self._repair_outbox_bindings(canonical, operation_key)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT repository, operation_key, task_id, effect_type, payload, "
+                "status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
+                "reconciliation_evidence, reconciliation_receipt_sequence, "
+                "authority_envelope "
+                "FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s",
+                (canonical, operation_key),
+            ).fetchone()
+        if row is None:
+            raise KeyError(operation_key)
+        if row["intent_lsn"] is None:
+            raise DurabilityPending("outbox intent durability binding is incomplete")
+        return dict(row)
+
     def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
         """Bind a locally committed claim/receipt before recovery marks it unknown."""
         with self._connect() as conn:
@@ -1893,7 +2147,8 @@ class PostgresBuilderOpsStore:
             receipt = conn.execute(
                 "SELECT recovery_lsn::text AS recovery_lsn FROM builderops_receipts "
                 "WHERE repository = %s AND receipt_sequence = %s "
-                "AND event_type = 'outbox.claimed' AND lease_holder = %s "
+                "AND event_type IN ('outbox.claimed', 'outbox.recovered') "
+                "AND lease_holder = %s "
                 "AND lease_fencing_token = %s FOR UPDATE",
                 (
                     repository,
@@ -1928,17 +2183,44 @@ class PostgresBuilderOpsStore:
                 (claim_lsn, repository, int(row["claim_receipt_sequence"])),
             )
 
-    def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim:
-        """Recover a process-lost attempt as unknown for mandatory readback."""
-        repository = canonical_repository(repository)
+    def outbox_claim(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        operation_key: str,
+        worker_id: str,
+        claim_ttl_seconds: int = 300,
+    ) -> OutboxClaim:
+        """Recover an expired/unknown attempt under a fresh fenced identity."""
+        if (
+            not operation_key
+            or not worker_id
+            or claim_ttl_seconds <= 0
+        ):
+            raise ValueError(
+                "operation_key, worker_id, and positive claim_ttl_seconds "
+                "are mandatory"
+            )
+        repository = canonical_repository(envelope.repository)
         self._repair_outbox_bindings(repository, operation_key)
         self._repair_outbox_claim_binding(repository, operation_key)
         with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
+            self._assert_executor_enabled(conn)
             row = conn.execute(
-                "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
-                "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at "
-                "FROM builderops_outbox WHERE repository = %s AND operation_key = %s "
-                "AND status IN ('claimed', 'unknown') FOR UPDATE",
+                "SELECT outbox.task_id, outbox.status, outbox.worker_id, "
+                "outbox.claim_fencing_token, "
+                "outbox.intent_lsn::text AS intent_lsn, "
+                "outbox.claim_lsn::text AS claim_lsn, "
+                "outbox.claim_receipt_sequence, outbox.claim_expires_at, "
+                "clock_timestamp() AS database_now, receipt.event_type AS claim_event_type "
+                "FROM builderops_outbox AS outbox "
+                "JOIN builderops_receipts AS receipt "
+                "ON receipt.repository = outbox.repository "
+                "AND receipt.receipt_sequence = outbox.claim_receipt_sequence "
+                "WHERE outbox.repository = %s AND outbox.operation_key = %s "
+                "AND outbox.status IN ('claimed', 'unknown') "
+                "FOR UPDATE OF outbox",
                 (repository, operation_key),
             ).fetchone()
             if (
@@ -1950,22 +2232,93 @@ class PostgresBuilderOpsStore:
                 raise KeyError(operation_key)
             if row["intent_lsn"] is None:
                 raise DurabilityPending("outbox intent durability binding is incomplete")
-            if row["status"] == "claimed":
-                conn.execute(
-                    "UPDATE builderops_outbox SET status = 'unknown', "
-                    "unknown_detail = 'worker process lost; external readback required', "
-                    "updated_at = clock_timestamp() WHERE repository = %s AND operation_key = %s",
-                    (repository, operation_key),
+            if (
+                row["claim_expires_at"] > row["database_now"]
+            ):
+                raise LeaseUnavailable(
+                    "outbox operation still has an active claim"
                 )
+            token = int(row["claim_fencing_token"]) + 1
+            expires_at = row["database_now"] + timedelta(
+                seconds=claim_ttl_seconds
+            )
+            receipt = conn.execute(
+                "INSERT INTO builderops_receipts("
+                "repository, task_id, event_type, idempotency_key, "
+                "lease_holder, lease_fencing_token, authority_envelope"
+                ") VALUES (%s, %s, 'outbox.recovered', %s, %s, %s, %s) "
+                "RETURNING receipt_sequence",
+                (
+                    repository,
+                    row["task_id"],
+                    f"outbox:{operation_key}:recover:{token}",
+                    worker_id,
+                    token,
+                    Jsonb(envelope.as_json()),
+                ),
+            ).fetchone()
+            assert receipt is not None
+            receipt_sequence = int(receipt["receipt_sequence"])
+            updated = conn.execute(
+                "UPDATE builderops_outbox SET status = 'unknown', "
+                "worker_id = %s, claim_fencing_token = %s, "
+                "claim_expires_at = %s, claim_lsn = NULL, "
+                "claim_receipt_sequence = %s, "
+                "unknown_detail = 'worker process lost; external readback "
+                "required', authority_envelope = %s, "
+                "updated_at = clock_timestamp() "
+                "WHERE repository = %s AND operation_key = %s "
+                "AND claim_fencing_token = %s RETURNING operation_key",
+                (
+                    worker_id,
+                    token,
+                    expires_at,
+                    receipt_sequence,
+                    Jsonb(envelope.as_json()),
+                    repository,
+                    operation_key,
+                    int(row["claim_fencing_token"]),
+                ),
+            ).fetchone()
+            if updated is None:
+                raise StaleFencingToken(
+                    "outbox recovery fence was superseded"
+                )
+        claim_lsn = self._flushed_lsn()
+        with self._connect() as conn:
+            finalized = conn.execute(
+                "UPDATE builderops_outbox SET claim_lsn = %s "
+                "WHERE repository = %s AND operation_key = %s "
+                "AND worker_id = %s AND claim_fencing_token = %s "
+                "AND claim_receipt_sequence = %s "
+                "RETURNING operation_key",
+                (
+                    claim_lsn,
+                    repository,
+                    operation_key,
+                    worker_id,
+                    token,
+                    receipt_sequence,
+                ),
+            ).fetchone()
+            if finalized is None:
+                raise StaleFencingToken(
+                    "outbox recovery was superseded before durability binding"
+                )
+            conn.execute(
+                "UPDATE builderops_receipts SET recovery_lsn = %s "
+                "WHERE repository = %s AND receipt_sequence = %s",
+                (claim_lsn, repository, receipt_sequence),
+            )
         return OutboxClaim(
             repository=repository,
             operation_key=operation_key,
-            worker_id=str(row["worker_id"]),
-            fencing_token=int(row["claim_fencing_token"]),
+            worker_id=worker_id,
+            fencing_token=token,
             intent_lsn=str(row["intent_lsn"]),
-            claim_lsn=str(row["claim_lsn"]),
-            receipt_sequence=int(row["claim_receipt_sequence"]),
-            expires_at=row["claim_expires_at"],
+            claim_lsn=claim_lsn,
+            receipt_sequence=receipt_sequence,
+            expires_at=expires_at,
         )
 
     def effect_eligible(
@@ -1994,7 +2347,9 @@ class PostgresBuilderOpsStore:
             row = conn.execute(
                 "UPDATE builderops_outbox SET status = 'unknown', unknown_detail = %s, updated_at = clock_timestamp() "
                 "WHERE repository = %s AND operation_key = %s AND status = 'claimed' "
-                "AND worker_id = %s AND claim_fencing_token = %s RETURNING operation_key",
+                "AND worker_id = %s AND claim_fencing_token = %s "
+                "AND claim_expires_at > clock_timestamp() "
+                "RETURNING operation_key",
                 (
                     detail,
                     claim.repository,
@@ -2011,10 +2366,19 @@ class PostgresBuilderOpsStore:
         claim: OutboxClaim,
         *,
         observed_applied: bool,
+        terminal_unknown: bool = False,
         evidence: Mapping[str, Any],
         fault_at: str | None = None,
     ) -> OutboxReconciliation:
-        status = "succeeded" if observed_applied else "pending"
+        if terminal_unknown and observed_applied:
+            raise ValueError(
+                "terminal-unknown reconciliation cannot claim an applied effect"
+            )
+        status = (
+            "dead_letter"
+            if terminal_unknown
+            else ("succeeded" if observed_applied else "pending")
+        )
         request_hash = _hash(
             {
                 "repository": claim.repository,
@@ -2024,6 +2388,7 @@ class PostgresBuilderOpsStore:
                 "claim_receipt_sequence": claim.receipt_sequence,
                 "claim_lsn": claim.claim_lsn,
                 "observed_applied": observed_applied,
+                "terminal_unknown": terminal_unknown,
                 "evidence": dict(evidence),
             }
         )
@@ -2037,6 +2402,26 @@ class PostgresBuilderOpsStore:
                     f"{claim.fencing_token}",
                 ),
             )
+            if terminal_unknown:
+                effect = conn.execute(
+                    "SELECT outbox.effect_type, outbox.payload AS effect_payload, "
+                    "task.payload AS task_payload FROM builderops_outbox AS outbox "
+                    "JOIN builderops_tasks AS task ON task.repository = outbox.repository "
+                    "AND task.task_id = outbox.task_id "
+                    "WHERE outbox.repository = %s AND outbox.operation_key = %s "
+                    "FOR UPDATE OF outbox, task",
+                    (claim.repository, claim.operation_key),
+                ).fetchone()
+                if effect is None:
+                    raise StaleFencingToken(
+                        "unknown effect was already reconciled or superseded"
+                    )
+                _assert_terminal_unknown_model_evidence(
+                    effect_type=str(effect["effect_type"]),
+                    effect_payload=dict(effect["effect_payload"]),
+                    task_payload=dict(effect["task_payload"]),
+                    evidence=evidence,
+                )
             existing = conn.execute(
                 "SELECT request_hash, receipt_sequence FROM builderops_outbox_reconciliations "
                 "WHERE repository = %s AND operation_key = %s AND claim_fencing_token = %s "
@@ -2056,7 +2441,8 @@ class PostgresBuilderOpsStore:
                     "WHERE repository = %s AND operation_key = %s AND status = 'unknown' "
                     "AND worker_id = %s AND claim_fencing_token = %s "
                     "AND claim_receipt_sequence = %s "
-                    "AND COALESCE(claim_lsn::text, '0/0') = %s FOR UPDATE",
+                    "AND COALESCE(claim_lsn::text, '0/0') = %s "
+                    "AND claim_expires_at > clock_timestamp() FOR UPDATE",
                     (
                         claim.repository,
                         claim.operation_key,
@@ -2108,6 +2494,18 @@ class PostgresBuilderOpsStore:
                 if updated is None:
                     raise StaleFencingToken("unknown effect was already reconciled or superseded")
                 self._fault(fault_at, "after_reconciliation_state")
+                if terminal_unknown:
+                    conn.execute(
+                        "INSERT INTO builderops_dead_letters("
+                        "repository, operation_key, outcome, authority_envelope) "
+                        "VALUES (%s, %s, %s, %s)",
+                        (
+                            claim.repository,
+                            claim.operation_key,
+                            Jsonb(dict(evidence)),
+                            Jsonb(dict(outbox["authority_envelope"])),
+                        ),
+                    )
                 conn.execute(
                     "INSERT INTO builderops_outbox_reconciliations("
                     "repository, operation_key, claim_fencing_token, task_id, worker_id, "

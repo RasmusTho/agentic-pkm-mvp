@@ -79,7 +79,7 @@ reshape a Product SBS subsystem.
 | BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | repo/deployment contract implemented; live activation remains gated |
 | BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | dependency-unblocked after BCP-01 |
 | BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | dependency-unblocked after BCP-02 |
-| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline; API/PostgreSQL migration blocked on BCP-02/04; host auth green and #3812/PR #3813 closed/merged; installed-main pilot receipt pending |
+| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline retained as history; repo-side API/PostgreSQL/outbox migration implemented under #3603; installed-main Demerzel pilot receipt pending |
 | BCP-06 | [#3793](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3793) | `agent:blocked` on BCP-03/04/05 |
 | BCP-07 | Existing #3690 | `agent:blocked` on BCP-06 |
 

@@ -20,6 +20,12 @@ mechanism_id. Reuse the same finding/domain/mechanism binding throughout the run
 new mechanism merely to reset the remaining budget shown in the context pack. Clean reviews carry
 no failure binding. Budget exhaustion is technical classifier input, never a Human Exception by itself.
 Do not merge unless the loaded skill's prerequisites are satisfied.
+When the immutable dispatch context sets `merge_execution_mode` to
+`host_fenced_executor`, do not merge, edit/neutralize/restore the PR body, close Issues, change
+labels/Project state, post GitHub comments, push, or perform any other GitHub mutation. In that mode,
+complete the review/repair and verification gates locally, then return verdict `verified` with the
+fresh clean review events. The Demerzel host owns the separately fenced merge-or-no-merge effect and
+all later lifecycle reconciliation.
 After neutralizing body closers, persist and authenticate the continuous
 prepared -> merged -> reconciled -> restored merge-phase ledger. If a crash leaves an exact-head PR
 open with the neutralized body and a trusted prepared receipt, or merged but incomplete, resume the

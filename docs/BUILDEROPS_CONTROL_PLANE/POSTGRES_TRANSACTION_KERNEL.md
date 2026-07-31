@@ -70,7 +70,13 @@ by BuilderOps governance and remains outside Product persistence authority.
 
 - No Product database tables or Product Alembic lineage own this schema.
 - GitHub effects do not run inside the transaction; only durable outbox intent does.
-- A timed-out external call stays `unknown` until reconciled.
+- A timed-out external call stays `unknown` until reconciled. GitHub effects require authoritative
+  GitHub readback and can never use the terminal-unknown path. Only a
+  `model.verification_coordinator` effect whose provider session identity was not durably observed
+  may terminate as `dead_letter`, and only with the exact pre-session evidence bound to the
+  scheduled head SHA and a task payload in which both session identity and context are durably
+  absent. A sessionful, one-sided, empty, or malformed task state fails closed without outbox
+  mutation; it must not become retryable merely because the worker lease expired.
 - Stale fencing tokens cannot mutate after lease expiry/reassignment.
 - File projections/artifacts cannot be the sole terminal-state or receipt authority.
 - A transaction result binds its committed receipt sequence and recovery LSN for observability and
@@ -101,6 +107,12 @@ by BuilderOps governance and remains outside Product persistence authority.
 - [x] Outbox claims are crash-recoverable and a timed-out external effect enters reconciliation
   rather than immediate replay or terminal success.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_unknown_external_effect_requires_readback_before_retry`.
+- [x] A pre-session indeterminate verification-model effect without a provider identity becomes one
+  durable `dead_letter` reconciliation and cannot be reclaimed or replayed; the PostgreSQL
+  authority rejects the same terminal-unknown request for GitHub effects without mutation.
+  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_indeterminate_effect_dead_letters_without_retry`.
+  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_terminal_unknown_rejects_github_effect_without_mutation`.
+  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_terminal_unknown_rejects_session_bound_task_without_mutation`.
 - [x] Production construction requires a PostgreSQL DSN and never selects/creates SQLite implicitly;
   the SQLite adapter is available only through explicit test/migration injection.
   Verify: `tests/builderops/control_plane/test_store_selection.py::test_production_store_fails_closed_without_postgres`.

@@ -196,6 +196,50 @@ class BuilderOpsControlPlaneClient:
             pin_epoch=False,
         )
 
+    def get_task(self, *, repository: str, task_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/{API_VERSION}/tasks/{task_id}",
+            params={"repository": repository},
+            pin_epoch=False,
+        )
+
+    def list_tasks(
+        self, *, repository: str, task_prefix: str | None = None
+    ) -> list[dict[str, Any]]:
+        params = {"repository": repository}
+        if task_prefix is not None:
+            params["task_prefix"] = task_prefix
+        body = self._request(
+            "GET", f"/{API_VERSION}/tasks", params=params, pin_epoch=False
+        )
+        tasks = body.get("tasks")
+        if not isinstance(tasks, list) or any(
+            not isinstance(task, dict) for task in tasks
+        ):
+            raise ControlPlaneProtocolError(
+                "control plane returned malformed task collection"
+            )
+        return tasks
+
+    def list_attempts(
+        self, *, repository: str, task_id: str
+    ) -> list[dict[str, Any]]:
+        body = self._request(
+            "GET",
+            f"/{API_VERSION}/tasks/{task_id}/attempts",
+            params={"repository": repository},
+            pin_epoch=False,
+        )
+        attempts = body.get("attempts")
+        if not isinstance(attempts, list) or any(
+            not isinstance(attempt, dict) for attempt in attempts
+        ):
+            raise ControlPlaneProtocolError(
+                "control plane returned malformed attempt collection"
+            )
+        return attempts
+
     # -- authority-bearing mutations ----------------------------------------
     def commit_record(
         self,
@@ -249,6 +293,7 @@ class BuilderOpsControlPlaneClient:
         idempotency_key: str,
         request: Mapping[str, Any] | None = None,
         ttl_seconds: int = 5400,
+        require_new_fence: bool = False,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -259,6 +304,7 @@ class BuilderOpsControlPlaneClient:
                 "idempotency_key": idempotency_key,
                 "request": dict(request or {}),
                 "ttl_seconds": ttl_seconds,
+                "require_new_fence": require_new_fence,
             },
         )
 
@@ -289,8 +335,15 @@ class BuilderOpsControlPlaneClient:
         envelope: Mapping[str, Any],
         lease: Mapping[str, Any],
         idempotency_key: str,
+        expected_version: int | None = None,
         request: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if expected_version is None:
+            task = self.get_task(
+                repository=str(envelope["repository"]),
+                task_id=str(lease["resource_id"]),
+            )
+            expected_version = int(task["version"])
         return self._request(
             "POST",
             f"/{API_VERSION}/tasks/complete",
@@ -299,6 +352,65 @@ class BuilderOpsControlPlaneClient:
                 "lease": dict(lease),
                 "idempotency_key": idempotency_key,
                 "request": dict(request or {}),
+                "expected_version": expected_version,
+            },
+        )
+
+    def release_task(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        lease: Mapping[str, Any],
+        idempotency_key: str,
+        expected_version: int | None = None,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if expected_version is None:
+            task = self.get_task(
+                repository=str(envelope["repository"]),
+                task_id=str(lease["resource_id"]),
+            )
+            expected_version = int(task["version"])
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/tasks/release",
+            json_body={
+                "envelope": dict(envelope),
+                "lease": dict(lease),
+                "idempotency_key": idempotency_key,
+                "request": dict(request or {}),
+                "expected_version": expected_version,
+            },
+        )
+
+    def transition_task(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        task_id: str,
+        to_state: str,
+        idempotency_key: str,
+        request: Mapping[str, Any],
+        outbox: Mapping[str, Any] | None = None,
+        lease: Mapping[str, Any] | None = None,
+        expected_states: tuple[str, ...] | None = None,
+        expected_version: int | None = None,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/tasks/transition",
+            json_body={
+                "envelope": dict(envelope),
+                "task_id": task_id,
+                "to_state": to_state,
+                "idempotency_key": idempotency_key,
+                "request": dict(request),
+                "outbox": dict(outbox) if outbox is not None else None,
+                "lease": dict(lease) if lease is not None else None,
+                "expected_states": (
+                    list(expected_states) if expected_states is not None else None
+                ),
+                "expected_version": expected_version,
             },
         )
 
@@ -333,8 +445,14 @@ class BuilderOpsControlPlaneClient:
         payload: Mapping[str, Any],
         idempotency_key: str,
         lease: Mapping[str, Any],
+        expected_task_version: int | None = None,
         expected_states: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
+        if expected_task_version is None:
+            task = self.get_task(
+                repository=str(envelope["repository"]), task_id=task_id
+            )
+            expected_task_version = int(task["version"])
         return self._request(
             "POST",
             f"/{API_VERSION}/attempts",
@@ -349,6 +467,7 @@ class BuilderOpsControlPlaneClient:
                 "expected_states": (
                     list(expected_states) if expected_states is not None else None
                 ),
+                "expected_task_version": expected_task_version,
             },
         )
 
@@ -376,6 +495,91 @@ class BuilderOpsControlPlaneClient:
                 "expected_states": (
                     list(expected_states) if expected_states is not None else None
                 ),
+            },
+        )
+
+    def claim_outbox(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        operation_key: str,
+        worker_id: str,
+        claim_ttl_seconds: int = 300,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/executor/outbox/claim",
+            json_body={
+                "envelope": dict(envelope),
+                "operation_key": operation_key,
+                "worker_id": worker_id,
+                "claim_ttl_seconds": claim_ttl_seconds,
+            },
+        )
+
+    def mark_outbox_unknown(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        claim: Mapping[str, Any],
+        detail: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/executor/outbox/unknown",
+            json_body={
+                "envelope": dict(envelope),
+                "claim": dict(claim),
+                "detail": detail,
+            },
+        )
+
+    def recover_outbox(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        operation_key: str,
+        worker_id: str,
+        claim_ttl_seconds: int = 300,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/executor/outbox/recover",
+            json_body={
+                "envelope": dict(envelope),
+                "operation_key": operation_key,
+                "worker_id": worker_id,
+                "claim_ttl_seconds": claim_ttl_seconds,
+            },
+        )
+
+    def get_outbox_status(
+        self, *, repository: str, operation_key: str
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/{API_VERSION}/executor/outbox/{operation_key}",
+            params={"repository": repository},
+        )
+
+    def reconcile_outbox(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        claim: Mapping[str, Any],
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/executor/outbox/reconcile",
+            json_body={
+                "envelope": dict(envelope),
+                "claim": dict(claim),
+                "observed_applied": observed_applied,
+                "terminal_unknown": terminal_unknown,
+                "evidence": dict(evidence),
             },
         )
 

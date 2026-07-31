@@ -187,6 +187,7 @@ def test_all_authority_commands_use_remote_api(tmp_path: Path) -> None:
         envelope=_envelope(),
         lease=claim["lease"],
         idempotency_key="complete-issue-3791",
+        expected_version=1,
     )
     receipt = client.get_receipt(
         repository=REPO, object_kind="records", object_id="learning-3791"

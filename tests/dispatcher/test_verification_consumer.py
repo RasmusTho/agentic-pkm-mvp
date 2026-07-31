@@ -38,11 +38,47 @@ from app.dispatcher.verification_agent_loop import (
     valid_human_exception_packet,
 )
 from app.dispatcher.verification_dispatch import _authenticated_verification_request
+from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
     prepare_verified_merge,
 )
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
+from tests.dispatcher.builderops_verification_fakes import (
+    FakeBuilderOpsClient,
+    FakeVerificationOutbox,
+)
+
+
+def test_consumer_uses_builderops_api_for_durable_state() -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    durable = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    consumer = VerificationConsumer(
+        durable,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        Launcher(),
+        holder="verification-host",
+    )
+
+    result = consumer.consume(request())
+
+    assert result.status == "needs_human"
+    call_names = [name for name, _values in api.calls]
+    assert "claim_task" in call_names
+    assert "heartbeat_task" in call_names
+    assert "transition_task" in call_names
+    assert any(
+        values.get("outbox", {}).get("effect_type")
+        == "model.verification_coordinator"
+        for name, values in api.calls
+        if name == "transition_task"
+    )
+    assert outbox.calls == ["status", "claim", "unknown", "reconcile"]
+    assert all("sqlite" not in name for name in call_names)
 
 
 @dataclass
@@ -913,8 +949,12 @@ def test_merge_recovery_rejects_final_review_authority_drift(
         assert result.stop_reason == "final_review_authority_mismatch"
 
 
-def _open_neutralized_recovery_evidence(*, merge_commit_sha: object = None):
-    plan = _merge_plan(HEAD)
+def _open_neutralized_recovery_evidence(
+    *,
+    merge_commit_sha: object = None,
+    run_id: str | None = None,
+):
+    plan = _merge_plan(HEAD, run_id=run_id)
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = eligible_pr(
@@ -1649,10 +1689,11 @@ def _merge_plan(
     ),
     authenticated_supporting: tuple[int, ...] = (),
     repair_budget: Mapping[str, object] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, object]:
     context = {
         "contract": "verification_closer_dispatch_context.v2",
-        "run_id": _verification_run_id(),
+        "run_id": run_id or _verification_run_id(),
         "repository": REPO,
         "pr_number": 3603,
         "governing_issue": 3603,
@@ -1692,6 +1733,7 @@ def _merge_comments(
     authenticated_supporting: tuple[int, ...] = (),
     reopened_unauthorized: tuple[int, ...] = (),
     repair_budget: Mapping[str, object] | None = None,
+    run_id: str | None = None,
 ) -> list[dict[str, object]]:
     head_sha = pr.get("head", {}).get("sha") if isinstance(pr.get("head"), Mapping) else None
     assert isinstance(head_sha, str)
@@ -1707,6 +1749,7 @@ def _merge_comments(
         ),
         authenticated_supporting=authenticated_supporting,
         repair_budget=repair_budget,
+        run_id=run_id,
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
@@ -2187,7 +2230,7 @@ def green_checks(head_sha: str = HEAD) -> list[dict[str, object]]:
         {
             "id": 1,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             **_required_check_authority(head_sha),
             "status": "completed",
             "conclusion": "success",
@@ -2298,8 +2341,15 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
         if "/pulls/3603" in endpoint:
             return Result(json.dumps(eligible_pr()))
         if "/actions/runs?head_sha=" in endpoint:
-            return Result(json.dumps({"workflow_runs": [GREEN[0]["workflow_run"]]}))
-        return Result(json.dumps({"check_runs": GREEN}))
+            return Result(
+                json.dumps(
+                    {
+                        "total_count": 1,
+                        "workflow_runs": [GREEN[0]["workflow_run"]],
+                    }
+                )
+            )
+        return Result(json.dumps({"total_count": 1, "check_runs": GREEN}))
 
     source = GhCliVerificationSource(runner=runner)
     assert source.pending_requests(
@@ -2315,7 +2365,7 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
         {
             "id": 10,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             "check_suite": {"id": 77},
             "status": "completed",
             "conclusion": "success",
@@ -2323,7 +2373,7 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
         {
             "id": 11,
             "name": "Unit tests (not pg)",
-            "app": {"slug": "github-actions"},
+            "app": {"id": 7, "slug": "github-actions"},
             "check_suite": {"id": 88},
             "workflow_run": {
                 "path": ".github/workflows/ci-smoke.yaml",
@@ -2345,22 +2395,34 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
         if "/actions/runs?head_sha=" in endpoint:
             return Result(
                 json.dumps(
-                    {
-                        "workflow_runs": [
-                            {
-                                "id": 123,
+                        {
+                            "total_count": 2,
+                            "workflow_runs": [
+                                {
+                                    "id": 123,
                                 "workflow_id": 198962230,
                                 "path": ".github/workflows/ci-smoke.yaml",
                                 "event": "pull_request",
                                 "head_sha": HEAD,
                                 "check_suite_id": 77,
-                                "run_attempt": 1,
-                            }
-                        ]
+                                    "run_attempt": 1,
+                                },
+                                {
+                                    "id": 124,
+                                    "workflow_id": 198962230,
+                                    "path": ".github/workflows/ci-smoke.yaml",
+                                    "event": "push",
+                                    "head_sha": HEAD,
+                                    "check_suite_id": 88,
+                                    "run_attempt": 1,
+                                },
+                            ]
                     }
                 )
             )
-        return Result(json.dumps({"check_runs": raw_checks}))
+        return Result(
+            json.dumps({"total_count": len(raw_checks), "check_runs": raw_checks})
+        )
 
     checks = GhCliVerificationSource(runner=runner).checks(
         "RasmusTho/agentic-pkm-mvp", HEAD
@@ -2375,10 +2437,315 @@ def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
         "check_suite_id": 77,
         "run_attempt": 1,
     }
-    assert "workflow_run" not in checks[1]
+    assert checks[1]["workflow_run"]["event"] == "push"
     assert (
         verification_consumer._checks_rejection(checks, expected_head_sha=HEAD)
         is None
+    )
+
+
+def test_gh_source_paginates_complete_check_and_workflow_authority() -> None:
+    check_rows = [
+        {
+            "id": index,
+            "name": f"check-{index}",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 10_000 + index},
+            "status": "completed",
+            "conclusion": "success",
+        }
+        for index in range(1, 102)
+    ]
+    workflow_rows = [
+        {
+            "id": 20_000 + index,
+            "workflow_id": 198962230,
+            "path": ".github/workflows/ci-smoke.yaml",
+            "event": "pull_request",
+            "head_sha": HEAD,
+            "check_suite_id": 10_000 + index,
+            "run_attempt": 1,
+        }
+        for index in range(1, 102)
+    ]
+
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    calls: list[str] = []
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        calls.append(endpoint)
+        page_rows = (
+            workflow_rows if "/actions/runs?head_sha=" in endpoint else check_rows
+        )
+        page = 2 if "&page=2" in endpoint else 1
+        start = (page - 1) * 100
+        key = (
+            "workflow_runs"
+            if "/actions/runs?head_sha=" in endpoint
+            else "check_runs"
+        )
+        return Result(
+            {
+                "total_count": len(page_rows),
+                key: page_rows[start : start + 100],
+            }
+        )
+
+    checks = GhCliVerificationSource(runner=runner).checks(REPO, HEAD)
+
+    assert len(checks) == 101
+    assert checks[-1]["workflow_run"]["check_suite_id"] == 10_101
+    assert any(
+        "check-runs?per_page=100&filter=all&page=2" in call
+        for call in calls
+    )
+    assert any(
+        "check-runs?per_page=100&filter=all" in call
+        for call in calls
+    )
+    assert any("actions/runs?head_sha=" in call and "&page=2" in call for call in calls)
+
+
+@pytest.mark.parametrize("truncated_key", ("check_runs", "workflow_runs"))
+def test_gh_source_rejects_truncated_check_authority(
+    truncated_key: str,
+) -> None:
+    check_rows = [
+        {
+            "id": index,
+            "name": f"check-{index}",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 10_000 + index},
+            "status": "completed",
+            "conclusion": "success",
+        }
+        for index in range(1, 101)
+    ]
+    workflow_rows = [
+        {
+            "id": 20_000 + index,
+            "workflow_id": 198962230,
+            "path": ".github/workflows/ci-smoke.yaml",
+            "event": "pull_request",
+            "head_sha": HEAD,
+            "check_suite_id": 10_000 + index,
+            "run_attempt": 1,
+        }
+        for index in range(1, 101)
+    ]
+
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        is_workflow = "/actions/runs?head_sha=" in endpoint
+        key = "workflow_runs" if is_workflow else "check_runs"
+        rows = workflow_rows if is_workflow else check_rows
+        if "&page=2" in endpoint:
+            return Result(
+                {
+                    "total_count": 101 if key == truncated_key else 100,
+                    key: [],
+                }
+            )
+        return Result(
+            {
+                "total_count": 101 if key == truncated_key else 100,
+                key: rows,
+            }
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"GitHub {truncated_key.replace('_', '-')} listing is incomplete",
+    ):
+        GhCliVerificationSource(runner=runner).checks(REPO, HEAD)
+
+
+def test_gh_source_rejects_ambiguous_workflow_suite_provenance() -> None:
+    raw_checks = [
+        {
+            "id": 10,
+            "name": "Docs Guard",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 71},
+            "status": "completed",
+            "conclusion": "failure",
+        }
+    ]
+    common_workflow = {
+        "workflow_id": 198962230,
+        "path": ".github/workflows/docs-guard.yml",
+        "event": "pull_request",
+        "head_sha": HEAD,
+        "check_suite_id": 71,
+        "run_attempt": 1,
+    }
+
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if "/actions/runs?head_sha=" in command[-1]:
+            return Result(
+                {
+                    "total_count": 2,
+                    "workflow_runs": [
+                        {"id": 81, **common_workflow},
+                        {"id": 82, **common_workflow},
+                    ],
+                }
+            )
+        return Result(
+            {"total_count": len(raw_checks), "check_runs": raw_checks}
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="workflow-suite provenance is ambiguous",
+    ):
+        GhCliVerificationSource(runner=runner).checks(REPO, HEAD)
+
+
+def test_gh_source_rejects_invalid_github_actions_suite() -> None:
+    class Result:
+        returncode = 0
+
+        def __init__(self, value: object) -> None:
+            self.stdout = json.dumps(value)
+
+    def runner(command, **_kwargs):
+        if "/actions/runs?head_sha=" in command[-1]:
+            return Result({"total_count": 0, "workflow_runs": []})
+        return Result(
+            {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 10,
+                        "name": "Docs Guard",
+                        "app": {"id": 7, "slug": "github-actions"},
+                        "check_suite": {"id": 0},
+                        "status": "completed",
+                        "conclusion": "failure",
+                    }
+                ],
+            }
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="GitHub Actions check-suite evidence is malformed",
+    ):
+        GhCliVerificationSource(runner=runner).checks(REPO, HEAD)
+
+
+def test_check_reduction_binds_both_app_slug_and_id() -> None:
+    checks = [
+        *green_checks(),
+        {
+            "id": 10,
+            "name": "Docs Guard",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 71},
+            "workflow_run": {
+                "id": 81,
+                "workflow_id": 198962230,
+                "path": ".github/workflows/docs-guard.yml",
+                "event": "pull_request",
+                "head_sha": HEAD,
+                "check_suite_id": 71,
+                "run_attempt": 1,
+            },
+            "status": "completed",
+            "conclusion": "failure",
+        },
+        {
+            "id": 11,
+            "name": "Docs Guard",
+            "app": {"id": 999, "slug": "github-actions"},
+            "check_suite": {"id": 72},
+            "workflow_run": {
+                "id": 82,
+                "workflow_id": 198962230,
+                "path": ".github/workflows/docs-guard.yml",
+                "event": "pull_request",
+                "head_sha": HEAD,
+                "check_suite_id": 72,
+                "run_attempt": 1,
+            },
+            "status": "completed",
+            "conclusion": "success",
+        },
+    ]
+
+    assert (
+        verification_consumer._checks_rejection(
+            checks,
+            expected_head_sha=HEAD,
+        )
+        == "checks_not_green"
+    )
+
+
+def test_check_reduction_binds_distinct_workflow_identity() -> None:
+    checks = [
+        *green_checks(),
+        {
+            "id": 10,
+            "name": "Docs Guard",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 71},
+            "workflow_run": {
+                "id": 81,
+                "workflow_id": 111,
+                "path": ".github/workflows/docs-guard.yml",
+                "event": "pull_request",
+                "head_sha": HEAD,
+                "check_suite_id": 71,
+                "run_attempt": 1,
+            },
+            "status": "completed",
+            "conclusion": "failure",
+        },
+        {
+            "id": 11,
+            "name": "Docs Guard",
+            "app": {"id": 7, "slug": "github-actions"},
+            "check_suite": {"id": 72},
+            "workflow_run": {
+                "id": 82,
+                "workflow_id": 222,
+                "path": ".github/workflows/unrelated.yml",
+                "event": "pull_request",
+                "head_sha": HEAD,
+                "check_suite_id": 72,
+                "run_attempt": 1,
+            },
+            "status": "completed",
+            "conclusion": "success",
+        },
+    ]
+
+    assert (
+        verification_consumer._checks_rejection(
+            checks,
+            expected_head_sha=HEAD,
+        )
+        == "checks_not_green"
     )
 
 
@@ -5199,6 +5566,56 @@ def test_coordinator_launch_strips_ambient_host_credentials(tmp_path, monkeypatc
             "OPENAI_API_KEY",
         }
     )
+
+
+def test_host_fenced_coordinator_has_no_ambient_github_write_path(
+    tmp_path, monkeypatch
+) -> None:
+    calls: list[dict[str, object]] = []
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'forced_login_method = "chatgpt"\n'
+        'cli_auth_credentials_store = "keyring"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("GH_TOKEN", "must-not-pass")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-pass")
+
+    launcher = _capturing_coordinator_launcher(tmp_path, calls)
+    launcher.launch(
+        {
+            "head_sha": HEAD,
+            "merge_execution_mode": "host_fenced_executor",
+        }
+    )
+
+    child_env = calls[0]["env"]
+    assert isinstance(child_env, dict)
+    assert "GH_TOKEN" not in child_env
+    assert "GITHUB_TOKEN" not in child_env
+    assert child_env["GH_CONFIG_DIR"] == str(
+        tmp_path / "gh-uncredentialed"
+    )
+    assert child_env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert child_env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert child_env["GIT_TERMINAL_PROMPT"] == "0"
+    assert child_env["GIT_SSH_COMMAND"] == "/usr/bin/false"
+    assert child_env["HOME"] == os.environ["HOME"]
+    command = launcher.command(host_fenced_merge=True)
+    assert "--ignore-user-config" in command
+    assert command.count("--disable") == 2
+    assert "js_repl" in command
+    assert "multi_agent" in command
+    assert any(
+        value.startswith("forced_login_method=") for value in command
+    )
+    assert any(
+        value.startswith("cli_auth_credentials_store=")
+        for value in command
+    )
+    assert "Perform no GitHub mutation" in command[-1]
 
 
 def test_coordinator_launch_uses_explicit_runtime_environment(tmp_path, monkeypatch) -> None:
