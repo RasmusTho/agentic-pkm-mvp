@@ -33,6 +33,12 @@ FULL_SUITE_EXACT = {
     # subsystems. Never narrow their coverage to a single feature owner.
     "app/cli/__init__.py",
     "app/config/paths.py",
+    # Canonical runtime DSN resolution. `app/db/db.py::_psycopg_dsn` (already a
+    # FULL_SUITE_PREFIX via app/db/) resolves every connection through this
+    # module, and the self-owned outbox skip predicate resolves the same
+    # question with it (#4214 D1) — so a change here can move any DB-touching
+    # subsystem between "connect" and "skip". Never narrow it to one owner.
+    "app/config/database.py",
     "conftest.py",
     "pytest.ini",
     "pyproject.toml",
