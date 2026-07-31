@@ -30,8 +30,9 @@ introduce a generic saga framework, graph store, event store, queue, service, or
 
 ## Classification and authority boundary
 
-**Change classification:** target-state / future-state work. This docs-only breakdown does not claim
-the journal, lineage fields, or complement identities are shipped.
+**Change classification:** target-state delivery contract under serial implementation. EROJ-01's
+journal and committed-visibility fence are shipped (#4350); the EROJ-02 lineage fields and EROJ-03
+complement identities are not shipped and are not claimed.
 
 **SBS classification:** Product/Runtime.
 

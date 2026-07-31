@@ -275,6 +275,14 @@ class EntityReviewOperationJournalPort(Protocol):
         into_id: str,
     ) -> OperationRecord: ...
 
+    def find_active_operation(
+        self, *, vault_identity: str, queue_entry_id: str
+    ) -> OperationRecord | None: ...
+
+    def find_cleared_operation(
+        self, *, vault_identity: str, queue_entry_id: str, from_id: str, into_id: str
+    ) -> OperationRecord | None: ...
+
     def commit_merge_event(self, operation: OperationRecord) -> OperationRecord: ...
 
     def verify_committed_visibility(self, operation: OperationRecord) -> bool: ...
@@ -411,10 +419,13 @@ class EntityReviewOperationJournal:
         conn = self._connection_factory()
         autocommit = getattr(conn, "autocommit", False)
         if autocommit:
-            raise EntityReviewOperationJournalError(
-                "journal connections must be manual-commit; an autocommit "
-                "connection cannot express the atomic journal-owned transaction"
-            )
+            try:
+                conn.close()
+            finally:
+                raise EntityReviewOperationJournalError(
+                    "journal connections must be manual-commit; an autocommit "
+                    "connection cannot express the atomic journal-owned transaction"
+                )
         return conn
 
     def _load_row(self, conn: Any, operation_id: str) -> OperationRecord | None:
@@ -472,6 +483,70 @@ class EntityReviewOperationJournal:
         try:
             ensure_journal_schema(conn)
             return self._load_row(conn, operation_id)
+        finally:
+            conn.close()
+
+    def find_active_operation(
+        self, *, vault_identity: str, queue_entry_id: str
+    ) -> OperationRecord | None:
+        """The active (non-cleared) operation bound to this queue entry, if any.
+
+        Resume is keyed on the ENTRY, not on re-deriving an id from the current
+        decision content: after the decision history is edited mid-operation,
+        the current mapping derives a different id, and only this entry-keyed
+        read can still reach the in-flight row (review F1 on #4350). At most
+        one active row can exist (the partial unique index); more than one is
+        malformed and fails closed (INV-EROJ-6).
+        """
+        conn = self._open()
+        try:
+            ensure_journal_schema(conn)
+            cur = _exec(
+                conn,
+                f"SELECT operation_id FROM {JOURNAL_TABLE} "
+                "WHERE vault_identity = %s AND queue_entry_id = %s AND state <> %s",
+                (vault_identity, queue_entry_id, STATE_CLEARED),
+            )
+            rows = cur.fetchall() if hasattr(cur, "fetchall") else []
+            if not rows:
+                return None
+            if len(rows) > 1:
+                raise EntityReviewOperationJournalError(
+                    f"queue entry {queue_entry_id!r} has {len(rows)} active operations; "
+                    "the journal is malformed and the entry stays pending (INV-EROJ-6)"
+                )
+            return self._load_row(conn, str(_col(rows[0], 0, "operation_id")))
+        finally:
+            conn.close()
+
+    def find_cleared_operation(
+        self, *, vault_identity: str, queue_entry_id: str, from_id: str, into_id: str
+    ) -> OperationRecord | None:
+        """The most recent CLEARED operation for this entry and exact pair.
+
+        Guards matrix row 4's forbidden outcome (review F4 on #4350): a stop
+        between `mark_cleared` and the pending-note write leaves the entry
+        visible while its operation already released the active slot. A later
+        identical re-approval must finish the interrupted clear instead of
+        claiming a fresh operation and emitting a second event for the same
+        merge. Filtered by the exact original pair so a genuinely new merge of
+        a split-reverted pair (effects no longer present) never matches.
+        """
+        conn = self._open()
+        try:
+            ensure_journal_schema(conn)
+            cur = _exec(
+                conn,
+                f"SELECT operation_id FROM {JOURNAL_TABLE} "
+                "WHERE vault_identity = %s AND queue_entry_id = %s AND state = %s "
+                "AND from_id = %s AND into_id = %s "
+                "ORDER BY updated_at DESC, operation_id LIMIT 1",
+                (vault_identity, queue_entry_id, STATE_CLEARED, from_id, into_id),
+            )
+            row = cur.fetchone() if hasattr(cur, "fetchone") else None
+            if row is None:
+                return None
+            return self._load_row(conn, str(_col(row, 0, "operation_id")))
         finally:
             conn.close()
 

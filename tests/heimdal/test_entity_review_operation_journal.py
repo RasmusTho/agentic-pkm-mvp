@@ -296,10 +296,17 @@ def _persisted_decisions(vault_root: Path) -> list[Any]:
 
 
 def _claim_kwargs(
-    vault_root: Path, queue_entry_id: str, from_id: str, into_id: str, raw_decision: dict[str, Any]
+    register: EntityRegister,
+    queue_entry_id: str,
+    from_id: str,
+    into_id: str,
+    raw_decision: dict[str, Any],
 ) -> dict[str, Any]:
+    # The applicator binds the register's canonical vault identity (the
+    # vault-selection id, not a filesystem-path spelling — review F7 on
+    # #4350), so derived expectations must use the same identity.
     return {
-        "vault_identity": str(vault_root.resolve()),
+        "vault_identity": register.vault_identity,
         "queue_entry_id": queue_entry_id,
         "decision_position": 0,
         "decision_digest": journal_module.decision_mapping_digest(raw_decision),
@@ -320,7 +327,7 @@ def test_operation_identity_binds_exact_human_decision(
     register = _register(vault_root)
     queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
     journal = _journal(scratch_dsn)
-    kwargs = _claim_kwargs(vault_root, queue_entry_id, from_id, into_id, raw_decision)
+    kwargs = _claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
 
     # Deterministic across retries: the derivation is a pure function of the
     # INV-EROJ-2 tuple, and every varied component derives a different id.
@@ -392,7 +399,7 @@ def test_operation_claim_commits_before_first_register_effect(
     queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
     journal = _journal(scratch_dsn)
     expected_id = derive_operation_id(
-        **_claim_kwargs(vault_root, queue_entry_id, from_id, into_id, raw_decision)
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
     )
     decisions_before = _persisted_decisions(vault_root)
 
@@ -434,7 +441,7 @@ def test_mid_effect_crash_resumes_and_completes_target_side(
     queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
     journal = _journal(scratch_dsn)
     expected_id = derive_operation_id(
-        **_claim_kwargs(vault_root, queue_entry_id, from_id, into_id, raw_decision)
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
     )
 
     # Crash between the source-redirect write and the target-complement write.
@@ -473,7 +480,7 @@ def test_merge_event_commit_is_visible_on_fresh_connection_before_pending_clear(
     queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
     journal = _journal(scratch_dsn)
     operation = journal.claim_operation(
-        **_claim_kwargs(vault_root, queue_entry_id, from_id, into_id, raw_decision)
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
     )
     register.ensure_merge_effects(from_id, into_id)
 
@@ -640,7 +647,7 @@ def test_effect_before_event_commit_recovers_one_durable_event(
     assert target_entry is not None and from_id in target_entry.merged_from
     assert _merged_event_rows(scratch_dsn) == []
     expected_id = derive_operation_id(
-        **_claim_kwargs(vault_root, queue_entry_id, from_id, into_id, raw_decision)
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
     )
     row = _journal_row(scratch_dsn, expected_id)
     assert row is not None and row[0] == STATE_CLAIMED
@@ -665,3 +672,202 @@ def test_effect_before_event_commit_recovers_one_durable_event(
     # A later replay is a no-op: nothing pending, still exactly one event.
     assert apply_human_review_decisions(vault_root, register=register, journal=journal) == ()
     assert len(_merged_event_rows(scratch_dsn)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Review F1/F3/F4 on #4350 — orphaned-operation convergence and the
+# second-event guard, reproduced and closed against real Postgres.
+# ---------------------------------------------------------------------------
+
+
+class _FenceRefusingJournal(EntityReviewOperationJournal):
+    """Real journal whose fence reports not-visible for the first N calls —
+    the deterministic way to park an operation in the designed refusal state
+    (`event_committed`, entry still pending) that review F1 starts from."""
+
+    def __init__(self, *, connection_factory: Any, refuse_first: int) -> None:
+        super().__init__(connection_factory=connection_factory)
+        self._refusals_left = refuse_first
+
+    def verify_committed_visibility(self, operation: OperationRecord) -> bool:
+        if self._refusals_left > 0:
+            self._refusals_left -= 1
+            return False
+        return super().verify_committed_visibility(operation)
+
+
+def _append_decisions(vault_root: Path, *decisions: dict[str, Any]) -> None:
+    note = read_settings_note(vault_root, ENTITY_REVIEW, settings_dir=DEFAULT_SETTINGS_DIR)
+    assert note is not None
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={
+                **note.values,
+                "decisions": [*list(note.values.get("decisions") or []), *decisions],
+            },
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+
+
+@pytest.mark.parametrize("late_ruling", ["reapprove", "reject"])
+def test_edited_history_after_refusal_converges_without_manual_repair(
+    scratch_dsn: str, tmp_path: Path, late_ruling: str
+) -> None:
+    """Review F1 (#4350): an operation parked in the designed refusal state
+    (`event_committed`, entry pending) must converge through the entry-keyed
+    resume even after the human edits the decision history — never fail
+    closed forever on the re-derived identity."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
+    decisions_before = _persisted_decisions(vault_root)
+
+    refusing = _FenceRefusingJournal(
+        connection_factory=lambda: psycopg.connect(scratch_dsn), refuse_first=1
+    )
+    with pytest.raises(EntityConfirmError, match="committed visibility"):
+        apply_human_review_decisions(vault_root, register=register, journal=refusing)
+    expected_id = derive_operation_id(
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
+    )
+    row = _journal_row(scratch_dsn, expected_id)
+    assert row is not None and row[0] == STATE_EVENT_COMMITTED
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [queue_entry_id]
+
+    # The human reacts to the still-pending entry by editing the history —
+    # the natural response, and the exact move that used to brick the entry.
+    if late_ruling == "reapprove":
+        _append_decisions(
+            vault_root,
+            ReviewDecision(queue_entry_id=queue_entry_id, action="undo").to_dict(),
+            ReviewDecision(
+                queue_entry_id=queue_entry_id,
+                action="merge",
+                from_id=from_id,
+                into_id=into_id,
+            ).to_dict(),
+        )
+    else:
+        _append_decisions(
+            vault_root,
+            ReviewDecision(queue_entry_id=queue_entry_id, action="reject").to_dict(),
+        )
+
+    # The retry converges: the in-flight operation is finished (fence ->
+    # cleared -> entry removed) under its ORIGINAL identity; the late ruling
+    # is a post-application no-op per the documented undo boundary.
+    journal = _journal(scratch_dsn)
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert len(applied) == 1
+    assert applied[0].merged is True
+    assert applied[0].operation_id == expected_id
+    assert pending_review_entries(vault_root) == ()
+    events = _merged_event_rows(scratch_dsn)
+    assert len(events) == 1, "convergence must never mint a second merge event"
+    row = _journal_row(scratch_dsn, expected_id)
+    assert row is not None and row[0] == STATE_CLEARED
+    with psycopg.connect(scratch_dsn) as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM entity_review_operations WHERE queue_entry_id = %s",
+            (queue_entry_id,),
+        ).fetchone()
+    assert count == (1,), "no second operation may be minted for the edited history"
+
+    # The loop actually terminates: a further run is a clean no-op.
+    assert apply_human_review_decisions(vault_root, register=register, journal=journal) == ()
+    # Append-only decision history survived every round byte-for-byte.
+    assert _persisted_decisions(vault_root)[: len(decisions_before)] == decisions_before
+
+
+def test_reject_with_claimed_operation_refuses_and_preserves_pending(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """Review F3 (#4350): a reject must not clear an entry whose claimed
+    operation is still in flight — its register effects may already exist,
+    and clearing would silently divorce the ruling from canonical notes."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root, _CrashingRegister)
+    assert isinstance(register, _CrashingRegister)
+    queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+
+    # Park a claimed operation with a real half-applied effect: crash between
+    # the source-redirect write and the target-complement write.
+    register.arm(fail_on_write=2)
+    with pytest.raises(EntityConfirmError, match="simulated crash"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    register.disarm()
+    expected_id = derive_operation_id(
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
+    )
+    row = _journal_row(scratch_dsn, expected_id)
+    assert row is not None and row[0] == STATE_CLAIMED
+
+    # The human changes their mind to a reject while the operation is claimed.
+    _append_decisions(
+        vault_root,
+        ReviewDecision(queue_entry_id=queue_entry_id, action="undo").to_dict(),
+        ReviewDecision(queue_entry_id=queue_entry_id, action="reject").to_dict(),
+    )
+    with pytest.raises(EntityConfirmError, match="still claimed"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    # Nothing moved: entry pending, no event, effects exactly as the crash
+    # left them, ruling history intact.
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [queue_entry_id]
+    assert _merged_event_rows(scratch_dsn) == []
+    source_entry = register.get_entry(from_id)
+    assert source_entry is not None and source_entry.merged_into == into_id
+
+
+def test_interrupted_clear_never_emits_second_event_on_reapproval(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """Review F4 (#4350): partial-failure matrix row 4's forbidden outcome. A
+    stop between `mark_cleared` and the pending-note write, followed by a
+    human undo + re-approval of the same merge, must finish the interrupted
+    clear — never claim a fresh operation and emit a second event."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+
+    # Drive the operation to `cleared` entirely journal-side, stopping before
+    # the pending-note write — exactly the crash window under review.
+    operation = journal.claim_operation(
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
+    )
+    register.ensure_merge_effects(from_id, into_id)
+    operation = journal.commit_merge_event(operation)
+    assert journal.verify_committed_visibility(operation) is True
+    journal.mark_cleared(operation)
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [queue_entry_id]
+    assert len(_merged_event_rows(scratch_dsn)) == 1
+
+    # Human sees the entry still pending, undoes, and re-approves the same
+    # merge — a new decision position, thus a new derived identity.
+    _append_decisions(
+        vault_root,
+        ReviewDecision(queue_entry_id=queue_entry_id, action="undo").to_dict(),
+        ReviewDecision(
+            queue_entry_id=queue_entry_id, action="merge", from_id=from_id, into_id=into_id
+        ).to_dict(),
+    )
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert len(applied) == 1 and applied[0].merged is True
+    assert applied[0].operation_id == operation.operation_id, (
+        "the interrupted clear must finish under the original operation"
+    )
+    assert pending_review_entries(vault_root) == ()
+    assert len(_merged_event_rows(scratch_dsn)) == 1, (
+        "matrix row 4 forbidden outcome: a second event was emitted"
+    )
+    with psycopg.connect(scratch_dsn) as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM entity_review_operations WHERE queue_entry_id = %s",
+            (queue_entry_id,),
+        ).fetchone()
+    assert count == (1,), "no second operation may be claimed for the finished clear"

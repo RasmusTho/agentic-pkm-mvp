@@ -276,9 +276,21 @@ class EntityRegister:
         if not vault_context.active_vault_path:
             raise EntityRegisterError("vault_context.active_vault_path is required")
         self._vault_root = Path(vault_context.active_vault_path).expanduser().resolve()
+        # Canonical vault identity for operational records bound to this
+        # register (EROJ-01, #4350): the vault-selection SoT id when the
+        # context carries one, else the resolved root path. A mount/symlink
+        # respelling of the same selected vault must NOT re-derive
+        # entity-review operation ids — that silently duplicates merge events
+        # instead of resuming (review F7 on #4350).
+        self._vault_identity = vault_context.active_vault_id or str(self._vault_root)
         self._write_guard = write_guard
         self._register_dir = register_dir
         self._conn = conn
+
+    @property
+    def vault_identity(self) -> str:
+        """Stable identity of the vault this register is bound to."""
+        return self._vault_identity
 
     # -- internal note IO ---------------------------------------------------
 
@@ -509,6 +521,18 @@ class EntityRegister:
             raise EntityRegisterError(f"merge_effect_state(): unknown into_id {into_id!r}")
         if from_id == into_id:
             raise EntityRegisterError("merge_effect_state(): from_id and into_id must differ")
+        if target.lifecycle == LIFECYCLE_MERGED:
+            # Target-evolution refusal (INV-EROJ-7, partial-failure matrix row
+            # 5): the human-decided target has itself been merged away, so this
+            # slice can neither begin a merge into it nor prove that resuming
+            # one recovers the original decision rather than rewriting it.
+            # EROJ-02's lineage proof owns that recovery; until then the
+            # decision history stays unchanged and the queue entry pending.
+            raise EntityRegisterError(
+                f"merge_effect_state(): into_id {into_id!r} is merged into "
+                f"{target.merged_into!r}; the target has evolved and this slice refuses "
+                "target-evolved application/recovery (EROJ-02)"
+            )
 
         target_claims_source = from_id in target.merged_from
         if source.lifecycle == LIFECYCLE_MERGED:
