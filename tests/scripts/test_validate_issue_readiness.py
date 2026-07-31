@@ -438,3 +438,46 @@ def test_cli_reads_issue_number_from_environment(tmp_path: Path) -> None:
     assert result.stdout == ""
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["issue_number"] == 3212
+
+
+def test_declared_parent_reference_must_be_machine_parseable() -> None:
+    """A declared child->parent reference must be exactly one canonical
+    ``Parent: #<N>`` line (INV-DG-3, #4443)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+
+    canonical = body + "\nParent: #4447\n"
+    report = classify_issue_body(canonical, issue_number=1, labels=["type:task"])
+    assert report.readiness_classification == "ready_candidate"
+
+    for malformed_line in (
+        "Parent: **#4447**",
+        "Parent: #4447 and #4448",
+        "Parent: see #4447",
+    ):
+        report = classify_issue_body(
+            body + f"\n{malformed_line}\n", issue_number=1, labels=["type:task"]
+        )
+        assert report.readiness_classification == "malformed_parent_reference", malformed_line
+        assert any("Parent: #<N>" in item for item in report.repair_guidance)
+
+    duplicated = body + "\nParent: #4447\nParent: #4448\n"
+    report = classify_issue_body(duplicated, issue_number=1, labels=["type:task"])
+    assert report.readiness_classification == "malformed_parent_reference"
+
+
+def test_body_without_parent_reference_stays_ready() -> None:
+    """Orphan slices (no declared parent) remain valid, including legacy
+    prose like ``Parent feature issue: #N`` that is not the declaration
+    grammar (#4443)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+
+    report = classify_issue_body(body, issue_number=1, labels=["type:task"])
+    assert report.readiness_classification == "ready_candidate"
+
+    legacy_prose = body + "\nParent feature issue: #3325 (validation hub).\n"
+    report = classify_issue_body(legacy_prose, issue_number=1, labels=["type:task"])
+    assert report.readiness_classification == "ready_candidate"
+
+    descriptive_no_number = body + "\nParent: the governing validation hub for this track.\n"
+    report = classify_issue_body(descriptive_no_number, issue_number=1, labels=["type:task"])
+    assert report.readiness_classification == "ready_candidate"

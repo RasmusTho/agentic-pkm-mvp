@@ -50,6 +50,24 @@ data, or any artefact that is not reproducible from the checked-in repo plus pub
 body, linked PR, owner doc) before authoring the Issue that depends on it. If the material cannot be
 promoted, the Issue should not depend on it.
 
+## Child to parent reference
+
+A child slice governed by a parent feature issue declares that edge with exactly one line, on its
+own line in the body (conventionally at the end of `## Context`):
+
+```
+Parent: #<N>
+```
+
+Plain text, one parent, no bold or prose around the number — the line is machine-parsed
+(INV-DG-3). Orphan slices (no governing parent) carry no `Parent:` declaration at all.
+`scripts/validate_issue_readiness.py` fails readiness (`malformed_parent_reference`) when a
+declared reference — a `Parent:`-prefixed line carrying a `#<digits>` token — is not exactly this
+shape or appears more than once. Descriptive parent prose without an issue-number token is not a
+declaration. The parent→child direction is owned by the epic delivery ledger
+(`verification-and-closure :: Parent Issue Closure :: Structured child ledger (epic delivery
+ledger v1)`), not by this line.
+
 ## Verify: marker rule
 
 Every Acceptance Criterion declares its verification inline with a `Verify:` marker:
