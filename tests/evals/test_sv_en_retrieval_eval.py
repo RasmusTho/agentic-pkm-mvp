@@ -11,7 +11,7 @@ Three layers, deliberately separated so the eval is honest about what CI can pro
    end to end and re-derives the scorecard's headline finding from live embeddings.
 
 Layer 3 is what makes the scorecard reproducible rather than asserted. CI has no Ollama host, so it
-skips there and runs on any embedding host (mac mini / test channel, or a laptop with both models
+skips there and runs on any embedding host (the test-channel host, or any machine with both models
 pulled).
 """
 

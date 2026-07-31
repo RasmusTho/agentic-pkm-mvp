@@ -16,8 +16,8 @@ under owner ruling R2: the eval **validates and tunes** the BGE-M3 migration, it
   English, across 12 topics. Eight topics exist in both languages (the labelled topics); four are
   single-language distractors that deliberately share heavy surface vocabulary with a labelled topic
   (brewing/sourdough, post-office queueing/watcher backpressure, graph theory/note linking,
-  coffee roasting/sleep). Niflheim-**style**, never Niflheim content: nothing here comes from a real
-  vault.
+  coffee roasting/sleep). Modelled on the **shape** of a real bilingual personal vault, never on its
+  content: nothing here comes from a real vault.
 - **Query set** — 24 hand-labelled queries, 8 per class:
   - `sv_only` — Swedish query, gold is the Swedish document on that topic.
   - `en_only` — English query, gold is the English document on that topic.

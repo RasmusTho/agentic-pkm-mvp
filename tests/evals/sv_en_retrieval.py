@@ -141,8 +141,8 @@ def ollama_models_available() -> set[str]:
     """Return the Ollama model tags reachable from this host, or an empty set.
 
     Used to skip — never to silently pass — when the runner machine has no embedding host. The
-    owner's laptop deliberately carries no ML deps; the eval runs on the mac mini (test channel) or
-    any Ollama host.
+    owner's laptop deliberately carries no ML deps; the eval runs on the test-channel host or any
+    other host with an Ollama runtime.
     """
     import httpx
 

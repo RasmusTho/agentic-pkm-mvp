@@ -26,7 +26,7 @@ The harness lives in `tests/evals/sv_en_retrieval.py`; the checks in
 
 ## Content rule
 
-**Niflheim-style, never Niflheim content.** Every document here is hand-authored and synthetic. No
+**Vault-shaped, never vault content.** Every document here is hand-authored and synthetic. No
 personal, client, work, or vault material may be committed to this directory — the corpus imitates
 the *shape* of a bilingual personal knowledge vault (a builder's working notes mixed with hobby and
 admin notes), not its contents. `test_corpus_is_synthetic_and_canonically_tagged` enforces the
@@ -58,8 +58,8 @@ not.
 ## Regenerating the scorecard
 
 The eval embeds under both identities, so it needs an Ollama host with both models pulled. The
-owner's laptop deliberately carries no ML deps — run this on the mac mini (test channel) or any
-Ollama host:
+owner's laptop deliberately carries no ML deps — run this on the test-channel host or any other
+machine with an Ollama runtime:
 
 ```bash
 ollama pull nomic-embed-text
