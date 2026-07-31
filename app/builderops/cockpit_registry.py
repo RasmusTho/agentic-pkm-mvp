@@ -27,6 +27,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.builderops.cockpit_docs_plane import (
+    DocsPlaneSnapshot,
+    build_lanes,
+    classify_capability,
+    classify_epic,
+    read_docs_plane,
+    unlinked_docs_threads,
+)
 from app.builderops.cockpit_github_plane import (
     GithubLiveSnapshot,
     GithubReader,
@@ -81,9 +89,11 @@ RUNG_ORDER: tuple[str, ...] = (
 
 # Planes the v1 join deliberately does not read. Named so their absence is
 # visible instead of implied. github-live moved out of this tuple in
-# BOPS-COCKPIT-03 (#4450): it is now a named, per-render read source.
+# BOPS-COCKPIT-03 (#4450); docs-frontmatter moved out in BOPS-COCKPIT-05
+# (#4451): both are now named, per-render read sources. ckm-projection stays
+# unread by design (ADR-0057: CKM is a lens, never spine — it must never
+# become a fourth join input here).
 UNREAD_PLANES: tuple[str, ...] = (
-    "docs-frontmatter",
     "ckm-projection",
     "git",
 )
@@ -317,6 +327,44 @@ def _read_github_live(
     return result.snapshot
 
 
+def _read_docs_plane_snapshot(
+    docs_root: Path | None,
+    capabilities_yaml_path: Path | None,
+    matrix_path: Path | None,
+    sources: _Sources,
+) -> DocsPlaneSnapshot | None:
+    """Read the docs/capability plane and fold it into the named source list.
+
+    Mirrors ``_read_github_live``'s shape: unconfigured (any path is ``None``)
+    or a failed read both degrade to ``state="unavailable"`` — the refused
+    claim, never a fabricated empty snapshot (BOPS-COCKPIT-05, #4451).
+    """
+    if docs_root is None or capabilities_yaml_path is None or matrix_path is None:
+        sources.add(
+            _SourceRead(
+                name="docs-frontmatter",
+                state="unavailable",
+                last_successful_read=None,
+                detail="docs plane not configured",
+            )
+        )
+        return None
+    result = read_docs_plane(
+        capabilities_yaml_path=capabilities_yaml_path,
+        matrix_path=matrix_path,
+        docs_root=docs_root,
+    )
+    sources.add(
+        _SourceRead(
+            name="docs-frontmatter",
+            state=result.state,
+            last_successful_read=result.last_successful_read,
+            detail=result.detail,
+        )
+    )
+    return result.snapshot
+
+
 def _sync_labels(sync_state: str | None) -> list[str]:
     if not sync_state:
         return []
@@ -405,12 +453,16 @@ def _build_rungs(
     task: dict[str, Any],
     verification: dict[tuple[str, int], dict[str, Any]],
     github_snapshot: GithubLiveSnapshot | None = None,
+    docs_snapshot: DocsPlaneSnapshot | None = None,
 ) -> list[dict[str, Any]]:
     """Classify the eight rungs for one task.
 
-    Key classes: ``proven`` (DB-keyed or CI-forced edge), ``absent`` (no object
-    at that level in the system). v1 has no prose-derived rungs; ``derived``
-    appears once epic/capability edges are joined in a later slice.
+    Key classes: ``proven`` (DB-keyed, CI-forced, or docs-plane machine edge),
+    ``derived`` (prose-only edge — epic rung only, BOPS-COCKPIT-05/#4451),
+    ``amber`` (capability rung only: the docs plane was read but named no
+    edge for this thread — freestanding, never guessed under a parent),
+    ``absent`` (no object at that level in the system at all, or the docs
+    plane itself was not configured/could not be read).
 
     BOPS-COCKPIT-03 (#4450): when a live GitHub read succeeded, ``pr`` and
     ``ci_sha`` can additionally be proven from live PR + check keys even when
@@ -419,15 +471,18 @@ def _build_rungs(
     "no PR" just because the dispatcher store has not caught up. When the
     live read failed or was not configured, ``github_snapshot`` is ``None``
     and this function behaves exactly as it did before #4450 — refusal never
-    fabricates an upgrade.
+    fabricates an upgrade. The same posture applies to ``docs_snapshot`` for
+    the ``capability``/``epic`` rungs.
     """
+    issue_number = task.get("issue_number")
+    capability = classify_capability(issue_number, docs_snapshot)
+    epic = classify_epic(issue_number, docs_snapshot)
     rungs: list[dict[str, Any]] = [
         _rung("intention", "absent"),
-        _rung("capability", "absent"),
-        _rung("epic", "absent"),
+        capability["rung"],
+        epic["rung"],
     ]
     repo = task.get("repo") or ""
-    issue_number = task.get("issue_number")
     if issue_number:
         rungs.append(_rung("slice", "proven", f"{repo}#{issue_number}"))
     else:
@@ -489,6 +544,7 @@ def _build_item(
     band: str,
     verification: dict[tuple[str, int], dict[str, Any]],
     github_snapshot: GithubLiveSnapshot | None = None,
+    docs_snapshot: DocsPlaneSnapshot | None = None,
 ) -> dict[str, Any]:
     labels = _sync_labels(task.get("sync_state"))
     mirror_url = _sync_url(task.get("sync_state"))
@@ -516,6 +572,19 @@ def _build_item(
     sources = ["dispatcher-store", "verification-runs"]
     if github_snapshot is not None:
         sources.append("github-live")
+    if docs_snapshot is not None:
+        sources.append("docs-frontmatter")
+
+    capability = classify_capability(issue_number, docs_snapshot)
+    capability_lane = (
+        {
+            "key": capability["lane_key"],
+            "name": capability["lane_name"],
+            "rung": capability["rung"]["class"],
+        }
+        if capability["lane_key"] is not None
+        else None
+    )
 
     return {
         "id": task["task_id"],
@@ -535,8 +604,9 @@ def _build_item(
         "mirror_watermark": mirror_watermark,
         "why_now": _why_now(task, band),
         "links": links,
-        "rungs": _build_rungs(task, verification, github_snapshot),
+        "rungs": _build_rungs(task, verification, github_snapshot, docs_snapshot),
         "sources": sources,
+        "capability_lane": capability_lane,
         "updated_at": task.get("updated_at"),
     }
 
@@ -625,6 +695,9 @@ def build_registry(
     deploy_receipt_dir: Path,
     github_repo: str | None = None,
     github_reader: GithubReader = default_github_reader,
+    docs_root: Path | None = None,
+    capabilities_yaml_path: Path | None = None,
+    matrix_path: Path | None = None,
 ) -> dict[str, Any]:
     """Build the cockpit registry payload. Pure read; never writes anywhere.
 
@@ -635,18 +708,27 @@ def build_registry(
     ``app/api/routes/cockpit.py``, is solely responsible for resolving
     ``COCKPIT_GITHUB_REPO``), so a direct call with ``github_repo=None``
     always refuses, deterministically, with no environment dependence.
-    Every call performs its own fresh read — decision Q5 forbids any cache
-    surviving across two ``build_registry`` calls.
+    ``docs_root``/``capabilities_yaml_path``/``matrix_path`` are the same kind
+    of injection point for the docs/capability plane (BOPS-COCKPIT-05,
+    #4451): all three default to ``None``, so a direct call with no docs
+    plane configured always refuses that source too, deterministically —
+    tests point them at a fixture tree under ``tmp_path`` rather than the
+    live repo docs. Every call performs its own fresh read — decision Q5
+    forbids any cache surviving across two ``build_registry`` calls.
     """
     sources = _Sources()
     tasks = _read_tasks(db_path, sources)
     verification = _read_verification_runs(db_path, sources)
     deployments = _read_deploy_receipts(deploy_receipt_dir, sources)
     github_snapshot = _read_github_live(github_repo, sources, reader=github_reader)
+    docs_snapshot = _read_docs_plane_snapshot(
+        docs_root, capabilities_yaml_path, matrix_path, sources
+    )
 
     generated_at = _utc_now()
     bands: list[dict[str, Any]] = []
     unclassified: list[dict[str, Any]] = []
+    all_items: list[dict[str, Any]] = []
 
     if tasks is None:
         # The band counts are owned by the dispatcher store. Without it the
@@ -686,9 +768,9 @@ def build_registry(
                     }
                 )
                 continue
-            grouped[band].append(
-                _build_item(task, band, verification, github_snapshot)
-            )
+            item = _build_item(task, band, verification, github_snapshot, docs_snapshot)
+            grouped[band].append(item)
+            all_items.append(item)
         for key, question in BANDS:
             bands.append(
                 {
@@ -714,6 +796,8 @@ def build_registry(
                 "as_of": generated_at,
             }
 
+    lanes = build_lanes(all_items, docs_snapshot)
+
     return {
         "authority": "read_time_join",
         "generated_at": generated_at,
@@ -725,4 +809,9 @@ def build_registry(
         "deployments": deployments,
         "github": _github_facts(sources, github_snapshot),
         "unsynced_threads": _build_unsynced_threads(tasks, github_snapshot),
+        # BOPS-COCKPIT-05 (#4451): "countable": False + "lanes": None is the
+        # refused claim (an unreadable docs tree), never an empty lane list —
+        # the same shape discipline as `github` above.
+        "capability_lanes": {"countable": lanes is not None, "lanes": lanes},
+        "docs_only_threads": unlinked_docs_threads(docs_snapshot),
     }
