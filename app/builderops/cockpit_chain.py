@@ -87,9 +87,12 @@ FORGOTTEN_STALL_DAYS = 14
 # source is *stale* (EXT-3's accepted third pill state, enacted here for the
 # first time: #4450/#4451 shipped only fresh/empty/unavailable).
 #
-# Why seven days: three of the five sources are read at render time, so their
-# watermark is always "now" and this threshold can never fire for them. The one
-# source whose watermark is genuinely a content age is ``docs-frontmatter``,
+# Why seven days: four of the five sources (dispatcher-store, verification-runs,
+# deploy-receipts, github-live) are read at render time, so their watermark is
+# always "now" and this threshold can never fire for them in production — the
+# github-live and verification-runs amber/withdrawn-count paths below are only
+# reachable through a test fixture that hand-constructs an old watermark. The
+# one source whose watermark is genuinely a content age is ``docs-frontmatter``,
 # whose watermark is the newest mtime among the spec files it read. Seven days
 # is the cadence at which this repo's spec directories actually move; a shorter
 # window would paint the docs plane amber on every render (noise, not honesty),
@@ -269,7 +272,15 @@ def derive_position(
     """
     status = str(task.get("status") or "")
     movement_at, movement_text = _last_movement(task)
-    open_pull = getattr(live_pull, "number", None)
+    # Only a genuinely open PR counts as live movement — a closed/merged
+    # pull sitting in the snapshot (a future reader may not filter by state
+    # the way the default one does) must not permanently exempt a thread
+    # from the forgotten-stall test.
+    open_pull = (
+        getattr(live_pull, "number", None)
+        if getattr(live_pull, "state", None) == "open"
+        else None
+    )
 
     if status in TERMINAL_STATUSES:
         return ChainPosition(
@@ -513,6 +524,12 @@ def _stale_epic_with_open_children(ctx: ThreadContext) -> dict[str, Any] | None:
         and doc.github_issue in ctx.github_snapshot.issues
     )
     if not open_children:
+        return None
+    # An open live PR against the epic itself is the same "live movement"
+    # signal derive_position already treats as settling the stall test —
+    # a card must not carry stale_epic_with_open_children while its own
+    # position rung says in_progress from that same open PR.
+    if getattr(ctx.live_pull, "state", None) == "open":
         return None
     movement_at, movement_text = _last_movement(ctx.task)
     if movement_at is None:
@@ -786,6 +803,7 @@ def why_now(
     position: ChainPosition,
     band: str,
     flaws: list[dict[str, Any]],
+    evaluated_predicates: list[str] | None = None,
 ) -> str:
     """Which predicate fired, or which position the thread holds. Never a score.
 
@@ -796,11 +814,23 @@ def why_now(
         return flaws[0]["text"]
     status = str(task.get("status") or "?")
     if band == "needs_you":
+        if position.unresolved_reason:
+            return f"{status} · labelled for a human · {position.unresolved_reason}"
         return f"{status} · labelled for a human"
     if position.position == "forgotten":
         last_movement = position.evidence.get("last_movement_at") or "unknown"
         return f"stalled without closure · no movement since {last_movement}"
     if position.position == "delivered":
+        # A missing receipt would have fired delivered_without_verification_receipt
+        # above; reaching here with that predicate genuinely unevaluated (its
+        # source was unavailable) means we cannot claim a receipt exists —
+        # claiming presence without evidence is the same overclaim class as
+        # showing a zero over a dead source.
+        if (
+            evaluated_predicates is not None
+            and "delivered_without_verification_receipt" not in evaluated_predicates
+        ):
+            return f"{status} · delivered, but the verification-runs source could not be read"
         return f"{status} · delivered with a terminal verification receipt"
     if task.get("claimed_by"):
         return f"{status} · claimed by {task['claimed_by']}"

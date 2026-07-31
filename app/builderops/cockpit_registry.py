@@ -691,7 +691,7 @@ def _build_item(
         # watermark here, never the dispatcher-store SQLite read instant the
         # `dispatcher-store` source pill reports.
         "mirror_watermark": mirror_watermark,
-        "why_now": why_now(task, position, band, flaws),
+        "why_now": why_now(task, position, band, flaws, evaluated_predicates),
         "links": links,
         "rungs": _build_rungs(
             task, verification, github_snapshot, docs_snapshot, stale_sources
@@ -702,6 +702,10 @@ def _build_item(
         # produced it, so the card can state *why* it sits where it sits.
         "chain_position": position.position,
         "position_evidence": position.evidence,
+        # Populated only when the position is unresolvable (e.g. a
+        # needs_you-labelled thread whose fail-closed position could not
+        # be derived) — the card's own stated reason, not just a null.
+        "position_unresolved_reason": position.unresolved_reason,
         "bands": appears_in,
         "flaws": flaws,
         "risk_meter": risk_meter(flaws),
@@ -875,40 +879,56 @@ def build_registry(
         grouped: dict[str, list[dict[str, Any]]] = {key: [] for key, _ in BANDS}
         for task in tasks:
             status = str(task.get("status") or "")
-            labels = _sync_labels(task.get("sync_state"))
-            _, live_pull = _resolve_pr(task, github_snapshot)
-            position = derive_position(task, now=now, live_pull=live_pull)
-            if _NEEDS_HUMAN_LABEL in labels:
-                # An explicit human-routing label is the owner's own authority
-                # speaking, not a derived claim, so it is not subject to the
-                # fail-closed position rule: it routes even when the chain
-                # position itself is unresolvable (the card still carries
-                # `chain_position: null` and its reason).
-                band = "needs_you"
-            elif position.band is not None:
-                band = position.band
-            else:
+            try:
+                labels = _sync_labels(task.get("sync_state"))
+                _, live_pull = _resolve_pr(task, github_snapshot)
+                position = derive_position(task, now=now, live_pull=live_pull)
+                if _NEEDS_HUMAN_LABEL in labels:
+                    # An explicit human-routing label is the owner's own
+                    # authority speaking, not a derived claim, so it is not
+                    # subject to the fail-closed position rule: it routes
+                    # even when the chain position itself is unresolvable
+                    # (the card still carries `chain_position: null` and
+                    # its reason).
+                    band = "needs_you"
+                elif position.band is not None:
+                    band = position.band
+                else:
+                    unclassified.append(
+                        {
+                            "id": task["task_id"],
+                            "title": task.get("title"),
+                            "status": status,
+                            "reason": position.unresolved_reason
+                            or f"status {status!r} has no chain position",
+                        }
+                    )
+                    continue
+                item = _build_item(
+                    task,
+                    band,
+                    position,
+                    verification,
+                    github_snapshot,
+                    docs_snapshot,
+                    stale_sources,
+                    evaluated_predicates,
+                    now,
+                )
+            except Exception as exc:  # noqa: BLE001 - one thread's derivation
+                # failure must never crash the whole render (the #4451-class
+                # bug this exact pattern exists to prevent, applied per task
+                # rather than per source): the thread renders as explicitly
+                # unclassified instead of taking bands/tasks/everything down.
                 unclassified.append(
                     {
-                        "id": task["task_id"],
+                        "id": task.get("task_id"),
                         "title": task.get("title"),
                         "status": status,
-                        "reason": position.unresolved_reason
-                        or f"status {status!r} has no chain position",
+                        "reason": f"chain-position derivation failed: {exc}",
                     }
                 )
                 continue
-            item = _build_item(
-                task,
-                band,
-                position,
-                verification,
-                github_snapshot,
-                docs_snapshot,
-                stale_sources,
-                evaluated_predicates,
-                now,
-            )
             grouped[band].append(item)
             # The flaws band is cross-cutting: a thread holds one position
             # band and additionally appears here when a predicate fired. The

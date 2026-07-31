@@ -288,6 +288,32 @@ def test_unresolvable_position_is_unclassified_not_guessed(tmp_path: Path) -> No
     assert _band(payload, "working")["count"] == 1
 
 
+def test_needs_human_card_states_its_unresolved_reason(tmp_path: Path) -> None:
+    """A needs_you-labelled thread whose chain position is unresolvable must
+    still carry ITS OWN reason on the card — the routing label bypasses the
+    fail-closed band rule, but it must not silently drop the "why null"
+    explanation the unclassified path would otherwise have surfaced."""
+    db_path, store = _make_store(tmp_path)
+    store.upsert_task(
+        _task(
+            status="mystery_status",
+            issue_number=940,
+            title="needs a human, unresolvable position",
+            sync_state={"labels": ["agent:needs-human"]},
+        )
+    )
+
+    payload = build_registry(db_path=db_path, deploy_receipt_dir=tmp_path / "deploys")
+
+    item = _item_by_issue(payload, 940)
+    assert 940 in _issues_in(payload, "needs_you")
+    assert item["chain_position"] is None
+    assert item["position_unresolved_reason"] is not None
+    assert "mystery_status" in item["position_unresolved_reason"]
+    assert "mystery_status" in item["why_now"]
+    assert "labelled for a human" in item["why_now"]
+
+
 # ---------------------------------------------------------------------------
 # AC2 — every flaw predicate fires with named evidence
 # ---------------------------------------------------------------------------
@@ -563,6 +589,13 @@ def test_forgotten_needs_stall_not_age(tmp_path: Path) -> None:
             last_heartbeat_at=_iso(_now() - timedelta(hours=2)),
         )
     )
+    # E: old and silent, and its governing PR is CLOSED (dead, not live) —
+    # a closed pull sitting in the snapshot must never be treated as open
+    # authority movement, or a genuinely abandoned thread could never
+    # become forgotten just because a dead PR still matches its issue.
+    store.upsert_task(
+        _task(status="ready", issue_number=834, title="old, closed pr", updated_at=old)
+    )
 
     snapshot = _snapshot(
         pulls={
@@ -574,7 +607,16 @@ def test_forgotten_needs_stall_not_age(tmp_path: Path) -> None:
                 head_sha="f" * 40,
                 head_ref="pr-31",
                 governing_issue=831,
-            )
+            ),
+            32: GithubPull(
+                number=32,
+                title="Governing-Issue: #834",
+                state="closed",
+                html_url=f"https://github.com/{REPO}/pull/32",
+                head_sha="c" * 40,
+                head_ref="pr-32",
+                governing_issue=834,
+            ),
         },
         checks={"f" * 40: "success"},
     )
@@ -586,9 +628,14 @@ def test_forgotten_needs_stall_not_age(tmp_path: Path) -> None:
         github_reader=_reader(snapshot),
     )
 
-    # Only the thread that is both old *and* silent is forgotten.
-    assert _issues_in(payload, "forgotten") == {830}
+    # Only threads that are both old *and* silent are forgotten — a closed
+    # PR (E) does not exempt a thread the way an open one (B) does.
+    assert _issues_in(payload, "forgotten") == {830, 834}
     assert _issues_in(payload, "working") == {831, 832, 833}
+
+    closed_pr_thread = _item_by_issue(payload, 834)
+    assert closed_pr_thread["chain_position"] == "forgotten"
+    assert closed_pr_thread["position_evidence"]["open_authority_work"] is None
 
     # B is provably as old as A — age was present and deliberately insufficient.
     old_but_moving = _item_by_issue(payload, 831)
@@ -608,6 +655,62 @@ def test_forgotten_needs_stall_not_age(tmp_path: Path) -> None:
     # C is not aged; D's heartbeat is the dispatcher's own movement signal.
     assert _item_by_issue(payload, 832)["position_evidence"]["aged_past_threshold"] is False
     assert _item_by_issue(payload, 833)["position_evidence"]["aged_past_threshold"] is False
+
+
+def test_stale_epic_exempt_when_epic_has_open_pr(tmp_path: Path) -> None:
+    """`stale_epic_with_open_children` must agree with `derive_position` about
+    what counts as movement: an epic with a live open PR against it is not
+    stalled, even if its dispatcher row's own timestamps are old — a card
+    must never carry `chain_position: in_progress` (from the open PR) and
+    the "no movement in the window" flaw for the same reason at once."""
+    db_path, store = _make_store(tmp_path)
+    stale_stamp = _days_ago(FORGOTTEN_STALL_DAYS + 16)
+    store.upsert_task(
+        _task(
+            status="ready",
+            issue_number=907,
+            title="epic with a live pr",
+            updated_at=stale_stamp,
+        )
+    )
+
+    docs_root = tmp_path / "docs"
+    _write_docs_fixture(docs_root, epic_issue=907, child_issue=908, spec_dir_name="LIVE_EPIC")
+
+    snapshot = _snapshot(
+        issues={
+            908: GithubIssue(
+                number=908,
+                title="open child",
+                state="open",
+                html_url=f"https://github.com/{REPO}/issues/908",
+            ),
+        },
+        pulls={
+            90: GithubPull(
+                number=90,
+                title="Governing-Issue: #907",
+                state="open",
+                html_url=f"https://github.com/{REPO}/pull/90",
+                head_sha="9" * 40,
+                head_ref="pr-90",
+                governing_issue=907,
+            )
+        },
+        checks={"9" * 40: "success"},
+    )
+
+    payload = build_registry(
+        db_path=db_path,
+        deploy_receipt_dir=tmp_path / "deploys",
+        github_repo=REPO,
+        github_reader=_reader(snapshot),
+        **_docs_kwargs(docs_root),
+    )
+
+    item = _item_by_issue(payload, 907)
+    assert item["chain_position"] == "in_progress"
+    assert "stale_epic_with_open_children" not in _flaw_names(item)
 
 
 # ---------------------------------------------------------------------------
@@ -851,6 +954,33 @@ def test_stale_source_ambers_rungs_and_withdraws_counts(tmp_path: Path) -> None:
     assert control_rungs["capability"]["class"] == "proven"
 
 
+def test_delivered_why_now_does_not_overclaim_unevaluated_receipt(tmp_path: Path) -> None:
+    """A delivered thread whose verification-runs source could not be read
+    must not claim "delivered with a terminal verification receipt" — that
+    claims evidence the render never actually saw, the same overclaim class
+    as showing a zero over a dead source."""
+    db_path, store = _make_store(tmp_path)
+    store.upsert_task(_task(status="completed", issue_number=920, title="delivered"))
+
+    # Drop verification_runs entirely so the source degrades to unavailable
+    # while dispatcher-store itself stays perfectly readable.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE IF EXISTS verification_runs")
+
+    payload = build_registry(db_path=db_path, deploy_receipt_dir=tmp_path / "deploys")
+
+    assert _source(payload, "verification-runs")["state"] == "empty"
+    header = _band(payload, "flawed")["header"]
+    assert any(
+        entry["predicate"] == "delivered_without_verification_receipt"
+        for entry in header["not_evaluated"]
+    )
+    item = _item_by_issue(payload, 920)
+    assert item["chain_position"] == "delivered"
+    assert "verification-runs source could not be read" in item["why_now"]
+    assert "terminal verification receipt" not in item["why_now"]
+
+
 # ---------------------------------------------------------------------------
 # Degradation boundary — the #4451 review class of defect
 # ---------------------------------------------------------------------------
@@ -915,3 +1045,37 @@ def test_new_reads_and_predicates_degrade_instead_of_crashing(tmp_path: Path) ->
     assert malformed_payload["claim"]["kind"] == "counted"
     assert _issues_in(malformed_payload, "working") == {970}
     assert _flaw_names(_item_by_issue(malformed_payload, 970)) == set()
+
+
+def test_one_threads_derivation_failure_does_not_crash_the_render(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A structural defense-in-depth guarantee, not just a happy-path proof:
+    if chain-position derivation itself ever raises for one thread (a bug in
+    a future edit to this module, not a source-read failure), the whole
+    render must still stand — that thread renders unclassified instead of
+    taking every other thread down with it."""
+    import app.builderops.cockpit_registry as cockpit_registry
+
+    db_path, store = _make_store(tmp_path)
+    store.upsert_task(_task(status="ready", issue_number=950, title="poisoned"))
+    store.upsert_task(_task(status="ready", issue_number=951, title="healthy"))
+
+    real_derive_position = cockpit_registry.derive_position
+
+    def _poisoned_derive_position(task, **kwargs):
+        if task.get("issue_number") == 950:
+            raise RuntimeError("synthetic derivation bug")
+        return real_derive_position(task, **kwargs)
+
+    monkeypatch.setattr(cockpit_registry, "derive_position", _poisoned_derive_position)
+
+    payload = build_registry(db_path=db_path, deploy_receipt_dir=tmp_path / "deploys")
+
+    assert payload["claim"]["kind"] == "counted"
+    unclassified = {entry["id"]: entry for entry in payload["unclassified"]}
+    assert len(unclassified) == 1
+    (reason,) = [entry["reason"] for entry in unclassified.values()]
+    assert "synthetic derivation bug" in reason
+    # The other thread is entirely unaffected.
+    assert _issues_in(payload, "working") == {951}
