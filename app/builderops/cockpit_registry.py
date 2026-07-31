@@ -463,6 +463,34 @@ def _pr_number_from_linked(linked_pr: str | None) -> int | None:
         return None
 
 
+def _snapshot_for_task(
+    task: dict[str, Any],
+    github_snapshot: GithubLiveSnapshot | None,
+    github_repo: str | None,
+) -> GithubLiveSnapshot | None:
+    """The live snapshot, but only for a task in the repo that snapshot is of.
+
+    One live read covers exactly one repository (``COCKPIT_GITHUB_REPO``),
+    while the dispatcher store carries a ``repo`` per task. Issue and PR
+    numbers are only unique *within* a repository, so joining them across
+    repositories would let a task in repo B inherit rungs, out-links, and
+    flaw evidence from a same-numbered PR in repo A. The existing
+    verification-runs join is already keyed on ``(repo, pr_number)``; this
+    applies the same key to the live plane.
+
+    Gating here rather than inside each consumer is deliberate: every live
+    consumer — ``_resolve_pr``, the rung classifier, and every flaw predicate
+    reading ``github_snapshot`` — is covered by this one rule, so no future
+    predicate can be added on the unscoped path by omission.
+
+    Single-repo deployments (today's reality) see no behavior change: every
+    task's ``repo`` equals the configured one.
+    """
+    if github_snapshot is None or github_repo is None:
+        return github_snapshot
+    return github_snapshot if str(task.get("repo") or "") == github_repo else None
+
+
 def _resolve_pr(
     task: dict[str, Any],
     github_snapshot: GithubLiveSnapshot | None,
@@ -772,6 +800,7 @@ def _github_facts(
 def _build_unsynced_threads(
     tasks: list[dict[str, Any]] | None,
     github_snapshot: GithubLiveSnapshot | None,
+    github_repo: str | None = None,
 ) -> list[dict[str, Any]]:
     """PRs visible in GitHub with no matching dispatcher task.
 
@@ -792,6 +821,12 @@ def _build_unsynced_threads(
     known_pr_numbers: set[int] = set()
     known_issue_numbers: set[int] = set()
     for task in tasks or []:
+        # Only a task in the repo this snapshot describes can vouch for one of
+        # its PRs. Without this, a same-numbered task in another repository
+        # would suppress a genuinely-unsynced live PR as "already known" — the
+        # silent direction of the same collision `_snapshot_for_task` guards.
+        if _snapshot_for_task(task, github_snapshot, github_repo) is None:
+            continue
         pr_number = _pr_number_from_linked(task.get("linked_pr"))
         if pr_number is not None:
             known_pr_numbers.add(pr_number)
@@ -911,7 +946,11 @@ def build_registry(
             status = str(task.get("status") or "")
             try:
                 labels = _sync_labels(task.get("sync_state"))
-                _, live_pull = _resolve_pr(task, github_snapshot)
+                # Scoped once per task, then used everywhere below: position
+                # derivation, rungs, out-links, and flaw predicates all read
+                # the same repo-checked snapshot.
+                task_snapshot = _snapshot_for_task(task, github_snapshot, github_repo)
+                _, live_pull = _resolve_pr(task, task_snapshot)
                 position = derive_position(task, now=now, live_pull=live_pull)
                 if _NEEDS_HUMAN_LABEL in labels:
                     # An explicit human-routing label is the owner's own
@@ -939,7 +978,7 @@ def build_registry(
                     band,
                     position,
                     verification,
-                    github_snapshot,
+                    task_snapshot,
                     docs_snapshot,
                     stale_sources,
                     evaluated_predicates,
@@ -1058,7 +1097,9 @@ def build_registry(
         "unclassified": unclassified,
         "deployments": deployments,
         "github": _github_facts(sources, github_snapshot),
-        "unsynced_threads": _build_unsynced_threads(tasks, github_snapshot),
+        "unsynced_threads": _build_unsynced_threads(
+            tasks, github_snapshot, github_repo
+        ),
         "capability_lanes": {"countable": lanes is not None, "lanes": lanes},
         "docs_only_threads": unlinked_docs_threads(docs_snapshot),
         # The counts a stale source no longer backs. Named so the withdrawal

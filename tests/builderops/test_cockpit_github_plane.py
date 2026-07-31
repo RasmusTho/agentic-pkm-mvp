@@ -615,3 +615,116 @@ def test_default_github_reader_rejects_a_malformed_repo_slug() -> None:
         assert "owner/name" in str(exc)
     else:  # pragma: no cover - the call above must raise
         raise AssertionError("a slug with no '/' must be refused before any call")
+
+
+# ---------------------------------------------------------------------------
+# Cross-repo join scoping (#4470)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_repo_issue_number_collision_does_not_cross_wire(tmp_path: Path) -> None:
+    """Issue and PR numbers are only unique within a repository.
+
+    One live read covers one repo. A dispatcher task in a *different* repo
+    that happens to share an issue number must not inherit that repo's PR —
+    and must not vouch for it either, which would silently suppress a
+    genuinely-unsynced live PR.
+    """
+    db_path, store = _make_store(tmp_path)
+    # A synthetic second repository: the scoping rule is about the repo
+    # dimension itself, so naming a real sibling repo here would add coupling
+    # and nothing else.
+    other_repo = "example-org/other-repo"
+
+    # Same issue number, two repositories. Only the first is the repo the live
+    # snapshot describes.
+    store.upsert_task(
+        _task(status="in_progress", issue_number=800, title="ours", repo=REPO)
+    )
+    store.upsert_task(
+        _task(status="in_progress", issue_number=800, title="theirs", repo=other_repo)
+    )
+    # A task in the other repo whose linked_pr collides with a live PR number.
+    store.upsert_task(
+        _task(
+            status="in_progress",
+            issue_number=801,
+            title="their pr number",
+            repo=other_repo,
+            linked_pr="91",
+        )
+    )
+
+    head_sha = "1" * 40
+
+    def fake_reader(repo: str) -> GithubLiveSnapshot:
+        assert repo == REPO
+        return GithubLiveSnapshot(
+            read_at=_now(),
+            issues={
+                800: GithubIssue(
+                    number=800,
+                    title="ours",
+                    state="open",
+                    html_url=f"https://github.com/{REPO}/issues/800",
+                )
+            },
+            pulls={
+                90: GithubPull(
+                    number=90,
+                    title="Fix #800",
+                    state="open",
+                    html_url=f"https://github.com/{REPO}/pull/90",
+                    head_sha=head_sha,
+                    head_ref="fix-800",
+                    governing_issue=800,
+                ),
+                # Number 91 exists live in REPO and is tracked by nobody here;
+                # only the other repo's task carries linked_pr="91".
+                91: GithubPull(
+                    number=91,
+                    title="Unrelated live PR",
+                    state="open",
+                    html_url=f"https://github.com/{REPO}/pull/91",
+                    head_sha="2" * 40,
+                    head_ref="unrelated",
+                    governing_issue=None,
+                ),
+            },
+            checks={head_sha: "success"},
+            branches=("fix-800", "unrelated"),
+        )
+
+    payload = build_registry(
+        db_path=db_path,
+        deploy_receipt_dir=tmp_path / "deploys",
+        github_repo=REPO,
+        github_reader=fake_reader,
+    )
+
+    def _item(title: str) -> dict:
+        for band in payload["bands"]:
+            for item in band["items"]:
+                if item["title"] == title:
+                    return item
+        raise AssertionError(f"no item titled {title!r}")
+
+    # The in-repo task joins as before: live PR rung, live check, live out-link.
+    ours = _item("ours")
+    ours_rungs = {r["name"]: r for r in ours["rungs"]}
+    assert ours_rungs["pr"]["class"] == "proven"
+    assert "90" in ours_rungs["pr"]["value"]
+    assert ours_rungs["ci_sha"]["class"] == "proven"
+    assert ours["links"] == [f"https://github.com/{REPO}/pull/90"]
+
+    # The same-numbered task in another repo inherits none of it.
+    theirs = _item("theirs")
+    theirs_rungs = {r["name"]: r for r in theirs["rungs"]}
+    assert theirs_rungs["pr"]["class"] == "absent"
+    assert theirs_rungs["ci_sha"]["class"] == "absent"
+    assert f"https://github.com/{REPO}/pull/90" not in theirs["links"]
+
+    # And it cannot vouch for PR 91 either: that live PR is still unsynced.
+    unsynced_numbers = {t["pr_number"] for t in payload["unsynced_threads"]}
+    assert 91 in unsynced_numbers
+    assert 90 not in unsynced_numbers
