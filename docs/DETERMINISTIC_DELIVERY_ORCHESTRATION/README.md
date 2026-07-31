@@ -1,4 +1,4 @@
-State: Active target-state specification. Parent #4163 owns live validation state. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is the next serial implementation slice after contract reconciliation; #4168–#4170 remain dependency-blocked.
+State: Active target-state specification. Parent #4163 owns live validation state. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is delivered by PR #4252, which defers the autonomous CI-failure retry loop to #4466; #4168–#4170 and #4466 remain dependency-blocked.
 Doc role: Builder System capability specification
 Authority: Owns the bounded target, decomposition, cross-task invariants, verification path, and acceptance path for deterministic issue-set delivery. GitHub Issues own executable task state after filing.
 Owner: Builder System governance
@@ -227,8 +227,12 @@ The renderer does not infer which label applies.
    delivered contract seam.
 3. [Compile Immutable Delivery Plans](COMPILE_IMMUTABLE_DELIVERY_PLANS.md) ([#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166)) — delivered by
    [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226).
-4. [Advance Delivery Runs Deterministically](ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md) ([#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167)) — depends
-   on the delivered tasks 1 and 3; next serial implementation slice after this reconciliation.
+4. [Advance Delivery Runs Deterministically](ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md) ([#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167)) — delivered by
+   [PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252): the pure reducer, the
+   acceptance-profile and worker-runtime contracts, `DeliveryReceipt.v2`, and the bounded authority
+   adapters. Cancellation records committed-effect obligations for DDO-05 rather than compensating
+   them, per INV-DDO-15, and a red required check routes to a typed terminal repair deferral whose
+   autonomous retry loop is [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466).
 5. [Bind Delivery Effects to BuilderOps Reconciliation](BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md)
    ([#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168)) — depends on task 4 and reuses #3792.
 6. [Connect CKM Initiation and Delivery Receipts](CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md) ([#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169)) —
@@ -236,9 +240,11 @@ The renderer does not infer which label applies.
 7. [Validate TCD and Recovery](VALIDATE_TCD_AND_RECOVERY.md) ([#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170)) — final pilot, failure proof,
    acceptance, and owner-doc promotion.
 
-DDO-01 through DDO-03 are delivered. After this reconciliation is merged, the live #4167 body is
-aligned to its exact task specification and strict readiness validation passes, #4167 is the only
-Issue eligible to become `agent:ready`. #4168–#4170 remain serially dependency-blocked.
+DDO-01 through DDO-04 are delivered. #4168 becomes the next eligible slice once its own strict
+readiness reconciliation, including the #3793 timing dependency, passes. #4169–#4170 remain serially
+dependency-blocked. [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) carries the
+autonomous CI-failure retry loop, which DDO-04 defers because a retry needs the durable, replayable
+effect identity that DDO-05 delivers; it is blocked on #4168.
 
 ## Architecture reconciliation after DDO-03
 
@@ -356,8 +362,8 @@ bounded residual work, and triggers owner-doc promotion only when the capability
 | DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | delivered and closed |
 | DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | delivered by [PR #4176](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4176) and closed |
 | DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | delivered by [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226) |
-| DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | next serial slice; remains blocked until this reconciliation is on `main` and strict readiness passes |
-| DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | blocked on #4167; timing reconciles with #3793 |
+| DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | delivered by [PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252); autonomous CI retry deferred to [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) |
+| DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | next serial slice; timing reconciles with #3793; unblocks [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) |
 | DDO-06 CKM bridge | [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169) | blocked on #4168 |
 | DDO-07 acceptance | [#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170) | blocked on #4167–#4169 |
 

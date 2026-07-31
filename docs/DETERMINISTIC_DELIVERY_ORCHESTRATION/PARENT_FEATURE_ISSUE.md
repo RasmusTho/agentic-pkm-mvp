@@ -1,4 +1,4 @@
-State: Active blocked validation hub #4163. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is the next serial slice after the 2026-07-28 architecture reconciliation.
+State: Active blocked validation hub #4163. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is delivered by PR #4252; its deferred autonomous CI retry loop is #4466.
 Doc role: Parent validation-hub contract
 Authority: The capability README owns stable decomposition. The live GitHub parent owns backlog and validation state after filing.
 
@@ -103,8 +103,8 @@ reconciliation, and receipts.
 | DDO-01 — independent-Issue fast lane | #4164 | delivered/closed | #4161 |
 | DDO-02 — carrier-neutral delivery contracts | #4165 | delivered/closed by PR #4176 | none |
 | DDO-03 — immutable plan compiler | #4166 | delivered/closed by PR #4226 | #4165 |
-| DDO-04 — deterministic reducer | #4167 | next serial slice; blocked until reconciled spec/body and strict readiness | delivered #4164 and #4166 |
-| DDO-05 — BuilderOps reconciliation binding | #4168 | blocked | #4167; reconcile timing with #3793 |
+| DDO-04 — deterministic reducer | #4167 | delivered by PR #4252; autonomous CI retry deferred to #4466 | delivered #4164 and #4166 |
+| DDO-05 — BuilderOps reconciliation binding | #4168 | next serial slice; also unblocks #4466 | #4167; reconcile timing with #3793 |
 | DDO-06 — CKM initiation/receipt bridge | #4169 | blocked | #4165 and #4168 |
 | DDO-07 — TCD/recovery acceptance | #4170 | blocked | #4164 through #4169 |
 

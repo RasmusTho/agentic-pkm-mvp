@@ -22,8 +22,10 @@ function while keeping implementation, diagnosis, and independent review bounded
 ## What This Task Does
 
 - Implements the reducer states and legal transitions for plan admission, claim, worker start,
-  implementation result, CI, review, repair, verified delivery, blocking, pause, resume, cancel,
-  and supersession.
+  implementation result, CI, review, repair routing, verified delivery, blocking, pause, resume,
+  cancel, and supersession. A red required check routes to a typed terminal repair deferral; the
+  autonomous retry loop needs a durable, replayable effect and invocation identity and is therefore
+  delivered by [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) on top of DDO-05.
 - Emits typed effect requests but performs no effect inside the reducer.
 - Adds adapters over existing claim, worktree, CI-wait, review, verified-merge, and closure paths.
 - Routes valid structured review severity deterministically.
@@ -54,8 +56,9 @@ full durable outbox binding.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_reducer_transition_matrix_is_exhaustive`.
 - [ ] Duplicate events are no-ops and stale run versions or head SHAs fail closed.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_duplicate_and_stale_events_cannot_advance`.
-- [ ] Worker, CI, review, repair, merge, and closure effects are emitted only after their named
-  prerequisites.
+- [ ] Worker, CI, review, merge, and closure effects are emitted only after their named
+  prerequisites, and a red required check routes to the typed terminal repair deferral without
+  emitting a retry.
   - Verify: `tests/builderops/test_delivery_orchestration_contracts.py::test_effects_require_exact_prerequisites`.
 - [ ] Valid structured P2 routes to one deferred disposition without synchronous repair; every
   protected/invalid/P0/P1 outcome blocks.
@@ -105,6 +108,10 @@ full durable outbox binding.
 
 ## Out of Scope
 
+- The autonomous CI-failure retry loop ([#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466)).
+  A retry needs a durable, replayable effect and invocation identity; re-deriving an authorized
+  effect across ticks or a restart changes its start-once identity and could start a second worker.
+  That durability is DDO-05 (#4168), so this slice routes a red check to a typed terminal deferral.
 - New transaction/outbox storage.
 - CKM initiation.
 - Raising pilot concurrency.
@@ -120,8 +127,10 @@ full durable outbox binding.
 
 ## Related GitHub Issues
 
-Live task: [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167). DDO-01
+Live task: [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167), delivered by
+[PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252). DDO-01
 [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) and DDO-03
-[#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) are delivered. #4167 is the next
-serial implementation slice after this exact contract is merged, reconciled to the live Issue body,
-and strict readiness validation passes.
+[#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) are delivered. The autonomous
+CI-failure retry loop is carried by
+[#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466), blocked on DDO-05
+[#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168).
