@@ -236,7 +236,8 @@ def _build_transition_matrix() -> (
         for phase, signal in product(RUN_PHASES, REDUCER_SIGNALS)
     }
 
-    for opening_signal in ("run_started", "timer_elapsed"):
+    opening_signals: tuple[ReducerSignal, ...] = ("run_started", "timer_elapsed")
+    for opening_signal in opening_signals:
         matrix[("admitted", opening_signal)] = _legal(
             "claiming",
             "the Issue's dependency wave is open",
@@ -252,7 +253,8 @@ def _build_transition_matrix() -> (
         "working",
         "launch_worker succeeded for the authorized invocation identity",
     )
-    for source_phase in ("working", "repairing"):
+    worker_result_phases: tuple[RunPhase, ...] = ("working", "repairing")
+    for source_phase in worker_result_phases:
         matrix[(source_phase, "worker_result_recorded")] = _legal(
             None,
             "the worker result resolves the full pack/invocation/effect chain",
