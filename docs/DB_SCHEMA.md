@@ -335,34 +335,44 @@ Interpretation:
 
 ### Self-owned write durability policy (`required_db`)
 
-Source: `app/services/outbox.py::_self_owned_outbox_write_policy` (#4064 / #4203).
+Source: `app/services/outbox.py::_self_owned_outbox_write_policy` (#4064 / #4203 / #4214).
 
 A *self-owned* write is a `write_outbox_event()` / `insert_object_and_outbox()` call that passes no
 `conn`. For those calls only, the connection decision is resolved from the environment **before** any
 connection is opened, so a memory-backed runtime never triggers a DSN fallback whose DNS resolution
 could stall:
 
-| `STORE_BACKEND` | `DATABASE_URL` / `DB_DSN` | `required_db=False` (default) | `required_db=True` |
+| `STORE_BACKEND` | Database named? | `required_db=False` (default) | `required_db=True` |
 | --- | --- | --- | --- |
-| `memory` | set or unset | skip, return `""` | connect |
-| `pg` | set or unset | connect | connect |
-| unset | set | connect | connect |
-| unset | unset | skip, return `""` | connect |
+| `memory` | either | skip, return `""` | connect |
+| `pg` | either | connect | connect |
+| unset | yes | connect | connect |
+| unset | no | skip, return `""` | connect |
 | any other value | any | `RuntimeError` | `RuntimeError` |
 
+- **"Database named?"** is `app/config/database.py::explicit_runtime_database_url(os.environ)`, the
+  same resolution the connection performs (`conn_rw()` -> `_psycopg_dsn()` ->
+  `resolve_runtime_database_url(os.environ)`). It is **not** just `DATABASE_URL`/`DB_DSN`: it is any
+  key in `RUNTIME_DATABASE_ENV_KEYS` (`DATABASE_URL`, `DB_DSN`, `PKM_DB_NAME_DEV/TEST/PROD`,
+  `POSTGRES_USER`, `POSTGRES_PASSWORD`, `PKM_DB_HOST`, `PKM_DB_PORT`). "No" means every input the
+  resolver would use is a built-in default, so the DSN it synthesizes is the compose-shaped fallback
+  nobody asked for. Reading a narrower key set was #4214 D1: a runtime that named its database
+  through `PKM_DB_*`/`POSTGRES_*` connected successfully while the skip predicate called it
+  unconfigured and dropped the write.
 - `required_db` is keyword-only and defaults to `False`; `insert_object_and_outbox()` forwards it
   unchanged. It is a **caller-resolved durability requirement**, not a runtime probe.
 - A skip returns `""` — the same no-insert result already used for a deduplicated event. Only a
   caller that passed `required_db=True` may treat a return from these functions as evidence that the
-  DB path actually ran.
+  DB path actually ran. A caller that must distinguish the two without requiring the DB asks
+  `self_owned_write_would_skip(required_db=...)`, which delegates to the same policy.
 - An unsupported explicit `STORE_BACKEND` fails loud before any connection attempt, rather than
   degrading to a silent skip.
 - A supplied `conn` is authoritative and caller-owned: it bypasses this policy entirely and is never
   closed by the outbox helper.
 
 **Required (DB-durable) producers.** These call sites are load-bearing — a silent skip would let a
-projection, receipt, or acknowledgement advance past an event that was never queued — so they pass
-`required_db=True` and fail loud instead:
+projection, receipt, acknowledgement, or HTTP 2xx advance past an event that was never queued — so
+they pass `required_db=True` and fail loud instead:
 
 | Producer | Source |
 | --- | --- |
@@ -372,27 +382,70 @@ projection, receipt, or acknowledgement advance past an event that was never que
 | Explicit panel DB persistence | `app/agents/panel_agent/execution.py` |
 | Durable object saves | `app/objects/__init__.py` |
 | Worker transient retries | `app/workers/outbox_worker.py` |
-| Watcher `panel.scan.requested` / `ingest.vault.changed` (when `WATCHER_REQUIRE_DB_OUTBOX`) | `app/watcher/registry.py` |
+| Watcher `panel.scan.requested` / `ingest.vault.changed` (when `db_outbox_required()`) | `app/watcher/registry.py` |
+| `POST /ingest` (the route's only persistence side effect) | `app/api/routes/ingest.py` |
+| Vault-watcher delete tombstone (`db_outbox_required()`) | `app/watcher/vault_watcher.py` |
 
 Optional, best-effort, and compensated producers keep the default `required_db=False` behavior.
 
+**This table is not the contract — the gate is.** A hand-maintained list can only show that the
+producers someone named are classified, never that the set is complete, which is how the `/ingest`
+route and the delete tombstone were missed (#4214 D2/D3/D5).
+`tests/architecture/test_outbox_producer_durability.py` is the enforcing gate: every self-owned
+producer in `app/` must pass `required_db=` or appear on a reviewed allowlist that states why a
+silent skip is survivable there (in practice: a compensating JSONL sink that outlives the skip). The
+gate also fails on a stale allowlist entry, so exemptions cannot accumulate.
+
 ### Watcher required-delivery cursor semantics
 
-Source: `app/watcher/registry.py::_emit_changed_entry` (#4203).
+Source: `app/watcher/registry.py::_emit_changed_entry` (#4203 / #4214).
 
-When a watcher observation requires DB delivery (`WATCHER_REQUIRE_DB_OUTBOX` set and the spec emits
-`panel.scan.requested` or `ingest.vault.changed`), the required enqueue and its durable observation
-cursor are **one state transition**:
+`app/watcher/registry.py::db_outbox_required()` is `True` when `WATCHER_REQUIRE_DB_OUTBOX` is set
+**or** when `STORE_BACKEND=pg` — the shipped production default (`config/runtime.defaults.env`). It
+reads like an opt-in switch; it is not, and production runs with required delivery on.
 
-- if the required enqueue raises, the pre-observation `state.files` entry is restored (or removed
-  when the file was previously unseen) and the exception propagates, so the next tick re-observes the
-  unchanged file instead of treating it as already delivered;
-- the cursor advances exactly once, after a successful required enqueue; a subsequent tick over the
-  same unchanged file emits nothing.
+Scope of the guarantee below: **the emission step only.** Once `_emit_changed_entry` reaches the
+emission, the emission and its durable observation cursor are one state transition:
+
+- if the emission raises, the pre-observation `state.files` entry is restored (or removed when the
+  file was previously unseen) and the exception propagates, so the next tick re-observes the
+  unchanged file instead of treating it as already delivered. The restore is **not** gated on
+  `required_db` (#4214 D6): `append_jsonl_outbox_event` is unwrapped, so the non-required path can
+  also raise with neither sink written;
+- the cursor advances exactly once, after a successful emission; a subsequent tick over the same
+  unchanged file emits nothing.
+
+**Known gap this guarantee does NOT cover.** `_emit_changed_entry` advances the `mtime`/`hash` cursor
+*before* the debounce/rate-limit check, and that check `return None`s without emitting and without
+rolling the cursor back; `_collect_changed_entries` then never re-detects the file. With the shipped
+`configs/watchers.yaml` (`rate_limit_per_min: 30`, `debounce_ms: 1500`) a bulk vault change
+permanently drops every observation past the limit. This drop is pre-existing and out of scope here —
+it is documented rather than claimed away.
+
+### Vault-watcher delete tombstone durability
+
+Source: `app/watcher/vault_watcher.py::_emit_watcher_delete_event` (#4214 D3).
+
+The tick's delete-reconciliation path has no compensating JSONL sink, and its caller both increments
+`deleted_purged` and lets `refresh_snapshot()` drop the path from the snapshot — so an unqueued
+tombstone is permanently unrecoverable. The emitter therefore reports its outcome explicitly:
+
+- `"emitted"` — the tombstone reached the outbox (or deduped against an identical one); the purge is
+  counted and the snapshot moves on;
+- `"superseded_by_rename"` — no tombstone is owed, the identity is alive at a path this tick already
+  re-ingested; the snapshot moves on;
+- `"not_queued"` — no sink took it. The purge is **not** counted and `refresh_snapshot(retain=...)`
+  re-adds the prior snapshot entry, so the next tick re-sees the deletion and retries.
+
+A required enqueue that raises is caught by the reconciliation loop, counted as an error, and treated
+as `not_queued`.
 
 Contract regression coverage: `tests/services/test_outbox_memory_mode.py`,
 `tests/services/test_outbox_required_policy_callers.py`,
-`tests/watcher/test_registry_required_outbox.py`.
+`tests/watcher/test_registry_required_outbox.py`,
+`tests/watcher/test_vault_watcher_delete_required_outbox.py`,
+`tests/api/test_ingest_required_outbox.py`,
+`tests/architecture/test_outbox_producer_durability.py`.
 
 ## Entity-Review Operation Journal
 

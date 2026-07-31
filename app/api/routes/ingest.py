@@ -23,5 +23,16 @@ async def ingest(req: IngestRequest, request: Request):
     trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
     with start_span("api.ingest", trace_id, {"path": "/ingest"}):
         payload = normalize_artifact_state_axes(req.model_dump(exclude_none=True), default_review_state="draft")
-        insert_object_and_outbox(payload, INGEST_OBJECT_CREATED, trace_id, object_id=req.uuid)
+        # required_db=True (#4214 D2): this enqueue is the route's ONLY
+        # persistence side effect and it has no compensating JSONL sink, so an
+        # optional self-owned skip would return ``""`` and let the route answer
+        # 200 for an ingest that was never queued. Fail loud instead — the
+        # pre-#4064 behaviour this route always had.
+        insert_object_and_outbox(
+            payload,
+            INGEST_OBJECT_CREATED,
+            trace_id,
+            object_id=req.uuid,
+            required_db=True,
+        )
     return {"trace_id": trace_id}

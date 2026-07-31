@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
 
+from app.config.database import (
+    RUNTIME_DATABASE_ENV_KEYS,
+    explicit_runtime_database_url,
+    resolve_runtime_database_url,
+)
 from app.events.models import new_event
 from app.services import outbox as outbox_service
 
@@ -79,17 +85,77 @@ def test_write_outbox_event_uses_explicit_pg_backend(monkeypatch: pytest.MonkeyP
     assert conn.cursor_instance.calls
 
 
-def test_write_outbox_event_skips_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The chosen best-effort contract skips when neither backend nor DSN is configured."""
+def test_settings_resolved_dsn_is_not_treated_as_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The skip predicate may not be narrower than the connection's resolver (#4214 D1).
+
+    ``conn_rw()`` resolves through ``resolve_runtime_database_url(os.environ)``,
+    which also honours ``PKM_DB_HOST``/``PKM_DB_NAME_*``/``POSTGRES_*``. A skip
+    predicate that read only ``DATABASE_URL``/``DB_DSN`` therefore classified a
+    runtime whose connection WOULD have succeeded as unconfigured, and dropped
+    the write while returning ``""`` — the value this contract defines as
+    success/dedup.
+    """
     monkeypatch.delenv("STORE_BACKEND", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("PKM_DB_HOST", "named-host.example")
+    conn = _Connection("resolver-key")
+    monkeypatch.setattr(outbox_service, "conn_rw", lambda: conn)
+
+    assert outbox_service.write_outbox_event(_event(), idempotency_key="resolver-key") == "resolver-key"
+    assert conn.cursor_instance.calls
+
+
+@pytest.mark.parametrize("naming_key", RUNTIME_DATABASE_ENV_KEYS)
+def test_skip_decision_never_contradicts_the_connection_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    naming_key: str,
+) -> None:
+    """Every key the connection's resolver reads must also make the write connect.
+
+    Parametrized over ``RUNTIME_DATABASE_ENV_KEYS`` itself, so a new synthesis
+    input added to ``app/config/database.py`` is covered here automatically
+    instead of quietly re-opening the #4214 D1 divergence.
+    """
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    monkeypatch.setenv(
+        naming_key,
+        "postgresql://named.example/app" if naming_key in {"DATABASE_URL", "DB_DSN"} else "named",
+    )
+    conn = _Connection(f"named-{naming_key}")
+    monkeypatch.setattr(outbox_service, "conn_rw", lambda: conn)
+
+    assert (
+        outbox_service.write_outbox_event(_event(), idempotency_key=f"named-{naming_key}")
+        == f"named-{naming_key}"
+    )
+    # The DSN the write would use is byte-identical to the one the connection
+    # resolves, so the decision and the connection cannot disagree.
+    assert explicit_runtime_database_url(os.environ) == resolve_runtime_database_url(os.environ)
+
+
+def test_write_outbox_event_skips_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The chosen best-effort contract skips when the runtime names no database.
+
+    "Unconfigured" now means every input the connection's resolver would use is
+    a built-in default, so the DSN it hands back is the compose-shaped fallback
+    nobody named — connecting to it is exactly the stalling DNS lookup #4064
+    exists to avoid.
+    """
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
     def _fail_if_called(*args: object, **kwargs: object) -> Any:
         raise AssertionError("unconfigured write_outbox_event must not open a DB connection")
 
     monkeypatch.setattr(outbox_service, "conn_rw", _fail_if_called)
 
+    assert explicit_runtime_database_url(os.environ) is None
     assert outbox_service.write_outbox_event(_event(), idempotency_key="unconfigured-key") == ""
 
 

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple
 
+from app.config.database import explicit_runtime_database_url
 from app.db.errors import OutboxSchemaMissingError
 from app.events.models import Event, new_event
 from app.events.schema import OutboxEvent
@@ -123,6 +124,28 @@ def _open_conn():
     return psycopg.connect(url, autocommit=True)
 
 
+def _self_owned_database_is_named() -> bool:
+    """Whether the environment names a database for a self-owned outbox write.
+
+    Resolved through ``app.config.database``, the SAME module ``conn_rw()``
+    resolves its DSN with (``app/db/db.py::_psycopg_dsn`` ->
+    ``resolve_runtime_database_url(os.environ)``), so the skip decision cannot
+    be narrower than the connection it stands in for.
+
+    Reading ``DATABASE_URL``/``DB_DSN`` directly was that narrower predicate
+    (#4214 D1): ``resolve_runtime_database_url`` also honours
+    ``PKM_DB_HOST``/``PKM_DB_PORT``/``PKM_DB_NAME_*``/``POSTGRES_*``, so a
+    runtime that named its database through those keys resolved to a real,
+    reachable connection while the skip predicate reported "unconfigured" and
+    dropped the write, returning ``""`` — the value this contract defines as
+    success/dedup. ``False`` here now means one thing only: every input the
+    resolver would use is a built-in default, so the DSN it hands back is the
+    compose-shaped fallback nobody named, and connecting to it is exactly the
+    stalling DNS lookup #4064 exists to avoid.
+    """
+    return explicit_runtime_database_url(os.environ) is not None
+
+
 def _self_owned_outbox_write_policy(
     *,
     backend: str | None,
@@ -131,17 +154,20 @@ def _self_owned_outbox_write_policy(
 ) -> Literal["connect", "skip"]:
     """Resolve one self-owned outbox write without probing the database.
 
-    ``conn_rw`` can fall back to a settings DSN even when the active store is
-    memory-backed.  A best-effort outbox emission must not trigger that fallback:
-    DNS resolution happens before a connection failure can be caught and can
-    stall a non-pg test run.  An optional explicit-memory write therefore skips
-    even if a stale DSN remains in the environment.
+    ``conn_rw`` synthesizes a compose-shaped DSN even when the active store is
+    memory-backed and nobody named a database.  A best-effort outbox emission
+    must not trigger that fallback: DNS resolution happens before a connection
+    failure can be caught and can stall a non-pg test run.  An optional
+    explicit-memory write therefore skips even if a stale DSN remains in the
+    environment.
 
-    With no explicit backend, an explicit DSN is still a durability request and
-    retains the existing Postgres write path.  A caller that has already resolved
-    required DB-outbox intent overrides the optional memory shortcut and must
-    observe connection failures.  Callers that supply ``conn`` own their
-    transaction and bypass this self-owned policy entirely.
+    With no explicit backend, a named database is still a durability request and
+    retains the existing Postgres write path.  ``dsn_configured`` MUST be
+    resolved by :func:`_self_owned_database_is_named` so this decision and the
+    connection read the same source (#4214 D1).  A caller that has already
+    resolved required DB-outbox intent overrides the optional memory shortcut
+    and must observe connection failures.  Callers that supply ``conn`` own
+    their transaction and bypass this self-owned policy entirely.
     """
     normalized_backend = (backend or "").strip().lower()
     if normalized_backend and normalized_backend not in {"memory", "pg"}:
@@ -155,6 +181,29 @@ def _self_owned_outbox_write_policy(
     if normalized_backend == "memory":
         return "skip"
     return "connect" if dsn_configured else "skip"
+
+
+def self_owned_write_would_skip(*, required_db: bool = False) -> bool:
+    """Whether a self-owned write with this durability intent would skip the DB.
+
+    Producers whose ``""`` return is otherwise indistinguishable from a
+    deduplicated insert use this to decide whether they may finalize durable
+    state (a cursor, a snapshot, a "purged" counter) on the strength of that
+    return. Delegates to :func:`_self_owned_outbox_write_policy` with exactly
+    the inputs :func:`write_outbox_event` resolves, so it can never disagree
+    with the decision the write itself makes.
+
+    Producers that HAVE a compensating sink (a JSONL append that survives the
+    skip) do not need this: their durability does not rest on the DB row.
+    """
+    return (
+        _self_owned_outbox_write_policy(
+            backend=os.environ.get("STORE_BACKEND"),
+            dsn_configured=_self_owned_database_is_named(),
+            required_db=required_db,
+        )
+        == "skip"
+    )
 
 
 def open_outbox_txn_conn():
@@ -482,7 +531,7 @@ def write_outbox_event(
         envelope = envelope.model_copy(update={"meta": stamped_meta})
     if conn is None and _self_owned_outbox_write_policy(
         backend=os.environ.get("STORE_BACKEND"),
-        dsn_configured=bool(os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")),
+        dsn_configured=_self_owned_database_is_named(),
         required_db=required_db,
     ) == "skip":
         # Outbox emission is best effort outside an explicitly configured

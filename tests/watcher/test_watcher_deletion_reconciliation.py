@@ -432,6 +432,12 @@ def test_run_watcher_tick_falls_back_to_derived_identity(
 
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "events.jsonl"))
     monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    # The patched producer below stands in for an outbox that accepts the
+    # tombstone, so declare the runtime posture that matches it (#4214 D3):
+    # deleted_purged may only be reported for a runtime where the tombstone is
+    # actually delivered. Without this the tick correctly reports 0 purges.
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
     snapshot_path = vault / ".state.json"
 
     # delete_note reports it could not identify/emit (no file_state row).

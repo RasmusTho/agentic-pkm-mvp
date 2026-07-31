@@ -16,6 +16,7 @@ import yaml
 
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel.writeback import upsert_executed_ids
+from app.config.database import explicit_runtime_database_url
 from app.briefing.trigger import scheduled_briefing_tick
 from app.agents.panel_agent.policy import (
     watcher_panel_candidate_for_path,
@@ -875,7 +876,15 @@ def _validate_registry_vault(vault_path: Path) -> bool:
     return True
 
 
-def _db_outbox_required() -> bool:
+def db_outbox_required() -> bool:
+    """Whether watcher event delivery must reach the DB outbox to count.
+
+    True when ``WATCHER_REQUIRE_DB_OUTBOX`` is set OR when ``STORE_BACKEND=pg``
+    — the shipped production default (`config/runtime.defaults.env`), so this
+    is NOT an opt-in-only switch. Public because the vault-watcher tick's
+    delete-tombstone path must resolve required intent identically (#4214 D3);
+    one definition, one answer.
+    """
     require_db = resolve_dev_lab_env_value(
         "WATCHER_REQUIRE_DB_OUTBOX",
         default="0",
@@ -887,8 +896,22 @@ def _db_outbox_required() -> bool:
     return backend == "pg"
 
 
+# Historical internal name, kept so the in-module call sites below read the same
+# as they did before the helper was published.
+_db_outbox_required = db_outbox_required
+
+
 def _has_db_outbox_env() -> bool:
-    return bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
+    """Whether the environment names a database the watcher could enqueue into.
+
+    Resolved through the same ``app.config.database`` helper the self-owned
+    outbox policy and ``conn_rw()`` use (#4214 D1). Reading only
+    ``DATABASE_URL``/``DB_DSN`` here was the same narrow predicate: it made the
+    required path raise "DSN required" for a runtime that named its database
+    through ``PKM_DB_*``/``POSTGRES_*`` and would have connected fine, and it
+    made the optional path skip the DB enqueue for that same runtime.
+    """
+    return explicit_runtime_database_url(os.environ) is not None
 
 
 def _panel_candidate_for_path(note_path: Path) -> tuple[bool, bool]:
@@ -1234,14 +1257,19 @@ def _emit_changed_entry(
             required_db=required_db,
         )
     except Exception:
-        if required_db:
-            # Required delivery and its durable observation cursor are one
-            # state transition: if enqueue fails, restore the pre-observation
-            # state so finalization cannot suppress an unchanged-file retry.
-            if previous_file_state is None:
-                state.files.pop(rel_path, None)
-            else:
-                state.files[rel_path] = previous_file_state
+        # Delivery and its durable observation cursor are one state
+        # transition: if emission fails, restore the pre-observation state so
+        # finalization cannot suppress an unchanged-file retry.
+        #
+        # Not gated on required_db (#4214 D6): the non-required path can raise
+        # too — `append_jsonl_outbox_event` is unwrapped, so an OSError on the
+        # compensating JSONL sink propagates here with NEITHER sink written.
+        # Rolling back only for required delivery dropped that observation
+        # permanently once `_finalize_spec_tick` saved the advanced cursor.
+        if previous_file_state is None:
+            state.files.pop(rel_path, None)
+        else:
+            state.files[rel_path] = previous_file_state
         raise
     if not trace_id:
         return None
@@ -1291,7 +1319,11 @@ def _emit_watch_event(
         append_jsonl_outbox_event(outbox_path, event, default_source="watcher.registry")
         require_db = _db_outbox_required() if required_db is None else required_db
         if require_db and not _has_db_outbox_env():
-            raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
+            raise RuntimeError(
+                "Required watcher DB outbox delivery, but the runtime names no database: "
+                "set DATABASE_URL/DB_DSN (or the PKM_DB_*/POSTGRES_* keys "
+                "resolve_runtime_database_url reads)."
+            )
         if require_db or _has_db_outbox_env():
             try:
                 # Watcher-run scoped key: (topic, relative path, run-window
@@ -1338,7 +1370,11 @@ def _emit_watch_event(
     if spec.emit_event == INGEST_VAULT_CHANGED:
         require_db = _db_outbox_required() if required_db is None else required_db
         if require_db and not _has_db_outbox_env():
-            raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
+            raise RuntimeError(
+                "Required watcher DB outbox delivery, but the runtime names no database: "
+                "set DATABASE_URL/DB_DSN (or the PKM_DB_*/POSTGRES_* keys "
+                "resolve_runtime_database_url reads)."
+            )
         if require_db or _has_db_outbox_env():
             try:
                 insert_object_and_outbox(
