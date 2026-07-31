@@ -15,11 +15,14 @@ segments"):
 - ``open_segment:<scope>`` -- the accumulated situation-model state of one
   scope's currently-open (not yet proposed) segment
   (:mod:`app.episodes.segmenter`).
-- ``calendar_consumed_signal:<scope>:<signal_id>`` -- exact calendar signal
-  identities whose segments closed under the fixed-window calendar poller.
-  These rows outlive an open segment's deletion after closure, preventing a
-  later poll from replaying stale calendar evidence into a new segment while
-  preserving eligibility for changed identities.
+- ``calendar_consumed_signal:<len(scope)>:<scope>:<signal_id>`` -- exact
+  calendar signal identities whose segments closed under the fixed-window
+  calendar poller. ``scope`` is length-prefixed netstring-style
+  (:func:`app.episodes.segmenter._calendar_consumed_signal_key`) so an
+  embedded ``:`` in either ``scope`` or ``signal_id`` cannot shift the key
+  boundary. These rows outlive an open segment's deletion after closure,
+  preventing a later poll from replaying stale calendar evidence into a new
+  segment while preserving eligibility for changed identities.
 
 Quiescence-closure frontiers are NOT persisted here: the segmenter computes a
 per-scope observed frontier fresh from each tick's own consumed signals

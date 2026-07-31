@@ -363,9 +363,12 @@ there is no `STORE_SCHEMA_AUTOCREATE` opt-in here, test fixtures run the migrati
       `outbox` table's vault-activity topics (independent of `outbox.delivered_at`, which the
       worker dispatcher owns);
     - `open_segment:<scope>` — one scope's currently-open (not yet proposed) segment state.
-    - `calendar_consumed_signal:<scope>:<signal_id>` — a closed calendar signal's durable
-      fixed-window idempotency boundary. It prevents a later poll from replaying evidence after
-      the originating open segment was deleted; changed calendar identities remain distinct.
+    - `calendar_consumed_signal:<len(scope)>:<scope>:<signal_id>` — a closed calendar signal's
+      durable fixed-window idempotency boundary. `scope` is length-prefixed netstring-style
+      (`app/episodes/segmenter.py::_calendar_consumed_signal_key`) so an embedded `:` in either
+      `scope` or `signal_id` cannot shift the key boundary. It prevents a later poll from
+      replaying evidence after the originating open segment was deleted; changed calendar
+      identities remain distinct.
   - (No `stream_watermark` row family: the quiescence-closure frontier is a per-scope
     read position computed fresh from each tick's own consumed signals, not carried durably.)
   - `value` (`jsonb`, `NOT NULL`)
