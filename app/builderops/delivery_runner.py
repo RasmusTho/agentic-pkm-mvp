@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Final, Literal, Protocol, TypeAlias, get_args
 
 from app.builderops.delivery_orchestration_contracts import (
+    ContractRef,
     DeliveryPlan,
     EffectClass,
     IssueScope,
@@ -31,7 +32,6 @@ from app.builderops.delivery_orchestration_contracts import (
     WorkerRuntimeState,
 )
 from app.builderops.delivery_reducer import (
-    ContractRef,
     DeliveryRunState,
     ReducerAdmissionError,
     replay_delivery_sidecar,
