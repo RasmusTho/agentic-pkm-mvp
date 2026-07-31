@@ -45,6 +45,11 @@ body:has(#fq4:checked) #f4{display:flex}
 .src.stale{border-left-color:var(--amber)}.src.stale span{color:var(--amber)}
 .src.dead{border-left-color:var(--destructive);background:var(--destructive-muted)}.src.dead span{color:var(--destructive)}
 .src.dead b{color:var(--destructive)}
+/* EXT-8: opted out, not broken. Recedes rather than alarms — no destructive
+   colour, no amber, no raised background: the pill still names itself and its
+   reason, it just stops competing for attention it does not deserve. */
+.src.off{border-left-color:var(--border);background:transparent}
+.src.off b,.src.off span{color:var(--fg-3)}
 
 /* ---------- legend, always visible ---------- */
 .legend{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:var(--space-6);border:1px solid var(--border);background:var(--bg-surface);padding:var(--space-4) var(--space-5);margin-bottom:var(--space-8)}

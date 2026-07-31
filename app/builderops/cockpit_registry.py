@@ -135,6 +135,12 @@ class _SourceRead:
     state: str  # "fresh" | "stale" | "empty" | "unavailable"
     last_successful_read: str | None
     detail: str
+    # EXT-8: an optional-by-design plane whose enabling config is simply absent
+    # is not a broken source. `configured` separates the two so the surface can
+    # render "never turned on" calmly while a genuinely dead source stays loud.
+    # It never affects `state`, which stays "unavailable" either way — an
+    # unconfigured plane still owns no countable facts.
+    configured: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -143,6 +149,7 @@ class _SourceRead:
             "last_successful_read": self.last_successful_read,
             "detail": self.detail,
             "stale_after_days": SOURCE_STALE_AFTER_DAYS,
+            "configured": self.configured,
         }
 
 
@@ -344,6 +351,13 @@ def _read_github_live(
     function (``fetch_github_live`` already catches every failure mode), and
     a failed/unconfigured read yields ``state="unavailable"`` — the refused
     claim, never a fabricated empty snapshot.
+
+    The two refusals are distinguished by ``configured`` (EXT-8), not by
+    ``state``: this plane is opt-in, so an absent ``repo`` means nobody asked
+    for it, while a present ``repo`` whose read fails is a real outage. The
+    flag mirrors ``fetch_github_live``'s own ``if not repo`` branch — the one
+    place that "no repo configured" refusal is produced — rather than matching
+    on its detail text.
     """
     result = fetch_github_live(repo, reader=reader)
     sources.add(
@@ -352,6 +366,7 @@ def _read_github_live(
             state=result.state,
             last_successful_read=result.last_successful_read,
             detail=result.detail,
+            configured=bool(repo),
         )
     )
     return result.snapshot
