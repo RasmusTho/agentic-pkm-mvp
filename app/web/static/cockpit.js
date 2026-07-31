@@ -379,20 +379,38 @@ function renderFocus(payload) {
 }
 
 function sourceMarkup(source) {
-  const cls = source.state === "unavailable" ? " dead" : source.state === "stale" ? " stale" : "";
+  // EXT-8: an optional plane that was never turned on is unavailable but not
+  // broken. It gets its own calm class and says so in words — the loud
+  // `.src.dead` treatment is reserved for a source that was expected to work.
+  const optedOut = source.state === "unavailable" && source.configured === false;
+  const cls = optedOut
+    ? " off"
+    : source.state === "unavailable"
+      ? " dead"
+      : source.state === "stale"
+        ? " stale"
+        : "";
   const read = source.last_successful_read
     ? `read ${source.last_successful_read}`
-    : "no successful read";
+    : optedOut
+      ? "never enabled"
+      : "no successful read";
   return (
     `<div class="src${cls}"><b>${esc(source.name)}</b>` +
-    `<span>${esc(source.state)} · ${esc(read)}</span>` +
+    `<span>${esc(optedOut ? "not enabled" : source.state)} · ${esc(read)}</span>` +
     `<span>${esc(source.detail || "")}</span></div>`
   );
 }
 
 function render(payload) {
   const claimSection = document.getElementById("claim");
-  const anyDead = (payload.sources || []).some((s) => s.state === "unavailable");
+  // Only a source that was supposed to be readable counts toward the banner's
+  // amber. An opted-out optional plane (EXT-8) is a permanent, calm baseline;
+  // counting it would leave every deployed cockpit amber forever and drain the
+  // signal from a real outage.
+  const anyDead = (payload.sources || []).some(
+    (s) => s.state === "unavailable" && s.configured !== false
+  );
   claimSection.classList.toggle("bad", payload.claim.kind === "refused");
   claimSection.classList.toggle("warn", payload.claim.kind !== "refused" && anyDead);
   document.getElementById("claim-text").textContent = payload.claim.text;

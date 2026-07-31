@@ -163,6 +163,56 @@ def test_true_emptiness_is_dated_claim(tmp_path: Path) -> None:
     assert deploy_source["state"] == "empty"
 
 
+def test_unconfigured_github_source_marks_not_configured(tmp_path: Path) -> None:
+    """EXT-8: an opt-in plane nobody turned on is unavailable but configured=False.
+
+    ``state`` still says ``unavailable`` — the plane owns no countable facts
+    either way — but the payload now carries enough for the surface to tell
+    "never enabled" apart from "broken".
+    """
+    _, db_path = _make_store(tmp_path)
+
+    payload = build_registry(
+        db_path=db_path,
+        deploy_receipt_dir=tmp_path / "deploys",
+        github_repo=None,
+    )
+
+    github_source = next(
+        s for s in payload["sources"] if s["name"] == "github-live"
+    )
+    assert github_source["state"] == "unavailable"
+    assert github_source["configured"] is False
+
+    # Every other source is configured by construction: only a plane that is
+    # optional *and* unset may claim otherwise.
+    for source in payload["sources"]:
+        if source["name"] != "github-live":
+            assert source["configured"] is True
+
+
+def test_configured_github_failure_stays_configured(tmp_path: Path) -> None:
+    """A configured plane that fails is a real outage, and must stay loud."""
+    _, db_path = _make_store(tmp_path)
+
+    def failing_reader(repo: str):
+        raise RuntimeError("simulated read failure on a configured plane")
+
+    payload = build_registry(
+        db_path=db_path,
+        deploy_receipt_dir=tmp_path / "deploys",
+        github_repo="RasmusTho/agentic-pkm-mvp",
+        github_reader=failing_reader,
+    )
+
+    github_source = next(
+        s for s in payload["sources"] if s["name"] == "github-live"
+    )
+    assert github_source["state"] == "unavailable"
+    assert github_source["configured"] is True
+    assert github_source["last_successful_read"] is None
+
+
 def test_rung_classification_machine_edges_only(tmp_path: Path) -> None:
     store, db_path = _make_store(tmp_path)
     repo = "RasmusTho/agentic-pkm-mvp"

@@ -64,6 +64,7 @@ except ImportError:
     )
 
 from app.api.routes.cockpit import registry as _cockpit_registry_endpoint
+from app.builderops import cockpit_github_plane
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.store import SqliteStore
 
@@ -358,6 +359,7 @@ def _serve_cockpit(
     docs_root: Path | None = None,
     capabilities_yaml_path: Path | None = None,
     matrix_path: Path | None = None,
+    github_repo: str | None = None,
 ) -> Iterator[str]:
     env_keys = [
         "DISPATCHER_DB_PATH",
@@ -365,10 +367,18 @@ def _serve_cockpit(
         "COCKPIT_DOCS_ROOT",
         "COCKPIT_CAPABILITIES_YAML",
         "COCKPIT_TRACEABILITY_MATRIX",
+        # Held explicitly so an ambient COCKPIT_GITHUB_REPO on the runner
+        # cannot leak the opt-in live plane — and its network call — into a
+        # journey that never asked for it. Unset unless a test opts in.
+        "COCKPIT_GITHUB_REPO",
     ]
     env_before = {key: os.environ.get(key) for key in env_keys}
     os.environ["DISPATCHER_DB_PATH"] = str(db_path)
     os.environ["COCKPIT_DEPLOY_RECEIPT_DIR"] = str(deploy_receipt_dir)
+    if github_repo is None:
+        os.environ.pop("COCKPIT_GITHUB_REPO", None)
+    else:
+        os.environ["COCKPIT_GITHUB_REPO"] = github_repo
     if docs_root is not None:
         os.environ["COCKPIT_DOCS_ROOT"] = str(docs_root)
     if capabilities_yaml_path is not None:
@@ -489,15 +499,15 @@ def test_true_emptiness_is_dated_claim(tmp_path: Path) -> None:
                 # opt-in github-live plane (BOPS-COCKPIT-03, #4450) always
                 # reads "unavailable" here — a clean refusal of a source
                 # nobody asked for, not a degradation of the dispatcher-owned
-                # claim this test is actually about.
+                # claim this test is actually about. Since EXT-8 (#4481) that
+                # opted-out plane no longer ambers the banner either, so
+                # "warn" is asserted too: without it, the false-positive amber
+                # would mask a real regression in this computation.
                 claim_classes = (page.locator("#claim").get_attribute("class") or "").split()
                 assert "bad" not in claim_classes
+                assert "warn" not in claim_classes
 
-                dead_names = {
-                    text.split("\n", 1)[0]
-                    for text in page.locator(".src.dead").all_inner_texts()
-                }
-                assert dead_names <= {"github-live"}
+                assert page.locator(".src.dead").count() == 0
                 pill_texts = " ".join(page.locator(".src").all_inner_texts())
                 assert "dispatcher-store" in pill_texts
                 assert "verification-runs" in pill_texts
@@ -506,6 +516,114 @@ def test_true_emptiness_is_dated_claim(tmp_path: Path) -> None:
                 counts = page.locator(".band-count").all_inner_texts()
                 assert len(counts) == 5
                 assert all(count.strip() == "0" for count in counts)
+            finally:
+                browser.close()
+
+
+def test_unconfigured_source_pill_is_not_dead(tmp_path: Path) -> None:
+    """EXT-8 (#4481): a plane nobody turned on renders calm, and says why.
+
+    `github-live` is opt-in and no deployment sets COCKPIT_GITHUB_REPO, so the
+    unconfigured read is the permanent steady state on every deployed cockpit
+    — it must not wear the treatment reserved for a source that broke.
+    """
+    db_path = _empty_store(tmp_path)
+    deploy_dir = tmp_path / "deploys"
+
+    with _serve_cockpit(db_path=db_path, deploy_receipt_dir=deploy_dir) as url:
+        with sync_playwright() as playwright:
+            browser, page = _open_page(playwright, url)
+            try:
+                github_pill = page.locator(".src", has_text="github-live")
+                assert github_pill.count() == 1
+                classes = (github_pill.first.get_attribute("class") or "").split()
+                assert "off" in classes
+                assert "dead" not in classes
+
+                # It still names itself, in words, rather than going silent.
+                pill_text = github_pill.first.inner_text()
+                assert "not enabled" in pill_text
+                assert "COCKPIT_GITHUB_REPO" in pill_text
+
+                # Nothing else regressed into the dead treatment.
+                assert page.locator(".src.dead").count() == 0
+            finally:
+                browser.close()
+
+
+def test_claim_banner_ignores_unconfigured_optional_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The banner ambers for real failures only — never for an opted-out plane.
+
+    Three states, one computation: opted-out stays calm, a required source
+    that dies ambers, and an *optional* source that was configured and then
+    failed ambers too. Without the middle and last cases this test would pass
+    on a client that simply never ambers.
+    """
+    deploy_dir = tmp_path / "deploys"
+
+    # (1) Opted out: unavailable, but nobody asked for it. Calm.
+    with _serve_cockpit(
+        db_path=_empty_store(tmp_path / "calm"), deploy_receipt_dir=deploy_dir
+    ) as url:
+        with sync_playwright() as playwright:
+            browser, page = _open_page(playwright, url)
+            try:
+                classes = (page.locator("#claim").get_attribute("class") or "").split()
+                assert "warn" not in classes
+                assert "bad" not in classes
+            finally:
+                browser.close()
+
+    # (2) A required source that dies still ambers. A malformed deploy receipt
+    # is a read failure of a source the surface always reads — unlike a missing
+    # receipt, which is structural absence and stays "empty".
+    broken_deploys = tmp_path / "broken-deploys"
+    broken_deploys.mkdir()
+    (broken_deploys / "dev-latest.json").write_text("{not json", encoding="utf-8")
+
+    with _serve_cockpit(
+        db_path=_empty_store(tmp_path / "amber"), deploy_receipt_dir=broken_deploys
+    ) as url:
+        with sync_playwright() as playwright:
+            browser, page = _open_page(playwright, url)
+            try:
+                classes = (page.locator("#claim").get_attribute("class") or "").split()
+                assert "warn" in classes
+                dead_names = {
+                    text.split("\n", 1)[0]
+                    for text in page.locator(".src.dead").all_inner_texts()
+                }
+                assert "deploy-receipts" in dead_names
+            finally:
+                browser.close()
+
+    # (3) An *optional* plane that was configured and then failed is a real
+    # outage on a host that did opt in — still amber, still the dead pill.
+    # The failure is injected at the `gh` subprocess boundary so the whole
+    # production reader path runs with no network (module docstring rule).
+    def _refuse(args: list[str]):
+        raise cockpit_github_plane.GithubReadError("simulated read failure")
+
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", _refuse)
+
+    with _serve_cockpit(
+        db_path=_empty_store(tmp_path / "configured"),
+        deploy_receipt_dir=deploy_dir,
+        github_repo=_REPO,
+    ) as url:
+        with sync_playwright() as playwright:
+            browser, page = _open_page(playwright, url)
+            try:
+                classes = (page.locator("#claim").get_attribute("class") or "").split()
+                assert "warn" in classes
+                github_pill = page.locator(".src", has_text="github-live")
+                github_classes = (
+                    github_pill.first.get_attribute("class") or ""
+                ).split()
+                assert "dead" in github_classes
+                assert "off" not in github_classes
             finally:
                 browser.close()
 
@@ -543,14 +661,13 @@ def test_populated_bands_spine_freshness(tmp_path: Path) -> None:
                     assert name in pill_texts
                 # github-live is a separate, opt-in plane (BOPS-COCKPIT-03,
                 # #4450): unconfigured by default in this offline harness (no
-                # COCKPIT_GITHUB_REPO, no real network), so it alone is
-                # expected to read "unavailable" here — see the identical
-                # accounting in test_true_emptiness_is_dated_claim.
-                dead_names = {
-                    text.split("\n", 1)[0]
-                    for text in page.locator(".src.dead").all_inner_texts()
-                }
-                assert dead_names <= {"github-live"}
+                # COCKPIT_GITHUB_REPO, no real network), so it alone reads
+                # "unavailable" here — and since EXT-8 (#4481) it renders as
+                # opted-out rather than dead, and leaves the banner calm. See
+                # the identical accounting in test_true_emptiness_is_dated_claim.
+                assert page.locator(".src.dead").count() == 0
+                claim_classes = (page.locator("#claim").get_attribute("class") or "").split()
+                assert "warn" not in claim_classes
 
                 # Out-link on the delivered card carries the authority URL.
                 done_card = page.locator(".card.card-done").first
