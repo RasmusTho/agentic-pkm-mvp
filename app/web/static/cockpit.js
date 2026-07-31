@@ -323,8 +323,10 @@ function focusScreenMarkup(index, band) {
     (rows
       ? `<ul class="focus-list">${rows}</ul>`
       : `<p class="mono" style="color:var(--fg-3)">nothing to show</p>`) +
-    deferral +
-    `<div class="focus-nav">${nav}${back}</div>` +
+    // The deferral link lives inside .focus-nav alongside nav/back — it is
+    // a navigation control (switches lens), not a printable claim, and the
+    // print rule that hides .focus-nav must catch it too (#4453 review).
+    `<div class="focus-nav">${deferral}${nav}${back}</div>` +
     `</div>`
   );
 }

@@ -122,13 +122,17 @@ The capability may be claimed as supported when all of these hold (mirrored by t
 issue, which is where progress is checked off):
 
 - [x] All seven task rows above are Delivered with their per-AC `Verify:` targets green on merged SHAs
-- [ ] The induced dead-source journey runs in the post-merge browser lane and proves red-not-calm
-      — **not yet true**: `.github/workflows/browser-runtime.yml` does not include a step for
-      `tests/companion_ui/test_cockpit_journeys.py` (it currently runs only
-      `test_runtime_unavailable_browser.py` and `test_overlay_history_browser.py`). BOPS-COCKPIT-02
-      named wiring the journey file into that lane as its own step; that wiring was never done. A
-      Builder System workflow-file change is out of scope for this presentation-only slice (#4453
-      touches `cockpit.html|css|js` and the test file only) — flagged as a follow-up.
+- [x] The induced dead-source journey runs in the post-merge browser lane and proves red-not-calm
+      — the wiring itself has existed since #4448 (`.github/workflows/browser-runtime.yml` :: "Run
+      cockpit induced-failure browser journeys (BOPS-COCKPIT-02)", a required, non-`continue-on-error`
+      step). It went genuinely red on `main` starting with #4450's merge (confirmed via the lane's
+      own run history: green through commit `2c7daf18`, red from `11712858` onward) — `#4450` added
+      the opt-in `github-live` source, which this offline test harness never configures
+      (`COCKPIT_GITHUB_REPO` unset, deliberately no live network in tests), so it always reads
+      `unavailable` there; the original `.src.dead` assertions never accounted for that new,
+      correctly-refusing source and started failing on every push since. This slice's own test-file
+      changes repair that drift (scoping the dead-source check to exclude the one source that is
+      supposed to be unconfigured here) rather than adding new wiring.
 - [x] Every plane the surface reads has fresh/stale/unavailable pill states with its own threshold
 - [ ] The five chain-derived states and the flaw predicates render from live data on the host, with
       every unreadable predicate named as unread

@@ -242,8 +242,12 @@ body:has(#fq4:checked) #f4{display:flex}
   :root{--bg-base:#fff;--bg-surface:#fff;--bg-raised:#fff;--bg-overlay:#f2f2f2;--fg-1:#111;--fg-2:#333;--fg-3:#666;--border:#999;--border-strong:#444;--accent:#111;--cyan:#111;--vault:#111;--agent:#111;--amber:#111;--destructive:#111}
   body{background:#fff;color:#111}
   .sw,.focus-nav,.out{display:none!important}
-  .pane{display:block!important}
-  #lens-question-pane .focus{display:flex!important}
+  /* Print projects whichever lens/question screen is actually selected on
+     screen — the checked-state rules above (no !important, so they still
+     apply in print) already show exactly one pane and one focus screen.
+     Forcing every pane/screen open here would print all three lenses and
+     all four question screens stacked together, breaking "lens choice
+     changes projection" (#4453 review). */
   .card[open] .body,.body{display:flex!important}
   details>:not(summary){display:block!important}
   details::details-content{content-visibility:visible!important}

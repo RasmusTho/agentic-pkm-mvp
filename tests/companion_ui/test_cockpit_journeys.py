@@ -93,6 +93,46 @@ def _dead_store_path(tmp_path: Path) -> Path:
     return tmp_path / "nowhere" / "dispatcher.sqlite3"
 
 
+def _write_docs_fixture_with_proven_edges(docs_root: Path, *, epic_issue: int, child_issue: int) -> None:
+    """A spec dir giving one thread a *proven* capability and epic rung, so
+    the graph lens's "middle-only solid" rule can be proven to key off the
+    rung's fixed name/position (MIDDLE_RUNGS) rather than off its class —
+    without this, capability/epic never leave class="absent" in a fixture,
+    and a regression that solidified any class="proven" rung (not just the
+    machine-keyed middle four) would pass unnoticed (#4453 review)."""
+    docs_root.mkdir(parents=True, exist_ok=True)
+    (docs_root / "capabilities.yaml").write_text(
+        "capabilities:\n"
+        "  - id: cap-graph-fixture\n"
+        "    stable_key: ckm-capability-9301\n"
+        "    name: Graph Fixture Capability\n"
+        "    definition: test fixture capability\n"
+        "    parent: null\n"
+        "    boundary_ref: GRAPH\n"
+        '    seed_source: "test fixture"\n',
+        encoding="utf-8",
+    )
+    (docs_root / "matrix.md").write_text(
+        "State: test fixture traceability matrix.\n\n# Fixture Traceability Matrix\n",
+        encoding="utf-8",
+    )
+    spec_dir = docs_root / "GRAPH_FIXTURE"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "PARENT_FEATURE_ISSUE.md").write_text(
+        f"---\nname: Graph Fixture\ngithub_issue: {epic_issue}\n---\n\n# Graph Fixture\n",
+        encoding="utf-8",
+    )
+    (spec_dir / "CHILD_TASK.md").write_text(
+        "---\n"
+        "name: Full Chain Thread\n"
+        "task_id: GRAPH-01\n"
+        f"github_issue: {child_issue}\n"
+        "parent_capability: Graph Fixture Capability\n"
+        "---\n\n# Full Chain Thread\n",
+        encoding="utf-8",
+    )
+
+
 def _empty_store(tmp_path: Path) -> Path:
     db_path = tmp_path / "dispatcher.sqlite3"
     store = SqliteStore(db_path)
@@ -223,10 +263,14 @@ def _many_working_store(tmp_path: Path, count: int = 7) -> Path:
 
 def _graph_lens_store(tmp_path: Path) -> Path:
     """One thread with a full CI-forced chain (slice/PR/sha/receipt all
-    proven) and one thread with no PR at all (those same rungs absent). Both
-    have no docs-plane configured, so intention/capability/epic/tried are
-    always ``absent`` — the graph lens must never draw those solid regardless
-    of the middle rungs' own state (#4453 AC2)."""
+    proven) and one thread with no PR at all (those same rungs absent). The
+    docs-plane fixture (wired in by the test itself, see
+    ``_write_docs_fixture_with_proven_edges``) gives ``task-graph-full`` a
+    genuinely *proven* capability rung and a *proven* epic rung — the graph
+    lens must still never draw those solid, proving the "only slice/PR/sha/
+    receipt are ever solid" rule is keyed by the rung's fixed name/position,
+    not by its class (#4453 AC2; a class-keyed regression would pass
+    unnoticed if capability/epic stayed ``absent`` in every fixture)."""
     db_path = tmp_path / "dispatcher.sqlite3"
     store = SqliteStore(db_path)
     store.initialize()
@@ -307,13 +351,30 @@ def _deploy_receipts(tmp_path: Path) -> Path:
 
 
 @contextmanager
-def _serve_cockpit(*, db_path: Path, deploy_receipt_dir: Path) -> Iterator[str]:
-    env_before = {
-        key: os.environ.get(key)
-        for key in ("DISPATCHER_DB_PATH", "COCKPIT_DEPLOY_RECEIPT_DIR")
-    }
+def _serve_cockpit(
+    *,
+    db_path: Path,
+    deploy_receipt_dir: Path,
+    docs_root: Path | None = None,
+    capabilities_yaml_path: Path | None = None,
+    matrix_path: Path | None = None,
+) -> Iterator[str]:
+    env_keys = [
+        "DISPATCHER_DB_PATH",
+        "COCKPIT_DEPLOY_RECEIPT_DIR",
+        "COCKPIT_DOCS_ROOT",
+        "COCKPIT_CAPABILITIES_YAML",
+        "COCKPIT_TRACEABILITY_MATRIX",
+    ]
+    env_before = {key: os.environ.get(key) for key in env_keys}
     os.environ["DISPATCHER_DB_PATH"] = str(db_path)
     os.environ["COCKPIT_DEPLOY_RECEIPT_DIR"] = str(deploy_receipt_dir)
+    if docs_root is not None:
+        os.environ["COCKPIT_DOCS_ROOT"] = str(docs_root)
+    if capabilities_yaml_path is not None:
+        os.environ["COCKPIT_CAPABILITIES_YAML"] = str(capabilities_yaml_path)
+    if matrix_path is not None:
+        os.environ["COCKPIT_TRACEABILITY_MATRIX"] = str(matrix_path)
 
     class _Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
@@ -625,8 +686,16 @@ def test_lenses_project_same_data(tmp_path: Path) -> None:
 def test_graph_lens_solid_spine_is_machine_keyed(tmp_path: Path) -> None:
     db_path = _graph_lens_store(tmp_path)
     deploy_dir = tmp_path / "deploys"
+    docs_root = tmp_path / "docs"
+    _write_docs_fixture_with_proven_edges(docs_root, epic_issue=9300, child_issue=9301)
 
-    with _serve_cockpit(db_path=db_path, deploy_receipt_dir=deploy_dir) as url:
+    with _serve_cockpit(
+        db_path=db_path,
+        deploy_receipt_dir=deploy_dir,
+        docs_root=docs_root,
+        capabilities_yaml_path=docs_root / "capabilities.yaml",
+        matrix_path=docs_root / "matrix.md",
+    ) as url:
         with sync_playwright() as playwright:
             browser, page = _open_page(playwright, url)
             try:
@@ -656,6 +725,20 @@ def test_graph_lens_solid_spine_is_machine_keyed(tmp_path: Path) -> None:
                 # docs-plane state can change that) — deterministically dashed.
                 assert "node-abs" in node_classes("intention", "task-graph-full")
                 assert "node-abs" in node_classes("tried", "task-graph-full")
+                # capability and epic are NOT absent here — the docs fixture
+                # gives both a genuinely proven/derived class — yet they still
+                # must not render solid. This is the discriminating case: it
+                # proves the solid-spine rule is keyed by rung name/position
+                # (MIDDLE_RUNGS), not by rung class, which a fixture where
+                # capability/epic stay "absent" cannot distinguish.
+                capability_classes = node_classes("capability", "task-graph-full")
+                assert "node-abs" not in capability_classes, (
+                    "fixture setup failed: capability should be proven, not absent"
+                )
+                epic_classes = node_classes("epic", "task-graph-full")
+                assert "node-abs" not in epic_classes, (
+                    "fixture setup failed: epic should be proven, not absent"
+                )
 
                 # The no-PR thread: pr/ci_sha/receipt are genuinely absent
                 # (no PR was ever linked) — never solid either.
@@ -798,5 +881,58 @@ def test_narrow_zoom_and_print_states(tmp_path: Path) -> None:
                         f"{selector} must not split across a page break:"
                         f" {break_style}"
                     )
+
+                # Print must still project only the currently-selected lens
+                # (AC1: "lens choice changes projection", including in print)
+                # — the default bands lens stays visible; the graph and
+                # one-question panes, never selected here, must not also
+                # render (#4453 review: a prior !important print rule forced
+                # all three panes and all four question screens open at once).
+                bands_display = page.locator("#lens-bands-pane").evaluate(
+                    "el => getComputedStyle(el).display"
+                )
+                assert bands_display == "block"
+                graph_display = page.locator("#lens-graph-pane").evaluate(
+                    "el => getComputedStyle(el).display"
+                )
+                assert graph_display == "none", "unselected graph pane must stay hidden in print"
+                question_display = page.locator("#lens-question-pane").evaluate(
+                    "el => getComputedStyle(el).display"
+                )
+                assert question_display == "none", (
+                    "unselected one-question pane must stay hidden in print"
+                )
+            finally:
+                browser.close()
+
+
+def test_print_hides_overflow_deferral_link(tmp_path: Path) -> None:
+    """The one-question lens's "+N more in the register" deferral is a real
+    clickable control (same family as the switcher and out-links), so print
+    must hide it too — it is not a printable claim (#4453 review: it lived
+    outside the .focus-nav wrapper the print rule actually hides, so it
+    stayed visible whenever a band's overflow made it render at all)."""
+    db_path = _many_working_store(tmp_path, count=7)
+    deploy_dir = tmp_path / "deploys"
+
+    with _serve_cockpit(db_path=db_path, deploy_receipt_dir=deploy_dir) as url:
+        with sync_playwright() as playwright:
+            browser, page = _open_page(playwright, url)
+            try:
+                page.locator("#lens-question").check()
+                page.wait_for_selector("#f1", timeout=5000)
+                deferral = page.locator('#f1 label[for="lens-bands"]')
+                assert deferral.count() == 1, "overflow must be present for this fixture"
+
+                page.emulate_media(media="print")
+                # The deferral is hidden via its .focus-nav *ancestor*'s
+                # display:none, not its own — getComputedStyle on the
+                # element itself would still report its own inline-flex
+                # regardless of an ancestor hiding it, so actual rendered
+                # visibility (which does account for ancestors) is the
+                # correct check here.
+                assert not deferral.is_visible(), (
+                    "the overflow deferral link must be hidden in print"
+                )
             finally:
                 browser.close()
