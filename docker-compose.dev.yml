@@ -24,6 +24,17 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      # Enables the BuilderOps cockpit's opt-in `github-live` plane on the dev
+      # channel only (#4484). Dev is the channel whose port is the plane's own
+      # stated acceptance form -- `localhost:18001/api/cockpit/registry`
+      # (docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: Concretely). test/prod
+      # deliberately leave the key unset, so their behavior stays byte-identical
+      # to the pre-#4484 refusal and the source renders *not enabled* rather
+      # than broken (EXT-8, #4481); turning another channel on is a promotion
+      # -lane act, not a side effect of making enablement possible. The read is
+      # read-only and persists nothing; the token it needs arrives separately on
+      # the api consumer's host-secret env layer (see docker-compose.yaml :: api).
+      COCKPIT_GITHUB_REPO: RasmusTho/agentic-pkm-mvp
       # Deliberately no VAULT_ROOT / VAULT_ROOT_DEV keys here (#3875, follow-up
       # to #3659/#3666 review thread PRRT_kwDOQEip6s6RRnQ2). Compose's service
       # `environment:` mapping always wins over `env_file:` for a given key,

@@ -141,6 +141,13 @@ sets `COCKPIT_GITHUB_REPO` anywhere, so `github-live`'s "unset by default" opt-i
 (`app/builderops/cockpit_github_plane.py`'s own docstring) is the permanent steady state on every
 host today, not an edge case.
 
+> Status since #4484: the "no repo-committed deployment config sets it anywhere" half of this
+> finding no longer holds — the runtime image ships the `gh` transport and `docker-compose.dev.yml`
+> commits the slug for the dev channel, so the unset state is now a per-channel choice (`test` and
+> `prod` keep it). EXT-8 is unaffected and more load-bearing for it: distinguishing opted-out from
+> broken is what lets an enabled channel's real failure read as a failure. See
+> `GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
+
 ### EXT-8 — `configured` flag on per-source reads — ACCEPT cockpit-local; claim-banner warn scoped to it
 
 The two causes read identically today: (i) an optional plane was never turned on (a deliberate,

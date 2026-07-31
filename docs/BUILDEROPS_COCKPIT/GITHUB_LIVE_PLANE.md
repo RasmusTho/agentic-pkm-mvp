@@ -47,9 +47,9 @@ freshness being the read instant and every failure degrading to a refused claim.
   that predicate asserts something about GitHub, and a failed read of ours is not evidence for it.
 - Every card gains its authority out-link (issue/PR URL) from the live read, independent of the
   sync mirror's structurally empty fields (audit F9) — rendered in the `out` button class.
-- Auth/binding: the token already available to the host environment (`gh` CLI credentials or
-  `GITHUB_TOKEN`); unauthenticated or missing-token environments degrade to the refused claim, and
-  tests must not require network.
+- Auth/binding: the token available to **the process that runs the read** — `gh` resolves
+  `GITHUB_TOKEN`/`GH_TOKEN` from its own environment. Unauthenticated or missing-token environments
+  degrade to the refused claim, and tests must not require network.
 
 ## Concretely
 
@@ -59,6 +59,29 @@ curl -s localhost:18001/api/cockpit/registry | jq '.sources[] | select(.name=="g
 
 Expected: `state: "fresh"` with the call's own instant — or `state: "unavailable"` with GitHub-owned
 counts refused, never zeroed, when the API is unreachable or rate-limited.
+
+### What makes that command answer `fresh` (#4484)
+
+The read runs **inside the `api` container**, not on the host, so the enablement path is three
+committed things plus one host-supplied value:
+
+1. **The transport exists in the image.** `Dockerfile`'s runtime stage installs `gh` alongside
+   `ffmpeg`/`espeak-ng` (a plain Debian trixie/main package; no third-party apt source). Before
+   #4484 it was absent, so `_run_gh` raised `gh CLI not found` on the first call in every channel
+   regardless of configuration.
+2. **The repo slug is committed for the dev channel.** `docker-compose.dev.yml :: api` sets
+   `COCKPIT_GITHUB_REPO=RasmusTho/agentic-pkm-mvp`. Dev is the channel this command names (18001).
+3. **`test` and `prod` deliberately leave it unset.** They stay byte-identical to the pre-#4484
+   refusal and render *not enabled* rather than broken (EXT-8, #4481). Turning another channel onto
+   the plane is a promotion-lane act.
+4. **The token is host-supplied.** `GITHUB_TOKEN` reaches the container on the `api` consumer's
+   already-declared host-secret env layer (`HOST_SECRET_RUNTIME_ENV_FILE_API` in
+   `docker-compose.yaml :: api`, #4422) — the same layer that delivers `HEIMDAL_RAW_STORE_KEY`. No
+   token is committed to the repo, and a repo-scoped read-only token is sufficient: the plane issues
+   GET requests only and persists nothing.
+
+With the slug set and the token absent, the plane is *configured but failing* — an honest outage,
+not an opt-out. With the slug unset, nobody asked for it and nothing is claimed either way.
 
 ## Why This Matters
 

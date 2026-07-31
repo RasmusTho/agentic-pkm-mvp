@@ -262,6 +262,23 @@ Companion docs:
   Markdown read-back, mixed-language segments may route to different voices, and production
   deployment still depends on the Mac mini/local model health path.
 
+### BuilderOps cockpit live GitHub plane (#4484)
+- The cockpit's `github-live` source reads GitHub REST from **inside the `api` container** via the
+  `gh` CLI, which the runtime image installs (`Dockerfile`, runtime-stage apt layer) alongside
+  `ffmpeg`/`espeak-ng`. Before #4484 the binary was absent, so the plane refused on every channel
+  regardless of configuration.
+- The plane is opt-in per channel. `docker-compose.dev.yml :: api` binds
+  `COCKPIT_GITHUB_REPO=RasmusTho/agentic-pkm-mvp`; `test` and `prod` deliberately leave it unset and
+  render the source as *not enabled* rather than broken. Turning another channel on is a
+  promotion-lane act, not a config default.
+- The token is host-supplied, never committed: put `GITHUB_TOKEN` on the `api` consumer's existing
+  host-secret env layer (`HOST_SECRET_RUNTIME_ENV_FILE_API`, the same layer that delivers
+  `HEIMDAL_RAW_STORE_KEY`). A repo-scoped read-only token suffices — the plane issues GET requests
+  only and persists nothing. Without a token the plane refuses cleanly; nothing else degrades.
+- Check it with `curl -s localhost:18001/api/cockpit/registry | jq '.sources[] |
+  select(.name=="github-live")'`. Full path and rationale:
+  `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
+
 ### Karakeep managed source service (KMA-02)
 - `docker-compose.karakeep.yml` is the repo-owned deployment for the self-hosted Karakeep
   read-later source on the mac mini (Heimdal's external source dependency; ADR-0049 §1). It pins the

@@ -131,6 +131,28 @@ def test_runtime_stage_keeps_ffmpeg_and_compose_entrypoints() -> None:
     ), "image entrypoint/startup behavior must not change"
 
 
+def test_runtime_image_installs_gh_for_the_cockpit_live_plane() -> None:
+    """#4484: the cockpit's `github-live` plane shells out to `gh` in-container.
+
+    `app/builderops/cockpit_github_plane.py :: _run_gh` is the single transport
+    every live REST read passes through, and the `api` service that serves
+    `/api/cockpit/registry` runs from this image. Without the binary in the
+    RUNTIME stage the plane raises `GithubReadError("gh CLI not found ...")` on
+    its first call in every channel, so no configuration can enable it.
+    """
+    text = _dockerfile_text()
+    final_stage = text[text.rindex("FROM ") :]
+    install_lines = [
+        line for line in final_stage.splitlines() if "apt-get install" in line
+    ]
+    assert install_lines, "runtime (final) stage must have an apt-get install layer"
+    assert any(re.search(r"(?<![\w-])gh(?![\w-])", line) for line in install_lines), (
+        "runtime (final) stage must install the gh CLI: it is the only "
+        "transport the cockpit live GitHub plane has (#4484). Installed "
+        f"packages found: {install_lines}"
+    )
+
+
 def test_dockerignore_excludes_dev_only_surfaces() -> None:
     patterns = _dockerignore_patterns()
     for required in ("tests", "docs", ".git", "*.md", "ops", "scripts"):

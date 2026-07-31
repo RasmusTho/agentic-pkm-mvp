@@ -52,10 +52,15 @@ pack is supporting input.
   watermark is older than `SOURCE_STALE_AFTER_DAYS` turns the rungs it backs amber and has the
   counts it owns withdrawn rather than shown whole. A read carries `configured` alongside `state`
   (EXT-8, #4481): an optional-by-design plane whose enabling config is absent — `github-live` with
-  `COCKPIT_GITHUB_REPO` unset, the steady state on every host until #4484 — renders as *not
-  enabled* rather than dead and never contributes to the claim banner's amber, while a plane that
-  was configured and then failed still does both. `state` is unchanged in either case: an
-  unconfigured plane still owns no countable facts.
+  `COCKPIT_GITHUB_REPO` unset — renders as *not enabled* rather than dead and never contributes to
+  the claim banner's amber, while a plane that was configured and then failed still does both.
+  `state` is unchanged in either case: an unconfigured plane still owns no countable facts. Since
+  #4484 that unset state is a per-channel choice rather than the only reachable state: the runtime
+  image ships the `gh` transport the plane reads through, and `docker-compose.dev.yml :: api`
+  commits the repo slug for the dev channel (18001) while `test`/`prod` stay unset. See
+  `GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)` for the full path,
+  including the host-supplied `GITHUB_TOKEN` that rides the `api` consumer's existing host-secret
+  env layer.
 - **Honest emptiness in three forms** — dated true emptiness; refused claims on dead sources
   ("cannot be counted", never zero); structural absence distinct from death.
 - **Two tiers in the done band** — "Ready for you to use" above "Tried by you" (empty by contract
