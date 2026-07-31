@@ -47,6 +47,7 @@ READINESS_CLASSES: tuple[str, ...] = (
     "missing_verify_markers",
     "missing_verify_file_paths",
     "malformed_acceptance_criteria",
+    "malformed_parent_reference",
     "ambiguous_intent",
     "authority_risk",
     "not_agentable",
@@ -298,6 +299,37 @@ def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport
     )
 
 
+_PARENT_CANONICAL = re.compile(r"^Parent: #[1-9][0-9]*$")
+_ISSUE_NUMBER_TOKEN = re.compile(r"#[0-9]+")
+
+
+def _parent_declaration_lines(body: str) -> list[str]:
+    """Lines that declare a child->parent reference (INV-DG-3).
+
+    The declaration grammar is a line starting with ``Parent:`` that carries an
+    issue-number token. Descriptive ``Parent:`` prose without a ``#<digits>``
+    token and legacy ``Parent feature issue: #N`` prose are not declarations,
+    so orphan slices and legacy bodies stay valid.
+    """
+    return [
+        stripped
+        for line in body.splitlines()
+        if (stripped := line.strip()).startswith("Parent:")
+        and _ISSUE_NUMBER_TOKEN.search(stripped)
+    ]
+
+
+def _parent_reference_problem(body: str) -> str | None:
+    declared = _parent_declaration_lines(body)
+    if not declared:
+        return None
+    if len(declared) > 1:
+        return "multiple parent declarations: " + "; ".join(declared)
+    if not _PARENT_CANONICAL.fullmatch(declared[0]):
+        return f"malformed parent declaration: {declared[0]}"
+    return None
+
+
 def _contains_any(patterns: Sequence[re.Pattern[str]], text: str) -> bool:
     return any(pattern.search(text) for pattern in patterns)
 
@@ -353,6 +385,8 @@ def classify_issue_body(
         classification = "missing_verify_markers"
     elif ac_report.missing_verify_file_paths:
         classification = "missing_verify_file_paths"
+    elif _parent_reference_problem(body) is not None:
+        classification = "malformed_parent_reference"
     elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
         classification = "authority_risk"
         human_exception_required = True
@@ -425,6 +459,11 @@ def repair_guidance(
         return [
             "Rewrite `## Acceptance Criteria` as checkbox bullets (`- [ ] ...`).",
             "Give every acceptance criterion an inline `Verify:` marker naming a test, doc anchor, roadmap diff, or runtime receipt.",
+        ]
+    if classification == "malformed_parent_reference":
+        return [
+            "Declare the governing parent as exactly one canonical `Parent: #<N>` line (plain text, one parent, no bold or prose around the number).",
+            "Orphan slices carry no `Parent:` declaration at all; see `.codex/skills/_shared/ISSUE_CONTRACT.md :: Child to parent reference`.",
         ]
     if classification == "missing_verify_markers":
         missing_items = "; ".join(ac_report.missing_verify_items)
