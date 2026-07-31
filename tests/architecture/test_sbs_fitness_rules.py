@@ -474,6 +474,8 @@ def test_delivery_contracts_are_carrier_and_provider_neutral() -> None:
         "reducer",
         "structured_result",
         "receipt",
+        "acceptance",
+        "worker_runtime",
     }
     for forbidden in (
         "promotionintent",
@@ -486,3 +488,21 @@ def test_delivery_contracts_are_carrier_and_provider_neutral() -> None:
         "model_name",
     ):
         assert forbidden not in encoded
+
+    # The worker-runtime seam names no concrete carrier, provider, model, or
+    # process mechanism: those are opaque envelope identifiers chosen by an
+    # adapter, never enumerated in the semantic contract.
+    for provider_specific in (
+        "codex",
+        "claude",
+        "anthropic",
+        "openai",
+        "gemini",
+        "ollama",
+        "tmux",
+        "subprocess",
+        "exit_code",
+        "process_id",
+        "stdout",
+    ):
+        assert provider_specific not in encoded

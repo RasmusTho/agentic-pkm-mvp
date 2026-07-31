@@ -227,8 +227,11 @@ The renderer does not infer which label applies.
    delivered contract seam.
 3. [Compile Immutable Delivery Plans](COMPILE_IMMUTABLE_DELIVERY_PLANS.md) ([#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166)) — delivered by
    [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226).
-4. [Advance Delivery Runs Deterministically](ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md) ([#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167)) — depends
-   on the delivered tasks 1 and 3; next serial implementation slice after this reconciliation.
+4. [Advance Delivery Runs Deterministically](ADVANCE_DELIVERY_RUNS_DETERMINISTICALLY.md) ([#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167)) — delivered by
+   [PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252): the pure reducer, the
+   acceptance-profile and worker-runtime contracts, `DeliveryReceipt.v2`, and the bounded authority
+   adapters. Cancellation records committed-effect obligations for DDO-05 rather than compensating
+   them, per INV-DDO-15.
 5. [Bind Delivery Effects to BuilderOps Reconciliation](BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md)
    ([#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168)) — depends on task 4 and reuses #3792.
 6. [Connect CKM Initiation and Delivery Receipts](CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md) ([#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169)) —
@@ -236,9 +239,9 @@ The renderer does not infer which label applies.
 7. [Validate TCD and Recovery](VALIDATE_TCD_AND_RECOVERY.md) ([#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170)) — final pilot, failure proof,
    acceptance, and owner-doc promotion.
 
-DDO-01 through DDO-03 are delivered. After this reconciliation is merged, the live #4167 body is
-aligned to its exact task specification and strict readiness validation passes, #4167 is the only
-Issue eligible to become `agent:ready`. #4168–#4170 remain serially dependency-blocked.
+DDO-01 through DDO-04 are delivered. #4168 becomes the next eligible slice once its own strict
+readiness reconciliation, including the #3793 timing dependency, passes. #4169–#4170 remain serially
+dependency-blocked.
 
 ## Architecture reconciliation after DDO-03
 

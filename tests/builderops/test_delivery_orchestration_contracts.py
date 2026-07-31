@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace as dataclass_replace
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from app.builderops.delivery_orchestration_contracts import (
+    ACCEPTANCE_EVIDENCE_BY_EFFECT_OUTCOME,
     ActorIdentity,
     ApprovalEvidence,
     AuthoritySnapshot,
@@ -53,16 +56,55 @@ from app.builderops.delivery_orchestration_contracts import (
     validate_reducer_effect_evidence,
     validate_reducer_event_evidence,
 )
-from app.builderops.delivery_reducer import (
+from app.builderops.delivery_orchestration_contracts import (
+    DELIVERY_ACCEPTANCE_PROFILE_VERSION,
     DeliveryAcceptanceProfile,
     DeliveryReceiptV2,
-    DeliveryRunEvent,
-    DeliveryRunState,
-    EXISTING_ADAPTER_PATHS,
+    OutstandingEffectObligation,
+    WorkerCarrierEnvelope,
     WorkerContextPack,
     WorkerInvocation,
     WorkerResultV2,
+    WorkerRuntimeObservation,
+    normalized_worker_delivery_result,
+    validate_delivery_receipt_v2_evidence,
+    validate_worker_authority_chain,
+    worker_conformance_key,
+    worker_invocation_idempotency_key,
+    worker_invocation_input_hash,
+)
+from app.builderops.delivery_reducer import (
+    ACTIVE_PHASES,
+    COMPENSATING_EFFECT_CLASSES,
+    REDUCER_SIGNALS,
+    REDUCER_TRANSITION_MATRIX,
+    RUN_PHASES,
+    TERMINAL_PHASES,
+    AdmittedEvent,
+    DeliveryRunState,
+    EffectProposal,
+    LifecycleCommand,
+    ReducerAdmissionError,
+    Reduction,
+    admit_reducer_event,
+    initial_delivery_run_state,
+    materialize_effect,
+    outstanding_effect_obligations,
     reduce_delivery_run,
+    reduce_lifecycle_command,
+    replay_delivery_sidecar,
+    resolve_terminal_delivery,
+)
+from app.builderops.delivery_runner import (
+    AUTHORITY_ENTRYPOINTS,
+    START_ONCE_OPERATION_BY_STATE,
+    WORKER_RUNTIME_OPERATIONS,
+    WORKER_RUNTIME_STATES,
+    WorkerRuntimeUnknownError,
+    missing_authority_entrypoints,
+    prepare_worker_execution,
+    resolve_authority_invocation,
+    resolve_worker_start,
 )
 
 SHA_A = "a" * 64
@@ -3557,147 +3599,2492 @@ def test_check_evidence_requires_distinct_check_run_identity() -> None:
         parse_delivery_contract(payload)
 
 
-def _ddo04_state() -> tuple[DeliveryRunState, DeliveryPlan, IssueScope]:
-    issue = _issue(4167, SHA_A)
-    plan = _plan(issue, _initiation(issue))
-    profile = DeliveryAcceptanceProfile(
-        profile_id="github-merged-profile",
-        required_evidence=("ci_green", "issue_closed", "pr_merged", "review_accepted"),
+# ---------------------------------------------------------------------------
+# DDO-04: deterministic reducer, worker seam, and bounded authority adapters.
+#
+# Every fixture below builds canonical delivered contracts. The reducer is only
+# ever driven through admitted events, and every effect it proposes is
+# materialized through the delivered identity derivations and re-validated by
+# validate_reducer_effect_evidence, so a green assertion here cannot be green
+# against a hand-rolled shadow model.
+# ---------------------------------------------------------------------------
+
+DDO4_RUN = "run-4167"
+DDO4_PR = 4200
+DDO4_BASE_HEAD = SHA_C
+DDO4_HEAD = SHA_D
+DDO4_REPAIRED_HEAD = SHA_E
+DDO4_CONTROL_SCOPE = "rasmustho/agentic-pkm-mvp"
+DDO4_DEFECT_REF = (
+    "registry:rasmustho/agentic-pkm-mvp/issues/4300:KD-AAAAAAAAAAAA"
+)
+
+
+def _ddo4_ref(contract: object, contract_id: str) -> ContractRef:
+    return ContractRef(
+        schema_version=contract.schema_version,  # type: ignore[attr-defined]
+        contract_id=contract_id,
+        content_hash=contract.content_hash,  # type: ignore[attr-defined]
     )
-    return (
-        DeliveryRunState(
-            run_id="run-ddo04",
-            plan_ref=ContractRef(schema_version=plan.schema_version, contract_id=plan.plan_id, content_hash=plan.content_hash),
-            acceptance_profile_ref=ContractRef(schema_version=profile.schema_version, contract_id=profile.profile_id, content_hash=profile.content_hash),
-            acceptance_profile_hash=profile.content_hash,
+
+
+def _ddo4_initiation(issues: tuple[IssueScope, ...]) -> DeliveryInitiation:
+    exclusions = (
+        ScopeExclusion(
+            scope_key="durable-carrier-selection",
+            reason="Deferred to the explicit carrier governance gate.",
         ),
+    )
+    requested_scope = tuple(sorted(issues, key=lambda item: item.scope_key))
+    policy_profile = _policy()
+    budget = _budget()
+    source_authorities = tuple(
+        sorted(
+            (_ready_authority(issue) for issue in requested_scope),
+            key=lambda item: item.authority_id,
+        )
+    )
+    provenance = _provenance("initiation-4167")
+    approval_id = "approval-4167"
+    approver = _actor()
+    approval_source_refs = (_source("rasmustho/agentic-pkm-mvp#4167", SHA_C),)
+    return DeliveryInitiation(
+        initiation_id="init-4167",
+        requested_scope=requested_scope,
+        exclusions=exclusions,
+        approval_evidence=ApprovalEvidence(
+            approval_id=approval_id,
+            approver=approver,
+            approved_at=TS,
+            approved_payload_hash=delivery_initiation_approval_hash(
+                initiation_id="init-4167",
+                requested_scope=requested_scope,
+                exclusions=exclusions,
+                policy_profile=policy_profile,
+                budget=budget,
+                source_authorities=source_authorities,
+                provenance=provenance,
+                approval_id=approval_id,
+                approver=approver,
+                approved_at=TS,
+                approval_source_refs=approval_source_refs,
+            ),
+            source_refs=approval_source_refs,
+        ),
+        policy_profile=policy_profile,
+        budget=budget,
+        source_authorities=source_authorities,
+        provenance=provenance,
+    )
+
+
+def _ddo4_plan(waves: tuple[tuple[IssueScope, ...], ...]) -> DeliveryPlan:
+    issues = tuple(
+        sorted(
+            (issue for wave in waves for issue in wave),
+            key=lambda item: item.scope_key,
+        )
+    )
+    initiation = _ddo4_initiation(issues)
+    return DeliveryPlan(
+        plan_id="plan-4167",
+        initiation_ref=_ddo4_ref(initiation, initiation.initiation_id),
+        input_authorities=initiation.source_authorities,
+        final_scope=issues,
+        exclusions=initiation.exclusions,
+        dependency_waves=tuple(
+            DependencyWave(
+                wave_index=index,
+                issues=tuple(sorted(wave, key=lambda item: item.scope_key)),
+            )
+            for index, wave in enumerate(waves)
+        ),
+        expected_states=tuple(
+            ExpectedAuthorityState(
+                issue=issue,
+                issue_state="open",
+                required_labels=("agent:ready", "type:task"),
+                forbidden_labels=("agent:blocked",),
+                expected_contract_hash=issue.contract_hash,
+            )
+            for issue in issues
+        ),
+        policy_profile=initiation.policy_profile,
+        budget=initiation.budget,
+        effect_allowlist=(
+            "await_ci",
+            "claim_issue",
+            "close_issue",
+            "launch_worker",
+            "merge_pull_request",
+            "record_delivery_receipt",
+            "record_known_defect",
+            "request_review",
+        ),
+        provenance=_provenance("plan-4167"),
+    )
+
+
+def _ddo4_profile(
+    required_evidence: tuple[str, ...] = (
+        "issue_closed",
+        "pull_request_merged",
+        "required_checks_green",
+        "review_accepted",
+    ),
+) -> DeliveryAcceptanceProfile:
+    return DeliveryAcceptanceProfile(
+        profile_id="acceptance-verified-delivery",
+        required_evidence=required_evidence,  # type: ignore[arg-type]
+        provenance=_provenance("acceptance-profile-4167"),
+    )
+
+
+def _ddo4_state(
+    plan: DeliveryPlan,
+    profile: DeliveryAcceptanceProfile,
+    *,
+    max_repair_rounds: int = 1,
+) -> DeliveryRunState:
+    return initial_delivery_run_state(
+        run_id=DDO4_RUN,
+        plan=plan,
+        acceptance_profile=profile,
+        authorized_control_scopes=(DDO4_CONTROL_SCOPE,),
+        max_repair_rounds=max_repair_rounds,
+    )
+
+
+def _ddo4_event(
+    plan: DeliveryPlan,
+    *,
+    sequence: int,
+    event_type: str,
+    subject: AuthoritySnapshot | None = None,
+    effect_ref: ContractRef | None = None,
+    result_ref: ContractRef | None = None,
+    exception: DeliveryException | None = None,
+    effect_outcome: EffectOutcomeEvidence | None = None,
+    correlation_id: str,
+) -> ReducerEvent:
+    plan_ref = _ddo4_ref(plan, plan.plan_id)
+    input_hash = delivery_event_input_hash(
+        run_id=DDO4_RUN,
+        plan_ref=plan_ref,
+        sequence=sequence,
+        event_type=event_type,
+        subject_authority=subject,
+        effect_ref=effect_ref,
+        result_ref=result_ref,
+        exception=exception,
+        effect_outcome=effect_outcome,
+    )
+    return ReducerEvent(
+        event_id=delivery_event_id(input_hash),
+        input_hash=input_hash,
+        run_id=DDO4_RUN,
+        plan_ref=plan_ref,
+        sequence=sequence,
+        event_type=event_type,  # type: ignore[arg-type]
+        subject_authority=subject,
+        effect_ref=effect_ref,
+        result_ref=result_ref,
+        exception=exception,
+        effect_outcome=effect_outcome,
+        provenance=_provenance(correlation_id),
+    )
+
+
+def _ddo4_effect_outcome_event(
+    plan: DeliveryPlan,
+    effect: ReducerEffect,
+    *,
+    subject: AuthoritySnapshot,
+    outcome_state: str,
+    sequence: int,
+    correlation_id: str,
+    succeeded: bool = True,
+    exception: DeliveryException | None = None,
+) -> ReducerEvent:
+    outcome = EffectOutcomeEvidence(
+        effect_class=effect.effect_class,
+        effect_idempotency_key=effect.idempotency_key,
+        outcome_state=outcome_state,  # type: ignore[arg-type]
+        outcome_keys=effect.expected_outcome_keys,
+        observed_at=TS,
+        evidence_refs=(f"effect-outcome:{correlation_id}",),
+    )
+    return _ddo4_event(
         plan,
+        sequence=sequence,
+        event_type="effect_succeeded" if succeeded else "effect_failed",
+        subject=subject,
+        effect_ref=_ddo4_ref(effect, effect.effect_id),
+        effect_outcome=outcome,
+        exception=exception,
+        correlation_id=correlation_id,
+    )
+
+
+def _ddo4_closed_authority(issue: IssueScope) -> AuthoritySnapshot:
+    return _authority(issue, "closed", labels=("type:task",))
+
+
+def _ddo4_worker_domain_result(
+    issue: IssueScope,
+    plan: DeliveryPlan,
+    *,
+    result_id: str,
+    head: str = DDO4_HEAD,
+    pull_request_number: int = DDO4_PR,
+    status: str = "completed",
+) -> StructuredWorkerResult:
+    completed = status == "completed"
+    return StructuredWorkerResult(
+        result_id=result_id,
+        run_id=DDO4_RUN,
+        plan_ref=_ddo4_ref(plan, plan.plan_id),
+        issue=issue,
+        status=status,  # type: ignore[arg-type]
+        exact_head_sha=head if completed else None,
+        pull_request_number=pull_request_number if completed else None,
+        changed_files=("app/builderops/delivery_reducer.py",),
+        validations=(
+            ValidationEvidence(
+                name="focused-reducer-tests",
+                status="passed",
+                evidence_ref="pytest:delivery-reducer",
+                exact_head_sha=head,
+            ),
+        )
+        if completed
+        else (),
+        exceptions=()
+        if completed
+        else (
+            DeliveryException(
+                kind="execution_failed",
+                code="worker-execution-failed",
+                message="The bounded worker could not finish the slice.",
+                retryable=False,
+                evidence_refs=("worker:4167:failed",),
+            ),
+        ),
+        summary="Implemented the deterministic delivery-run reducer.",
+        provenance=_provenance(result_id),
+    )
+
+
+def _ddo4_worker_bundle(
+    issue: IssueScope,
+    plan: DeliveryPlan,
+    launch_effect: ReducerEffect,
+    *,
+    result_id: str = "worker-result-v2-4167",
+    domain_result_id: str = "worker-result-4167",
+    head: str = DDO4_HEAD,
+    base_head: str | None = DDO4_BASE_HEAD,
+    pull_request_number: int = DDO4_PR,
+    status: str = "completed",
+    carrier_id: str = "carrier-alpha",
+    provider_id: str = "provider-alpha",
+    worker_model_ref: str = "worker-model-alpha",
+) -> tuple[WorkerContextPack, WorkerInvocation, WorkerResultV2]:
+    plan_ref = _ddo4_ref(plan, plan.plan_id)
+    effect_ref = _ddo4_ref(launch_effect, launch_effect.effect_id)
+    pack = WorkerContextPack(
+        context_pack_id=f"pack-{issue.issue_number}",
+        run_id=DDO4_RUN,
+        plan_ref=plan_ref,
+        effect_ref=effect_ref,
+        issue=issue,
+        base_head_sha=base_head,
+        required_skills=("issue-to-code",),
+        verify_targets=(
+            "tests/builderops/test_delivery_orchestration_contracts.py",
+        ),
+        context_refs=(_source(f"{issue.authority_id}", issue.contract_hash),),
+        provenance=_provenance(f"pack-{issue.issue_number}"),
+    )
+    pack_ref = _ddo4_ref(pack, pack.context_pack_id)
+    input_hash = worker_invocation_input_hash(
+        run_id=DDO4_RUN,
+        plan_ref=plan_ref,
+        effect_ref=effect_ref,
+        issue=issue,
+        base_head_sha=base_head,
+        context_pack_ref=pack_ref,
+        runtime_target="bounded-worker-runtime",
+    )
+    invocation = WorkerInvocation(
+        invocation_id=worker_invocation_idempotency_key(input_hash),
+        run_id=DDO4_RUN,
+        plan_ref=plan_ref,
+        effect_ref=effect_ref,
+        issue=issue,
+        base_head_sha=base_head,
+        context_pack_ref=pack_ref,
+        context_pack_hash=pack.content_hash,
+        runtime_target="bounded-worker-runtime",
+        idempotency_key=worker_invocation_idempotency_key(input_hash),
+        input_hash=input_hash,
+        provenance=_provenance(f"invocation-{issue.issue_number}"),
+    )
+    domain = _ddo4_worker_domain_result(
         issue,
+        plan,
+        result_id=domain_result_id,
+        head=head,
+        pull_request_number=pull_request_number,
+        status=status,
     )
+    result = WorkerResultV2(
+        result_id=result_id,
+        run_id=DDO4_RUN,
+        plan_ref=plan_ref,
+        effect_ref=effect_ref,
+        issue=issue,
+        base_head_sha=base_head,
+        exact_head_sha=domain.exact_head_sha,
+        pull_request_number=domain.pull_request_number,
+        context_pack_ref=pack_ref,
+        context_pack_hash=pack.content_hash,
+        invocation_ref=_ddo4_ref(invocation, invocation.invocation_id),
+        invocation_idempotency_key=invocation.idempotency_key,
+        delivery_result=domain,
+        carrier=WorkerCarrierEnvelope(
+            carrier_id=carrier_id,
+            provider_id=provider_id,
+            worker_model_ref=worker_model_ref,
+            session_ref=f"session-{carrier_id}",
+            usage_ref=f"usage-{carrier_id}",
+            provenance_ref=f"provenance-{carrier_id}",
+        ),
+        provenance=_provenance(result_id),
+    )
+    return pack, invocation, result
 
 
-def _event(state: DeliveryRunState, kind: str, *, head: str | None = None, **kwargs: object) -> DeliveryRunEvent:
-    return DeliveryRunEvent(
-        event_id=f"{state.version}-{kind}-{head or 'none'}",
-        kind=kind,  # type: ignore[arg-type]
-        run_id=state.run_id,
-        expected_version=state.version,
+def _ddo4_review(
+    issue: IssueScope,
+    plan: DeliveryPlan,
+    *,
+    result_id: str,
+    disposition: str,
+    findings: tuple[ReviewFinding, ...] = (),
+    known_defect_refs: tuple[str, ...] = (),
+    confidence_basis_points: int = 9_500,
+    head: str = DDO4_HEAD,
+) -> ReviewResult:
+    return ReviewResult(
+        result_id=result_id,
+        run_id=DDO4_RUN,
+        plan_ref=_ddo4_ref(plan, plan.plan_id),
+        policy_profile=plan.policy_profile,
+        issue=issue,
+        pull_request_number=DDO4_PR,
         exact_head_sha=head,
-        **kwargs,
+        disposition=disposition,  # type: ignore[arg-type]
+        confidence_basis_points=confidence_basis_points,
+        findings=findings,
+        known_defect_refs=known_defect_refs,
+        provenance=_provenance(result_id),
     )
+
+
+class _DdoRun:
+    """A deterministic driver that only ever feeds admitted canonical events."""
+
+    def __init__(
+        self,
+        plan: DeliveryPlan,
+        profile: DeliveryAcceptanceProfile,
+        *,
+        max_repair_rounds: int = 1,
+    ) -> None:
+        self.plan = plan
+        self.profile = profile
+        self.state = _ddo4_state(plan, profile, max_repair_rounds=max_repair_rounds)
+        self.sequence = 0
+        self.events: list[ReducerEvent] = []
+        self.effects: list[ReducerEffect] = []
+        self.worker_results: list[StructuredWorkerResult] = []
+        self.review_results: list[ReviewResult] = []
+        self.last: Reduction | None = None
+
+    def next_sequence(self) -> int:
+        self.sequence += 1
+        return self.sequence
+
+    def apply(self, admitted: AdmittedEvent) -> Reduction:
+        result = reduce_delivery_run(self.state, admitted)
+        self.last = result
+        if result.refusal is None:
+            self.state = result.state
+            self.events.append(admitted.event)
+        return result
+
+    def materialize(
+        self,
+        proposal: EffectProposal,
+        causal_event: ReducerEvent,
+    ) -> ReducerEffect:
+        effect = materialize_effect(
+            proposal,
+            state=self.state,
+            plan=self.plan,
+            causal_event=causal_event,
+            sequence=self.next_sequence(),
+            provenance=_provenance(
+                f"effect-{proposal.effect_class}-{proposal.issue.issue_number}"
+            ),
+            prior_effects=tuple(self.effects),
+            prior_events=tuple(self.events),
+            worker_results=tuple(self.worker_results),
+            review_results=tuple(self.review_results),
+        )
+        self.effects.append(effect)
+        return effect
+
+    def admit(self, event: ReducerEvent, **kwargs: object) -> AdmittedEvent:
+        return admit_reducer_event(
+            event,
+            plan=self.plan,
+            prior_effects=tuple(self.effects),
+            prior_events=tuple(self.events),
+            worker_results=tuple(self.worker_results),
+            review_results=tuple(self.review_results),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def start(self) -> Reduction:
+        event = _ddo4_event(
+            self.plan,
+            sequence=0,
+            event_type="run_started",
+            correlation_id="event-run-started-4167",
+        )
+        return self.apply(self.admit(event))
+
+    def tick(self) -> Reduction:
+        sequence = self.next_sequence()
+        event = _ddo4_event(
+            self.plan,
+            sequence=sequence,
+            event_type="timer_elapsed",
+            correlation_id=f"event-timer-{sequence}",
+        )
+        return self.apply(self.admit(event))
+
+    def succeed(
+        self,
+        proposal: EffectProposal,
+        causal_event: ReducerEvent,
+        *,
+        subject: AuthoritySnapshot,
+        outcome_state: str,
+        label: str,
+    ) -> Reduction:
+        effect = self.materialize(proposal, causal_event)
+        event = _ddo4_effect_outcome_event(
+            self.plan,
+            effect,
+            subject=subject,
+            outcome_state=outcome_state,
+            sequence=self.next_sequence(),
+            correlation_id=f"event-{label}",
+        )
+        return self.apply(self.admit(event, effect=effect))
+
+    def fail(
+        self,
+        proposal: EffectProposal,
+        causal_event: ReducerEvent,
+        *,
+        subject: AuthoritySnapshot,
+        label: str,
+    ) -> Reduction:
+        effect = self.materialize(proposal, causal_event)
+        event = _ddo4_effect_outcome_event(
+            self.plan,
+            effect,
+            subject=subject,
+            outcome_state="failed",
+            sequence=self.next_sequence(),
+            correlation_id=f"event-{label}",
+            succeeded=False,
+            exception=DeliveryException(
+                kind="execution_failed",
+                code=f"{label}-failed",
+                message="The governed authority reported a failed effect.",
+                retryable=True,
+                evidence_refs=(f"effect-failure:{label}",),
+            ),
+        )
+        return self.apply(self.admit(event, effect=effect))
+
+
+def _drive_to_awaiting_review(
+    issue: IssueScope,
+    *,
+    plan: DeliveryPlan | None = None,
+    profile: DeliveryAcceptanceProfile | None = None,
+) -> tuple[_DdoRun, ReducerEvent, ReducerEffect]:
+    """Advance one Issue to awaiting_review with only reducer decisions."""
+
+    plan = plan or _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, profile or _ddo4_profile())
+    claimed = _claimed_authority(issue)
+
+    started = run.start()
+    assert [item.effect_class for item in started.effects] == ["claim_issue"]
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    launch_proposal = run.last.effects[0]
+    assert launch_proposal.effect_class == "launch_worker"
+    run.succeed(
+        launch_proposal,
+        run.events[-1],
+        subject=claimed,
+        outcome_state="worker_launched",
+        label="launch",
+    )
+    launch_effect = run.effects[-1]
+
+    pack, invocation, result = _ddo4_worker_bundle(issue, plan, launch_effect)
+    run.worker_results.append(result.delivery_result)
+    worker_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            result.delivery_result, result.delivery_result.result_id
+        ),
+        correlation_id="event-worker-result",
+    )
+    worker_reduction = run.apply(
+        run.admit(
+            worker_event,
+            worker_result=result,
+            context_pack=pack,
+            invocation=invocation,
+            launch_effect=launch_effect,
+        )
+    )
+    assert [item.effect_class for item in worker_reduction.effects] == ["await_ci"]
+    run.succeed(
+        worker_reduction.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="checks_passed",
+        label="await-ci",
+    )
+    review_proposal = run.last.effects[0]
+    assert review_proposal.effect_class == "request_review"
+    run.succeed(
+        review_proposal,
+        run.events[-1],
+        subject=claimed,
+        outcome_state="review_recorded",
+        label="request-review",
+    )
+    return run, worker_event, launch_effect
+
+
+def _record_review(
+    run: _DdoRun,
+    review: ReviewResult,
+    *,
+    subject: AuthoritySnapshot,
+) -> Reduction:
+    run.review_results.append(review)
+    event = _ddo4_event(
+        run.plan,
+        sequence=run.next_sequence(),
+        event_type="review_result_recorded",
+        subject=subject,
+        result_ref=_ddo4_ref(review, review.result_id),
+        correlation_id=f"event-review-{review.result_id}",
+    )
+    return run.apply(run.admit(event, review_result=review))
+
+
+def _drive_to_delivered(
+    issue: IssueScope,
+    *,
+    profile: DeliveryAcceptanceProfile | None = None,
+) -> _DdoRun:
+    run, _worker_event, _launch = _drive_to_awaiting_review(issue, profile=profile)
+    claimed = _claimed_authority(issue)
+    accepted = _record_review(
+        run,
+        _ddo4_review(
+            issue,
+            run.plan,
+            result_id="review-accept-4167",
+            disposition="accept",
+        ),
+        subject=claimed,
+    )
+    assert [item.effect_class for item in accepted.effects] == [
+        "merge_pull_request"
+    ]
+    run.succeed(
+        accepted.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="merged",
+        label="merge",
+    )
+    close_proposal = run.last.effects[0]
+    assert close_proposal.effect_class == "close_issue"
+    run.succeed(
+        close_proposal,
+        run.events[-1],
+        subject=_ddo4_closed_authority(issue),
+        outcome_state="closed",
+        label="close",
+    )
+    receipt_proposal = run.last.effects[0]
+    assert receipt_proposal.effect_class == "record_delivery_receipt"
+    run.succeed(
+        receipt_proposal,
+        run.events[-1],
+        subject=_ddo4_closed_authority(issue),
+        outcome_state="receipt_recorded",
+        label="receipt",
+    )
+    return run
 
 
 def test_reducer_transition_matrix_is_exhaustive() -> None:
-    state, _, _ = _ddo04_state()
-    phases = []
-    for kind, head in (("admit", None), ("claimed", None), ("worker_completed", SHA_D), ("ci_passed", SHA_D), ("review_accepted", SHA_D), ("merged", SHA_D), ("closed", SHA_D)):
-        result = reduce_delivery_run(state, _event(state, kind, head=head))
-        assert result.state is not state
-        state = result.state
-        phases.append(state.phase)
-    assert phases == ["claiming", "working", "awaiting_ci", "awaiting_review", "merging", "closing", "delivered"]
-    assert [effect.kind for effect in result.effects] == ["record_delivery_receipt"]
+    """The matrix is total, terminal-closed, and actually governs the reducer."""
+
+    assert set(REDUCER_TRANSITION_MATRIX) == {
+        (phase, signal) for phase in RUN_PHASES for signal in REDUCER_SIGNALS
+    }
+    assert len(REDUCER_TRANSITION_MATRIX) == len(RUN_PHASES) * len(
+        REDUCER_SIGNALS
+    )
+    for phase in TERMINAL_PHASES:
+        for signal in REDUCER_SIGNALS:
+            assert not REDUCER_TRANSITION_MATRIX[(phase, signal)].legal, (
+                f"terminal phase {phase} must refuse {signal}"
+            )
+    for (phase, signal), rule in REDUCER_TRANSITION_MATRIX.items():
+        if rule.legal:
+            assert rule.prerequisites, f"{phase}/{signal} names no prerequisite"
+            assert phase in ACTIVE_PHASES
+        else:
+            assert rule.target_phase is None and not rule.emits
+
+    # Every phase the happy path visits is reachable, and the matrix is what
+    # refuses everything else from that phase.
+    issue = _issue(4167, SHA_A)
+    run = _drive_to_delivered(issue)
+    assert run.state.issue_state(issue.scope_key).phase == "delivered"
+
+    # A refused pair leaves state byte-identical and reports a typed reason.
+    fresh = _DdoRun(_ddo4_plan(((issue,),)), _ddo4_profile())
+    fresh.start()
+    stray_effect = fresh.effects
+    assert not stray_effect
+    claim_effect = fresh.materialize(fresh.last.effects[0], fresh.events[-1])
+    merged_event = _ddo4_effect_outcome_event(
+        fresh.plan,
+        claim_effect,
+        subject=_claimed_authority(issue),
+        outcome_state="claimed",
+        sequence=fresh.next_sequence(),
+        correlation_id="event-claim-matrix",
+    )
+    admitted = fresh.admit(merged_event, effect=claim_effect)
+    before = fresh.state
+    fresh.apply(admitted)
+    # Re-applying the same admitted event from a phase the matrix refuses.
+    repeat = reduce_delivery_run(fresh.state, admitted)
+    assert repeat.refusal == "duplicate_event"
+    assert repeat.state == fresh.state
+    assert before.issue_state(issue.scope_key).phase == "claiming"
 
 
 def test_duplicate_and_stale_events_cannot_advance() -> None:
-    state, _, _ = _ddo04_state()
-    admitted = reduce_delivery_run(state, _event(state, "admit")).state
-    duplicate = DeliveryRunEvent("0-admit-none", "admit", state.run_id, state.version)
-    assert reduce_delivery_run(admitted, duplicate).state == admitted
-    stale = DeliveryRunEvent("stale", "claimed", state.run_id, 0)
-    assert reduce_delivery_run(admitted, stale).state == admitted
-    bad_head = reduce_delivery_run(admitted, _event(admitted, "worker_completed", head=SHA_D)).state
-    assert reduce_delivery_run(bad_head, _event(bad_head, "ci_passed", head=SHA_E)).state == bad_head
+    """Duplicate identities are no-ops; stale plan or head evidence fails closed."""
+
+    issue = _issue(4167, SHA_A)
+    run, _worker_event, _launch = _drive_to_awaiting_review(issue)
+    claimed = _claimed_authority(issue)
+
+    replayed = run.events[-1]
+    duplicate = reduce_delivery_run(
+        run.state, run.admit(replayed, effect=run.effects[-1])
+    )
+    assert duplicate.refusal == "duplicate_event"
+    assert duplicate.state == run.state
+
+    # A verdict for a different head cannot advance the reviewed head.
+    stale_head_review = _ddo4_review(
+        issue,
+        run.plan,
+        result_id="review-stale-head",
+        disposition="accept",
+        head=DDO4_REPAIRED_HEAD,
+    )
+    stale = _record_review(run, stale_head_review, subject=claimed)
+    assert stale.refusal == "head_evidence_conflict"
+    assert stale.state == run.state
+    run.review_results.pop()
+
+    # A verdict for a different pull request cannot advance the authorized one.
+    other_pr_review = ReviewResult(
+        result_id="review-other-pr",
+        run_id=DDO4_RUN,
+        plan_ref=_ddo4_ref(run.plan, run.plan.plan_id),
+        policy_profile=run.plan.policy_profile,
+        issue=issue,
+        pull_request_number=DDO4_PR + 1,
+        exact_head_sha=DDO4_HEAD,
+        disposition="accept",
+        confidence_basis_points=9_500,
+        findings=(),
+        known_defect_refs=(),
+        provenance=_provenance("review-other-pr"),
+    )
+    other = _record_review(run, other_pr_review, subject=claimed)
+    assert other.refusal == "pull_request_identity_conflict"
+    run.review_results.pop()
+
+    # An event bound to a different run never resolves against this state.
+    foreign = dataclass_replace(run.state, run_id="run-other")
+    assert (
+        reduce_delivery_run(
+            foreign, run.admit(run.events[-1], effect=run.effects[-1])
+        ).refusal
+        == "foreign_run"
+    )
 
 
 def test_effects_require_exact_prerequisites() -> None:
-    state, _, _ = _ddo04_state()
-    assert not reduce_delivery_run(state, _event(state, "merged", head=SHA_D)).effects
-    admitted = reduce_delivery_run(state, _event(state, "admit"))
-    assert [item.kind for item in admitted.effects] == ["claim_issue"]
-    claimed = reduce_delivery_run(admitted.state, _event(admitted.state, "claimed"))
-    assert [item.kind for item in claimed.effects] == ["launch_worker"]
+    """No effect is proposed before the exact named prerequisite is proven."""
+
+    issue = _issue(4167, SHA_A)
+    plan = _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile())
+    claimed = _claimed_authority(issue)
+
+    started = run.start()
+    assert [item.effect_class for item in started.effects] == ["claim_issue"]
+
+    # launch_worker is not proposed until a truthful claim readback exists.
+    ordered: list[tuple[str, tuple[str, ...]]] = []
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    ordered.append(("claim_succeeded", tuple(
+        item.effect_class for item in run.last.effects
+    )))
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="worker_launched",
+        label="launch",
+    )
+    ordered.append(("worker_launched", tuple(
+        item.effect_class for item in run.last.effects
+    )))
+    launch_effect = run.effects[-1]
+    pack, invocation, result = _ddo4_worker_bundle(issue, plan, launch_effect)
+    run.worker_results.append(result.delivery_result)
+    worker_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            result.delivery_result, result.delivery_result.result_id
+        ),
+        correlation_id="event-worker-prereq",
+    )
+    run.apply(
+        run.admit(
+            worker_event,
+            worker_result=result,
+            context_pack=pack,
+            invocation=invocation,
+            launch_effect=launch_effect,
+        )
+    )
+    ordered.append(("worker_result", tuple(
+        item.effect_class for item in run.last.effects
+    )))
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="checks_passed",
+        label="await-ci",
+    )
+    ordered.append(("checks_passed", tuple(
+        item.effect_class for item in run.last.effects
+    )))
+
+    assert ordered == [
+        ("claim_succeeded", ("launch_worker",)),
+        ("worker_launched", ()),
+        ("worker_result", ("await_ci",)),
+        ("checks_passed", ("request_review",)),
+    ]
+
+    # A merge cannot be proposed while the run is still awaiting its verdict.
+    assert run.state.issue_state(issue.scope_key).phase == "awaiting_review"
+    assert not any(
+        proposal.effect_class in {"merge_pull_request", "close_issue"}
+        for proposal in run.last.effects
+    )
+
+    # Every effect the reducer proposed materialized into a canonical effect
+    # that the delivered validator independently accepted.
+    assert [item.effect_class for item in run.effects] == [
+        "claim_issue",
+        "launch_worker",
+        "await_ci",
+    ]
+    assert [item.effect_class for item in run.last.effects] == ["request_review"]
+    for effect in run.effects:
+        assert effect.effect_id == effect.idempotency_key
+        assert effect.effect_class in run.plan.effect_allowlist
 
 
 def test_review_severity_routes_fail_closed() -> None:
-    state, _, _ = _ddo04_state()
-    for kind, head in (("admit", None), ("claimed", None), ("worker_completed", SHA_D), ("ci_passed", SHA_D)):
-        state = reduce_delivery_run(state, _event(state, kind, head=head)).state
-    p2 = reduce_delivery_run(state, _event(state, "review_p2", head=SHA_D))
-    assert [effect.kind for effect in p2.effects] == ["record_known_defect"]
-    blocked = reduce_delivery_run(state, _event(state, "review_p2", head=SHA_D, protected=True))
-    assert blocked.state.phase == "blocked"
-    p0 = reduce_delivery_run(state, _event(state, "review_blocking", head=SHA_D))
-    assert p0.state.phase == "blocked"
+    """One valid P2 defers once; protected, P0, P1, and low confidence block."""
+
+    issue = _issue(4167, SHA_A)
+    claimed = _claimed_authority(issue)
+
+    p2_finding = ReviewFinding(
+        finding_id="finding-p2-1",
+        severity="P2",
+        summary="A bounded follow-up remains outside this slice.",
+        protected_risk=False,
+        false_green=False,
+        evidence_refs=("review:4200:finding-p2-1",),
+    )
+    run, _worker_event, _launch = _drive_to_awaiting_review(issue)
+    deferred = _record_review(
+        run,
+        _ddo4_review(
+            issue,
+            run.plan,
+            result_id="review-p2-4167",
+            disposition="accept_with_risk",
+            findings=(p2_finding,),
+            known_defect_refs=(DDO4_DEFECT_REF,),
+        ),
+        subject=claimed,
+    )
+    assert [item.effect_class for item in deferred.effects] == [
+        "record_known_defect"
+    ]
+    assert deferred.effects[0].known_defect_registry_ref == DDO4_DEFECT_REF
+    assert deferred.effects[0].known_defect_finding_hash == canonical_hash(
+        p2_finding
+    )
+    # The merge is authorized only after the durable disposition is observed.
+    assert run.state.issue_state(issue.scope_key).phase == "recording_defect"
+    run.succeed(
+        deferred.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="known_defect_recorded",
+        label="known-defect",
+    )
+    assert [item.effect_class for item in run.last.effects] == [
+        "merge_pull_request"
+    ]
+
+    for label, finding in (
+        (
+            "protected",
+            ReviewFinding(
+                finding_id="finding-protected",
+                severity="P2",
+                summary="A protected authority path is affected.",
+                protected_risk=True,
+                false_green=False,
+                evidence_refs=("review:4200:protected",),
+            ),
+        ),
+        (
+            "false-green",
+            ReviewFinding(
+                finding_id="finding-false-green",
+                severity="P2",
+                summary="A verify target passes without proving its claim.",
+                protected_risk=False,
+                false_green=True,
+                evidence_refs=("review:4200:false-green",),
+            ),
+        ),
+        (
+            "p1",
+            ReviewFinding(
+                finding_id="finding-p1",
+                severity="P1",
+                summary="An authority-integrity defect remains.",
+                protected_risk=False,
+                false_green=False,
+                evidence_refs=("review:4200:p1",),
+            ),
+        ),
+        (
+            "p0",
+            ReviewFinding(
+                finding_id="finding-p0",
+                severity="P0",
+                summary="A delivery-blocking defect remains.",
+                protected_risk=False,
+                false_green=False,
+                evidence_refs=("review:4200:p0",),
+            ),
+        ),
+    ):
+        blocking_run, _event, _launch_effect = _drive_to_awaiting_review(issue)
+        blocked = _record_review(
+            blocking_run,
+            _ddo4_review(
+                issue,
+                blocking_run.plan,
+                result_id=f"review-{label}",
+                disposition="reject",
+                findings=(finding,),
+            ),
+            subject=claimed,
+        )
+        issue_state = blocked.state.issue_state(issue.scope_key)
+        assert issue_state.phase == "blocked", label
+        assert issue_state.blocked_reason == "review_blocking"
+        assert not blocked.effects
+
+    # Low confidence cannot be expressed as anything but a reject verdict, so
+    # the contract layer itself refuses to produce a mergeable low-confidence
+    # result and the reducer never sees one.
+    with pytest.raises(ValidationError, match="low-confidence"):
+        _ddo4_review(
+            issue,
+            run.plan,
+            result_id="review-low-confidence",
+            disposition="accept",
+            confidence_basis_points=10,
+        )
+
+    # More than one deferred P2 is not a single deferred disposition.
+    multi_run, _event, _launch_effect = _drive_to_awaiting_review(issue)
+    second_p2 = ReviewFinding(
+        finding_id="finding-p2-2",
+        severity="P2",
+        summary="A second unrelated deferral.",
+        protected_risk=False,
+        false_green=False,
+        evidence_refs=("review:4200:finding-p2-2",),
+    )
+    multi = _record_review(
+        multi_run,
+        _ddo4_review(
+            issue,
+            multi_run.plan,
+            result_id="review-two-p2",
+            disposition="accept_with_risk",
+            findings=(p2_finding, second_p2),
+            known_defect_refs=(DDO4_DEFECT_REF,),
+        ),
+        subject=claimed,
+    )
+    assert multi.state.issue_state(issue.scope_key).phase == "blocked"
+    assert not multi.effects
 
 
 def test_runner_uses_existing_claim_wait_and_verified_closure_paths() -> None:
-    assert EXISTING_ADAPTER_PATHS == {
-        "claim_issue": "scripts/issue_pickup_claim.sh",
-        "await_ci": "scripts/wait_for_pr_checks.py",
-        "request_review": ".codex/skills/verification-and-closure/SKILL.md",
-        "merge_pull_request": ".codex/skills/verification-and-closure/SKILL.md",
-        "close_issue": ".codex/skills/verification-and-closure/SKILL.md",
-    }
+    """Adapters route to entrypoints that exist; nothing is reimplemented."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    assert missing_authority_entrypoints(repo_root) == ()
+    assert AUTHORITY_ENTRYPOINTS["await_ci"] == "scripts/await_pr_checks.sh"
+    assert AUTHORITY_ENTRYPOINTS["claim_issue"] == "scripts/issue_pickup_claim.sh"
+
+    issue = _issue(4167, SHA_A)
+    run = _drive_to_delivered(issue)
+    by_class = {effect.effect_class: effect for effect in run.effects}
+
+    claim = resolve_authority_invocation(
+        by_class["claim_issue"], agent_id="builder:ddo04", session_id="session-1"
+    )
+    assert claim.handoff == "subprocess"
+    assert claim.argv[0] == "scripts/issue_pickup_claim.sh"
+    assert "--issue" in claim.argv and str(issue.issue_number) in claim.argv
+    assert "--repo" in claim.argv and issue.repository in claim.argv
+
+    ci = resolve_authority_invocation(
+        by_class["await_ci"], agent_id="builder:ddo04", session_id="session-1"
+    )
+    assert ci.handoff == "subprocess"
+    assert ci.argv[0] == "scripts/await_pr_checks.sh"
+    assert str(DDO4_PR) in ci.argv
+
+    for effect_class in ("merge_pull_request", "close_issue", "request_review"):
+        governed = resolve_authority_invocation(
+            by_class[effect_class],
+            agent_id="builder:ddo04",
+            session_id="session-1",
+        )
+        assert governed.handoff == "governed_skill"
+        assert governed.entrypoint == (
+            ".codex/skills/verification-and-closure/SKILL.md"
+        )
+
+    # Every argv the runner can build starts at a governing entrypoint.
+    known = set(AUTHORITY_ENTRYPOINTS.values())
+    for effect in run.effects:
+        if effect.effect_class == "launch_worker":
+            continue
+        invocation = resolve_authority_invocation(
+            effect, agent_id="builder:ddo04", session_id="session-1"
+        )
+        assert invocation.entrypoint in known
+        for argument in invocation.argv:
+            if argument.startswith("scripts/") or argument.startswith(".codex/"):
+                assert argument in known
+
+    # The worker launch is not a script: it goes through the runtime port.
+    with pytest.raises(Exception, match="worker runtime port"):
+        resolve_authority_invocation(
+            by_class["launch_worker"],
+            agent_id="builder:ddo04",
+            session_id="session-1",
+        )
 
 
 def test_independent_waves_advance_without_model_coordination() -> None:
-    first, _, _ = _ddo04_state()
-    second, _, _ = _ddo04_state()
-    second = DeliveryRunState(**{**second.__dict__, "run_id": "run-ddo04-wave-2"})
-    assert reduce_delivery_run(first, _event(first, "admit")).effects[0].kind == "claim_issue"
-    assert reduce_delivery_run(second, _event(second, "admit")).effects[0].kind == "claim_issue"
+    """Wave two opens from the reducer alone once wave one is truly delivered."""
+
+    first = _issue(4167, SHA_A)
+    second = _issue(4168, SHA_B)
+    plan = _ddo4_plan(((first,), (second,)))
+    profile = _ddo4_profile()
+
+    run, _worker_event, _launch = _drive_to_awaiting_review(
+        first, plan=plan, profile=profile
+    )
+    claimed = _claimed_authority(first)
+
+    # Wave two is untouched while wave one is still in flight, and a timer tick
+    # cannot open it early.
+    assert run.state.issue_state(second.scope_key).phase == "admitted"
+    early = run.tick()
+    assert not early.effects
+    assert run.state.issue_state(second.scope_key).phase == "admitted"
+
+    accepted = _record_review(
+        run,
+        _ddo4_review(
+            first, plan, result_id="review-wave-one", disposition="accept"
+        ),
+        subject=claimed,
+    )
+    run.succeed(
+        accepted.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="merged",
+        label="merge",
+    )
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=_ddo4_closed_authority(first),
+        outcome_state="closed",
+        label="close",
+    )
+    receipt_proposal = run.last.effects[0]
+
+    # The terminal receipt of wave one is the only delivery input. It opens the
+    # next wave but proposes nothing, because a reducer effect must bind the
+    # subject authority of its causal event and this event's subject is the
+    # Issue that just closed.
+    receipt = run.succeed(
+        receipt_proposal,
+        run.events[-1],
+        subject=_ddo4_closed_authority(first),
+        outcome_state="receipt_recorded",
+        label="receipt",
+    )
+    assert run.state.issue_state(first.scope_key).phase == "delivered"
+    assert receipt.effects == ()
+
+    # The next deterministic tick alone opens wave two. Between the terminal
+    # wave-one receipt and the wave-two claim there is no coordinator turn, no
+    # model decision, and no external input other than the timer.
+    events_before = len(run.events)
+    opened = run.tick()
+    assert len(run.events) == events_before + 1
+    assert run.events[-1].event_type == "timer_elapsed"
+    assert run.events[-1].subject_authority is None
+    assert [
+        (item.effect_class, item.issue.issue_number) for item in opened.effects
+    ] == [("claim_issue", second.issue_number)]
+    assert run.state.issue_state(second.scope_key).phase == "claiming"
+
+    # The wave-two claim materializes into a canonical effect bound to the exact
+    # planned authority of the second Issue, not the first.
+    wave_two_claim = run.materialize(opened.effects[0], run.events[-1])
+    assert wave_two_claim.issue == second
+    assert wave_two_claim.expected_authorities == (_ready_authority(second),)
+    assert wave_two_claim.causal_event.event_type == "timer_elapsed"
 
 
 def test_worker_contracts_bind_one_authority_chain() -> None:
-    state, plan, issue = _ddo04_state()
-    effect_ref = ContractRef(schema_version=REDUCER_EFFECT_VERSION, contract_id="effect-1", content_hash=SHA_C)
-    pack = WorkerContextPack(context_pack_id="pack-1", run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, issue=issue, required_skills=("issue-to-code",), verify_targets=("pytest",))
-    pack_ref = ContractRef(schema_version=pack.schema_version, contract_id=pack.context_pack_id, content_hash=pack.content_hash)
-    invocation = WorkerInvocation(invocation_id="invoke-1", context_pack_ref=pack_ref, context_pack_hash=pack.content_hash, run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, idempotency_key="start-once", runtime_target="neutral")
-    invocation_ref = ContractRef(schema_version=invocation.schema_version, contract_id=invocation.invocation_id, content_hash=invocation.content_hash)
-    result = WorkerResultV2(result_id="result-1", invocation_ref=invocation_ref, context_pack_ref=pack_ref, context_pack_hash=pack.content_hash, run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, issue=issue, exact_head_sha=SHA_D, status="completed", carrier="carrier-a", provider="provider-a", model="model-a", session_ref="session-a", usage_ref="usage-a", provenance_ref="provenance-a")
-    assert result.context_pack_hash == pack.content_hash
+    """Pack, invocation, and result resolve one chain; envelopes may differ."""
+
+    issue = _issue(4167, SHA_A)
+    plan = _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile())
+    claimed = _claimed_authority(issue)
+    started = run.start()
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="worker_launched",
+        label="launch",
+    )
+    launch_effect = run.effects[-1]
+
+    pack, invocation, result = _ddo4_worker_bundle(issue, plan, launch_effect)
+    assert (
+        validate_worker_authority_chain(
+            result,
+            context_pack=pack,
+            invocation=invocation,
+            effect=launch_effect,
+            plan=plan,
+        )
+        is result
+    )
+
+    # Carrier conformance: a second carrier varies every envelope value and
+    # still normalizes to the same delivery-domain result and authority chain.
+    _pack_b, _invocation_b, other_carrier = _ddo4_worker_bundle(
+        issue,
+        plan,
+        launch_effect,
+        result_id="worker-result-v2-4167-b",
+        carrier_id="carrier-beta",
+        provider_id="provider-beta",
+        worker_model_ref="worker-model-beta",
+    )
+    assert other_carrier.carrier != result.carrier
+    assert other_carrier.carrier.session_ref != result.carrier.session_ref
+    assert other_carrier.carrier.usage_ref != result.carrier.usage_ref
+    assert other_carrier.carrier.provenance_ref != result.carrier.provenance_ref
+    assert normalized_worker_delivery_result(
+        other_carrier
+    ) == normalized_worker_delivery_result(result)
+    assert worker_conformance_key(other_carrier) == worker_conformance_key(result)
+    assert other_carrier.canonical_bytes() != result.canonical_bytes()
+
+    # A missing envelope field is rejected rather than normalized away.
+    payload = result.model_dump(mode="json")
+    del payload["carrier"]["usage_ref"]
+    with pytest.raises(ValidationError):
+        parse_delivery_contract(payload)
+
+    # A cross-chain construction is rejected at every reference in the chain.
+    other_issue = _issue(4169, SHA_B)
+    other_plan = _ddo4_plan(((other_issue,),))
+    foreign_pack, foreign_invocation, foreign_result = _ddo4_worker_bundle(
+        issue,
+        plan,
+        launch_effect,
+        result_id="worker-result-v2-foreign",
+    )
+    with pytest.raises(ValueError, match="does not bind the plan"):
+        validate_worker_authority_chain(
+            foreign_result,
+            context_pack=foreign_pack,
+            invocation=foreign_invocation,
+            effect=launch_effect,
+            plan=other_plan,
+        )
+    # A result asserting another run cannot ride an honest pack and invocation.
+    hijacked = foreign_result.model_dump(mode="json")
+    hijacked["run_id"] = "run-other"
+    hijacked["result_id"] = "worker-result-v2-hijacked-run"
+    with pytest.raises(ValidationError, match="one run, plan, Issue"):
+        parse_delivery_contract(hijacked)
+
+    mismatched_pack = WorkerContextPack(
+        context_pack_id="pack-mismatched",
+        run_id="run-other",
+        plan_ref=_ddo4_ref(plan, plan.plan_id),
+        effect_ref=_ddo4_ref(launch_effect, launch_effect.effect_id),
+        issue=issue,
+        base_head_sha=DDO4_BASE_HEAD,
+        required_skills=("issue-to-code",),
+        verify_targets=("tests/builderops/test_delivery_reducer.py",),
+        context_refs=(),
+        provenance=_provenance("pack-mismatched"),
+    )
+    with pytest.raises(ValueError, match="one context pack"):
+        validate_worker_authority_chain(
+            result,
+            context_pack=mismatched_pack,
+            invocation=invocation,
+            effect=launch_effect,
+            plan=plan,
+        )
+
+    # An invocation whose bound context-pack hash drifts cannot be built at all.
     with pytest.raises(ValidationError, match="exact context-pack hash"):
-        WorkerInvocation(invocation_id="bad", context_pack_ref=pack_ref, context_pack_hash=SHA_A, run_id=state.run_id, plan_ref=state.plan_ref, effect_ref=effect_ref, idempotency_key="bad", runtime_target="neutral")
+        WorkerInvocation(
+            invocation_id="bad",
+            run_id=DDO4_RUN,
+            plan_ref=_ddo4_ref(plan, plan.plan_id),
+            effect_ref=_ddo4_ref(launch_effect, launch_effect.effect_id),
+            issue=issue,
+            base_head_sha=DDO4_BASE_HEAD,
+            context_pack_ref=_ddo4_ref(pack, pack.context_pack_id),
+            context_pack_hash=SHA_A,
+            runtime_target="bounded-worker-runtime",
+            idempotency_key="bad",
+            input_hash=SHA_A,
+            provenance=_provenance("invocation-bad"),
+        )
+
+    # Every worker contract round-trips through strict canonical parsing.
+    for contract in (pack, invocation, result):
+        assert parse_delivery_contract(contract.canonical_bytes()) == contract
 
 
 def test_worker_runtime_port_is_provider_neutral_and_exhaustive() -> None:
-    from app.builderops.delivery_reducer import WorkerRuntimePort
-    assert set(WorkerRuntimePort.__dict__) >= {"start", "inspect", "heartbeat", "interrupt", "reattach", "await_terminal", "cancel"}
+    """The port is exercised behaviorally, not by inspecting its namespace."""
+
+    issue = _issue(4167, SHA_A)
+    plan = _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile())
+    claimed = _claimed_authority(issue)
+    started = run.start()
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="worker_launched",
+        label="launch",
+    )
+    launch_effect = run.effects[-1]
+    _pack, invocation, result = _ddo4_worker_bundle(issue, plan, launch_effect)
+
+    def _observation(
+        state: str,
+        *,
+        result_ref: ContractRef | None = None,
+        key: str | None = None,
+    ) -> WorkerRuntimeObservation:
+        identity = key or invocation.idempotency_key
+        return WorkerRuntimeObservation(
+            observation_id=f"observation-{state}",
+            run_id=DDO4_RUN,
+            plan_ref=_ddo4_ref(plan, plan.plan_id),
+            effect_ref=_ddo4_ref(launch_effect, launch_effect.effect_id),
+            invocation_ref=ContractRef(
+                schema_version=invocation.schema_version,
+                contract_id=identity,
+                content_hash=invocation.content_hash,
+            ),
+            invocation_idempotency_key=identity,
+            runtime_state=state,  # type: ignore[arg-type]
+            result_ref=result_ref,
+            observed_at=TS,
+            provenance=_provenance(f"observation-{state}"),
+        )
+
+    class _RecordingPort:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def _answer(self, name: str) -> WorkerRuntimeObservation:
+            self.calls.append(name)
+            return _observation("running")
+
+        def start(self, invocation: WorkerInvocation) -> WorkerRuntimeObservation:
+            return self._answer("start")
+
+        def inspect(self, invocation: WorkerInvocation) -> WorkerRuntimeObservation:
+            return self._answer("inspect")
+
+        def heartbeat(
+            self, invocation: WorkerInvocation
+        ) -> WorkerRuntimeObservation:
+            return self._answer("heartbeat")
+
+        def interrupt(
+            self, invocation: WorkerInvocation
+        ) -> WorkerRuntimeObservation:
+            return self._answer("interrupt")
+
+        def reattach(
+            self, invocation: WorkerInvocation
+        ) -> WorkerRuntimeObservation:
+            return self._answer("reattach")
+
+        def await_terminal(
+            self, invocation: WorkerInvocation
+        ) -> WorkerRuntimeObservation:
+            return self._answer("await_terminal")
+
+        def cancel(self, invocation: WorkerInvocation) -> WorkerRuntimeObservation:
+            return self._answer("cancel")
+
+    assert set(START_ONCE_OPERATION_BY_STATE) == set(WORKER_RUNTIME_STATES)
+    assert set(WORKER_RUNTIME_OPERATIONS) == {
+        "start",
+        "inspect",
+        "heartbeat",
+        "interrupt",
+        "reattach",
+        "await_terminal",
+        "cancel",
+    }
+
+    # Only not_started may ever start; unknown starts reattach instead.
+    port = _RecordingPort()
+    resolve_worker_start(port, invocation, _observation("not_started"))
+    resolve_worker_start(port, invocation, _observation("starting_unknown"))
+    resolve_worker_start(port, invocation, _observation("running"))
+    resolve_worker_start(port, invocation, _observation("idle"))
+    assert port.calls == ["start", "reattach", "inspect", "inspect"]
+    assert port.calls.count("start") == 1
+
+    # A terminal readback returns the recorded result and never launches again.
+    terminal_port = _RecordingPort()
+    result_ref = _ddo4_ref(result, result.result_id)
+    terminal = _observation("terminal", result_ref=result_ref)
+    assert resolve_worker_start(terminal_port, invocation, terminal) is terminal
+    assert terminal_port.calls == []
+    assert terminal.result_ref == result_ref
+
+    # Unreachable and cancelled cannot authorize any start.
+    for unstartable in ("unreachable", "cancelled"):
+        with pytest.raises(WorkerRuntimeUnknownError):
+            resolve_worker_start(
+                _RecordingPort(), invocation, _observation(unstartable)
+            )
+
+    # An observation for another invocation identity is refused outright.
+    with pytest.raises(WorkerRuntimeUnknownError):
+        resolve_worker_start(
+            _RecordingPort(),
+            invocation,
+            _observation("not_started", key="builderops.worker-invocation.v1:other"),
+        )
+
+    # A non-terminal observation may not smuggle a recorded result, and a
+    # terminal one must carry it.
+    with pytest.raises(ValidationError, match="terminal runtime observation"):
+        _observation("running", result_ref=result_ref)
+    with pytest.raises(ValidationError, match="terminal runtime observation"):
+        _observation("terminal")
 
 
 def test_unstructured_worker_output_cannot_advance() -> None:
-    state, _, _ = _ddo04_state()
-    assert reduce_delivery_run(state, _event(state, "admit")).state.phase == "claiming"
-    assert reduce_delivery_run(state, _event(state, "review_accepted", head=SHA_D)).state == state
+    """Prose, exit status, and session state have no path into the reducer."""
+
+    issue = _issue(4167, SHA_A)
+    plan = _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile())
+    claimed = _claimed_authority(issue)
+    started = run.start()
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="worker_launched",
+        label="launch",
+    )
+    launch_effect = run.effects[-1]
+    pack, invocation, result = _ddo4_worker_bundle(issue, plan, launch_effect)
+
+    # An admitted event cannot be forged: only admit_reducer_event may build one.
+    with pytest.raises(ReducerAdmissionError, match="admit_reducer_event"):
+        AdmittedEvent(
+            event=run.events[-1],
+            signal="worker_result_recorded",
+            effect=None,
+            worker_result=result,
+            review_result=None,
+            subject_issue=issue,
+        )
+
+    worker_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            result.delivery_result, result.delivery_result.result_id
+        ),
+        correlation_id="event-worker-unstructured",
+    )
+
+    # The delivery-domain bytes alone are not admissible: the carrier-neutral
+    # envelope and its full authority chain are required.
+    run.worker_results.append(result.delivery_result)
+    with pytest.raises(ReducerAdmissionError, match="worker result envelope"):
+        run.admit(worker_event)
+    with pytest.raises(ReducerAdmissionError, match="context pack"):
+        run.admit(worker_event, worker_result=result)
+
+    # Two carriers whose prose, session, usage, and provenance envelopes differ
+    # produce exactly the same reducer decision, so no envelope value is
+    # delivery authority.
+    admitted_a = run.admit(
+        worker_event,
+        worker_result=result,
+        context_pack=pack,
+        invocation=invocation,
+        launch_effect=launch_effect,
+    )
+    _pack_b, _invocation_b, result_b = _ddo4_worker_bundle(
+        issue,
+        plan,
+        launch_effect,
+        result_id="worker-result-v2-prose",
+        carrier_id="carrier-prose",
+        provider_id="provider-prose",
+        worker_model_ref="worker-model-prose",
+    )
+    admitted_b = run.admit(
+        worker_event,
+        worker_result=result_b,
+        context_pack=pack,
+        invocation=invocation,
+        launch_effect=launch_effect,
+    )
+    reduction_a = reduce_delivery_run(run.state, admitted_a)
+    reduction_b = reduce_delivery_run(run.state, admitted_b)
+    assert reduction_a.state == reduction_b.state
+    assert reduction_a.effects == reduction_b.effects
+
+    # A non-completed worker result blocks instead of advancing to CI.
+    _pack_f, _invocation_f, failed_result = _ddo4_worker_bundle(
+        issue,
+        plan,
+        launch_effect,
+        result_id="worker-result-v2-failed",
+        domain_result_id="worker-result-failed",
+        status="failed",
+    )
+    run.worker_results.append(failed_result.delivery_result)
+    failed_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            failed_result.delivery_result,
+            failed_result.delivery_result.result_id,
+        ),
+        correlation_id="event-worker-failed",
+    )
+    blocked = reduce_delivery_run(
+        run.state,
+        run.admit(
+            failed_event,
+            worker_result=failed_result,
+            context_pack=pack,
+            invocation=invocation,
+            launch_effect=launch_effect,
+        ),
+    )
+    assert blocked.state.issue_state(issue.scope_key).phase == "blocked"
+    assert not blocked.effects
 
 
 def test_lifecycle_controls_are_typed_fenced_and_effect_safe() -> None:
-    state, _, _ = _ddo04_state()
-    paused = reduce_delivery_run(state, _event(state, "pause")).state
-    assert paused.phase == "paused"
-    resumed = reduce_delivery_run(paused, _event(paused, "resume"))
-    assert resumed.state.phase == "claiming" and resumed.effects[0].kind == "claim_issue"
-    unauthenticated = reduce_delivery_run(state, _event(state, "cancel", authenticated=False))
-    assert unauthenticated.state.phase == "owner_decision" and not unauthenticated.effects
+    """Pause, resume, cancel, and supersede never claim to undo a committed effect."""
+
+    issue = _issue(4167, SHA_A)
+    run, _worker_event, _launch = _drive_to_awaiting_review(issue)
+    authorized = _actor("owner:RasmusTho")
+    unauthorized = ActorIdentity(
+        actor_type="service",
+        actor_id="service:unbound",
+        authority_scope="some/other-repo",
+    )
+
+    def _command(
+        name: str,
+        *,
+        command_id: str,
+        version: int | None = None,
+        issued_by: ActorIdentity | None = None,
+        superseding: ContractRef | None = None,
+    ) -> LifecycleCommand:
+        return LifecycleCommand(
+            command=name,  # type: ignore[arg-type]
+            command_id=command_id,
+            run_id=DDO4_RUN,
+            expected_run_version=(
+                run.state.version if version is None else version
+            ),
+            issued_by=issued_by or authorized,
+            issued_at=TS,
+            superseding_initiation_ref=superseding,
+        )
+
+    # Authentication is an authority reference, never a self-asserted flag.
+    denied = reduce_lifecycle_command(
+        run.state, _command("pause", command_id="cmd-denied", issued_by=unauthorized)
+    )
+    assert denied.refusal == "unauthorized_command"
+    assert denied.state == run.state
+
+    # Version fencing rejects a stale command outright.
+    stale = reduce_lifecycle_command(
+        run.state, _command("pause", command_id="cmd-stale", version=0)
+    )
+    assert stale.refusal == "stale_run_version"
+
+    paused = reduce_lifecycle_command(
+        run.state, _command("pause", command_id="cmd-pause")
+    )
+    assert paused.state.lifecycle == "paused"
+    assert not paused.effects
+    # The paused phase is preserved verbatim.
+    assert paused.state.issue_state(issue.scope_key).phase == "awaiting_review"
+
+    # Pause is idempotent by command identity.
+    repeat = reduce_lifecycle_command(
+        paused.state, _command("pause", command_id="cmd-pause")
+    )
+    assert repeat.refusal == "duplicate_command"
+    assert repeat.state == paused.state
+
+    # A paused run admits no reducer events at all.
+    stalled = reduce_delivery_run(
+        paused.state, run.admit(run.events[-1], effect=run.effects[-1])
+    )
+    assert stalled.refusal in {"paused_run", "duplicate_event"}
+
+    resumed = reduce_lifecycle_command(
+        paused.state,
+        LifecycleCommand(
+            command="resume",
+            command_id="cmd-resume",
+            run_id=DDO4_RUN,
+            expected_run_version=paused.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    assert resumed.state.lifecycle == "active"
+    # Resume continues the pending gate; it never re-claims an already claimed
+    # Issue or relaunches an already committed worker.
+    assert [item.effect_class for item in resumed.effects] == ["request_review"]
+    assert resumed.state.issue_state(issue.scope_key).phase == "awaiting_review"
+
+    # Cancellation records committed effects as obligations and emits nothing.
+    committed = run.state.issue_state(issue.scope_key).committed_effects
+    assert {item.effect_class for item in committed} >= {
+        "claim_issue",
+        "launch_worker",
+        "await_ci",
+    }
+    cancelled = reduce_lifecycle_command(
+        run.state, _command("cancel", command_id="cmd-cancel")
+    )
+    assert cancelled.state.lifecycle == "cancelled"
+    assert cancelled.effects == ()
+    assert COMPENSATING_EFFECT_CLASSES == frozenset()
+    assert cancelled.obligations == outstanding_effect_obligations(run.state)
+    assert {item.effect_class for item in cancelled.obligations} >= {
+        "claim_issue",
+        "launch_worker",
+        "await_ci",
+    }
+    for obligation in cancelled.obligations:
+        assert obligation.reconciliation_owner == "builderops_reconciliation"
+        assert obligation.effect_idempotency_key in {
+            effect.idempotency_key for effect in run.effects
+        }
+        assert obligation.outcome_keys
+
+    # A cancelled run is terminal for every further event and command.
+    assert (
+        reduce_delivery_run(
+            cancelled.state, run.admit(run.events[-1], effect=run.effects[-1])
+        ).refusal
+        == "terminal_run"
+    )
+    assert (
+        reduce_lifecycle_command(
+            cancelled.state,
+            _command(
+                "cancel",
+                command_id="cmd-cancel-2",
+                version=cancelled.state.version,
+            ),
+        ).refusal
+        == "terminal_run"
+    )
+
+    # Supersession requires the superseding initiation identity.
+    assert (
+        reduce_lifecycle_command(
+            run.state, _command("supersede", command_id="cmd-supersede-bad")
+        ).refusal
+        == "unauthorized_command"
+    )
+    superseding_ref = ContractRef(
+        schema_version="builderops.delivery-initiation.v1",
+        contract_id="init-4167-next",
+        content_hash=SHA_B,
+    )
+    superseded = reduce_lifecycle_command(
+        run.state,
+        _command(
+            "supersede",
+            command_id="cmd-supersede",
+            superseding=superseding_ref,
+        ),
+    )
+    assert superseded.state.lifecycle == "superseded"
+    assert superseded.state.superseding_initiation_ref == superseding_ref
+    assert superseded.effects == ()
+    assert superseded.obligations == cancelled.obligations
 
 
 def test_authority_ambiguity_and_system_blocks_are_distinct() -> None:
-    state, _, _ = _ddo04_state()
-    assert reduce_delivery_run(state, _event(state, "authority_ambiguous")).state.phase == "owner_decision"
-    assert reduce_delivery_run(state, _event(state, "system_missing")).state.phase == "system_blocked"
+    """An owner decision is never collapsed into a missing-evidence block."""
+
+    issue = _issue(4167, SHA_A)
+
+    def _exception_reduction(kind: str, code: str) -> Reduction:
+        run, _worker_event, _launch = _drive_to_awaiting_review(issue)
+        event = _ddo4_event(
+            run.plan,
+            sequence=run.next_sequence(),
+            event_type="exception_recorded",
+            exception=DeliveryException(
+                kind=kind,  # type: ignore[arg-type]
+                code=code,
+                message="A typed delivery exception was recorded.",
+                retryable=False,
+                evidence_refs=(f"exception:{code}",),
+            ),
+            correlation_id=f"event-exception-{code}",
+        )
+        return run.apply(run.admit(event))
+
+    owner = _exception_reduction("authority_conflict", "authority-conflict")
+    assert owner.state.issue_state(issue.scope_key).phase == "owner_decision"
+
+    for kind, code in (
+        ("dependency_blocked", "dependency-blocked"),
+        ("external_state_unknown", "external-state-unknown"),
+    ):
+        system = _exception_reduction(kind, code)
+        assert (
+            system.state.issue_state(issue.scope_key).phase == "system_blocked"
+        ), kind
+
+    plain = _exception_reduction("execution_failed", "execution-failed")
+    assert plain.state.issue_state(issue.scope_key).phase == "blocked"
+
+    # Drift in the Issue contract itself is an owner decision, not a block.
+    run, _worker_event, _launch = _drive_to_awaiting_review(issue)
+    changed = AuthoritySnapshot(
+        authority_type="github_issue",
+        authority_id=issue.authority_id,
+        content_hash=SHA_F,
+        observed_state="open",
+        observed_labels=("agent:in-progress", "type:task"),
+        observed_at=TS,
+    )
+    change_event = _ddo4_event(
+        run.plan,
+        sequence=run.next_sequence(),
+        event_type="authority_changed",
+        subject=changed,
+        correlation_id="event-authority-drift",
+    )
+    drift = run.apply(run.admit(change_event))
+    drifted_state = drift.state.issue_state(issue.scope_key)
+    assert drifted_state.phase == "owner_decision"
+    assert drifted_state.blocked_reason == "authority_contract_drift"
+    assert not drift.effects
+
+    # Contract drift is an owner decision, never a system block, and never a
+    # silent continuation on the drifted authority.
+    assert drifted_state.current_authority != changed
+
+    run, _worker_event, _launch = _drive_to_awaiting_review(issue)
+
+    # An in-scope authority change that is genuinely new advances the resolved
+    # authority without terminating the run.
+    relabelled = _authority(
+        issue, labels=("agent:in-progress", "prio:high", "type:task")
+    )
+    relabel_event = _ddo4_event(
+        run.plan,
+        sequence=run.next_sequence(),
+        event_type="authority_changed",
+        subject=relabelled,
+        correlation_id="event-authority-relabelled",
+    )
+    advanced = run.apply(run.admit(relabel_event))
+    assert advanced.refusal is None
+    issue_state = advanced.state.issue_state(issue.scope_key)
+    assert issue_state.phase == "awaiting_review"
+    assert issue_state.current_authority == relabelled
+
+    # The three outcomes are genuinely distinct reducer phases.
+    assert len({"owner_decision", "system_blocked", "blocked"}) == 3
 
 
 def test_acceptance_profile_is_canonical_and_evidence_bound() -> None:
-    state, _, _ = _ddo04_state()
-    assert state.acceptance_profile_ref.content_hash == state.acceptance_profile_hash
-    with pytest.raises(ValidationError, match="sorted"):
-        DeliveryAcceptanceProfile(profile_id="bad", required_evidence=("pr_merged", "ci_green"))
+    """Terminality follows the bound profile, not the shape of the last step."""
+
+    profile = _ddo4_profile()
+    assert profile.schema_version == DELIVERY_ACCEPTANCE_PROFILE_VERSION
+    assert parse_delivery_contract(profile.canonical_bytes()) == profile
+    with pytest.raises(ValidationError, match="canonical sorted order"):
+        DeliveryAcceptanceProfile(
+            profile_id="unsorted",
+            required_evidence=("pull_request_merged", "issue_closed"),
+            provenance=_provenance("acceptance-unsorted"),
+        )
+    with pytest.raises(ValidationError, match="explicit delivery evidence"):
+        DeliveryAcceptanceProfile(
+            profile_id="empty",
+            required_evidence=(),
+            provenance=_provenance("acceptance-empty"),
+        )
+
+    issue = _issue(4167, SHA_A)
+    run = _drive_to_delivered(issue)
+    profile_ref = run.state.acceptance_profile_ref
+    assert profile_ref.content_hash == run.state.acceptance_profile_hash
+    assert profile_ref.contract_id == profile.profile_id
+
+    # The binding survives every transition and the plan bytes never change.
+    assert run.state.plan_ref == _ddo4_ref(run.plan, run.plan.plan_id)
+    assert run.state.acceptance_profile_ref == profile_ref
+    for effect in run.effects:
+        assert effect.plan_ref == run.state.plan_ref
+
+    satisfied, unmet = resolve_terminal_delivery(run.state, issue, profile)
+    assert satisfied and unmet == ()
+
+    # Acceptance evidence is only ever derived from typed lower-level facts.
+    observed = run.state.issue_state(issue.scope_key).acceptance_evidence
+    assert set(observed) == {
+        "issue_closed",
+        "pull_request_merged",
+        "required_checks_green",
+        "review_accepted",
+    }
+    assert set(ACCEPTANCE_EVIDENCE_BY_EFFECT_OUTCOME.values()) >= {
+        "issue_closed",
+        "pull_request_merged",
+        "required_checks_green",
+    }
+
+    # A stronger profile governs the same sequence of lower-level facts: the
+    # identical run stops short of delivered instead of recording a clean
+    # receipt, so terminality is not hard-coded to the closing transition.
+    stronger = _ddo4_profile(
+        (
+            "issue_closed",
+            "known_defect_recorded",
+            "pull_request_merged",
+            "required_checks_green",
+            "review_accepted",
+        )
+    )
+    assert stronger.content_hash != profile.content_hash
+    stronger_run = _drive_to_delivered(issue, profile=stronger)
+    stronger_state = stronger_run.state.issue_state(issue.scope_key)
+    assert stronger_state.phase == "blocked"
+    assert stronger_state.blocked_reason == (
+        "acceptance_evidence_unmet:known_defect_recorded"
+    )
+    satisfied_strong, unmet_strong = resolve_terminal_delivery(
+        stronger_run.state, issue, stronger
+    )
+    assert not satisfied_strong
+    assert unmet_strong == ("known_defect_recorded",)
+
+    # The two runs executed the same effects; only the bound profile differed.
+    assert [item.effect_class for item in stronger_run.effects] == [
+        item.effect_class for item in run.effects
+    ]
+
+    # A profile that does not match the immutable binding cannot resolve at all.
+    with pytest.raises(ValueError, match="immutable run binding"):
+        resolve_terminal_delivery(run.state, issue, stronger)
 
 
 def test_delivery_receipt_v2_is_additive_and_version_bound() -> None:
-    state, _, _ = _ddo04_state()
-    receipt = DeliveryReceiptV2("receipt-2", SHA_A, state.acceptance_profile_ref, state.acceptance_profile_hash, "superseded", "run-old", ContractRef(schema_version="builderops.delivery-initiation.v1", contract_id="init-new", content_hash=SHA_B))
-    assert receipt.terminal_outcome == "superseded"
-    assert DeliveryReceipt.model_fields["schema_version"].default == "builderops.delivery-receipt.v1"
+    """v2 references v1 bytes; it never re-encodes or reinterprets them."""
+
+    issue = _issue(4165, SHA_A)
+    initiation = _initiation(issue)
+    plan = _plan(issue, initiation)
+    worker = _worker_result(issue, plan)
+    review = _review_result(issue, plan)
+    receipt_v1 = _receipt(issue, initiation, plan, worker, review)
+    profile = _ddo4_profile()
+
+    before = parse_delivery_contract(receipt_v1.canonical_bytes())
+    receipt_v2 = DeliveryReceiptV2(
+        receipt_id="delivery-receipt-4165-v2",
+        run_id=receipt_v1.run_id,
+        delivery_receipt_ref=_ddo4_ref(receipt_v1, receipt_v1.receipt_id),
+        acceptance_profile_ref=_ddo4_ref(profile, profile.profile_id),
+        acceptance_profile_hash=profile.content_hash,
+        satisfied_evidence=(
+            "issue_closed",
+            "pull_request_merged",
+            "required_checks_green",
+            "review_accepted",
+        ),
+        terminal_outcome="delivered",
+        provenance=_provenance("delivery-receipt-4165-v2"),
+    )
+    after = parse_delivery_contract(receipt_v1.canonical_bytes())
+    assert before == after == receipt_v1
+    assert receipt_v1.schema_version == "builderops.delivery-receipt.v1"
+    assert receipt_v2.schema_version == "builderops.delivery-receipt.v2"
+    assert parse_delivery_contract(receipt_v2.canonical_bytes()) == receipt_v2
+    assert (
+        validate_delivery_receipt_v2_evidence(
+            receipt_v2, receipt=receipt_v1, acceptance_profile=profile
+        )
+        is receipt_v2
+    )
+
+    # v2 repeats the identical acceptance reference and hash.
+    assert receipt_v2.acceptance_profile_hash == profile.content_hash
+    with pytest.raises(ValidationError, match="exact acceptance profile hash"):
+        DeliveryReceiptV2(
+            receipt_id="drifted",
+            run_id=receipt_v1.run_id,
+            delivery_receipt_ref=_ddo4_ref(receipt_v1, receipt_v1.receipt_id),
+            acceptance_profile_ref=_ddo4_ref(profile, profile.profile_id),
+            acceptance_profile_hash=SHA_B,
+            satisfied_evidence=("issue_closed",),
+            terminal_outcome="delivered",
+            provenance=_provenance("drifted"),
+        )
+
+    # A delivered v2 receipt cannot claim evidence the profile does not have.
+    thin = DeliveryReceiptV2(
+        receipt_id="thin",
+        run_id=receipt_v1.run_id,
+        delivery_receipt_ref=_ddo4_ref(receipt_v1, receipt_v1.receipt_id),
+        acceptance_profile_ref=_ddo4_ref(profile, profile.profile_id),
+        acceptance_profile_hash=profile.content_hash,
+        satisfied_evidence=("issue_closed",),
+        terminal_outcome="delivered",
+        provenance=_provenance("thin"),
+    )
+    with pytest.raises(ValueError, match="every required acceptance evidence"):
+        validate_delivery_receipt_v2_evidence(
+            thin, receipt=receipt_v1, acceptance_profile=profile
+        )
+
+    # Supersession identities are recorded together and only when superseded.
+    with pytest.raises(ValidationError, match="both supersession identities"):
+        DeliveryReceiptV2(
+            receipt_id="half-superseded",
+            run_id=receipt_v1.run_id,
+            delivery_receipt_ref=_ddo4_ref(receipt_v1, receipt_v1.receipt_id),
+            acceptance_profile_ref=_ddo4_ref(profile, profile.profile_id),
+            acceptance_profile_hash=profile.content_hash,
+            satisfied_evidence=("issue_closed",),
+            terminal_outcome="superseded",
+            superseded_run_id=receipt_v1.run_id,
+            provenance=_provenance("half-superseded"),
+        )
+
+    # A delivered receipt cannot hide unreconciled committed effects.
+    obligation = OutstandingEffectObligation(
+        effect_class="claim_issue",
+        effect_idempotency_key="builderops.delivery-effect.v1:" + SHA_A,
+        outcome_keys=(f"{issue.authority_id}#claimed",),
+        last_observed_outcome_state="claimed",
+    )
+    with pytest.raises(ValidationError, match="unreconciled effect obligations"):
+        DeliveryReceiptV2(
+            receipt_id="dirty-delivered",
+            run_id=receipt_v1.run_id,
+            delivery_receipt_ref=_ddo4_ref(receipt_v1, receipt_v1.receipt_id),
+            acceptance_profile_ref=_ddo4_ref(profile, profile.profile_id),
+            acceptance_profile_hash=profile.content_hash,
+            satisfied_evidence=(
+                "issue_closed",
+                "pull_request_merged",
+                "required_checks_green",
+                "review_accepted",
+            ),
+            terminal_outcome="delivered",
+            outstanding_effect_obligations=(obligation,),
+            provenance=_provenance("dirty-delivered"),
+        )
+
+    # v2 cannot contradict the delivered v1 terminal outcome.
+    contradicting = DeliveryReceiptV2(
+        receipt_id="contradicting",
+        run_id=receipt_v1.run_id,
+        delivery_receipt_ref=_ddo4_ref(receipt_v1, receipt_v1.receipt_id),
+        acceptance_profile_ref=_ddo4_ref(profile, profile.profile_id),
+        acceptance_profile_hash=profile.content_hash,
+        satisfied_evidence=("issue_closed",),
+        terminal_outcome="blocked",
+        provenance=_provenance("contradicting"),
+    )
+    with pytest.raises(ValueError, match="agree with delivered v1 bytes"):
+        validate_delivery_receipt_v2_evidence(
+            contradicting, receipt=receipt_v1, acceptance_profile=profile
+        )
+
+
+# ---------------------------------------------------------------------------
+# Regressions for the four protected authority-integrity findings.
+# ---------------------------------------------------------------------------
+
+
+def test_replayed_worker_sidecars_require_strict_canonical_revalidation() -> None:
+    """Finding 1: a replayed sidecar is untrusted until it re-parses exactly."""
+
+    issue = _issue(4167, SHA_A)
+    plan = _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile())
+    claimed = _claimed_authority(issue)
+    started = run.start()
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="worker_launched",
+        label="launch",
+    )
+    launch_effect = run.effects[-1]
+    pack, invocation, result = _ddo4_worker_bundle(issue, plan, launch_effect)
+    pack_ref = _ddo4_ref(pack, pack.context_pack_id)
+    invocation_ref = _ddo4_ref(invocation, invocation.invocation_id)
+
+    # The honest replay resolves.
+    assert (
+        replay_delivery_sidecar(pack.canonical_bytes(), expected_ref=pack_ref)
+        == pack
+    )
+    assert (
+        replay_delivery_sidecar(
+            invocation.canonical_bytes(), expected_ref=invocation_ref
+        )
+        == invocation
+    )
+    observation = WorkerRuntimeObservation(
+        observation_id="observation-replay",
+        run_id=DDO4_RUN,
+        plan_ref=_ddo4_ref(plan, plan.plan_id),
+        effect_ref=_ddo4_ref(launch_effect, launch_effect.effect_id),
+        invocation_ref=invocation_ref,
+        invocation_idempotency_key=invocation.idempotency_key,
+        runtime_state="terminal",
+        result_ref=_ddo4_ref(result, result.result_id),
+        observed_at=TS,
+        provenance=_provenance("observation-replay"),
+    )
+    assert (
+        replay_delivery_sidecar(
+            observation.canonical_bytes(),
+            expected_ref=_ddo4_ref(observation, observation.observation_id),
+        )
+        == observation
+    )
+
+    # A mutated sidecar no longer matches the reference that claimed it.
+    mutated = pack.model_dump(mode="json")
+    mutated["verify_targets"] = ["tests/does_not_prove_anything.py"]
+    with pytest.raises(ReducerAdmissionError, match="content hash"):
+        replay_delivery_sidecar(mutated, expected_ref=pack_ref)
+
+    # An identity swap is refused even when the hash reference is updated.
+    renamed = pack.model_dump(mode="json")
+    renamed["context_pack_id"] = "pack-substituted"
+    renamed_pack = parse_delivery_contract(renamed)
+    with pytest.raises(ReducerAdmissionError, match="identity"):
+        replay_delivery_sidecar(
+            renamed,
+            expected_ref=ContractRef(
+                schema_version=pack_ref.schema_version,
+                contract_id=pack_ref.contract_id,
+                content_hash=renamed_pack.content_hash,
+            ),
+        )
+
+    # A different contract family cannot be replayed under this reference.
+    with pytest.raises(ReducerAdmissionError, match="schema version"):
+        replay_delivery_sidecar(
+            invocation.canonical_bytes(), expected_ref=pack_ref
+        )
+
+    # Unknown fields, duplicate keys, and non-canonical bytes are all refused.
+    extra = pack.model_dump(mode="json")
+    extra["worker_notes"] = "the worker said it was fine"
+    with pytest.raises(ValidationError):
+        replay_delivery_sidecar(extra, expected_ref=pack_ref)
+    duplicated = (
+        '{"schema_version": "builderops.worker-context-pack.v1", '
+        '"run_id": "a", "run_id": "b"}'
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        replay_delivery_sidecar(duplicated, expected_ref=pack_ref)
+
+    # Admission itself re-parses in-memory contracts, so a non-canonical object
+    # cannot skip the strict path.
+    worker_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            result.delivery_result, result.delivery_result.result_id
+        ),
+        correlation_id="event-worker-replay",
+    )
+    run.worker_results.append(result.delivery_result)
+    admitted = run.admit(
+        worker_event,
+        worker_result=result,
+        context_pack=pack,
+        invocation=invocation,
+        launch_effect=launch_effect,
+    )
+    assert admitted.worker_result == result
+    assert admitted.worker_result is not result
+
+
+def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
+    """Finding 2: a repair round may move the head but never the PR identity."""
+
+    issue = _issue(4167, SHA_A)
+    plan = _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile(), max_repair_rounds=1)
+    claimed = _claimed_authority(issue)
+    started = run.start()
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    run.succeed(
+        run.last.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="worker_launched",
+        label="launch",
+    )
+    launch_effect = run.effects[-1]
+    pack, invocation, result = _ddo4_worker_bundle(issue, plan, launch_effect)
+    run.worker_results.append(result.delivery_result)
+    first_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            result.delivery_result, result.delivery_result.result_id
+        ),
+        correlation_id="event-worker-first",
+    )
+    first = run.apply(
+        run.admit(
+            first_event,
+            worker_result=result,
+            context_pack=pack,
+            invocation=invocation,
+            launch_effect=launch_effect,
+        )
+    )
+    assert run.state.issue_state(issue.scope_key).authorized_pull_request == DDO4_PR
+    assert run.state.issue_state(issue.scope_key).authorized_head_sha == DDO4_HEAD
+
+    # CI fails, so the run enters a budgeted repair round.
+    run.fail(first.effects[0], run.events[-1], subject=claimed, label="await-ci")
+    repairing = run.state.issue_state(issue.scope_key)
+    assert repairing.phase == "repairing"
+    assert repairing.repair_rounds == 1
+    # Head-bound acceptance evidence is invalidated by the failure.
+    assert "required_checks_green" not in repairing.acceptance_evidence
+
+    # A repair result that moves to another pull request is refused outright.
+    _p, _i, hijacked = _ddo4_worker_bundle(
+        issue,
+        plan,
+        launch_effect,
+        result_id="worker-result-v2-hijack",
+        domain_result_id="worker-result-hijack",
+        head=DDO4_REPAIRED_HEAD,
+        pull_request_number=DDO4_PR + 7,
+    )
+    run.worker_results.append(hijacked.delivery_result)
+    hijack_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            hijacked.delivery_result, hijacked.delivery_result.result_id
+        ),
+        correlation_id="event-worker-hijack",
+    )
+    hijack = reduce_delivery_run(
+        run.state,
+        run.admit(
+            hijack_event,
+            worker_result=hijacked,
+            context_pack=pack,
+            invocation=invocation,
+            launch_effect=launch_effect,
+        ),
+    )
+    assert hijack.refusal == "pull_request_identity_conflict"
+    assert hijack.state == run.state
+    assert not hijack.effects
+    run.worker_results.pop()
+
+    # The honest repair keeps the pull request and advances only the head.
+    _p2, _i2, repaired = _ddo4_worker_bundle(
+        issue,
+        plan,
+        launch_effect,
+        result_id="worker-result-v2-repaired",
+        domain_result_id="worker-result-repaired",
+        head=DDO4_REPAIRED_HEAD,
+    )
+    run.worker_results.append(repaired.delivery_result)
+    repaired_event = _ddo4_event(
+        plan,
+        sequence=run.next_sequence(),
+        event_type="worker_result_recorded",
+        subject=claimed,
+        result_ref=_ddo4_ref(
+            repaired.delivery_result, repaired.delivery_result.result_id
+        ),
+        correlation_id="event-worker-repaired",
+    )
+    accepted = run.apply(
+        run.admit(
+            repaired_event,
+            worker_result=repaired,
+            context_pack=pack,
+            invocation=invocation,
+            launch_effect=launch_effect,
+        )
+    )
+    repaired_state = run.state.issue_state(issue.scope_key)
+    assert repaired_state.authorized_pull_request == DDO4_PR
+    assert repaired_state.authorized_head_sha == DDO4_REPAIRED_HEAD
+    assert [item.effect_class for item in accepted.effects] == ["await_ci"]
+    assert accepted.effects[0].pull_request_number == DDO4_PR
+    assert accepted.effects[0].exact_head_sha == DDO4_REPAIRED_HEAD
+
+    # The repaired await_ci is a distinct reducer-authorized effect identity.
+    repaired_effect = run.materialize(accepted.effects[0], run.events[-1])
+    first_ci = next(
+        effect for effect in run.effects if effect.effect_class == "await_ci"
+    )
+    assert repaired_effect.idempotency_key != first_ci.idempotency_key
+    assert repaired_effect.pull_request_number == first_ci.pull_request_number
+
+    # Exhausting the repair budget blocks instead of repairing forever.
+    exhausted = run.fail(
+        accepted.effects[0], run.events[-1], subject=claimed, label="await-ci-2"
+    )
+    blocked_state = exhausted.state.issue_state(issue.scope_key)
+    assert blocked_state.phase == "blocked"
+    assert blocked_state.blocked_reason == "repair_budget_exhausted"
+
+
+def test_worktree_preparation_follows_the_full_worker_authority_chain() -> None:
+    """Finding 3: no side effect happens before the chain is fully resolved."""
+
+    issue = _issue(4167, SHA_A)
+    plan = _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile())
+    claimed = _claimed_authority(issue)
+    started = run.start()
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=claimed,
+        outcome_state="claimed",
+        label="claim",
+    )
+    launch_proposal = run.last.effects[0]
+    launch_effect = run.materialize(launch_proposal, run.events[-1])
+    pack, invocation, _result = _ddo4_worker_bundle(issue, plan, launch_effect)
+    pack_ref = _ddo4_ref(pack, pack.context_pack_id)
+    invocation_ref = _ddo4_ref(invocation, invocation.invocation_id)
+
+    # The reducer must have authorized a launch before any preparation runs.
+    launching_state = run.state
+
+    class _RecordingWorktree:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def register(self, *, worktree_path: str, owner: str) -> tuple[str, ...]:
+            self.calls.append((worktree_path, owner))
+            return ("python3", "scripts/agent_worktree.py", "register")
+
+    def _prepare(
+        adapter: _RecordingWorktree,
+        *,
+        raw_pack: object = None,
+        raw_invocation: object = None,
+        state: DeliveryRunState | None = None,
+        effect: ReducerEffect | None = None,
+        target_issue: IssueScope | None = None,
+        pack_ref_override: ContractRef | None = None,
+    ):
+        return prepare_worker_execution(
+            raw_context_pack=raw_pack
+            if raw_pack is not None
+            else pack.canonical_bytes(),
+            raw_invocation=raw_invocation
+            if raw_invocation is not None
+            else invocation.canonical_bytes(),
+            context_pack_ref=pack_ref_override or pack_ref,
+            invocation_ref=invocation_ref,
+            launch_effect=effect or launch_effect,
+            plan=plan,
+            state=state or launching_state,
+            issue=target_issue or issue,
+            worktree_path="/tmp/worktree-4167",
+            owner_session_id="session-4167",
+            worktree_adapter=adapter,
+        )
+
+    happy = _RecordingWorktree()
+    prepared = _prepare(happy)
+    assert happy.calls == [("/tmp/worktree-4167", "session-4167")]
+    assert prepared.trace == (
+        "context_pack_revalidated",
+        "invocation_revalidated",
+        "authority_chain_resolved",
+        "reducer_authorization_resolved",
+        "worktree_registered",
+    )
+    # The side effect is strictly last.
+    assert prepared.trace[-1] == "worktree_registered"
+    assert "worktree_registered" not in prepared.trace[:-1]
+
+    # A mutated context pack stops before the worktree is touched.
+    mutated = pack.model_dump(mode="json")
+    mutated["required_skills"] = ["not-the-authorized-skill"]
+    tampered = _RecordingWorktree()
+    with pytest.raises(ReducerAdmissionError):
+        _prepare(tampered, raw_pack=mutated)
+    assert tampered.calls == []
+
+    # An invocation that resolves a different context pack stops as well.
+    other_pack = WorkerContextPack(
+        context_pack_id="pack-other",
+        run_id=DDO4_RUN,
+        plan_ref=_ddo4_ref(plan, plan.plan_id),
+        effect_ref=_ddo4_ref(launch_effect, launch_effect.effect_id),
+        issue=issue,
+        base_head_sha=DDO4_BASE_HEAD,
+        required_skills=("issue-to-code",),
+        verify_targets=("tests/builderops/test_other.py",),
+        context_refs=(),
+        provenance=_provenance("pack-other"),
+    )
+    crossed = _RecordingWorktree()
+    with pytest.raises(
+        ReducerAdmissionError, match="does not resolve this context pack"
+    ):
+        _prepare(
+            crossed,
+            raw_pack=other_pack.canonical_bytes(),
+            pack_ref_override=_ddo4_ref(other_pack, other_pack.context_pack_id),
+        )
+    assert crossed.calls == []
+
+    # A sidecar whose bytes drifted from the reference stops even earlier.
+    drifted = _RecordingWorktree()
+    with pytest.raises(ReducerAdmissionError, match="content hash"):
+        _prepare(drifted, raw_pack=other_pack.canonical_bytes())
+    assert drifted.calls == []
+
+    # A run that has not authorized a launch cannot prepare a worktree.
+    unauthorized = _RecordingWorktree()
+    fresh_state = _ddo4_state(plan, _ddo4_profile())
+    with pytest.raises(ReducerAdmissionError, match="has not authorized"):
+        _prepare(unauthorized, state=fresh_state)
+    assert unauthorized.calls == []
+
+    # A non-launch effect cannot be used to prepare a worker at all.
+    claim_effect = next(
+        effect for effect in run.effects if effect.effect_class == "claim_issue"
+    )
+    wrong_class = _RecordingWorktree()
+    with pytest.raises(ReducerAdmissionError, match="launch-worker effect"):
+        _prepare(wrong_class, effect=claim_effect)
+    assert wrong_class.calls == []
+
+    # An Issue outside the run's bound scope cannot prepare a worktree.
+    foreign_issue = _issue(4169, SHA_B)
+    foreign = _RecordingWorktree()
+    with pytest.raises(ReducerAdmissionError):
+        _prepare(foreign, target_issue=foreign_issue)
+    assert foreign.calls == []
+
+
+def test_cancellation_records_obligations_instead_of_claiming_compensation() -> None:
+    """Finding 4: DDO-04 never partially compensates committed pickup authority."""
+
+    issue = _issue(4167, SHA_A)
+    run, _worker_event, _launch = _drive_to_awaiting_review(issue)
+    authorized = _actor("owner:RasmusTho")
+
+    cancelled = reduce_lifecycle_command(
+        run.state,
+        LifecycleCommand(
+            command="cancel",
+            command_id="cmd-cancel-compensation",
+            run_id=DDO4_RUN,
+            expected_run_version=run.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+
+    # No effect at all is emitted, so no partial compensation can exist. The
+    # delivered effect vocabulary has no compensating class, and DDO-04 does not
+    # invent one: INV-DDO-15 forbids claiming to undo a committed effect.
+    assert cancelled.effects == ()
+    assert COMPENSATING_EFFECT_CLASSES == frozenset()
+
+    # The committed claim - which really did remove agent:ready and take a
+    # dispatcher lease - is handed to reconciliation as an explicit obligation
+    # rather than silently half-reversed.
+    claim_effect = next(
+        effect for effect in run.effects if effect.effect_class == "claim_issue"
+    )
+    claim_obligation = next(
+        item
+        for item in cancelled.obligations
+        if item.effect_class == "claim_issue"
+    )
+    assert claim_obligation.effect_idempotency_key == claim_effect.idempotency_key
+    assert claim_obligation.outcome_keys == claim_effect.expected_outcome_keys
+    assert claim_obligation.last_observed_outcome_state == "claimed"
+    assert claim_obligation.reconciliation_owner == "builderops_reconciliation"
+
+    # Every committed effect is represented exactly once, and nothing that was
+    # never committed appears.
+    committed_keys = {
+        item.idempotency_key
+        for item in run.state.issue_state(issue.scope_key).committed_effects
+    }
+    assert {
+        item.effect_idempotency_key for item in cancelled.obligations
+    } == committed_keys
+    assert len(cancelled.obligations) == len(committed_keys)
+
+    # The reducer emits no further effect after cancellation, from any input.
+    for admitted_event in (run.events[-1], run.events[0]):
+        followup = reduce_delivery_run(
+            cancelled.state,
+            run.admit(admitted_event, effect=run.effects[-1])
+            if admitted_event.event_type
+            in {"effect_succeeded", "effect_failed"}
+            else run.admit(admitted_event),
+        )
+        assert followup.refusal == "terminal_run"
+        assert followup.effects == ()
+
+    # A cancelled run's obligations can only be carried by a receipt that is not
+    # marked delivered, so a false clean receipt is unconstructable.
+    initiation = _initiation(_issue(4165, SHA_A))
+    plan_4165 = _plan(_issue(4165, SHA_A), initiation)
+    receipt_v1 = _receipt(
+        _issue(4165, SHA_A),
+        initiation,
+        plan_4165,
+        _worker_result(_issue(4165, SHA_A), plan_4165),
+        _review_result(_issue(4165, SHA_A), plan_4165),
+    )
+    profile = _ddo4_profile()
+    with pytest.raises(ValidationError, match="unreconciled effect obligations"):
+        DeliveryReceiptV2(
+            receipt_id="false-clean",
+            run_id=receipt_v1.run_id,
+            delivery_receipt_ref=_ddo4_ref(receipt_v1, receipt_v1.receipt_id),
+            acceptance_profile_ref=_ddo4_ref(profile, profile.profile_id),
+            acceptance_profile_hash=profile.content_hash,
+            satisfied_evidence=(
+                "issue_closed",
+                "pull_request_merged",
+                "required_checks_green",
+                "review_accepted",
+            ),
+            terminal_outcome="delivered",
+            outstanding_effect_obligations=cancelled.obligations,
+            provenance=_provenance("false-clean"),
+        )

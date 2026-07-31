@@ -46,6 +46,24 @@ REVIEW_RESULT_VERSION: Final[
 DELIVERY_RECEIPT_VERSION: Final[
     Literal["builderops.delivery-receipt.v1"]
 ] = "builderops.delivery-receipt.v1"
+DELIVERY_ACCEPTANCE_PROFILE_VERSION: Final[
+    Literal["builderops.delivery-acceptance-profile.v1"]
+] = "builderops.delivery-acceptance-profile.v1"
+WORKER_CONTEXT_PACK_VERSION: Final[
+    Literal["builderops.worker-context-pack.v1"]
+] = "builderops.worker-context-pack.v1"
+WORKER_INVOCATION_VERSION: Final[
+    Literal["builderops.worker-invocation.v1"]
+] = "builderops.worker-invocation.v1"
+WORKER_RESULT_V2_VERSION: Final[
+    Literal["builderops.delivery-worker-result.v2"]
+] = "builderops.delivery-worker-result.v2"
+WORKER_RUNTIME_OBSERVATION_VERSION: Final[
+    Literal["builderops.worker-runtime-observation.v1"]
+] = "builderops.worker-runtime-observation.v1"
+DELIVERY_RECEIPT_V2_VERSION: Final[
+    Literal["builderops.delivery-receipt.v2"]
+] = "builderops.delivery-receipt.v2"
 
 _UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
@@ -109,6 +127,22 @@ ExceptionKind: TypeAlias = Literal[
     "budget_exhausted",
     "review_blocking",
     "execution_failed",
+    "cancelled",
+]
+AcceptanceEvidenceKind: TypeAlias = Literal[
+    "issue_closed",
+    "known_defect_recorded",
+    "pull_request_merged",
+    "required_checks_green",
+    "review_accepted",
+]
+WorkerRuntimeState: TypeAlias = Literal[
+    "not_started",
+    "starting_unknown",
+    "running",
+    "idle",
+    "terminal",
+    "unreachable",
     "cancelled",
 ]
 EffectOutcomeState: TypeAlias = Literal[
@@ -3123,6 +3157,624 @@ def validate_delivery_receipt_evidence(
     return receipt
 
 
+ACCEPTANCE_EVIDENCE_BY_EFFECT_OUTCOME: Final[
+    dict[EffectOutcomeState, AcceptanceEvidenceKind]
+] = {
+    "checks_passed": "required_checks_green",
+    "merged": "pull_request_merged",
+    "closed": "issue_closed",
+    "known_defect_recorded": "known_defect_recorded",
+}
+
+
+class DeliveryAcceptanceProfile(CanonicalDeliveryContract):
+    """The immutable meaning of terminal delivery for one approved run.
+
+    The profile never names a phase, a state machine node, or an adapter. It
+    enumerates only explicit lower-level Issue/PR/CI/review/merge/closure facts,
+    so terminality can be resolved from observed evidence rather than from the
+    shape of the transition that happened to run last.
+    """
+
+    contract_family: ClassVar[str] = "acceptance"
+    schema_version: Literal[
+        "builderops.delivery-acceptance-profile.v1"
+    ] = DELIVERY_ACCEPTANCE_PROFILE_VERSION
+    profile_id: NonEmptyStr
+    required_evidence: tuple[AcceptanceEvidenceKind, ...]
+    provenance: Provenance
+
+    @model_validator(mode="after")
+    def _validate_profile(self) -> DeliveryAcceptanceProfile:
+        if not self.required_evidence:
+            raise ValueError(
+                "acceptance profile must require explicit delivery evidence"
+            )
+        _require_unique(self.required_evidence, "acceptance profile evidence")
+        if self.required_evidence != tuple(sorted(self.required_evidence)):
+            raise ValueError(
+                "acceptance profile evidence must use canonical sorted order"
+            )
+        return self
+
+    def unmet_evidence(
+        self,
+        observed: frozenset[AcceptanceEvidenceKind],
+    ) -> tuple[AcceptanceEvidenceKind, ...]:
+        """Return the required evidence the run has not explicitly proven."""
+
+        return tuple(
+            kind for kind in self.required_evidence if kind not in observed
+        )
+
+    def is_satisfied_by(
+        self,
+        observed: frozenset[AcceptanceEvidenceKind],
+    ) -> bool:
+        return not self.unmet_evidence(observed)
+
+
+class WorkerContextPack(CanonicalDeliveryContract):
+    """Bounded, hash-addressed context handed to exactly one worker invocation."""
+
+    contract_family: ClassVar[str] = "worker_runtime"
+    schema_version: Literal[
+        "builderops.worker-context-pack.v1"
+    ] = WORKER_CONTEXT_PACK_VERSION
+    context_pack_id: NonEmptyStr
+    run_id: NonEmptyStr
+    plan_ref: ContractRef
+    effect_ref: ContractRef
+    issue: IssueScope
+    base_head_sha: GitSha | None
+    required_skills: tuple[NonEmptyStr, ...]
+    verify_targets: tuple[NonEmptyStr, ...]
+    context_refs: tuple[SourceRef, ...]
+    provenance: Provenance
+
+    @model_validator(mode="after")
+    def _validate_pack(self) -> WorkerContextPack:
+        if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
+            raise ValueError("worker context pack must bind DeliveryPlan.v1")
+        if self.effect_ref.schema_version != REDUCER_EFFECT_VERSION:
+            raise ValueError(
+                "worker context pack must bind its authorizing reducer effect"
+            )
+        if not self.verify_targets:
+            raise ValueError("worker context pack must name its verify targets")
+        _require_unique(self.required_skills, "context pack required skills")
+        _require_unique(self.verify_targets, "context pack verify targets")
+        _require_unique(
+            tuple(
+                (item.source_type, item.source_id) for item in self.context_refs
+            ),
+            "context pack context refs",
+        )
+        if self.required_skills != tuple(sorted(self.required_skills)):
+            raise ValueError(
+                "context pack required skills must use canonical sorted order"
+            )
+        if self.verify_targets != tuple(sorted(self.verify_targets)):
+            raise ValueError(
+                "context pack verify targets must use canonical sorted order"
+            )
+        if self.context_refs != tuple(
+            sorted(
+                self.context_refs,
+                key=lambda item: (item.source_type, item.source_id),
+            )
+        ):
+            raise ValueError(
+                "context pack context refs must use canonical sorted order"
+            )
+        return self
+
+
+def worker_invocation_input_hash(
+    *,
+    run_id: str,
+    plan_ref: ContractRef,
+    effect_ref: ContractRef,
+    issue: IssueScope,
+    base_head_sha: str | None,
+    context_pack_ref: ContractRef,
+    runtime_target: str,
+) -> str:
+    """Hash the complete semantic input to one reducer-authorized invocation."""
+
+    return canonical_hash(
+        {
+            "run_id": run_id,
+            "plan_ref": plan_ref.model_dump(mode="json"),
+            "effect_ref": effect_ref.model_dump(mode="json"),
+            "issue": issue.model_dump(mode="json"),
+            "base_head_sha": base_head_sha,
+            "context_pack_ref": context_pack_ref.model_dump(mode="json"),
+            "runtime_target": runtime_target,
+        }
+    )
+
+
+def worker_invocation_idempotency_key(input_hash: str) -> str:
+    """Derive the sole start-once identity from validated semantic input."""
+
+    return f"builderops.worker-invocation.v1:{input_hash}"
+
+
+class WorkerInvocation(CanonicalDeliveryContract):
+    """One reducer-authorized worker start, identified by its semantic input."""
+
+    contract_family: ClassVar[str] = "worker_runtime"
+    schema_version: Literal[
+        "builderops.worker-invocation.v1"
+    ] = WORKER_INVOCATION_VERSION
+    invocation_id: NonEmptyStr
+    run_id: NonEmptyStr
+    plan_ref: ContractRef
+    effect_ref: ContractRef
+    issue: IssueScope
+    base_head_sha: GitSha | None
+    context_pack_ref: ContractRef
+    context_pack_hash: Sha256
+    runtime_target: NonEmptyStr
+    idempotency_key: NonEmptyStr
+    input_hash: Sha256
+    provenance: Provenance
+
+    @model_validator(mode="after")
+    def _validate_invocation(self) -> WorkerInvocation:
+        if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
+            raise ValueError("worker invocation must bind DeliveryPlan.v1")
+        if self.effect_ref.schema_version != REDUCER_EFFECT_VERSION:
+            raise ValueError(
+                "worker invocation must bind its authorizing reducer effect"
+            )
+        if self.context_pack_ref.schema_version != WORKER_CONTEXT_PACK_VERSION:
+            raise ValueError("worker invocation must bind worker-context-pack.v1")
+        if self.context_pack_ref.content_hash != self.context_pack_hash:
+            raise ValueError(
+                "worker invocation must repeat the exact context-pack hash"
+            )
+        expected_input_hash = worker_invocation_input_hash(
+            run_id=self.run_id,
+            plan_ref=self.plan_ref,
+            effect_ref=self.effect_ref,
+            issue=self.issue,
+            base_head_sha=self.base_head_sha,
+            context_pack_ref=self.context_pack_ref,
+            runtime_target=self.runtime_target,
+        )
+        if self.input_hash != expected_input_hash:
+            raise ValueError(
+                "worker invocation input hash must bind exact semantic input"
+            )
+        if self.idempotency_key != worker_invocation_idempotency_key(
+            expected_input_hash
+        ):
+            raise ValueError(
+                "worker invocation idempotency key must derive from semantic input"
+            )
+        if self.invocation_id != self.idempotency_key:
+            raise ValueError(
+                "worker invocation identity must equal its start-once key"
+            )
+        return self
+
+
+class WorkerCarrierEnvelope(_StrictFrozenModel):
+    """Complete execution envelope for one carrier run of one invocation.
+
+    Every field is an opaque identifier chosen by the executing adapter. The
+    envelope is retained as provenance and is never delivery authority, so its
+    values may differ freely between two conforming carriers.
+    """
+
+    carrier_id: NonEmptyStr
+    provider_id: NonEmptyStr
+    worker_model_ref: NonEmptyStr
+    session_ref: NonEmptyStr
+    usage_ref: NonEmptyStr
+    provenance_ref: NonEmptyStr
+
+
+class WorkerResultV2(CanonicalDeliveryContract):
+    """Carrier-neutral worker result: one authority chain plus one envelope."""
+
+    contract_family: ClassVar[str] = "worker_runtime"
+    schema_version: Literal[
+        "builderops.delivery-worker-result.v2"
+    ] = WORKER_RESULT_V2_VERSION
+    result_id: NonEmptyStr
+    run_id: NonEmptyStr
+    plan_ref: ContractRef
+    effect_ref: ContractRef
+    issue: IssueScope
+    base_head_sha: GitSha | None
+    exact_head_sha: GitSha | None
+    pull_request_number: PositiveInt | None
+    context_pack_ref: ContractRef
+    context_pack_hash: Sha256
+    invocation_ref: ContractRef
+    invocation_idempotency_key: NonEmptyStr
+    delivery_result: StructuredWorkerResult
+    carrier: WorkerCarrierEnvelope
+    provenance: Provenance
+
+    @model_validator(mode="after")
+    def _validate_result_v2(self) -> WorkerResultV2:
+        if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
+            raise ValueError("worker result must bind DeliveryPlan.v1")
+        if self.effect_ref.schema_version != REDUCER_EFFECT_VERSION:
+            raise ValueError(
+                "worker result must bind its authorizing reducer effect"
+            )
+        if self.context_pack_ref.schema_version != WORKER_CONTEXT_PACK_VERSION:
+            raise ValueError("worker result must bind worker-context-pack.v1")
+        if self.invocation_ref.schema_version != WORKER_INVOCATION_VERSION:
+            raise ValueError("worker result must bind worker-invocation.v1")
+        if self.context_pack_ref.content_hash != self.context_pack_hash:
+            raise ValueError(
+                "worker result must repeat the exact context-pack hash"
+            )
+        if self.invocation_ref.contract_id != self.invocation_idempotency_key:
+            raise ValueError(
+                "worker result must repeat the exact invocation start-once key"
+            )
+        domain = self.delivery_result
+        if (
+            domain.run_id != self.run_id
+            or domain.plan_ref != self.plan_ref
+            or domain.issue != self.issue
+            or domain.exact_head_sha != self.exact_head_sha
+            or domain.pull_request_number != self.pull_request_number
+        ):
+            raise ValueError(
+                "worker result envelope and delivery-domain result must bind "
+                "one run, plan, Issue, head, and pull request"
+            )
+        if self.provenance.created_at < domain.provenance.created_at:
+            raise ValueError(
+                "worker result envelope must follow its delivery-domain result"
+            )
+        return self
+
+
+def normalized_worker_delivery_result(result: WorkerResultV2) -> str:
+    """Return the carrier-independent delivery-domain form of one result."""
+
+    return canonical_json(result.delivery_result)
+
+
+def worker_conformance_key(result: WorkerResultV2) -> str:
+    """Hash the delivery-domain result together with its authority chain.
+
+    Two carriers that executed the same reducer-authorized invocation and
+    reached the same delivery-domain conclusion produce the same key while
+    their carrier/provider/model/session/usage/provenance envelopes differ.
+    """
+
+    return canonical_hash(
+        {
+            "run_id": result.run_id,
+            "plan_ref": result.plan_ref.model_dump(mode="json"),
+            "effect_ref": result.effect_ref.model_dump(mode="json"),
+            "issue": result.issue.model_dump(mode="json"),
+            "base_head_sha": result.base_head_sha,
+            "exact_head_sha": result.exact_head_sha,
+            "pull_request_number": result.pull_request_number,
+            "context_pack_ref": result.context_pack_ref.model_dump(mode="json"),
+            "invocation_ref": result.invocation_ref.model_dump(mode="json"),
+            "delivery_result": result.delivery_result.model_dump(mode="json"),
+        }
+    )
+
+
+class WorkerRuntimeObservation(CanonicalDeliveryContract):
+    """One typed readback of a worker runtime for one invocation identity."""
+
+    contract_family: ClassVar[str] = "worker_runtime"
+    schema_version: Literal[
+        "builderops.worker-runtime-observation.v1"
+    ] = WORKER_RUNTIME_OBSERVATION_VERSION
+    observation_id: NonEmptyStr
+    run_id: NonEmptyStr
+    plan_ref: ContractRef
+    effect_ref: ContractRef
+    invocation_ref: ContractRef
+    invocation_idempotency_key: NonEmptyStr
+    runtime_state: WorkerRuntimeState
+    result_ref: ContractRef | None
+    observed_at: UtcTimestamp
+    provenance: Provenance
+
+    @model_validator(mode="after")
+    def _validate_observation(self) -> WorkerRuntimeObservation:
+        if self.plan_ref.schema_version != DELIVERY_PLAN_VERSION:
+            raise ValueError("runtime observation must bind DeliveryPlan.v1")
+        if self.effect_ref.schema_version != REDUCER_EFFECT_VERSION:
+            raise ValueError(
+                "runtime observation must bind its authorizing reducer effect"
+            )
+        if self.invocation_ref.schema_version != WORKER_INVOCATION_VERSION:
+            raise ValueError("runtime observation must bind worker-invocation.v1")
+        if self.invocation_ref.contract_id != self.invocation_idempotency_key:
+            raise ValueError(
+                "runtime observation must repeat the exact start-once key"
+            )
+        if (self.result_ref is not None) != (self.runtime_state == "terminal"):
+            raise ValueError(
+                "only a terminal runtime observation carries a recorded result"
+            )
+        if (
+            self.result_ref is not None
+            and self.result_ref.schema_version != WORKER_RESULT_V2_VERSION
+        ):
+            raise ValueError(
+                "terminal runtime observation must bind worker-result.v2"
+            )
+        if self.observed_at > self.provenance.created_at:
+            raise ValueError(
+                "runtime observation must precede its own provenance"
+            )
+        return self
+
+
+def _expected_ref(contract: CanonicalDeliveryContract, contract_id: str) -> ContractRef:
+    return ContractRef(
+        schema_version=cast(str, getattr(contract, "schema_version")),
+        contract_id=contract_id,
+        content_hash=contract.content_hash,
+    )
+
+
+def validate_worker_authority_chain(
+    result: WorkerResultV2,
+    *,
+    context_pack: WorkerContextPack,
+    invocation: WorkerInvocation,
+    effect: ReducerEffect,
+    plan: DeliveryPlan,
+) -> WorkerResultV2:
+    """Resolve every worker reference against the exact referenced contract.
+
+    Reference version checks alone cannot prove a chain: a pack citing run A
+    may be carried by an invocation for run B whose result asserts run C. This
+    resolver rebuilds each expected reference from the supplied contract and
+    then requires one identical run, plan, effect, Issue, and base head across
+    pack, invocation, result, and the authorizing effect.
+    """
+
+    expected_plan_ref = _expected_ref(plan, plan.plan_id)
+    expected_effect_ref = _expected_ref(effect, effect.effect_id)
+    expected_pack_ref = _expected_ref(context_pack, context_pack.context_pack_id)
+    expected_invocation_ref = _expected_ref(invocation, invocation.invocation_id)
+
+    if effect.effect_class != "launch_worker":
+        raise ValueError(
+            "worker authority chain must resolve a launch-worker effect"
+        )
+    if effect.plan_ref != expected_plan_ref:
+        raise ValueError("worker authority chain effect does not bind the plan")
+    if (
+        context_pack.plan_ref != expected_plan_ref
+        or invocation.plan_ref != expected_plan_ref
+        or result.plan_ref != expected_plan_ref
+    ):
+        raise ValueError("worker authority chain must bind exactly one plan")
+    if (
+        context_pack.effect_ref != expected_effect_ref
+        or invocation.effect_ref != expected_effect_ref
+        or result.effect_ref != expected_effect_ref
+    ):
+        raise ValueError(
+            "worker authority chain must bind exactly one authorizing effect"
+        )
+    if (
+        invocation.context_pack_ref != expected_pack_ref
+        or result.context_pack_ref != expected_pack_ref
+    ):
+        raise ValueError("worker authority chain must resolve one context pack")
+    if result.invocation_ref != expected_invocation_ref:
+        raise ValueError("worker authority chain must resolve one invocation")
+    if (
+        effect.run_id != result.run_id
+        or context_pack.run_id != result.run_id
+        or invocation.run_id != result.run_id
+    ):
+        raise ValueError("worker authority chain must bind exactly one run")
+    if (
+        effect.issue != result.issue
+        or context_pack.issue != result.issue
+        or invocation.issue != result.issue
+    ):
+        raise ValueError("worker authority chain must bind exactly one Issue")
+    if (
+        context_pack.base_head_sha != result.base_head_sha
+        or invocation.base_head_sha != result.base_head_sha
+    ):
+        raise ValueError("worker authority chain must bind exactly one base head")
+    if result.invocation_idempotency_key != invocation.idempotency_key:
+        raise ValueError(
+            "worker authority chain must bind exactly one start-once identity"
+        )
+    planned_issue = next(
+        (
+            item
+            for item in plan.final_scope
+            if item.scope_key == result.issue.scope_key
+        ),
+        None,
+    )
+    if planned_issue != result.issue:
+        raise ValueError("worker authority chain Issue is outside exact plan scope")
+    return result
+
+
+class OutstandingEffectObligation(_StrictFrozenModel):
+    """One committed external effect this run cannot and does not undo.
+
+    Cancellation and supersession terminate a run without claiming to reverse an
+    effect that already happened. The obligation records the exact effect
+    identity and logical outcome keys so BuilderOps reconciliation - not this
+    reducer - can resolve the live external state.
+    """
+
+    effect_class: EffectClass
+    effect_idempotency_key: NonEmptyStr
+    outcome_keys: tuple[NonEmptyStr, ...]
+    last_observed_outcome_state: EffectOutcomeState | None
+    reconciliation_owner: Literal[
+        "builderops_reconciliation"
+    ] = "builderops_reconciliation"
+
+    @model_validator(mode="after")
+    def _validate_obligation(self) -> OutstandingEffectObligation:
+        if not self.outcome_keys:
+            raise ValueError("outstanding effect obligation must carry outcome keys")
+        _require_unique(self.outcome_keys, "outstanding effect outcome keys")
+        if self.outcome_keys != tuple(sorted(self.outcome_keys)):
+            raise ValueError(
+                "outstanding effect outcome keys must use canonical sorted order"
+            )
+        return self
+
+
+class DeliveryReceiptV2(CanonicalDeliveryContract):
+    """Additive receipt binding acceptance and supersession identities.
+
+    v2 references delivered `DeliveryReceipt.v1` bytes by identity and hash and
+    never re-encodes or reinterprets them, so a v1 receipt parses identically
+    before and after this contract exists.
+    """
+
+    contract_family: ClassVar[str] = "receipt"
+    schema_version: Literal[
+        "builderops.delivery-receipt.v2"
+    ] = DELIVERY_RECEIPT_V2_VERSION
+    receipt_id: NonEmptyStr
+    run_id: NonEmptyStr
+    delivery_receipt_ref: ContractRef
+    acceptance_profile_ref: ContractRef
+    acceptance_profile_hash: Sha256
+    satisfied_evidence: tuple[AcceptanceEvidenceKind, ...]
+    terminal_outcome: Literal[
+        "delivered",
+        "partially_delivered",
+        "blocked",
+        "failed",
+        "cancelled",
+        "superseded",
+    ]
+    superseded_run_id: NonEmptyStr | None = None
+    superseding_initiation_ref: ContractRef | None = None
+    outstanding_effect_obligations: tuple[OutstandingEffectObligation, ...] = ()
+    provenance: Provenance
+
+    @model_validator(mode="after")
+    def _validate_receipt_v2(self) -> DeliveryReceiptV2:
+        if self.delivery_receipt_ref.schema_version != DELIVERY_RECEIPT_VERSION:
+            raise ValueError("receipt v2 must reference DeliveryReceipt.v1")
+        if (
+            self.acceptance_profile_ref.schema_version
+            != DELIVERY_ACCEPTANCE_PROFILE_VERSION
+        ):
+            raise ValueError("receipt v2 must bind DeliveryAcceptanceProfile.v1")
+        if self.acceptance_profile_ref.content_hash != self.acceptance_profile_hash:
+            raise ValueError(
+                "receipt v2 must repeat the exact acceptance profile hash"
+            )
+        _require_unique(self.satisfied_evidence, "receipt v2 satisfied evidence")
+        if self.satisfied_evidence != tuple(sorted(self.satisfied_evidence)):
+            raise ValueError(
+                "receipt v2 satisfied evidence must use canonical sorted order"
+            )
+        supersession_fields = (
+            self.superseded_run_id is not None,
+            self.superseding_initiation_ref is not None,
+        )
+        if (self.terminal_outcome == "superseded") != all(supersession_fields):
+            raise ValueError(
+                "only a superseded receipt carries both supersession identities"
+            )
+        if any(supersession_fields) and not all(supersession_fields):
+            raise ValueError("supersession identities must be recorded together")
+        if (
+            self.superseding_initiation_ref is not None
+            and self.superseding_initiation_ref.schema_version
+            != DELIVERY_INITIATION_VERSION
+        ):
+            raise ValueError(
+                "superseding initiation ref must bind DeliveryInitiation.v1"
+            )
+        if self.superseded_run_id is not None and self.superseded_run_id != self.run_id:
+            raise ValueError("superseded run identity must be this run")
+        _require_unique(
+            tuple(
+                item.effect_idempotency_key
+                for item in self.outstanding_effect_obligations
+            ),
+            "receipt v2 outstanding effect obligations",
+        )
+        if self.outstanding_effect_obligations != tuple(
+            sorted(
+                self.outstanding_effect_obligations,
+                key=lambda item: item.effect_idempotency_key,
+            )
+        ):
+            raise ValueError(
+                "receipt v2 outstanding obligations must use canonical sorted order"
+            )
+        if (
+            self.terminal_outcome == "delivered"
+            and self.outstanding_effect_obligations
+        ):
+            raise ValueError(
+                "a delivered receipt cannot carry unreconciled effect obligations"
+            )
+        return self
+
+
+_RECEIPT_V1_OUTCOME_FOR_V2: Final[dict[str, str]] = {
+    "delivered": "delivered",
+    "partially_delivered": "partially_delivered",
+    "blocked": "blocked",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "superseded": "cancelled",
+}
+
+
+def validate_delivery_receipt_v2_evidence(
+    receipt_v2: DeliveryReceiptV2,
+    *,
+    receipt: DeliveryReceipt,
+    acceptance_profile: DeliveryAcceptanceProfile,
+) -> DeliveryReceiptV2:
+    """Resolve a v2 receipt against the exact v1 receipt and acceptance profile."""
+
+    if receipt_v2.delivery_receipt_ref != _expected_ref(receipt, receipt.receipt_id):
+        raise ValueError("receipt v2 does not resolve the supplied v1 receipt")
+    if receipt_v2.acceptance_profile_ref != _expected_ref(
+        acceptance_profile, acceptance_profile.profile_id
+    ):
+        raise ValueError("receipt v2 does not resolve the supplied acceptance profile")
+    if receipt_v2.run_id != receipt.run_id:
+        raise ValueError("receipt v2 must bind the same run as its v1 receipt")
+    if _RECEIPT_V1_OUTCOME_FOR_V2[receipt_v2.terminal_outcome] != (
+        receipt.terminal_outcome
+    ):
+        raise ValueError(
+            "receipt v2 terminal outcome must agree with delivered v1 bytes"
+        )
+    if receipt_v2.terminal_outcome == "delivered" and not (
+        acceptance_profile.is_satisfied_by(frozenset(receipt_v2.satisfied_evidence))
+    ):
+        raise ValueError(
+            "delivered receipt v2 must satisfy every required acceptance evidence"
+        )
+    return receipt_v2
+
+
 DeliveryContract = (
     DeliveryInitiation
     | DeliveryPlan
@@ -3131,6 +3783,12 @@ DeliveryContract = (
     | StructuredWorkerResult
     | ReviewResult
     | DeliveryReceipt
+    | DeliveryAcceptanceProfile
+    | WorkerContextPack
+    | WorkerInvocation
+    | WorkerResultV2
+    | WorkerRuntimeObservation
+    | DeliveryReceiptV2
 )
 
 DELIVERY_CONTRACT_FAMILIES: dict[
@@ -3140,7 +3798,14 @@ DELIVERY_CONTRACT_FAMILIES: dict[
     "plan": (DeliveryPlan,),
     "reducer": (ReducerEvent, ReducerEffect),
     "structured_result": (StructuredWorkerResult, ReviewResult),
-    "receipt": (DeliveryReceipt,),
+    "receipt": (DeliveryReceipt, DeliveryReceiptV2),
+    "acceptance": (DeliveryAcceptanceProfile,),
+    "worker_runtime": (
+        WorkerContextPack,
+        WorkerInvocation,
+        WorkerResultV2,
+        WorkerRuntimeObservation,
+    ),
 }
 
 _CONTRACT_TYPES: dict[str, type[CanonicalDeliveryContract]] = {
@@ -3189,6 +3854,8 @@ def parse_delivery_contract(
 
 
 __all__ = [
+    "ACCEPTANCE_EVIDENCE_BY_EFFECT_OUTCOME",
+    "AcceptanceEvidenceKind",
     "ActorIdentity",
     "ApprovalEvidence",
     "AuthoritySnapshot",
@@ -3196,17 +3863,24 @@ __all__ = [
     "CheckEvidence",
     "ClosureEvidence",
     "ContractRef",
+    "DELIVERY_ACCEPTANCE_PROFILE_VERSION",
     "DELIVERY_CONTRACT_FAMILIES",
     "DELIVERY_INITIATION_VERSION",
     "DELIVERY_PLAN_VERSION",
+    "DELIVERY_RECEIPT_V2_VERSION",
     "DELIVERY_RECEIPT_VERSION",
+    "DeliveryAcceptanceProfile",
     "DeliveryBudget",
     "DeliveryContract",
     "DeliveryException",
     "DeliveryInitiation",
     "DeliveryPlan",
     "DeliveryReceipt",
+    "DeliveryReceiptV2",
     "DependencyWave",
+    "EffectClass",
+    "EffectOutcomeState",
+    "OutstandingEffectObligation",
     "ExpectedAuthorityState",
     "EffectOutcomeEvidence",
     "IssueDeliveryProof",
@@ -3229,7 +3903,17 @@ __all__ = [
     "StructuredWorkerResult",
     "TcdMetrics",
     "ValidationEvidence",
+    "WORKER_CONTEXT_PACK_VERSION",
+    "WORKER_INVOCATION_VERSION",
+    "WORKER_RESULT_V2_VERSION",
     "WORKER_RESULT_VERSION",
+    "WORKER_RUNTIME_OBSERVATION_VERSION",
+    "WorkerCarrierEnvelope",
+    "WorkerContextPack",
+    "WorkerInvocation",
+    "WorkerResultV2",
+    "WorkerRuntimeObservation",
+    "WorkerRuntimeState",
     "canonical_hash",
     "canonical_json",
     "delivery_event_id",
@@ -3238,10 +3922,16 @@ __all__ = [
     "delivery_effect_expected_outcome_keys",
     "delivery_effect_input_hash",
     "delivery_initiation_approval_hash",
+    "normalized_worker_delivery_result",
     "parse_delivery_contract",
     "resolve_current_authority",
     "validate_delivery_plan_evidence",
     "validate_delivery_receipt_evidence",
+    "validate_delivery_receipt_v2_evidence",
     "validate_reducer_effect_evidence",
     "validate_reducer_event_evidence",
+    "validate_worker_authority_chain",
+    "worker_conformance_key",
+    "worker_invocation_idempotency_key",
+    "worker_invocation_input_hash",
 ]
