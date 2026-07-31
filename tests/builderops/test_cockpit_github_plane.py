@@ -209,6 +209,9 @@ def test_live_keys_upgrade_rungs_and_surface_unsynced_threads(tmp_path: Path) ->
     assert rungs["ci_sha"]["class"] == "proven"
     assert head_sha[:12] in rungs["ci_sha"]["value"]
     assert "success" in rungs["ci_sha"]["value"]
+    # The card's out-link must follow the same live-only PR match the rung
+    # just claimed — not fall back to the plain issue URL (#4450 review).
+    assert item["links"] == [f"https://github.com/{REPO}/pull/55"]
 
     # PR #77 matches no dispatcher task by PR number or governing issue: it
     # must render as a card, not disappear.

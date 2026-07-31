@@ -14,6 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_registry_endpoint_and_page_served(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DISPATCHER_STATE_DIR", str(tmp_path / "dispatcher"))
     monkeypatch.setenv("COCKPIT_DEPLOY_RECEIPT_DIR", str(tmp_path / "deploys"))
+    # Force the live GitHub plane off: an ambient COCKPIT_GITHUB_REPO in the
+    # host/CI shell would otherwise make this "unit" test perform a real gh
+    # api network call (BOPS-COCKPIT-03, #4450).
+    monkeypatch.delenv("COCKPIT_GITHUB_REPO", raising=False)
 
     client = TestClient(app)
 

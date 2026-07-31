@@ -370,6 +370,33 @@ def _pr_number_from_linked(linked_pr: str | None) -> int | None:
         return None
 
 
+def _resolve_pr(
+    task: dict[str, Any],
+    github_snapshot: GithubLiveSnapshot | None,
+) -> tuple[int | None, Any | None]:
+    """Resolve the governing PR number and its live pull, one precedence rule.
+
+    Store-linked PR wins; otherwise a live governing-issue match. Both the
+    rung classification and the authority out-link must agree on this same
+    PR, or a card can render "PR #NN (live) proven" while its out-link still
+    points at the plain issue (the drift #4450 review caught).
+    """
+    issue_number = task.get("issue_number")
+    linked_pr = task.get("linked_pr")
+    pr_number = _pr_number_from_linked(linked_pr)
+    live_pull = None
+    if not linked_pr and (
+        github_snapshot is not None
+        and issue_number is not None
+        and (governing := github_snapshot.pulls_governing(int(issue_number)))
+    ):
+        live_pull = governing[0]
+        pr_number = live_pull.number
+    if live_pull is None and pr_number is not None and github_snapshot is not None:
+        live_pull = github_snapshot.pulls.get(pr_number)
+    return pr_number, live_pull
+
+
 def _rung(name: str, cls: str, value: str | None = None) -> dict[str, Any]:
     return {"name": name, "class": cls, "value": value}
 
@@ -407,23 +434,13 @@ def _build_rungs(
         rungs.append(_rung("slice", "absent"))
 
     linked_pr = task.get("linked_pr")
-    pr_number = _pr_number_from_linked(linked_pr)
-    live_pull = None
+    pr_number, live_pull = _resolve_pr(task, github_snapshot)
     if linked_pr:
         rungs.append(_rung("pr", "proven", f"PR #{linked_pr}"))
-    elif (
-        github_snapshot is not None
-        and issue_number is not None
-        and (governing := github_snapshot.pulls_governing(int(issue_number)))
-    ):
-        live_pull = governing[0]
-        pr_number = live_pull.number
-        rungs.append(_rung("pr", "proven", f"PR #{live_pull.number} (live)"))
+    elif live_pull is not None and pr_number is not None:
+        rungs.append(_rung("pr", "proven", f"PR #{pr_number} (live)"))
     else:
         rungs.append(_rung("pr", "absent"))
-
-    if live_pull is None and pr_number is not None and github_snapshot is not None:
-        live_pull = github_snapshot.pulls.get(pr_number)
 
     run = verification.get((repo, pr_number)) if pr_number is not None else None
     live_check_state = (
@@ -478,7 +495,10 @@ def _build_item(
     mirror_watermark = _sync_last_pull_at(task.get("sync_state"))
     issue_number = task.get("issue_number")
     linked_pr = task.get("linked_pr")
-    pr_number = _pr_number_from_linked(linked_pr)
+    # Same precedence _build_rungs uses for its "PR #NN (live) proven" rung —
+    # a card whose rung claims a live PR match must out-link to that same PR,
+    # not fall back to the plain issue (the drift #4450 review caught).
+    pr_number, _ = _resolve_pr(task, github_snapshot)
 
     # AC3 (#4450): every card carries its authority out-link from the live
     # GitHub read, independent of the sync mirror's `url` field (audit F9,

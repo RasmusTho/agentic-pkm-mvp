@@ -34,8 +34,8 @@ def _github_repo() -> str | None:
     """Repo slug for the live GitHub read (BOPS-COCKPIT-03, #4450).
 
     Unset by default: the source then refuses cleanly rather than guessing a
-    repo (see ``cockpit_registry._GITHUB_REPO_ENV``). An operator enables the
-    live plane by setting this alongside the host's ``gh`` auth.
+    repo. An operator enables the live plane by setting this alongside the
+    host's ``gh`` auth.
     """
     return os.environ.get("COCKPIT_GITHUB_REPO") or None
 
