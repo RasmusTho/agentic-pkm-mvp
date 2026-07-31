@@ -131,3 +131,51 @@ yet; `GITHUB_LIVE_PLANE.md` carries the AC.
 The mirror-cache posture (a fourth source-pill state, "read from mirror, not from the authority")
 belongs to the future ADR-0062 independent-service home and is out of v1. Enacted by
 `GITHUB_LIVE_PLANE.md`.
+
+## Addendum 2026-07-31 — opted-out is not the same claim as broken
+
+Found while extending `test_cockpit_journeys.py` for BOPS-COCKPIT-06 (#4453): the delivered
+increment's `state="unavailable"` collapses two different causes into one signal, and the collapse
+is currently live on every deployed cockpit, not hypothetical — no repo-committed deployment config
+sets `COCKPIT_GITHUB_REPO` anywhere, so `github-live`'s "unset by default" opt-in posture
+(`app/builderops/cockpit_github_plane.py`'s own docstring) is the permanent steady state on every
+host today, not an edge case.
+
+### EXT-8 — `configured` flag on per-source reads — ACCEPT cockpit-local; claim-banner warn scoped to it
+
+The two causes read identically today: (i) an optional plane was never turned on (a deliberate,
+permanent, calm baseline — `github-live` with `COCKPIT_GITHUB_REPO` unset) and (ii) a plane was
+turned on and a read failed (a real, current degradation). Both render `.src.dead` and both flip
+`app/web/static/cockpit.js`'s `anyDead` (`cockpit.js:363`) → the claim banner's amber `.warn` class,
+even though the claim text itself (`claim.kind`) is correctly scoped to `dispatcher-store` alone
+(`app/builderops/cockpit_registry.py:847-877`). The result: the surface's
+headline signal is permanently amber on every host, independent of whether the planes it actually
+depends on (dispatcher-store, verification-runs, deploy-receipts) are healthy — a standing false
+alarm, the mirror-image failure of the false calm EXT-4 exists to prevent. This is a distinct axis
+from EXT-3 (fresh/stale/unavailable is about read *age*; this is about *why* a source is
+unavailable) and does not reopen it.
+
+Decision: add `configured: bool` to `_SourceRead` (default `True`; `False` only for a plane that is
+explicitly optional-by-design and whose enabling config is absent — `github-live` today). The data
+already exists as free text in `fetch_github_live`'s `detail` field ("no repo configured" vs "read
+failed: ..."); this promotes it to a structured field the client can act on instead of parsing
+prose.
+
+- Pill: `state="unavailable" and configured=False` renders a calm, distinct treatment (not
+  `.src.dead`) — "not enabled," not "broken."
+- Claim banner: `anyDead` counts only `state="unavailable" and configured is not False` — an
+  unconfigured optional plane never contributes to the aggregate warning; a configured-but-failing
+  one still does, so a real current outage on an opted-in host is never silenced.
+- Required planes (`dispatcher-store`, `verification-runs`, `deploy-receipts`,
+  `docs-frontmatter` as actually deployed — its own injection point is technically optional but
+  every real caller always configures it) stay `configured=True` unconditionally; their
+  `unavailable` reading is never demoted.
+
+Every existing invariant survives unchanged: per-source pills never fabricate `fresh`; predicates
+that depend on `github-live`-owned facts still render as "not evaluated" regardless of cause
+(evaluability keys off `state`, not `configured`); the claim's `refused` (`.bad`) path is untouched.
+Only the false-positive amber on the aggregate banner is removed. Promotion to a shared
+design-system primitive is deferred with EXT-1..4's other cockpit-local states, same posture.
+
+Implementation tracked as #4481 (this ledger records the decision; it does not carry code). Decided
+under `AGENTS.md :: Agency default`, same posture as the rest of this ledger.
