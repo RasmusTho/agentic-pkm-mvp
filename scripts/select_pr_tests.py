@@ -15,6 +15,16 @@ ALWAYS_TARGETS = (
     # This test must run on every scoped PR: a deleting/renaming PR otherwise
     # filters its missing static target before pytest has a chance to detect it.
     STATIC_TARGET_COLLECTABILITY_FITNESS,
+    # The outbox producer gates are repo-wide AST censuses over app/, so the PR
+    # that breaks them is by definition a PR that adds or edits a producer —
+    # and every producer today lives in an OWNED subsystem (heimdal, watcher,
+    # api routes, panel, workers, services, receipts, knowledge_acquisition).
+    # A scoped selection therefore excluded exactly the PRs these gates exist
+    # to catch, and a new producer defaulting to the dropping path could merge
+    # with a green required check (#4214 D5). They are cheap — pure ast.parse
+    # over app/, no fixtures, seconds — so run them on every scoped PR.
+    "tests/architecture/test_outbox_producer_durability.py",
+    "tests/architecture/test_outbox_producer_idempotency.py",
 )
 
 PR_MARKER_EXPRESSION = (
