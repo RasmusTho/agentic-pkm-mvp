@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from app.config.database import RUNTIME_DATABASE_ENV_KEYS
 from app.watcher import vault_watcher
 
 pytestmark = pytest.mark.not_pg
@@ -79,11 +80,16 @@ def test_unqueued_tombstone_stays_reobservable_on_the_next_tick(
     seeded_vault: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The snapshot must retain a deletion no sink accepted, so it can retry."""
+    """The snapshot must retain a deletion no sink accepted, so it can retry.
+
+    The runtime NAMES a database (so a durable queue and a durable projection
+    exist and the tombstone is genuinely owed) while the explicit memory backend
+    makes the optional self-owned write skip — the configuration in which D3's
+    loss is real.
+    """
     vault, note, snapshot_path = seeded_vault
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured.example/app")
 
     time.sleep(0.01)
     note.unlink()
@@ -150,6 +156,103 @@ def test_queued_tombstone_still_advances_the_snapshot(
 
     second, _ = _tick(vault, snapshot_path)
     assert second["deleted"] == 0, "a reconciled deletion must not be re-reported"
+
+
+def test_retention_survives_a_bare_refresh_snapshot_from_outside_the_tick(
+    seeded_vault: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retention must be durable, not a local variable of the tick.
+
+    ``refresh_snapshot`` has callers outside ``run_watcher_tick`` —
+    ``app/runtime/runtime_loop.py``, ``app/cli/uat.py``,
+    ``app/cli/latency_harness.py`` — which construct their own ``VaultWatcher``
+    and call it with no arguments. Holding the retained set in the tick's local
+    scope let the very next bare call rescan disk (where the deleted note is
+    gone) and silently undo the retention, restoring the exact D3 loss.
+    """
+    vault, note, snapshot_path = seeded_vault
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
+
+    def _unavailable(*args: object, **kwargs: object) -> Any:
+        raise RuntimeError("required outbox unavailable")
+
+    monkeypatch.setattr(vault_watcher, "insert_object_and_outbox", _unavailable)
+
+    time.sleep(0.01)
+    note.unlink()
+    _tick(vault, snapshot_path)
+    assert "Concepts/D.md" in _snapshot(snapshot_path)
+
+    # Exactly what runtime_loop.run_once does after the tick.
+    vault_watcher.VaultWatcher(vault, snapshot_path=snapshot_path).refresh_snapshot()
+
+    assert "Concepts/D.md" in _snapshot(snapshot_path), (
+        "a bare refresh_snapshot() from outside the tick dropped the retained deletion"
+    )
+    second, _ = _tick(vault, snapshot_path)
+    assert second["deleted"] == 1, "the deletion must still be retryable"
+
+
+def test_a_reconciled_deletion_clears_the_durable_retention(
+    seeded_vault: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sidecar is authoritative per tick, so retention must not leak forever."""
+    vault, note, snapshot_path = seeded_vault
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
+    failing = {"now": True}
+
+    def _writer(*args: object, **kwargs: object) -> Any:
+        if failing["now"]:
+            raise RuntimeError("required outbox unavailable")
+        return "queued"
+
+    monkeypatch.setattr(vault_watcher, "insert_object_and_outbox", _writer)
+
+    time.sleep(0.01)
+    note.unlink()
+    _tick(vault, snapshot_path)
+    sidecar = vault_watcher.unreconciled_deletions_path(snapshot_path)
+    assert sidecar.exists() and "Concepts/D.md" in json.loads(sidecar.read_text(encoding="utf-8"))
+
+    failing["now"] = False
+    second, _ = _tick(vault, snapshot_path)
+
+    assert second["deleted_purged"] == 1
+    assert not sidecar.exists(), "a reconciled deletion must stop being retained"
+    assert "Concepts/D.md" not in _snapshot(snapshot_path)
+
+    third, _ = _tick(vault, snapshot_path)
+    assert third["deleted"] == 0, "the retention must terminate once reconciled"
+
+
+def test_a_runtime_naming_no_database_does_not_retain_forever(
+    seeded_vault: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No named database means no durable queue and no durable projection.
+
+    Nothing is owed and nothing will ever accept the tombstone, so retaining it
+    would re-report the same deletion on every tick forever.
+    """
+    vault, note, snapshot_path = seeded_vault
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    time.sleep(0.01)
+    note.unlink()
+    summary, _ = _tick(vault, snapshot_path)
+
+    assert summary["deleted_purged"] == 0, "no event was queued, so no purge may be counted"
+    assert "Concepts/D.md" not in _snapshot(snapshot_path)
+    assert not vault_watcher.unreconciled_deletions_path(snapshot_path).exists()
+
+    second, _ = _tick(vault, snapshot_path)
+    assert second["deleted"] == 0, "the deletion must not be re-reported forever"
 
 
 def test_rename_supersedes_the_tombstone_without_retaining_the_path(

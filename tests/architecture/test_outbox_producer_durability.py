@@ -45,7 +45,8 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "(durable_settings_write_receipt_exists reads it back); the DB row is a mirror"
     ),
     ("app/watcher/registry.py", "_process_panel_note"): (
-        "append_jsonl_outbox_event compensates unconditionally on the same path"
+        "_write_jsonl_event (append_jsonl_outbox_event) compensates unconditionally "
+        "on the same path"
     ),
     ("app/panel/confirmation.py", "_emit_projection_event"): (
         "JSONL is the declared primary sink and the caller raises "
@@ -75,23 +76,26 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "self-owned fallback taken only when open_outbox_txn_conn() returned None; "
         "the JSONL audit append above already recorded the dead letter"
     ),
-    # The Heimdal meeting family follows the same JSONL-first sink discipline
-    # capture.py established, and says so in its own docstrings: the
-    # append_jsonl_outbox_event to INDEX_OUTBOX_PATH runs unconditionally
-    # BEFORE the backend/DSN gate, and the `emitted` bool each caller gates its
-    # acknowledgement on is decided by that append, never by the DB write's
-    # return value.
+    # The Heimdal meeting family sets `emitted = True` on a normal return
+    # rather than on the returned row id, because its idempotency keys are
+    # derived from stable identity: a deduplicated "" there is proof the event
+    # was already committed by a prior attempt, so treating "" as failure would
+    # refuse the capture forever. That reading is only sound while a normal
+    # return cannot mean "skipped", so each of these guards its DB branch with
+    # `self_owned_write_would_skip()` — the policy itself, not a re-derived
+    # STORE_BACKEND/DSN predicate. The unconditional JSONL append above the
+    # guard is what survives a skip.
     ("app/api/routes/heimdal_meeting.py", "_emit_user_note_event"): (
-        "JSONL append to the shared note outbox path runs first and unconditionally; "
-        "the 500-vs-200 decision is made on that sink, not on the DB row"
+        "unconditional JSONL append survives a skip, and the DB branch runs only when "
+        "self_owned_write_would_skip() is False, so a normal return proves the row exists"
     ),
     ("app/heimdal/media_ingress.py", "_emit_admission_event"): (
-        "JSONL append runs first and unconditionally; the media receipt that acknowledges "
-        "the admission is written after, gated on that sink"
+        "unconditional JSONL append survives a skip, and the DB branch runs only when "
+        "self_owned_write_would_skip() is False, so a normal return proves the row exists"
     ),
     ("app/heimdal/meeting_finalization.py", "_emit_finalized_event"): (
-        "JSONL append runs first and unconditionally; the finalized-receipt ack ordering "
-        "is already satisfied by that sink"
+        "unconditional JSONL append survives a skip, and the DB branch runs only when "
+        "self_owned_write_would_skip() is False, so a normal return proves the row exists"
     ),
     ("app/heimdal/meeting_ledger.py", "_emit_late_admitted_event"): (
         "documented non-acknowledging emission: the segment ledger row is already "
@@ -142,7 +146,15 @@ def _unclassified_self_owned_producers() -> dict[tuple[str, str], list[int]]:
                 # entirely. A literal ``conn=None`` does NOT — that is a
                 # self-owned write spelled differently.
                 continue
-            if "required_db" in keywords:
+            required_db = keywords.get("required_db")
+            if required_db is not None and not (
+                isinstance(required_db, ast.Constant) and required_db.value is False
+            ):
+                # A resolved expression (`required_db=db_outbox_required()`) or
+                # a literal True is a real classification. A literal
+                # `required_db=False` is NOT — it re-states the risky default,
+                # so it still owes a reviewed allowlist reason rather than
+                # silently satisfying the gate.
                 continue
             key = (str(path.relative_to(APP_ROOT.parent)), _enclosing_function(node, parents))
             found.setdefault(key, []).append(node.lineno)

@@ -585,9 +585,13 @@ def _emit_finalized_event(payload: Dict[str, Any], *, trace_id: str) -> bool:
         )
     except Exception as exc:
         logger.warning("meeting finalized event jsonl write failed: %s", exc)
-    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
-    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
-    if backend == "pg" or db_url:
+    # Ask the outbox policy whether a self-owned write will actually connect,
+    # instead of re-deriving that from STORE_BACKEND/DATABASE_URL here (#4214
+    # D1). The local predicate was narrower than the connection's own resolver,
+    # and since the memory-mode skip branch landed a skipped write returns
+    # normally — which would make the `emitted = True` below report a finalized
+    # acknowledgement for an event no sink took.
+    if not outbox_service.self_owned_write_would_skip():
         outbox_evt = outbox_service.coerce_outbox_event(evt, default_source=_EVENT_SOURCE)
         if outbox_evt is not None:
             try:

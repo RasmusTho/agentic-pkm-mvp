@@ -233,7 +233,12 @@ def open_outbox_txn_conn():
     if not conn_rw:
         return None
     backend = (os.environ.get("STORE_BACKEND") or "").strip().lower()
-    if backend != "pg" and not (os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")):
+    # Resolved through the same helper the self-owned policy and conn_rw use
+    # (#4214 D1). Reading DATABASE_URL/DB_DSN directly was narrower than the
+    # connection: a runtime naming its database through PKM_DB_*/POSTGRES_*
+    # short-circuited to None here and silently degraded the worker's poison
+    # bookkeeping to the non-atomic per-call sequence #3930 exists to avoid.
+    if backend != "pg" and not _self_owned_database_is_named():
         return None
     try:
         return conn_rw()

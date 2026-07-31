@@ -434,11 +434,39 @@ tombstone is permanently unrecoverable. The emitter therefore reports its outcom
   counted and the snapshot moves on;
 - `"superseded_by_rename"` — no tombstone is owed, the identity is alive at a path this tick already
   re-ingested; the snapshot moves on;
-- `"not_queued"` — no sink took it. The purge is **not** counted and `refresh_snapshot(retain=...)`
-  re-adds the prior snapshot entry, so the next tick re-sees the deletion and retries.
+- `"no_durable_outbox"` — the runtime names no database at all (`explicit_runtime_database_url` is
+  `None`), so there is no durable queue to enqueue into and no durable projection to purge. Nothing
+  is owed and nothing will ever accept it: the purge is **not** counted, and the deletion is **not**
+  retained, because a retention that can never clear would re-report the same deletion forever;
+- `"not_queued"` — a database IS named, so the tombstone was owed, but no sink took it. The purge is
+  **not** counted and the deletion is retained so the next tick re-sees it and retries.
 
 A required enqueue that raises is caught by the reconciliation loop, counted as an error, and treated
 as `not_queued`.
+
+**The retention is durable, not a variable of the tick.** It lives in a sidecar beside the snapshot
+(`<snapshot>.unreconciled-deletions.json`), because `refresh_snapshot()` has callers outside
+`run_watcher_tick` — `app/runtime/runtime_loop.py`, `app/cli/uat.py`, `app/cli/latency_harness.py` —
+that construct their own `VaultWatcher` and call it with no arguments. A bare `refresh_snapshot()`
+rescans disk, where the deleted note is absent, and would otherwise silently undo the retention the
+tick just performed. `refresh_snapshot(retain=...)` is the tick speaking authoritatively and REPLACES
+the sidecar (so a reconciled deletion stops being retained); `refresh_snapshot()` honours the sidecar
+and leaves it unchanged.
+
+### Producers that read a normal return as a commit
+
+`write_outbox_event` returns `""` for both a skipped write and an ON CONFLICT no-op. A producer whose
+idempotency key is derived from stable identity may legitimately read `""` as *proof of a prior
+commit* — the Heimdal meeting family does, because treating a dedup as failure would refuse the same
+capture forever. That reading is only sound while a normal return cannot mean "skipped", so those
+producers guard their DB branch with `self_owned_write_would_skip()` rather than re-deriving a
+`STORE_BACKEND`/DSN predicate of their own (#4214). One consequence is explicit: under an explicit
+memory backend the DB outbox mirror does not run for them, and their unconditional JSONL append is
+the sink of record.
+
+Producers whose key is per-emission (`app/api/routes/capture.py`, `app/panel/confirmation.py`) take
+the other correct route — `emitted = emitted or bool(stored_id)` — where a skip simply leaves
+`emitted` unchanged.
 
 Contract regression coverage: `tests/services/test_outbox_memory_mode.py`,
 `tests/services/test_outbox_required_policy_callers.py`,

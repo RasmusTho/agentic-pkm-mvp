@@ -865,10 +865,28 @@ def test_committed_db_outbox_event_is_not_reread_as_uncommitted(
     `write_outbox_event` returns "" when its ON CONFLICT swallowed a duplicate.
     Because this lane's key is derived from the transfer identity (unlike the
     governed text capture's random event_id), treating "" as "not committed"
-    would refuse an already-committed capture forever. The DB sink branch is
-    reached by configuring a DSN while the stores stay on the memory backend.
+    would refuse an already-committed capture forever.
+
+    Reaching the DB sink branch takes one more fake than it used to. Since
+    #4064/#4203 the self-owned outbox policy SKIPS an optional write under an
+    explicit memory backend, so `STORE_BACKEND=memory` plus a DSN no longer
+    runs the write at all — and `_emit_admission_event` now refuses to read
+    that skip as a commit (#4214), because a `""` from a write that never ran
+    is not proof of anything. The receipt store stays memory-backed, so this
+    test keeps `STORE_BACKEND=memory` and instead states the runtime it is
+    simulating outright: a runtime where the self-owned write DOES connect.
+    That is the only configuration in which this test's claim — a derived-key
+    ON CONFLICT no-op is proof of commit — is meaningful.
+
+    The real skip behaviour is pinned separately by
+    `tests/heimdal/test_meeting_emitters_skip_reporting.py` and
+    `tests/services/test_outbox_memory_mode.py`. No real connection is opened
+    here; `write_outbox_event` is faked below.
     """
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://unused:unused@db.invalid:5432/none")
+    monkeypatch.setattr(
+        media_ingress.outbox_service, "self_owned_write_would_skip", lambda **_kwargs: False
+    )
 
     def conflict_noop(*_args: Any, **_kwargs: Any) -> str:
         return ""
