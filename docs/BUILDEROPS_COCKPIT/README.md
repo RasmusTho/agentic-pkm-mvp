@@ -34,8 +34,10 @@ pack is supporting input.
 
 ## What the delivered increment renders (#4438)
 
-- **Four bands in locked order plus a needs-you band**, derivation fail-closed (`STATUS_BAND` in
-  `app/builderops/cockpit_registry.py`): an unmapped status lands in the explicit `unclassified`
+- **Four bands in locked order plus a needs-you band**, derivation fail-closed. #4438 derived the
+  band from the dispatcher status word; BOPS-COCKPIT-04 (#4452) replaced that mapping with
+  **chain-position** derivation (`derive_position` in `app/builderops/cockpit_chain.py`) over the
+  joined planes: a thread whose position cannot be computed lands in the explicit `unclassified`
   list, never guessed. `agent:needs-human` routes to the needs-you band — label routing reads the
   sync mirror's `sync_state`, which production sync has populated with labels and URLs since #4441
   (=#4456, audit F9) merged; each mirror-derived field now names its own `sync_state.last_pull_at`
@@ -45,11 +47,24 @@ pack is supporting input.
   for DB-keyed or CI-forced edges). Intention, capability, epic, and tried render `absent` — their
   visible absence is the point.
 - **Per-source freshness** — pills with per-source `last_successful_read` for `dispatcher-store`,
-  `verification-runs` (SQLite read-only), `deploy-receipts`; unread planes named as unread.
+  `verification-runs` (SQLite read-only), `deploy-receipts`; unread planes named as unread. The
+  third pill state, **stale** (EXT-3), arrived with BOPS-COCKPIT-04 (#4452): a source whose own
+  watermark is older than `SOURCE_STALE_AFTER_DAYS` turns the rungs it backs amber and has the
+  counts it owns withdrawn rather than shown whole.
 - **Honest emptiness in three forms** — dated true emptiness; refused claims on dead sources
   ("cannot be counted", never zero); structural absence distinct from death.
 - **Two tiers in the done band** — "Ready for you to use" above "Tried by you" (empty by contract
   until INV-DG-7 has an owner-acceptance receipt contract).
+- **Flaw predicates with named evidence** (BOPS-COCKPIT-04, #4452) — deficiencies are derived
+  predicates over the joined planes, not an enumerated list: a blocked link, a dispatcher/GitHub
+  contradiction, an expired lease, red or absent CI on a PR head SHA, a pushed branch with no PR,
+  a delivery with no verification receipt, a stale epic with open children. Each carries its own
+  evidence keys; a predicate whose plane is not fresh is **named as unevaluated** in the flaws band
+  header rather than reading as "no flaw", and predicates needing a plane this capability never
+  reads (git working trees, session records, issue comments) are named as unread there too. A
+  thread holds one position band and additionally appears in the flaws band — one identity, no
+  copy drift. Within-band ordering is a four-tick reading signal only (EXT-7): it never crosses a
+  band, never hides a card, and is never a selection input (ADR-0057 A1).
 
 ## Implementation tasks and execution order
 
@@ -58,9 +73,9 @@ pack is supporting input.
 | 1 | [REGISTRY_READ_TIME_JOIN](REGISTRY_READ_TIME_JOIN.md) | BOPS-COCKPIT-01 | #4438 | Delivered |
 | 2 | [INDUCED_FAILURE_JOURNEYS](INDUCED_FAILURE_JOURNEYS.md) | BOPS-COCKPIT-02 | #4448 | Ready |
 | 2 (par) | [COGNITIVE_LOAD_SIBLING](COGNITIVE_LOAD_SIBLING.md) | BOPS-COCKPIT-07 | #4449 | Ready |
-| 3 | [GITHUB_LIVE_PLANE](GITHUB_LIVE_PLANE.md) | BOPS-COCKPIT-03 | #4450 | Ready |
-| 3 (par) | [DOCS_PLANE_CAPABILITY_LANES](DOCS_PLANE_CAPABILITY_LANES.md) | BOPS-COCKPIT-05 | #4451 | Ready |
-| 4 | [CHAIN_DERIVED_STATES](CHAIN_DERIVED_STATES.md) | BOPS-COCKPIT-04 | #4452 | Blocked on 03 |
+| 3 | [GITHUB_LIVE_PLANE](GITHUB_LIVE_PLANE.md) | BOPS-COCKPIT-03 | #4450 | Delivered |
+| 3 (par) | [DOCS_PLANE_CAPABILITY_LANES](DOCS_PLANE_CAPABILITY_LANES.md) | BOPS-COCKPIT-05 | #4451 | Delivered |
+| 4 | [CHAIN_DERIVED_STATES](CHAIN_DERIVED_STATES.md) | BOPS-COCKPIT-04 | #4452 | Delivered |
 | 5 | [SURFACE_LENSES](SURFACE_LENSES.md) | BOPS-COCKPIT-06 | #4453 | Blocked on 02+04+05 |
 
 Flat order: journeys and the docs sibling first (they harden and govern what exists), then the two

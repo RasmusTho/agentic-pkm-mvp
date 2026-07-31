@@ -60,13 +60,28 @@ def _band(payload: dict, key: str) -> dict:
 
 
 def test_band_derivation_fail_closed(tmp_path: Path) -> None:
+    """Fail-closed banding, restated over chain position (#4452).
+
+    #4438 shipped a dispatcher-status-word mapping; BOPS-COCKPIT-04 replaced it
+    with chain-position derivation, so the *band counts* below moved while
+    every honesty contract this test guards stayed put:
+
+    - a fresh unclaimed ``ready`` issue is **in progress**, not forgotten (the
+      register's first question includes the queue); forgotten now requires a
+      stall, proven separately in ``test_forgotten_needs_stall_not_age``;
+    - ``blocked`` is an open chain position that *carries* a flaw rather than
+      being a band of its own, so it appears in working **and** flawed;
+    - ``completed`` with no verification receipt stays delivered and gains the
+      ``delivered_without_verification_receipt`` flaw — gating the position on
+      the receipt would hide an unverified merge from the done band entirely.
+    """
     store, db_path = _make_store(tmp_path)
     store.upsert_task(_task(status="in_progress", issue_number=1, title="working"))
     store.upsert_task(_task(status="completed", issue_number=2, title="done"))
     store.upsert_task(
         _task(status="blocked", issue_number=3, title="flawed", blocked_reason="upstream")
     )
-    store.upsert_task(_task(status="ready", issue_number=4, title="forgotten"))
+    store.upsert_task(_task(status="ready", issue_number=4, title="fresh queue item"))
     store.upsert_task(
         _task(
             status="blocked",
@@ -79,11 +94,16 @@ def test_band_derivation_fail_closed(tmp_path: Path) -> None:
 
     payload = _registry(db_path, tmp_path)
 
+    # Band order stays locked — the contract #4452 must not weaken.
     assert [band["key"] for band in payload["bands"]] == [key for key, _ in BANDS]
-    assert _band(payload, "working")["count"] == 1
+    # in_progress (#1), blocked (#3) and the fresh ready item (#4) all hold an
+    # open chain position.
+    assert _band(payload, "working")["count"] == 3
     assert _band(payload, "done")["count"] == 1
-    assert _band(payload, "flawed")["count"] == 1
-    assert _band(payload, "forgotten")["count"] == 1
+    # Two threads carry a flaw: #3 (blocked) and #2 (delivered, no receipt).
+    assert _band(payload, "flawed")["count"] == 2
+    # Nothing has stalled: no card is forgotten on age it does not have.
+    assert _band(payload, "forgotten")["count"] == 0
     # The needs-human label routes to the needs-you band even from a mapped status.
     assert _band(payload, "needs_you")["count"] == 1
     # The unknown status is listed, never guessed into a band.
@@ -91,8 +111,13 @@ def test_band_derivation_fail_closed(tmp_path: Path) -> None:
     assert payload["unclassified"][0]["status"] == "mystery_status"
     all_items = [item for band in payload["bands"] for item in band["items"]]
     assert all(item["status"] != "mystery_status" for item in all_items)
-    # The flawed item carries the gate's own wording.
-    flawed_item = _band(payload, "flawed")["items"][0]
+    # The claim counts distinct threads, not band memberships: the two
+    # dual-banded threads are each one thread, never two.
+    assert payload["claim"]["text"].startswith("5 threads in motion")
+    # The flawed item carries the gate's own wording — the predicate's phrasing.
+    flawed_item = next(
+        item for item in _band(payload, "flawed")["items"] if item["issue_number"] == 3
+    )
     assert flawed_item["why_now"] == "blocked: upstream"
 
 

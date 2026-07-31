@@ -7,15 +7,20 @@ nothing survives a reload.
 
 Honesty rules this module enforces (owner doc: docs/BUILDEROPS_COCKPIT/README.md):
 
-- Band derivation is fail-closed: a task whose status has no band mapping lands
-  in ``unclassified``, never silently in a band.
+- Band derivation is fail-closed: a thread whose **chain position** cannot be
+  computed lands in ``unclassified``, never silently in a band
+  (BOPS-COCKPIT-04, #4452 — this replaced the earlier status-word mapping).
 - A view that cannot name per-source freshness must not claim emptiness: when a
   source read fails, the claim is refused and bands owned by that source report
-  ``countable: false`` instead of zero.
+  ``countable: false`` instead of zero. A source that is readable but *stale*
+  turns its dependent rungs amber and has the counts it owns withdrawn.
 - Evidence rungs classify by key class, not content quality: only DB-keyed or
   CI-forced edges are ``proven``. Rungs with no machine-readable object in v1
   (intention, capability, epic, tried-by-owner) render ``absent`` — visible
   absence is the point.
+- One identity, many appearances: a thread holds exactly one position band and
+  additionally appears in the flaws band when a predicate fires. The flaws band
+  holds the same object, never a copy.
 """
 
 from __future__ import annotations
@@ -27,6 +32,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.builderops.cockpit_chain import (
+    RUNG_SOURCE,
+    SOURCE_STALE_AFTER_DAYS,
+    TRIED_TIER_REASON,
+    ThreadContext,
+    amber_if_stale,
+    derive_position,
+    evaluable_predicates,
+    evaluate_flaws,
+    flaws_band_header,
+    order_within_band,
+    risk_meter,
+    stale_source_names,
+    why_now,
+)
 from app.builderops.cockpit_docs_plane import (
     DocsPlaneSnapshot,
     build_lanes,
@@ -45,7 +65,6 @@ from app.builderops.cockpit_github_plane import (
 __all__ = [
     "BANDS",
     "RUNG_ORDER",
-    "STATUS_BAND",
     "UNREAD_PLANES",
     "build_registry",
 ]
@@ -60,19 +79,12 @@ BANDS: tuple[tuple[str, str], ...] = (
     ("needs_you", "Needs you"),
 )
 
-# Dispatcher status -> band. Fail-closed: anything absent from this table is
-# reported as unclassified, never guessed into a band.
-STATUS_BAND: dict[str, str] = {
-    "claimed": "working",
-    "in_progress": "working",
-    "review": "working",
-    "completed": "done",
-    "done": "done",
-    "blocked": "flawed",
-    "backlog": "forgotten",
-    "ready": "forgotten",
-}
-
+# Band membership is derived in `app/builderops/cockpit_chain.py` from the
+# thread's *chain position*, not from its dispatcher status word
+# (BOPS-COCKPIT-04, #4452). The status word is one input among several
+# (movement timestamps, lease expiry, live PR existence); the mapping table
+# that used to live here is gone, because "ready" is not "forgotten" — a fresh
+# unclaimed ready issue is in progress, and forgotten requires a stall.
 _NEEDS_HUMAN_LABEL = "agent:needs-human"
 
 # Locked rung order for the evidence spine.
@@ -93,9 +105,16 @@ RUNG_ORDER: tuple[str, ...] = (
 # (#4451): both are now named, per-render read sources. ckm-projection stays
 # unread by design (ADR-0057: CKM is a lens, never spine — it must never
 # become a fourth join input here).
+# BOPS-COCKPIT-04 (#4452) names two further planes it does not read, because
+# each carries a deficiency predicate the flaws band would otherwise appear to
+# cover: session records and issue comments (see
+# `cockpit_chain.UNREAD_FLAW_PREDICATES`, which names the predicate each one
+# blocks).
 UNREAD_PLANES: tuple[str, ...] = (
     "ckm-projection",
     "git",
+    "session-records",
+    "issue-comments",
 )
 
 _DEPLOY_CHANNELS: tuple[str, ...] = ("dev", "test", "prod")
@@ -107,8 +126,13 @@ def _utc_now() -> str:
 
 @dataclass
 class _SourceRead:
+    # "stale" is the third pill state EXT-3 accepted and #4452 enacts: a
+    # readable source whose own watermark is older than
+    # SOURCE_STALE_AFTER_DAYS. It is applied after every read completes (see
+    # `stale_source_names`), and never rewrites `last_successful_read` — the
+    # pill must keep naming the instant it actually read.
     name: str
-    state: str  # "fresh" | "empty" | "unavailable"
+    state: str  # "fresh" | "stale" | "empty" | "unavailable"
     last_successful_read: str | None
     detail: str
 
@@ -118,6 +142,7 @@ class _SourceRead:
             "state": self.state,
             "last_successful_read": self.last_successful_read,
             "detail": self.detail,
+            "stale_after_days": SOURCE_STALE_AFTER_DAYS,
         }
 
 
@@ -160,9 +185,14 @@ def _read_tasks(db_path: Path, sources: _Sources) -> list[dict[str, Any]] | None
         return None
     try:
         with _read_only_connection(db_path) as conn:
+            # lease_id / last_heartbeat_at joined in by BOPS-COCKPIT-04
+            # (#4452): the expired-lease flaw predicate needs the lease's own
+            # id as evidence, and the forgotten stall test needs the heartbeat
+            # as a second movement timestamp alongside updated_at.
             rows = conn.execute(
                 "SELECT task_id, issue_number, title, status, priority, repo,"
-                " claimed_by, lease_expires_at, linked_pr, blocked_reason,"
+                " claimed_by, lease_id, lease_expires_at, last_heartbeat_at,"
+                " linked_pr, blocked_reason,"
                 " sync_state, created_at, updated_at"
                 " FROM dispatcher_tasks WHERE status != '_meta'"
                 " ORDER BY updated_at DESC, created_at DESC"
@@ -454,6 +484,7 @@ def _build_rungs(
     verification: dict[tuple[str, int], dict[str, Any]],
     github_snapshot: GithubLiveSnapshot | None = None,
     docs_snapshot: DocsPlaneSnapshot | None = None,
+    stale_sources: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Classify the eight rungs for one task.
 
@@ -473,27 +504,52 @@ def _build_rungs(
     and this function behaves exactly as it did before #4450 — refusal never
     fabricates an upgrade. The same posture applies to ``docs_snapshot`` for
     the ``capability``/``epic`` rungs.
+
+    BOPS-COCKPIT-04 (#4452): ``stale_sources`` names sources that read
+    successfully but whose watermark is older than the staleness threshold.
+    Every rung is ambered against *the source that actually produced its
+    value* — a ``pr`` rung proven from the dispatcher store's own
+    ``linked_pr`` is not ambered by a stale live-GitHub read, and vice versa.
+    The downgrade is one-directional: ``absent`` never becomes anything else.
     """
     issue_number = task.get("issue_number")
     capability = classify_capability(issue_number, docs_snapshot)
     epic = classify_epic(issue_number, docs_snapshot)
     rungs: list[dict[str, Any]] = [
         _rung("intention", "absent"),
-        capability["rung"],
-        epic["rung"],
+        amber_if_stale(capability["rung"], RUNG_SOURCE["capability"], stale_sources),
+        amber_if_stale(epic["rung"], RUNG_SOURCE["epic"], stale_sources),
     ]
     repo = task.get("repo") or ""
     if issue_number:
-        rungs.append(_rung("slice", "proven", f"{repo}#{issue_number}"))
+        rungs.append(
+            amber_if_stale(
+                _rung("slice", "proven", f"{repo}#{issue_number}"),
+                RUNG_SOURCE["slice"],
+                stale_sources,
+            )
+        )
     else:
         rungs.append(_rung("slice", "absent"))
 
     linked_pr = task.get("linked_pr")
     pr_number, live_pull = _resolve_pr(task, github_snapshot)
     if linked_pr:
-        rungs.append(_rung("pr", "proven", f"PR #{linked_pr}"))
+        rungs.append(
+            amber_if_stale(
+                _rung("pr", "proven", f"PR #{linked_pr}"),
+                "dispatcher-store",
+                stale_sources,
+            )
+        )
     elif live_pull is not None and pr_number is not None:
-        rungs.append(_rung("pr", "proven", f"PR #{pr_number} (live)"))
+        rungs.append(
+            amber_if_stale(
+                _rung("pr", "proven", f"PR #{pr_number} (live)"),
+                "github-live",
+                stale_sources,
+            )
+        )
     else:
         rungs.append(_rung("pr", "absent"))
 
@@ -504,13 +560,23 @@ def _build_rungs(
         else None
     )
     if run and run.get("verified_head_sha"):
-        rungs.append(_rung("ci_sha", "proven", str(run["verified_head_sha"])[:12]))
+        rungs.append(
+            amber_if_stale(
+                _rung("ci_sha", "proven", str(run["verified_head_sha"])[:12]),
+                "verification-runs",
+                stale_sources,
+            )
+        )
     elif live_check_state and live_pull is not None:
         rungs.append(
-            _rung(
-                "ci_sha",
-                "proven",
-                f"{live_pull.head_sha[:12]} ({live_check_state}, live)",
+            amber_if_stale(
+                _rung(
+                    "ci_sha",
+                    "proven",
+                    f"{live_pull.head_sha[:12]} ({live_check_state}, live)",
+                ),
+                "github-live",
+                stale_sources,
             )
         )
     elif run:
@@ -519,7 +585,13 @@ def _build_rungs(
         rungs.append(_rung("ci_sha", "absent"))
 
     if run and run.get("terminal_receipt_json"):
-        rungs.append(_rung("receipt", "proven", str(run.get("updated_at") or "")))
+        rungs.append(
+            amber_if_stale(
+                _rung("receipt", "proven", str(run.get("updated_at") or "")),
+                RUNG_SOURCE["receipt"],
+                stale_sources,
+            )
+        )
     else:
         rungs.append(_rung("receipt", "absent"))
 
@@ -527,24 +599,16 @@ def _build_rungs(
     return rungs
 
 
-def _why_now(task: dict[str, Any], band: str) -> str:
-    """The gate's own wording, not a score."""
-    status = task.get("status") or "?"
-    if band == "flawed" and task.get("blocked_reason"):
-        return f"blocked: {task['blocked_reason']}"
-    if band == "working" and task.get("claimed_by"):
-        return f"{status} · claimed by {task['claimed_by']}"
-    if band == "forgotten":
-        return f"{status} since {task.get('updated_at') or 'unknown'}"
-    return status
-
-
 def _build_item(
     task: dict[str, Any],
     band: str,
+    position: Any,
     verification: dict[tuple[str, int], dict[str, Any]],
     github_snapshot: GithubLiveSnapshot | None = None,
     docs_snapshot: DocsPlaneSnapshot | None = None,
+    stale_sources: frozenset[str] = frozenset(),
+    evaluated_predicates: list[str] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     labels = _sync_labels(task.get("sync_state"))
     mirror_url = _sync_url(task.get("sync_state"))
@@ -554,7 +618,32 @@ def _build_item(
     # Same precedence _build_rungs uses for its "PR #NN (live) proven" rung —
     # a card whose rung claims a live PR match must out-link to that same PR,
     # not fall back to the plain issue (the drift #4450 review caught).
-    pr_number, _ = _resolve_pr(task, github_snapshot)
+    pr_number, live_pull = _resolve_pr(task, github_snapshot)
+
+    # BOPS-COCKPIT-04 (#4452): deficiency predicates over the joined planes.
+    # Every predicate is a pure function of already-fetched snapshots, so no
+    # predicate can perform I/O, fail a read, or raise past this call.
+    repo = task.get("repo") or ""
+    flaws = evaluate_flaws(
+        ThreadContext(
+            task=task,
+            repo=repo,
+            issue_number=issue_number,
+            position=position.position,
+            pr_number=pr_number,
+            live_pull=live_pull,
+            verification_run=(
+                verification.get((repo, pr_number)) if pr_number is not None else None
+            ),
+            github_snapshot=github_snapshot,
+            docs_snapshot=docs_snapshot,
+            now=now or datetime.now(timezone.utc),
+        ),
+        evaluated_predicates or [],
+    )
+    # The bands this one identity appears in: its position band always, plus
+    # the flaws band when a predicate fired. Same object, never a copy.
+    appears_in = [band] + (["flawed"] if flaws else [])
 
     # AC3 (#4450): every card carries its authority out-link from the live
     # GitHub read, independent of the sync mirror's `url` field (audit F9,
@@ -602,11 +691,24 @@ def _build_item(
         # watermark here, never the dispatcher-store SQLite read instant the
         # `dispatcher-store` source pill reports.
         "mirror_watermark": mirror_watermark,
-        "why_now": _why_now(task, band),
+        "why_now": why_now(task, position, band, flaws, evaluated_predicates),
         "links": links,
-        "rungs": _build_rungs(task, verification, github_snapshot, docs_snapshot),
+        "rungs": _build_rungs(
+            task, verification, github_snapshot, docs_snapshot, stale_sources
+        ),
         "sources": sources,
         "capability_lane": capability_lane,
+        # Chain position (#4452): the derived position and the evidence that
+        # produced it, so the card can state *why* it sits where it sits.
+        "chain_position": position.position,
+        "position_evidence": position.evidence,
+        # Populated only when the position is unresolvable (e.g. a
+        # needs_you-labelled thread whose fail-closed position could not
+        # be derived) — the card's own stated reason, not just a null.
+        "position_unresolved_reason": position.unresolved_reason,
+        "bands": appears_in,
+        "flaws": flaws,
+        "risk_meter": risk_meter(flaws),
         "updated_at": task.get("updated_at"),
     }
 
@@ -725,6 +827,18 @@ def build_registry(
         docs_root, capabilities_yaml_path, matrix_path, sources
     )
 
+    now = datetime.now(timezone.utc)
+    # EXT-3's third pill state, enacted (#4452): flip readable-but-old sources
+    # to "stale" before anything reads their state. Everything downstream —
+    # rung colour, count withdrawal, predicate evaluability — keys off the
+    # post-flip state, so a stale source degrades consistently everywhere
+    # instead of ambering one surface and staying calm on another.
+    stale_sources = stale_source_names(sources.reads, now=now)
+    source_state = {read.name: read.state for read in sources.reads}
+    # A predicate whose plane is not fresh is not evaluated at all: never
+    # fired on absent evidence, never silently dropped. The header names it.
+    evaluated_predicates, not_evaluated_predicates = evaluable_predicates(source_state)
+
     generated_at = _utc_now()
     bands: list[dict[str, Any]] = []
     unclassified: list[dict[str, Any]] = []
@@ -734,15 +848,27 @@ def build_registry(
         # The band counts are owned by the dispatcher store. Without it the
         # only honest claim is a refusal — "cannot be counted", never zero.
         for key, question in BANDS:
-            bands.append(
-                {
-                    "key": key,
-                    "question": question,
-                    "countable": False,
-                    "count": None,
+            refused_band: dict[str, Any] = {
+                "key": key,
+                "question": question,
+                "countable": False,
+                "count": None,
+                "items": [],
+            }
+            # The flaws header and the tried tier are structural, not counts:
+            # they must still say what is unread and what is reserved even
+            # when nothing can be counted at all.
+            if key == "flawed":
+                refused_band["header"] = flaws_band_header(
+                    evaluated_predicates, not_evaluated_predicates
+                )
+            if key == "done":
+                refused_band["tried_tier"] = {
                     "items": [],
+                    "reserved": True,
+                    "reason": TRIED_TIER_REASON,
                 }
-            )
+            bands.append(refused_band)
         claim = {
             "kind": "refused",
             "text": "I cannot say what is in motion: the dispatcher store"
@@ -753,35 +879,101 @@ def build_registry(
         grouped: dict[str, list[dict[str, Any]]] = {key: [] for key, _ in BANDS}
         for task in tasks:
             status = str(task.get("status") or "")
-            labels = _sync_labels(task.get("sync_state"))
-            if _NEEDS_HUMAN_LABEL in labels:
-                band = "needs_you"
-            elif status in STATUS_BAND:
-                band = STATUS_BAND[status]
-            else:
+            try:
+                labels = _sync_labels(task.get("sync_state"))
+                _, live_pull = _resolve_pr(task, github_snapshot)
+                position = derive_position(task, now=now, live_pull=live_pull)
+                if _NEEDS_HUMAN_LABEL in labels:
+                    # An explicit human-routing label is the owner's own
+                    # authority speaking, not a derived claim, so it is not
+                    # subject to the fail-closed position rule: it routes
+                    # even when the chain position itself is unresolvable
+                    # (the card still carries `chain_position: null` and
+                    # its reason).
+                    band = "needs_you"
+                elif position.band is not None:
+                    band = position.band
+                else:
+                    unclassified.append(
+                        {
+                            "id": task["task_id"],
+                            "title": task.get("title"),
+                            "status": status,
+                            "reason": position.unresolved_reason
+                            or f"status {status!r} has no chain position",
+                        }
+                    )
+                    continue
+                item = _build_item(
+                    task,
+                    band,
+                    position,
+                    verification,
+                    github_snapshot,
+                    docs_snapshot,
+                    stale_sources,
+                    evaluated_predicates,
+                    now,
+                )
+            except Exception as exc:  # noqa: BLE001 - one thread's derivation
+                # failure must never crash the whole render (the #4451-class
+                # bug this exact pattern exists to prevent, applied per task
+                # rather than per source): the thread renders as explicitly
+                # unclassified instead of taking bands/tasks/everything down.
                 unclassified.append(
                     {
-                        "id": task["task_id"],
+                        "id": task.get("task_id"),
                         "title": task.get("title"),
                         "status": status,
-                        "reason": f"status {status!r} has no band mapping",
+                        "reason": f"chain-position derivation failed: {exc}",
                     }
                 )
                 continue
-            item = _build_item(task, band, verification, github_snapshot, docs_snapshot)
             grouped[band].append(item)
+            # The flaws band is cross-cutting: a thread holds one position
+            # band and additionally appears here when a predicate fired. The
+            # *same object* goes in both lists — one identity, no copy drift.
+            if item["flaws"] and band != "flawed":
+                grouped["flawed"].append(item)
             all_items.append(item)
+        # The band counts are owned by the dispatcher store, and the staleness
+        # rule deliberately does not reach them: `_read_tasks` stamps its
+        # watermark at the instant it reads, so `dispatcher-store` is either
+        # fresh or unavailable and can never be stale. That matters beyond
+        # bookkeeping — `countable: false` already means "no cards either" to
+        # the delivered surface (`app/web/static/cockpit.js` renders no body
+        # for an uncountable band), so emitting an uncountable band that still
+        # carries items would hide cards, which is exactly what "withdraw the
+        # count, never the card" forbids. Withdrawal therefore applies only to
+        # counts owned by sources with a non-instant watermark: the docs
+        # plane's lane grouping and the github-live facts.
         for key, question in BANDS:
-            bands.append(
-                {
-                    "key": key,
-                    "question": question,
-                    "countable": True,
-                    "count": len(grouped[key]),
-                    "items": grouped[key],
+            band_payload: dict[str, Any] = {
+                "key": key,
+                "question": question,
+                "countable": True,
+                "count": len(grouped[key]),
+                # EXT-7: ordering applies strictly within this band's own item
+                # list, so it structurally cannot move a card across bands.
+                "items": order_within_band(grouped[key]),
+            }
+            if key == "flawed":
+                band_payload["header"] = flaws_band_header(
+                    evaluated_predicates, not_evaluated_predicates
+                )
+            if key == "done":
+                # EXT-2 / decision Q3: the tried tier renders, is empty, and
+                # says why. Delivered-never-tried is visible here as absence,
+                # never as a red mark in the flaws band.
+                band_payload["tried_tier"] = {
+                    "items": [],
+                    "reserved": True,
+                    "reason": TRIED_TIER_REASON,
                 }
-            )
-        total = sum(len(items) for items in grouped.values())
+            bands.append(band_payload)
+        # Distinct threads, not the sum of band memberships: a thread in both
+        # its position band and the flaws band is one thread, counted once.
+        total = len(all_items)
         if total == 0 and not unclassified:
             claim = {
                 "kind": "counted",
@@ -803,7 +995,28 @@ def build_registry(
     # (tasks is None) — in which case all_items is an artifact of nothing
     # being known, not a true empty set, so lanes must refuse too rather
     # than calmly reporting "0 lanes" next to the bands' own refusal above.
-    lanes = build_lanes(all_items, docs_snapshot) if tasks is not None else None
+    #
+    # #4452 adds a third: the docs plane read fine but is *stale*, so the lane
+    # grouping it owns is withdrawn rather than shown whole (EXT-3's stale-
+    # source rule). The lane cards themselves are not hidden — they simply
+    # stop being counted, which is what "withdraw the numbers that source
+    # owns" means.
+    lanes = (
+        build_lanes(all_items, docs_snapshot)
+        if tasks is not None and "docs-frontmatter" not in stale_sources
+        else None
+    )
+
+    # Only counts owned by a source that can actually go stale appear here —
+    # see the band-count comment above for why `dispatcher-store` is absent.
+    withdrawn_counts = [
+        {"source": name, "counts": counts}
+        for name, counts in (
+            ("github-live", ["github.open_issues", "github.open_prs", "github.branches"]),
+            ("docs-frontmatter", ["capability_lanes.lanes"]),
+        )
+        if name in stale_sources
+    ]
 
     return {
         "authority": "read_time_join",
@@ -818,4 +1031,19 @@ def build_registry(
         "unsynced_threads": _build_unsynced_threads(tasks, github_snapshot),
         "capability_lanes": {"countable": lanes is not None, "lanes": lanes},
         "docs_only_threads": unlinked_docs_threads(docs_snapshot),
+        # The counts a stale source no longer backs. Named so the withdrawal
+        # is visible on the surface instead of looking like a quiet zero.
+        "withdrawn_counts": withdrawn_counts,
+        # EXT-7's binding constraint, stated in the payload so a frontend
+        # cannot reinterpret the risk meter as a ranking (ADR-0057 A1).
+        "within_band_ordering": {
+            "applied": True,
+            "basis": "count of fired flaw predicates, capped at four ticks",
+            "never": [
+                "reordering across bands",
+                "hiding, capping, or demoting a card",
+                "selection, ranking, or filtering (ADR-0057 A1: a risk number"
+                " is a signal to read, never a selection input)",
+            ],
+        },
     }
