@@ -441,9 +441,13 @@ def _emit_user_note_event(payload: Dict[str, Any], *, trace_id: str) -> bool:
         )
     except Exception as exc:
         logger.warning("user-note event jsonl write failed trace_id=%s err=%s", trace_id, exc)
-    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
-    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
-    if backend == "pg" or db_url:
+    # Ask the outbox policy whether a self-owned write will actually connect,
+    # instead of re-deriving that from STORE_BACKEND/DATABASE_URL here (#4214
+    # D1). Two reasons: the local predicate was narrower than the connection's
+    # own resolver, and — since the memory-mode skip branch landed — a write
+    # that skips returns normally, so `emitted = True` below would report
+    # success for an event no sink took (#4214 D2/D3 failure class).
+    if not outbox_service.self_owned_write_would_skip():
         outbox_evt = outbox_service.coerce_outbox_event(
             evt, default_source="heimdal.meeting.blocks"
         )

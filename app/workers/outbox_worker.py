@@ -1405,6 +1405,7 @@ def _queue_transient_retry(
                     _original_event_id(payload, original_event_id) or str(note_path),
                     f"retry:{retry_count + 1}:{reason}",
                 ),
+                required_db=True,
             )
         else:
             append_jsonl_outbox_event(_outbox_audit_path(), retry_event, default_source="worker")

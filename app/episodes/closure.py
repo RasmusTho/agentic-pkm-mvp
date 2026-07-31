@@ -330,7 +330,11 @@ def close_episode(
     # the LAST write. A crash after the outbox insert but before the projection sync still leaves
     # this episode selectable on the next tick, which retries the (now-deduped) outbox write and
     # completes the projection sync -- the durable retry path outbox-first-then-gate requires.
-    inserted_id = write_outbox_event(event, idempotency_key=idempotency_key)
+    inserted_id = write_outbox_event(
+        event,
+        idempotency_key=idempotency_key,
+        required_db=True,
+    )
     _sync_projection_closed(candidate.episode_id)
     return EpisodeCloseResult(episode_id=candidate.episode_id, event_emitted=bool(inserted_id))
 

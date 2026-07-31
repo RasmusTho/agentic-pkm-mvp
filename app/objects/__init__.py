@@ -139,6 +139,7 @@ class ObjectStore:
                 object_id=obj.uuid,
                 source="object_store",
                 observation=payload_fingerprint(obj.payload),
+                required_db=True,
             )
         # Do not mirror durable state in-process: transactional producers can
         # commit through another connection, so a process-local cache cannot be

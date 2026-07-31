@@ -8,8 +8,10 @@ import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from app.agents.panel.agent import handle_note_update
+from app.config.database import runtime_database_is_named
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block, upsert_executed_ids
 from app.agents.panel_agent.policy import (
@@ -29,8 +31,9 @@ from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_note_text_with_version
 from app.knowledge.write_ops import write_note_from_absolute
-from app.services.outbox import insert_object_and_outbox
+from app.services.outbox import insert_object_and_outbox, self_owned_write_would_skip
 from app.services.vault_sync import delete_note
+from app.watcher.registry import db_outbox_required
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.objects import ObjectStore, canonical_event_identity, resolve_canonical_object_id
@@ -341,13 +344,16 @@ class VaultWatcher:
         return current
 
 
+_DeleteReconciliation = Literal["emitted", "superseded_by_rename", "not_queued"]
+
+
 def _emit_watcher_delete_event(
     deleted_path: Path,
     *,
     rel_deleted: Path,
     vault_root: Path,
     observed_mtime: float | None,
-) -> bool:
+) -> _DeleteReconciliation:
     """Emit the deletion tombstone for a note vault_sync.delete_note could
     not identify (no file_state row -- i.e. a note ingested only through the
     tick's vault-alpha path, which keys store rows by note uuid).
@@ -370,7 +376,46 @@ def _emit_watcher_delete_event(
     source_ref, and the tick's vector upsert for the same uuid is
     synchronous with no follow-up created-event, so an async purge here
     would wipe the freshly re-ingested vectors with nothing to restore
-    them. Returns ``True`` when the tombstone was emitted.
+    them.
+
+    Durability (#4214 D3): this path has no compensating JSONL sink, and its
+    caller both increments ``deleted_purged`` and lets ``refresh_snapshot()``
+    drop the path — so a *silent* skip here is permanent and unrecoverable (the
+    note is gone from disk AND from the snapshot, the purge event never
+    existed, and the deleted content stays indexed). Two things follow.
+
+    **The write is required whenever a database is named.** ``required_db`` is
+    the watcher's own required-delivery intent OR ``runtime_database_is_named``,
+    so a runtime with an explicit DSN keeps the delivery semantics it has on
+    ``main`` — the enqueue is attempted and an unreachable database raises
+    loudly — instead of being silently skipped by the optional-write policy
+    under ``STORE_BACKEND=memory``. #4214's constraint is explicit that a
+    properly configured runtime (``STORE_BACKEND=pg`` *or an explicit DSN*)
+    must not change delivery semantics. This also makes every outcome
+    terminal: named+reachable commits, named+unreachable raises once and is
+    recorded as an error, and an unnamed runtime has no durable queue and no
+    durable projection, so nothing is owed.
+
+    **The outcome is reported explicitly** rather than as a bare bool, so the
+    caller cannot read a skip as a purge. Note these are strings — ``"not_queued"``
+    is truthy — so a caller must compare, never test truthiness:
+
+    - ``"emitted"`` — the tombstone reached the outbox (or deduped against an
+      identical one already there); the caller may count the purge;
+    - ``"superseded_by_rename"`` — no tombstone is owed, the identity is alive
+      at a new path (the rename case above);
+    - ``"not_queued"`` — the runtime names no database, so the optional write
+      skipped and no event exists. The caller must NOT count a purge.
+
+    A required enqueue that fails raises; the caller records it as an error and
+    does not count a purge.
+
+    Re-observability of a deletion that produced no tombstone is deliberately
+    NOT attempted here — it needs ``vault_sync.delete_note``'s own connection
+    classified first (it raises before this function is reached in a runtime
+    that names no database), plus a decided termination policy. Carried by
+    #4468; see ``docs/DB_SCHEMA.md :: Vault-watcher delete tombstone
+    durability``.
     """
     companion = find_companion_by_source_ref(vault_root, str(rel_deleted))
     companion_uuid = companion.uuid if companion else ""
@@ -382,7 +427,7 @@ def _emit_watcher_delete_event(
         if live_path.exists():
             # Rename: the same identity now lives at a new path that this
             # tick already (re)ingested -- purging would orphan it.
-            return False
+            return "superseded_by_rename"
     payload = {
         "path": str(deleted_path),
         "deleted": True,
@@ -390,13 +435,21 @@ def _emit_watcher_delete_event(
         "source": "vault_watcher.run_watcher_tick",
         **canonical_event_identity(canonical_object_id, note_uuid),
     }
+    required_db = db_outbox_required() or runtime_database_is_named(os.environ)
+    # Resolved from the same policy the write itself applies, BEFORE the call,
+    # because the write's ``""`` return cannot distinguish "skipped, nothing
+    # queued" from "deduped against a row already queued". The write still runs
+    # either way — a skip opens no connection, so there is nothing to save by
+    # short-circuiting, and the decision stays in exactly one place.
+    would_skip = self_owned_write_would_skip(required_db=required_db)
     insert_object_and_outbox(
         payload,
         INGEST_OBJECT_DELETED,
         None,
         observation=str(observed_mtime) if observed_mtime is not None else None,
+        required_db=required_db,
     )
-    return True
+    return "not_queued" if would_skip else "emitted"
 
 
 def run_watcher_tick(
@@ -478,13 +531,18 @@ def run_watcher_tick(
     # event directly. Idempotent on replay: the outbox idempotency key is
     # scoped to this observation (the deleted version's last snapshotted
     # mtime), and refresh_snapshot() removes the path from the snapshot so
-    # later ticks never re-see the deletion. Called AFTER the tick's ingest
+    # later ticks never re-see the deletion -- which is also why only a
+    # tombstone that actually landed may be counted as a purge (#4214 D3), and
+    # why making an unlanded one re-observable is a separate contract that
+    # needs vault_sync.delete_note's own connection classified first. Called
+    # AFTER the tick's ingest
     # of changed paths, so a rename (delete(old) + result.changed entry for
     # the new path) resolves against the already-updated companion and the
     # liveness check in _emit_watcher_delete_event can skip purging an
     # identity that just re-ingested at a new path. Runs in every non-dry-run
     # exit path -- including changed==0 and limit-exceeded (the max-notes
     # limit bounds panel/ingest fan-out only). dry_run must not purge.
+
     def _reconcile_deletions() -> None:
         if dry_run or not result.deleted:
             return
@@ -494,16 +552,32 @@ def run_watcher_tick(
                 rel_deleted = deleted_path.relative_to(vault_root)
             except ValueError:
                 rel_deleted = deleted_path
+            # `rel_deleted` falls back to the absolute path when relative_to
+            # raises, so look the observation up under both keys rather than
+            # losing the retention mtime on that branch.
+            observed_mtime = prior_snapshot.get(str(rel_deleted))
+            if observed_mtime is None:
+                observed_mtime = prior_snapshot.get(str(deleted_path))
             try:
-                emitted = delete_note(str(deleted_path))
-                if not emitted:
-                    emitted = _emit_watcher_delete_event(
+                # delete_note commits its event inside its own transaction, so
+                # True is proof the tombstone landed. False means it could not
+                # identify the note (no file_state row), not that a queue
+                # rejected it — the watcher's own emitter resolves those.
+                outcome: _DeleteReconciliation
+                if delete_note(str(deleted_path)):
+                    outcome = "emitted"
+                else:
+                    outcome = _emit_watcher_delete_event(
                         deleted_path,
                         rel_deleted=rel_deleted,
                         vault_root=vault_root,
-                        observed_mtime=prior_snapshot.get(str(rel_deleted)),
+                        observed_mtime=observed_mtime,
                     )
-                if emitted:
+                # Only a tombstone that actually landed counts as a purge
+                # (#4214 D3). "not_queued" and "superseded_by_rename" are both
+                # honest non-purges, and neither is retried: see the emitter's
+                # docstring for why re-observability is a separate contract.
+                if outcome == "emitted":
                     summary["deleted_purged"] += 1
             except Exception:
                 summary["errors"] += 1

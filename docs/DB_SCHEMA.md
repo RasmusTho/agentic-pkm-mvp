@@ -333,6 +333,159 @@ Interpretation:
 - the outbox is the canonical runtime queue,
 - but the event payload is still an operational artifact layer rather than the whole domain model.
 
+### Self-owned write durability policy (`required_db`)
+
+Source: `app/services/outbox.py::_self_owned_outbox_write_policy` (#4064 / #4203 / #4214).
+
+A *self-owned* write is a `write_outbox_event()` / `insert_object_and_outbox()` call that passes no
+`conn`. For those calls only, the connection decision is resolved from the environment **before** any
+connection is opened, so a memory-backed runtime never triggers a DSN fallback whose DNS resolution
+could stall:
+
+| `STORE_BACKEND` | Database named? | `required_db=False` (default) | `required_db=True` |
+| --- | --- | --- | --- |
+| `memory` | either | skip, return `""` | connect |
+| `pg` | either | connect | connect |
+| unset | yes | connect | connect |
+| unset | no | skip, return `""` | connect |
+| any other value | any | `RuntimeError` | `RuntimeError` |
+
+- **"Database named?"** is `app/config/database.py::explicit_runtime_database_url(os.environ)`, the
+  same resolution the connection performs (`conn_rw()` -> `_psycopg_dsn()` ->
+  `resolve_runtime_database_url(os.environ)`). It is **not** just `DATABASE_URL`/`DB_DSN`: it is any
+  key in `RUNTIME_DATABASE_ENV_KEYS` (`DATABASE_URL`, `DB_DSN`, `PKM_DB_NAME_DEV/TEST/PROD`,
+  `POSTGRES_USER`, `POSTGRES_PASSWORD`, `PKM_DB_HOST`, `PKM_DB_PORT`). "No" means every input the
+  resolver would use is a built-in default, so the DSN it synthesizes is the compose-shaped fallback
+  nobody asked for. Reading a narrower key set was #4214 D1: a runtime that named its database
+  through `PKM_DB_*`/`POSTGRES_*` connected successfully while the skip predicate called it
+  unconfigured and dropped the write.
+- `required_db` is keyword-only and defaults to `False`; `insert_object_and_outbox()` forwards it
+  unchanged. It is a **caller-resolved durability requirement**, not a runtime probe.
+- A skip returns `""` — the same no-insert result already used for a deduplicated event. Only a
+  caller that passed `required_db=True` may treat a return from these functions as evidence that the
+  DB path actually ran. A caller that must distinguish the two without requiring the DB asks
+  `self_owned_write_would_skip(required_db=...)`, which delegates to the same policy.
+- An unsupported explicit `STORE_BACKEND` fails loud before any connection attempt, rather than
+  degrading to a silent skip.
+- A supplied `conn` is authoritative and caller-owned: it bypasses this policy entirely and is never
+  closed by the outbox helper.
+
+**Required (DB-durable) producers.** These call sites are load-bearing — a silent skip would let a
+projection, receipt, acknowledgement, or HTTP 2xx advance past an event that was never queued — so
+they pass `required_db=True` and fail loud instead:
+
+| Producer | Source |
+| --- | --- |
+| Episode closure (outbox-before-projection boundary) | `app/episodes/closure.py` |
+| Promotion receipts | `app/promotion/consumer.py` |
+| Embedding requests | `app/outbox/events.py` |
+| Explicit panel DB persistence | `app/agents/panel_agent/execution.py` |
+| Durable object saves | `app/objects/__init__.py` |
+| Worker transient retries | `app/workers/outbox_worker.py` |
+| Watcher `panel.scan.requested` / `ingest.vault.changed` (when `db_outbox_required()`) | `app/watcher/registry.py` |
+| `POST /ingest` (the route's only persistence side effect) | `app/api/routes/ingest.py` |
+| Vault-watcher delete tombstone (`db_outbox_required()` **or** a named database) | `app/watcher/vault_watcher.py` |
+| Knowledge-acquisition stage transitions | `app/knowledge_acquisition/stage_events.py` |
+
+Optional, best-effort, and compensated producers keep the default `required_db=False` behavior.
+
+**This table is not the contract — the gate is.** A hand-maintained list can only show that the
+producers someone named are classified, never that the set is complete, which is how the `/ingest`
+route and the delete tombstone were missed (#4214 D2/D3/D5).
+`tests/architecture/test_outbox_producer_durability.py` is the enforcing gate: every self-owned
+producer in `app/` must pass `required_db=` or appear on a reviewed allowlist that states why a
+silent skip is survivable there (in practice: a compensating JSONL sink that outlives the skip). The
+gate also fails on a stale allowlist entry, so exemptions cannot accumulate.
+
+### Watcher required-delivery cursor semantics
+
+Source: `app/watcher/registry.py::_emit_changed_entry` (#4203 / #4214).
+
+`app/watcher/registry.py::db_outbox_required()` is `True` when `WATCHER_REQUIRE_DB_OUTBOX` is set
+**or** when `STORE_BACKEND=pg` — the shipped production default (`config/runtime.defaults.env`). It
+reads like an opt-in switch; it is not, and production runs with required delivery on.
+
+Scope of the guarantee below: **the emission step only.** Once `_emit_changed_entry` reaches the
+emission, the emission and its durable observation cursor are one state transition:
+
+- if the emission raises, the pre-observation `state.files` entry is restored (or removed when the
+  file was previously unseen) and the exception propagates, so the next tick re-observes the
+  unchanged file instead of treating it as already delivered. The restore is **not** gated on
+  `required_db` (#4214 D6): `append_jsonl_outbox_event` is unwrapped, so the non-required path can
+  also raise with neither sink written;
+- the cursor advances exactly once, after a successful emission; a subsequent tick over the same
+  unchanged file emits nothing.
+
+**Known gap this guarantee does NOT cover.** `_emit_changed_entry` advances the `mtime`/`hash` cursor
+*before* the debounce/rate-limit check, and that check `return None`s without emitting and without
+rolling the cursor back; `_collect_changed_entries` then never re-detects the file. With the shipped
+`configs/watchers.yaml` (`rate_limit_per_min: 30`, `debounce_ms: 1500`) a bulk vault change
+permanently drops every observation past the limit. This drop is pre-existing and out of scope here —
+it is documented rather than claimed away.
+
+### Vault-watcher delete tombstone durability
+
+Source: `app/watcher/vault_watcher.py::_emit_watcher_delete_event` (#4214 D3).
+
+The tick's delete-reconciliation path has no compensating JSONL sink, and its caller both increments
+`deleted_purged` and lets `refresh_snapshot()` drop the path from the snapshot. So the false purge is
+the only signal anyone would ever get for a tombstone that never landed. Two rules follow.
+
+**The write is required whenever a database is named.** The delete path resolves
+`required_db = db_outbox_required() or runtime_database_is_named(os.environ)`. Left optional, the
+policy would skip the enqueue under `STORE_BACKEND=memory` even with an explicit DSN and drop the
+tombstone with no purge, no error and no message — a silent, permanent loss on a runtime that does
+have a durable queue and a durable projection, and a change to the delivery semantics a properly
+configured runtime has today. The widening keeps `STORE_BACKEND=pg` and explicit-DSN runtimes exactly
+as they are, and makes an unreachable database raise loudly instead of vanishing.
+
+**Only a tombstone that landed is counted.** The emitter reports its outcome explicitly rather than
+as a bool — note these are strings, so `"not_queued"` is truthy and callers must compare, never test
+truthiness:
+
+- `"emitted"` — the tombstone reached the outbox (or deduped against an identical one); the purge is
+  counted;
+- `"superseded_by_rename"` — no tombstone is owed, the identity is alive at a path this tick already
+  re-ingested;
+- `"not_queued"` — the runtime names no database, so the optional write skipped and no event exists.
+  The purge is **not** counted.
+
+A required enqueue that raises is caught by the reconciliation loop, counted as an error, and
+surfaced as an `unable to reconcile deletion` message.
+
+**Known gap: an unlanded tombstone is not retried.** The deletion is not made re-observable, so it is
+still lost — honestly reported now, but lost. Closing that needs `app/services/vault_sync.py::delete_note`
+classified first: it is step 1 of this path, it opens an unconditional `conn_rw()` with no
+memory-mode guard, and in a runtime that names no database it *raises* before the tombstone emitter
+is ever consulted. A retry layer built above that seam cannot terminate — two independent review
+rounds on PR #4138 demonstrated exactly that, once as a retention silently undone by the bare
+`refresh_snapshot()` in `app/runtime/runtime_loop.py`, once as a permanent per-tick error loop with
+an unbounded sidecar. The prerequisite and a decided termination policy are carried by #4468;
+`tests/watcher/test_vault_watcher_delete_required_outbox.py::test_the_tick_terminates_when_no_database_is_named`
+runs the real `delete_note` so the gap stays visible instead of being stubbed away.
+
+### Producers that read a normal return as a commit
+
+`write_outbox_event` returns `""` for both a skipped write and an ON CONFLICT no-op. A producer whose
+idempotency key is derived from stable identity may legitimately read `""` as *proof of a prior
+commit* — the Heimdal meeting family does, because treating a dedup as failure would refuse the same
+capture forever. That reading is only sound while a normal return cannot mean "skipped", so those
+producers guard their DB branch with `self_owned_write_would_skip()` rather than re-deriving a
+`STORE_BACKEND`/DSN predicate of their own (#4214). One consequence is explicit: under an explicit
+memory backend the DB outbox mirror does not run for them, and their unconditional JSONL append is
+the sink of record.
+
+Producers whose key is per-emission (`app/api/routes/capture.py`, `app/panel/confirmation.py`) take
+the other correct route — `emitted = emitted or bool(stored_id)` — where a skip simply leaves
+`emitted` unchanged.
+
+Contract regression coverage: `tests/services/test_outbox_memory_mode.py`,
+`tests/services/test_outbox_required_policy_callers.py`,
+`tests/watcher/test_registry_required_outbox.py`,
+`tests/watcher/test_vault_watcher_delete_required_outbox.py`,
+`tests/api/test_ingest_required_outbox.py`,
+`tests/architecture/test_outbox_producer_durability.py`.
+
 ## Entity-Review Operation Journal
 
 Migration-owned (EROJ-01, #4350): Alembic revision `e7a2b9c4d1f8` creates the table exactly as the

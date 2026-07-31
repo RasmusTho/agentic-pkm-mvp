@@ -162,11 +162,13 @@ def test_fixture_day_full_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(closure_module, "find_closable_episodes", _fake_find_closable_from_vault(vault_root))
     monkeypatch.setattr(closure_module, "_count_active_bound_artifacts", lambda episode_id: 1)
-    emitted: list[tuple[Any, str]] = []
+    emitted: list[tuple[Any, str, bool]] = []
     monkeypatch.setattr(
         closure_module,
         "write_outbox_event",
-        lambda event, *, idempotency_key: (emitted.append((event, idempotency_key)) or idempotency_key),
+        lambda event, *, idempotency_key, required_db=False: (
+            emitted.append((event, idempotency_key, required_db)) or idempotency_key
+        ),
     )
     # #3181 review fix: close_episode now ALSO syncs the `episodes` projection's `closed` column
     # itself (app.episodes.closure._sync_projection_closed) -- stub it like every other DB

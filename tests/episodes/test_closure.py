@@ -183,11 +183,13 @@ def test_close_episode_flips_closed_and_emits_event(
     _write_open_episode_note(tmp_path, episode_id=episode_id, end=end)
 
     monkeypatch.setattr(closure_module, "_count_active_bound_artifacts", lambda eid: 3)
-    emitted: list[tuple[Any, str]] = []
+    emitted: list[tuple[Any, str, bool]] = []
     monkeypatch.setattr(
         closure_module,
         "write_outbox_event",
-        lambda event, *, idempotency_key: (emitted.append((event, idempotency_key)) or idempotency_key),
+        lambda event, *, idempotency_key, required_db=False: (
+            emitted.append((event, idempotency_key, required_db)) or idempotency_key
+        ),
     )
     sync_conn = _SyncConn({episode_id})
     monkeypatch.setattr(closure_module, "conn_rw", lambda *a, **k: sync_conn)
@@ -211,8 +213,9 @@ def test_close_episode_flips_closed_and_emits_event(
     assert fields["segmentation"] == "proposed"
 
     assert len(emitted) == 1
-    event, idempotency_key = emitted[0]
+    event, idempotency_key, required_db = emitted[0]
     assert event.event_type == "episode.closed"
+    assert required_db is True
     assert event.payload["episode_id"] == episode_id
     assert event.payload["scope"] == "work"
     assert event.payload["bound_artifact_count"] == 3
@@ -259,7 +262,9 @@ def test_close_episode_already_closed_note_reconciles_outbox_and_projection(
     monkeypatch.setattr(
         closure_module,
         "write_outbox_event",
-        lambda event, *, idempotency_key: (emitted.append(idempotency_key) or idempotency_key),
+        lambda event, *, idempotency_key, required_db=False: (
+            emitted.append(idempotency_key) or idempotency_key
+        ),
     )
     sync_conn = _SyncConn({episode_id})
     monkeypatch.setattr(closure_module, "conn_rw", lambda *a, **k: sync_conn)
@@ -402,7 +407,10 @@ def test_quiesced_episode_closes_once(tmp_path: Path, monkeypatch: pytest.Monkey
     seen_keys: set[str] = set()
     inserted: list[str] = []
 
-    def _fake_write_outbox_event(event: Any, *, idempotency_key: str) -> str:
+    def _fake_write_outbox_event(
+        event: Any, *, idempotency_key: str, required_db: bool = False
+    ) -> str:
+        assert required_db is True
         # Mirrors app.services.outbox.write_outbox_event's real `ON CONFLICT (id) DO NOTHING`
         # semantics: the FIRST insert of a given (fixed) idempotency key lands and returns the
         # key; every later attempt with the SAME key is a deduped no-op returning "".

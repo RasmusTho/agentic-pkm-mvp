@@ -15,6 +15,16 @@ ALWAYS_TARGETS = (
     # This test must run on every scoped PR: a deleting/renaming PR otherwise
     # filters its missing static target before pytest has a chance to detect it.
     STATIC_TARGET_COLLECTABILITY_FITNESS,
+    # The outbox producer gates are repo-wide AST censuses over app/, so the PR
+    # that breaks them is by definition a PR that adds or edits a producer —
+    # and every producer today lives in an OWNED subsystem (heimdal, watcher,
+    # api routes, panel, workers, services, receipts, knowledge_acquisition).
+    # A scoped selection therefore excluded exactly the PRs these gates exist
+    # to catch, and a new producer defaulting to the dropping path could merge
+    # with a green required check (#4214 D5). They are cheap — pure ast.parse
+    # over app/, no fixtures, seconds — so run them on every scoped PR.
+    "tests/architecture/test_outbox_producer_durability.py",
+    "tests/architecture/test_outbox_producer_idempotency.py",
 )
 
 PR_MARKER_EXPRESSION = (
@@ -33,6 +43,12 @@ FULL_SUITE_EXACT = {
     # subsystems. Never narrow their coverage to a single feature owner.
     "app/cli/__init__.py",
     "app/config/paths.py",
+    # Canonical runtime DSN resolution. `app/db/db.py::_psycopg_dsn` (already a
+    # FULL_SUITE_PREFIX via app/db/) resolves every connection through this
+    # module, and the self-owned outbox skip predicate resolves the same
+    # question with it (#4214 D1) — so a change here can move any DB-touching
+    # subsystem between "connect" and "skip". Never narrow it to one owner.
+    "app/config/database.py",
     "conftest.py",
     "pytest.ini",
     "pyproject.toml",

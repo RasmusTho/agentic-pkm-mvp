@@ -171,6 +171,7 @@ def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
     write_outbox_event(
         envelope,
         idempotency_key=derive_idempotency_key(INDEX_EMBEDDING_REQUESTED, envelope.event_id, EVENT_ID_FINGERPRINT),
+        required_db=True,
     )
     _append_record_best_effort(record, event_name=INDEX_EMBEDDING_REQUESTED)
 
