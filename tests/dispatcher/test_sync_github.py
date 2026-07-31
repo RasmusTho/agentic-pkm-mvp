@@ -128,6 +128,43 @@ def test_pull_sync_adapter_interface() -> None:
 # AC: normalize_github_issue maps fields correctly
 # ---------------------------------------------------------------------------
 
+def test_sync_state_carries_labels_and_url() -> None:
+    """Every pull records the issue's label names and HTML URL in sync_state
+    so Signboard cards stop rendering structurally empty chips/links (#4441).
+
+    REST payloads carry both an API ``url`` and the browser ``html_url``;
+    the browser URL must win. GraphQL-shaped payloads carry only ``url``.
+    """
+    rest_payload = {
+        "number": 205,
+        "title": "REST-shaped issue",
+        "labels": [{"name": "prio:med"}, {"name": "agent:ready"}],
+        "url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/205",
+        "html_url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/205",
+        "created_at": "2026-04-20T10:00:00Z",
+        "updated_at": "2026-04-21T12:00:00Z",
+    }
+    task = normalize_github_issue(rest_payload, REPO)
+    assert task.sync_state["labels"] == ["prio:med", "agent:ready"]
+    assert task.sync_state["url"] == "https://github.com/RasmusTho/agentic-pkm-mvp/issues/205"
+
+    graphql_payload = {
+        "number": 206,
+        "title": "GraphQL-shaped issue",
+        "labels": [{"name": "prio:low"}],
+        "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/206",
+        "createdAt": "2026-04-20T10:00:00Z",
+        "updatedAt": "2026-04-21T12:00:00Z",
+    }
+    task = normalize_github_issue(graphql_payload, REPO)
+    assert task.sync_state["labels"] == ["prio:low"]
+    assert task.sync_state["url"] == "https://github.com/RasmusTho/agentic-pkm-mvp/issues/206"
+
+    bare = normalize_github_issue(SAMPLE_ISSUE_NO_LABELS, REPO)
+    assert bare.sync_state["labels"] == []
+    assert bare.sync_state["url"] is None
+
+
 def test_github_issue_task_id_single_source_format_pinned() -> None:
     """The repo-qualified task id has exactly one implementation with a pinned
     byte format, including the doubled ``--`` owner/repo separator that keeps

@@ -885,3 +885,51 @@ def test_cli_export_signboard_prune_exits_nonzero_on_foreign_board(
 
     assert main(["export-signboard", str(board), "--prune-absent", "--json"]) == 1
     assert {path: path.read_bytes() for path in sorted(board.rglob("*.md"))} == before
+
+
+def test_render_task_shows_labels_and_url_from_synced_record() -> None:
+    """A record produced by the sync path renders label chips and the GitHub
+    link without hand-seeded sync_state (#4441)."""
+    from app.dispatcher.signboard import _render_task
+    from app.dispatcher.sync_github import normalize_github_issue
+
+    payload = {
+        "number": 4441,
+        "title": "Synced card",
+        "labels": [{"name": "type:task"}, {"name": "prio:med"}],
+        "url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/4441",
+        "html_url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4441",
+        "created_at": "2026-07-31T10:00:00Z",
+        "updated_at": "2026-07-31T10:00:00Z",
+    }
+    task = normalize_github_issue(payload, "RasmusTho/agentic-pkm-mvp")
+
+    card = _render_task(task)
+
+    assert 'labels: ["type:task", "prio:med"]' in card
+    assert 'github_url: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4441"' in card
+    assert "- GitHub: https://github.com/RasmusTho/agentic-pkm-mvp/issues/4441" in card
+
+
+def test_render_task_tolerates_sync_state_without_labels_or_url() -> None:
+    """Pre-#4441 rows without the new keys keep rendering unchanged."""
+    from app.dispatcher.models import TaskRecord
+    from app.dispatcher.signboard import _render_task
+
+    task = TaskRecord(
+        task_id="github-RasmusTho--agentic-pkm-mvp-issue-99",
+        issue_number=99,
+        title="Legacy row",
+        status="ready",
+        priority="med",
+        source_anchor_refs=["github:issue:99"],
+        created_at="2026-07-01T00:00:00+00:00",
+        updated_at="2026-07-01T00:00:00+00:00",
+        sync_state={"last_pull_at": "2026-07-01T00:00:00+00:00"},
+    )
+
+    card = _render_task(task)
+
+    assert 'github_url: ""' in card
+    assert "labels: []" in card
+    assert "- GitHub:" not in card

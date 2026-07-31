@@ -360,11 +360,20 @@ def normalize_github_issue(
 
     updated_at = payload.get("updatedAt") or payload.get("updated_at") or now
 
+    # REST payloads carry both the API ``url`` and the browser ``html_url``;
+    # prefer the browser URL so Signboard cards link to the issue page.
+    # GraphQL-shaped payloads carry the browser URL as ``url``.
+    html_url = payload.get("html_url") or payload.get("url") or None
+
     sync_state = SyncState(
         last_pull_at=now,
         source_version=payload.get("updatedAt") or payload.get("updated_at"),
         sync_result="ok",
         sync_note=None,
+        extra={
+            "labels": labels,
+            "url": str(html_url) if html_url is not None else None,
+        },
     )
 
     return TaskRecord(
