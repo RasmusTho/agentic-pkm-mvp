@@ -40,6 +40,25 @@ def _github_repo() -> str | None:
     return os.environ.get("COCKPIT_GITHUB_REPO") or None
 
 
+def _docs_root() -> Path:
+    override = os.environ.get("COCKPIT_DOCS_ROOT")
+    return Path(override) if override else _REPO_ROOT / "docs"
+
+
+def _capabilities_yaml_path() -> Path:
+    override = os.environ.get("COCKPIT_CAPABILITIES_YAML")
+    if override:
+        return Path(override)
+    return _REPO_ROOT / "app" / "builderops" / "ckm" / "seed" / "capabilities.yaml"
+
+
+def _matrix_path() -> Path:
+    override = os.environ.get("COCKPIT_TRACEABILITY_MATRIX")
+    if override:
+        return Path(override)
+    return _REPO_ROOT / "docs" / "architecture" / "traceability-matrix.md"
+
+
 @router.get("/registry")
 async def registry() -> dict[str, Any]:
     """Recompute the registry from the authorities. Nothing is cached."""
@@ -48,6 +67,9 @@ async def registry() -> dict[str, Any]:
         db_path=paths.db_path,
         deploy_receipt_dir=_deploy_receipt_dir(),
         github_repo=_github_repo(),
+        docs_root=_docs_root(),
+        capabilities_yaml_path=_capabilities_yaml_path(),
+        matrix_path=_matrix_path(),
     )
 
 
