@@ -193,7 +193,12 @@ def _declared_secrets(
 def _validate_secret(kind: str, value: str) -> bool:
     if kind == "raw-store-key":
         return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
-    if kind == "api-key":
+    # `token` shares the api-key grammar deliberately (#4489): both are opaque
+    # provider-issued bearer strings, and a second near-identical grammar would
+    # be a place for the two to drift apart rather than a real distinction. The
+    # kind exists at all because the contract derives it from the logical id's
+    # suffix, and `GITHUB_TOKEN` requires the logical id `github.token`.
+    if kind in {"api-key", "token"}:
         return (
             value == value.strip()
             and 20 <= len(value) <= 512
@@ -312,7 +317,16 @@ def _resolve_consumer_environment(
             try:
                 value = keychain_lookup(contract.keychain_service, account)
             except Exception as exc:
+                # An optional declaration tolerates *absence* only, and the
+                # lookup cannot distinguish "no such item" from any other
+                # failure, so an unresolvable optional secret simply does not
+                # bind. Its consumer runs without it; a required one still
+                # fails the whole bootstrap (#4489).
+                if contract.is_optional(secret):
+                    continue
                 raise _secret_failure(secret=secret, kind=kind) from exc
+            # Validation is deliberately outside that tolerance: a value that
+            # is present and wrong is a misconfiguration, never an opt-out.
             if not _validate_secret(kind, value):
                 raise _secret_failure(secret=secret, kind=kind)
             resolved[env_name] = value

@@ -13,7 +13,8 @@ This file asserts the committed side of that path:
    `api` service, which is the service that serves the cockpit route;
 2. the token key the plane needs is documented on the `api` consumer's
    already-declared host-secret env layer, which is how a value reaches that
-   container without a new secret mechanism or compose surface; and
+   container without a new secret mechanism or compose surface — and, since
+   #4489, that the layer actually *delivers* it rather than only naming it; and
 3. the other channels stay unset, so the opt-in posture (and #4481's
    opted-out-vs-broken distinction) still holds where nobody asked for it.
 """
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.ops.host_secret_bootstrap import materialize_consumer_environment
 from app.release_channels.channel_isolation_preflight import _load_compose
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -93,3 +95,44 @@ def test_other_channels_stay_opted_out_of_the_live_plane() -> None:
             "onto the live plane is an operational act owned by the promotion "
             "lane, not a side effect of making enablement possible (#4484)"
         )
+
+
+def test_api_host_secret_layer_delivers_the_github_token(tmp_path) -> None:
+    """#4489: the documented token key must actually arrive, not just be named.
+
+    #4484 documented `GITHUB_TOKEN` on the api consumer's host-secret layer, but
+    that layer's file is bootstrap-owned and rebuilt from the *declared*
+    identifiers only, so an operator-supplied value was discarded on every
+    governed deploy. This exercises the real production resolution path —
+    `materialize_consumer_environment` for the same `(channel, consumer)` pair
+    `scripts/lib/deploy_channel_compose.sh` wraps compose with — and asserts the
+    binding lands in the file the `api` service's `env_file` chain reads.
+    """
+    raw_key = "b" * 64
+    token = "ghp_" + ("t" * 36)
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":github.token"):
+            return token
+        if account.endswith(":heimdal.raw-store-key"):
+            return raw_key
+        raise AssertionError(f"undeclared account reached the lookup: {account}")
+
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-api-ingress",
+        keychain_lookup=lookup,
+        directory=tmp_path,
+    ) as env_file:
+        delivered = dict(
+            line.split("=", 1)
+            for line in env_file.read_text(encoding="utf-8").splitlines()
+            if line
+        )
+
+    assert delivered.get(_TOKEN_KEY) == token, (
+        "the api consumer's host-secret layer must deliver GITHUB_TOKEN — it is "
+        "the credential the in-container gh transport reads (#4489)"
+    )
+    # The layer's existing duty is unchanged.
+    assert delivered["HEIMDAL_RAW_STORE_KEY"] == raw_key

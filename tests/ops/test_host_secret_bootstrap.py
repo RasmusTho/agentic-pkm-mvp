@@ -29,6 +29,7 @@ from app.ops.host_secret_bootstrap import (
 _RAW_KEY = "a" * 64
 _OPENAI_KEY = "openai-key-" + ("o" * 32)
 _ANTHROPIC_KEY = "anthropic-key-" + ("a" * 32)
+_GITHUB_TOKEN = "ghp_" + ("g" * 36)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -858,3 +859,90 @@ deploy_channel_compose \\
         f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
     )
     assert not secret_file.exists()
+
+
+# --- Optional declared secrets (#4489) -------------------------------------
+#
+# The host-secret layer is fail-closed over *every* secret declared for a
+# consumer, which is why #4484 could not simply declare the cockpit's GitHub
+# token: doing so would make a Keychain item mandatory on dev, test, and prod,
+# and a host missing it would lose the Heimdal ingress lanes. `optional` makes
+# the required/optional distinction — which
+# `docs/LOCAL_SECRET_PROVISIONING/README.md :: Fixed constraints` #3 already
+# relies on in prose — something the schema can express. Optionality covers
+# *absence* only: a malformed value fails closed exactly as before.
+
+
+def _absent(*absent_suffixes: str) -> KeychainLookup:
+    """Keychain lookup where the named accounts are missing, others resolve."""
+
+    def lookup(_service: str, account: str) -> str:
+        for suffix in absent_suffixes:
+            if account.endswith(suffix):
+                # Mirrors _security_keychain_lookup's non-zero-exit path: the
+                # bootstrap cannot tell "no such item" from any other lookup
+                # failure, so absence surfaces as this exception.
+                raise HostSecretBootstrapError(
+                    "host secret bootstrap failed for declared consumer"
+                )
+        if account.endswith(":heimdal.raw-store-key"):
+            return _RAW_KEY
+        if account.endswith(":github.token"):
+            return _GITHUB_TOKEN
+        pytest.fail(f"unexpected account lookup: {account}")
+
+    return lookup
+
+
+def test_absent_optional_secret_does_not_fail_the_consumer(tmp_path: Path) -> None:
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-api-ingress",
+        keychain_lookup=_absent(":github.token"),
+        directory=tmp_path,
+    ) as env_file:
+        assert env_file.read_text(encoding="utf-8") == f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+
+
+def test_malformed_optional_secret_fails_closed(tmp_path: Path) -> None:
+    """Optionality covers absence, never a value that is present and wrong."""
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":github.token"):
+            return "short"  # present, but not a valid token value
+        return _RAW_KEY
+
+    with pytest.raises(HostSecretBootstrapError):
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-api-ingress",
+            keychain_lookup=lookup,
+            directory=tmp_path,
+        ):
+            pytest.fail("a malformed optional secret must not materialize a layer")
+
+    # Nothing was written: the whole consumer fails, so a partially-populated
+    # layer can never be handed to the child.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_absent_required_secret_still_fails_closed(tmp_path: Path) -> None:
+    """#4489 must not weaken the guarantee protecting the ingress lanes."""
+    with pytest.raises(HostSecretBootstrapError):
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-api-ingress",
+            keychain_lookup=_absent(":heimdal.raw-store-key"),
+            directory=tmp_path,
+        ):
+            pytest.fail("an absent required secret must not materialize a layer")
+
+
+def test_every_committed_secret_declares_its_optionality_explicitly() -> None:
+    """No implicit default: the closed schema stays closed."""
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    for logical_id, _binding, _kind in contract.secret_definitions:
+        assert isinstance(contract.is_optional(logical_id), bool)
+    # Everything that existed before #4489 stays required.
+    for logical_id in ("heimdal.raw-store-key", "openai.api-key", "anthropic.api-key"):
+        assert contract.is_optional(logical_id) is False

@@ -35,7 +35,12 @@ ingress transport only; it is never a secret store or raw-audio archive.
    watched path only; it does not receive unrelated provider or deployment credentials. `dev`,
    `test`, and `prod` secrets remain distinct.
 3. **Fail closed.** A missing, malformed, or inaccessible required secret prevents the named process
-   from starting; it does not select a default, print the value, or silently weaken encryption.
+   from starting; it does not select a default, print the value, or silently weaken encryption. Since
+   #4489 "required" is a property the schema states rather than assumes: every declaration carries an
+   explicit `optional` boolean, and only a declaration marked `optional` may be *absent* without
+   failing its consumer. Optionality never covers a value that is present and malformed — that still
+   fails closed, for optional and required secrets alike — so this constraint is unweakened for every
+   secret that guards a shipped lane.
 4. **Key material stays outside the raw volume and database.** This preserves Heimdal's raw-store
    trust boundary.
 5. **No cloud secret service now.** 1Password Developer/CLI is a future migration option only when
@@ -43,13 +48,31 @@ ingress transport only; it is never a secret store or raw-audio archive.
 
 ### Declared identifier contract
 
-The value-free contract declares `heimdal.raw-store-key`, `openai.api-key`, and
-`anthropic.api-key`, their child bindings, and their validation kinds. The raw-store key is granted
-to `heimdal-capture-watch`; both model-provider identifiers are granted only to
-`builderops-model-inquiry`, with exact `fable` and `gpt_codex` role requirements. Every grant is
-declared for `dev`, `test`, and `prod` in `config/secrets/host_secret_contract.json`; no value or
-host path is stored in that file. This is the ADR-0064 declared-API-key scope. It declares the
-credential boundary but does not authorize provider selection, calls, CKM access, or fallback.
+The value-free contract declares `heimdal.raw-store-key`, `openai.api-key`, `anthropic.api-key`, and
+`github.token`, their child bindings, their validation kinds, and whether each is optional. The
+raw-store key is granted to `heimdal-capture-watch` and `heimdal-api-ingress`; both model-provider
+identifiers are granted only to `builderops-model-inquiry`, with exact `fable` and `gpt_codex` role
+requirements. Every grant is declared for `dev`, `test`, and `prod` in
+`config/secrets/host_secret_contract.json`; no value or host path is stored in that file. This is the
+ADR-0064 declared-API-key scope. It declares the credential boundary but does not authorize provider
+selection, calls, CKM access, or fallback.
+
+`github.token` (#4489) is the one **optional** declaration. It is granted to `heimdal-api-ingress`
+so the BuilderOps cockpit's `github-live` plane can read GitHub from inside the `api` container via
+`gh`, which reads `GITHUB_TOKEN` from its own environment. It must be optional because the
+bootstrap is fail-closed over every declared secret for a consumer: a required GitHub token would
+make a Keychain item mandatory on `dev`, `test`, **and** `prod`, and a host without one would lose
+the Heimdal media/screen ingress lanes that share this consumer's layer. Two properties follow, and
+both are deliberate:
+
+- **The grant is per-consumer, not per-channel.** A consumer's channels and its secrets are separate
+  flat lists, so `github.token` is declared on all three channels. It is inert wherever nothing is
+  provisioned and wherever no channel binds `COCKPIT_GITHUB_REPO` (today only `dev` does), so least
+  privilege holds in effect.
+- **The token inherits the layer's activation condition.** `deploy_channel_compose.sh` only wraps
+  compose with this consumer's bootstrap when `heimdal.raw-store-key` resolves, so a host without
+  that key materializes no layer and therefore receives no `GITHUB_TOKEN` either — provisioning the
+  token alone is not sufficient on the governed deploy path.
 
 The v1 Keychain service is pinned to the stable non-secret namespace
 `yggdrasil.host-secrets`, and its account is derived by percent-encoding each
@@ -58,9 +81,12 @@ tuples cannot collide and each channel resolves a distinct item. The loader acce
 grammar-valid, contract-declared identifiers. Identifier namespaces are length-bounded, require
 logical-id/validation-kind agreement, and derive each child binding from its logical identifier.
 Value-freedom is structural and semantic: the schema is closed at every level, duplicate keys fail,
-declarations carry no value field, and exact grants constrain every identifier. Identifier strings
-and the deliberately provider-agnostic `api-key` value validator are not required to have disjoint
-lexical languages.
+declarations carry no value field, and exact grants constrain every identifier. `optional` is a
+required field on every declaration for exactly this reason — an omitted field would be an implicit
+default in a schema that has none. Identifier strings and the deliberately provider-agnostic
+`api-key` value validator are not required to have disjoint lexical languages; `token` shares that
+validator rather than introducing a second near-identical grammar for the same shape of opaque
+bearer string.
 Contract JSON must use unique object keys; a duplicate declaration fails closed rather than allowing a
 value to be hidden behind a later canonical field.
 The delivered HSP-02 bootstrap resolves each consumer's allowlist into a temporary mode-0600 file.
