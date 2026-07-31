@@ -304,7 +304,8 @@ def _build_transition_matrix() -> (
         matrix[(phase, "effect_failed")] = _legal(
             None,
             "the failed effect resolves its exact idempotency and outcome keys",
-            "repair is permitted only for CI failure within the repair budget",
+            "the failed effect names the authorized pull request and head",
+            "only a red required check awaited in awaiting_ci defers to repair",
         )
         matrix[(phase, "authority_changed")] = _legal(
             None,
@@ -1444,7 +1445,10 @@ def _reduce_effect_failed(
         return _refuse(state, "head_evidence_conflict")
     authority = _authority_of(admitted, issue_state)
     ledger = _committed(issue_state, admitted)
-    if effect.effect_class != "await_ci":
+    # Only the check the run is currently awaiting defers to repair. A late
+    # failure report for an effect the run already moved past is still refused
+    # evidence, not a reason to reopen a merged or closed Issue.
+    if effect.effect_class != "await_ci" or issue_state.phase != "awaiting_ci":
         updated = replace(
             issue_state,
             phase="blocked",
@@ -1549,9 +1553,16 @@ def outstanding_effect_obligations(
     )
 
 
+#: Phases whose pending effect a resume may safely re-propose. ``launching`` is
+#: deliberately absent: a re-derived launch keeps its idempotency key but not its
+#: content hash, and ``WorkerInvocation`` binds the effect *reference*, so
+#: re-proposing an in-flight launch would mint a second start-once identity and
+#: could start a second worker on one Issue. Every class listed here is
+#: identified purely by its idempotency key downstream, so a re-proposal
+#: collapses to one logical effect. Replaying an in-flight launch safely needs
+#: durable effect binding - DDO-05 (#4168) and #4466.
 _RESUMABLE_EFFECT_BY_PHASE: Final[dict[RunPhase, EffectClass]] = {
     "claiming": "claim_issue",
-    "launching": "launch_worker",
     "awaiting_ci": "await_ci",
     "awaiting_review": "request_review",
     "recording_defect": "record_known_defect",
@@ -1589,7 +1600,9 @@ def pending_effect_proposals(
             continue
         effect_class = _RESUMABLE_EFFECT_BY_PHASE.get(item.phase)
         if effect_class is None:
-            # working waits on an external structured result.
+            # working waits on an external structured result, and launching
+            # waits on its in-flight launch outcome rather than minting a second
+            # start-once identity for the same worker.
             continue
         proposals.append(
             EffectProposal(

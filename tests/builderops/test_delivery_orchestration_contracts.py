@@ -4119,13 +4119,13 @@ class _DdoRun:
         return self.apply(self.admit(event, effect=effect))
 
 
-def _drive_to_awaiting_review(
+def _drive_to_awaiting_ci(
     issue: IssueScope,
     *,
     plan: DeliveryPlan | None = None,
     profile: DeliveryAcceptanceProfile | None = None,
 ) -> tuple[_DdoRun, ReducerEvent, ReducerEffect]:
-    """Advance one Issue to awaiting_review with only reducer decisions."""
+    """Advance one Issue to awaiting_ci with only reducer decisions."""
 
     plan = plan or _ddo4_plan(((issue,),))
     run = _DdoRun(plan, profile or _ddo4_profile())
@@ -4173,8 +4173,23 @@ def _drive_to_awaiting_review(
         )
     )
     assert [item.effect_class for item in worker_reduction.effects] == ["await_ci"]
+    return run, worker_event, launch_effect
+
+
+def _drive_to_awaiting_review(
+    issue: IssueScope,
+    *,
+    plan: DeliveryPlan | None = None,
+    profile: DeliveryAcceptanceProfile | None = None,
+) -> tuple[_DdoRun, ReducerEvent, ReducerEffect]:
+    """Advance one Issue to awaiting_review with only reducer decisions."""
+
+    run, worker_event, launch_effect = _drive_to_awaiting_ci(
+        issue, plan=plan, profile=profile
+    )
+    claimed = _claimed_authority(issue)
     run.succeed(
-        worker_reduction.effects[0],
+        run.last.effects[0],
         run.events[-1],
         subject=claimed,
         outcome_state="checks_passed",
@@ -4490,6 +4505,27 @@ def test_effects_require_exact_prerequisites() -> None:
         "await_ci",
     ]
     assert [item.effect_class for item in run.last.effects] == ["request_review"]
+
+    # A red required check emits no retry. It routes to the typed terminal
+    # repair deferral, because an autonomous retry needs the durable, replayable
+    # effect and invocation identity that DDO-05 owns and #4466 delivers.
+    failing_run, _event, _launch = _drive_to_awaiting_ci(_issue(4167, SHA_A))
+    awaiting_ci = failing_run.state.issue_state(issue.scope_key)
+    assert awaiting_ci.phase == "awaiting_ci"
+    deferred = failing_run.fail(
+        failing_run.last.effects[0],
+        failing_run.events[-1],
+        subject=claimed,
+        label="await-ci-red",
+    )
+    deferred_state = deferred.state.issue_state(issue.scope_key)
+    assert deferred_state.phase == "repairing"
+    assert deferred_state.blocked_reason == "ci_failed_repair_deferred"
+    assert deferred.effects == ()
+    assert "repairing" in TERMINAL_PHASES
+    for signal in REDUCER_SIGNALS:
+        assert not REDUCER_TRANSITION_MATRIX[("repairing", signal)].legal
+
     for effect in run.effects:
         assert effect.effect_id == effect.idempotency_key
         assert effect.effect_class in run.plan.effect_allowlist
