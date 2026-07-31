@@ -26,7 +26,11 @@ freshness being the read instant and every failure degrading to a refused claim.
   `Governing-Issue`/closing keywords in PR bodies, check/CI state per PR head SHA, and the branch
   list (so the owner's "branch but no PR" deficiency becomes a computable predicate in
   BOPS-COCKPIT-04). Joined on issue number / PR number / SHA — the spine the audit proves
-  machine-keyed (INV-DG-1).
+  machine-keyed (INV-DG-1) — and scoped by repository (#4470): one live read covers one repo, while
+  the dispatcher store carries a `repo` per task, and those numbers are unique only *within* a
+  repository. A task outside the configured repo sees no live snapshot at all, so it can neither
+  inherit another repo's PR nor vouch for one as already-synced. Same key as the pre-existing
+  verification-runs join.
 - Registers `github-live` as a read source with `last_successful_read` = the call instant, removing
   it from `UNREAD_PLANES`. Per decision Q5: no cache that survives a reload; a failed or
   rate-limited read yields the refused-claim state for GitHub-owned facts, never stale data
