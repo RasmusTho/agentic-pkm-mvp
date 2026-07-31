@@ -478,6 +478,14 @@ jobs:
           source scripts/lib/instance_ownership_host_state.sh
           prepare_instance_ownership_host_state_dir
           compose_files="-f docker-compose.yaml -f docker-compose.legacy-vault.yml"
+          # #4463: single source of truth for the verifier's artifact paths. The
+          # diagnostic below used to read the script's workspace-relative tmp/
+          # defaults while the invocation overrode them to absolute /tmp paths,
+          # so a failing gate emitted no evidence at all. Declare once, and both
+          # the writer and the reader stay on the same paths. The run-id/attempt
+          # namespacing is deliberate: it stays precise under concurrent runs.
+          VAULTWIDE_PANEL_LOG_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.log"
+          VAULTWIDE_PANEL_REPORT_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.report"
           cleanup() {
             rc=$?
             trap - EXIT
@@ -485,11 +493,25 @@ jobs:
               echo "docker compose ps"
               docker compose $compose_files ps || true
               echo "verifier artifacts"
-              ls -1t tmp/verify_vaultwide_panel.*.report tmp/verify_vaultwide_panel.*.log 2>/dev/null | head -n 10 || true
-              latest_report=$(ls -1t tmp/verify_vaultwide_panel.*.report 2>/dev/null | head -n 1 || true)
-              latest_log=$(ls -1t tmp/verify_vaultwide_panel.*.log 2>/dev/null | head -n 1 || true)
-              if [ -n "${latest_report:-}" ]; then echo "=== REPORT (tail 200) ==="; tail -n 200 "$latest_report" || true; fi
-              if [ -n "${latest_log:-}" ]; then echo "=== LOG (tail 200) ==="; tail -n 200 "$latest_log" || true; fi
+              # No stderr suppression: when an artifact is absent, ls naming the
+              # missing path is itself the evidence.
+              ls -l "$VAULTWIDE_PANEL_REPORT_PATH" "$VAULTWIDE_PANEL_LOG_PATH" || true
+              if [ -s "$VAULTWIDE_PANEL_REPORT_PATH" ]; then
+                echo "=== REPORT $VAULTWIDE_PANEL_REPORT_PATH ==="
+                cat "$VAULTWIDE_PANEL_REPORT_PATH" || true
+              else
+                echo "VAULTWIDE_PANEL_VERIFIER_ARTIFACT_MISSING report=$VAULTWIDE_PANEL_REPORT_PATH"
+              fi
+              if [ -s "$VAULTWIDE_PANEL_LOG_PATH" ]; then
+                # The failing assertions are the point of the log, and they can
+                # sit far above its tail, so surface them before the tail.
+                echo "=== LOG FAILURES $VAULTWIDE_PANEL_LOG_PATH ==="
+                grep -F "FAIL: " "$VAULTWIDE_PANEL_LOG_PATH" || echo "(no FAIL: lines in verifier log)"
+                echo "=== LOG (tail 400) $VAULTWIDE_PANEL_LOG_PATH ==="
+                tail -n 400 "$VAULTWIDE_PANEL_LOG_PATH" || true
+              else
+                echo "VAULTWIDE_PANEL_VERIFIER_ARTIFACT_MISSING log=$VAULTWIDE_PANEL_LOG_PATH"
+              fi
               echo "migrate logs (tail=200)"
               docker compose $compose_files logs --no-color --tail=200 migrate || true
               echo "watcher logs (tail=200)"
@@ -508,8 +530,8 @@ jobs:
           prepare_instance_state_deployment run_ci_compose "${PKM_ENVIRONMENT:-dev}"
 
           docker compose $compose_files up -d --build db api watcher worker
-          LOG_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.log" \
-          REPORT_PATH="/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.report" \
+          LOG_PATH="$VAULTWIDE_PANEL_LOG_PATH" \
+          REPORT_PATH="$VAULTWIDE_PANEL_REPORT_PATH" \
           bash scripts/verify_vaultwide_panel.sh
 
       - name: Skip docker smoke for docs-only PR

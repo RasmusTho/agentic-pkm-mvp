@@ -30,6 +30,13 @@ def _contract_job_text() -> str:
     return workflow[workflow.index("contract-validation:") :]
 
 
+def _vaultwide_panel_verifier_step_text() -> str:
+    workflow = _smoke_text()
+    start = workflow.index('- name: "CI gate: vaultwide panel verifier"')
+    end = workflow.index("- name: Skip docker smoke for docs-only PR", start)
+    return workflow[start:end]
+
+
 def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     # Moved from the retired ci.yml into ci-smoke.yaml (#3892); the PR unit
     # test lane must keep subsystem-scoped selection, the mandatory mypy
@@ -99,6 +106,87 @@ def test_smoke_docker_runs_for_stable_targeting_pull_requests() -> None:
     assert f"if: {ordinary_pull_request}" in workflow
     assert "Docker smoke is skipped only for ordinary pull requests." in workflow
     assert "types: [opened, synchronize, reopened, edited]" in workflow
+
+
+def test_vaultwide_panel_verifier_diagnostic_reads_runner_paths() -> None:
+    # #4463: the failure diagnostic read the verifier script's workspace-relative
+    # tmp/ defaults while the runner overrode LOG_PATH/REPORT_PATH to absolute
+    # /tmp paths namespaced by run id and attempt. The two never matched, so a
+    # failing gate printed the literal string "verifier artifacts" and nothing
+    # else. Both sides must resolve from one declaration.
+    step = _vaultwide_panel_verifier_step_text()
+
+    log_declaration = (
+        'VAULTWIDE_PANEL_LOG_PATH='
+        '"/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.log"'
+    )
+    report_declaration = (
+        'VAULTWIDE_PANEL_REPORT_PATH='
+        '"/tmp/verify_vaultwide_panel.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.report"'
+    )
+    assert step.count(log_declaration) == 1, (
+        "the verifier log path must be declared exactly once, keeping the "
+        "run-id/attempt namespacing"
+    )
+    assert step.count(report_declaration) == 1, (
+        "the verifier report path must be declared exactly once, keeping the "
+        "run-id/attempt namespacing"
+    )
+
+    # The runner writes through the declared paths...
+    assert 'LOG_PATH="$VAULTWIDE_PANEL_LOG_PATH"' in step
+    assert 'REPORT_PATH="$VAULTWIDE_PANEL_REPORT_PATH"' in step
+    assert "bash scripts/verify_vaultwide_panel.sh" in step
+
+    # ...and the failure diagnostic reads the same declared paths back.
+    assert 'cat "$VAULTWIDE_PANEL_REPORT_PATH"' in step
+    assert 'tail -n 400 "$VAULTWIDE_PANEL_LOG_PATH"' in step
+    assert 'grep -F "FAIL: " "$VAULTWIDE_PANEL_LOG_PATH"' in step
+
+    # The stale workspace-relative glob must be gone; it never matched what the
+    # runner wrote, which is exactly how the failure became unreadable.
+    assert "tmp/verify_vaultwide_panel.*" not in step
+
+
+def test_vaultwide_panel_verifier_diagnostic_fails_loud_on_missing_artifact() -> None:
+    # #4463: every `ls` in the old diagnostic was swallowed by
+    # `2>/dev/null || true`, so "no artifact found" and "artifact found and
+    # empty" were indistinguishable from a healthy silent step.
+    step = _vaultwide_panel_verifier_step_text()
+
+    marker = "VAULTWIDE_PANEL_VERIFIER_ARTIFACT_MISSING"
+    assert f'echo "{marker} report=$VAULTWIDE_PANEL_REPORT_PATH"' in step
+    assert f'echo "{marker} log=$VAULTWIDE_PANEL_LOG_PATH"' in step
+
+    # The artifact listing must not suppress its own stderr: the "No such file"
+    # line names the path that was expected and is itself the evidence.
+    listing = 'ls -l "$VAULTWIDE_PANEL_REPORT_PATH" "$VAULTWIDE_PANEL_LOG_PATH"'
+    assert listing in step
+    assert "2>/dev/null" not in step, (
+        "the verifier diagnostic must not discard stderr; a swallowed error is "
+        "how #4463 produced a red gate with no readable evidence"
+    )
+
+
+def test_vaultwide_panel_verifier_gate_remains_blocking() -> None:
+    # #4463 is bounded to legibility: the gate itself keeps failing the job and
+    # the verifier's assertions are untouched.
+    workflow = _smoke_text()
+    step = _vaultwide_panel_verifier_step_text()
+
+    assert '- name: "CI gate: vaultwide panel verifier"' in workflow
+    assert "continue-on-error" not in step
+
+    # The verifier runs bare, so its exit status is the step's exit status, and
+    # the cleanup trap re-raises the original status instead of masking it.
+    assert "bash scripts/verify_vaultwide_panel.sh ||" not in step
+    assert 'exit "$rc"' in step
+
+    verifier = (REPO_ROOT / "scripts" / "verify_vaultwide_panel.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'if [[ "$FAIL" -eq 0 ]]; then' in verifier
+    assert verifier.rstrip().endswith('_log "SUMMARY PASS=$PASS FAIL=$FAIL"\nexit 1')
 
 
 def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_merge() -> None:
