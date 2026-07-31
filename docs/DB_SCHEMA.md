@@ -384,7 +384,8 @@ they pass `required_db=True` and fail loud instead:
 | Worker transient retries | `app/workers/outbox_worker.py` |
 | Watcher `panel.scan.requested` / `ingest.vault.changed` (when `db_outbox_required()`) | `app/watcher/registry.py` |
 | `POST /ingest` (the route's only persistence side effect) | `app/api/routes/ingest.py` |
-| Vault-watcher delete tombstone (`db_outbox_required()`) | `app/watcher/vault_watcher.py` |
+| Vault-watcher delete tombstone (`db_outbox_required()` **or** a named database) | `app/watcher/vault_watcher.py` |
+| Knowledge-acquisition stage transitions | `app/knowledge_acquisition/stage_events.py` |
 
 Optional, best-effort, and compensated producers keep the default `required_db=False` behavior.
 

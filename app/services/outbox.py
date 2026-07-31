@@ -832,6 +832,7 @@ __all__ = [
     "write_outbox_event",
     "insert_object_and_outbox",
     "open_outbox_txn_conn",
+    "self_owned_write_would_skip",
     "poll_outbox_one",
     "ack_outbox",
     "bump_outbox_attempts",

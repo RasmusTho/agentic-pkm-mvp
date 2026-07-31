@@ -57,9 +57,19 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "this DB write is the documented mirror"
     ),
     ("app/cli/__init__.py", "pipe"): (
-        "operator-facing CLI: the emission is redundant with ObjectStore.save_object's "
-        "own required_db=True event for the same object, and a failure prints an "
-        "operator-visible WARNING rather than being swallowed"
+        "append_jsonl to INDEX_OUTBOX_PATH records the pipeline run on the same path "
+        "before this call; the DB emission is an operator-facing convenience on a "
+        "one-shot CLI, not a durability contract"
+    ),
+    ("app/services/vault_sync.py", "_enqueue"): (
+        "the conn=None default is vestigial: all three call sites (delete_note, "
+        "upsert_note, and the object sync) pass a live conn_rw() connection inside "
+        "the same transaction as the store write, so this never runs self-owned"
+    ),
+    ("app/heimdal/entity_register.py", "_emit"): (
+        "conn=self._conn may be None, but the register note written before this call "
+        "is the canonical identity record and survives the skip; the event is a "
+        "projection trigger and no caller derives a success signal from the return"
     ),
     ("app/api/routes/capture.py", "_emit_capture_event"): (
         "JSONL is the declared primary sink and the caller raises "
@@ -114,13 +124,67 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
-def _enclosing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
+def _enclosing_function_node(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     current = parents.get(node)
     while current is not None:
         if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return current.name
+            return current
         current = parents.get(current)
-    return "<module>"
+    return None
+
+
+def _enclosing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
+    enclosing = _enclosing_function_node(node, parents)
+    return enclosing.name if enclosing is not None else "<module>"
+
+
+def _optional_conn_parameters(
+    enclosing: ast.FunctionDef | ast.AsyncFunctionDef | None,
+) -> set[str]:
+    """Parameters of the enclosing function that default to ``None``.
+
+    Forwarding such a parameter as ``conn=`` does NOT make the call
+    caller-owned: at runtime the value is `None` whenever the caller omitted
+    it, and the write is self-owned after all.
+    """
+    if enclosing is None:
+        return set()
+    optional: set[str] = set()
+    args = enclosing.args
+    for arg, default in zip(args.args[-len(args.defaults) :] if args.defaults else [], args.defaults):
+        if isinstance(default, ast.Constant) and default.value is None:
+            optional.add(arg.arg)
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        if isinstance(default, ast.Constant) and default.value is None:
+            optional.add(arg.arg)
+    return optional
+
+
+def _conn_is_caller_owned(
+    conn_arg: ast.expr | None,
+    enclosing: ast.FunctionDef | ast.AsyncFunctionDef | None,
+) -> bool:
+    """Whether a ``conn=`` argument really proves a caller-owned transaction.
+
+    Only a value that cannot be ``None`` does. A literal ``None``, or a
+    forwarded parameter/attribute that is allowed to be ``None``, leaves the
+    write self-owned at runtime — which is exactly how the knowledge-acquisition
+    emitters slipped past the first version of this gate while silently
+    dropping their events under the memory-mode skip branch.
+    """
+    if conn_arg is None:
+        return False
+    if isinstance(conn_arg, ast.Constant) and conn_arg.value is None:
+        return False
+    if isinstance(conn_arg, ast.Name) and conn_arg.id in _optional_conn_parameters(enclosing):
+        return False
+    if isinstance(conn_arg, ast.Attribute):
+        # `self._conn` and friends: the class may well construct with None.
+        # Unprovable here, so it owes a classification or a reviewed reason.
+        return False
+    return True
 
 
 def _unclassified_self_owned_producers() -> dict[tuple[str, str], list[int]]:
@@ -138,13 +202,10 @@ def _unclassified_self_owned_producers() -> dict[tuple[str, str], list[int]]:
             if not isinstance(node, ast.Call) or _call_name(node) not in PRODUCER_NAMES:
                 continue
             keywords = {kw.arg: kw.value for kw in node.keywords}
-            conn_arg = keywords.get("conn")
-            if conn_arg is not None and not (
-                isinstance(conn_arg, ast.Constant) and conn_arg.value is None
-            ):
-                # Caller-owned transaction: bypasses the self-owned policy
-                # entirely. A literal ``conn=None`` does NOT — that is a
-                # self-owned write spelled differently.
+            enclosing = _enclosing_function_node(node, parents)
+            if _conn_is_caller_owned(keywords.get("conn"), enclosing):
+                # A conn that cannot be None bypasses the self-owned policy
+                # entirely and owes nothing here.
                 continue
             required_db = keywords.get("required_db")
             if required_db is not None and not (

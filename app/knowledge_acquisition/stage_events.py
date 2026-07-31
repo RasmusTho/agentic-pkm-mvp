@@ -182,7 +182,16 @@ def emit_stage_completed(
         trace_id=trace_id,
         source=STAGE_EVENT_SOURCE,
     )
-    return write_outbox_event(event, conn=conn, idempotency_key=key)
+    # required_db=True (#4214): `conn` is an OPTIONAL parameter here and the
+    # acquisition entrypoints forward their own `conn=None` default, so this is a
+    # self-owned write at runtime. Left unclassified, an explicit memory backend
+    # skipped it and returned "" — which `acquire.py`/`replay.py` read as
+    # `idempotent=True`, i.e. a receipt asserting the transition was ALREADY
+    # durably recorded, for a stage event that never existed. This module's own
+    # contract forbids that: `acquire.py` calls require_configured_database_url()
+    # precisely so an acquisition cannot land without a lineage trail. A supplied
+    # connection still bypasses the policy and owns its transaction.
+    return write_outbox_event(event, conn=conn, idempotency_key=key, required_db=True)
 
 
 def emit_stage_dead_letter(
@@ -223,7 +232,16 @@ def emit_stage_dead_letter(
         trace_id=trace_id,
         source=STAGE_EVENT_SOURCE,
     )
-    return write_outbox_event(event, conn=conn, idempotency_key=key)
+    # required_db=True (#4214): `conn` is an OPTIONAL parameter here and the
+    # acquisition entrypoints forward their own `conn=None` default, so this is a
+    # self-owned write at runtime. Left unclassified, an explicit memory backend
+    # skipped it and returned "" — which `acquire.py`/`replay.py` read as
+    # `idempotent=True`, i.e. a receipt asserting the transition was ALREADY
+    # durably recorded, for a stage event that never existed. This module's own
+    # contract forbids that: `acquire.py` calls require_configured_database_url()
+    # precisely so an acquisition cannot land without a lineage trail. A supplied
+    # connection still bypasses the policy and owns its transaction.
+    return write_outbox_event(event, conn=conn, idempotency_key=key, required_db=True)
 
 
 @dataclass(frozen=True)
