@@ -112,7 +112,6 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # - companion-ui/companion-app/ the companion_ui package the companion-ui
 #                               service serves (working_dir + PYTHONPATH)
 # - alembic.ini                 root alembic entry (script_location=app/alembic)
-# - sitecustomize.py            import-time classifier persistence hook
 # - scripts/                    the two entrypoints compose executes
 #                               in-container (migrate + api services) PLUS the
 #                               scripts.<module> Python modules app/** imports
@@ -134,7 +133,7 @@ COPY vault/ ./vault/
 COPY docs/settings/ ./docs/settings/
 COPY docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md ./docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md
 COPY companion-ui/companion-app/ ./companion-ui/companion-app/
-COPY alembic.ini sitecustomize.py ./
+COPY alembic.ini ./
 COPY scripts/start_api.sh scripts/run_migrations.sh \
      scripts/__init__.py scripts/yaml_roundtrip.py \
      scripts/validate_issue_readiness.py scripts/validate_source_anchors.py \
