@@ -4369,6 +4369,40 @@ def test_duplicate_and_stale_events_cannot_advance() -> None:
         == "foreign_run"
     )
 
+    # An event bound to a different plan cannot advance a run: the plan binding
+    # is immutable initial state, so a stale run version fails closed.
+    other_plan = _ddo4_plan(((_issue(4169, SHA_B),),))
+    stale_plan = dataclass_replace(
+        run.state, plan_ref=_ddo4_ref(other_plan, other_plan.plan_id)
+    )
+    fresh_tick = run.admit(
+        _ddo4_event(
+            run.plan,
+            sequence=run.next_sequence(),
+            event_type="timer_elapsed",
+            correlation_id="event-timer-stale-plan",
+        )
+    )
+    assert reduce_delivery_run(stale_plan, fresh_tick).refusal == (
+        "stale_plan_binding"
+    )
+    assert reduce_delivery_run(stale_plan, fresh_tick).state == stale_plan
+
+    # A lifecycle command carrying a stale run version is fenced the same way.
+    stale_command = reduce_lifecycle_command(
+        run.state,
+        LifecycleCommand(
+            command="pause",
+            command_id="cmd-stale-version",
+            run_id=DDO4_RUN,
+            expected_run_version=run.state.version - 1,
+            issued_by=_actor("owner:RasmusTho"),
+            issued_at=TS,
+        ),
+    )
+    assert stale_command.refusal == "stale_run_version"
+    assert stale_command.state == run.state
+
 
 def test_effects_require_exact_prerequisites() -> None:
     """No effect is proposed before the exact named prerequisite is proven."""
@@ -4651,8 +4685,11 @@ def test_runner_uses_existing_claim_wait_and_verified_closure_paths() -> None:
         assert governed.entrypoint == (
             ".codex/skills/verification-and-closure/SKILL.md"
         )
+        # A governed handoff never pretends to be a runnable command line.
+        assert governed.argv == ()
 
-    # Every argv the runner can build starts at a governing entrypoint.
+    # Every entrypoint and planner the runner can name is one of the governing
+    # paths, and every subprocess handoff is genuinely runnable.
     known = set(AUTHORITY_ENTRYPOINTS.values())
     for effect in run.effects:
         if effect.effect_class == "launch_worker":
@@ -4661,9 +4698,28 @@ def test_runner_uses_existing_claim_wait_and_verified_closure_paths() -> None:
             effect, agent_id="builder:ddo04", session_id="session-1"
         )
         assert invocation.entrypoint in known
+        assert set(invocation.planner_entrypoints) <= known
+        if invocation.handoff == "subprocess":
+            assert invocation.argv and invocation.argv[0] in known
         for argument in invocation.argv:
             if argument.startswith("scripts/") or argument.startswith(".codex/"):
                 assert argument in known
+
+    # Every advertised entrypoint is actually routed to by some effect class or
+    # by the worker preflight, so the map cannot accumulate dead paths.
+    routed = {AUTHORITY_ENTRYPOINTS["worktree_lifecycle"]}
+    for effect in run.effects:
+        if effect.effect_class == "launch_worker":
+            continue
+        invocation = resolve_authority_invocation(
+            effect, agent_id="builder:ddo04", session_id="session-1"
+        )
+        routed.add(invocation.entrypoint)
+        routed.update(invocation.planner_entrypoints)
+        routed.update(
+            argument for argument in invocation.argv if argument in known
+        )
+    assert routed == known
 
     # The worker launch is not a script: it goes through the runtime port.
     with pytest.raises(Exception, match="worker runtime port"):
@@ -5224,7 +5280,7 @@ def test_lifecycle_controls_are_typed_fenced_and_effect_safe() -> None:
     assert resumed.state.issue_state(issue.scope_key).phase == "awaiting_review"
 
     # Cancellation records committed effects as obligations and emits nothing.
-    committed = run.state.issue_state(issue.scope_key).committed_effects
+    committed = run.state.issue_state(issue.scope_key).unreconciled_effects
     assert {item.effect_class for item in committed} >= {
         "claim_issue",
         "launch_worker",
@@ -5784,14 +5840,58 @@ def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
     # Head-bound acceptance evidence is invalidated by the failure.
     assert "required_checks_green" not in repairing.acceptance_evidence
 
+    # A worker result cannot re-enter the run straight from repairing: the
+    # repair must first be re-launched under its own attempt identity.
+    assert not REDUCER_TRANSITION_MATRIX[
+        ("repairing", "worker_result_recorded")
+    ].legal
+
+    # The tick authorizes a genuinely new launch, not a replay of the first one.
+    relaunch = run.tick()
+    assert [item.effect_class for item in relaunch.effects] == ["launch_worker"]
+    assert relaunch.effects[0].worker_attempt == 1
+    repair_launch = run.materialize(relaunch.effects[0], run.events[-1])
+    assert repair_launch.idempotency_key != launch_effect.idempotency_key
+    assert repair_launch.expected_outcome_keys != launch_effect.expected_outcome_keys
+    assert repair_launch.expected_outcome_keys[0].endswith(":repair-1")
+
+    relaunched_event = _ddo4_effect_outcome_event(
+        plan,
+        repair_launch,
+        subject=claimed,
+        outcome_state="worker_launched",
+        sequence=run.next_sequence(),
+        correlation_id="event-relaunch",
+    )
+    run.apply(run.admit(relaunched_event, effect=repair_launch))
+    assert run.state.issue_state(issue.scope_key).phase == "working"
+    assert (
+        run.state.issue_state(issue.scope_key).authorized_invocation_effect_key
+        == repair_launch.idempotency_key
+    )
+
+    # The repair invocation identity differs from the first, so the runtime port
+    # is never asked to restart a terminal invocation.
+    repair_pack, repair_invocation, repaired = _ddo4_worker_bundle(
+        issue,
+        plan,
+        repair_launch,
+        result_id="worker-result-v2-repaired",
+        domain_result_id="worker-result-repaired",
+        head=DDO4_REPAIRED_HEAD,
+        base_head=DDO4_HEAD,
+    )
+    assert repair_invocation.idempotency_key != invocation.idempotency_key
+
     # A repair result that moves to another pull request is refused outright.
     _p, _i, hijacked = _ddo4_worker_bundle(
         issue,
         plan,
-        launch_effect,
+        repair_launch,
         result_id="worker-result-v2-hijack",
         domain_result_id="worker-result-hijack",
         head=DDO4_REPAIRED_HEAD,
+        base_head=DDO4_HEAD,
         pull_request_number=DDO4_PR + 7,
     )
     run.worker_results.append(hijacked.delivery_result)
@@ -5810,9 +5910,9 @@ def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
         run.admit(
             hijack_event,
             worker_result=hijacked,
-            context_pack=pack,
-            invocation=invocation,
-            launch_effect=launch_effect,
+            context_pack=repair_pack,
+            invocation=repair_invocation,
+            launch_effect=repair_launch,
         ),
     )
     assert hijack.refusal == "pull_request_identity_conflict"
@@ -5821,14 +5921,6 @@ def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
     run.worker_results.pop()
 
     # The honest repair keeps the pull request and advances only the head.
-    _p2, _i2, repaired = _ddo4_worker_bundle(
-        issue,
-        plan,
-        launch_effect,
-        result_id="worker-result-v2-repaired",
-        domain_result_id="worker-result-repaired",
-        head=DDO4_REPAIRED_HEAD,
-    )
     run.worker_results.append(repaired.delivery_result)
     repaired_event = _ddo4_event(
         plan,
@@ -5844,9 +5936,9 @@ def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
         run.admit(
             repaired_event,
             worker_result=repaired,
-            context_pack=pack,
-            invocation=invocation,
-            launch_effect=launch_effect,
+            context_pack=repair_pack,
+            invocation=repair_invocation,
+            launch_effect=repair_launch,
         )
     )
     repaired_state = run.state.issue_state(issue.scope_key)
@@ -6054,7 +6146,7 @@ def test_cancellation_records_obligations_instead_of_claiming_compensation() -> 
     # never committed appears.
     committed_keys = {
         item.idempotency_key
-        for item in run.state.issue_state(issue.scope_key).committed_effects
+        for item in run.state.issue_state(issue.scope_key).unreconciled_effects
     }
     assert {
         item.effect_idempotency_key for item in cancelled.obligations
@@ -6072,6 +6164,62 @@ def test_cancellation_records_obligations_instead_of_claiming_compensation() -> 
         )
         assert followup.refusal == "terminal_run"
         assert followup.effects == ()
+
+    # An effect the reducer authorized but never saw acknowledged is an unknown
+    # external state, not an absent one. Cancelling mid-claim must still report
+    # it: the adapter may already have removed agent:ready and taken a lease.
+    inflight_issue = _issue(4167, SHA_A)
+    inflight_plan = _ddo4_plan(((inflight_issue,),))
+    inflight = _DdoRun(inflight_plan, _ddo4_profile())
+    started = inflight.start()
+    assert [item.effect_class for item in started.effects] == ["claim_issue"]
+    claiming_state = inflight.state.issue_state(inflight_issue.scope_key)
+    assert claiming_state.phase == "claiming"
+    assert [entry.outcome_state for entry in claiming_state.effect_ledger] == [None]
+
+    authorized_claim = inflight.materialize(started.effects[0], inflight.events[-1])
+    mid_claim = reduce_lifecycle_command(
+        inflight.state,
+        LifecycleCommand(
+            command="cancel",
+            command_id="cmd-cancel-mid-claim",
+            run_id=DDO4_RUN,
+            expected_run_version=inflight.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    assert mid_claim.effects == ()
+    assert len(mid_claim.obligations) == 1
+    orphaned = mid_claim.obligations[0]
+    assert orphaned.effect_class == "claim_issue"
+    assert orphaned.effect_idempotency_key == authorized_claim.idempotency_key
+    assert orphaned.last_observed_outcome_state is None
+    assert orphaned.outcome_keys == authorized_claim.expected_outcome_keys
+    assert orphaned.reconciliation_owner == "builderops_reconciliation"
+
+    # A truthful failure proves the guarded authority never moved, so that one
+    # effect is the only kind excluded from the obligation set.
+    failing = _DdoRun(_ddo4_plan(((inflight_issue,),)), _ddo4_profile())
+    failing_started = failing.start()
+    failing.fail(
+        failing_started.effects[0],
+        failing.events[-1],
+        subject=_ready_authority(inflight_issue),
+        label="claim",
+    )
+    resolved = reduce_lifecycle_command(
+        failing.state,
+        LifecycleCommand(
+            command="cancel",
+            command_id="cmd-cancel-after-failure",
+            run_id=DDO4_RUN,
+            expected_run_version=failing.state.version,
+            issued_by=authorized,
+            issued_at=TS,
+        ),
+    )
+    assert resolved.obligations == ()
 
     # A cancelled run's obligations can only be carried by a receipt that is not
     # marked delivered, so a false clean receipt is unconstructable.

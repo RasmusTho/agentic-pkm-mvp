@@ -54,11 +54,12 @@ WORKER_RUNTIME_OPERATIONS: Final[tuple[str, ...]] = (
 )
 
 #: The exact repo-relative entrypoints that already own each authority. Every
-#: path here is asserted to exist, so a renamed or imagined script cannot be
-#: advertised as an adapter.
+#: path here is asserted to exist and is actually routed to, so a renamed or
+#: imagined script cannot be advertised as an adapter. Workspace preflight is
+#: deliberately absent: ``issue_pickup_claim.sh`` runs it internally, and
+#: re-invoking it here would be a second copy of that authority.
 AUTHORITY_ENTRYPOINTS: Final[Mapping[str, str]] = {
     "claim_issue": "scripts/issue_pickup_claim.sh",
-    "workspace_preflight": "scripts/agent_workspace_preflight.sh",
     "worktree_lifecycle": "scripts/agent_worktree.py",
     "await_ci": "scripts/await_pr_checks.sh",
     "verified_delivery_skill": ".codex/skills/verification-and-closure/SKILL.md",
@@ -79,12 +80,30 @@ class WorkerRuntimeUnknownError(RuntimeError):
 
 @dataclass(frozen=True)
 class AuthorityInvocation:
-    """How one reducer-authorized effect reaches its existing authority."""
+    """How one reducer-authorized effect reaches its existing authority.
+
+    ``argv`` is a complete, runnable command line and is populated only for a
+    ``subprocess`` handoff. A ``governed_skill`` handoff has no runnable command
+    line by design - the skill owns the GitHub write and drives its planner
+    scripts with context files this seam does not hold - so it names those
+    planners in ``planner_entrypoints`` instead of pretending to be executable.
+    """
 
     effect_class: EffectClass
     handoff: HandoffKind
     entrypoint: str
-    argv: tuple[str, ...]
+    argv: tuple[str, ...] = ()
+    planner_entrypoints: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.handoff == "subprocess" and not self.argv:
+            raise DeliveryAuthorityError(
+                "a subprocess handoff must carry a runnable command line"
+            )
+        if self.handoff == "governed_skill" and self.argv:
+            raise DeliveryAuthorityError(
+                "a governed-skill handoff has no runnable command line"
+            )
 
 
 def resolve_authority_invocation(
@@ -150,18 +169,15 @@ def resolve_authority_invocation(
             effect_class=effect.effect_class,
             handoff="governed_skill",
             entrypoint=_GOVERNED_SKILL,
-            argv=(
-                "python3",
-                AUTHORITY_ENTRYPOINTS["verified_merge_planner"]
-                if effect.effect_class == "merge_pull_request"
-                else AUTHORITY_ENTRYPOINTS["verified_merge_phase"],
+            planner_entrypoints=(
+                AUTHORITY_ENTRYPOINTS["verified_merge_phase"],
+                AUTHORITY_ENTRYPOINTS["verified_merge_planner"],
             ),
         )
     return AuthorityInvocation(
         effect_class=effect.effect_class,
         handoff="governed_skill",
         entrypoint=_GOVERNED_SKILL,
-        argv=(),
     )
 
 

@@ -249,18 +249,22 @@ def _build_transition_matrix() -> (
         "claim_issue succeeded with a truthful ready-to-claimed readback",
         emits=("launch_worker",),
     )
-    matrix[("launching", "worker_launched")] = _legal(
-        "working",
-        "launch_worker succeeded for the authorized invocation identity",
-    )
-    worker_result_phases: tuple[RunPhase, ...] = ("working", "repairing")
-    for source_phase in worker_result_phases:
-        matrix[(source_phase, "worker_result_recorded")] = _legal(
-            None,
-            "the worker result resolves the full pack/invocation/effect chain",
-            "the result repeats the reducer-authorized pull-request identity",
-            emits=("await_ci",),
+    worker_launch_phases: tuple[RunPhase, ...] = ("launching", "repairing")
+    for launch_phase in worker_launch_phases:
+        matrix[(launch_phase, "worker_launched")] = _legal(
+            "working",
+            "launch_worker succeeded for the authorized invocation identity",
         )
+    # A worker result is admissible only from working. A repair must first be
+    # re-launched under its own attempt identity, so a result cannot re-enter the
+    # run straight from repairing without a new reducer-authorized launch.
+    matrix[("working", "worker_result_recorded")] = _legal(
+        None,
+        "the worker result resolves the full pack/invocation/effect chain",
+        "the result names the launch effect this run authorized",
+        "the result repeats the reducer-authorized pull-request identity",
+        emits=("await_ci",),
+    )
     matrix[("awaiting_ci", "checks_passed")] = _legal(
         "awaiting_review",
         "await_ci succeeded at the authorized pull request and exact head",
@@ -312,7 +316,14 @@ def _build_transition_matrix() -> (
             "the typed exception kind selects owner-decision, system-block, "
             "or block",
         )
-        if phase != "admitted":
+        if phase == "repairing":
+            matrix[(phase, "timer_elapsed")] = _legal(
+                phase,
+                "a budgeted repair round is open for this Issue",
+                "the repair launch carries its own attempt identity",
+                emits=("launch_worker",),
+            )
+        elif phase != "admitted":
             matrix[(phase, "timer_elapsed")] = _legal(
                 phase,
                 "a timer tick re-derives due effects and never invents evidence",
@@ -326,13 +337,26 @@ REDUCER_TRANSITION_MATRIX: Final[
 
 
 @dataclass(frozen=True)
-class CommittedEffect:
-    """One external effect this run has observed as committed."""
+class EffectLedgerEntry:
+    """One effect this run authorized, and the last outcome it observed.
+
+    ``outcome_state`` is ``None`` while the effect is authorized but its typed
+    outcome has not been observed. That is an *unknown* external state, not an
+    absent one: the adapter may already have removed ``agent:ready``, taken a
+    dispatcher lease, or opened a pull request. Cancellation therefore reports
+    unknown entries as obligations exactly like committed ones.
+    """
 
     effect_class: EffectClass
     idempotency_key: str
-    outcome_state: EffectOutcomeState
     outcome_keys: tuple[str, ...]
+    outcome_state: EffectOutcomeState | None = None
+
+    @property
+    def is_resolved_uncommitted(self) -> bool:
+        """True only when a truthful failure proved the effect did not commit."""
+
+        return self.outcome_state == "failed"
 
 
 @dataclass(frozen=True)
@@ -349,13 +373,23 @@ class IssueRunState:
     pending_known_defect_ref: str | None = None
     pending_known_defect_finding_hash: str | None = None
     acceptance_evidence: tuple[AcceptanceEvidenceKind, ...] = ()
-    committed_effects: tuple[CommittedEffect, ...] = ()
+    effect_ledger: tuple[EffectLedgerEntry, ...] = ()
     repair_rounds: int = 0
     blocked_reason: str | None = None
 
     @property
     def observed_evidence(self) -> frozenset[AcceptanceEvidenceKind]:
         return frozenset(self.acceptance_evidence)
+
+    @property
+    def unreconciled_effects(self) -> tuple[EffectLedgerEntry, ...]:
+        """Authorized effects whose external state is committed or unknown."""
+
+        return tuple(
+            entry
+            for entry in self.effect_ledger
+            if not entry.is_resolved_uncommitted
+        )
 
 
 @dataclass(frozen=True)
@@ -372,6 +406,7 @@ class DeliveryRunState:
     acceptance_profile_ref: ContractRef
     acceptance_profile_hash: str
     required_acceptance_evidence: tuple[AcceptanceEvidenceKind, ...]
+    required_check_names: tuple[str, ...]
     authorized_control_scopes: tuple[str, ...]
     max_repair_rounds: int
     version: int = 0
@@ -405,6 +440,7 @@ class EffectProposal:
     exact_head_sha: str | None = None
     known_defect_registry_ref: str | None = None
     known_defect_finding_hash: str | None = None
+    worker_attempt: int = 0
 
 
 @dataclass(frozen=True)
@@ -713,6 +749,7 @@ def initial_delivery_run_state(
         acceptance_profile_ref=profile_ref,
         acceptance_profile_hash=acceptance_profile.content_hash,
         required_acceptance_evidence=acceptance_profile.required_evidence,
+        required_check_names=plan.policy_profile.required_check_names,
         authorized_control_scopes=tuple(sorted(set(authorized_control_scopes))),
         max_repair_rounds=max_repair_rounds,
         issues=tuple(sorted(issues, key=lambda item: item.issue.scope_key)),
@@ -786,6 +823,106 @@ def _open_due_claims(
     return updated, tuple(proposals)
 
 
+@dataclass(frozen=True)
+class EffectIdentity:
+    """The derived canonical identity of one proposed effect."""
+
+    input_hash: str
+    idempotency_key: str
+    outcome_keys: tuple[str, ...]
+
+
+def proposal_effect_identity(
+    state: DeliveryRunState,
+    proposal: EffectProposal,
+) -> EffectIdentity:
+    """Derive the canonical identity of one proposal.
+
+    :func:`materialize_effect` uses this same derivation, so the ledger the
+    reducer writes and the canonical effect an executor receives can never name
+    different identities for the same decision.
+    """
+
+    outcome_keys = delivery_effect_expected_outcome_keys(
+        effect_class=proposal.effect_class,
+        run_id=state.run_id,
+        issue=proposal.issue,
+        pull_request_number=proposal.pull_request_number,
+        required_check_names=state.required_check_names,
+        known_defect_registry_ref=proposal.known_defect_registry_ref,
+        known_defect_finding_hash=proposal.known_defect_finding_hash,
+        worker_attempt=proposal.worker_attempt,
+    )
+    input_hash = delivery_effect_input_hash(
+        run_id=state.run_id,
+        plan_ref=state.plan_ref,
+        effect_class=proposal.effect_class,
+        issue=proposal.issue,
+        pull_request_number=proposal.pull_request_number,
+        exact_head_sha=proposal.exact_head_sha,
+        expected_authorities=proposal.expected_authorities,
+        expected_outcome_keys=outcome_keys,
+        known_defect_registry_ref=proposal.known_defect_registry_ref,
+        known_defect_finding_hash=proposal.known_defect_finding_hash,
+    )
+    return EffectIdentity(
+        input_hash=input_hash,
+        idempotency_key=delivery_effect_idempotency_key(input_hash),
+        outcome_keys=outcome_keys,
+    )
+
+
+def _record_authorizations(
+    state: DeliveryRunState,
+    issues: tuple[IssueRunState, ...],
+    proposals: tuple[EffectProposal, ...],
+) -> tuple[IssueRunState, ...]:
+    """Ledger every proposed effect the moment the reducer authorizes it.
+
+    Recording at authorization rather than at acknowledgement is what makes
+    cancellation honest: an effect whose outcome never arrived is an unknown
+    external state that reconciliation must resolve, not an effect that can be
+    assumed never to have happened.
+    """
+
+    updated = issues
+    for proposal in proposals:
+        issue_state = next(
+            (
+                item
+                for item in updated
+                if item.issue.scope_key == proposal.issue.scope_key
+            ),
+            None,
+        )
+        if issue_state is None:
+            continue
+        identity = proposal_effect_identity(state, proposal)
+        if any(
+            entry.idempotency_key == identity.idempotency_key
+            for entry in issue_state.effect_ledger
+        ):
+            continue
+        entry = EffectLedgerEntry(
+            effect_class=proposal.effect_class,
+            idempotency_key=identity.idempotency_key,
+            outcome_keys=identity.outcome_keys,
+        )
+        updated = _replace_issue(
+            updated,
+            replace(
+                issue_state,
+                effect_ledger=tuple(
+                    sorted(
+                        (*issue_state.effect_ledger, entry),
+                        key=lambda item: item.idempotency_key,
+                    )
+                ),
+            ),
+        )
+    return updated
+
+
 def _advance(
     state: DeliveryRunState,
     admitted: AdmittedEvent,
@@ -796,7 +933,7 @@ def _advance(
         state=replace(
             state,
             version=state.version + 1,
-            issues=issues,
+            issues=_record_authorizations(state, issues, effects),
             seen_event_ids=tuple(
                 sorted({*state.seen_event_ids, admitted.event.event_id})
             ),
@@ -851,11 +988,37 @@ def reduce_delivery_run(
     return _ISSUE_HANDLERS[admitted.signal](state, admitted, issue_state)
 
 
+def _due_repair_launches(
+    issues: tuple[IssueRunState, ...],
+    signal: ReducerSignal,
+) -> tuple[EffectProposal, ...]:
+    """Return the repair launches a tick is due to authorize.
+
+    A repair launch has no issue-scoped cause it could legally bind, so the
+    subjectless tick authorizes it. The attempt identity comes from the run's
+    own repair counter, so the port is never asked to restart a terminal
+    invocation identity.
+    """
+
+    return tuple(
+        EffectProposal(
+            effect_class="launch_worker",
+            issue=item.issue,
+            expected_authorities=(item.current_authority,),
+            worker_attempt=item.repair_rounds,
+        )
+        for item in issues
+        if item.phase == "repairing"
+        and REDUCER_TRANSITION_MATRIX[(item.phase, signal)].legal
+    )
+
+
 def _reduce_tick(
     state: DeliveryRunState,
     admitted: AdmittedEvent,
 ) -> Reduction:
-    issues, proposals = _open_due_claims(state.issues, admitted.signal)
+    issues, claims = _open_due_claims(state.issues, admitted.signal)
+    proposals = claims + _due_repair_launches(issues, admitted.signal)
     return _advance(state, admitted, issues, proposals)
 
 
@@ -883,25 +1046,27 @@ def _reduce_exception(
 def _committed(
     issue_state: IssueRunState,
     admitted: AdmittedEvent,
-) -> tuple[CommittedEffect, ...]:
+) -> tuple[EffectLedgerEntry, ...]:
+    """Resolve the ledger entry for the effect this event reports on."""
+
     effect = admitted.effect
     outcome = admitted.event.effect_outcome
     if effect is None or outcome is None:
-        return issue_state.committed_effects
-    record = CommittedEffect(
+        return issue_state.effect_ledger
+    record = EffectLedgerEntry(
         effect_class=effect.effect_class,
         idempotency_key=effect.idempotency_key,
-        outcome_state=outcome.outcome_state,
         outcome_keys=tuple(outcome.outcome_keys),
+        outcome_state=outcome.outcome_state,
     )
-    if any(
-        item.idempotency_key == record.idempotency_key
-        for item in issue_state.committed_effects
-    ):
-        return issue_state.committed_effects
+    remaining = tuple(
+        item
+        for item in issue_state.effect_ledger
+        if item.idempotency_key != record.idempotency_key
+    )
     return tuple(
         sorted(
-            (*issue_state.committed_effects, record),
+            (*remaining, record),
             key=lambda item: item.idempotency_key,
         )
     )
@@ -937,7 +1102,7 @@ def _reduce_claim_succeeded(
         issue_state,
         phase="launching",
         current_authority=authority,
-        committed_effects=_committed(issue_state, admitted),
+        effect_ledger=_committed(issue_state, admitted),
     )
     proposal = EffectProposal(
         effect_class="launch_worker",
@@ -960,7 +1125,7 @@ def _reduce_worker_launched(
         phase="working",
         current_authority=_authority_of(admitted, issue_state),
         authorized_invocation_effect_key=admitted.effect.idempotency_key,
-        committed_effects=_committed(issue_state, admitted),
+        effect_ledger=_committed(issue_state, admitted),
     )
     return _advance(state, admitted, _replace_issue(state.issues, updated))
 
@@ -1042,7 +1207,7 @@ def _reduce_checks_passed(
         issue_state,
         phase="awaiting_review",
         acceptance_evidence=_with_evidence(issue_state, *_effect_evidence(admitted)),
-        committed_effects=_committed(issue_state, admitted),
+        effect_ledger=_committed(issue_state, admitted),
         current_authority=authority,
     )
     proposal = EffectProposal(
@@ -1066,7 +1231,7 @@ def _reduce_review_recorded(
         return _refuse(state, "head_evidence_conflict")
     updated = replace(
         issue_state,
-        committed_effects=_committed(issue_state, admitted),
+        effect_ledger=_committed(issue_state, admitted),
         current_authority=_authority_of(admitted, issue_state),
     )
     return _advance(state, admitted, _replace_issue(state.issues, updated))
@@ -1175,7 +1340,7 @@ def _reduce_known_defect_recorded(
         issue_state,
         phase="merging",
         acceptance_evidence=_with_evidence(issue_state, *_effect_evidence(admitted)),
-        committed_effects=_committed(issue_state, admitted),
+        effect_ledger=_committed(issue_state, admitted),
         current_authority=authority,
     )
     proposal = EffectProposal(
@@ -1202,7 +1367,7 @@ def _reduce_merge_succeeded(
         issue_state,
         phase="closing",
         acceptance_evidence=_with_evidence(issue_state, *_effect_evidence(admitted)),
-        committed_effects=_committed(issue_state, admitted),
+        effect_ledger=_committed(issue_state, admitted),
         current_authority=authority,
     )
     proposal = EffectProposal(
@@ -1229,7 +1394,7 @@ def _reduce_closure_succeeded(
         issue_state,
         phase="recording_receipt",
         acceptance_evidence=_with_evidence(issue_state, *_effect_evidence(admitted)),
-        committed_effects=_committed(issue_state, admitted),
+        effect_ledger=_committed(issue_state, admitted),
         current_authority=authority,
     )
     proposal = EffectProposal(
@@ -1268,7 +1433,7 @@ def _reduce_receipt_recorded(
             issue_state,
             phase="blocked",
             blocked_reason="acceptance_evidence_unmet:" + ",".join(unmet),
-            committed_effects=committed,
+            effect_ledger=committed,
             acceptance_evidence=tuple(sorted(observed)),
             current_authority=_authority_of(admitted, issue_state),
         )
@@ -1276,7 +1441,7 @@ def _reduce_receipt_recorded(
     updated = replace(
         issue_state,
         phase="delivered",
-        committed_effects=committed,
+        effect_ledger=committed,
         acceptance_evidence=tuple(sorted(observed)),
         current_authority=_authority_of(admitted, issue_state),
     )
@@ -1296,12 +1461,22 @@ def _reduce_effect_failed(
 ) -> Reduction:
     effect = admitted.effect
     assert effect is not None
+    # A failure report about a pull request or head this run does not currently
+    # authorize is stale evidence, exactly as a success report would be. Without
+    # this fence a late failure could regress an already-reviewed run and burn a
+    # repair round against evidence for a superseded head.
+    if effect.pull_request_number is not None and not _authorized_target_matches(
+        issue_state, admitted
+    ):
+        return _refuse(state, "head_evidence_conflict")
     authority = _authority_of(admitted, issue_state)
+    ledger = _committed(issue_state, admitted)
     if effect.effect_class != "await_ci":
         updated = replace(
             issue_state,
             phase="blocked",
             blocked_reason=f"effect_failed:{effect.effect_class}",
+            effect_ledger=ledger,
             current_authority=authority,
         )
         return _advance(state, admitted, _replace_issue(state.issues, updated))
@@ -1310,14 +1485,20 @@ def _reduce_effect_failed(
             issue_state,
             phase="blocked",
             blocked_reason="repair_budget_exhausted",
+            effect_ledger=ledger,
             current_authority=authority,
         )
         return _advance(state, admitted, _replace_issue(state.issues, updated))
-    # A repair round hands the failure back to the already-authorized bounded
-    # worker. No second launch_worker effect is emitted: the delivered effect
-    # vocabulary scopes one worker launch per Issue per run, and the next
-    # reducer-authorized effect is await_ci at the repaired head, whose semantic
-    # identity necessarily differs from the failed one.
+    # A repair retry is a new reducer-authorized launch with its own attempt
+    # identity, per the DDO-04 constraint that the same invocation identity
+    # starts at most once: the runtime port refuses to restart a terminal
+    # invocation, so re-proposing the first launch would deadlock the run.
+    #
+    # The launch is not emitted here. A launch effect carries no pull request or
+    # head, while this causal event resolves the failed await_ci evidence, and a
+    # delivered effect must match its causal evidence's PR and head. The next
+    # subjectless timer tick is therefore the only legitimate cause, exactly as
+    # for opening a dependency wave.
     updated = replace(
         issue_state,
         phase="repairing",
@@ -1327,6 +1508,7 @@ def _reduce_effect_failed(
             for kind in issue_state.acceptance_evidence
             if kind not in _HEAD_BOUND_EVIDENCE
         ),
+        effect_ledger=ledger,
         current_authority=authority,
     )
     return _advance(state, admitted, _replace_issue(state.issues, updated))
@@ -1375,12 +1557,20 @@ _ISSUE_HANDLERS: Final[dict[ReducerSignal, _IssueHandler]] = {
 def outstanding_effect_obligations(
     state: DeliveryRunState,
 ) -> tuple[OutstandingEffectObligation, ...]:
-    """Return every committed effect this run will not attempt to undo."""
+    """Return every effect this run authorized and will not attempt to undo.
+
+    Both committed and unknown-outcome effects are reported. An effect the
+    reducer authorized but never saw acknowledged may already have removed
+    ``agent:ready``, taken a dispatcher lease, or opened a pull request, so
+    omitting it would let a cancelled run assert that nothing is outstanding
+    while live pickup authority is orphaned. Only an effect whose truthful
+    failure proved the guarded authority unchanged is excluded.
+    """
 
     records = {
         item.idempotency_key: item
         for issue_state in state.issues
-        for item in issue_state.committed_effects
+        for item in issue_state.unreconciled_effects
     }
     return tuple(
         OutstandingEffectObligation(
@@ -1396,6 +1586,7 @@ def outstanding_effect_obligations(
 _RESUMABLE_EFFECT_BY_PHASE: Final[dict[RunPhase, EffectClass]] = {
     "claiming": "claim_issue",
     "launching": "launch_worker",
+    "repairing": "launch_worker",
     "awaiting_ci": "await_ci",
     "awaiting_review": "request_review",
     "recording_defect": "record_known_defect",
@@ -1433,7 +1624,7 @@ def pending_effect_proposals(
             continue
         effect_class = _RESUMABLE_EFFECT_BY_PHASE.get(item.phase)
         if effect_class is None:
-            # working and repairing wait on an external structured result.
+            # working waits on an external structured result.
             continue
         proposals.append(
             EffectProposal(
@@ -1452,6 +1643,11 @@ def pending_effect_proposals(
                 known_defect_finding_hash=item.pending_known_defect_finding_hash
                 if effect_class == "record_known_defect"
                 else None,
+                # A resumed repair re-proposes its own attempt, never the first
+                # launch, so the port is not asked to restart a terminal identity.
+                worker_attempt=item.repair_rounds
+                if item.phase == "repairing"
+                else 0,
             )
         )
     return tuple(proposals)
@@ -1579,28 +1775,14 @@ def materialize_effect(
 
     if state.plan_ref.contract_id != plan.plan_id:
         raise ValueError("effect materialization must use the run's bound plan")
-    outcome_keys = delivery_effect_expected_outcome_keys(
-        effect_class=proposal.effect_class,
-        run_id=state.run_id,
-        issue=proposal.issue,
-        pull_request_number=proposal.pull_request_number,
-        required_check_names=plan.policy_profile.required_check_names,
-        known_defect_registry_ref=proposal.known_defect_registry_ref,
-        known_defect_finding_hash=proposal.known_defect_finding_hash,
-    )
-    input_hash = delivery_effect_input_hash(
-        run_id=state.run_id,
-        plan_ref=state.plan_ref,
-        effect_class=proposal.effect_class,
-        issue=proposal.issue,
-        pull_request_number=proposal.pull_request_number,
-        exact_head_sha=proposal.exact_head_sha,
-        expected_authorities=proposal.expected_authorities,
-        expected_outcome_keys=outcome_keys,
-        known_defect_registry_ref=proposal.known_defect_registry_ref,
-        known_defect_finding_hash=proposal.known_defect_finding_hash,
-    )
-    idempotency_key = delivery_effect_idempotency_key(input_hash)
+    if plan.policy_profile.required_check_names != state.required_check_names:
+        raise ValueError(
+            "effect materialization must use the run's bound required checks"
+        )
+    identity = proposal_effect_identity(state, proposal)
+    idempotency_key = identity.idempotency_key
+    outcome_keys = identity.outcome_keys
+    input_hash = identity.input_hash
     effect = ReducerEffect(
         effect_id=idempotency_key,
         run_id=state.run_id,
@@ -1637,8 +1819,9 @@ __all__ = [
     "RUN_PHASES",
     "TERMINAL_PHASES",
     "AdmittedEvent",
-    "CommittedEffect",
+    "EffectLedgerEntry",
     "DeliveryRunState",
+    "EffectIdentity",
     "EffectProposal",
     "IssueRunState",
     "LifecycleCommand",
@@ -1653,6 +1836,7 @@ __all__ = [
     "initial_delivery_run_state",
     "materialize_effect",
     "outstanding_effect_obligations",
+    "proposal_effect_identity",
     "pending_effect_proposals",
     "reduce_delivery_run",
     "reduce_lifecycle_command",
