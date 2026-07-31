@@ -149,6 +149,10 @@ Delivery rules:
 - A coordinator waits on many PRs at once — the worst case for the shared API budget. Poll per `_shared/CI_WAIT_CONTRACT.md` (REST check-runs only, ≥60–120s backoff, `scripts/await_pr_checks.sh`); never run concurrent `gh pr checks` loops, which drain the shared GraphQL bucket to zero and stall every sub-agent.
 - After every delivered issue, re-read the parent feature issue and live Issue/PR state, then
   recompute the next pickup target. Inspect Project state only for an explicitly Project-scoped run.
+  As part of that parent upkeep, refresh the parent's structured child ledger
+  (`builderops:epic-delivery-ledger v1`) per
+  `verification-and-closure :: Parent Issue Closure :: Structured child ledger (epic delivery ledger v1)`
+  instead of hand-editing prose child tables.
 - Stop forcing the current issue when it is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input. Apply the [no-progress final gate](#no-progress-final-gate) before treating that stop as a delivery conclusion.
 
 Parallel claim is allowed only when all are true:

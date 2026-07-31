@@ -490,7 +490,9 @@ same exact head back to the ordinary verified-merge sequence below.
     Status to `Done` when automation has not already projected it; never project an unclosed governing parent `Done`
 14. if issue-backed, update spec files named by each closing issue's `Source Anchors` from stale
    `State: Not yet implemented` to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
-   Record child-delivery validation evidence on any distinct open governing parent
+   Record child-delivery validation evidence on any distinct open governing parent; for an epic /
+   parent feature issue, refresh its structured child ledger per
+   `## Parent Issue Closure :: Structured child ledger (epic delivery ledger v1)`
 15. verify final state, including restored body authority and the absence of unauthorized closures
 16. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, write the same PR-specific
     result on every exact closed issue and also on a distinct open governing parent; for issue-free
@@ -584,6 +586,29 @@ Use [`docs/development/PARENT_ISSUE_CLOSURE.md`](../../../docs/development/PAREN
 
 - if a slice issue is fully delivered, merge the PR and deliver the Issue
 - if the parent feature still needs validation, keep it open and record the child validation receipt on the parent issue
+
+### Structured child ledger (epic delivery ledger v1)
+
+When recording child validation evidence on an epic / parent feature issue, refresh the
+machine-readable child ledger rather than hand-editing prose tables — the posted block is what makes
+the parent's child set enumerable in both directions (INV-DG-4, #4442):
+
+1. Build a children JSON list from live Issue/PR/CI truth, one entry per child
+   (`issue_number` required; `title`, `issue_status`, `pr_number`, `pr_status`, `head_sha`,
+   `merge_sha`, `ci_state`, `blocker`, `next_action` as known).
+2. Render without GitHub writes:
+   `python3 -m app.builderops builderops epic-run-state ledger render --epic-issue-number <N> --children-file <children.json>`
+3. Upsert the rendered block into the parent issue **body** idempotently: when the
+   `<!-- builderops:epic-delivery-ledger v1` … `<!-- /builderops:epic-delivery-ledger -->` markers
+   already exist, replace everything between them inclusive; otherwise append the block at the end
+   of the body. The body is the canonical placement (one fetch enumerates the child set). Never
+   rewrite the parent's contract sections; the block is additive.
+4. The block is coordination evidence only — live GitHub Issues/PRs/CI win on conflict (the
+   renderer stamps `authority: coordination_evidence_only_live_github_issues_prs_ci_win`).
+   Refresh by re-rendering from live truth, never by hand-editing ledger rows.
+
+A parent AC of the form "Verify: child ledger on this Issue" (for example #4163) is discharged by
+this block.
 - if the parent feature is the final child slice or an explicit closure task, close the parent after repo-verifiable acceptance is satisfied and the parent-closure handoff or explicit parent-closure issue is resolved
 - future adoption or retro work should move to a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work; it should not block delivered repo-verifiable scope
 
