@@ -970,9 +970,12 @@ def _reduce_worker_result(
 ) -> Reduction:
     result = admitted.worker_result
     assert result is not None
+    # working and repairing are reachable only through a committed launch, so a
+    # result must name the exact launch effect this run authorized. Treating an
+    # unset key as permissive would leave a hole rather than a defensive branch.
     if (
-        issue_state.authorized_invocation_effect_key is not None
-        and result.effect_ref.contract_id
+        issue_state.authorized_invocation_effect_key is None
+        or result.effect_ref.contract_id
         != issue_state.authorized_invocation_effect_key
     ):
         return _refuse(state, "illegal_transition")

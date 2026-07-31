@@ -5750,15 +5750,29 @@ def test_repair_cannot_change_the_reducer_authorized_pull_request() -> None:
         ),
         correlation_id="event-worker-first",
     )
-    first = run.apply(
-        run.admit(
-            first_event,
-            worker_result=result,
-            context_pack=pack,
-            invocation=invocation,
-            launch_effect=launch_effect,
-        )
+    first_admitted = run.admit(
+        first_event,
+        worker_result=result,
+        context_pack=pack,
+        invocation=invocation,
+        launch_effect=launch_effect,
     )
+
+    # A run state that has not recorded an authorized launch fails closed rather
+    # than accepting a worker result on trust.
+    unbound = dataclass_replace(
+        run.state,
+        issues=tuple(
+            dataclass_replace(item, authorized_invocation_effect_key=None)
+            for item in run.state.issues
+        ),
+    )
+    assert (
+        reduce_delivery_run(unbound, first_admitted).refusal
+        == "illegal_transition"
+    )
+
+    first = run.apply(first_admitted)
     assert run.state.issue_state(issue.scope_key).authorized_pull_request == DDO4_PR
     assert run.state.issue_state(issue.scope_key).authorized_head_sha == DDO4_HEAD
 
