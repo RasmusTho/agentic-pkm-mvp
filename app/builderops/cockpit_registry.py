@@ -579,6 +579,21 @@ def _build_rungs(
                 stale_sources,
             )
         )
+    elif (
+        live_pull is not None
+        and github_snapshot is not None
+        and github_snapshot.check_read_failed(live_pull.head_sha)
+    ):
+        # The check state for this SHA was not read, which is not the same
+        # claim as "this SHA has no checks". Say so on the rung instead of
+        # letting a failed read wear the same bare `absent` as a real absence.
+        rungs.append(
+            _rung(
+                "ci_sha",
+                "absent",
+                f"{live_pull.head_sha[:12]} (check state unread: live read failed)",
+            )
+        )
     elif run:
         rungs.append(_rung("ci_sha", "absent", f"run {run.get('status', '?')}"))
     else:

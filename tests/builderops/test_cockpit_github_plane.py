@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.builderops import cockpit_github_plane
 from app.builderops.cockpit_github_plane import (
     GithubIssue,
     GithubLiveSnapshot,
@@ -452,3 +453,165 @@ def test_mirror_watermark_absent_when_sync_state_lacks_it(tmp_path: Path) -> Non
 
     item = _item_by_issue(payload, 401)
     assert item["mirror_watermark"] is None
+
+
+# ---------------------------------------------------------------------------
+# Per-PR check-status read failures, and the real reader (#4471)
+# ---------------------------------------------------------------------------
+
+
+def test_check_status_read_failure_is_distinguishable_from_no_checks(
+    tmp_path: Path,
+) -> None:
+    """A failed per-SHA check read must not impersonate "this SHA has no CI".
+
+    Both cases leave the SHA out of ``checks``. Only one of them is a claim
+    about GitHub; the other is a claim about our own read. The rung says which,
+    and the "PR without CI" flaw refuses to fire on evidence nobody has.
+    """
+    db_path, store = _make_store(tmp_path)
+    store.upsert_task(_task(status="in_progress", issue_number=610, title="unread ci"))
+    store.upsert_task(_task(status="in_progress", issue_number=620, title="no ci"))
+
+    unread_sha = "c" * 40
+    genuinely_bare_sha = "d" * 40
+
+    def _pull(number: int, issue: int, sha: str) -> GithubPull:
+        return GithubPull(
+            number=number,
+            title=f"Fix #{issue}",
+            state="open",
+            html_url=f"https://github.com/{REPO}/pull/{number}",
+            head_sha=sha,
+            head_ref=f"fix-{issue}",
+            governing_issue=issue,
+        )
+
+    def fake_reader(repo: str) -> GithubLiveSnapshot:
+        return GithubLiveSnapshot(
+            read_at=_now(),
+            issues={},
+            pulls={61: _pull(61, 610, unread_sha), 62: _pull(62, 620, genuinely_bare_sha)},
+            # Neither SHA is in `checks`. The difference is entirely in why.
+            checks={},
+            branches=("fix-610", "fix-620"),
+            check_read_failures=frozenset({unread_sha}),
+        )
+
+    payload = build_registry(
+        db_path=db_path,
+        deploy_receipt_dir=tmp_path / "deploys",
+        github_repo=REPO,
+        github_reader=fake_reader,
+    )
+
+    unread_item = _item_by_issue(payload, 610)
+    unread_rung = {r["name"]: r for r in unread_item["rungs"]}["ci_sha"]
+    assert unread_rung["class"] == "absent"
+    assert unread_sha[:12] in unread_rung["value"]
+    assert "unread" in unread_rung["value"]
+
+    bare_item = _item_by_issue(payload, 620)
+    bare_rung = {r["name"]: r for r in bare_item["rungs"]}["ci_sha"]
+    assert bare_rung["class"] == "absent"
+    assert "unread" not in (bare_rung["value"] or "")
+
+    # The flaw is a claim about GitHub, so it fires only for the SHA we
+    # actually read — never for the one we failed to read.
+    def _flaw_names(item: dict) -> set[str]:
+        return {flaw["predicate"] for flaw in item.get("flaws", [])}
+
+    assert "pr_without_ci_on_head_sha" in _flaw_names(bare_item)
+    assert "pr_without_ci_on_head_sha" not in _flaw_names(unread_item)
+
+
+def test_default_github_reader_builds_snapshot_from_mocked_gh_calls(
+    monkeypatch,
+) -> None:
+    """Direct coverage of the reader that actually runs in production.
+
+    Every other test here injects a snapshot, so ``default_github_reader`` —
+    pagination, PR/issue separation, the per-SHA status loop, and its failure
+    handling — had none. The ``gh`` subprocess boundary is mocked, so this
+    still performs no network I/O.
+    """
+    good_sha = "e" * 40
+    failing_sha = "f" * 40
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args: list[str]):
+        calls.append(args)
+        endpoint = args[1]
+        if endpoint.endswith("/issues"):
+            return [
+                {
+                    "number": 700,
+                    "title": "a real issue",
+                    "state": "open",
+                    "html_url": f"https://github.com/{REPO}/issues/700",
+                },
+                # The raw /issues endpoint mixes PRs in; they must be dropped.
+                {
+                    "number": 701,
+                    "title": "a pr wearing an issue shape",
+                    "state": "open",
+                    "html_url": f"https://github.com/{REPO}/pull/701",
+                    "pull_request": {"url": "..."},
+                },
+            ]
+        if endpoint.endswith("/pulls"):
+            return [
+                {
+                    "number": 71,
+                    "title": "Fix the thing",
+                    "state": "open",
+                    "html_url": f"https://github.com/{REPO}/pull/71",
+                    "head": {"sha": good_sha, "ref": "fix-700"},
+                    "body": "Governing-Issue: #700",
+                },
+                {
+                    "number": 72,
+                    "title": "Another",
+                    "state": "open",
+                    "html_url": f"https://github.com/{REPO}/pull/72",
+                    "head": {"sha": failing_sha, "ref": "other"},
+                    "body": "no governing line here",
+                },
+            ]
+        if endpoint.endswith("/branches"):
+            return [{"name": "fix-700"}, {"name": "other"}]
+        if endpoint.endswith(f"/commits/{good_sha}/status"):
+            return {"state": "success"}
+        if endpoint.endswith(f"/commits/{failing_sha}/status"):
+            raise GithubReadError("simulated rate limit on one PR's checks")
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", fake_run_gh)
+
+    snapshot = cockpit_github_plane.default_github_reader(REPO)
+
+    assert set(snapshot.issues) == {700}
+    assert set(snapshot.pulls) == {71, 72}
+    assert snapshot.pulls[71].governing_issue == 700
+    assert snapshot.pulls[72].governing_issue is None
+    assert snapshot.branches == ("fix-700", "other")
+
+    # One PR's check read succeeded, the other failed. The failure is recorded
+    # rather than swallowed, and does not refuse the whole plane.
+    assert snapshot.checks == {good_sha: "success"}
+    assert snapshot.check_read_failures == frozenset({failing_sha})
+    assert snapshot.check_read_failed(failing_sha) is True
+    assert snapshot.check_read_failed(good_sha) is False
+
+    # REST only, never GraphQL (the shared budget dies on GraphQL first).
+    assert all(call[0] == "api" for call in calls)
+    assert not any("graphql" in " ".join(call) for call in calls)
+
+
+def test_default_github_reader_rejects_a_malformed_repo_slug() -> None:
+    try:
+        cockpit_github_plane.default_github_reader("not-a-slug")
+    except GithubReadError as exc:
+        assert "owner/name" in str(exc)
+    else:  # pragma: no cover - the call above must raise
+        raise AssertionError("a slug with no '/' must be refused before any call")

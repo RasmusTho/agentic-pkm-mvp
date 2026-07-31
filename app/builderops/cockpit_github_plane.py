@@ -105,6 +105,10 @@ class GithubLiveSnapshot:
     pulls: dict[int, GithubPull] = field(default_factory=dict)
     checks: dict[str, str] = field(default_factory=dict)  # head_sha -> combined state
     branches: tuple[str, ...] = ()
+    # Head SHAs whose per-PR check-status read failed. Absence from `checks`
+    # otherwise means "this SHA has no checks recorded" — a claim about GitHub.
+    # A failed read is not that claim, and must not be able to impersonate it.
+    check_read_failures: frozenset[str] = frozenset()
 
     def issue_url(self, issue_number: int | None) -> str | None:
         if issue_number is None:
@@ -128,6 +132,16 @@ class GithubLiveSnapshot:
         if not head_sha:
             return None
         return self.checks.get(head_sha)
+
+    def check_read_failed(self, head_sha: str | None) -> bool:
+        """True when this SHA's check state could not be read at all.
+
+        Callers that treat a missing check state as evidence ("this PR has no
+        CI") must consult this first: unread is not the same claim as absent.
+        """
+        if not head_sha:
+            return False
+        return head_sha in self.check_read_failures
 
     def pulls_governing(self, issue_number: int) -> list[GithubPull]:
         return [
@@ -298,9 +312,11 @@ def default_github_reader(repo: str) -> GithubLiveSnapshot:
         )
 
     # Combined status per PR head SHA. One PR's check lookup failing does not
-    # refuse the whole plane — that SHA simply carries no recorded check
-    # state, same posture as a structurally-absent field elsewhere in v1.
+    # refuse the whole plane — but it is recorded as a failed read rather than
+    # dropped, because "we could not read this SHA's checks" and "this SHA has
+    # no checks" are different claims and only one of them is about GitHub.
     checks: dict[str, str] = {}
+    check_read_failures: set[str] = set()
     for pull in pulls.values():
         if not pull.head_sha:
             continue
@@ -309,6 +325,7 @@ def default_github_reader(repo: str) -> GithubLiveSnapshot:
                 ["api", f"repos/{owner}/{name}/commits/{pull.head_sha}/status"]
             )
         except GithubReadError:
+            check_read_failures.add(pull.head_sha)
             continue
         state = status_payload.get("state") if isinstance(status_payload, dict) else None
         if state:
@@ -331,6 +348,7 @@ def default_github_reader(repo: str) -> GithubLiveSnapshot:
         pulls=pulls,
         checks=checks,
         branches=branches,
+        check_read_failures=frozenset(check_read_failures),
     )
 
 

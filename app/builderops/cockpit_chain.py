@@ -449,6 +449,12 @@ def _pr_without_ci_on_head_sha(ctx: ThreadContext) -> dict[str, Any] | None:
         return None
     if ctx.github_snapshot.check_state_for(head_sha) is not None:
         return None
+    if ctx.github_snapshot.check_read_failed(head_sha):
+        # This predicate asserts something about GitHub ("no CI state on this
+        # SHA"). A failed read is not evidence for that claim, so the flaw is
+        # withheld rather than fired on evidence nobody has — the rung names
+        # the unread read instead (cockpit_registry, ci_sha).
+        return None
     run = ctx.verification_run
     if run and run.get("verified_head_sha") == head_sha:
         return None

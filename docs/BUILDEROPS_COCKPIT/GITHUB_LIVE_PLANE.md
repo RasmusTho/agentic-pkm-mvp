@@ -36,6 +36,11 @@ freshness being the read instant and every failure degrading to a refused claim.
 - Upgrades rung classes where live keys now exist: `pr` and `ci_sha` rungs become `proven` from
   live PR + check data; threads with a branch/PR but no dispatcher task appear rather than being
   invisible.
+- Per-SHA partial failure is recorded, not swallowed (#4471). One PR's check-status call failing
+  does not refuse the whole plane — the rest of the snapshot is still fresh — but the SHA lands in
+  `GithubLiveSnapshot.check_read_failures` rather than simply missing from `checks`. Downstream,
+  the `ci_sha` rung names the unread read and the "PR with no CI on head SHA" predicate withholds:
+  that predicate asserts something about GitHub, and a failed read of ours is not evidence for it.
 - Every card gains its authority out-link (issue/PR URL) from the live read, independent of the
   sync mirror's structurally empty fields (audit F9) — rendered in the `out` button class.
 - Auth/binding: the token already available to the host environment (`gh` CLI credentials or
