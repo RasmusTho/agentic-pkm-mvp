@@ -2,6 +2,7 @@
 name: Validate the Design Hub End to End
 description: Prove production-path provider/refusal behavior, final cockpit artifacts, owner-doc promotion, and parent acceptance readiness.
 task_id: CDH-06
+github_issue: 4313
 source_anchor: docs/CKM_DESIGN_AGENT_INTEGRATION/README.md :: Capability acceptance
 parent_capability: CKM Design-Agent Integration Hub
 prerequisites: [CDH-01, CDH-02, CDH-03, CDH-04, CDH-05]

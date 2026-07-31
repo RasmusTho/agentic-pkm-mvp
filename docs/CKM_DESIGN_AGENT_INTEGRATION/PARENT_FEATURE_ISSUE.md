@@ -1,4 +1,4 @@
-State: Active parent validation-hub contract. GitHub Issue #4131 exists and remains blocked pending merged breakdown and child delivery.
+State: Active parent validation-hub contract. GitHub Issue #4131 exists and remains blocked while child delivery completes; children #4308–#4313 are filed, with #4312 and #4313 still open.
 Doc role: Parent feature Issue specification
 Authority: Stable acceptance shape for live parent #4131; GitHub owns current labels, comments, and closure state.
 Owner: Builder System / CKM

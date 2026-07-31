@@ -2,6 +2,7 @@
 name: Define Design-Run Contracts
 description: Define strict provider-neutral design descriptors, briefs, requests, admissions, statuses, results, handoffs, and canonical hashes.
 task_id: CDH-01
+github_issue: 4308
 source_anchor: docs/CKM_DESIGN_AGENT_INTEGRATION/README.md :: Reuse boundary and external prerequisite
 parent_capability: CKM Design-Agent Integration Hub
 prerequisites: []

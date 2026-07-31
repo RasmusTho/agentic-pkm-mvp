@@ -2,6 +2,7 @@
 name: PostgreSQL Transaction Kernel
 description: Establish the single PostgreSQL authority and atomic orchestration/outbox primitives.
 task_id: BCP-01
+github_issue: 3792
 source_anchor: docs/BUILDEROPS_CONTROL_PLANE/README.md :: Cross-task invariants / partial-failure safety
 parent_capability: BuilderOps independent control plane
 prerequisites: []

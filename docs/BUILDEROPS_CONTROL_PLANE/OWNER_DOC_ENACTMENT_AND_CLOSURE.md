@@ -2,6 +2,7 @@
 name: Owner-Doc Enactment And Closure
 description: Promote proven control-plane reality into owner docs and close backlog truth.
 task_id: BCP-07
+github_issue: 3690
 source_anchor: docs/BUILDEROPS_CONTROL_PLANE/README.md :: Validation and owner-doc promotion
 parent_capability: BuilderOps independent control plane
 prerequisites: [BCP-06]

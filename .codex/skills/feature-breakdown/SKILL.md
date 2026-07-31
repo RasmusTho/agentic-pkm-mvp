@@ -96,6 +96,7 @@ Each task file uses this frontmatter:
 name: {Human-Readable Task Name}
 description: {one-line description}
 task_id: {CAPABILITY-NN}
+github_issue: {issue number, written back at filing time; absent only before the issue exists}
 source_anchor: {docs path :: anchor}
 parent_capability: {capability name}
 prerequisites: [{task_id list}]
@@ -103,6 +104,11 @@ depends_on: [{filename list}]
 can_parallelize_with: [{task name list}]
 ---
 ```
+
+`github_issue:` is the machine join between the task doc and its filed slice issue (INV-DG-5,
+#4444). It is not authored speculatively: the filing step below writes the created issue number
+back into the frontmatter in the same delivery, so a filed task doc never carries an empty or
+stale value.
 
 ### Task file structure
 
@@ -204,6 +210,10 @@ By contrast, additive work on a single surface that mirrors an existing pattern 
    - If the GitHub parent issue later closes, update the local `PARENT_FEATURE_ISSUE.md` again so it no longer reads as an unfiled or active draft.
    - When closing, also update the capability `README.md` so it no longer reads as an active pre-delivery lane and so any now-satisfied acceptance checklist truthfully reflects the delivered docs/spec state.
 10. Create or update GitHub issues from the task specifications, in dependency order.
+    Immediately after each child `gh issue create`, write the created issue number back into that
+    task doc's `github_issue:` frontmatter and include the writeback in the same breakdown
+    commit/PR — the filing-time invariant INV-DG-5; a task doc with a filed issue must never
+    leave the breakdown without its `github_issue:` key.
 11. Keep authoritative labels truthful; Project status is optional projection:
     - parent feature issue normally starts with `agent:blocked`
     - ready tasks use `agent:ready` after strict validation

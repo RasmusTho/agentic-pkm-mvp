@@ -2,6 +2,7 @@
 name: Expose Design-Run CLI
 description: Provide the explicit operator brief, admission, start, status, and result surface outside generated HTML.
 task_id: CDH-04
+github_issue: 4311
 source_anchor: docs/CKM_DESIGN_AGENT_INTEGRATION/README.md :: Operator surfaces
 parent_capability: CKM Design-Agent Integration Hub
 prerequisites: [CDH-01, CDH-02, CDH-03]

@@ -1,4 +1,4 @@
-State: Active target-state specification. Parent validation hub #4131 is open and blocked; no child implementation issue has been filed yet.
+State: Active target-state specification. Parent validation hub #4131 is open and blocked. Child implementation issues #4308–#4313 are filed (see each task doc's `github_issue:` frontmatter); CDH-01 through CDH-04 are delivered, CDH-05 (#4312) and CDH-06 (#4313) remain open.
 Doc role: Capability specification
 Authority: Owns the bounded CKM design-agent integration capability, cross-task invariants, task order, and acceptance path. Subordinate to ADR-0057, ADR-0064, the delivered CKM Direction B contract, and the BuilderOps authority boundary.
 Owner: Builder System / CKM
