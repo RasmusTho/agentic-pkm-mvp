@@ -75,6 +75,29 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "self-owned fallback taken only when open_outbox_txn_conn() returned None; "
         "the JSONL audit append above already recorded the dead letter"
     ),
+    # The Heimdal meeting family follows the same JSONL-first sink discipline
+    # capture.py established, and says so in its own docstrings: the
+    # append_jsonl_outbox_event to INDEX_OUTBOX_PATH runs unconditionally
+    # BEFORE the backend/DSN gate, and the `emitted` bool each caller gates its
+    # acknowledgement on is decided by that append, never by the DB write's
+    # return value.
+    ("app/api/routes/heimdal_meeting.py", "_emit_user_note_event"): (
+        "JSONL append to the shared note outbox path runs first and unconditionally; "
+        "the 500-vs-200 decision is made on that sink, not on the DB row"
+    ),
+    ("app/heimdal/media_ingress.py", "_emit_admission_event"): (
+        "JSONL append runs first and unconditionally; the media receipt that acknowledges "
+        "the admission is written after, gated on that sink"
+    ),
+    ("app/heimdal/meeting_finalization.py", "_emit_finalized_event"): (
+        "JSONL append runs first and unconditionally; the finalized-receipt ack ordering "
+        "is already satisfied by that sink"
+    ),
+    ("app/heimdal/meeting_ledger.py", "_emit_late_admitted_event"): (
+        "documented non-acknowledging emission: the segment ledger row is already "
+        "committed before this runs, the JSONL append precedes the DB branch, and the "
+        "caller discards the result"
+    ),
 }
 
 
