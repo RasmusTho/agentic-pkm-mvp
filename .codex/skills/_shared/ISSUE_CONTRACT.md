@@ -79,8 +79,24 @@ Every Acceptance Criterion declares its verification inline with a `Verify:` mar
   `Verify: \`tests/<path>::<test_name>\`` and the test asserts `<guard>` is invoked from
   `<runtime entrypoint>`. A unit test of the guard function alone does not discharge an
   enforcement AC.
-- Non-behavioral AC → concrete observable target: doc writeback path plus anchor
-  (`Verify: doc writeback at \`docs/<path> :: <anchor>\``), roadmap diff, or runtime receipt.
+- Non-behavioral AC → concrete observable target, one of: doc writeback path plus anchor
+  (`Verify: doc writeback at \`docs/<path> :: <anchor>\``), roadmap diff
+  (`Verify: roadmap diff: \`docs/<path> :: <anchor>\``), runtime receipt
+  (`Verify: runtime receipt: <identity>.v<N>`), a bare repo anchor
+  (`Verify: \`<path> :: <anchor>\``), a diff-of-file target
+  (`Verify: diff of \`<repo path>\` <what the diff adds>`), or a marker-presence target
+  (`Verify: \`<literal>\` present in \`<repo path>\``). A durable repository path or anchor is
+  what makes the target concrete; prose without one is not a target.
+- A backticked canonical target may carry a trailing prose annotation on the same marker line
+  (an enforcement note, or "removed or rewritten as delivered."); the target stays the
+  backticked segment.
+- The `Verify:` marker opens its own (optionally bulleted) line per the body template. An
+  inline tail on the AC line (`- [ ] text. Verify: <target>`) also declares a marker when its
+  target is grammar-resolvable; any other mid-line mention inside AC prose is not a marker.
+- The machine grammar for these forms is
+  `app/builderops/issue_contract_validation.py :: is_resolvable_verify_target`;
+  `tests/governance/test_verify_target_contract_parity.py` keeps this section and the grammar
+  in parity.
 - An AC without a resolvable `Verify:` target is not executable; the Issue must not be
   `agent:ready` until the AC is refined or split.
 - Ready-label validation permits a behavioral `tests/...py::test_name` target to name a new test

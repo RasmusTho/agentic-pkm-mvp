@@ -44,6 +44,11 @@ _RUNTIME_RECEIPT_TARGET = re.compile(
 )
 _PLACEHOLDER = re.compile(r"<[^>]+>")
 _AUTHORITY_TOKEN = re.compile(r"[A-Za-z0-9]+")
+_ANNOTATED_TARGET = re.compile(r"^`(?P<inner>[^`]+)` (?P<annotation>\S.*)$")
+_DIFF_OF_TARGET = re.compile(r"^diff of `(?P<path>[^`]+)`(?: \S.*)?$")
+_MARKER_PRESENCE_TARGET = re.compile(
+    r"^`(?P<literal>[^`]+)` present in `(?P<path>[^`]+)`(?:[,;]? \S.*)?$"
+)
 
 
 def _contains_vague_authority_token(value: str) -> bool:
@@ -100,12 +105,40 @@ def is_durable_repo_anchor(value: str) -> bool:
     )
 
 
+def _is_canonical_backticked_inner(inner: str) -> bool:
+    """Whether one unquoted segment is a standalone canonical target."""
+
+    test_target = _TEST_VERIFY_TARGET.fullmatch(inner)
+    if test_target is not None:
+        return is_durable_repo_path(test_target.group("path"))
+    if is_durable_repo_anchor(inner):
+        return True
+    repo_path, separator, selector = inner.partition("::")
+    return bool(separator and selector and is_durable_repo_path(repo_path))
+
+
 def is_resolvable_verify_target(value: str) -> bool:
     """Return whether one strict-contract ``Verify:`` target is resolvable."""
 
     target = value.strip()
     if not target or _PLACEHOLDER.search(target) is not None:
         return False
+
+    # Non-behavioral concrete-observable forms and prose-annotated canonical
+    # targets carry more than one backtick segment, so they are matched
+    # before the single-segment unwrap below (#4464).
+    annotated = _ANNOTATED_TARGET.fullmatch(target)
+    if annotated is not None and _is_canonical_backticked_inner(
+        annotated.group("inner")
+    ):
+        return True
+    diff_target = _DIFF_OF_TARGET.fullmatch(target)
+    if diff_target is not None:
+        return is_durable_repo_path(diff_target.group("path"))
+    presence_target = _MARKER_PRESENCE_TARGET.fullmatch(target)
+    if presence_target is not None:
+        return is_durable_repo_path(presence_target.group("path"))
+
     unquoted_target = _strip_backtick_pair(target)
     if unquoted_target != target and "`" in unquoted_target:
         return False
@@ -114,6 +147,9 @@ def is_resolvable_verify_target(value: str) -> bool:
     test_target = _TEST_VERIFY_TARGET.fullmatch(target)
     if test_target is not None:
         return is_durable_repo_path(test_target.group("path"))
+
+    if is_durable_repo_anchor(target):
+        return True
 
     repo_path, separator, selector = target.partition("::")
     if separator and selector and is_durable_repo_path(repo_path):

@@ -317,7 +317,8 @@ Rules:
   file that the builder will add. Other file-based `Verify:` targets must resolve to existing
   repository files.
 - Enforcement ACs — behavioral ACs asserting a guard, gate, or invariant holds on the live runtime path — must point to a test that exercises the production call site, not the guard function in isolation. "Module exists and is unit-tested" does not discharge an enforcement AC; "invoked on the runtime path and asserted there" does.
-- Non-behavioral ACs point to a concrete observable target: doc writeback path plus anchor, roadmap diff, or runtime receipt.
+- Non-behavioral ACs point to a concrete observable target: doc writeback path plus anchor, roadmap diff, runtime receipt, a bare repo anchor (`` `<path> :: <anchor>` ``), a diff-of-file target (``diff of `<repo path>` <what the diff adds>``), or a marker-presence target (`` `<literal>` present in `<repo path>` ``). A durable repository path or anchor is what makes the target concrete.
+- A backticked canonical target may carry a trailing prose annotation on the same marker line (as the roadmap example above shows); the target stays the backticked segment. The `Verify:` marker opens its own line per the template; an inline tail on the AC line declares a marker only when its target is grammar-resolvable — any other mid-line mention inside AC prose is not a marker.
 - If an AC cannot carry a resolvable `Verify:` target, refine or split it before marking the Issue `agent:ready`.
 - `Suggested Validation` remains the section that lists the commands and procedures that execute the declared `Verify:` targets. ACs and Suggested Validation are coupled: commands exist to resolve the Verify targets, not to duplicate them.
 
