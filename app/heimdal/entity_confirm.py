@@ -83,6 +83,7 @@ from typing import Any, Mapping, Sequence
 
 from app.heimdal.attribution_stage import RESOLUTION_UNRESOLVED, EntityMention
 from app.heimdal.entity_register import (
+    LIFECYCLE_MERGED,
     MERGE_EFFECTS_COMPLETE,
     EntityRegister,
     EntityRegisterError,
@@ -425,16 +426,23 @@ def apply_human_review_decisions(
     decision content: an active `event_committed` operation on a pending
     entry is an already-authorized merge whose clear was interrupted, and it
     is finished first (fence -> cleared -> entry removed, reported as the
-    applied merge) regardless of what the decision history now folds to --
-    consistent with the documented undo boundary, where a ruling appended
-    after hub application is an idempotent no-op, never a reversal. An active
+    applied merge under its original operation id) -- the merge is
+    materialised and its event committed, so it is not reversible at this
+    layer. Because the documented undo boundary is defined on `pending` (the
+    only surface a client observes), a ruling that folded differently while
+    the entry was still pending is NEVER silently discarded: the completion
+    stands, and the divergence is raised loudly, naming the finished merge
+    and the ruling that was not applied (with `EntityRegister.split` as the
+    reversal path). The same loud notice covers a non-merge ruling clearing
+    an entry whose previously completed merge still stands. An active
     `claimed` operation blocks a `reject` from clearing that entry (the
     operation may already have register effects; ambiguity fails closed,
-    INV-EROJ-6) and makes a *changed* merge decision fail closed via the
-    identity conflict. An interrupted clear whose operation already reached
-    `cleared` (stop between the journal update and the note write) is
-    finished without claiming a new operation, so one merge can never emit a
-    second event through re-approval (partial-failure matrix row 4).
+    INV-EROJ-6; restoring the entry's original decision resumes it cleanly)
+    and makes a *changed* merge decision fail closed via the identity
+    conflict. An interrupted clear whose operation already reached `cleared`
+    (stop between the journal update and the note write) is finished without
+    claiming a new operation, so one merge can never emit a second event
+    through re-approval (partial-failure matrix row 4).
 
     Idempotent: a decision whose `queue_entry_id` is no longer in `pending`
     has already been applied (or never existed) and is skipped rather than
@@ -495,10 +503,8 @@ def apply_human_review_decisions(
                 )
                 if active is not None and active.state == STATE_EVENT_COMMITTED:
                     # An already-authorized merge whose clear was interrupted:
-                    # finish it first. Whatever the history folds to now, the
-                    # durable outcome was recorded when its event committed --
-                    # a later ruling is an idempotent no-op per the undo
-                    # boundary, never a reversal.
+                    # finish it first. The merge is materialised and its event
+                    # committed -- it is not reversible at this layer.
                     if not journal.verify_committed_visibility(active):
                         refused.append(
                             (
@@ -524,6 +530,34 @@ def apply_human_review_decisions(
                             operation_id=active.operation_id,
                         )
                     )
+                    if not (
+                        effective_decision.action == "merge"
+                        and effective_decision.from_id == active.from_id
+                        and effective_decision.into_id == active.into_id
+                    ):
+                        # Round-2 review blocker on #4350: completing the
+                        # committed operation is correct, but silently
+                        # discarding the human's later, different ruling is
+                        # not -- the journal must never appear to reinterpret
+                        # a decision (INV-EROJ-1). Say exactly what stood and
+                        # what was not applied.
+                        later_ruling = (
+                            f"merge into {effective_decision.into_id}"
+                            if effective_decision.action == "merge"
+                            else effective_decision.action
+                        )
+                        refused.append(
+                            (
+                                queue_entry_id,
+                                "an already-committed merge operation "
+                                f"{active.operation_id} ({active.from_id} -> "
+                                f"{active.into_id}) was finished and its entry "
+                                f"cleared; your later {later_ruling} was NOT "
+                                "applied. The merge is materialised and is not "
+                                "reversible at this layer -- see the undo "
+                                "boundary; use EntityRegister.split to reverse it.",
+                            )
+                        )
                     continue
                 if active is not None and effective_decision.action != "merge":
                     # Review F3: a reject must not clear an entry whose claimed
@@ -534,10 +568,38 @@ def apply_human_review_decisions(
                             queue_entry_id,
                             f"operation {active.operation_id} is still claimed for this "
                             "entry; a reject cannot clear it and the entry stays "
-                            "pending (INV-EROJ-6)",
+                            "pending (INV-EROJ-6). To recover, restore this entry's "
+                            "original decision in entities/review.md (the claimed "
+                            "operation then resumes cleanly), or wait for EROJ-02.",
                         )
                     )
                     continue
+                if effective_decision.action != "merge":
+                    # Round-2 review on #4350, cleared-window variant: the
+                    # entry may clear on this ruling, but a previously
+                    # completed merge that still stands must be named -- the
+                    # ruling does not reverse it.
+                    prior = journal.find_cleared_operation(
+                        vault_identity=vault_identity, queue_entry_id=queue_entry_id
+                    )
+                    if prior is not None:
+                        prior_source = register.get_entry(prior.from_id)
+                        if (
+                            prior_source is not None
+                            and prior_source.lifecycle == LIFECYCLE_MERGED
+                        ):
+                            refused.append(
+                                (
+                                    queue_entry_id,
+                                    f"entry cleared by {effective_decision.action}, but "
+                                    f"previously completed merge operation "
+                                    f"{prior.operation_id} ({prior.from_id} -> "
+                                    f"{prior.into_id}) remains materialised with its "
+                                    f"event committed; the {effective_decision.action} "
+                                    "does not reverse it -- use EntityRegister.split "
+                                    "to reverse it.",
+                                )
+                            )
 
             if effective_decision.action == "merge":
                 assert (
@@ -661,8 +723,9 @@ def apply_human_review_decisions(
         details = "; ".join(f"{queue_id}: {reason}" for queue_id, reason in refused)
         raise EntityConfirmError(
             "apply_human_review_decisions: "
-            f"{len(refused)} queue entr{'y' if len(refused) == 1 else 'ies'} refused and "
-            f"left pending with decision history unchanged -- {details}"
+            f"{len(refused)} queue entr{'y' if len(refused) == 1 else 'ies'} require "
+            f"operator attention (decision history is unchanged; each item states "
+            f"whether its entry stayed pending or was cleared) -- {details}"
         )
 
     return tuple(applied)

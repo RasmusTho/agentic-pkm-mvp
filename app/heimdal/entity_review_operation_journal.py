@@ -280,7 +280,12 @@ class EntityReviewOperationJournalPort(Protocol):
     ) -> OperationRecord | None: ...
 
     def find_cleared_operation(
-        self, *, vault_identity: str, queue_entry_id: str, from_id: str, into_id: str
+        self,
+        *,
+        vault_identity: str,
+        queue_entry_id: str,
+        from_id: str | None = None,
+        into_id: str | None = None,
     ) -> OperationRecord | None: ...
 
     def commit_merge_event(self, operation: OperationRecord) -> OperationRecord: ...
@@ -520,29 +525,43 @@ class EntityReviewOperationJournal:
             conn.close()
 
     def find_cleared_operation(
-        self, *, vault_identity: str, queue_entry_id: str, from_id: str, into_id: str
+        self,
+        *,
+        vault_identity: str,
+        queue_entry_id: str,
+        from_id: str | None = None,
+        into_id: str | None = None,
     ) -> OperationRecord | None:
-        """The most recent CLEARED operation for this entry and exact pair.
+        """The most recent CLEARED operation for this entry (optionally by pair).
 
         Guards matrix row 4's forbidden outcome (review F4 on #4350): a stop
         between `mark_cleared` and the pending-note write leaves the entry
         visible while its operation already released the active slot. A later
         identical re-approval must finish the interrupted clear instead of
         claiming a fresh operation and emitting a second event for the same
-        merge. Filtered by the exact original pair so a genuinely new merge of
-        a split-reverted pair (effects no longer present) never matches.
+        merge. With the exact original pair supplied, a genuinely new merge of
+        a split-reverted pair (effects no longer present) never matches. The
+        pair-less form supports the round-2 divergence diagnostic: a non-merge
+        ruling that clears an entry must be able to name a previously
+        completed merge that remains materialised for it.
         """
+        if (from_id is None) != (into_id is None):
+            raise EntityReviewOperationJournalError(
+                "find_cleared_operation requires both from_id and into_id, or neither"
+            )
         conn = self._open()
         try:
             ensure_journal_schema(conn)
-            cur = _exec(
-                conn,
+            sql = (
                 f"SELECT operation_id FROM {JOURNAL_TABLE} "
                 "WHERE vault_identity = %s AND queue_entry_id = %s AND state = %s "
-                "AND from_id = %s AND into_id = %s "
-                "ORDER BY updated_at DESC, operation_id LIMIT 1",
-                (vault_identity, queue_entry_id, STATE_CLEARED, from_id, into_id),
             )
+            params: tuple[Any, ...] = (vault_identity, queue_entry_id, STATE_CLEARED)
+            if from_id is not None and into_id is not None:
+                sql += "AND from_id = %s AND into_id = %s "
+                params = (*params, from_id, into_id)
+            sql += "ORDER BY updated_at DESC, operation_id LIMIT 1"
+            cur = _exec(conn, sql, params)
             row = cur.fetchone() if hasattr(cur, "fetchone") else None
             if row is None:
                 return None
@@ -611,7 +630,10 @@ class EntityReviewOperationJournal:
                 raise EntityReviewOperationConflictError(
                     f"queue entry {queue_entry_id!r} already has active operation "
                     f"{conflicting[0]} bound to a different decision mapping; the changed "
-                    "decision fails closed and the entry stays pending (INV-EROJ-2/6)"
+                    "decision fails closed and the entry stays pending (INV-EROJ-2/6). "
+                    "To recover, restore this entry's original decision in "
+                    "entities/review.md (the active operation then resumes cleanly), "
+                    "or wait for EROJ-02."
                 )
             try:
                 _exec(
@@ -638,7 +660,9 @@ class EntityReviewOperationJournal:
                 if _is_unique_violation(exc):
                     raise EntityReviewOperationConflictError(
                         f"queue entry {queue_entry_id!r} gained a concurrent active operation "
-                        "bound to a different decision mapping; failing closed (INV-EROJ-2/6)"
+                        "bound to a different decision mapping; failing closed (INV-EROJ-2/6). "
+                        "To recover, restore this entry's original decision in "
+                        "entities/review.md, or wait for EROJ-02."
                     ) from exc
                 raise
             conn.commit()

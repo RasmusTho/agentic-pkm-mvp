@@ -758,13 +758,26 @@ def test_edited_history_after_refusal_converges_without_manual_repair(
         )
 
     # The retry converges: the in-flight operation is finished (fence ->
-    # cleared -> entry removed) under its ORIGINAL identity; the late ruling
-    # is a post-application no-op per the documented undo boundary.
+    # cleared -> entry removed) under its ORIGINAL identity. An identical
+    # re-approval is a silent success; a DIVERGENT later ruling still
+    # converges but must be reported loudly -- the completion stands and the
+    # discarded ruling is named (round-2 review blocker on #4350).
     journal = _journal(scratch_dsn)
-    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
-    assert len(applied) == 1
-    assert applied[0].merged is True
-    assert applied[0].operation_id == expected_id
+    if late_ruling == "reapprove":
+        applied = apply_human_review_decisions(
+            vault_root, register=register, journal=journal
+        )
+        assert len(applied) == 1
+        assert applied[0].merged is True
+        assert applied[0].operation_id == expected_id
+    else:
+        with pytest.raises(EntityConfirmError) as excinfo:
+            apply_human_review_decisions(vault_root, register=register, journal=journal)
+        message = str(excinfo.value)
+        assert "was finished and its entry cleared" in message
+        assert "your later reject was NOT applied" in message
+        assert expected_id in message
+        assert "EntityRegister.split" in message
     assert pending_review_entries(vault_root) == ()
     events = _merged_event_rows(scratch_dsn)
     assert len(events) == 1, "convergence must never mint a second merge event"
@@ -781,6 +794,112 @@ def test_edited_history_after_refusal_converges_without_manual_repair(
     assert apply_human_review_decisions(vault_root, register=register, journal=journal) == ()
     # Append-only decision history survived every round byte-for-byte.
     assert _persisted_decisions(vault_root)[: len(decisions_before)] == decisions_before
+
+
+def test_divergent_reapproval_after_refusal_is_completed_loudly(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """Round-2 review blocker (P1b) on #4350: the human's later terminal
+    ruling is a merge into a DIFFERENT candidate than the already-committed
+    operation. The committed merge is finished (it is materialised and
+    evented; refusing would re-create the round-1 brick), but the
+    substitution must be loud -- an indistinguishable success return is the
+    defect."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
+    other_candidate = register.mint_canonical("Anna Karlsson", aliases=["Anna K"])
+
+    refusing = _FenceRefusingJournal(
+        connection_factory=lambda: psycopg.connect(scratch_dsn), refuse_first=1
+    )
+    with pytest.raises(EntityConfirmError, match="committed visibility"):
+        apply_human_review_decisions(vault_root, register=register, journal=refusing)
+    expected_id = derive_operation_id(
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
+    )
+
+    # The human re-decides toward a different candidate while the entry is
+    # still pending.
+    _append_decisions(
+        vault_root,
+        ReviewDecision(queue_entry_id=queue_entry_id, action="undo").to_dict(),
+        ReviewDecision(
+            queue_entry_id=queue_entry_id,
+            action="merge",
+            from_id=from_id,
+            into_id=other_candidate,
+        ).to_dict(),
+    )
+
+    journal = _journal(scratch_dsn)
+    with pytest.raises(EntityConfirmError) as excinfo:
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    message = str(excinfo.value)
+    assert "was finished and its entry cleared" in message
+    assert f"your later merge into {other_candidate} was NOT applied" in message
+    assert expected_id in message and from_id in message and into_id in message
+    assert "EntityRegister.split" in message
+
+    # Durable truth: the ORIGINAL merge stands, exactly one event, entry
+    # cleared, no operation exists for the discarded ruling.
+    source_entry = register.get_entry(from_id)
+    assert source_entry is not None and source_entry.merged_into == into_id
+    other_entry = register.get_entry(other_candidate)
+    assert other_entry is not None and from_id not in other_entry.merged_from
+    assert pending_review_entries(vault_root) == ()
+    events = _merged_event_rows(scratch_dsn)
+    assert len(events) == 1
+    assert events[0][1]["into_id"] == into_id
+    with psycopg.connect(scratch_dsn) as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM entity_review_operations WHERE queue_entry_id = %s",
+            (queue_entry_id,),
+        ).fetchone()
+    assert count == (1,)
+
+
+def test_reject_over_cleared_operation_names_the_standing_merge(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """Round-2 review, cleared-window variant on #4350: a reject that clears
+    an entry whose previously completed merge still stands must name that
+    standing merge -- it is applied as a reject, but never silently, because
+    the reject does not reverse the materialised, evented merge."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, from_id, into_id, raw_decision = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+
+    # Complete the operation journal-side, stopping before the note write.
+    operation = journal.claim_operation(
+        **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
+    )
+    register.ensure_merge_effects(from_id, into_id)
+    operation = journal.commit_merge_event(operation)
+    assert journal.verify_committed_visibility(operation) is True
+    journal.mark_cleared(operation)
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [queue_entry_id]
+
+    # The human rejects the still-visible entry.
+    _append_decisions(
+        vault_root,
+        ReviewDecision(queue_entry_id=queue_entry_id, action="undo").to_dict(),
+        ReviewDecision(queue_entry_id=queue_entry_id, action="reject").to_dict(),
+    )
+    with pytest.raises(EntityConfirmError) as excinfo:
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    message = str(excinfo.value)
+    assert "entry cleared by reject" in message
+    assert "remains materialised" in message
+    assert operation.operation_id in message
+    assert "EntityRegister.split" in message
+
+    # Durable truth: entry cleared, the merge stands, exactly one event.
+    assert pending_review_entries(vault_root) == ()
+    source_entry = register.get_entry(from_id)
+    assert source_entry is not None and source_entry.merged_into == into_id
+    assert len(_merged_event_rows(scratch_dsn)) == 1
 
 
 def test_reject_with_claimed_operation_refuses_and_preserves_pending(

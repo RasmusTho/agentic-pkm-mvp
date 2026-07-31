@@ -200,7 +200,12 @@ class _InMemoryJournal:
         return None
 
     def find_cleared_operation(
-        self, *, vault_identity: str, queue_entry_id: str, from_id: str, into_id: str
+        self,
+        *,
+        vault_identity: str,
+        queue_entry_id: str,
+        from_id: str | None = None,
+        into_id: str | None = None,
     ) -> OperationRecord | None:
         self.log.append(("find_cleared_operation", queue_entry_id))
         for record in self.operations.values():
@@ -208,8 +213,8 @@ class _InMemoryJournal:
                 record.vault_identity == vault_identity
                 and record.queue_entry_id == queue_entry_id
                 and record.state == STATE_CLEARED
-                and record.from_id == from_id
-                and record.into_id == into_id
+                and (from_id is None or record.from_id == from_id)
+                and (into_id is None or record.into_id == into_id)
             ):
                 return record
         return None
