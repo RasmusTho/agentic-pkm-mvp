@@ -134,14 +134,13 @@ issue, which is where progress is checked off):
       changes repair that drift (scoping the dead-source check to exclude the one source that is
       supposed to be unconfigured here) rather than adding new wiring.
 - [x] Every plane the surface reads has fresh/stale/unavailable pill states with its own threshold
-- [ ] The five chain-derived states and the flaw predicates render from live data on the host, with
+- [x] The five chain-derived states and the flaw predicates render from live data on the host, with
       every unreadable predicate named as unread
-      — **partially true**: the chain-derived bands and flaw predicates do render from live data
-      (proven by `test_cockpit_journeys.py` and `test_cockpit_chain_states.py`), but the flaws
-      band's own `header.not_evaluated`/`header.unread` fields — distinct from the coarser
-      `unread_planes` list `cockpit.js` already renders — are not yet surfaced anywhere on the
-      served surface. Adding that rendering is beyond #4453's five lens/scale/print ACs — flagged
-      as a follow-up.
+      — the chain-derived bands and flaw predicates render from live data (proven by
+      `test_cockpit_journeys.py` and `test_cockpit_chain_states.py`); the flaws band's own
+      `header.not_evaluated`/`header.unread` fields — distinct from the coarser `unread_planes`
+      list `cockpit.js` also renders — are now surfaced on the served surface too (#4479,
+      `test_flaws_band_header_renders_not_evaluated_and_unread`).
 - [x] This README's task table, coordination constraints, and decision ledger reflect delivered
       reality (no stale "pending" rows)
 

@@ -936,3 +936,50 @@ def test_print_hides_overflow_deferral_link(tmp_path: Path) -> None:
                 )
             finally:
                 browser.close()
+
+
+def test_flaws_band_header_renders_not_evaluated_and_unread(tmp_path: Path) -> None:
+    """The flaws band's own header (app/builderops/cockpit_chain.py
+    ::flaws_band_header) names which flaw predicates this render could not
+    evaluate because their required source wasn't fresh (``not_evaluated``),
+    and which flaw types v1 never reads at all (``unread``) — distinct from
+    and more specific than the capability-wide ``#unread-planes`` list, which
+    names planes the whole surface never reads, not individual flaw
+    predicates. #4479: the payload already carried this data; cockpit.js
+    never rendered it."""
+    db_path = _seeded_store(tmp_path)
+    deploy_dir = _deploy_receipts(tmp_path)
+
+    with _serve_cockpit(db_path=db_path, deploy_receipt_dir=deploy_dir) as url:
+        with sync_playwright() as playwright:
+            browser, page = _open_page(playwright, url)
+            try:
+                page.wait_for_selector(".card", timeout=5000)
+
+                flawed_band = page.locator("section.band").filter(
+                    has_text="What has flaws?"
+                )
+                assert flawed_band.count() == 1
+
+                # github-live is unconfigured in this offline harness (no
+                # COCKPIT_GITHUB_REPO), so every predicate requiring it is
+                # not evaluated on this render — named, not silently skipped.
+                not_evaluated = flawed_band.locator(".flaws-not-evaluated")
+                assert not_evaluated.count() == 1
+                not_evaluated_text = not_evaluated.inner_text()
+                assert "pr_ci_red_on_head_sha" in not_evaluated_text
+                assert "github-live" in not_evaluated_text
+
+                # The fixed unread set (planes v1 never reads at all).
+                unread = flawed_band.locator(".flaws-unread")
+                assert unread.count() == 1
+                unread_text = unread.inner_text()
+                assert "unpushed_local_worktree" in unread_text
+                assert "git working trees" in unread_text
+
+                # Distinct from the coarser capability-wide list, not a copy.
+                top_unread = page.locator("#unread-planes").inner_text()
+                assert "git" in top_unread
+                assert unread_text != top_unread
+            finally:
+                browser.close()
