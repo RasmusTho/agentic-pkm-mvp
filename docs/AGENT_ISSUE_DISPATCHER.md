@@ -494,6 +494,9 @@ When present, `sync_state` may include:
 - `source_version` (etag/hash/updated marker)
 - `sync_result` (`ok`, `stale`, `conflict`, `error`)
 - `sync_note` (string)
+- `labels` (list of GitHub label names, recorded on every pull since #4441)
+- `url` (the issue's browser `html_url`, or null; Signboard cards and the
+  `/api/signboard` board read these two keys for chips and links)
 
 MVP must remain testable without GitHub API access; sync-state is optional and never required for core queue/lease behavior.
 
