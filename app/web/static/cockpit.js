@@ -13,6 +13,32 @@ const RUNG_LABELS = {
   tried: "tried by you",
 };
 
+// Locked rung order (mirrors app/builderops/cockpit_registry.py::RUNG_ORDER).
+// The graph lens fans these out as columns.
+const RUNG_ORDER = [
+  "intention",
+  "capability",
+  "epic",
+  "slice",
+  "pr",
+  "ci_sha",
+  "receipt",
+  "tried",
+];
+
+// The only stretch of the spine that is CI-forced/database-keyed in every
+// case the registry can emit (app/builderops/cockpit_chain.py: slice/pr/
+// ci_sha/receipt are always "proven" or "absent", never "derived" — capability
+// and epic can be "proven" too, but only via a docs/prose edge, never a
+// CI-forced one). The graph lens draws this stretch as the only solid
+// backbone; everything else stays dashed/dotted regardless of its own class.
+const MIDDLE_RUNGS = new Set(["slice", "pr", "ci_sha", "receipt"]);
+
+// The four fixed questions the one-question lens pages through, in the
+// charter's own locked order (docs/BUILDEROPS_COCKPIT/README.md).
+const FOCUS_BAND_KEYS = ["working", "done", "flawed", "forgotten"];
+const FOCUS_ROW_CAP = 5;
+
 const CARD_CLASS = {
   working: "card-active",
   done: "card-done",
@@ -94,6 +120,39 @@ function cardMarkup(item) {
   );
 }
 
+// Many-at-once (decision Q2 / AC4): past LANE_CARD_CAP cards in one lane, the
+// rest fall to row form. Row form still carries the same evidence spine — it
+// is denser, never hidden, and never a "+N more" silence. The surface gets
+// longer, not shorter.
+const LANE_CARD_CAP = 5;
+
+function threadRowMarkup(item) {
+  const idText = item.issue_number ? `#${esc(item.issue_number)}` : esc(item.id);
+  const flaw = (item.flaws || [])[0];
+  const tag = flaw
+    ? `<span class="chip chip-flaw">${esc(flaw.predicate)}</span>`
+    : `<span class="chip">${esc(item.status || "")}</span>`;
+  return (
+    `<div class="thread-row">` +
+    `<span class="id">${idText}</span>` +
+    spineMarkup(item.rungs || []) +
+    `<span class="nm">${esc(item.title)}</span>${tag}` +
+    `</div>`
+  );
+}
+
+function laneCardsMarkup(items) {
+  if (items.length <= LANE_CARD_CAP) {
+    return items.map(cardMarkup).join("");
+  }
+  const cards = items.slice(0, LANE_CARD_CAP).map(cardMarkup).join("");
+  const rows = items
+    .slice(LANE_CARD_CAP)
+    .map(threadRowMarkup)
+    .join("");
+  return `${cards}<div class="thread-rows">${rows}</div>`;
+}
+
 function bandMarkup(band) {
   const count = band.countable
     ? `<span class="band-count">${band.count}</span>`
@@ -102,7 +161,7 @@ function bandMarkup(band) {
   if (!band.countable) {
     bodyHtml = "";
   } else if (band.key === "done") {
-    const cards = band.items.map(cardMarkup).join("");
+    const cards = laneCardsMarkup(band.items);
     bodyHtml =
       `<div class="tier tier-invite"><div class="tier-head"><h3>Ready for you to use</h3>` +
       `<p>Delivered threads. The open link goes to the authority, never to a copy.</p></div>` +
@@ -115,9 +174,9 @@ function bandMarkup(band) {
   } else if (band.items.length === 0) {
     bodyHtml = `<p class="mono" style="color:var(--fg-3)">0 — counted, not assumed</p>`;
   } else {
-    bodyHtml = `<div class="lane"><div class="lane-cards">${band.items
-      .map(cardMarkup)
-      .join("")}</div></div>`;
+    bodyHtml = `<div class="lane"><div class="lane-cards">${laneCardsMarkup(
+      band.items
+    )}</div></div>`;
   }
   const number = band.key === "needs_you" ? "·" : String(bandIndex(band.key));
   return (
@@ -129,6 +188,162 @@ function bandMarkup(band) {
 
 function bandIndex(key) {
   return { working: 1, done: 2, flawed: 3, forgotten: 4 }[key] || "·";
+}
+
+// ---------------------------------------------------------------------------
+// Graph lens: the same threads, re-projected as a fan-out across the eight
+// rung columns. Every thread appears once in every column it has a rung for
+// (never fewer, never more) — no new data, only a different reading order.
+// ---------------------------------------------------------------------------
+
+function allThreads(payload) {
+  // One identity, many appearances (README): a thread can sit in its
+  // position band *and* the flaws band. Dedupe by id so the graph lens never
+  // draws the same thread twice.
+  const seen = new Map();
+  (payload.bands || []).forEach((band) => {
+    (band.items || []).forEach((item) => {
+      if (!seen.has(item.id)) seen.set(item.id, item);
+    });
+  });
+  return Array.from(seen.values());
+}
+
+function graphNodeClass(rung, isMiddle) {
+  if (!rung || rung.class === "absent") return "node-abs";
+  if (isMiddle) {
+    // The middle rungs (slice/pr/ci_sha/receipt) are only ever "proven",
+    // "amber" (stale-downgraded), or "absent" in the registry — never
+    // "derived" — so "proven" is the only case that earns the solid,
+    // machine-keyed node style here.
+    return rung.class === "proven" ? "node-p" : "node-ghost";
+  }
+  // Left of slice / the tried rung: never solid, even when the registry
+  // classifies the edge "proven" (a docs-plane frontmatter edge is still a
+  // prose/docs proof, not a CI-forced one — the graph lens's solid backbone
+  // is reserved for the stretch CI itself enforces).
+  return rung.class === "amber" ? "node-ghost" : "node-d";
+}
+
+function graphColumnMarkup(rungName, threads) {
+  const isMiddle = MIDDLE_RUNGS.has(rungName);
+  const nodes = threads
+    .map((item) => {
+      const rung = (item.rungs || []).find((r) => r.name === rungName);
+      const cls = graphNodeClass(rung, isMiddle);
+      const detail = rung && rung.value ? rung.value : rung ? rung.class : "no object";
+      return (
+        `<div class="node ${cls}" data-thread="${esc(item.id)}" data-rung-class="${esc(
+          (rung && rung.class) || "absent"
+        )}">${esc(item.title)}` +
+        `<span class="n-id">${esc(item.issue_number ? "#" + item.issue_number : item.id)} · ${esc(
+          detail
+        )}</span></div>`
+      );
+    })
+    .join("");
+  return (
+    `<div class="graf-col" data-rung="${esc(rungName)}"><h3>${esc(
+      RUNG_LABELS[rungName] || rungName
+    )}</h3>` +
+    (nodes || `<p class="mono" style="color:var(--fg-3)">no threads</p>`) +
+    `</div>`
+  );
+}
+
+function renderGraph(payload) {
+  const threads = allThreads(payload);
+  document.getElementById("graph-cols").innerHTML = RUNG_ORDER.map((name) =>
+    graphColumnMarkup(name, threads)
+  ).join("");
+}
+
+// ---------------------------------------------------------------------------
+// One-question-at-a-time lens: the same four bands, one screen each, in the
+// charter's fixed order. Answer first as a claim, then at most five rows,
+// then an explicit counted deferral into the bands lens — never a silent cut.
+// ---------------------------------------------------------------------------
+
+function focusClaim(bandKey, band) {
+  if (!band.countable) {
+    return "This cannot be counted: the source it depends on is unavailable.";
+  }
+  const n = band.count;
+  const plural = n === 1 ? "" : "s";
+  if (bandKey === "working") {
+    return n === 0 ? "Nothing is in motion right now." : `${n} thread${plural} in motion right now.`;
+  }
+  if (bandKey === "done") {
+    return n === 0
+      ? "Nothing delivered and unread by you."
+      : `${n} thing${plural} delivered and unread by you.`;
+  }
+  if (bandKey === "flawed") {
+    return n === 0
+      ? "No flaw fired on what could be read."
+      : `${n} flaw${plural} fired on what could be read.`;
+  }
+  return n === 0
+    ? "Nothing has stalled without closure."
+    : `${n} thread${plural} stalled without closure.`;
+}
+
+function focusRowMarkup(item) {
+  const idText = item.issue_number ? `#${esc(item.issue_number)}` : esc(item.id);
+  return (
+    `<li><span class="id">${idText}</span><span>${esc(item.title)}</span>` +
+    `<span class="mono">${esc(item.why_now || "")}</span></li>`
+  );
+}
+
+function focusScreenMarkup(index, band) {
+  const screenNo = index + 1;
+  const items = band.countable ? band.items : [];
+  const shown = items.slice(0, FOCUS_ROW_CAP);
+  const extra = items.length - shown.length;
+  const rows = shown.map(focusRowMarkup).join("");
+  const deferral =
+    extra > 0
+      ? `<label class="btn btn-out" for="lens-bands"><span class="k">+${extra}</span>and ${extra} more in the register</label>`
+      : "";
+  const nextIndex = index + 1;
+  const nav =
+    nextIndex < FOCUS_BAND_KEYS.length
+      ? `<label class="btn btn-out" for="fq${nextIndex + 1}"><span class="k">next</span>question ${
+          nextIndex + 1
+        } of 4</label>`
+      : `<label class="btn btn-out" for="lens-bands"><span class="k">done</span>Open the register</label>`;
+  const back =
+    index > 0 ? `<label class="btn" for="fq${index}">Back</label>` : "";
+  return (
+    `<div class="focus" id="f${screenNo}">` +
+    `<p class="eyebrow">Question ${screenNo} of 4</p>` +
+    `<p class="q">${esc(band.question)}</p>` +
+    `<p class="a${band.countable ? "" : " warn"}">${esc(focusClaim(band.key, band))}</p>` +
+    (rows
+      ? `<ul class="focus-list">${rows}</ul>`
+      : `<p class="mono" style="color:var(--fg-3)">nothing to show</p>`) +
+    // The deferral link lives inside .focus-nav alongside nav/back — it is
+    // a navigation control (switches lens), not a printable claim, and the
+    // print rule that hides .focus-nav must catch it too (#4453 review).
+    `<div class="focus-nav">${deferral}${nav}${back}</div>` +
+    `</div>`
+  );
+}
+
+function renderFocus(payload) {
+  const bandByKey = new Map((payload.bands || []).map((band) => [band.key, band]));
+  const html = FOCUS_BAND_KEYS.map((key, index) => {
+    const band = bandByKey.get(key) || {
+      key,
+      question: "",
+      countable: false,
+      count: null,
+      items: [],
+    };
+    return focusScreenMarkup(index, band);
+  }).join("");
+  document.getElementById("focus-screens").innerHTML = html;
 }
 
 function sourceMarkup(source) {
@@ -171,6 +386,12 @@ function render(payload) {
         `<span class="mv">${esc(row.reason)}</span><span></span></div>`
     )
     .join("");
+
+  // Same payload, two more re-projections. Neither performs a fetch: the
+  // lens switcher (pure CSS :has()) only chooses which of the three already-
+  // rendered panes is visible.
+  renderGraph(payload);
+  renderFocus(payload);
 }
 
 function renderFetchFailure(error) {

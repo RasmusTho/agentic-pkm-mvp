@@ -12,9 +12,23 @@ body{background:var(--bg-base);min-height:100vh}
 .radios{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .sw-row label{font-family:var(--font-ui);font-size:var(--text-sm);color:var(--fg-2);border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:5px 10px;cursor:pointer;background:var(--bg-surface);transition:background var(--duration-base) var(--ease)}
 .sw-row label:hover{background:var(--bg-overlay);color:var(--fg-1)}
-.radios input:focus-visible+label,.sw-row label:focus-visible{outline:1px solid var(--cyan);outline-offset:2px;box-shadow:var(--cyan-glow)}
+.sw-row input[type=radio]{accent-color:var(--cyan);margin:0 -2px 0 0;cursor:pointer}
+.sw-row input:checked+label{background:var(--bg-overlay);color:var(--fg-1);border-color:var(--cyan);box-shadow:var(--cyan-glow)}
+.radios input:focus-visible+label,.sw-row label:focus-visible,.sw-row input:focus-visible{outline:1px solid var(--cyan);outline-offset:2px;box-shadow:var(--cyan-glow)}
 .doc-note{font-family:var(--font-ui);font-size:var(--text-sm);color:var(--fg-2);max-width:56ch;margin-left:auto}
 .pane{display:none}
+
+/* ---------- lens switcher: pure CSS state, no JS required ---------- */
+body:has(#lens-bands:checked) #lens-bands-pane{display:block}
+body:has(#lens-graph:checked) #lens-graph-pane{display:block}
+body:has(#lens-question:checked) #lens-question-pane{display:block}
+
+/* ---------- one-question-at-a-time: pure CSS paging, no JS required ---------- */
+#lens-question-pane .focus{display:none}
+body:has(#fq1:checked) #f1{display:flex}
+body:has(#fq2:checked) #f2{display:flex}
+body:has(#fq3:checked) #f3{display:flex}
+body:has(#fq4:checked) #f4{display:flex}
 
 /* ---------- läget: the standing claim ---------- */
 .claim{border:1px solid var(--border-strong);border-top:2px solid var(--vault);background:var(--bg-surface);padding:var(--space-6) var(--space-6) var(--space-5);margin:var(--space-8) 0 var(--space-6)}
@@ -71,6 +85,14 @@ body{background:var(--bg-base);min-height:100vh}
 .lane-head b{font-family:var(--font-ui);font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--fg-1)}
 .lane-head span{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2)}
 .lane-cards{display:flex;flex-direction:column;gap:var(--space-3)}
+
+/* ---------- many-at-once: past five cards, same spine, row form ---------- */
+.thread-rows{border:1px solid var(--border);background:var(--bg-surface);margin-top:var(--space-3)}
+.thread-row{display:grid;grid-template-columns:auto auto 1fr auto;gap:var(--space-3);align-items:center;padding:6px var(--space-3);border-bottom:1px solid var(--border);font-size:var(--text-sm)}
+.thread-row:last-child{border-bottom:none}
+.thread-row:hover{background:var(--bg-raised)}
+.thread-row .id{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2)}
+.thread-row .nm{color:var(--fg-1)}
 
 /* ---------- thread card (Signboard grammar, Yggdrasil tokens) ---------- */
 .card{border:1px solid var(--border);border-left:2px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg-raised)}
@@ -167,7 +189,7 @@ body{background:var(--bg-base);min-height:100vh}
 
 /* ---------- graph lens ---------- */
 .graf{border:1px solid var(--border);background:var(--bg-surface);padding:var(--space-6);overflow-x:auto}
-.graf-cols{display:grid;grid-template-columns:repeat(5,minmax(180px,1fr));gap:var(--space-6);min-width:1100px}
+.graf-cols{display:grid;grid-template-columns:repeat(8,minmax(140px,1fr));gap:var(--space-4);min-width:1280px}
 .graf-col>h3{font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-wider);text-transform:uppercase;color:var(--fg-2);padding-bottom:var(--space-2);border-bottom:1px solid var(--border-strong);margin-bottom:var(--space-3)}
 .node{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-raised);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);font-size:var(--text-sm);color:var(--fg-1)}
 .node .n-id{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);display:block}
@@ -214,18 +236,25 @@ body{background:var(--bg-base);min-height:100vh}
 .sec-note b{color:var(--fg-1);font-weight:var(--weight-medium)}
 .gallery-h{font-family:var(--font-display);font-size:var(--text-2xl);color:var(--fg-1);margin:var(--space-12) 0 var(--space-2);padding-top:var(--space-8);border-top:1px solid var(--border-strong)}
 
-@media (max-width:900px){.lanes,.flaws,.arch{grid-template-columns:1fr}.legend{grid-template-columns:1fr}.still-row{grid-template-columns:1fr;gap:var(--space-1)}.graf-cols{min-width:0;grid-template-columns:1fr}}
+@media (max-width:900px){.lanes,.flaws,.arch{grid-template-columns:1fr}.legend{grid-template-columns:1fr}.still-row{grid-template-columns:1fr;gap:var(--space-1)}.graf-cols{min-width:0;grid-template-columns:1fr}.thread-row{grid-template-columns:1fr;gap:2px}.sw-in{flex-direction:column;align-items:flex-start}.sw-row{flex-wrap:wrap}.doc-note{margin-left:0}.focus-list li{grid-template-columns:1fr;gap:var(--space-1)}.focus-nav{flex-wrap:wrap}}
 
 @media print{
   :root{--bg-base:#fff;--bg-surface:#fff;--bg-raised:#fff;--bg-overlay:#f2f2f2;--fg-1:#111;--fg-2:#333;--fg-3:#666;--border:#999;--border-strong:#444;--accent:#111;--cyan:#111;--vault:#111;--agent:#111;--amber:#111;--destructive:#111}
   body{background:#fff;color:#111}
   .sw,.focus-nav,.out{display:none!important}
-  .pane{display:block!important}
+  /* Print projects whichever lens/question screen is actually selected on
+     screen — the checked-state rules above (no !important, so they still
+     apply in print) already show exactly one pane and one focus screen.
+     Forcing every pane/screen open here would print all three lenses and
+     all four question screens stacked together, breaking "lens choice
+     changes projection" (#4453 review). */
   .card[open] .body,.body{display:flex!important}
   details>:not(summary){display:block!important}
   details::details-content{content-visibility:visible!important}
   .spine b.p,.spine b.d{background:#111;box-shadow:none}
-  .band,.card,.tier,.still-row,.focus{break-inside:avoid-page}
+  .node-p,.node-d{border-left-color:#111}
+  .node-ghost,.node-abs{border-color:#111}
+  .band,.card,.tier,.still-row,.focus,.thread-row,.node,.graf-group{break-inside:avoid-page}
   h1,h2,h3,.band-head,.gallery-h{break-after:avoid-page}
   .zoom{font-size:100%}
 }

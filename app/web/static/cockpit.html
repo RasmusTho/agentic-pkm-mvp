@@ -8,6 +8,23 @@
 <link rel="stylesheet" href="/static/cockpit.css">
 </head>
 <body>
+<div class="sw">
+  <div class="sw-in">
+    <div class="sw-grp">
+      <span class="eyebrow">Lens</span>
+      <div class="sw-row" role="radiogroup" aria-label="Lens">
+        <input type="radio" name="lens" id="lens-bands" checked>
+        <label for="lens-bands">Bands</label>
+        <input type="radio" name="lens" id="lens-graph">
+        <label for="lens-graph">Graph</label>
+        <input type="radio" name="lens" id="lens-question">
+        <label for="lens-question">One question</label>
+      </div>
+    </div>
+    <p class="doc-note">Lens choice re-projects the same read-time join. Nothing
+    is fetched again on switch, and the choice does not survive a reload.</p>
+  </div>
+</div>
 <div class="wrap">
   <section class="claim" id="claim">
     <div class="claim-top">
@@ -59,13 +76,45 @@
     </div>
   </section>
 
-  <div id="bands" aria-live="polite"></div>
+  <!-- ---------- LENS: bands (default) ---------- -->
+  <div class="pane" id="lens-bands-pane">
+    <div id="bands" aria-live="polite"></div>
 
-  <section id="unclassified-wrap" hidden>
-    <p class="sec-note"><b>Unclassifiable.</b> These rows have a status this
-    surface cannot map to a band. They are listed, not guessed.</p>
-    <div class="still" id="unclassified"></div>
-  </section>
+    <section id="unclassified-wrap" hidden>
+      <p class="sec-note"><b>Unclassifiable.</b> These rows have a status this
+      surface cannot map to a band. They are listed, not guessed.</p>
+      <div class="still" id="unclassified"></div>
+    </section>
+  </div>
+
+  <!-- ---------- LENS: graph ---------- -->
+  <div class="pane" id="lens-graph-pane">
+    <p class="sec-note"><b>The same threads, fanned across the delivery-graph
+    levels.</b> Each column is one rung. A node inherits its edge style from
+    the rung's own class: solid is CI-forced or database-keyed, dashed is a
+    prose/docs edge, dotted amber is known but not currently trustworthy, and
+    a faint dashed box means no object exists at that level yet.</p>
+    <div class="graf"><div class="graf-cols" id="graph-cols"></div></div>
+    <p class="sec-note">The graph's weakness is legible in its shape:
+    everything left of <b>slice</b> is dashed, dotted, or faint. The only
+    solid backbone the graph draws is slice → PR → sha → receipt — the one
+    stretch of the chain CI itself enforces.</p>
+  </div>
+
+  <!-- ---------- LENS: one question at a time ---------- -->
+  <div class="pane" id="lens-question-pane">
+    <p class="sec-note"><b>Lowest cognitive load.</b> One question fills the
+    screen at a time, in the register's own fixed order. The answer comes
+    first as a claim, then at most five rows, then an explicit count of what
+    is deferred — never a silent cut.</p>
+    <div class="radios">
+      <input type="radio" name="fq" id="fq1" checked><label for="fq1">1</label>
+      <input type="radio" name="fq" id="fq2"><label for="fq2">2</label>
+      <input type="radio" name="fq" id="fq3"><label for="fq3">3</label>
+      <input type="radio" name="fq" id="fq4"><label for="fq4">4</label>
+    </div>
+    <div id="focus-screens"></div>
+  </div>
 
   <p class="sec-note" style="margin-top:var(--space-12)">This surface is a
   projection. It owns no queue, no register, and no decision right. Deletion,
