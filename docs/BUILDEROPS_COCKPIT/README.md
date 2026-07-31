@@ -66,7 +66,11 @@ pack is supporting input.
   a delivery with no verification receipt, a stale epic with open children. Each carries its own
   evidence keys; a predicate whose plane is not fresh is **named as unevaluated** in the flaws band
   header rather than reading as "no flaw", and predicates needing a plane this capability never
-  reads (git working trees, session records, issue comments) are named as unread there too. A
+  reads (git working trees, session records, issue comments) are named as unread there too. The
+  same rule holds one level down, per evidence rather than per plane (#4471): when a *fresh* plane
+  failed to read one specific fact — a per-PR check-status call that errored — the predicate that
+  would have asserted something about that fact withholds instead of firing, and the thread's
+  `ci_sha` rung names the unread read. Unread is never allowed to wear the shape of absent. A
   thread holds one position band and additionally appears in the flaws band — one identity, no
   copy drift. Within-band ordering is a four-tick reading signal only (EXT-7): it never crosses a
   band, never hides a card, and is never a selection input (ADR-0057 A1).
