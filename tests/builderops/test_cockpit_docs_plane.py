@@ -330,6 +330,72 @@ def test_docs_source_freshness_and_refusal(tmp_path: Path) -> None:
         "lanes": None,
     }
 
+    # Case 4: the docs root exists but is genuinely unreadable (permission
+    # denied on the directory itself) — the literal "unreadable docs tree"
+    # this AC names. Path.iterdir() raises PermissionError here, which is not
+    # a DocsPlaneReadError; the whole build_registry() call must still
+    # degrade to a refused docs-frontmatter source, never crash outright.
+    unreadable_docs_root = tmp_path / "unreadable-docs"
+    unreadable_docs_root.mkdir()
+    unreadable_docs_root.chmod(0o000)
+    try:
+        unreadable_payload = build_registry(
+            db_path=db_path,
+            deploy_receipt_dir=tmp_path / "deploys",
+            docs_root=unreadable_docs_root,
+            capabilities_yaml_path=docs_root / "capabilities.yaml",
+            matrix_path=docs_root / "matrix.md",
+        )
+    finally:
+        unreadable_docs_root.chmod(0o755)  # restore so tmp_path cleanup can remove it
+    assert _source(unreadable_payload, "docs-frontmatter")["state"] == "unavailable"
+    assert unreadable_payload["capability_lanes"] == {"countable": False, "lanes": None}
+    assert unreadable_payload["claim"]["kind"] == "counted"
+
+    # Case 5: capabilities.yaml parses but to a non-list "capabilities" value
+    # (a plausible malformed hand-edit) — the read helper's own iteration
+    # over it (`for entry in payload.get("capabilities") or []`) would raise
+    # TypeError, not a DocsPlaneReadError; must still refuse, not crash.
+    malformed_docs_root = tmp_path / "malformed-docs"
+    _write_docs_fixture(malformed_docs_root)
+    _write(malformed_docs_root / "capabilities.yaml", "capabilities: 5\n")
+    malformed_payload = build_registry(
+        db_path=db_path,
+        deploy_receipt_dir=tmp_path / "deploys",
+        docs_root=malformed_docs_root,
+        capabilities_yaml_path=malformed_docs_root / "capabilities.yaml",
+        matrix_path=malformed_docs_root / "matrix.md",
+    )
+    assert _source(malformed_payload, "docs-frontmatter")["state"] == "unavailable"
+    assert malformed_payload["capability_lanes"] == {"countable": False, "lanes": None}
+    assert malformed_payload["claim"]["kind"] == "counted"
+
+
+def test_dead_dispatcher_store_refuses_lanes_not_calm_empty(tmp_path: Path) -> None:
+    """capability_lanes must refuse alongside the bands' own refusal when the
+    dispatcher store itself is unreadable — an empty ``all_items`` in that
+    branch means "nothing is known", not "zero threads exist"; reporting
+    ``{"countable": True, "lanes": []}`` next to the bands' explicit refusal
+    would be exactly the calm-next-to-refused inconsistency this capability
+    exists to prevent."""
+    docs_root = tmp_path / "docs"
+    _write_docs_fixture(docs_root)
+    missing_db = tmp_path / "nowhere" / "dispatcher.sqlite3"
+
+    payload = build_registry(
+        db_path=missing_db,
+        deploy_receipt_dir=tmp_path / "deploys",
+        docs_root=docs_root,
+        capabilities_yaml_path=docs_root / "capabilities.yaml",
+        matrix_path=docs_root / "matrix.md",
+    )
+
+    assert payload["claim"]["kind"] == "refused"  # dispatcher store is dead
+    # The docs plane itself read fine — it must not be blamed for a failure
+    # that belongs to a different source.
+    assert _source(payload, "docs-frontmatter")["state"] == "fresh"
+    assert payload["capability_lanes"] == {"countable": False, "lanes": None}
+
 
 # ---------------------------------------------------------------------------
 # test_ckm_is_lens_never_spine

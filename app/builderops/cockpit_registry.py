@@ -796,7 +796,14 @@ def build_registry(
                 "as_of": generated_at,
             }
 
-    lanes = build_lanes(all_items, docs_snapshot)
+    # BOPS-COCKPIT-05 (#4451): "countable": False + "lanes": None is the
+    # refused claim, never an empty lane list. That refusal fires on either
+    # of two independent failures: the docs plane itself is unreadable
+    # (build_lanes returns None), or the dispatcher store is unreadable
+    # (tasks is None) — in which case all_items is an artifact of nothing
+    # being known, not a true empty set, so lanes must refuse too rather
+    # than calmly reporting "0 lanes" next to the bands' own refusal above.
+    lanes = build_lanes(all_items, docs_snapshot) if tasks is not None else None
 
     return {
         "authority": "read_time_join",
@@ -809,9 +816,6 @@ def build_registry(
         "deployments": deployments,
         "github": _github_facts(sources, github_snapshot),
         "unsynced_threads": _build_unsynced_threads(tasks, github_snapshot),
-        # BOPS-COCKPIT-05 (#4451): "countable": False + "lanes": None is the
-        # refused claim (an unreadable docs tree), never an empty lane list —
-        # the same shape discipline as `github` above.
         "capability_lanes": {"countable": lanes is not None, "lanes": lanes},
         "docs_only_threads": unlinked_docs_threads(docs_snapshot),
     }

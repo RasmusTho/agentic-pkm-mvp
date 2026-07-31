@@ -397,7 +397,14 @@ def read_docs_plane(
         capabilities = _read_capabilities(capabilities_yaml_path, mtimes)
         matrix_edges = _read_matrix(matrix_path, mtimes)
         task_docs, spec_dirs = _read_spec_dirs(docs_root, mtimes)
-    except DocsPlaneReadError as exc:
+    except Exception as exc:  # noqa: BLE001 - any reader failure degrades to refusal
+        # Broad on purpose, matching cockpit_github_plane.fetch_github_live:
+        # the caller must never see an exception from this function. A
+        # DocsPlaneReadError covers the read helpers' own OSError wrapping,
+        # but an unreadable docs_root directory (PermissionError from
+        # Path.iterdir()) or a malformed capabilities.yaml (e.g. parsing to
+        # a non-list, raising TypeError) must degrade the same way — a
+        # single source's failure must never crash the whole registry.
         return DocsPlaneResult(
             snapshot=None,
             state="unavailable",
