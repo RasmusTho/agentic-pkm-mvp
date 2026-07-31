@@ -66,6 +66,15 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "upsert_note, and the object sync) pass a live conn_rw() connection inside "
         "the same transaction as the store write, so this never runs self-owned"
     ),
+    ("app/knowledge_acquisition/acquisition_requests.py", "_emit"): (
+        "self-owned at runtime (every facade that reaches it defaults conn=None), but "
+        "the acquisition queue is volatile in exactly the configurations where the "
+        "write skips: _resolve_backend lets an explicit STORE_BACKEND win, so a memory "
+        "backend means _MEMORY_REQUESTS holds the rows these events describe. Unlike "
+        "stage_events, this lane has no require_configured_database_url, and the return "
+        "is discarded. Classifying it required_db=True breaks source sync on a memory "
+        "runtime (tests/knowledge_acquisition/test_playlist_discovery.py)"
+    ),
     ("app/heimdal/entity_register.py", "_emit"): (
         "conn=self._conn may be None, but the register note written before this call "
         "is the canonical identity record and survives the skip; the event is a "
@@ -140,26 +149,29 @@ def _enclosing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
     return enclosing.name if enclosing is not None else "<module>"
 
 
-def _optional_conn_parameters(
+def _names_bound_to_a_call(
     enclosing: ast.FunctionDef | ast.AsyncFunctionDef | None,
 ) -> set[str]:
-    """Parameters of the enclosing function that default to ``None``.
+    """Local names assigned from a call or bound by a ``with`` in this function.
 
-    Forwarding such a parameter as ``conn=`` does NOT make the call
-    caller-owned: at runtime the value is `None` whenever the caller omitted
-    it, and the write is self-owned after all.
+    ``with _conn() as conn:`` / ``conn = conn_rw()`` are the only shapes in this
+    repo that PROVE a live connection at the call site without leaving the file.
     """
     if enclosing is None:
         return set()
-    optional: set[str] = set()
-    args = enclosing.args
-    for arg, default in zip(args.args[-len(args.defaults) :] if args.defaults else [], args.defaults):
-        if isinstance(default, ast.Constant) and default.value is None:
-            optional.add(arg.arg)
-    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
-        if isinstance(default, ast.Constant) and default.value is None:
-            optional.add(arg.arg)
-    return optional
+    bound: set[str] = set()
+    for node in ast.walk(enclosing):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bound.add(target.id)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if isinstance(item.context_expr, ast.Call) and isinstance(
+                    item.optional_vars, ast.Name
+                ):
+                    bound.add(item.optional_vars.id)
+    return bound
 
 
 def _conn_is_caller_owned(
@@ -168,23 +180,26 @@ def _conn_is_caller_owned(
 ) -> bool:
     """Whether a ``conn=`` argument really proves a caller-owned transaction.
 
-    Only a value that cannot be ``None`` does. A literal ``None``, or a
-    forwarded parameter/attribute that is allowed to be ``None``, leaves the
-    write self-owned at runtime — which is exactly how the knowledge-acquisition
-    emitters slipped past the first version of this gate while silently
-    dropping their events under the memory-mode skip branch.
+    Only a value that provably cannot be ``None`` does, and inside one function
+    that means a name bound from a call (``with _conn() as conn``). Everything
+    else — a literal ``None``, a forwarded parameter, an attribute such as
+    ``self._conn`` — is unprovable here and owes a classification or a reviewed
+    allowlist reason.
+
+    A forwarded parameter is unprovable EVEN WHEN it has no default of its own,
+    because the caller one frame up may itself default it to ``None``. That is
+    not hypothetical: ``AcquisitionRequests._emit`` declares ``conn: Any`` with
+    no default, while every facade that reaches it (``enqueue``, ``claim_batch``,
+    ``_emit_failed``) defaults ``conn=None`` and the production caller in
+    ``playlist_discovery`` passes none at all. Reading "no default" as "caller
+    owns it" let that site escape the gate entirely, so the gate's completeness
+    claim — the whole point of #4214 D5 — was false.
     """
     if conn_arg is None:
         return False
-    if isinstance(conn_arg, ast.Constant) and conn_arg.value is None:
-        return False
-    if isinstance(conn_arg, ast.Name) and conn_arg.id in _optional_conn_parameters(enclosing):
-        return False
-    if isinstance(conn_arg, ast.Attribute):
-        # `self._conn` and friends: the class may well construct with None.
-        # Unprovable here, so it owes a classification or a reviewed reason.
-        return False
-    return True
+    if isinstance(conn_arg, ast.Name):
+        return conn_arg.id in _names_bound_to_a_call(enclosing)
+    return False
 
 
 def _unclassified_self_owned_producers() -> dict[tuple[str, str], list[int]]:
