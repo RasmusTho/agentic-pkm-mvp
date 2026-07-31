@@ -90,6 +90,7 @@ from app.builderops.delivery_reducer import (
     initial_delivery_run_state,
     materialize_effect,
     outstanding_effect_obligations,
+    proposal_effect_identity,
     reduce_delivery_run,
     reduce_lifecycle_command,
     replay_delivery_sidecar,
@@ -4119,6 +4120,44 @@ class _DdoRun:
         return self.apply(self.admit(event, effect=effect))
 
 
+def _command_for(
+    state: DeliveryRunState,
+    command: str,
+    *,
+    command_id: str,
+) -> LifecycleCommand:
+    return LifecycleCommand(
+        command=command,  # type: ignore[arg-type]
+        command_id=command_id,
+        run_id=DDO4_RUN,
+        expected_run_version=state.version,
+        issued_by=_actor("owner:RasmusTho"),
+        issued_at=TS,
+    )
+
+
+def _drive_to_launching(
+    issue: IssueScope,
+    *,
+    plan: DeliveryPlan | None = None,
+) -> tuple[_DdoRun, ReducerEvent, EffectProposal]:
+    """Advance one Issue to launching, with its launch effect still in flight."""
+
+    plan = plan or _ddo4_plan(((issue,),))
+    run = _DdoRun(plan, _ddo4_profile())
+    started = run.start()
+    run.succeed(
+        started.effects[0],
+        run.events[-1],
+        subject=_claimed_authority(issue),
+        outcome_state="claimed",
+        label="claim",
+    )
+    launch_proposal = run.last.effects[0]
+    assert launch_proposal.effect_class == "launch_worker"
+    return run, run.events[-1], launch_proposal
+
+
 def _drive_to_awaiting_ci(
     issue: IssueScope,
     *,
@@ -4425,15 +4464,34 @@ def test_effects_require_exact_prerequisites() -> None:
     started = run.start()
     assert [item.effect_class for item in started.effects] == ["claim_issue"]
 
-    # launch_worker is not proposed until a truthful claim readback exists.
-    ordered: list[tuple[str, tuple[str, ...]]] = []
-    run.succeed(
-        started.effects[0],
-        run.events[-1],
+    # An outcome event may only report on an effect this run authorized. With
+    # the ledgered authorization removed, the identical event is refused, so a
+    # foreign or fabricated effect identity cannot advance the run.
+    claim_effect = run.materialize(started.effects[0], run.events[-1])
+    claim_success = _ddo4_effect_outcome_event(
+        plan,
+        claim_effect,
         subject=claimed,
         outcome_state="claimed",
-        label="claim",
+        sequence=run.next_sequence(),
+        correlation_id="event-claim-authorization",
     )
+    claim_admitted = run.admit(claim_success, effect=claim_effect)
+    unledgered = dataclass_replace(
+        run.state,
+        issues=tuple(
+            dataclass_replace(item, effect_ledger=())
+            for item in run.state.issues
+        ),
+    )
+    unauthorized = reduce_delivery_run(unledgered, claim_admitted)
+    assert unauthorized.refusal == "unauthorized_effect"
+    assert unauthorized.state == unledgered
+    assert not unauthorized.effects
+
+    # launch_worker is not proposed until a truthful claim readback exists.
+    ordered: list[tuple[str, tuple[str, ...]]] = []
+    run.apply(claim_admitted)
     ordered.append(("claim_succeeded", tuple(
         item.effect_class for item in run.last.effects
     )))
@@ -5305,10 +5363,92 @@ def test_lifecycle_controls_are_typed_fenced_and_effect_safe() -> None:
         ),
     )
     assert resumed.state.lifecycle == "active"
-    # Resume continues the pending gate; it never re-claims an already claimed
-    # Issue or relaunches an already committed worker.
-    assert [item.effect_class for item in resumed.effects] == ["request_review"]
+    # Resume preserves the paused phase and re-proposes only effects that are
+    # still unresolved. Here every authorized effect already succeeded and the
+    # run waits on an external structured verdict, so resume emits nothing
+    # rather than duplicating a committed request_review.
+    assert resumed.effects == ()
     assert resumed.state.issue_state(issue.scope_key).phase == "awaiting_review"
+
+    # An effect that really is still in flight is replayed exactly as it was
+    # authorized, so it collapses to one logical effect.
+    pending_run = _DdoRun(_ddo4_plan(((issue,),)), _ddo4_profile())
+    pending_started = pending_run.start()
+    authorized_claim = pending_run.materialize(
+        pending_started.effects[0], pending_run.events[-1]
+    )
+    pending_paused = reduce_lifecycle_command(
+        pending_run.state,
+        _command_for(
+            pending_run.state, "pause", command_id="cmd-pause-pending"
+        ),
+    )
+    pending_resumed = reduce_lifecycle_command(
+        pending_paused.state,
+        _command_for(
+            pending_paused.state, "resume", command_id="cmd-resume-pending"
+        ),
+    )
+    assert [item.effect_class for item in pending_resumed.effects] == [
+        "claim_issue"
+    ]
+    replayed = pending_resumed.effects[0]
+    assert (
+        proposal_effect_identity(
+            pending_resumed.state, replayed
+        ).idempotency_key
+        == authorized_claim.idempotency_key
+    )
+
+    # A relabelled Issue does not split one authorized effect into two
+    # identities: resume replays the authorization, not the current authority.
+    relabelled_state = dataclass_replace(
+        pending_paused.state,
+        issues=tuple(
+            dataclass_replace(
+                item,
+                current_authority=_authority(
+                    issue, labels=("agent:ready", "prio:high", "type:task")
+                ),
+            )
+            for item in pending_paused.state.issues
+        ),
+    )
+    relabelled_resume = reduce_lifecycle_command(
+        relabelled_state,
+        _command_for(
+            relabelled_state, "resume", command_id="cmd-resume-relabelled"
+        ),
+    )
+    assert (
+        proposal_effect_identity(
+            relabelled_resume.state, relabelled_resume.effects[0]
+        ).idempotency_key
+        == authorized_claim.idempotency_key
+    )
+
+    # Resume never re-proposes a launch that is already in flight: a re-derived
+    # launch would mint a second worker start-once identity for one Issue.
+    launching_run, _worker_event, _launch = _drive_to_launching(issue)
+    assert (
+        launching_run.state.issue_state(issue.scope_key).phase == "launching"
+    )
+    launching_paused = reduce_lifecycle_command(
+        launching_run.state,
+        _command_for(
+            launching_run.state, "pause", command_id="cmd-pause-launching"
+        ),
+    )
+    launching_resumed = reduce_lifecycle_command(
+        launching_paused.state,
+        _command_for(
+            launching_paused.state, "resume", command_id="cmd-resume-launching"
+        ),
+    )
+    assert launching_resumed.effects == ()
+    assert (
+        launching_resumed.state.issue_state(issue.scope_key).phase == "launching"
+    )
 
     # Cancellation records committed effects as obligations and emits nothing.
     committed = run.state.issue_state(issue.scope_key).unreconciled_effects
@@ -6053,6 +6193,49 @@ def test_worktree_preparation_follows_the_full_worker_authority_chain() -> None:
     with pytest.raises(ReducerAdmissionError, match="has not authorized"):
         _prepare(unauthorized, state=fresh_state)
     assert unauthorized.calls == []
+
+    # The phase alone is not authorization. With the ledgered launch removed,
+    # the identical effect is refused, so a foreign or replayed launch cannot
+    # register a worktree or mint a second worker start-once identity.
+    unledgered_state = dataclass_replace(
+        launching_state,
+        issues=tuple(
+            dataclass_replace(
+                item,
+                effect_ledger=tuple(
+                    entry
+                    for entry in item.effect_ledger
+                    if entry.effect_class != "launch_worker"
+                ),
+            )
+            for item in launching_state.issues
+        ),
+    )
+    unledgered = _RecordingWorktree()
+    with pytest.raises(ReducerAdmissionError, match="reducer authorized"):
+        _prepare(unledgered, state=unledgered_state)
+    assert unledgered.calls == []
+
+    # A launch the reducer already saw acknowledged is likewise not preparable.
+    resolved_state = dataclass_replace(
+        launching_state,
+        issues=tuple(
+            dataclass_replace(
+                item,
+                effect_ledger=tuple(
+                    dataclass_replace(entry, outcome_state="worker_launched")
+                    if entry.effect_class == "launch_worker"
+                    else entry
+                    for entry in item.effect_ledger
+                ),
+            )
+            for item in launching_state.issues
+        ),
+    )
+    replayed = _RecordingWorktree()
+    with pytest.raises(ReducerAdmissionError, match="reducer authorized"):
+        _prepare(replayed, state=resolved_state)
+    assert replayed.calls == []
 
     # A non-launch effect cannot be used to prepare a worker at all.
     claim_effect = next(

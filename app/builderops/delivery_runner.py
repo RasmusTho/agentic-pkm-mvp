@@ -43,15 +43,16 @@ WORKER_RUNTIME_STATES: Final[tuple[WorkerRuntimeState, ...]] = get_args(
     WorkerRuntimeState
 )
 
-WORKER_RUNTIME_OPERATIONS: Final[tuple[str, ...]] = (
-    "start",
-    "inspect",
-    "heartbeat",
-    "interrupt",
-    "reattach",
-    "await_terminal",
-    "cancel",
-)
+#: Derived from the port itself, never hand-listed, so the exhaustiveness check
+#: cannot degrade into a constant compared against a constant.
+def _port_operations() -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            name
+            for name in getattr(WorkerRuntimePort, "__protocol_attrs__", ())
+            if not name.startswith("_")
+        )
+    )
 
 #: The exact repo-relative entrypoints that already own each authority. Every
 #: path here is asserted to exist and is actually routed to, so a renamed or
@@ -321,10 +322,22 @@ def prepare_worker_execution(
         raise ReducerAdmissionError(
             "the reducer has not authorized a worker start in this phase"
         )
+    # The phase alone is not authorization. The run's effect ledger records the
+    # exact launch identity the reducer emitted, and it must be this one and
+    # still unresolved - otherwise a foreign or replayed launch effect could
+    # register a worktree and mint a second worker start-once identity.
+    authorized_launch = next(
+        (
+            entry
+            for entry in issue_state.effect_ledger
+            if entry.effect_class == "launch_worker"
+            and entry.outcome_state is None
+        ),
+        None,
+    )
     if (
-        issue_state.authorized_invocation_effect_key is not None
-        and issue_state.authorized_invocation_effect_key
-        != launch_effect.idempotency_key
+        authorized_launch is None
+        or authorized_launch.idempotency_key != launch_effect.idempotency_key
     ):
         raise ReducerAdmissionError(
             "launch effect is not the invocation the reducer authorized"
@@ -366,6 +379,9 @@ class WorkerRuntimePort(Protocol):
     ) -> WorkerRuntimeObservation: ...
 
     def cancel(self, invocation: WorkerInvocation) -> WorkerRuntimeObservation: ...
+
+
+WORKER_RUNTIME_OPERATIONS: Final[tuple[str, ...]] = _port_operations()
 
 
 #: The single behavioral rule for one invocation identity: only ``not_started``

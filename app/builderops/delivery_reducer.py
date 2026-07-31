@@ -114,6 +114,7 @@ RefusalReason: TypeAlias = Literal[
     "pull_request_identity_conflict",
     "head_evidence_conflict",
     "unauthorized_command",
+    "unauthorized_effect",
 ]
 
 LifecycleState: TypeAlias = Literal["active", "paused", "cancelled", "superseded"]
@@ -330,6 +331,19 @@ REDUCER_TRANSITION_MATRIX: Final[
 
 
 @dataclass(frozen=True)
+class EffectProposal:
+    """A next-effect decision. It is not an effect and performs nothing."""
+
+    effect_class: EffectClass
+    issue: IssueScope
+    expected_authorities: tuple[AuthoritySnapshot, ...]
+    pull_request_number: int | None = None
+    exact_head_sha: str | None = None
+    known_defect_registry_ref: str | None = None
+    known_defect_finding_hash: str | None = None
+
+
+@dataclass(frozen=True)
 class EffectLedgerEntry:
     """One effect this run authorized, and the last outcome it observed.
 
@@ -344,6 +358,10 @@ class EffectLedgerEntry:
     idempotency_key: str
     outcome_keys: tuple[str, ...]
     outcome_state: EffectOutcomeState | None = None
+    #: The exact proposal that was authorized. Resume replays this rather than
+    #: re-deriving one, so a benign authority relabel between authorization and
+    #: resume cannot split one logical effect into two identities.
+    proposal: EffectProposal | None = None
 
     @property
     def is_resolved_uncommitted(self) -> bool:
@@ -418,19 +436,6 @@ class DeliveryRunState:
         return self.lifecycle in {"cancelled", "superseded"} or all(
             item.phase in TERMINAL_PHASES for item in self.issues
         )
-
-
-@dataclass(frozen=True)
-class EffectProposal:
-    """A next-effect decision. It is not an effect and performs nothing."""
-
-    effect_class: EffectClass
-    issue: IssueScope
-    expected_authorities: tuple[AuthoritySnapshot, ...]
-    pull_request_number: int | None = None
-    exact_head_sha: str | None = None
-    known_defect_registry_ref: str | None = None
-    known_defect_finding_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -900,6 +905,7 @@ def _record_authorizations(
             effect_class=proposal.effect_class,
             idempotency_key=identity.idempotency_key,
             outcome_keys=identity.outcome_keys,
+            proposal=proposal,
         )
         updated = _replace_issue(
             updated,
@@ -985,7 +991,28 @@ def reduce_delivery_run(
         return _refuse(state, "foreign_run")
     if not REDUCER_TRANSITION_MATRIX[(issue_state.phase, admitted.signal)].legal:
         return _refuse(state, "illegal_transition")
+    # An effect-outcome event may only report on an effect this run actually
+    # authorized. Without this gate an adapter could report success for a
+    # launch, merge, or closure the reducer never emitted, and the reducer would
+    # bind that foreign identity as its own.
+    if admitted.effect is not None and not _is_authorized_effect(
+        issue_state, admitted.effect
+    ):
+        return _refuse(state, "unauthorized_effect")
     return _ISSUE_HANDLERS[admitted.signal](state, admitted, issue_state)
+
+
+def _is_authorized_effect(
+    issue_state: IssueRunState,
+    effect: ReducerEffect,
+) -> bool:
+    """True when this run ledgered the exact effect identity being reported."""
+
+    return any(
+        entry.idempotency_key == effect.idempotency_key
+        and entry.effect_class == effect.effect_class
+        for entry in issue_state.effect_ledger
+    )
 
 
 def _reduce_tick(
@@ -1027,11 +1054,20 @@ def _committed(
     outcome = admitted.event.effect_outcome
     if effect is None or outcome is None:
         return issue_state.effect_ledger
+    authorized = next(
+        (
+            entry
+            for entry in issue_state.effect_ledger
+            if entry.idempotency_key == effect.idempotency_key
+        ),
+        None,
+    )
     record = EffectLedgerEntry(
         effect_class=effect.effect_class,
         idempotency_key=effect.idempotency_key,
         outcome_keys=tuple(outcome.outcome_keys),
         outcome_state=outcome.outcome_state,
+        proposal=authorized.proposal if authorized is not None else None,
     )
     remaining = tuple(
         item
@@ -1604,25 +1640,22 @@ def pending_effect_proposals(
             # waits on its in-flight launch outcome rather than minting a second
             # start-once identity for the same worker.
             continue
-        proposals.append(
-            EffectProposal(
-                effect_class=effect_class,
-                issue=item.issue,
-                expected_authorities=(item.current_authority,),
-                pull_request_number=item.authorized_pull_request
-                if effect_class not in {"claim_issue", "launch_worker"}
-                else None,
-                exact_head_sha=item.authorized_head_sha
-                if effect_class not in {"claim_issue", "launch_worker"}
-                else None,
-                known_defect_registry_ref=item.pending_known_defect_ref
-                if effect_class == "record_known_defect"
-                else None,
-                known_defect_finding_hash=item.pending_known_defect_finding_hash
-                if effect_class == "record_known_defect"
-                else None,
-            )
+        # Replay the exact authorization from the ledger. Re-deriving one from
+        # the run's *current* authority would change the semantic input, and a
+        # benign relabel between authorization and resume would then split one
+        # logical effect into two identities.
+        pending = next(
+            (
+                entry.proposal
+                for entry in item.effect_ledger
+                if entry.effect_class == effect_class
+                and entry.outcome_state is None
+                and entry.proposal is not None
+            ),
+            None,
         )
+        if pending is not None:
+            proposals.append(pending)
     return tuple(proposals)
 
 
