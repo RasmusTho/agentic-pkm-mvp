@@ -61,6 +61,13 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     assert "app/knowledge_acquisition/youtube_api_client.py" in job
     assert "app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py" in job
     assert "tests/knowledge_acquisition/test_youtube_api_quota_pg.py" in job
+    # Entity-review operation journal (EROJ-01, #4350): all its
+    # committed-visibility proofs are pg-marked, so this lane is the only
+    # PR-path check that can regress-test them.
+    assert "app/heimdal/entity_review_operation_journal.py" in job
+    assert "app/alembic/versions/e7a2b9c4d1f8_eroj01_entity_review_operations.py" in job
+    assert "tests/heimdal/test_entity_review_operation_journal.py" in job
+    assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in job
     assert '-m "pg"' in job
 
 

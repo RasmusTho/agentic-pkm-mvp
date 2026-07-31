@@ -704,6 +704,16 @@ jobs:
               - 'tests/index/test_provenance_stamp.py'
               - 'tests/indexer/test_outbox_roundtrip_pg.py'
               - 'tests/knowledge_acquisition/test_youtube_api_quota_pg.py'
+              # Entity-review operation journal (EROJ-01, #4350): every
+              # committed-visibility mechanism proof is pg-marked, so this
+              # lane is the PR-path check that can catch drift on it
+              # (`Unit tests (not pg)` deselects all of them by design).
+              - 'app/heimdal/entity_review_operation_journal.py'
+              - 'app/heimdal/entity_confirm.py'
+              - 'app/heimdal/entity_register.py'
+              - 'app/alembic/versions/e7a2b9c4d1f8_eroj01_entity_review_operations.py'
+              - 'tests/heimdal/test_entity_review_operation_journal.py'
+              - 'tests/migrations/test_entity_review_operation_journal_schema_parity.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -723,7 +733,7 @@ jobs:
         if: steps.changes.outputs.index_pg == 'true'
         run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
-      - name: Run exact index and YouTube quota PG acceptance surface
+      - name: Run exact index, YouTube quota, and entity-review journal PG surface
         if: steps.changes.outputs.index_pg == 'true'
         shell: bash
         run: |
@@ -732,6 +742,8 @@ jobs:
             tests/index/test_provenance_stamp.py \
             tests/indexer/test_outbox_roundtrip_pg.py \
             tests/knowledge_acquisition/test_youtube_api_quota_pg.py \
+            tests/heimdal/test_entity_review_operation_journal.py \
+            tests/migrations/test_entity_review_operation_journal_schema_parity.py \
             --tb=short \
             | tee pytest-index-pg.log
 

@@ -1,11 +1,11 @@
-State: Filed target-state specification (parent #4349; serial children #4350–#4352) authored 2026-07-29; no runtime behavior is implemented by this directory.
+State: Target-state specification under serial delivery (parent #4349). EROJ-01 (#4350, committed operation identity + atomic event commit + fresh-visibility fence) is implemented; EROJ-02 (#4351) and EROJ-03 (#4352) are not yet implemented and their recovery guarantees are not claimed.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the bounded implementation order, cross-task recovery invariants, and acceptance path for crash-safe entity-review merge application. Subordinate to ADR-0049 and the Mimer entity-register contracts for semantic authority, `docs/EVENTS.md` for event authority, and the runtime correctness kernel for multi-store ordering.
 Owner: Product/Runtime — Mimer identity resolution, with PDM persistence and OEF outbox participation
 Temporal class: target-state delivery contract
 Review cadence: event-driven (filing, each child merge, terminal acceptance)
 Source of truth: this directory for task shape; the owner documents named above for current authority and shipped behavior
-Last reviewed: 2026-07-29
+Last reviewed: 2026-07-31
 
 # Entity-Review Operation Journal
 
@@ -30,8 +30,9 @@ introduce a generic saga framework, graph store, event store, queue, service, or
 
 ## Classification and authority boundary
 
-**Change classification:** target-state / future-state work. This docs-only breakdown does not claim
-the journal, lineage fields, or complement identities are shipped.
+**Change classification:** target-state delivery contract under serial implementation. EROJ-01's
+journal and committed-visibility fence are shipped (#4350); the EROJ-02 lineage fields and EROJ-03
+complement identities are not shipped and are not claimed.
 
 **SBS classification:** Product/Runtime.
 
@@ -143,7 +144,7 @@ recorded. No work in this chain is safe to parallelize.
       implementation PR that first changes each contract updates that owner in the same PR.
       Verify: doc writeback at `docs/DB_SCHEMA.md :: Source Of Truth`,
       `docs/EVENTS.md :: heimdal.register.entity.merged`,
-      `docs/MIMER_IPAD_THINKING_CANVAS/SIDE_BY_SIDE_ENTITY_CONFIRMATION_ON_IPAD.md :: Human flow`,
+      `docs/MIMER_IPAD_THINKING_CANVAS/SIDE_BY_SIDE_ENTITY_CONFIRMATION_ON_IPAD.md :: What This Task Does`,
       and `docs/STATUS.md :: Runtime verification`
 
 ## Acceptance and handoff path

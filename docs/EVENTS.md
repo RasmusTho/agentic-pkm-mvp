@@ -859,15 +859,32 @@ Payload fields (in addition to the envelope):
 
 ### `heimdal.register.entity.merged`
 
-Emitted by `EntityRegister.merge()` when a governed, human-confirmed merge folds one
-entity into another (`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 op 3 / §9-g). Append-only
-(HEIM-1): the source entity's note is never deleted, only marked `lifecycle: merged` with
-a `merged_into` redirect; the target note's aliases are folded to include the source's
-label/aliases. Lineage/audit event, same non-dispatched posture as above.
+Emitted when a governed, human-confirmed merge folds one entity into another
+(`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 op 3 / §9-g). Append-only (HEIM-1): the source
+entity's note is never deleted, only marked `lifecycle: merged` with a `merged_into`
+redirect; the target note's aliases are folded to include the source's label/aliases.
+Lineage/audit event, same non-dispatched posture as above. Two emitters:
+
+- **Entity-review merges** (the production human-review path, EROJ-01 #4350): emitted by the
+  entity-review operation journal (`app/heimdal/entity_review_operation_journal.py`), NOT by the
+  register. The event commits **atomically with the operation's terminal `event_committed` journal
+  state in one journal-owned Postgres transaction**, deterministically keyed by the operation id, so
+  the event cannot exist without its committed operation row (or be duplicated by a retry). The
+  `entities/review.md` `pending` entry may be cleared only after a **fresh** connection observes
+  both the terminal journal row and this committed event (INV-EROJ-3) — visibility on the writer's
+  or a caller's own uncommitted transaction never authorizes the clear. Source:
+  `heimdal.entity_review`. Recovery across later target evolution or splits is NOT claimed here
+  (EROJ-02/EROJ-03).
+- **Direct `EntityRegister.merge()` calls** (the A1 register API outside the review path): emitted
+  by the register immediately after the note writes, without an `operation_id`. Source:
+  `heimdal.entity_register`.
 
 Payload fields (in addition to the envelope):
-- `from_id` (`string`): the entity_id that was merged away.
-- `into_id` (`string`): the entity_id it was merged into.
+- `from_id` (`string`): the entity_id that was merged away — for entity-review merges, always the
+  **original** human-decided source, never a later-evolved endpoint (INV-EROJ-4).
+- `into_id` (`string`): the entity_id it was merged into — original, per the same rule.
+- `operation_id` (`string`, entity-review merges only): the deterministic entity-review operation
+  this merge was journaled under (see `docs/DB_SCHEMA.md` — `entity_review_operations`).
 
 ### `heimdal.register.entity.split`
 

@@ -40,6 +40,15 @@ merge-execution authority.
   not the client signal, canonicalizes an approval into a merge operation.
 - The client never mutates `pending`, never edits or deletes prior review history, never writes the
   entity register notes, and never owns merge execution (Mimer-organ-owned, ADR-0049 §2).
+- **Delivered Hub-side transaction boundary (EROJ-01, #4350):** when the Hub folds an uncompensated
+  approval, it canonicalizes it into one durable entity-review operation
+  (`entity_review_operations`, deterministic over the exact decision mapping) **before** any
+  register mutation; the operation's `heimdal.register.entity.merged` event commits atomically with
+  its terminal journal state; and the `pending` entry is cleared only after a **fresh** database
+  transaction observes both committed rows. A client record alone is never replayed as a merge
+  command, and a changed decision mapping for a still-active operation fails closed with the entry
+  left pending. Recovery across later target merges/splits is not claimed by this boundary
+  (EROJ-02/EROJ-03).
 
 ## Undo boundary
 

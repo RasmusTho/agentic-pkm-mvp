@@ -29,6 +29,21 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   fixtures opt in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1` flag KERNEL-04
   established. Schema parity between the migration and the audited `bootstrap()` shape is asserted by
   `tests/migrations/test_outbox_schema_parity.py`.
+- The **entity-review operation journal** table (`entity_review_operations`) is **migration-owned**
+  (EROJ-01, #4350): Alembic revision `e7a2b9c4d1f8` creates it, and
+  `app/heimdal/entity_review_operation_journal.py::ensure_journal_schema()` is assert-only outside
+  tests — a Postgres runtime with the table or a column missing raises
+  `EntityReviewOperationSchemaMissingError` with a "run `alembic upgrade head`" hint instead of
+  creating schema. Test fixtures opt in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1`
+  flag KERNEL-04 established. Schema parity between the migration and the module's audited shape is
+  asserted by `tests/migrations/test_entity_review_operation_journal_schema_parity.py`. One row per
+  deterministic entity-review merge operation: the row commits **before** the first register note
+  effect, its terminal `event_committed` state commits atomically with the operation's
+  `heimdal.register.entity.merged` outbox row, and a merge queue entry leaves
+  `entities/review.md` `pending` only after a **fresh** connection observes both committed rows
+  (INV-EROJ-3; see `docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md`). Operational coordination
+  evidence only — entity notes remain canonical identity truth. Target-evolution lineage recovery
+  (EROJ-02) and globally unique split complements (EROJ-03) are not delivered by this table.
 - The active legacy **`decisions`** writer schema is **migration-owned** (#3488): Alembic revision
   `e1d2c3b4a5f6` carries forward the table's creation, compatibility columns, generated UUID default,
   and nullable `object_id` / `ON DELETE SET NULL` FK. The neutral database seam
@@ -317,6 +332,36 @@ audited `app/services/outbox.py::bootstrap()` produced it; `bootstrap()` is asse
 Interpretation:
 - the outbox is the canonical runtime queue,
 - but the event payload is still an operational artifact layer rather than the whole domain model.
+
+## Entity-Review Operation Journal
+
+Migration-owned (EROJ-01, #4350): Alembic revision `e7a2b9c4d1f8` creates the table exactly as the
+audited `app/heimdal/entity_review_operation_journal.py` autocreate shape;
+`ensure_journal_schema()` is assert-only outside tests (`STORE_SCHEMA_AUTOCREATE=1` opts test
+fixtures into create-on-demand):
+- `entity_review_operations`
+  - `operation_id` (`uuid`, PK) — deterministic over the INV-EROJ-2 tuple (active vault identity,
+    queue entry id, decision-list position, SHA-256 digest of the exact human decision mapping,
+    original `from_id`, original `into_id`)
+  - `vault_identity` (`text`)
+  - `queue_entry_id` (`text`)
+  - `decision_position` (`integer`)
+  - `decision_digest` (`text`)
+  - `from_id` / `into_id` (`text`) — the original, immutable human-decided pair
+  - `state` (`text`, default `'claimed'`, CHECK `claimed | event_committed | cleared`, monotonic)
+  - `outbox_event_id` (`uuid`) — the operation's deterministic merged-event idempotency key
+  - `created_at` / `updated_at` (`timestamptz`, default `now()`)
+  - Indexes: `entity_review_operations_active_entry_idx` — partial UNIQUE on
+    `(vault_identity, queue_entry_id) WHERE state <> 'cleared'`, the fail-closed guard that a
+    changed decision mapping cannot mint a colliding second active operation
+
+Interpretation:
+- the journal is operational coordination evidence for restart-safe entity-review merges: the row
+  commits before the first register note effect, the terminal state commits atomically with the
+  `heimdal.register.entity.merged` outbox row, and only a fresh transaction's read of both
+  committed rows authorizes clearing the `entities/review.md` `pending` entry (INV-EROJ-3),
+- it never decides identity: `_heimdal/register/*.md` notes remain canonical identity truth and
+  `entities/review.md` remains the human decision history.
 
 ## Heimdal Observation Log (append-only, per-consumer cursor)
 

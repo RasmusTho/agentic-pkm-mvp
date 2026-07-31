@@ -25,6 +25,7 @@ read/write path, never a mock of either.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,15 @@ from app.heimdal.entity_register import (
     LIFECYCLE_CANONICAL,
     LIFECYCLE_MERGED,
     EntityRegister,
+)
+from app.heimdal.entity_review_operation_journal import (
+    STATE_CLAIMED,
+    STATE_CLEARED,
+    STATE_EVENT_COMMITTED,
+    EntityReviewOperationConflictError,
+    OperationRecord,
+    derive_operation_event_id,
+    derive_operation_id,
 )
 from app.heimdal.settings_notes import (
     DEFAULT_SETTINGS_DIR,
@@ -112,6 +122,138 @@ class FakeOutboxConn:
 
     def rows_for(self, topic: str) -> list[dict[str, Any]]:
         return [r for r in self.rows.values() if r["topic"] == topic]
+
+
+class _InMemoryJournal:
+    """In-process `EntityReviewOperationJournalPort` double for applicator
+    ROUTING coverage: honest deterministic identity, fail-closed digest
+    conflicts, and monotonic states — but no transaction physics. The
+    committed-visibility fence itself is only proven against real Postgres
+    (tests/heimdal/test_entity_review_operation_journal.py, pg-marked).
+
+    ``log`` records ("<journal method>", operation_id) in call order and may
+    be shared with `_LoggingRegister` to assert journal-vs-register ordering.
+    ``visibility`` simulates the fence outcome: False models "the fresh
+    transaction cannot observe the committed evidence"."""
+
+    def __init__(self, *, visibility: bool = True, log: list[tuple[str, str]] | None = None):
+        self.visibility = visibility
+        self.log = log if log is not None else []
+        self.operations: dict[str, OperationRecord] = {}
+
+    def claim_operation(
+        self,
+        *,
+        vault_identity: str,
+        queue_entry_id: str,
+        decision_position: int,
+        decision_digest: str,
+        from_id: str,
+        into_id: str,
+    ) -> OperationRecord:
+        operation_id = derive_operation_id(
+            vault_identity=vault_identity,
+            queue_entry_id=queue_entry_id,
+            decision_position=decision_position,
+            decision_digest=decision_digest,
+            from_id=from_id,
+            into_id=into_id,
+        )
+        record = self.operations.get(operation_id)
+        if record is None:
+            for other in self.operations.values():
+                if (
+                    other.vault_identity == vault_identity
+                    and other.queue_entry_id == queue_entry_id
+                    and other.state != STATE_CLEARED
+                ):
+                    raise EntityReviewOperationConflictError(
+                        f"queue entry {queue_entry_id!r} already has active operation "
+                        f"{other.operation_id}"
+                    )
+            record = OperationRecord(
+                operation_id=operation_id,
+                vault_identity=vault_identity,
+                queue_entry_id=queue_entry_id,
+                decision_position=decision_position,
+                decision_digest=decision_digest,
+                from_id=from_id,
+                into_id=into_id,
+                state=STATE_CLAIMED,
+                outbox_event_id=derive_operation_event_id(operation_id),
+            )
+            self.operations[operation_id] = record
+        self.log.append(("claim_operation", operation_id))
+        return record
+
+    def find_active_operation(
+        self, *, vault_identity: str, queue_entry_id: str
+    ) -> OperationRecord | None:
+        self.log.append(("find_active_operation", queue_entry_id))
+        for record in self.operations.values():
+            if (
+                record.vault_identity == vault_identity
+                and record.queue_entry_id == queue_entry_id
+                and record.state != STATE_CLEARED
+            ):
+                return record
+        return None
+
+    def find_cleared_operation(
+        self,
+        *,
+        vault_identity: str,
+        queue_entry_id: str,
+        from_id: str | None = None,
+        into_id: str | None = None,
+    ) -> OperationRecord | None:
+        self.log.append(("find_cleared_operation", queue_entry_id))
+        for record in self.operations.values():
+            if (
+                record.vault_identity == vault_identity
+                and record.queue_entry_id == queue_entry_id
+                and record.state == STATE_CLEARED
+                and (from_id is None or record.from_id == from_id)
+                and (into_id is None or record.into_id == into_id)
+            ):
+                return record
+        return None
+
+    def commit_merge_event(self, operation: OperationRecord) -> OperationRecord:
+        record = self.operations[operation.operation_id]
+        if record.state == STATE_CLAIMED:
+            record = replace(record, state=STATE_EVENT_COMMITTED)
+            self.operations[record.operation_id] = record
+        self.log.append(("commit_merge_event", record.operation_id))
+        return record
+
+    def verify_committed_visibility(self, operation: OperationRecord) -> bool:
+        self.log.append(("verify_committed_visibility", operation.operation_id))
+        record = self.operations.get(operation.operation_id)
+        return bool(
+            self.visibility
+            and record is not None
+            and record.state in (STATE_EVENT_COMMITTED, STATE_CLEARED)
+        )
+
+    def mark_cleared(self, operation: OperationRecord) -> OperationRecord:
+        record = replace(self.operations[operation.operation_id], state=STATE_CLEARED)
+        self.operations[record.operation_id] = record
+        self.log.append(("mark_cleared", record.operation_id))
+        return record
+
+
+class _LoggingRegister(EntityRegister):
+    """Real register that mirrors every note write into a shared call log so
+    tests can prove journal-before-register ordering."""
+
+    def __init__(self, *args: Any, log: list[tuple[str, str]], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._log = log
+
+    def _write_entry(self, entry: Any) -> None:
+        self._log.append(("register_write", entry.entity_id))
+        super()._write_entry(entry)
 
 
 def _vault_root(tmp_path: Path) -> Path:
@@ -197,10 +339,12 @@ def test_merge_writes_redirect_and_is_reversible(tmp_path: Path) -> None:
     )
     write_settings_note(vault_root, note, settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
 
-    applied = apply_human_review_decisions(vault_root, register=register)
+    journal = _InMemoryJournal()
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
     assert len(applied) == 1
     assert applied[0].merged is True
     assert applied[0].action == "merge"
+    assert applied[0].operation_id is not None
 
     # Redirect: the source note carries `merged_into` (append-only — HEIM-1).
     source_entry = register.get_entry(anna_gym)
@@ -218,7 +362,7 @@ def test_merge_writes_redirect_and_is_reversible(tmp_path: Path) -> None:
     assert pending_review_entries(vault_root) == ()
 
     # Idempotent: re-applying (no new decisions/pending) does nothing.
-    again = apply_human_review_decisions(vault_root, register=register)
+    again = apply_human_review_decisions(vault_root, register=register, journal=journal)
     assert again == ()
 
     # Reversible via split() (F5) — A1's own mechanism, not reimplemented.
@@ -387,7 +531,9 @@ def test_apply_human_review_decisions_applies_terminal_uncompensated_decision(
         write_guard=_allowing_guard(),
     )
 
-    applied = apply_human_review_decisions(vault_root, register=register)
+    applied = apply_human_review_decisions(
+        vault_root, register=register, journal=_InMemoryJournal()
+    )
 
     assert len(applied) == 1
     assert applied[0].action == terminal_action
@@ -582,3 +728,294 @@ def test_apply_human_review_decisions_no_note_yet_is_a_noop(tmp_path: Path) -> N
     vault_root = _vault_root(tmp_path)
     register = _register(vault_root)
     assert apply_human_review_decisions(vault_root, register=register) == ()
+
+
+# ---------------------------------------------------------------------------
+# EROJ-01 (#4350): the production applicator clears a merge only through the
+# committed-visibility fence; reject and pre-application undo are unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _queue_one_merge(
+    vault_root: Path, register: EntityRegister
+) -> tuple[str, str, str]:
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    mention = _mention(
+        resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="mention:fence-1"
+    )
+    entry = queue_for_review(vault_root, mention, candidate_entity_ids=[source, target])
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={
+                "pending": [entry.to_dict()],
+                "decisions": [
+                    ReviewDecision(
+                        queue_entry_id=entry.queue_entry_id,
+                        action="merge",
+                        from_id=source,
+                        into_id=target,
+                    ).to_dict()
+                ],
+            },
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    return entry.queue_entry_id, source, target
+
+
+def test_apply_merge_uses_committed_journal_before_pending_clear(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    log: list[tuple[str, str]] = []
+    register = _LoggingRegister(
+        vault_context=VaultContext(
+            status="selected",
+            active_vault_id="vault-test",
+            active_vault_name="Vault Test",
+            active_vault_path=str(vault_root),
+        ),
+        write_guard=_allowing_guard(),
+        conn=FakeOutboxConn(),
+        log=log,
+    )
+    queue_entry_id, source, target = _queue_one_merge(vault_root, register)
+
+    # Without a journal, a merge decision cannot be applied at all: no
+    # register mutation, no pending clear, loud failure.
+    with pytest.raises(EntityConfirmError, match="committed-visibility fence"):
+        apply_human_review_decisions(vault_root, register=register)
+    assert register.get_entry(source).lifecycle == LIFECYCLE_CANONICAL
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [queue_entry_id]
+
+    # With a journal whose fence cannot observe the committed evidence, the
+    # queue entry MUST stay pending — same-writer belief is never durability.
+    journal = _InMemoryJournal(visibility=False, log=log)
+    log.clear()
+    with pytest.raises(EntityConfirmError, match="committed visibility"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [queue_entry_id]
+    methods = [name for name, _ in log]
+    assert "mark_cleared" not in methods, "an unobserved commit must never authorize a clear"
+    assert methods.index("claim_operation") < methods.index("register_write"), (
+        "the operation must commit before the first register effect"
+    )
+
+    # Once the fence observes the committed evidence, the SAME in-flight
+    # operation is finished through the entry-keyed resume path: fence before
+    # mark_cleared, and no second event commit for an already-committed
+    # operation.
+    journal.visibility = True
+    log.clear()
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert len(applied) == 1 and applied[0].merged is True
+    assert pending_review_entries(vault_root) == ()
+    methods = [name for name, _ in log]
+    assert "commit_merge_event" not in methods, (
+        "an already event-committed operation must resume, never re-commit"
+    )
+    assert methods.index("find_active_operation") < methods.index(
+        "verify_committed_visibility"
+    )
+    assert methods.index("verify_committed_visibility") < methods.index("mark_cleared")
+
+    # Reject keeps its current journal-free semantics on a fresh entry.
+    other = _mention(
+        resolution=RESOLUTION_AMBIGUOUS, confidence=0.7, mention_id="mention:fence-reject"
+    )
+    entry = queue_for_review(vault_root, other, candidate_entity_ids=[target])
+    note = read_settings_note(vault_root, ENTITY_REVIEW, settings_dir=DEFAULT_SETTINGS_DIR)
+    assert note is not None
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={
+                **note.values,
+                "decisions": [
+                    *list(note.values.get("decisions") or []),
+                    ReviewDecision(queue_entry_id=entry.queue_entry_id, action="reject").to_dict(),
+                ],
+            },
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    applied = apply_human_review_decisions(vault_root, register=register)
+    assert [a.action for a in applied] == ["reject"]
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_client_approval_is_canonicalized_by_hub_before_merge_execution(
+    tmp_path: Path,
+) -> None:
+    """INV-EROJ-1: an iPad client record is a proposal-bound review signal.
+
+    The Hub fold validates that the signal is bound to a displayed pending
+    proposal and canonicalizes the approval into a journaled operation BEFORE
+    any register mutation; a client record alone (unbound, or compensated by
+    a pre-application undo) is never replayed as a merge command."""
+    vault_root = _vault_root(tmp_path)
+    log: list[tuple[str, str]] = []
+    register = _LoggingRegister(
+        vault_context=VaultContext(
+            status="selected",
+            active_vault_id="vault-test",
+            active_vault_name="Vault Test",
+            active_vault_path=str(vault_root),
+        ),
+        write_guard=_allowing_guard(),
+        conn=FakeOutboxConn(),
+        log=log,
+    )
+    journal = _InMemoryJournal(log=log)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+
+    # A client approval that is NOT bound to any displayed proposal (no such
+    # pending entry) is skipped outright: no operation, no register mutation.
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={
+                "pending": [],
+                "decisions": [
+                    ReviewDecision(
+                        queue_entry_id="review:mention:not-displayed",
+                        action="merge",
+                        from_id=source,
+                        into_id=target,
+                    ).to_dict()
+                ],
+            },
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    log.clear()
+    assert apply_human_review_decisions(vault_root, register=register, journal=journal) == ()
+    assert log == [], "an unbound client record must not reach the journal or the register"
+    assert register.get_entry(source).lifecycle == LIFECYCLE_CANONICAL
+
+    # An approval compensated by a pre-application undo folds to undecided:
+    # still no operation and no register mutation, history retained.
+    mention = _mention(
+        resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="mention:approve-1"
+    )
+    entry = queue_for_review(vault_root, mention, candidate_entity_ids=[source, target])
+    approval = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target
+    ).to_dict()
+    undo = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="undo").to_dict()
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={"pending": [entry.to_dict()], "decisions": [approval, undo]},
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    log.clear()
+    assert apply_human_review_decisions(vault_root, register=register, journal=journal) == ()
+    assert log == []
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [
+        entry.queue_entry_id
+    ]
+
+    # A new uncompensated approval bound to the displayed proposal IS
+    # canonicalized: the Hub claims the operation BEFORE the first register
+    # mutation and only the Hub executes the merge.
+    note = read_settings_note(vault_root, ENTITY_REVIEW, settings_dir=DEFAULT_SETTINGS_DIR)
+    assert note is not None
+    re_approval = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target
+    ).to_dict()
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={
+                **note.values,
+                "decisions": [*list(note.values.get("decisions") or []), re_approval],
+            },
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    log.clear()
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert len(applied) == 1 and applied[0].merged is True
+    methods = [name for name, _ in log]
+    assert "claim_operation" in methods and "register_write" in methods
+    assert methods.index("claim_operation") < methods.index("register_write"), (
+        "the Hub must canonicalize the approval into the operation before any "
+        "register mutation"
+    )
+    assert register.get_entry(source).merged_into == target
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_invalid_merge_decision_never_strands_an_operation(tmp_path: Path) -> None:
+    """Review F6 (#4350): pre-claim validation ordering. A decision that
+    cannot be executed from current notes (typo'd entity id) is refused
+    BEFORE any operation is bound, so no active journal row is stranded and
+    a corrected decision can proceed normally afterwards."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    journal = _InMemoryJournal()
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    mention = _mention(
+        resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="mention:typo-1"
+    )
+    entry = queue_for_review(vault_root, mention, candidate_entity_ids=[source, target])
+    typo = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action="merge",
+        from_id=source,
+        into_id="ent:no-such-entity",
+    ).to_dict()
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={"pending": [entry.to_dict()], "decisions": [typo]},
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+
+    with pytest.raises(EntityConfirmError, match="unknown into_id"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert journal.operations == {}, (
+        "a refused pre-claim validation must not bind an operation row"
+    )
+    assert [e.queue_entry_id for e in pending_review_entries(vault_root)] == [
+        entry.queue_entry_id
+    ]
+
+    # The corrected decision proceeds without any identity conflict.
+    note = read_settings_note(vault_root, ENTITY_REVIEW, settings_dir=DEFAULT_SETTINGS_DIR)
+    assert note is not None
+    corrected = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target
+    ).to_dict()
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={
+                **note.values,
+                "decisions": [*list(note.values.get("decisions") or []), corrected],
+            },
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert len(applied) == 1 and applied[0].merged is True
+    assert pending_review_entries(vault_root) == ()

@@ -92,6 +92,13 @@ LIFECYCLE_PROVISIONAL = "provisional"
 LIFECYCLE_CANONICAL = "canonical"
 LIFECYCLE_MERGED = "merged"
 
+# Note-effect states for one exact merge `(from_id -> into_id)` — the
+# resumable-application vocabulary of `merge_effect_state` /
+# `ensure_merge_effects` (EROJ-01, #4350).
+MERGE_EFFECTS_NONE = "none"
+MERGE_EFFECTS_SOURCE_ONLY = "source_only"
+MERGE_EFFECTS_COMPLETE = "complete"
+
 
 class EntityRegisterError(RuntimeError):
     """Raised for register contract violations (unknown id, bad merge, etc.)."""
@@ -269,9 +276,21 @@ class EntityRegister:
         if not vault_context.active_vault_path:
             raise EntityRegisterError("vault_context.active_vault_path is required")
         self._vault_root = Path(vault_context.active_vault_path).expanduser().resolve()
+        # Canonical vault identity for operational records bound to this
+        # register (EROJ-01, #4350): the vault-selection SoT id when the
+        # context carries one, else the resolved root path. A mount/symlink
+        # respelling of the same selected vault must NOT re-derive
+        # entity-review operation ids — that silently duplicates merge events
+        # instead of resuming (review F7 on #4350).
+        self._vault_identity = vault_context.active_vault_id or str(self._vault_root)
         self._write_guard = write_guard
         self._register_dir = register_dir
         self._conn = conn
+
+    @property
+    def vault_identity(self) -> str:
+        """Stable identity of the vault this register is bound to."""
+        return self._vault_identity
 
     # -- internal note IO ---------------------------------------------------
 
@@ -448,6 +467,12 @@ class EntityRegister:
         the mutation once confirmation has already happened (matching §9-g
         "human-confirmed by default": the confirmation gate lives at the
         caller, this is the mechanism). Emits `heimdal.register.entity.merged`.
+
+        The entity-review applicator does NOT call this method: it applies the
+        same note effects through :meth:`ensure_merge_effects` (resumable, no
+        emission) and commits its `heimdal.register.entity.merged` event in the
+        entity-review operation journal's atomic transaction instead (EROJ-01,
+        #4350) so the event cannot exist without its committed operation row.
         """
         source = self._read_entry(from_id)
         target = self._read_entry(into_id)
@@ -462,19 +487,106 @@ class EntityRegister:
         if from_id == into_id:
             raise EntityRegisterError("merge(): from_id and into_id must differ")
 
-        merged_source = RegisterEntry(
-            entity_id=source.entity_id,
-            kind=source.kind,
-            label=source.label,
-            aliases=source.aliases,
-            lifecycle=LIFECYCLE_MERGED,
-            merged_into=into_id,
-            merged_from=source.merged_from,
-            split_from=source.split_from,
-            created=source.created,
-            updated=_now_iso(),
+        self.ensure_merge_effects(from_id, into_id)
+
+        self._emit(
+            HEIMDAL_REGISTER_ENTITY_MERGED,
+            entity_id=from_id,
+            fingerprint_scope=f"merge:{from_id}:{into_id}:{_now_iso()}",
+            payload={"from_id": from_id, "into_id": into_id},
         )
-        self._write_entry(merged_source)
+
+    def merge_effect_state(self, from_id: str, into_id: str) -> str:
+        """Read-only classification of the note effects for one exact merge.
+
+        EROJ-01 (#4350) resume support: after a crash mid-merge, the retry must
+        prove from current notes exactly which side of `(from_id -> into_id)`
+        was written. Returns one of :data:`MERGE_EFFECTS_NONE` (no effect yet),
+        :data:`MERGE_EFFECTS_SOURCE_ONLY` (redirect written, target complement
+        absent), or :data:`MERGE_EFFECTS_COMPLETE` (both sides present).
+
+        Fails closed (INV-EROJ-6) instead of guessing: unknown ids, a
+        self-merge, a source redirect pointing at a *different* target (the
+        original effect can no longer be proven from current notes — a
+        pre-existing merge, or post-effect target evolution whose lineage
+        proof is EROJ-02, out of scope here), or contradictory notes (an
+        unmerged source that the target already claims in `merged_from`) all
+        raise `EntityRegisterError`.
+        """
+        source = self._read_entry(from_id)
+        target = self._read_entry(into_id)
+        if source is None:
+            raise EntityRegisterError(f"merge_effect_state(): unknown from_id {from_id!r}")
+        if target is None:
+            raise EntityRegisterError(f"merge_effect_state(): unknown into_id {into_id!r}")
+        if from_id == into_id:
+            raise EntityRegisterError("merge_effect_state(): from_id and into_id must differ")
+        if target.lifecycle == LIFECYCLE_MERGED:
+            # Target-evolution refusal (INV-EROJ-7, partial-failure matrix row
+            # 5): the human-decided target has itself been merged away, so this
+            # slice can neither begin a merge into it nor prove that resuming
+            # one recovers the original decision rather than rewriting it.
+            # EROJ-02's lineage proof owns that recovery; until then the
+            # decision history stays unchanged and the queue entry pending.
+            raise EntityRegisterError(
+                f"merge_effect_state(): into_id {into_id!r} is merged into "
+                f"{target.merged_into!r}; the target has evolved and this slice refuses "
+                "target-evolved application/recovery (EROJ-02)"
+            )
+
+        target_claims_source = from_id in target.merged_from
+        if source.lifecycle == LIFECYCLE_MERGED:
+            if source.merged_into != into_id:
+                raise EntityRegisterError(
+                    f"merge_effect_state(): {from_id!r} redirects to "
+                    f"{source.merged_into!r}, not {into_id!r}; the original effect cannot "
+                    "be proven from current notes and this slice refuses target-evolved "
+                    "recovery (EROJ-02)"
+                )
+            return MERGE_EFFECTS_COMPLETE if target_claims_source else MERGE_EFFECTS_SOURCE_ONLY
+        if target_claims_source:
+            raise EntityRegisterError(
+                f"merge_effect_state(): {into_id!r} claims {from_id!r} in merged_from but "
+                f"{from_id!r} carries no redirect; contradictory notes fail closed "
+                "(INV-EROJ-6)"
+            )
+        return MERGE_EFFECTS_NONE
+
+    def ensure_merge_effects(self, from_id: str, into_id: str) -> str:
+        """Idempotently apply the two note effects of one exact merge. No event.
+
+        The mechanism half of :meth:`merge`, made resumable for the
+        entity-review operation journal (EROJ-01, #4350): whichever of the
+        source-redirect and target-complement writes is missing for exactly
+        `(from_id -> into_id)` is applied; present effects are left untouched;
+        anything unprovable fails closed via :meth:`merge_effect_state`. Never
+        emits — the journal path commits its event atomically with the
+        operation row, and :meth:`merge` keeps its own emission.
+
+        Returns the pre-application :meth:`merge_effect_state` value.
+        """
+        state = self.merge_effect_state(from_id, into_id)
+        if state == MERGE_EFFECTS_COMPLETE:
+            return state
+
+        source = self._read_entry(from_id)
+        target = self._read_entry(into_id)
+        assert source is not None and target is not None  # proven by merge_effect_state
+
+        if state == MERGE_EFFECTS_NONE:
+            merged_source = RegisterEntry(
+                entity_id=source.entity_id,
+                kind=source.kind,
+                label=source.label,
+                aliases=source.aliases,
+                lifecycle=LIFECYCLE_MERGED,
+                merged_into=into_id,
+                merged_from=source.merged_from,
+                split_from=source.split_from,
+                created=source.created,
+                updated=_now_iso(),
+            )
+            self._write_entry(merged_source)
 
         # Fold the merged entity's aliases (and its own label, as an alias)
         # into the target so future resolve() calls against the old surface
@@ -495,13 +607,7 @@ class EntityRegister:
             updated=_now_iso(),
         )
         self._write_entry(updated_target)
-
-        self._emit(
-            HEIMDAL_REGISTER_ENTITY_MERGED,
-            entity_id=from_id,
-            fingerprint_scope=f"merge:{from_id}:{into_id}:{_now_iso()}",
-            payload={"from_id": from_id, "into_id": into_id},
-        )
+        return state
 
     def split(self, entity_id: str, partition_criteria: Mapping[str, Sequence[str]]) -> tuple[str, ...]:
         """`split(entity_id, partition_criteria)` — reversible un-merge (F5 gate).
@@ -687,6 +793,9 @@ __all__ = [
     "LIFECYCLE_PROVISIONAL",
     "LIFECYCLE_CANONICAL",
     "LIFECYCLE_MERGED",
+    "MERGE_EFFECTS_NONE",
+    "MERGE_EFFECTS_SOURCE_ONLY",
+    "MERGE_EFFECTS_COMPLETE",
     "entity_note_path",
     "render_entity_note",
 ]

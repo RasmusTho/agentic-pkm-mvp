@@ -38,11 +38,15 @@ from app.events.types import (
 from app.heimdal.entity_register import (
     AmbiguousCandidates,
     ARTIFACT_CLASS,
+    MERGE_EFFECTS_COMPLETE,
+    MERGE_EFFECTS_NONE,
+    MERGE_EFFECTS_SOURCE_ONLY,
     EntityRegister,
     EntityRegisterError,
     KIND_PERSON,
     LIFECYCLE_CANONICAL,
     LIFECYCLE_MERGED,
+    RegisterEntry,
     ResolvedRef,
     UnresolvedProvisional,
     entity_note_path,
@@ -351,3 +355,143 @@ def test_mint_blocked_by_write_guard_is_loud(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     register_dir = vault_root / "_heimdal" / "register"
     assert not register_dir.exists() or not list(register_dir.glob("*.md"))
+
+
+# ---------------------------------------------------------------------------
+# EROJ-01 (#4350): resumable merge-effect helpers — classification, idempotent
+# completion, and every fail-closed branch (review F2/F6 on #4350).
+# ---------------------------------------------------------------------------
+
+
+class _EffectCrashRegister(EntityRegister):
+    """Real register whose Nth armed note write raises, for exact-boundary
+    crash construction; arming happens after fixture setup writes."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._fail_on: int | None = None
+        self._writes = 0
+
+    def arm(self, fail_on_write: int) -> None:
+        self._fail_on = fail_on_write
+        self._writes = 0
+
+    def disarm(self) -> None:
+        self._fail_on = None
+
+    def _write_entry(self, entry: Any) -> None:
+        if self._fail_on is not None:
+            self._writes += 1
+            if self._writes >= self._fail_on:
+                raise EntityRegisterError("simulated crash mid-merge")
+        super()._write_entry(entry)
+
+
+def _effect_register(tmp_path: Path) -> _EffectCrashRegister:
+    return _EffectCrashRegister(
+        vault_context=_vault(tmp_path / "vault"),
+        write_guard=_allowing_guard(),
+        conn=FakeOutboxConn(),
+    )
+
+
+def test_merge_effect_state_classifies_all_note_shapes(tmp_path: Path) -> None:
+    register = _effect_register(tmp_path)
+    a = register.mint_canonical("Alpha", aliases=["Al"])
+    b = register.mint_canonical("Beta")
+
+    assert register.merge_effect_state(a, b) == MERGE_EFFECTS_NONE
+
+    # Crash between the source-redirect write and the target-complement write.
+    register.arm(fail_on_write=2)
+    with pytest.raises(EntityRegisterError, match="simulated crash"):
+        register.ensure_merge_effects(a, b)
+    register.disarm()
+    assert register.merge_effect_state(a, b) == MERGE_EFFECTS_SOURCE_ONLY
+    assert register.get_entry(a).merged_into == b
+    assert a not in register.get_entry(b).merged_from
+
+    # Resume completes only the missing target side.
+    assert register.ensure_merge_effects(a, b) == MERGE_EFFECTS_SOURCE_ONLY
+    assert register.merge_effect_state(a, b) == MERGE_EFFECTS_COMPLETE
+    assert a in register.get_entry(b).merged_from
+    assert "Alpha" in register.get_entry(b).aliases
+
+    # Idempotent: a fully applied merge is left untouched.
+    assert register.ensure_merge_effects(a, b) == MERGE_EFFECTS_COMPLETE
+
+
+def test_merge_effect_helpers_fail_closed_on_unprovable_notes(tmp_path: Path) -> None:
+    register = _effect_register(tmp_path)
+    a = register.mint_canonical("Alpha")
+    b = register.mint_canonical("Beta")
+    c = register.mint_canonical("Gamma")
+
+    # Unknown ids and self-merge.
+    with pytest.raises(EntityRegisterError, match="unknown from_id"):
+        register.merge_effect_state("ent:ghost", b)
+    with pytest.raises(EntityRegisterError, match="unknown into_id"):
+        register.merge_effect_state(a, "ent:ghost")
+    with pytest.raises(EntityRegisterError, match="must differ"):
+        register.merge_effect_state(a, a)
+
+    # Foreign redirect: the source redirects to a different target than the
+    # operation's original pair — unprovable, refused (EROJ-02 territory).
+    register.merge(a, b)
+    with pytest.raises(EntityRegisterError, match="refuses target-evolved recovery"):
+        register.merge_effect_state(a, c)
+    with pytest.raises(EntityRegisterError, match="refuses target-evolved recovery"):
+        register.ensure_merge_effects(a, c)
+
+    # Contradictory notes: the target claims the source in merged_from while
+    # the source carries no redirect (constructed corruption) — fail closed.
+    source_entry = register.get_entry(a)
+    register._write_entry(  # simulate note corruption/hand-edit
+        RegisterEntry(
+            entity_id=source_entry.entity_id,
+            kind=source_entry.kind,
+            label=source_entry.label,
+            aliases=source_entry.aliases,
+            lifecycle=LIFECYCLE_CANONICAL,
+            merged_into=None,
+            merged_from=source_entry.merged_from,
+            split_from=source_entry.split_from,
+            created=source_entry.created,
+        )
+    )
+    with pytest.raises(EntityRegisterError, match="contradictory notes"):
+        register.merge_effect_state(a, b)
+
+
+def test_merge_into_evolved_target_is_refused(tmp_path: Path) -> None:
+    """Review F2 (#4350): INV-EROJ-7 / partial-failure matrix row 5. A target
+    that has itself been merged away refuses both fresh application and
+    resume — this slice cannot prove target-evolved recovery (EROJ-02)."""
+    register = _effect_register(tmp_path)
+    a = register.mint_canonical("Alpha")
+    b = register.mint_canonical("Beta")
+    c = register.mint_canonical("Gamma")
+
+    # Crash after the source redirect for a -> b, then b evolves into c.
+    register.arm(fail_on_write=2)
+    with pytest.raises(EntityRegisterError, match="simulated crash"):
+        register.ensure_merge_effects(a, b)
+    register.disarm()
+    register.merge(b, c)
+
+    # Resume of the half-applied a -> b merge is refused, loudly.
+    with pytest.raises(EntityRegisterError, match="target has evolved"):
+        register.merge_effect_state(a, b)
+    with pytest.raises(EntityRegisterError, match="target has evolved"):
+        register.ensure_merge_effects(a, b)
+    # The half-applied state was not silently completed.
+    assert a not in register.get_entry(c).merged_from
+    assert a not in register.get_entry(b).merged_from
+
+    # Fresh application into a merged-away target is refused the same way —
+    # a deliberate fail-closed behavior change to merge() (previously it
+    # silently merged into the dead identity).
+    d = register.mint_canonical("Delta")
+    with pytest.raises(EntityRegisterError, match="target has evolved"):
+        register.merge(d, b)
+    assert register.get_entry(d).lifecycle == LIFECYCLE_CANONICAL
