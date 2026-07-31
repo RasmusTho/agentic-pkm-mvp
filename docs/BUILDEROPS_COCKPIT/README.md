@@ -36,10 +36,10 @@ pack is supporting input.
 
 - **Four bands in locked order plus a needs-you band**, derivation fail-closed (`STATUS_BAND` in
   `app/builderops/cockpit_registry.py`): an unmapped status lands in the explicit `unclassified`
-  list, never guessed. `agent:needs-human` routes to the needs-you band — with a caveat: label
-  routing reads the sync mirror's `sync_state`, which production sync does not populate with labels
-  or URLs until #4441 lands (audit F9), so the needs-you band and mirror out-links are structurally
-  empty in production today.
+  list, never guessed. `agent:needs-human` routes to the needs-you band — label routing reads the
+  sync mirror's `sync_state`, which production sync has populated with labels and URLs since #4441
+  (=#4456, audit F9) merged; each mirror-derived field now names its own `sync_state.last_pull_at`
+  watermark rather than borrowing the dispatcher-store read instant (BOPS-COCKPIT-03, #4450).
 - **An eight-rung evidence spine per thread** — intention · capability · epic · slice · PR ·
   CI/sha · receipt · tried, locked order; rung class derives from the key's nature (`proven` only
   for DB-keyed or CI-forced edges). Intention, capability, epic, and tried render `absent` — their
