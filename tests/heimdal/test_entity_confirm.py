@@ -812,7 +812,7 @@ def test_apply_merge_uses_committed_journal_before_pending_clear(tmp_path: Path)
 def test_client_approval_is_canonicalized_by_hub_before_merge_execution(
     tmp_path: Path,
 ) -> None:
-    """INV-EROJ-1: a Bifrost/iPad record is a proposal-bound review signal.
+    """INV-EROJ-1: an iPad client record is a proposal-bound review signal.
 
     The Hub fold validates that the signal is bound to a displayed pending
     proposal and canonicalizes the approval into a journaled operation BEFORE

@@ -378,11 +378,12 @@ def apply_human_review_decisions(
     This is the confirmation mechanism itself: reading `decisions` off disk
     IS reading the human ruling -- there is no separate "confirm" API a UI
     calls that the note lacks (Constraints: "the ruling itself is a one-line
-    note edit ... the UI owns no capability the note lacks"). A Bifrost/iPad
-    record is only ever a proposal-bound review signal (INV-EROJ-1): this Hub
-    fold is what validates that a decision is bound to a displayed pending
-    proposal and canonicalizes an approval into an executable operation — a
-    client record alone is never replayed as a merge command.
+    note edit ... the UI owns no capability the note lacks"). An iPad (or any
+    other client) record is only ever a proposal-bound review signal
+    (INV-EROJ-1): this Hub fold is what validates that a decision is bound to
+    a displayed pending proposal and canonicalizes an approval into an
+    executable operation — a client record alone is never replayed as a merge
+    command.
 
     A `merge` decision runs the EROJ-01 restart-safe sequence (#4350):
 
