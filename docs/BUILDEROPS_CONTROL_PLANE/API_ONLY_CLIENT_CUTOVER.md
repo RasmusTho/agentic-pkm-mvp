@@ -2,6 +2,7 @@
 name: API-Only Client Cutover
 description: Move every MacBook and automation client to the authenticated BuilderOps API.
 task_id: BCP-04
+github_issue: 3791
 source_anchor: docs/BUILDEROPS_CONTROL_PLANE/README.md :: Target boundary
 parent_capability: BuilderOps independent control plane
 prerequisites: [BCP-02]

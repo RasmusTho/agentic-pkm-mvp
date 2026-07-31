@@ -2,6 +2,7 @@
 name: Govern Design-Run Lifecycle
 description: Persist exact admission-bound design runs and append-only causal BuilderOps receipts.
 task_id: CDH-03
+github_issue: 4310
 source_anchor: docs/CKM_DESIGN_AGENT_INTEGRATION/README.md :: Cross-Task Invariants / Interaction Safety
 parent_capability: CKM Design-Agent Integration Hub
 prerequisites: [CDH-01, CDH-02]

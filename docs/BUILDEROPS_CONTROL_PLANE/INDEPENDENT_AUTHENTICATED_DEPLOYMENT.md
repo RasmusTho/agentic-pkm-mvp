@@ -2,6 +2,7 @@
 name: Independent Authenticated Deployment
 description: Deploy BuilderOps as its own authenticated Demerzel service and operations lifecycle.
 task_id: BCP-02
+github_issue: 3790
 source_anchor: docs/BUILDEROPS_CONTROL_PLANE/README.md :: Target boundary
 parent_capability: BuilderOps independent control plane
 prerequisites: [BCP-01]

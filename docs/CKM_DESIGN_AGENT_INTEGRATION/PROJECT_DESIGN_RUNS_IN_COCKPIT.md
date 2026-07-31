@@ -2,6 +2,7 @@
 name: Project Design Runs in the Cockpit
 description: Render Yggdrasil-compliant read-only adapter, status, receipt, refusal, and handoff projections in Direction B.
 task_id: CDH-05
+github_issue: 4312
 source_anchor: docs/CKM_DESIGN_AGENT_INTEGRATION/README.md :: Operator surfaces
 parent_capability: CKM Design-Agent Integration Hub
 prerequisites: [CDH-01, CDH-02, CDH-03, CDH-04, YGGDRASIL-DESIGN-HANDOFF]

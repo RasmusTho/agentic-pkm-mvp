@@ -2,6 +2,7 @@
 name: Demerzel Review And Merge Orchestration
 description: Adapt existing review/repair/verification/merge work to the BuilderOps API and outbox.
 task_id: BCP-05
+github_issue: 3603
 source_anchor: docs/BUILDEROPS_CONTROL_PLANE/README.md :: Backlog reconciliation
 parent_capability: BuilderOps independent control plane
 prerequisites: [BCP-02, BCP-04]

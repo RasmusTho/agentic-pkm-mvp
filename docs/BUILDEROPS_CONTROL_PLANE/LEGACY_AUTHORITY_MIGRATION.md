@@ -2,6 +2,7 @@
 name: Legacy Authority Migration
 description: Inventory and deterministically import every BuilderOps and dispatcher legacy authority.
 task_id: BCP-03
+github_issue: 3789
 source_anchor: docs/BUILDEROPS_CONTROL_PLANE/README.md :: Cross-task invariants / partial-failure safety
 parent_capability: BuilderOps independent control plane
 prerequisites: [BCP-01]

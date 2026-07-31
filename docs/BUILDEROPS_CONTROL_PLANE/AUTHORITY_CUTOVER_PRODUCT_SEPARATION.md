@@ -2,6 +2,7 @@
 name: Authority Cutover And Product Separation
 description: Perform the one-way cutover, remove Product ownership, and retire legacy authorities.
 task_id: BCP-06
+github_issue: 3793
 source_anchor: docs/BUILDEROPS_CONTROL_PLANE/README.md :: Cross-task invariants / partial-failure safety
 parent_capability: BuilderOps independent control plane
 prerequisites: [BCP-03, BCP-04, BCP-05]

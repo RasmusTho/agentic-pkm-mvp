@@ -2,6 +2,7 @@
 name: Register Design-Agent Adapters
 description: Add exact design-agent registrations above the shared ADR-0064 model-access transport.
 task_id: CDH-02
+github_issue: 4309
 source_anchor: docs/CKM_DESIGN_AGENT_INTEGRATION/README.md :: Authority boundary
 parent_capability: CKM Design-Agent Integration Hub
 prerequisites: [CDH-01, MAS-PHASE1-ACCEPTED]
