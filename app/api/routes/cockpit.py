@@ -34,8 +34,12 @@ def _github_repo() -> str | None:
     """Repo slug for the live GitHub read (BOPS-COCKPIT-03, #4450).
 
     Unset by default: the source then refuses cleanly rather than guessing a
-    repo. An operator enables the live plane by setting this alongside the
-    host's ``gh`` auth.
+    repo. The read runs in *this* process, so enabling a channel means binding
+    this key and a ``GITHUB_TOKEN`` for the in-container ``gh`` transport --
+    committed for dev in ``docker-compose.dev.yml``, token host-supplied on the
+    api consumer's host-secret env layer (#4484). See
+    ``docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command
+    answer fresh (#4484)``.
     """
     return os.environ.get("COCKPIT_GITHUB_REPO") or None
 

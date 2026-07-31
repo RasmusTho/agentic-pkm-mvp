@@ -75,9 +75,14 @@ WORKDIR /app
 
 # ffmpeg stays in the RUNTIME stage: the capture/transcription path shells out
 # to it (faster-whisper/yt-dlp media handling). espeak-ng backs the local TTS
-# engines (piper phonemization).
+# engines (piper phonemization). gh backs the BuilderOps cockpit's `github-live`
+# plane: app/builderops/cockpit_github_plane.py :: _run_gh is the single
+# transport every live REST read passes through, and the `api` service that
+# serves /api/cockpit/registry runs from this image, so without the binary the
+# plane refuses on its first call in every channel (#4484). It is a plain
+# trixie/main package — no third-party apt source is added for it.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg espeak-ng \
+  && apt-get install -y --no-install-recommends ffmpeg espeak-ng gh \
   && rm -rf /var/lib/apt/lists/*
 
 # Installed third-party packages and their console scripts (uvicorn, alembic,

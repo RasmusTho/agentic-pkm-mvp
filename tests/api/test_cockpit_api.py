@@ -7,6 +7,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.builderops import cockpit_github_plane, cockpit_registry
+from app.builderops.cockpit_github_plane import GithubLiveResult
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,6 +36,72 @@ def test_registry_endpoint_and_page_served(tmp_path, monkeypatch) -> None:
     assert page.status_code == 200
     assert "Cockpit" in page.text
     assert "/static/cockpit.js" in page.text
+
+
+def _github_live_source(payload: dict) -> dict:
+    return next(
+        source for source in payload["sources"] if source["name"] == "github-live"
+    )
+
+
+def test_configured_repo_reaches_the_live_github_read(tmp_path, monkeypatch) -> None:
+    """#4484: a configured slug must survive the real route-to-transport path.
+
+    The assertion is on the production chain — route `_github_repo` ->
+    `build_registry` -> `_read_github_live` -> `fetch_github_live` — with only
+    the outermost read boundary substituted, so no network is performed. A
+    helper called in isolation would not prove the route passes the slug at
+    all, which is exactly the defect #4484 fixes.
+    """
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(tmp_path / "dispatcher"))
+    monkeypatch.setenv("COCKPIT_DEPLOY_RECEIPT_DIR", str(tmp_path / "deploys"))
+    monkeypatch.setenv("COCKPIT_GITHUB_REPO", "RasmusTho/agentic-pkm-mvp")
+
+    seen: list[str | None] = []
+
+    def _record(repo: str | None, **kwargs):
+        seen.append(repo)
+        return GithubLiveResult(
+            snapshot=None,
+            state="unavailable",
+            last_successful_read=None,
+            detail="stubbed read boundary",
+        )
+
+    monkeypatch.setattr(cockpit_registry, "fetch_github_live", _record)
+
+    response = TestClient(app).get("/api/cockpit/registry")
+    assert response.status_code == 200
+
+    assert seen == ["RasmusTho/agentic-pkm-mvp"], (
+        "the /api/cockpit/registry route must reach the live GitHub read with "
+        "the configured slug; got: " + repr(seen)
+    )
+    # The plane was asked for, so its refusal is an outage rather than an
+    # opt-out (EXT-8, #4481).
+    assert _github_live_source(response.json())["configured"] is True
+
+
+def test_unset_repo_still_refuses_the_live_plane(tmp_path, monkeypatch) -> None:
+    """#4484 must not change the unconfigured path: no repo, no live read."""
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(tmp_path / "dispatcher"))
+    monkeypatch.setenv("COCKPIT_DEPLOY_RECEIPT_DIR", str(tmp_path / "deploys"))
+    monkeypatch.delenv("COCKPIT_GITHUB_REPO", raising=False)
+
+    def _must_not_transport(repo: str) -> None:
+        raise AssertionError(f"no live read may be attempted for {repo!r}")
+
+    monkeypatch.setattr(
+        cockpit_github_plane, "default_github_reader", _must_not_transport
+    )
+
+    response = TestClient(app).get("/api/cockpit/registry")
+    assert response.status_code == 200
+
+    source = _github_live_source(response.json())
+    assert source["state"] == "unavailable"
+    assert source["configured"] is False
+    assert source["last_successful_read"] is None
 
 
 def test_token_sheet_parity_with_binding_source() -> None:

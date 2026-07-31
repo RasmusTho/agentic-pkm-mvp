@@ -130,6 +130,15 @@ services:
       # from the capture-watch consumer's handle, which a nested bootstrap
       # scrubs). Delivers HEIMDAL_RAW_STORE_KEY so the shipped media/screen
       # ingress lanes can admit.
+      #
+      # This layer is also where the cockpit's `github-live` plane gets its
+      # credential (#4484): the in-container `gh` transport reads GITHUB_TOKEN
+      # (or GH_TOKEN) from the environment, so an operator enabling the plane on
+      # a channel supplies GITHUB_TOKEN through this same file rather than
+      # through any new mount, compose key, or secret mechanism. A repo-scoped
+      # read-only token is sufficient; the plane performs GET requests only and
+      # persists nothing. With the token absent the plane refuses cleanly, which
+      # is why no committed default is needed for it.
       - path: ${HOST_SECRET_RUNTIME_ENV_FILE_API:-/dev/null}
         required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
