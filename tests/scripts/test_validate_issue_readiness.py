@@ -195,6 +195,155 @@ def test_ready_issue_rejects_non_repo_relative_verify_file_path(verify_path: str
     assert report.readiness_classification == "missing_verify_file_paths"
 
 
+def test_diff_of_file_target_is_concrete() -> None:
+    """Contract-legal workflow-diff targets are concrete observables (#4464);
+    the #4448-shaped body classifies ready_candidate."""
+    body = (FIXTURE_DIR / "nonbehavioral_verify_targets.md").read_text(encoding="utf-8")
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_items == []
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_diff_of_file_target_requires_existing_file() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        "diff of `.github/workflows/does-not-exist.yml` adding a lane step",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+    assert report.acceptance_criteria.missing_verify_file_paths == [
+        ".github/workflows/does-not-exist.yml"
+    ]
+
+
+def test_marker_presence_target_is_concrete() -> None:
+    """A backticked literal asserted present in a durable repo file is a
+    concrete observable (#4464, #4448 AC shape)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        (
+            "Verify: `pytestmark = pytest.mark.browser_runtime` present in "
+            "`tests/companion_ui/test_cockpit_journeys.py`, deselected by the "
+            "PR marker expression in `scripts/select_pr_tests.py`"
+        ),
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_trailing_prose_annotation_is_concrete() -> None:
+    """A backticked canonical target followed by explanatory prose stays
+    concrete, and path extraction carries no backtick residue (#4464)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        (
+            "Verify: `tests/scripts/test_validate_issue_readiness.py::"
+            "test_fixture_classifications` (enforcement: exercises the "
+            "production `classify_issue_body` call site)"
+        ),
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_annotated_repo_anchor_target_is_concrete() -> None:
+    """The canonical DEV_WORKFLOW example form — a backticked repo anchor plus
+    'removed or rewritten as delivered.' — is concrete (#4464)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        (
+            "Verify: `docs/development/DEV_WORKFLOW.md :: Acceptance "
+            "verifiability` removed or rewritten as delivered."
+        ),
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "diff of uncommitted local changes",
+        "`some marker` present in the deployed environment",
+        "`` present in `tests/scripts/test_validate_issue_readiness.py`",
+        "diff of `<workflow file>` adding a step",
+        "`<marker>` present in `tests/scripts/test_validate_issue_readiness.py`",
+    ],
+)
+def test_unresolvable_target_still_rejected(target: str) -> None:
+    """Extending the grammar (#4464) must not admit genuinely unresolvable
+    targets: no durable repo path, placeholder tokens, or prose-only claims."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        f"Verify: {target}",
+    )
+
+    report = classify_issue_body(body)
+
+    assert report.readiness_classification == "missing_verify_markers"
+    assert report.acceptance_criteria.missing_verify_items == [
+        "- [ ] The checker reports a ready candidate for canonical issue bodies."
+    ]
+
+
+def test_inline_tail_marker_with_resolvable_target_is_declared() -> None:
+    """The inline tail form (`- [ ] text. Verify: <target>`) used by the
+    model-inquiry proposal contract stays a declared marker (#4464)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        (
+            "- [ ] The checker reports a ready candidate for canonical issue bodies.\n"
+            "  - Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`"
+        ),
+        (
+            "- [ ] The seam is deterministic. Verify: "
+            "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`"
+        ),
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_inline_marker_mention_in_prose_is_not_a_target() -> None:
+    """A mid-line mention inside AC prose whose tail is not a resolvable
+    target is not parsed as a marker declaration (#4464)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "- [ ] The checker reports a ready candidate for canonical issue bodies.",
+        (
+            "- [ ] The checker accepts ACs whose prose mentions the "
+            "Verify: marker grammar without carrying a second target."
+        ),
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
 @pytest.mark.parametrize("target", ["<test pointer>", "none", "n/a", "TBD"])
 def test_placeholder_verify_targets_are_not_concrete(target: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")

@@ -184,8 +184,28 @@ def _summarize_item(item: str) -> str:
     return re.sub(r"\s+", " ", first_line)
 
 
+_ANNOTATED_TARGET = re.compile(r"^`(?P<inner>[^`]+)` \S.*$")
+_DIFF_OF_TARGET = re.compile(r"^diff of `(?P<path>[^`]+)`(?: \S.*)?$")
+_MARKER_PRESENCE_TARGET = re.compile(
+    r"^`[^`]+` present in `(?P<path>[^`]+)`(?:[,;]? \S.*)?$"
+)
+
+
 def _verify_file_path(target: str) -> str | None:
     canonical = target.strip()
+    # Mirror the grammar's multi-segment form order (#4464): an annotated
+    # backticked canonical target first, then diff-of-file, then
+    # marker-presence, before the single-segment unwrap.
+    annotated = _ANNOTATED_TARGET.fullmatch(canonical)
+    if annotated is not None and "::" in annotated.group("inner"):
+        canonical = f"`{annotated.group('inner')}`"
+    else:
+        diff_target = _DIFF_OF_TARGET.fullmatch(canonical)
+        if diff_target is not None:
+            return diff_target.group("path")
+        presence_target = _MARKER_PRESENCE_TARGET.fullmatch(canonical)
+        if presence_target is not None:
+            return presence_target.group("path")
     if canonical.startswith("`") and canonical.endswith("`"):
         canonical = canonical[1:-1]
     if canonical.startswith("runtime receipt: "):
@@ -197,6 +217,9 @@ def _verify_file_path(target: str) -> str | None:
                 canonical = canonical[1:-1]
             path, separator, _ = canonical.partition(" :: ")
             return path if separator else None
+    path, separator, spaced_rest = canonical.partition(" :: ")
+    if separator and spaced_rest:
+        return path
     path, separator, _ = canonical.partition("::")
     return path if separator else None
 
@@ -239,14 +262,29 @@ def _target_has_existing_file_path(target: str) -> bool:
     )
 
 
+# A `Verify:` marker is declared when it opens its own (optionally bulleted)
+# line per the body template, or when an inline tail (`- [ ] text. Verify:
+# <target>`) carries a grammar-resolvable target. A mid-line mention inside
+# AC prose whose tail is not a resolvable target is not a marker (#4464).
+_VERIFY_MARKER_ANY = re.compile(r"(?im)(?:^|\b)Verify:[ \t]*(.*)$")
+_VERIFY_LINE_LEAD = re.compile(r"[ \t]*(?:[-*][ \t]+)?(?:\[[ xX]\][ \t]+)?")
+
+
+def _declared_verify_targets(item: str) -> list[str]:
+    declared: list[str] = []
+    for match in _VERIFY_MARKER_ANY.finditer(item):
+        line_start = item.rfind("\n", 0, match.start()) + 1
+        lead = item[line_start : match.start()]
+        target = match.group(1).strip()
+        if _VERIFY_LINE_LEAD.fullmatch(lead) is not None:
+            declared.append(target)
+        elif is_resolvable_verify_target(target):
+            declared.append(target)
+    return declared
+
+
 def _has_concrete_verify_marker(item: str) -> bool:
-    targets = tuple(
-        match.group(1).strip()
-        for match in re.finditer(
-            r"(?im)(?:^|\b)Verify:[ \t]*(.*)$",
-            item,
-        )
-    )
+    targets = tuple(_declared_verify_targets(item))
     return (
         bool(targets)
         and len(set(targets)) == len(targets)
@@ -260,11 +298,7 @@ def _has_concrete_verify_marker(item: str) -> bool:
 
 
 def _verify_targets(item: str) -> list[str]:
-    return [
-        match.group(1).strip()
-        for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item)
-        if match.group(1).strip()
-    ]
+    return [target for target in _declared_verify_targets(item) if target]
 
 
 def _missing_verify_file_paths(item: str) -> list[str]:
