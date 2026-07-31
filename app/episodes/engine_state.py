@@ -15,6 +15,11 @@ segments"):
 - ``open_segment:<scope>`` -- the accumulated situation-model state of one
   scope's currently-open (not yet proposed) segment
   (:mod:`app.episodes.segmenter`).
+- ``calendar_consumed_signal:<scope>:<signal_id>`` -- exact calendar signal
+  identities whose segments closed under the fixed-window calendar poller.
+  These rows outlive an open segment's deletion after closure, preventing a
+  later poll from replaying stale calendar evidence into a new segment while
+  preserving eligibility for changed identities.
 
 Quiescence-closure frontiers are NOT persisted here: the segmenter computes a
 per-scope observed frontier fresh from each tick's own consumed signals
@@ -26,13 +31,14 @@ table via ``app.heimdal.publish`` (``read_observations_for_consumer`` /
 ``advance_cursor_for_consumer``) and never touches this module -- this table
 exists only for state that has no existing durable-cursor primitive.
 
-Never authoritative: pure tick-runtime bookkeeping, fully replayable from the
-underlying streams. Losing it only means the engine re-derives open segments
-from event zero on the next tick, never a knowledge loss. Recovery posture
-(see the migration docstring): reset this table together with this engine's
-``heimdal_observation_cursor`` row -- full both-stream replay is
-deterministic and emission-deduped; a single-stream reset is a skewed replay
-and is not a supported operator action.
+The open-segment and vault-activity cursor rows are pure tick-runtime
+bookkeeping.  The closed-calendar row family is different: it is a durable
+idempotency boundary needed after an open segment has been deleted, so ordinary
+recovery MUST preserve it.  Do not clear ``calendar_consumed_signal:`` rows as
+part of a cursor/open-state reset.  A future full historical calendar rebuild
+may define an explicit replacement procedure; until then, selective or blanket
+engine-state reset is unsupported because it can replay closed calendar
+evidence into a later segment.
 
 Fail-loud schema preflight (invariant -> producers rule, mirroring
 ``app.heimdal.cursor_store._assert_pg_schema``): every public function

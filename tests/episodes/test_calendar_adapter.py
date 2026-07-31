@@ -16,9 +16,8 @@ architecture fork on AC3 is documented inline at that test):
   `fold_signals_into_segments`/the named shift constants) is unchanged, and
   calendar signals fold jointly with heimdal + vault.activity signals in the
   SAME `fold_signals_into_segments` call via the registry-driven
-  `run_segmentation_tick` entrypoint (per the coordinator's #3184
-  architecture-fork resolution: an additive `run_segmentation_tick`
-  ingestion block is in scope; the pure core is not).
+  `run_segmentation_tick` entrypoint.  Entry-point transport/idempotency
+  boundaries remain allowed; the pure core is not changed.
 - ``test_credentials_from_private_bindings_fail_loud`` (AC4): private-
   bindings env-var credential resolution, fail-loud when unconfigured,
   reached at the real `run_segmentation_tick` call site.
@@ -139,6 +138,19 @@ def _binding(*, calendar_id: str = "work-cal", scope: str = "work") -> CalendarB
         calendar_path=f"/calendars/{calendar_id}/",
         scope=scope,
     )
+
+
+def _stub_engine_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, object]]:
+    """Use one in-memory durable-state store across multiple tick calls."""
+    state: dict[str, dict[str, object]] = {}
+    monkeypatch.setattr(
+        segmenter.engine_state,
+        "all_state_with_prefix",
+        lambda prefix: {key: value for key, value in state.items() if key.startswith(prefix)},
+    )
+    monkeypatch.setattr(segmenter.engine_state, "set_state", lambda key, value: state.__setitem__(key, value))
+    monkeypatch.setattr(segmenter.engine_state, "delete_state", lambda key: state.pop(key, None))
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +537,161 @@ def test_unreachable_calendar_degrades_softly(tmp_path: Path, monkeypatch: pytes
     assert result["degraded"] == ["unreachable-cal"]
     assert result["consumed"][CALENDAR_STREAM_ID] == 1  # the reachable calendar's one item
     assert result["open_segments"] == 1  # the reachable calendar's signal still folded
+
+
+# ---------------------------------------------------------------------------
+# #4318: durable fixed-window consumption boundary
+# ---------------------------------------------------------------------------
+
+
+def test_closed_calendar_event_replay_does_not_contaminate_later_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fixed-window replay is ignored after its original segment closed."""
+    binding = _binding()
+    original = CalendarRawItem(
+        uid="replayed-event", etag="etag-1", ics_text=_ics("replayed-event", dtstart="20260711T090000Z")
+    )
+    first_boundary = CalendarRawItem(
+        uid="first-boundary", etag="etag-1", ics_text=_ics("first-boundary", dtstart="20260711T110000Z")
+    )
+    later = CalendarRawItem(
+        uid="later-event", etag="etag-1", ics_text=_ics("later-event", dtstart="20260711T130000Z")
+    )
+    polls = [([(binding, original), (binding, first_boundary)], []), ([(binding, original), (binding, later)], [])]
+    closed_batches: list[list[segmenter.ClosedSegment]] = []
+
+    monkeypatch.setattr(
+        segmenter, "enumerate_consumable_streams", lambda *a, **k: (SimpleNamespace(stream_id=CALENDAR_STREAM_ID),)
+    )
+    monkeypatch.setattr(segmenter, "read_calendar_raw_items_for_tick", lambda *a, **k: polls.pop(0))
+    monkeypatch.setattr(segmenter, "read_register_snapshot", lambda *a, **k: ())
+    monkeypatch.setattr(
+        segmenter,
+        "_emit_proposals_with_fusion_gate",
+        lambda closed, **kwargs: (closed_batches.append(list(closed)) or {"proposed": [], "fused": [], "fusions_denied": 0}),
+    )
+    _stub_engine_state(monkeypatch)
+    _stub_assignment_io(monkeypatch)
+
+    run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard())
+    replay_result = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard())
+
+    assert len(closed_batches) == 2
+    assert closed_batches[0][0].derived_from == ("calendar:replayed-event:etag-1",)
+    # Tick two closes the previous still-open segment, but the stale 09:00
+    # event was filtered by durable identity before the fixed-window replay
+    # reached the fold core.
+    assert closed_batches[1][0].derived_from == ("calendar:first-boundary:etag-1",)
+    assert replay_result["consumed"][CALENDAR_STREAM_ID] == 1
+
+
+def test_new_calendar_event_after_consumption_boundary_is_processed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A changed calendar signal has a new identity and remains eligible."""
+    binding = _binding()
+    original = CalendarRawItem(
+        uid="edited-event", etag="etag-1", ics_text=_ics("edited-event", dtstart="20260711T090000Z")
+    )
+    first_boundary = CalendarRawItem(
+        uid="first-boundary", etag="etag-1", ics_text=_ics("first-boundary", dtstart="20260711T110000Z")
+    )
+    changed = CalendarRawItem(
+        uid="edited-event", etag="etag-2", ics_text=_ics("edited-event", dtstart="20260711T130000Z")
+    )
+    polls = [([(binding, original), (binding, first_boundary)], []), ([(binding, original), (binding, changed)], [])]
+    closed_batches: list[list[segmenter.ClosedSegment]] = []
+
+    monkeypatch.setattr(
+        segmenter, "enumerate_consumable_streams", lambda *a, **k: (SimpleNamespace(stream_id=CALENDAR_STREAM_ID),)
+    )
+    monkeypatch.setattr(segmenter, "read_calendar_raw_items_for_tick", lambda *a, **k: polls.pop(0))
+    monkeypatch.setattr(segmenter, "read_register_snapshot", lambda *a, **k: ())
+    monkeypatch.setattr(
+        segmenter,
+        "_emit_proposals_with_fusion_gate",
+        lambda closed, **kwargs: (closed_batches.append(list(closed)) or {"proposed": [], "fused": [], "fusions_denied": 0}),
+    )
+    state = _stub_engine_state(monkeypatch)
+    _stub_assignment_io(monkeypatch)
+
+    run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard())
+    run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard())
+
+    assert len(closed_batches) == 2
+    # The replayed old ID is absent, while the changed ETag was not suppressed
+    # and now forms the next open segment.
+    assert closed_batches[1][0].derived_from == ("calendar:first-boundary:etag-1",)
+    assert state["open_segment:work"]["signal_ids"] == ["edited-event:etag-2"]
+
+
+def test_carried_open_calendar_signal_is_recorded_when_later_tick_is_degraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closure provenance, not only current CalDAV rows, drives the ledger."""
+    calendar_signal = segmenter.SegmentationSignal(
+        stream_id=CALENDAR_STREAM_ID,
+        signal_id="carried-event:etag-1",
+        observed_at=_dt(9, 0),
+        scope="work",
+        provenance_ref="calendar:carried-event:etag-1",
+    )
+    heimdal_signal = segmenter.SegmentationSignal(
+        stream_id=segmenter.HEIMDAL_STREAM_ID,
+        signal_id="obs-after-calendar",
+        observed_at=_dt(11, 0),
+        scope="work",
+        provenance_ref="heimdal.observations:obs-after-calendar",
+    )
+
+    class _SignalAdapter:
+        def __init__(self, polls: list[segmenter.ReadResult]) -> None:
+            self.polls = polls
+
+        def read(self, ctx: object) -> segmenter.ReadResult:
+            return self.polls.pop(0)
+
+        def normalize(self, row: segmenter.SegmentationSignal, ctx: object) -> segmenter.SegmentationSignal:
+            return row
+
+        def advance_cursor(self, rows: object, ctx: object) -> None:
+            return None
+
+    calendar_adapter = _SignalAdapter(
+        [
+            segmenter.ReadResult((calendar_signal,)),
+            segmenter.ReadResult((), ("calendar",)),
+            segmenter.ReadResult((calendar_signal,)),
+        ]
+    )
+    heimdal_adapter = _SignalAdapter(
+        [
+            segmenter.ReadResult(()),
+            segmenter.ReadResult((heimdal_signal,)),
+            segmenter.ReadResult(()),
+        ]
+    )
+    monkeypatch.setattr(
+        segmenter,
+        "enumerate_consumable_streams",
+        lambda *a, **k: (
+            SimpleNamespace(stream_id=CALENDAR_STREAM_ID),
+            SimpleNamespace(stream_id=segmenter.HEIMDAL_STREAM_ID),
+        ),
+    )
+    state = _stub_engine_state(monkeypatch)
+    _stub_assignment_io(monkeypatch)
+    adapters = {CALENDAR_STREAM_ID: calendar_adapter, segmenter.HEIMDAL_STREAM_ID: heimdal_adapter}
+
+    run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
+    degraded_close = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
+    replay = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard(), adapters=adapters)
+
+    key = segmenter._calendar_consumed_signal_key("work", "carried-event:etag-1")
+    assert degraded_close["degraded"] == ["calendar"]
+    assert state[key] == {"consumed": True}
+    assert replay["consumed"][CALENDAR_STREAM_ID] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1054,3 +1221,31 @@ def test_content_token_summary_with_pipe_does_not_collide() -> None:
     id_2 = calendar_signal_id("pipe-event", "etag-x", "20260706T090000Z", event_2)
     assert id_1 != id_2
     assert id_1.rsplit(":", 1)[0] == id_2.rsplit(":", 1)[0] == "pipe-event:20260706T090000Z"
+
+
+def test_calendar_consumed_signal_key_is_collision_free() -> None:
+    """Distinct (scope, signal_id) pairs must never share a ledger key.
+
+    ``signal_id`` always carries its own embedded ``:`` separators
+    (``uid:etag`` or ``uid:occurrence_key:token``) and ``scope`` is
+    unrestricted free-text config, so a plain ``f"{scope}:{signal_id}"`` join
+    is ambiguous: a colon in ``scope`` can shift the boundary. Two distinct
+    pairs that would collide under that OLD naive join must still resolve to
+    different keys.
+    """
+    # scope="a:b", signal_id="c:d" vs. scope="a", signal_id="b:c:d" were
+    # byte-identical under the old f"{scope}:{signal_id}" join.
+    key_1 = segmenter._calendar_consumed_signal_key("a:b", "c:d")
+    key_2 = segmenter._calendar_consumed_signal_key("a", "b:c:d")
+    assert key_1 != key_2
+
+    # A realistic pair: scope containing a colon (free-text config) vs. the
+    # calendar_signal_id shape itself (uid:occurrence_key:token).
+    key_3 = segmenter._calendar_consumed_signal_key("team:calendar", "uid-1:occ-1:token-1")
+    key_4 = segmenter._calendar_consumed_signal_key("team", "calendar:uid-1:occ-1:token-1")
+    assert key_3 != key_4
+
+    # Same (scope, signal_id) pair is still stable/idempotent.
+    assert segmenter._calendar_consumed_signal_key("work", "uid:etag") == segmenter._calendar_consumed_signal_key(
+        "work", "uid:etag"
+    )

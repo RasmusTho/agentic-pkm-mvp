@@ -273,6 +273,7 @@ PLACE_SHIFT_DETECTION_ENABLED: Final[bool] = False
 _EPISODE_ID_NAMESPACE: Final[uuid.UUID] = uuid.UUID("6f1d9a3a-8c3e-4f7a-9b1a-8f9d2e6c4a11")
 
 _OPEN_SEGMENT_KEY_PREFIX: Final[str] = "open_segment:"
+_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX: Final[str] = "calendar_consumed_signal:"
 
 _DEFAULT_SCOPE: Final[str] = "default"
 
@@ -799,7 +800,26 @@ class _CalendarStreamAdapter:
         return _signal_from_calendar_row(binding, item, register_snapshot=ctx.register_snapshot)
 
     def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
-        """Calendar re-polls a fixed window and has no durable cursor."""
+        """Calendar re-polls a fixed window; consumed signal identity is persisted by the tick."""
+
+
+def _calendar_consumed_signal_key(scope: str, signal_id: str) -> str:
+    """Return the durable idempotency-ledger key for one calendar signal.
+
+    Scope is part of the boundary: the same external UID must never suppress
+    a separately configured calendar scope.  ``signal_id`` already preserves
+    recurrence identity and changes (``calendar_signal_id``), so an edited
+    occurrence has a new key and remains eligible.
+
+    ``scope`` is unrestricted free-text config and ``signal_id`` always
+    contains its own embedded ``:`` separators (``uid:etag`` or
+    ``uid:occurrence_key:token``), so a plain ``f"{scope}:{signal_id}"`` join
+    is ambiguous: distinct ``(scope, signal_id)`` pairs can serialize to the
+    same string (e.g. ``scope="a:b", signal_id="c"`` vs. ``scope="a",
+    signal_id="b:c"``). Length-prefix ``scope`` (netstring-style) so the
+    boundary is unambiguous regardless of either string's content.
+    """
+    return f"{_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX}{len(scope)}:{scope}:{signal_id}"
 
 
 _STREAM_ADAPTERS: Final[Mapping[str, StreamAdapter]] = {
@@ -1255,6 +1275,23 @@ def run_segmentation_tick(
         key[len(_OPEN_SEGMENT_KEY_PREFIX) :]: OpenSegment.from_state(value) for key, value in open_state.items()
     }
 
+    # Calendar deliberately re-polls its fixed window.  Unlike the cursor-backed
+    # streams, an event that belonged to a segment deleted after closure has no
+    # open-segment ``signal_ids`` ledger left to dedupe a later poll.  Keep an
+    # exact durable identity ledger for CLOSED calendar evidence so that stale
+    # evidence cannot be folded into a later segment.  Changed events retain
+    # eligibility because calendar_signal_id changes with their ETag/content token.
+    consumed_calendar = engine_state.all_state_with_prefix(_CALENDAR_CONSUMED_SIGNAL_KEY_PREFIX)
+    signals_before_calendar_boundary = len(signals)
+    signals = [
+        signal
+        for signal in signals
+        if signal.stream_id != CALENDAR_STREAM_ID
+        or _calendar_consumed_signal_key(signal.scope, signal.signal_id) not in consumed_calendar
+    ]
+    if CALENDAR_STREAM_ID in consumed:
+        consumed[CALENDAR_STREAM_ID] -= signals_before_calendar_boundary - len(signals)
+
     # Per-scope READ-POSITION frontier for THIS tick: scope -> max
     # `observed_at` (the START of the latest signal consumed for that scope),
     # never `observed_until` (a signal's content-span END). The frontier
@@ -1365,6 +1402,22 @@ def run_segmentation_tick(
     from app.episodes.closure import run_closure_tick
 
     closure_summary = run_closure_tick(vault_root=root, write_guard=write_guard)
+
+    # A closed calendar signal loses its open-segment signal_ids ledger when
+    # the new open state is persisted below.  Record its identity first, only
+    # after its proposal output is durable.  Leaving still-open calendar
+    # signals to the open-segment ledger preserves crash recovery: if this tick
+    # fails before state replacement, a replay can still fold them as no-ops.
+    for closed in closed_segments:
+        for provenance_ref in closed.derived_from:
+            if provenance_ref.startswith("calendar:"):
+                # A carried-open calendar signal can close on a later tick
+                # where CalDAV is empty or degraded.  Its durable provenance
+                # lives on the closed segment, not necessarily in this tick's
+                # raw rows, so derive the ledger identity here rather than
+                # requiring a contemporaneous calendar read.
+                signal_id = provenance_ref.removeprefix("calendar:")
+                engine_state.set_state(_calendar_consumed_signal_key(closed.scope, signal_id), {"consumed": True})
 
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
