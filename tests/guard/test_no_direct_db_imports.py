@@ -161,6 +161,14 @@ ALLOW_FILES = (
     # (heimdal_meeting_finalization_receipt) with a self-contained dual
     # sqlite/pg backend and fail-loud schema preflight.
     'app/heimdal/meeting_finalization.py',
+    # Entity-review operation journal (EROJ-01, #4350). Same bounded pattern
+    # as the meeting-finalization receipt store above: one dedicated
+    # migration-owned table (entity_review_operations) with journal-owned
+    # manual-commit transactions, direct DSN connection, and fail-loud schema
+    # preflight; no ORM layer to route through. The fresh-connection
+    # committed-visibility fence (INV-EROJ-3) requires this module to open
+    # its own independent connections, which is exactly this direct pattern.
+    'app/heimdal/entity_review_operation_journal.py',
     # YouTube Source Sync durable source registry (YSS-01, #3916). Same bounded
     # pattern as app/heimdal/cursor_store.py above: a dedicated table
     # (acquisition_source_registry) with a self-contained dual memory/pg
