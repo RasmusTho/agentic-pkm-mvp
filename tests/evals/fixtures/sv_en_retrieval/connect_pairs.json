@@ -1,0 +1,49 @@
+{
+  "schema": "sv_en_connect_pair_set.v1",
+  "labelled_by": "hand-authored for G3-2 (#2985) Expansion-quality section; synthetic corpus, no vault content",
+  "finding_shape": {
+    "source": "app/expansion/connect.py :: run_connect_pass",
+    "note": "E3 (EXP-1, #2994) is merged, so this section scores the REAL Connect finding shape, not a proxy. run_connect_pass retrieves k hits per seed query, drops hits below ConnectPassConfig.relatedness_floor, and proposes every unordered pair among the survivors as a connect.related_unlinked finding. Connect precision here is therefore the precision of exactly that pair set against the labels below, with the same defaults (retrieval_k=8, relatedness_floor=0.55).",
+    "retrieval_k": 8,
+    "relatedness_floor": 0.55
+  },
+  "related_pairs": [
+    ["omindexering-sv", "index-rebuild-en"],
+    ["bevakare-mottryck-sv", "watcher-backpressure-en"],
+    ["lankvanor-sv", "note-linking-en"],
+    ["somn-och-fokus-sv", "sleep-focus-en"],
+    ["surdeg-sv", "sourdough-en"],
+    ["cykelservice-sv", "bicycle-maintenance-en"],
+    ["avdrag-frilans-sv", "freelance-expenses-en"],
+    ["spelbalans-sv", "board-game-design-en"]
+  ],
+  "hard_negative_pairs": [
+    ["surdeg-sv", "olbryggning-jast-sv"],
+    ["sourdough-en", "olbryggning-jast-sv"],
+    ["bevakare-mottryck-sv", "post-office-queue-en"],
+    ["watcher-backpressure-en", "post-office-queue-en"],
+    ["lankvanor-sv", "grafteori-sv"],
+    ["note-linking-en", "grafteori-sv"],
+    ["somn-och-fokus-sv", "coffee-roasting-en"],
+    ["sleep-focus-en", "coffee-roasting-en"]
+  ],
+  "hard_negative_rationale": "Each hard negative shares heavy surface vocabulary with its partner (fermentation temperature and volume; queue depth, ceiling and wait time; graphs, edges, neighbourhoods and hops; caffeine) while being a different subject. A pair set scored only against random negatives would flatter both identities.",
+  "seed_queries": [
+    "omindexering och vektoridentitet",
+    "reindexing after an embedding identity change",
+    "mottryck och kölängd i bevakaren",
+    "watcher queue backpressure and wait time",
+    "länkvanor och grafens grannskap",
+    "note linking habits and graph neighbourhoods",
+    "sömn koffein och fokus på förmiddagen",
+    "sleep caffeine and morning focus",
+    "surdeg jäsning och köksmätning",
+    "sourdough fermentation and kitchen measurement",
+    "cykelservice salt och kedja på vintern",
+    "bicycle winter servicing salt and chain",
+    "avdrag för frilans hemmakontor och bredband",
+    "freelance deductions home office and broadband",
+    "brädspelsbalans och dämpning för den som leder",
+    "board game balance and a catch-up damper"
+  ]
+}

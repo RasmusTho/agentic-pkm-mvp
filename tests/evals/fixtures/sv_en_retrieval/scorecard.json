@@ -1,0 +1,1853 @@
+{
+  "schema": "sv_en_retrieval_scorecard.v1",
+  "issue": 2985,
+  "slice": "G3-2",
+  "run_date": "2026-08-01",
+  "runner": "scripts/eval_sv_en_retrieval.py",
+  "host": {
+    "python": "3.12.7",
+    "platform": "macOS-26.5.2-arm64-arm-64bit"
+  },
+  "corpus": {
+    "docs": 20,
+    "sv_docs": 10,
+    "en_docs": 10,
+    "topics": [
+      "bicycle_maintenance",
+      "board_game_design",
+      "brewing",
+      "coffee_roasting",
+      "everyday_queueing",
+      "freelance_expenses",
+      "graph_theory",
+      "index_rebuild",
+      "note_linking",
+      "sleep_focus",
+      "sourdough",
+      "watcher_backpressure"
+    ]
+  },
+  "query_set": {
+    "queries": 24,
+    "by_class": {
+      "cross_lingual": 8,
+      "en_only": 8,
+      "sv_only": 8
+    }
+  },
+  "connect_pair_set": {
+    "related_pairs": 8,
+    "hard_negative_pairs": 8,
+    "seed_queries": 16
+  },
+  "runs": {
+    "nomic/linear": {
+      "identity": {
+        "key": "nomic",
+        "model": "nomic-embed-text:latest",
+        "dim": 768
+      },
+      "fusion": "linear",
+      "rationale": "identity comparison baseline (pre-migration snapshot)",
+      "retrieval": {
+        "overall": {
+          "n": 24,
+          "recall": {
+            "@1": 0.625,
+            "@3": 0.6667,
+            "@5": 0.6667
+          },
+          "mrr": 0.6458
+        },
+        "by_class": {
+          "sv_only": {
+            "n": 8,
+            "recall": {
+              "@1": 0.875,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "mrr": 0.9375
+          },
+          "en_only": {
+            "n": 8,
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "mrr": 1.0
+          },
+          "cross_lingual": {
+            "n": 8,
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "mrr": 0.0
+          }
+        },
+        "per_query": [
+          {
+            "id": "q01",
+            "class": "sv_only",
+            "topic": "index_rebuild",
+            "gold": [
+              "omindexering-sv"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "lankvanor-sv",
+              "avdrag-frilans-sv",
+              "grafteori-sv",
+              "surdeg-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q02",
+            "class": "en_only",
+            "topic": "index_rebuild",
+            "gold": [
+              "index-rebuild-en"
+            ],
+            "ranked": [
+              "index-rebuild-en",
+              "bicycle-maintenance-en",
+              "omindexering-sv",
+              "watcher-backpressure-en",
+              "note-linking-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q03",
+            "class": "cross_lingual",
+            "topic": "index_rebuild",
+            "gold": [
+              "index-rebuild-en"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "lankvanor-sv",
+              "olbryggning-jast-sv",
+              "avdrag-frilans-sv",
+              "surdeg-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q04",
+            "class": "sv_only",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "bevakare-mottryck-sv"
+            ],
+            "ranked": [
+              "bevakare-mottryck-sv",
+              "surdeg-sv",
+              "omindexering-sv",
+              "grafteori-sv",
+              "cykelservice-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q05",
+            "class": "en_only",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "watcher-backpressure-en"
+            ],
+            "ranked": [
+              "watcher-backpressure-en",
+              "post-office-queue-en",
+              "bicycle-maintenance-en",
+              "board-game-design-en",
+              "index-rebuild-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q06",
+            "class": "cross_lingual",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "watcher-backpressure-en"
+            ],
+            "ranked": [
+              "bevakare-mottryck-sv",
+              "avdrag-frilans-sv",
+              "somn-och-fokus-sv",
+              "lankvanor-sv",
+              "cykelservice-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q07",
+            "class": "sv_only",
+            "topic": "note_linking",
+            "gold": [
+              "lankvanor-sv"
+            ],
+            "ranked": [
+              "lankvanor-sv",
+              "spelbalans-sv",
+              "olbryggning-jast-sv",
+              "avdrag-frilans-sv",
+              "grafteori-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q08",
+            "class": "en_only",
+            "topic": "note_linking",
+            "gold": [
+              "note-linking-en"
+            ],
+            "ranked": [
+              "note-linking-en",
+              "sleep-focus-en",
+              "freelance-expenses-en",
+              "bicycle-maintenance-en",
+              "index-rebuild-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q09",
+            "class": "cross_lingual",
+            "topic": "note_linking",
+            "gold": [
+              "note-linking-en"
+            ],
+            "ranked": [
+              "lankvanor-sv",
+              "avdrag-frilans-sv",
+              "omindexering-sv",
+              "spelbalans-sv",
+              "surdeg-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q10",
+            "class": "sv_only",
+            "topic": "sleep_focus",
+            "gold": [
+              "somn-och-fokus-sv"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "somn-och-fokus-sv",
+              "avdrag-frilans-sv",
+              "lankvanor-sv",
+              "surdeg-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.5
+          },
+          {
+            "id": "q11",
+            "class": "en_only",
+            "topic": "sleep_focus",
+            "gold": [
+              "sleep-focus-en"
+            ],
+            "ranked": [
+              "sleep-focus-en",
+              "coffee-roasting-en",
+              "post-office-queue-en",
+              "watcher-backpressure-en",
+              "bicycle-maintenance-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q12",
+            "class": "cross_lingual",
+            "topic": "sleep_focus",
+            "gold": [
+              "sleep-focus-en"
+            ],
+            "ranked": [
+              "somn-och-fokus-sv",
+              "cykelservice-sv",
+              "omindexering-sv",
+              "lankvanor-sv",
+              "avdrag-frilans-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q13",
+            "class": "sv_only",
+            "topic": "sourdough",
+            "gold": [
+              "surdeg-sv"
+            ],
+            "ranked": [
+              "surdeg-sv",
+              "grafteori-sv",
+              "lankvanor-sv",
+              "spelbalans-sv",
+              "somn-och-fokus-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q14",
+            "class": "en_only",
+            "topic": "sourdough",
+            "gold": [
+              "sourdough-en"
+            ],
+            "ranked": [
+              "sourdough-en",
+              "bicycle-maintenance-en",
+              "coffee-roasting-en",
+              "note-linking-en",
+              "post-office-queue-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q15",
+            "class": "cross_lingual",
+            "topic": "sourdough",
+            "gold": [
+              "sourdough-en"
+            ],
+            "ranked": [
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "spelbalans-sv",
+              "cykelservice-sv",
+              "omindexering-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q16",
+            "class": "sv_only",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "cykelservice-sv"
+            ],
+            "ranked": [
+              "cykelservice-sv",
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "lankvanor-sv",
+              "spelbalans-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q17",
+            "class": "en_only",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "bicycle-maintenance-en"
+            ],
+            "ranked": [
+              "bicycle-maintenance-en",
+              "board-game-design-en",
+              "index-rebuild-en",
+              "watcher-backpressure-en",
+              "coffee-roasting-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q18",
+            "class": "cross_lingual",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "bicycle-maintenance-en"
+            ],
+            "ranked": [
+              "cykelservice-sv",
+              "olbryggning-jast-sv",
+              "spelbalans-sv",
+              "surdeg-sv",
+              "omindexering-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q19",
+            "class": "sv_only",
+            "topic": "freelance_expenses",
+            "gold": [
+              "avdrag-frilans-sv"
+            ],
+            "ranked": [
+              "avdrag-frilans-sv",
+              "spelbalans-sv",
+              "cykelservice-sv",
+              "omindexering-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q20",
+            "class": "en_only",
+            "topic": "freelance_expenses",
+            "gold": [
+              "freelance-expenses-en"
+            ],
+            "ranked": [
+              "freelance-expenses-en",
+              "coffee-roasting-en",
+              "sourdough-en",
+              "avdrag-frilans-sv",
+              "post-office-queue-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q21",
+            "class": "cross_lingual",
+            "topic": "freelance_expenses",
+            "gold": [
+              "freelance-expenses-en"
+            ],
+            "ranked": [
+              "avdrag-frilans-sv",
+              "lankvanor-sv",
+              "somn-och-fokus-sv",
+              "spelbalans-sv",
+              "olbryggning-jast-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q22",
+            "class": "sv_only",
+            "topic": "board_game_design",
+            "gold": [
+              "spelbalans-sv"
+            ],
+            "ranked": [
+              "spelbalans-sv",
+              "omindexering-sv",
+              "surdeg-sv",
+              "avdrag-frilans-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q23",
+            "class": "en_only",
+            "topic": "board_game_design",
+            "gold": [
+              "board-game-design-en"
+            ],
+            "ranked": [
+              "board-game-design-en",
+              "freelance-expenses-en",
+              "watcher-backpressure-en",
+              "coffee-roasting-en",
+              "index-rebuild-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q24",
+            "class": "cross_lingual",
+            "topic": "board_game_design",
+            "gold": [
+              "board-game-design-en"
+            ],
+            "ranked": [
+              "spelbalans-sv",
+              "olbryggning-jast-sv",
+              "lankvanor-sv",
+              "avdrag-frilans-sv",
+              "cykelservice-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          }
+        ]
+      },
+      "connect_precision": {
+        "proposed_pairs": 32,
+        "labelled_related_pairs": 8,
+        "true_positives": 1,
+        "hard_negatives_surfaced": 2,
+        "precision": 0.0312,
+        "recall": 0.125,
+        "f1": 0.05,
+        "missed_related_pairs": [
+          [
+            "avdrag-frilans-sv",
+            "freelance-expenses-en"
+          ],
+          [
+            "bevakare-mottryck-sv",
+            "watcher-backpressure-en"
+          ],
+          [
+            "board-game-design-en",
+            "spelbalans-sv"
+          ],
+          [
+            "index-rebuild-en",
+            "omindexering-sv"
+          ],
+          [
+            "lankvanor-sv",
+            "note-linking-en"
+          ],
+          [
+            "sleep-focus-en",
+            "somn-och-fokus-sv"
+          ],
+          [
+            "sourdough-en",
+            "surdeg-sv"
+          ]
+        ],
+        "hard_negative_pairs_surfaced": [
+          [
+            "olbryggning-jast-sv",
+            "surdeg-sv"
+          ],
+          [
+            "post-office-queue-en",
+            "watcher-backpressure-en"
+          ]
+        ]
+      }
+    },
+    "bge_m3/linear": {
+      "identity": {
+        "key": "bge_m3",
+        "model": "bge-m3:latest",
+        "dim": 1024
+      },
+      "fusion": "linear",
+      "rationale": "identity comparison candidate + shipped default configuration",
+      "retrieval": {
+        "overall": {
+          "n": 24,
+          "recall": {
+            "@1": 0.625,
+            "@3": 0.9167,
+            "@5": 0.9583
+          },
+          "mrr": 0.7653
+        },
+        "by_class": {
+          "sv_only": {
+            "n": 8,
+            "recall": {
+              "@1": 0.875,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "mrr": 0.9167
+          },
+          "en_only": {
+            "n": 8,
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "mrr": 1.0
+          },
+          "cross_lingual": {
+            "n": 8,
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.75,
+              "@5": 0.875
+            },
+            "mrr": 0.3792
+          }
+        },
+        "per_query": [
+          {
+            "id": "q01",
+            "class": "sv_only",
+            "topic": "index_rebuild",
+            "gold": [
+              "omindexering-sv"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "lankvanor-sv",
+              "avdrag-frilans-sv",
+              "index-rebuild-en",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q02",
+            "class": "en_only",
+            "topic": "index_rebuild",
+            "gold": [
+              "index-rebuild-en"
+            ],
+            "ranked": [
+              "index-rebuild-en",
+              "omindexering-sv",
+              "bicycle-maintenance-en",
+              "watcher-backpressure-en",
+              "note-linking-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q03",
+            "class": "cross_lingual",
+            "topic": "index_rebuild",
+            "gold": [
+              "index-rebuild-en"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "index-rebuild-en",
+              "board-game-design-en",
+              "spelbalans-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.5
+          },
+          {
+            "id": "q04",
+            "class": "sv_only",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "bevakare-mottryck-sv"
+            ],
+            "ranked": [
+              "bevakare-mottryck-sv",
+              "watcher-backpressure-en",
+              "omindexering-sv",
+              "index-rebuild-en",
+              "post-office-queue-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q05",
+            "class": "en_only",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "watcher-backpressure-en"
+            ],
+            "ranked": [
+              "watcher-backpressure-en",
+              "post-office-queue-en",
+              "bevakare-mottryck-sv",
+              "index-rebuild-en",
+              "bicycle-maintenance-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q06",
+            "class": "cross_lingual",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "watcher-backpressure-en"
+            ],
+            "ranked": [
+              "bevakare-mottryck-sv",
+              "watcher-backpressure-en",
+              "spelbalans-sv",
+              "somn-och-fokus-sv",
+              "board-game-design-en"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.5
+          },
+          {
+            "id": "q07",
+            "class": "sv_only",
+            "topic": "note_linking",
+            "gold": [
+              "lankvanor-sv"
+            ],
+            "ranked": [
+              "lankvanor-sv",
+              "note-linking-en",
+              "spelbalans-sv",
+              "avdrag-frilans-sv",
+              "omindexering-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q08",
+            "class": "en_only",
+            "topic": "note_linking",
+            "gold": [
+              "note-linking-en"
+            ],
+            "ranked": [
+              "note-linking-en",
+              "sleep-focus-en",
+              "lankvanor-sv",
+              "freelance-expenses-en",
+              "index-rebuild-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q09",
+            "class": "cross_lingual",
+            "topic": "note_linking",
+            "gold": [
+              "note-linking-en"
+            ],
+            "ranked": [
+              "lankvanor-sv",
+              "avdrag-frilans-sv",
+              "note-linking-en",
+              "omindexering-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.3333
+          },
+          {
+            "id": "q10",
+            "class": "sv_only",
+            "topic": "sleep_focus",
+            "gold": [
+              "somn-och-fokus-sv"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "sleep-focus-en",
+              "somn-och-fokus-sv",
+              "index-rebuild-en",
+              "board-game-design-en"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.3333
+          },
+          {
+            "id": "q11",
+            "class": "en_only",
+            "topic": "sleep_focus",
+            "gold": [
+              "sleep-focus-en"
+            ],
+            "ranked": [
+              "sleep-focus-en",
+              "somn-och-fokus-sv",
+              "coffee-roasting-en",
+              "board-game-design-en",
+              "post-office-queue-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q12",
+            "class": "cross_lingual",
+            "topic": "sleep_focus",
+            "gold": [
+              "sleep-focus-en"
+            ],
+            "ranked": [
+              "somn-och-fokus-sv",
+              "sleep-focus-en",
+              "omindexering-sv",
+              "spelbalans-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.5
+          },
+          {
+            "id": "q13",
+            "class": "sv_only",
+            "topic": "sourdough",
+            "gold": [
+              "surdeg-sv"
+            ],
+            "ranked": [
+              "surdeg-sv",
+              "grafteori-sv",
+              "olbryggning-jast-sv",
+              "spelbalans-sv",
+              "sourdough-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q14",
+            "class": "en_only",
+            "topic": "sourdough",
+            "gold": [
+              "sourdough-en"
+            ],
+            "ranked": [
+              "sourdough-en",
+              "bicycle-maintenance-en",
+              "coffee-roasting-en",
+              "note-linking-en",
+              "surdeg-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q15",
+            "class": "cross_lingual",
+            "topic": "sourdough",
+            "gold": [
+              "sourdough-en"
+            ],
+            "ranked": [
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "cykelservice-sv",
+              "spelbalans-sv",
+              "sourdough-en"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 1.0
+            },
+            "rr": 0.2
+          },
+          {
+            "id": "q16",
+            "class": "sv_only",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "cykelservice-sv"
+            ],
+            "ranked": [
+              "cykelservice-sv",
+              "bicycle-maintenance-en",
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "somn-och-fokus-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q17",
+            "class": "en_only",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "bicycle-maintenance-en"
+            ],
+            "ranked": [
+              "bicycle-maintenance-en",
+              "board-game-design-en",
+              "index-rebuild-en",
+              "cykelservice-sv",
+              "coffee-roasting-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q18",
+            "class": "cross_lingual",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "bicycle-maintenance-en"
+            ],
+            "ranked": [
+              "cykelservice-sv",
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "omindexering-sv",
+              "spelbalans-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q19",
+            "class": "sv_only",
+            "topic": "freelance_expenses",
+            "gold": [
+              "avdrag-frilans-sv"
+            ],
+            "ranked": [
+              "avdrag-frilans-sv",
+              "freelance-expenses-en",
+              "spelbalans-sv",
+              "bevakare-mottryck-sv",
+              "somn-och-fokus-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q20",
+            "class": "en_only",
+            "topic": "freelance_expenses",
+            "gold": [
+              "freelance-expenses-en"
+            ],
+            "ranked": [
+              "freelance-expenses-en",
+              "avdrag-frilans-sv",
+              "coffee-roasting-en",
+              "sourdough-en",
+              "sleep-focus-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q21",
+            "class": "cross_lingual",
+            "topic": "freelance_expenses",
+            "gold": [
+              "freelance-expenses-en"
+            ],
+            "ranked": [
+              "avdrag-frilans-sv",
+              "freelance-expenses-en",
+              "spelbalans-sv",
+              "lankvanor-sv",
+              "somn-och-fokus-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.5
+          },
+          {
+            "id": "q22",
+            "class": "sv_only",
+            "topic": "board_game_design",
+            "gold": [
+              "spelbalans-sv"
+            ],
+            "ranked": [
+              "spelbalans-sv",
+              "board-game-design-en",
+              "omindexering-sv",
+              "somn-och-fokus-sv",
+              "olbryggning-jast-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q23",
+            "class": "en_only",
+            "topic": "board_game_design",
+            "gold": [
+              "board-game-design-en"
+            ],
+            "ranked": [
+              "board-game-design-en",
+              "freelance-expenses-en",
+              "watcher-backpressure-en",
+              "coffee-roasting-en",
+              "spelbalans-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q24",
+            "class": "cross_lingual",
+            "topic": "board_game_design",
+            "gold": [
+              "board-game-design-en"
+            ],
+            "ranked": [
+              "spelbalans-sv",
+              "board-game-design-en",
+              "bevakare-mottryck-sv",
+              "watcher-backpressure-en",
+              "olbryggning-jast-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 0.5
+          }
+        ]
+      },
+      "connect_precision": {
+        "proposed_pairs": 8,
+        "labelled_related_pairs": 8,
+        "true_positives": 1,
+        "hard_negatives_surfaced": 1,
+        "precision": 0.125,
+        "recall": 0.125,
+        "f1": 0.125,
+        "missed_related_pairs": [
+          [
+            "avdrag-frilans-sv",
+            "freelance-expenses-en"
+          ],
+          [
+            "bevakare-mottryck-sv",
+            "watcher-backpressure-en"
+          ],
+          [
+            "board-game-design-en",
+            "spelbalans-sv"
+          ],
+          [
+            "index-rebuild-en",
+            "omindexering-sv"
+          ],
+          [
+            "lankvanor-sv",
+            "note-linking-en"
+          ],
+          [
+            "sleep-focus-en",
+            "somn-och-fokus-sv"
+          ],
+          [
+            "sourdough-en",
+            "surdeg-sv"
+          ]
+        ],
+        "hard_negative_pairs_surfaced": [
+          [
+            "post-office-queue-en",
+            "watcher-backpressure-en"
+          ]
+        ]
+      }
+    },
+    "bge_m3/rrf": {
+      "identity": {
+        "key": "bge_m3",
+        "model": "bge-m3:latest",
+        "dim": 1024
+      },
+      "fusion": "rrf",
+      "rationale": "fusion comparison arm for the G5 default recommendation",
+      "retrieval": {
+        "overall": {
+          "n": 24,
+          "recall": {
+            "@1": 0.625,
+            "@3": 0.625,
+            "@5": 0.6667
+          },
+          "mrr": 0.6333
+        },
+        "by_class": {
+          "sv_only": {
+            "n": 8,
+            "recall": {
+              "@1": 0.875,
+              "@3": 0.875,
+              "@5": 0.875
+            },
+            "mrr": 0.875
+          },
+          "en_only": {
+            "n": 8,
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "mrr": 1.0
+          },
+          "cross_lingual": {
+            "n": 8,
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.125
+            },
+            "mrr": 0.025
+          }
+        },
+        "per_query": [
+          {
+            "id": "q01",
+            "class": "sv_only",
+            "topic": "index_rebuild",
+            "gold": [
+              "omindexering-sv"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "lankvanor-sv",
+              "avdrag-frilans-sv",
+              "bevakare-mottryck-sv",
+              "somn-och-fokus-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q02",
+            "class": "en_only",
+            "topic": "index_rebuild",
+            "gold": [
+              "index-rebuild-en"
+            ],
+            "ranked": [
+              "index-rebuild-en",
+              "omindexering-sv",
+              "note-linking-en",
+              "watcher-backpressure-en",
+              "bicycle-maintenance-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q03",
+            "class": "cross_lingual",
+            "topic": "index_rebuild",
+            "gold": [
+              "index-rebuild-en"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "spelbalans-sv",
+              "board-game-design-en",
+              "cykelservice-sv",
+              "watcher-backpressure-en"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q04",
+            "class": "sv_only",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "bevakare-mottryck-sv"
+            ],
+            "ranked": [
+              "bevakare-mottryck-sv",
+              "omindexering-sv",
+              "grafteori-sv",
+              "watcher-backpressure-en",
+              "surdeg-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q05",
+            "class": "en_only",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "watcher-backpressure-en"
+            ],
+            "ranked": [
+              "watcher-backpressure-en",
+              "post-office-queue-en",
+              "index-rebuild-en",
+              "bicycle-maintenance-en",
+              "board-game-design-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q06",
+            "class": "cross_lingual",
+            "topic": "watcher_backpressure",
+            "gold": [
+              "watcher-backpressure-en"
+            ],
+            "ranked": [
+              "bevakare-mottryck-sv",
+              "spelbalans-sv",
+              "somn-och-fokus-sv",
+              "lankvanor-sv",
+              "omindexering-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q07",
+            "class": "sv_only",
+            "topic": "note_linking",
+            "gold": [
+              "lankvanor-sv"
+            ],
+            "ranked": [
+              "lankvanor-sv",
+              "avdrag-frilans-sv",
+              "omindexering-sv",
+              "grafteori-sv",
+              "spelbalans-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q08",
+            "class": "en_only",
+            "topic": "note_linking",
+            "gold": [
+              "note-linking-en"
+            ],
+            "ranked": [
+              "note-linking-en",
+              "freelance-expenses-en",
+              "sleep-focus-en",
+              "index-rebuild-en",
+              "bicycle-maintenance-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q09",
+            "class": "cross_lingual",
+            "topic": "note_linking",
+            "gold": [
+              "note-linking-en"
+            ],
+            "ranked": [
+              "lankvanor-sv",
+              "omindexering-sv",
+              "avdrag-frilans-sv",
+              "surdeg-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q10",
+            "class": "sv_only",
+            "topic": "sleep_focus",
+            "gold": [
+              "somn-och-fokus-sv"
+            ],
+            "ranked": [
+              "omindexering-sv",
+              "bicycle-maintenance-en",
+              "board-game-design-en",
+              "avdrag-frilans-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q11",
+            "class": "en_only",
+            "topic": "sleep_focus",
+            "gold": [
+              "sleep-focus-en"
+            ],
+            "ranked": [
+              "sleep-focus-en",
+              "coffee-roasting-en",
+              "somn-och-fokus-sv",
+              "sourdough-en",
+              "board-game-design-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q12",
+            "class": "cross_lingual",
+            "topic": "sleep_focus",
+            "gold": [
+              "sleep-focus-en"
+            ],
+            "ranked": [
+              "somn-och-fokus-sv",
+              "omindexering-sv",
+              "spelbalans-sv",
+              "bevakare-mottryck-sv",
+              "avdrag-frilans-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q13",
+            "class": "sv_only",
+            "topic": "sourdough",
+            "gold": [
+              "surdeg-sv"
+            ],
+            "ranked": [
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "grafteori-sv",
+              "spelbalans-sv",
+              "bevakare-mottryck-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q14",
+            "class": "en_only",
+            "topic": "sourdough",
+            "gold": [
+              "sourdough-en"
+            ],
+            "ranked": [
+              "sourdough-en",
+              "bicycle-maintenance-en",
+              "coffee-roasting-en",
+              "sleep-focus-en",
+              "cykelservice-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q15",
+            "class": "cross_lingual",
+            "topic": "sourdough",
+            "gold": [
+              "sourdough-en"
+            ],
+            "ranked": [
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "cykelservice-sv",
+              "somn-och-fokus-sv",
+              "spelbalans-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q16",
+            "class": "sv_only",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "cykelservice-sv"
+            ],
+            "ranked": [
+              "cykelservice-sv",
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "somn-och-fokus-sv",
+              "bicycle-maintenance-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q17",
+            "class": "en_only",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "bicycle-maintenance-en"
+            ],
+            "ranked": [
+              "bicycle-maintenance-en",
+              "board-game-design-en",
+              "coffee-roasting-en",
+              "index-rebuild-en",
+              "freelance-expenses-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q18",
+            "class": "cross_lingual",
+            "topic": "bicycle_maintenance",
+            "gold": [
+              "bicycle-maintenance-en"
+            ],
+            "ranked": [
+              "cykelservice-sv",
+              "surdeg-sv",
+              "olbryggning-jast-sv",
+              "omindexering-sv",
+              "spelbalans-sv"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q19",
+            "class": "sv_only",
+            "topic": "freelance_expenses",
+            "gold": [
+              "avdrag-frilans-sv"
+            ],
+            "ranked": [
+              "avdrag-frilans-sv",
+              "spelbalans-sv",
+              "bevakare-mottryck-sv",
+              "somn-och-fokus-sv",
+              "cykelservice-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q20",
+            "class": "en_only",
+            "topic": "freelance_expenses",
+            "gold": [
+              "freelance-expenses-en"
+            ],
+            "ranked": [
+              "freelance-expenses-en",
+              "index-rebuild-en",
+              "coffee-roasting-en",
+              "sleep-focus-en",
+              "avdrag-frilans-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q21",
+            "class": "cross_lingual",
+            "topic": "freelance_expenses",
+            "gold": [
+              "freelance-expenses-en"
+            ],
+            "ranked": [
+              "avdrag-frilans-sv",
+              "lankvanor-sv",
+              "spelbalans-sv",
+              "cykelservice-sv",
+              "board-game-design-en"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 0.0
+            },
+            "rr": 0.0
+          },
+          {
+            "id": "q22",
+            "class": "sv_only",
+            "topic": "board_game_design",
+            "gold": [
+              "spelbalans-sv"
+            ],
+            "ranked": [
+              "spelbalans-sv",
+              "omindexering-sv",
+              "olbryggning-jast-sv",
+              "surdeg-sv",
+              "somn-och-fokus-sv"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q23",
+            "class": "en_only",
+            "topic": "board_game_design",
+            "gold": [
+              "board-game-design-en"
+            ],
+            "ranked": [
+              "board-game-design-en",
+              "freelance-expenses-en",
+              "watcher-backpressure-en",
+              "coffee-roasting-en",
+              "index-rebuild-en"
+            ],
+            "recall": {
+              "@1": 1.0,
+              "@3": 1.0,
+              "@5": 1.0
+            },
+            "rr": 1.0
+          },
+          {
+            "id": "q24",
+            "class": "cross_lingual",
+            "topic": "board_game_design",
+            "gold": [
+              "board-game-design-en"
+            ],
+            "ranked": [
+              "spelbalans-sv",
+              "olbryggning-jast-sv",
+              "bevakare-mottryck-sv",
+              "avdrag-frilans-sv",
+              "board-game-design-en"
+            ],
+            "recall": {
+              "@1": 0.0,
+              "@3": 0.0,
+              "@5": 1.0
+            },
+            "rr": 0.2
+          }
+        ]
+      },
+      "connect_precision": {
+        "proposed_pairs": 90,
+        "labelled_related_pairs": 8,
+        "true_positives": 3,
+        "hard_negatives_surfaced": 4,
+        "precision": 0.0333,
+        "recall": 0.375,
+        "f1": 0.0612,
+        "missed_related_pairs": [
+          [
+            "board-game-design-en",
+            "spelbalans-sv"
+          ],
+          [
+            "index-rebuild-en",
+            "omindexering-sv"
+          ],
+          [
+            "lankvanor-sv",
+            "note-linking-en"
+          ],
+          [
+            "sleep-focus-en",
+            "somn-och-fokus-sv"
+          ],
+          [
+            "sourdough-en",
+            "surdeg-sv"
+          ]
+        ],
+        "hard_negative_pairs_surfaced": [
+          [
+            "bevakare-mottryck-sv",
+            "post-office-queue-en"
+          ],
+          [
+            "coffee-roasting-en",
+            "sleep-focus-en"
+          ],
+          [
+            "olbryggning-jast-sv",
+            "surdeg-sv"
+          ],
+          [
+            "post-office-queue-en",
+            "watcher-backpressure-en"
+          ]
+        ]
+      }
+    }
+  }
+}

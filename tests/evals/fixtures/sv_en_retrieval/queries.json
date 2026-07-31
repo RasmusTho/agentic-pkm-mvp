@@ -1,0 +1,42 @@
+{
+  "schema": "sv_en_retrieval_query_set.v1",
+  "labelled_by": "hand-authored for G3-2 (#2985); synthetic corpus, no vault content",
+  "classes": {
+    "sv_only": "Swedish query; gold is the Swedish document on that topic.",
+    "en_only": "English query; gold is the English document on that topic.",
+    "cross_lingual": "Query in one language; gold is deliberately ONLY the other-language document on the same topic. The same-topic same-language document is a competitor, not gold — so this class measures whether the other-language document surfaces at all, and at what rank. recall@1 is expected to be harsh for both identities; recall@3/@5 and MRR are the informative figures."
+  },
+  "queries": [
+    {"id": "q01", "class": "sv_only", "topic": "index_rebuild", "query": "varför måste jag bygga om hela indexet när modellen byts", "gold": ["omindexering-sv"]},
+    {"id": "q02", "class": "en_only", "topic": "index_rebuild", "query": "why does changing the embedding model force a full reindex", "gold": ["index-rebuild-en"]},
+    {"id": "q03", "class": "cross_lingual", "topic": "index_rebuild", "query": "blandade vektoridentiteter i lagret ger tyst felaktig rangordning", "gold": ["index-rebuild-en"]},
+
+    {"id": "q04", "class": "sv_only", "topic": "watcher_backpressure", "query": "kön i filbevakaren växer tills minnet tar slut", "gold": ["bevakare-mottryck-sv"]},
+    {"id": "q05", "class": "en_only", "topic": "watcher_backpressure", "query": "bounding the watcher queue instead of adding more workers", "gold": ["watcher-backpressure-en"]},
+    {"id": "q06", "class": "cross_lingual", "topic": "watcher_backpressure", "query": "mottryck gör återhämtningen efter en topp förutsägbar", "gold": ["watcher-backpressure-en"]},
+
+    {"id": "q07", "class": "sv_only", "topic": "note_linking", "query": "jag länkade allt till allt och grafen blev meningslös", "gold": ["lankvanor-sv"]},
+    {"id": "q08", "class": "en_only", "topic": "note_linking", "query": "only add a link when you can state the reason", "gold": ["note-linking-en"]},
+    {"id": "q09", "class": "cross_lingual", "topic": "note_linking", "query": "en naken hänvisning utan skäl är värdelös om ett år", "gold": ["note-linking-en"]},
+
+    {"id": "q10", "class": "sv_only", "topic": "sleep_focus", "query": "sen sänggående förstör hela min förmiddag", "gold": ["somn-och-fokus-sv"]},
+    {"id": "q11", "class": "en_only", "topic": "sleep_focus", "query": "caffeine in the afternoon delays falling asleep", "gold": ["sleep-focus-en"]},
+    {"id": "q12", "class": "cross_lingual", "topic": "sleep_focus", "query": "mörkt rum och samma tid varje kväll även i helgen", "gold": ["sleep-focus-en"]},
+
+    {"id": "q13", "class": "sv_only", "topic": "sourdough", "query": "hur vet jag att surdegen är färdigjäst", "gold": ["surdeg-sv"]},
+    {"id": "q14", "class": "en_only", "topic": "sourdough", "query": "cold kitchen makes the dough rise much slower in winter", "gold": ["sourdough-en"]},
+    {"id": "q15", "class": "cross_lingual", "topic": "sourdough", "query": "väg mjölet i stället för att mäta i deciliter", "gold": ["sourdough-en"]},
+
+    {"id": "q16", "class": "sv_only", "topic": "bicycle_maintenance", "query": "saltet förstör kedjan på pendlarcykeln under vintern", "gold": ["cykelservice-sv"]},
+    {"id": "q17", "class": "en_only", "topic": "bicycle_maintenance", "query": "brake cables rust inside the housing and start binding", "gold": ["bicycle-maintenance-en"]},
+    {"id": "q18", "class": "cross_lingual", "topic": "bicycle_maintenance", "query": "tjockare våtolja på vintern i stället för tunn sommarolja", "gold": ["bicycle-maintenance-en"]},
+
+    {"id": "q19", "class": "sv_only", "topic": "freelance_expenses", "query": "får jag dra av hemmakontoret som frilans", "gold": ["avdrag-frilans-sv"]},
+    {"id": "q20", "class": "en_only", "topic": "freelance_expenses", "query": "splitting phone and broadband between private and professional use", "gold": ["freelance-expenses-en"]},
+    {"id": "q21", "class": "cross_lingual", "topic": "freelance_expenses", "query": "en utgift måste vara nödvändig för intäkten inte bara praktisk", "gold": ["freelance-expenses-en"]},
+
+    {"id": "q22", "class": "sv_only", "topic": "board_game_design", "query": "den som leder tidigt behåller ledningen hela spelet", "gold": ["spelbalans-sv"]},
+    {"id": "q23", "class": "en_only", "topic": "board_game_design", "query": "a catch-up cost should not feel like punishment", "gold": ["board-game-design-en"]},
+    {"id": "q24", "class": "cross_lingual", "topic": "board_game_design", "query": "speltesterna avslöjade en öppning jag inte hade räknat på", "gold": ["board-game-design-en"]}
+  ]
+}
