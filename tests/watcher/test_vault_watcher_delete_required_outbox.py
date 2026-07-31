@@ -1,11 +1,24 @@
 """A vault delete tombstone may not be reported as purged unless it was queued (#4214 D3).
 
-``_emit_watcher_delete_event`` had no compensating sink, no ``required_db``
-classification, and returned ``True`` unconditionally. Its caller then both
-incremented ``deleted_purged`` and let ``refresh_snapshot()`` drop the path from
-the snapshot — so a tombstone that never reached the outbox was permanently
-unrecoverable: the note is gone from disk AND from the snapshot, later ticks
-never re-see the deletion, and the deleted content stays indexed.
+``_emit_watcher_delete_event`` had no ``required_db`` classification and returned
+``True`` unconditionally, so the tick incremented ``deleted_purged`` for an event
+the outbox policy had silently skipped. Because this path has no compensating
+JSONL sink and ``refresh_snapshot()`` then drops the path, that false purge was
+the only signal anyone would ever get.
+
+Two properties are pinned here:
+
+1. only a tombstone that actually landed is counted as a purge;
+2. a runtime that NAMES a database keeps `main`'s delivery semantics — the
+   enqueue is attempted and an unreachable database raises loudly — rather than
+   being silently skipped by the optional-write policy under
+   ``STORE_BACKEND=memory``. #4214's constraint says a properly configured
+   runtime (``STORE_BACKEND=pg`` *or an explicit DSN*) must not change.
+
+Making a deletion whose tombstone never landed *re-observable* is deliberately
+NOT in scope; it needs ``vault_sync.delete_note``'s own connection classified
+first. `test_the_tick_terminates_when_no_database_is_named` pins the resulting
+behaviour so the gap is visible rather than assumed away.
 """
 
 from __future__ import annotations
@@ -35,8 +48,7 @@ def _tick(vault: Path, snapshot_path: Path) -> tuple[dict[str, Any], list[str]]:
     )
 
 
-@pytest.fixture()
-def seeded_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
+def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
     vault = tmp_path / "vault"
     vault.mkdir()
     note = vault / "Concepts" / "D.md"
@@ -44,10 +56,20 @@ def seeded_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     note.write_text("Body", encoding="utf-8")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "events.jsonl"))
     monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
-    # delete_note cannot identify the note (no file_state row), so the tick
-    # falls through to the watcher's own tombstone emitter — the D3 path.
+    return vault, note, vault / ".state.json"
+
+
+@pytest.fixture()
+def seeded_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
+    """A vault with one ingested note, and `delete_note` stubbed to "can't identify".
+
+    That stub is what routes the tick into the watcher's own tombstone emitter —
+    the D3 path. `test_the_tick_terminates_when_no_database_is_named` deliberately
+    does NOT use this fixture, because stubbing `delete_note` also stubs away its
+    unguarded connection.
+    """
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
     monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: False)
-    snapshot_path = vault / ".state.json"
     _tick(vault, snapshot_path)
     return vault, note, snapshot_path
 
@@ -60,11 +82,11 @@ def test_unqueued_tombstone_is_not_reported_as_purged(
     seeded_vault: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicit memory runtime queues nothing, so it may not claim a purge."""
+    """A runtime that names no database queues nothing, so it may not claim a purge."""
     vault, note, snapshot_path = seeded_vault
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("DB_DSN", raising=False)
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
 
     time.sleep(0.01)
     note.unlink()
@@ -76,39 +98,70 @@ def test_unqueued_tombstone_is_not_reported_as_purged(
     )
 
 
-def test_unqueued_tombstone_stays_reobservable_on_the_next_tick(
+def test_a_named_database_is_still_delivered_to_under_a_memory_backend(
     seeded_vault: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The snapshot must retain a deletion no sink accepted, so it can retry.
+    """An explicit DSN must keep `main`'s delivery semantics (#4214 constraint).
 
-    The runtime NAMES a database (so a durable queue and a durable projection
-    exist and the tombstone is genuinely owed) while the explicit memory backend
-    makes the optional self-owned write skip — the configuration in which D3's
-    loss is real.
+    Left optional, the policy would skip this write under ``STORE_BACKEND=memory``
+    and drop the tombstone with no purge, no error and no message — a silent,
+    permanent loss on a runtime that does have a durable queue and a durable
+    projection. The delete path therefore resolves ``required_db`` as
+    ``db_outbox_required() or runtime_database_is_named(...)``.
     """
     vault, note, snapshot_path = seeded_vault
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("DATABASE_URL", "postgresql://configured.example/app")
+    attempts: list[bool] = []
+
+    def _writer(*args: object, required_db: bool = False, **kwargs: object) -> str:
+        attempts.append(required_db)
+        return "queued"
+
+    monkeypatch.setattr(vault_watcher, "insert_object_and_outbox", _writer)
 
     time.sleep(0.01)
     note.unlink()
-    _tick(vault, snapshot_path)
+    summary, _ = _tick(vault, snapshot_path)
 
-    assert "Concepts/D.md" in _snapshot(snapshot_path), (
-        "refresh_snapshot() dropped a path whose tombstone was never queued; "
-        "the deletion can never be re-observed"
-    )
-
-    second, _ = _tick(vault, snapshot_path)
-    assert second["deleted"] == 1, "the unreconciled deletion must be re-detected"
+    assert attempts == [True], "an explicit DSN must not be treated as an optional write"
+    assert summary["deleted_purged"] == 1
 
 
-def test_required_tombstone_failure_keeps_the_deletion_retryable(
+def test_an_unreachable_named_database_fails_loud_instead_of_dropping_silently(
     seeded_vault: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A required enqueue that raises must not consume the observation."""
+    """The same widening makes an unreachable database observable, not silent."""
+    vault, note, snapshot_path = seeded_vault
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://configured.example/app")
+
+    def _unavailable(*args: object, **kwargs: object) -> Any:
+        raise RuntimeError("required outbox unavailable")
+
+    monkeypatch.setattr(vault_watcher, "insert_object_and_outbox", _unavailable)
+
+    time.sleep(0.01)
+    note.unlink()
+    summary, messages = _tick(vault, snapshot_path)
+
+    assert summary["deleted_purged"] == 0
+    assert summary["errors"] == 1
+    assert any("unable to reconcile deletion" in message for message in messages)
+
+
+def test_required_tombstone_failure_is_recorded_and_not_retried(
+    seeded_vault: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed required enqueue consumes the observation — deliberately, for now.
+
+    Re-observability is a separate contract (it needs `vault_sync.delete_note`
+    classified first). This pins the CURRENT behaviour so the gap is explicit
+    and any future change to it is a visible test change, not a silent drift.
+    """
     vault, note, snapshot_path = seeded_vault
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
@@ -125,17 +178,15 @@ def test_required_tombstone_failure_keeps_the_deletion_retryable(
     assert summary["deleted_purged"] == 0
     assert summary["errors"] == 1
     assert any("unable to reconcile deletion" in message for message in messages)
-    assert "Concepts/D.md" in _snapshot(snapshot_path)
 
     second, _ = _tick(vault, snapshot_path)
-    assert second["deleted"] == 1, "a failed required tombstone must be retried"
+    assert second["deleted"] == 0, "the tick must terminate rather than loop on the failure"
 
 
-def test_queued_tombstone_still_advances_the_snapshot(
+def test_queued_tombstone_is_counted_once_and_the_snapshot_advances(
     seeded_vault: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The retention must be scoped to failures — a real purge still completes."""
     vault, note, snapshot_path = seeded_vault
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
@@ -158,108 +209,41 @@ def test_queued_tombstone_still_advances_the_snapshot(
     assert second["deleted"] == 0, "a reconciled deletion must not be re-reported"
 
 
-def test_retention_survives_a_bare_refresh_snapshot_from_outside_the_tick(
-    seeded_vault: tuple[Path, Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The retention must be durable, not a local variable of the tick.
-
-    ``refresh_snapshot`` has callers outside ``run_watcher_tick`` —
-    ``app/runtime/runtime_loop.py``, ``app/cli/uat.py``,
-    ``app/cli/latency_harness.py`` — which construct their own ``VaultWatcher``
-    and call it with no arguments. Holding the retained set in the tick's local
-    scope let the very next bare call rescan disk (where the deleted note is
-    gone) and silently undo the retention, restoring the exact D3 loss.
-    """
-    vault, note, snapshot_path = seeded_vault
-    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
-    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
-
-    def _unavailable(*args: object, **kwargs: object) -> Any:
-        raise RuntimeError("required outbox unavailable")
-
-    monkeypatch.setattr(vault_watcher, "insert_object_and_outbox", _unavailable)
-
-    time.sleep(0.01)
-    note.unlink()
-    _tick(vault, snapshot_path)
-    assert "Concepts/D.md" in _snapshot(snapshot_path)
-
-    # Exactly what runtime_loop.run_once does after the tick.
-    vault_watcher.VaultWatcher(vault, snapshot_path=snapshot_path).refresh_snapshot()
-
-    assert "Concepts/D.md" in _snapshot(snapshot_path), (
-        "a bare refresh_snapshot() from outside the tick dropped the retained deletion"
-    )
-    second, _ = _tick(vault, snapshot_path)
-    assert second["deleted"] == 1, "the deletion must still be retryable"
-
-
-def test_a_reconciled_deletion_clears_the_durable_retention(
-    seeded_vault: tuple[Path, Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The sidecar is authoritative per tick, so retention must not leak forever."""
-    vault, note, snapshot_path = seeded_vault
-    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
-    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
-    failing = {"now": True}
-
-    def _writer(*args: object, **kwargs: object) -> Any:
-        if failing["now"]:
-            raise RuntimeError("required outbox unavailable")
-        return "queued"
-
-    monkeypatch.setattr(vault_watcher, "insert_object_and_outbox", _writer)
-
-    time.sleep(0.01)
-    note.unlink()
-    _tick(vault, snapshot_path)
-    sidecar = vault_watcher.unreconciled_deletions_path(snapshot_path)
-    assert sidecar.exists() and "Concepts/D.md" in json.loads(sidecar.read_text(encoding="utf-8"))
-
-    failing["now"] = False
-    second, _ = _tick(vault, snapshot_path)
-
-    assert second["deleted_purged"] == 1
-    assert not sidecar.exists(), "a reconciled deletion must stop being retained"
-    assert "Concepts/D.md" not in _snapshot(snapshot_path)
-
-    third, _ = _tick(vault, snapshot_path)
-    assert third["deleted"] == 0, "the retention must terminate once reconciled"
-
-
-def test_a_runtime_naming_no_database_does_not_retain_forever(
-    seeded_vault: tuple[Path, Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No named database means no durable queue and no durable projection.
-
-    Nothing is owed and nothing will ever accept the tombstone, so retaining it
-    would re-report the same deletion on every tick forever.
-    """
-    vault, note, snapshot_path = seeded_vault
-    monkeypatch.setenv("STORE_BACKEND", "memory")
-    for key in RUNTIME_DATABASE_ENV_KEYS:
-        monkeypatch.delenv(key, raising=False)
-
-    time.sleep(0.01)
-    note.unlink()
-    summary, _ = _tick(vault, snapshot_path)
-
-    assert summary["deleted_purged"] == 0, "no event was queued, so no purge may be counted"
-    assert "Concepts/D.md" not in _snapshot(snapshot_path)
-    assert not vault_watcher.unreconciled_deletions_path(snapshot_path).exists()
-
-    second, _ = _tick(vault, snapshot_path)
-    assert second["deleted"] == 0, "the deletion must not be re-reported forever"
-
-
-def test_rename_supersedes_the_tombstone_without_retaining_the_path(
+def test_the_tick_terminates_when_no_database_is_named(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A rename owes no tombstone, so the snapshot must still move on."""
+    """Run the REAL `vault_sync.delete_note`, which has its own unguarded connection.
+
+    Every other test here stubs `delete_note` out, which also stubs away the
+    `conn_rw()` it opens with no memory-mode guard. In a runtime that names no
+    database that call raises before the tombstone emitter is ever consulted, so
+    a retention policy built above it cannot terminate — that is why
+    re-observability is out of scope and carried by its own Issue. This pins the
+    property that actually matters here: the tick does not loop.
+    """
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _tick(vault, snapshot_path)
+
+    time.sleep(0.01)
+    note.unlink()
+    first, _ = _tick(vault, snapshot_path)
+    assert first["deleted"] == 1
+    assert first["deleted_purged"] == 0
+
+    second, _ = _tick(vault, snapshot_path)
+    assert second["deleted"] == 0, "the deletion must not be re-reported on every tick"
+    assert second["errors"] == 0, "the tick must not raise the same failure forever"
+
+
+def test_rename_supersedes_the_tombstone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rename owes no tombstone and must not be counted as a purge."""
     vault = tmp_path / "vault"
     vault.mkdir()
     old_note = vault / "Concepts" / "E.md"
@@ -290,6 +274,4 @@ def test_rename_supersedes_the_tombstone_without_retaining_the_path(
 
     assert summary["deleted_purged"] == 0
     assert emitted == []
-    assert "Concepts/E.md" not in _snapshot(snapshot_path), (
-        "a rename owes no tombstone; retaining the old path would re-report it forever"
-    )
+    assert "Concepts/E.md" not in _snapshot(snapshot_path)

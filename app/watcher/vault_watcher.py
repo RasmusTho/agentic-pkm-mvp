@@ -5,7 +5,7 @@ import json
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -78,59 +78,6 @@ def load_snapshot(path: Path) -> Snapshot:
 def save_snapshot(path: Path, snapshot: Snapshot) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(snapshot, indent=2, sort_keys=True), encoding="utf-8")
-
-
-def unreconciled_deletions_path(snapshot_path: Path) -> Path:
-    """Sidecar for deletions observed but not yet turned into a durable tombstone.
-
-    Kept beside the snapshot rather than inside it because ``Snapshot`` is a
-    flat ``{rel_path: mtime}`` contract that several readers parse directly; a
-    reserved key would be indistinguishable from a note called that.
-    """
-    return snapshot_path.parent / f"{snapshot_path.name}.unreconciled-deletions.json"
-
-
-def load_unreconciled_deletions(path: Path) -> dict[str, float]:
-    if not path.exists():
-        return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    retained: dict[str, float] = {}
-    for rel_path, mtime in raw.items():
-        if isinstance(rel_path, str) and isinstance(mtime, (int, float)):
-            retained[rel_path] = float(mtime)
-    return retained
-
-
-def save_unreconciled_deletions(path: Path, retained: Mapping[str, float]) -> None:
-    if not retained:
-        # Nothing outstanding: remove the sidecar rather than leave an empty
-        # file, so its presence always means "a deletion is still owed".
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(retained), indent=2, sort_keys=True), encoding="utf-8")
-
-
-def _with_unreconciled_deletions(current: Snapshot, sidecar: Path) -> Snapshot:
-    """Re-add still-owed deletions to a freshly scanned snapshot.
-
-    ``setdefault`` so a path that came back on disk keeps its real mtime and the
-    retained entry simply disappears.
-    """
-    merged = dict(current)
-    for rel_path, mtime in load_unreconciled_deletions(sidecar).items():
-        merged.setdefault(rel_path, mtime)
-    return merged
 
 
 def _scan_md_files(vault_root: Path) -> dict[str, float]:
@@ -384,55 +331,20 @@ class VaultWatcher:
         self.vault_root = vault_root.expanduser()
         self.snapshot_path = snapshot_path or _default_snapshot_path(self.vault_root)
 
-    @property
-    def unreconciled_deletions_path(self) -> Path:
-        """Sidecar holding deletions observed but not yet turned into a tombstone."""
-        return unreconciled_deletions_path(self.snapshot_path)
-
     def run(self, *, save: bool = True) -> VaultWatcherResult:
         snapshot = load_snapshot(self.snapshot_path)
         changed, deleted, current = compute_changes(self.vault_root, snapshot)
         if save:
-            save_snapshot(
-                self.snapshot_path,
-                _with_unreconciled_deletions(current, self.unreconciled_deletions_path),
-            )
+            save_snapshot(self.snapshot_path, current)
         return VaultWatcherResult(changed=changed, deleted=deleted, snapshot=current)
 
-    def refresh_snapshot(self, *, retain: Mapping[str, float] | None = None) -> Snapshot:
-        """Persist the current on-disk scan as the new observation cursor.
-
-        A deletion this tick could NOT turn into a durable tombstone must stay
-        visible to the next tick (#4214 D3): the path is gone from disk, so a
-        plain rescan drops it and the diff never reports the deletion again —
-        the tombstone would be lost permanently. This is the snapshot-level
-        analogue of the watcher registry's required-enqueue cursor restore.
-
-        The retained set is held in a durable sidecar next to the snapshot, NOT
-        in a caller's local variable, because ``refresh_snapshot`` has callers
-        outside the tick (``app/runtime/runtime_loop.py``, ``app/cli/uat.py``,
-        ``app/cli/latency_harness.py``). A bare ``refresh_snapshot()`` from any
-        of them rescans disk, where the deleted note is absent, and would
-        otherwise silently undo the retention the tick just performed — the
-        exact loss D3 exists to prevent.
-
-        ``retain`` is the tick's authoritative, complete set for this vault: it
-        REPLACES the sidecar, so a deletion that finally reconciled stops being
-        retained. ``retain=None`` means "I am not the tick": honour the sidecar,
-        leave it unchanged.
-        """
+    def refresh_snapshot(self) -> Snapshot:
         current = _scan_md_files(self.vault_root)
-        sidecar = self.unreconciled_deletions_path
-        if retain is not None:
-            save_unreconciled_deletions(sidecar, retain)
-        current = _with_unreconciled_deletions(current, sidecar)
         save_snapshot(self.snapshot_path, current)
         return current
 
 
-_DeleteReconciliation = Literal[
-    "emitted", "superseded_by_rename", "no_durable_outbox", "not_queued"
-]
+_DeleteReconciliation = Literal["emitted", "superseded_by_rename", "not_queued"]
 
 
 def _emit_watcher_delete_event(
@@ -468,28 +380,42 @@ def _emit_watcher_delete_event(
 
     Durability (#4214 D3): this path has no compensating JSONL sink, and its
     caller both increments ``deleted_purged`` and lets ``refresh_snapshot()``
-    drop the path — so a silent skip here is permanent and unrecoverable (the
+    drop the path — so a *silent* skip here is permanent and unrecoverable (the
     note is gone from disk AND from the snapshot, the purge event never
-    existed, and the deleted content stays indexed). The write therefore
-    carries the watcher's resolved required-delivery intent, and the outcome is
-    reported explicitly rather than as a bare bool:
+    existed, and the deleted content stays indexed). Two things follow.
+
+    **The write is required whenever a database is named.** ``required_db`` is
+    the watcher's own required-delivery intent OR ``runtime_database_is_named``,
+    so a runtime with an explicit DSN keeps the delivery semantics it has on
+    ``main`` — the enqueue is attempted and an unreachable database raises
+    loudly — instead of being silently skipped by the optional-write policy
+    under ``STORE_BACKEND=memory``. #4214's constraint is explicit that a
+    properly configured runtime (``STORE_BACKEND=pg`` *or an explicit DSN*)
+    must not change delivery semantics. This also makes every outcome
+    terminal: named+reachable commits, named+unreachable raises once and is
+    recorded as an error, and an unnamed runtime has no durable queue and no
+    durable projection, so nothing is owed.
+
+    **The outcome is reported explicitly** rather than as a bare bool, so the
+    caller cannot read a skip as a purge. Note these are strings — ``"not_queued"``
+    is truthy — so a caller must compare, never test truthiness:
 
     - ``"emitted"`` — the tombstone reached the outbox (or deduped against an
-      identical one already there); the caller may count the purge and let the
-      snapshot move on;
+      identical one already there); the caller may count the purge;
     - ``"superseded_by_rename"`` — no tombstone is owed, the identity is alive
-      at a new path (the rename case above); the snapshot must move on;
-    - ``"no_durable_outbox"`` — the runtime names no database at all, so there
-      is no durable queue to enqueue into and no durable projection to purge.
-      Nothing is owed and nothing will ever accept it, so the caller must NOT
-      count a purge (no event exists) and must NOT retain the deletion (a
-      retention that can never clear would re-report the same deletion on every
-      tick forever);
-    - ``"not_queued"`` — a database IS named, so the tombstone was owed, but no
-      sink took it; the caller must keep the deletion re-observable.
+      at a new path (the rename case above);
+    - ``"not_queued"`` — the runtime names no database, so the optional write
+      skipped and no event exists. The caller must NOT count a purge.
 
-    A required enqueue that fails raises, which the caller also treats as
-    ``not_queued``.
+    A required enqueue that fails raises; the caller records it as an error and
+    does not count a purge.
+
+    Re-observability of a deletion that produced no tombstone is deliberately
+    NOT attempted here — it needs ``vault_sync.delete_note``'s own connection
+    classified first (it raises before this function is reached in a runtime
+    that names no database), plus a decided termination policy. Carried by
+    #4468; see ``docs/DB_SCHEMA.md :: Vault-watcher delete tombstone
+    durability``.
     """
     companion = find_companion_by_source_ref(vault_root, str(rel_deleted))
     companion_uuid = companion.uuid if companion else ""
@@ -509,7 +435,7 @@ def _emit_watcher_delete_event(
         "source": "vault_watcher.run_watcher_tick",
         **canonical_event_identity(canonical_object_id, note_uuid),
     }
-    required_db = db_outbox_required()
+    required_db = db_outbox_required() or runtime_database_is_named(os.environ)
     # Resolved from the same policy the write itself applies, BEFORE the call,
     # because the write's ``""`` return cannot distinguish "skipped, nothing
     # queued" from "deduped against a row already queued". The write still runs
@@ -523,9 +449,7 @@ def _emit_watcher_delete_event(
         observation=str(observed_mtime) if observed_mtime is not None else None,
         required_db=required_db,
     )
-    if not would_skip:
-        return "emitted"
-    return "not_queued" if runtime_database_is_named(os.environ) else "no_durable_outbox"
+    return "not_queued" if would_skip else "emitted"
 
 
 def run_watcher_tick(
@@ -606,22 +530,18 @@ def run_watcher_tick(
     # uuid5(rel_path) fallback) and emits a delete_note-compatible tombstone
     # event directly. Idempotent on replay: the outbox idempotency key is
     # scoped to this observation (the deleted version's last snapshotted
-    # mtime), and refresh_snapshot() removes the path from the snapshot once
-    # the tombstone actually landed, so later ticks stop re-seeing a
-    # RECONCILED deletion. A deletion no sink took is deliberately retained
-    # instead (#4214 D3). Called AFTER the tick's ingest
+    # mtime), and refresh_snapshot() removes the path from the snapshot so
+    # later ticks never re-see the deletion -- which is also why only a
+    # tombstone that actually landed may be counted as a purge (#4214 D3), and
+    # why making an unlanded one re-observable is a separate contract that
+    # needs vault_sync.delete_note's own connection classified first. Called
+    # AFTER the tick's ingest
     # of changed paths, so a rename (delete(old) + result.changed entry for
     # the new path) resolves against the already-updated companion and the
     # liveness check in _emit_watcher_delete_event can skip purging an
     # identity that just re-ingested at a new path. Runs in every non-dry-run
     # exit path -- including changed==0 and limit-exceeded (the max-notes
     # limit bounds panel/ingest fan-out only). dry_run must not purge.
-
-    # Deletions this tick observed but could not turn into a durable tombstone
-    # (#4214 D3). refresh_snapshot() retains these entries so the next tick
-    # re-sees the deletion; without that the path leaves both the disk and the
-    # snapshot and the purge can never be retried.
-    unreconciled_deletions: dict[str, float] = {}
 
     def _reconcile_deletions() -> None:
         if dry_run or not result.deleted:
@@ -653,18 +573,14 @@ def run_watcher_tick(
                         vault_root=vault_root,
                         observed_mtime=observed_mtime,
                     )
+                # Only a tombstone that actually landed counts as a purge
+                # (#4214 D3). "not_queued" and "superseded_by_rename" are both
+                # honest non-purges, and neither is retried: see the emitter's
+                # docstring for why re-observability is a separate contract.
                 if outcome == "emitted":
                     summary["deleted_purged"] += 1
-                elif outcome == "not_queued" and observed_mtime is not None:
-                    # A tombstone was owed and no sink took it: keep the
-                    # deletion visible to the next tick instead of losing it.
-                    # "superseded_by_rename" and "no_durable_outbox" owe
-                    # nothing, so both let the snapshot move on.
-                    unreconciled_deletions[str(rel_deleted)] = observed_mtime
             except Exception:
                 summary["errors"] += 1
-                if observed_mtime is not None:
-                    unreconciled_deletions[str(rel_deleted)] = observed_mtime
                 messages.append(
                     f"Warning: unable to reconcile deletion for {rel_deleted}"
                 )
@@ -708,7 +624,7 @@ def run_watcher_tick(
     if summary["changed"] == 0:
         _reconcile_deletions()
         if not dry_run:
-            watcher.refresh_snapshot(retain=unreconciled_deletions)
+            watcher.refresh_snapshot()
         _emit_run_event(
             summary,
             vault_root=vault_root,
@@ -954,7 +870,7 @@ def run_watcher_tick(
     else:
         messages.append("Panel runtime skipped (no candidates or --skip-panel set).")
 
-    watcher.refresh_snapshot(retain=unreconciled_deletions)
+    watcher.refresh_snapshot()
     _emit_run_event(
         summary,
         vault_root=vault_root,

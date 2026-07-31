@@ -427,31 +427,41 @@ it is documented rather than claimed away.
 Source: `app/watcher/vault_watcher.py::_emit_watcher_delete_event` (#4214 D3).
 
 The tick's delete-reconciliation path has no compensating JSONL sink, and its caller both increments
-`deleted_purged` and lets `refresh_snapshot()` drop the path from the snapshot — so an unqueued
-tombstone is permanently unrecoverable. The emitter therefore reports its outcome explicitly:
+`deleted_purged` and lets `refresh_snapshot()` drop the path from the snapshot. So the false purge is
+the only signal anyone would ever get for a tombstone that never landed. Two rules follow.
+
+**The write is required whenever a database is named.** The delete path resolves
+`required_db = db_outbox_required() or runtime_database_is_named(os.environ)`. Left optional, the
+policy would skip the enqueue under `STORE_BACKEND=memory` even with an explicit DSN and drop the
+tombstone with no purge, no error and no message — a silent, permanent loss on a runtime that does
+have a durable queue and a durable projection, and a change to the delivery semantics a properly
+configured runtime has today. The widening keeps `STORE_BACKEND=pg` and explicit-DSN runtimes exactly
+as they are, and makes an unreachable database raise loudly instead of vanishing.
+
+**Only a tombstone that landed is counted.** The emitter reports its outcome explicitly rather than
+as a bool — note these are strings, so `"not_queued"` is truthy and callers must compare, never test
+truthiness:
 
 - `"emitted"` — the tombstone reached the outbox (or deduped against an identical one); the purge is
-  counted and the snapshot moves on;
+  counted;
 - `"superseded_by_rename"` — no tombstone is owed, the identity is alive at a path this tick already
-  re-ingested; the snapshot moves on;
-- `"no_durable_outbox"` — the runtime names no database at all (`explicit_runtime_database_url` is
-  `None`), so there is no durable queue to enqueue into and no durable projection to purge. Nothing
-  is owed and nothing will ever accept it: the purge is **not** counted, and the deletion is **not**
-  retained, because a retention that can never clear would re-report the same deletion forever;
-- `"not_queued"` — a database IS named, so the tombstone was owed, but no sink took it. The purge is
-  **not** counted and the deletion is retained so the next tick re-sees it and retries.
+  re-ingested;
+- `"not_queued"` — the runtime names no database, so the optional write skipped and no event exists.
+  The purge is **not** counted.
 
-A required enqueue that raises is caught by the reconciliation loop, counted as an error, and treated
-as `not_queued`.
+A required enqueue that raises is caught by the reconciliation loop, counted as an error, and
+surfaced as an `unable to reconcile deletion` message.
 
-**The retention is durable, not a variable of the tick.** It lives in a sidecar beside the snapshot
-(`<snapshot>.unreconciled-deletions.json`), because `refresh_snapshot()` has callers outside
-`run_watcher_tick` — `app/runtime/runtime_loop.py`, `app/cli/uat.py`, `app/cli/latency_harness.py` —
-that construct their own `VaultWatcher` and call it with no arguments. A bare `refresh_snapshot()`
-rescans disk, where the deleted note is absent, and would otherwise silently undo the retention the
-tick just performed. `refresh_snapshot(retain=...)` is the tick speaking authoritatively and REPLACES
-the sidecar (so a reconciled deletion stops being retained); `refresh_snapshot()` honours the sidecar
-and leaves it unchanged.
+**Known gap: an unlanded tombstone is not retried.** The deletion is not made re-observable, so it is
+still lost — honestly reported now, but lost. Closing that needs `app/services/vault_sync.py::delete_note`
+classified first: it is step 1 of this path, it opens an unconditional `conn_rw()` with no
+memory-mode guard, and in a runtime that names no database it *raises* before the tombstone emitter
+is ever consulted. A retry layer built above that seam cannot terminate — two independent review
+rounds on PR #4138 demonstrated exactly that, once as a retention silently undone by the bare
+`refresh_snapshot()` in `app/runtime/runtime_loop.py`, once as a permanent per-tick error loop with
+an unbounded sidecar. The prerequisite and a decided termination policy are carried by #4468;
+`tests/watcher/test_vault_watcher_delete_required_outbox.py::test_the_tick_terminates_when_no_database_is_named`
+runs the real `delete_note` so the gap stays visible instead of being stubbed away.
 
 ### Producers that read a normal return as a commit
 
