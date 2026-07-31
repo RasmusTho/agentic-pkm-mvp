@@ -30,6 +30,16 @@ def _deploy_receipt_dir() -> Path:
     return _REPO_ROOT / "ops" / "deployments"
 
 
+def _github_repo() -> str | None:
+    """Repo slug for the live GitHub read (BOPS-COCKPIT-03, #4450).
+
+    Unset by default: the source then refuses cleanly rather than guessing a
+    repo. An operator enables the live plane by setting this alongside the
+    host's ``gh`` auth.
+    """
+    return os.environ.get("COCKPIT_GITHUB_REPO") or None
+
+
 @router.get("/registry")
 async def registry() -> dict[str, Any]:
     """Recompute the registry from the authorities. Nothing is cached."""
@@ -37,6 +47,7 @@ async def registry() -> dict[str, Any]:
     return build_registry(
         db_path=paths.db_path,
         deploy_receipt_dir=_deploy_receipt_dir(),
+        github_repo=_github_repo(),
     )
 
 

@@ -32,10 +32,11 @@ nothing.
   (`UNREAD_PLANES`), never implied.
 - Bands in locked order — working / done / flawed / forgotten / needs-you — derived fail-closed
   from dispatcher status (`STATUS_BAND`); unmapped statuses land in the explicit `unclassified`
-  list, never guessed. `agent:needs-human` routes to the needs-you band — caveat: labels and URLs
-  are consumed-if-present from the sync mirror's `sync_state`, and production sync populates
-  neither until #4441 (audit F9 enrichment) lands, so the needs-you band and mirror out-links are
-  structurally empty in production today.
+  list, never guessed. `agent:needs-human` routes to the needs-you band. Labels and URLs are
+  consumed-if-present from the sync mirror's `sync_state`; production sync has populated both since
+  #4441 (=#4456, audit F9 enrichment) merged, and mirror-derived fields now name their own
+  `sync_state.last_pull_at` watermark instead of the dispatcher-store read instant (BOPS-COCKPIT-03,
+  #4450).
 - Eight-rung evidence spine per thread in locked order (intention · capability · epic · slice · PR
   · CI/sha · receipt · tried); rung class derives from key class, not content quality; intention,
   capability, epic, and tried render `absent` in this increment.
