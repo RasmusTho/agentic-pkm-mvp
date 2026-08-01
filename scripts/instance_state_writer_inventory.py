@@ -32,6 +32,7 @@ DOMAINS = ("dev", "native", "prod", "test")
 COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "test"}
 COMPOSE_WRITER_SERVICES = {"api", "heimdal-capture-watch", "watcher", "worker"}
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
+LAUNCHER_ROLES = {name.removesuffix(".sh") for name in LAUNCHER_SCRIPTS}
 TOKEN_RE = re.compile(r"^(?:linux|darwin|docker):[0-9a-f]{64}$")
 PYTHON_RE = re.compile(r"^python(?:3(?:\.\d+)*)?$")
 PF_KTHREAD = 0x00200000
@@ -1200,6 +1201,7 @@ def _native_writers(
     *,
     controller_pid: int,
     controller_start_token: str,
+    controller_pgid: int,
     linux_boot_id: str | None = None,
 ) -> list[dict[str, object]]:
     writers: list[dict[str, object]] = []
@@ -1211,6 +1213,17 @@ def _native_writers(
         if role is None:
             continue
         if process.pid == controller_pid and process.start_token == controller_start_token:
+            continue
+        # A running deployment forks subshells (e.g. `deploy_channel_compose()`
+        # runs its body in `( ... )`) that inherit the launcher argv but are not
+        # the controller pid itself. Those forks stay in the controller's own
+        # process group, so excluding launcher-role processes by process-group
+        # membership covers the controller's whole tree without exempting a
+        # foreign deployment, which runs in its own process group. Scope this
+        # to launcher roles only -- a non-launcher native writer (watcher,
+        # worker, uvicorn, celery, heimdal capture-watch) that happens to share
+        # a process group must still be reported.
+        if role in LAUNCHER_ROLES and process.pgid == controller_pgid:
             continue
         writers.append(
             {
@@ -1232,6 +1245,7 @@ def _snapshot(*, controller_pid: int, controller_start_token: str) -> dict[str, 
     for writer in _docker_writers() + _native_writers(
         controller_pid=controller_pid,
         controller_start_token=controller_start_token,
+        controller_pgid=controller.pgid,
         linux_boot_id=linux_boot_id,
     ):
         domain = str(writer.pop("domain"))
