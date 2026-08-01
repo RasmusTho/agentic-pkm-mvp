@@ -116,6 +116,18 @@ KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_le
 # with KERNEL-08 registered schemas. Lineage/receipt posture, NOT dispatched
 # commands — no `outbox_worker._dispatch_topic` branch; a future consumer
 # follows the KA-07 route pattern.
+# MVR-02 (#3856): the versioned instance-default-vault mutation topic
+# (docs/MULTI_VAULT_RUNTIME/RESOLVE_INSTANCE_DEFAULT_VAULT.md). Emitted by
+# app/instance/default_vault.py whenever the explicit `default_vault_binding_id`
+# is set, replaced, or cleared through the one production service behind the
+# authenticated API and the headless CLI. KERNEL-08 schema registered at
+# `schemas/events/instance.default_vault.changed.v1.schema.json`. Lineage
+# posture, NOT a dispatched command — no `outbox_worker._dispatch_topic` branch;
+# MVR-06 consumes this contract for compatibility rebind. The payload carries the
+# new registry revision and binding identity only: never a content-root path,
+# vault name, or other raw binding payload.
+INSTANCE_DEFAULT_VAULT_CHANGED = "instance.default_vault.changed"
+
 YOUTUBE_SOURCE_DISCOVERED = "youtube.source.discovered"
 ACQUISITION_REQUESTED = "acquisition.requested"
 ACQUISITION_STARTED = "acquisition.started"
@@ -198,6 +210,7 @@ HEIMDAL_MEETING_USER_NOTE_WRITTEN = "heimdal.meeting.user_note.written"
 HEIMDAL_MEETING_FINALIZED = "heimdal.meeting.finalized"
 
 __all__ = [
+    "INSTANCE_DEFAULT_VAULT_CHANGED",
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
     "INGEST_OBJECT_METADATA",

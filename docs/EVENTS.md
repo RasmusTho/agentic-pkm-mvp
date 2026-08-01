@@ -656,6 +656,32 @@ Contract:
 - `promote.*` and `promotion.*` names currently coexist; read them as belonging to the same broad
   transition family in the current runtime, not as proof of a finalized naming model.
 
+### `instance.default_vault.changed`
+
+Emitted when the explicit instance default vault is set, replaced, or cleared
+(MVR-02, #3856). Producer: `app/instance/default_vault.py`, the one service behind
+the authenticated `PUT`/`DELETE /api/instance/default-vault` route and the headless
+`python -m app.instance.runtime default-vault-set|default-vault-clear` commands.
+
+Payload (registered schema `schemas/events/instance.default_vault.changed.v1.schema.json`):
+- `event_version` (`integer`, always `1`)
+- `registry_revision` (`integer`) — the registry revision this mutation produced
+- `vault_binding_id` (`string|null`) — the new default, or `null` when cleared
+- `previous_vault_binding_id` (`string|null`)
+- `provenance` (`string|null`) — which MVR-02 producer recorded the default:
+  `explicit_default_command`, `legacy_last_active_migration`, `first_vault_initialize`,
+  `first_open_existing`, or `roll_forward_restored`
+
+Interpretation:
+- exactly one event per durable default mutation; the idempotency key is derived from
+  the registry revision, so a crash-retry of the same logical mutation yields one row,
+- lineage only — there is no `_dispatch_topic` branch; MVR-06 consumes this contract
+  for compatibility rebind,
+- reading the default never publishes,
+- **redaction is part of the contract**: the payload carries binding identity and the
+  registry revision only, never a content-root path, vault name, filesystem identity,
+  or any other raw binding payload.
+
 ### `index.embedding.requested`
 
 Requests that the indexer compute and upsert an embedding for an existing object.

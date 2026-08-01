@@ -10,7 +10,7 @@ import os
 import stat
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping, Protocol
@@ -42,7 +42,25 @@ REGISTRY_AUTHORITY_DORMANT = "dormant"
 REGISTRY_AUTHORITY_ACTIVE = "active"
 SCALAR_ROLLBACK_SCHEMA = "agentic-pkm.scalar-rollback-floor.v1"
 ROLL_FORWARD_LINEAGE_SCHEMA = "agentic-pkm.scalar-roll-forward-lineage.v1"
+DEFAULT_VAULT_MIGRATION_SCHEMA = "agentic-pkm.instance-default-vault-migration.v1"
 _TRANSACTION_SCHEMA = "agentic-pkm.instance-vault-registry-transaction.v1"
+
+# MVR-02 explicit-default provenance vocabulary. ``last_active_vault_ref`` is
+# interaction history and never becomes a default outside the one-time migration.
+DEFAULT_PROVENANCE_EXPLICIT = "explicit_default_command"
+DEFAULT_PROVENANCE_LEGACY_MIGRATION = "legacy_last_active_migration"
+DEFAULT_PROVENANCE_FIRST_INITIALIZE = "first_vault_initialize"
+DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING = "first_open_existing"
+DEFAULT_PROVENANCE_ROLL_FORWARD_RESTORE = "roll_forward_restored"
+DEFAULT_VAULT_PROVENANCES = frozenset(
+    {
+        DEFAULT_PROVENANCE_EXPLICIT,
+        DEFAULT_PROVENANCE_LEGACY_MIGRATION,
+        DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+        DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING,
+        DEFAULT_PROVENANCE_ROLL_FORWARD_RESTORE,
+    }
+)
 
 _APP_DIR_NAME = "Agentic PKM"
 _SETTINGS_FILENAME = "app-local.md"
@@ -53,6 +71,8 @@ _REGISTRY_FIELDS = {
     "revision",
     "appInstallId",
     "lastActiveVaultRef",
+    "defaultVaultBindingId",
+    "defaultVaultProvenance",
     "registrations",
     "removalTombstones",
     "transferLineage",
@@ -82,6 +102,103 @@ class RegistryParseError(RegistryError):
 
 class RegistrySecurityError(RegistryError):
     """Registry path permissions, ownership, or type violate the private-state contract."""
+
+
+class RegistryDefaultConflict(RegistryError):
+    """A mutation would leave the explicit instance default dangling or inferred."""
+
+
+class _Unchanged:
+    """Sentinel distinguishing "leave the default alone" from "clear the default"."""
+
+
+_UNCHANGED = _Unchanged()
+
+
+def _default_migration_applied(extensions: Mapping[str, Any]) -> bool:
+    marker = extensions.get("defaultVaultMigration")
+    return isinstance(marker, dict) and marker.get("schema") == DEFAULT_VAULT_MIGRATION_SCHEMA
+
+
+def _default_migration_marker(provenance: str | None, revision: int) -> dict[str, Any]:
+    return {
+        "schema": DEFAULT_VAULT_MIGRATION_SCHEMA,
+        "appliedAtRevision": revision,
+        "provenance": provenance or "none",
+    }
+
+
+def _binding_for_ref(
+    ref: str | None, registrations: Mapping[str, VaultRegistration]
+) -> str | None:
+    """Resolve a legacy ``lastActiveVaultRef`` to exactly one binding, else ``None``."""
+
+    if ref is None:
+        return None
+    matches = [
+        binding_id for binding_id, item in registrations.items() if item.ref == ref
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _materialize_legacy_last_active_default(
+    current: RegistrySnapshot,
+) -> RegistrySnapshot | None:
+    """Run the one-time MVR-02 default materialization, or return ``None``.
+
+    This is a migration, not a runtime precedence source: it fires at most once
+    per instance, only while no explicit default exists, and only when the legacy
+    ``last_active_vault_ref`` names exactly one current registration. Every later
+    last-active change leaves the default untouched.
+    """
+
+    if _default_migration_applied(current.extensions):
+        return None
+    if current.default_vault_binding_id is not None:
+        return None
+    binding_id = _binding_for_ref(current.last_active_vault_ref, current.registrations)
+    if binding_id is None:
+        return None
+    next_revision = current.revision + 1
+    extensions = copy.deepcopy(current.extensions)
+    extensions["defaultVaultMigration"] = _default_migration_marker(
+        DEFAULT_PROVENANCE_LEGACY_MIGRATION, next_revision
+    )
+    if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+        floor = extensions.get("scalarRollback")
+        if not isinstance(floor, dict):
+            raise RegistryError("active registry scalar rollback floor is invalid")
+        extensions["scalarRollback"] = {**floor, "forkRegistryRevision": next_revision}
+    return replace(
+        current,
+        revision=next_revision,
+        extensions=extensions,
+        default_vault_binding_id=binding_id,
+        default_vault_provenance=DEFAULT_PROVENANCE_LEGACY_MIGRATION,
+    )
+
+
+def _assert_default_is_resolvable(
+    default_vault_binding_id: str | None,
+    default_vault_provenance: str | None,
+    registrations: Mapping[str, VaultRegistration],
+) -> None:
+    """Fail closed on an unresolvable or unlabelled explicit instance default."""
+
+    if default_vault_binding_id is None:
+        if default_vault_provenance is not None:
+            raise RegistryDefaultConflict(
+                "default provenance is present without an explicit default binding"
+            )
+        return
+    if default_vault_binding_id not in registrations:
+        raise RegistryDefaultConflict(
+            f"explicit instance default is not registered: {default_vault_binding_id}"
+        )
+    if default_vault_provenance not in DEFAULT_VAULT_PROVENANCES:
+        raise RegistryDefaultConflict(
+            f"unsupported default provenance: {default_vault_provenance or '<missing>'}"
+        )
 
 
 @dataclass(frozen=True)
@@ -157,6 +274,8 @@ class RegistrySnapshot:
     transfer_lineage: tuple[TransferLineage, ...] = ()
     settings_rebind: dict[str, Any] | None = None
     extensions: dict[str, Any] = field(default_factory=dict)
+    default_vault_binding_id: str | None = None
+    default_vault_provenance: str | None = None
 
 
 class VaultRegistryStore:
@@ -230,7 +349,12 @@ class VaultRegistryStore:
             schema = _optional_str(document.frontmatter.get("schema"))
             if schema == CURRENT_REGISTRY_SCHEMA:
                 _assert_private(self.path, directory=False)
-                return self._snapshot_from_frontmatter(document.frontmatter)
+                current = self._snapshot_from_frontmatter(document.frontmatter)
+                materialized = _materialize_legacy_last_active_default(current)
+                if materialized is None:
+                    return current
+                self._write_locked(materialized)
+                return materialized
             if schema != APP_LOCAL_SCHEMA:
                 raise RegistryMigrationError(f"unsupported registry migration schema: {schema or '<missing>'}")
             migrated = self._migrate_legacy_frontmatter(document.frontmatter)
@@ -242,10 +366,28 @@ class VaultRegistryStore:
         registration: VaultRegistration,
         *,
         expected_revision: int | None = None,
+        first_default_provenance: str | None = None,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
+        """Register one binding, optionally as the atomic MVR-02 first default.
+
+        ``first_default_provenance`` records the new binding as the explicit
+        instance default **inside this same locked transaction**, and only when
+        the transaction itself proves the registry had no prior registration and
+        no prior default. A later picker, open, or last-active write never infers
+        a default, so the first-vault journey stays a distinct producer rather
+        than a fallback rule.
+        """
+
         _require_storage_mutation_capability(_capability)
         self._validate_registration(registration)
+        if first_default_provenance is not None and first_default_provenance not in {
+            DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+            DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING,
+        }:
+            raise RegistryError(
+                f"unsupported first-default provenance: {first_default_provenance}"
+            )
         with self._locked():
             self._assert_no_scalar_rollback_session_locked()
             current = (
@@ -259,8 +401,67 @@ class VaultRegistryStore:
             if existing is not None and existing != registration:
                 raise RegistryError(f"vault_binding_id collision: {registration.vault_binding_id}")
             self._assert_registration_unique(registration, registrations)
+            first_registration = not current.registrations
             registrations[registration.vault_binding_id] = registration
             updated = self._with_registrations(current, registrations)
+            if first_default_provenance is not None:
+                if not first_registration or current.default_vault_binding_id is not None:
+                    raise RegistryDefaultConflict(
+                        "the first-vault default producer requires an empty registry "
+                        "with no explicit default"
+                    )
+                updated = replace(
+                    updated,
+                    default_vault_binding_id=registration.vault_binding_id,
+                    default_vault_provenance=first_default_provenance,
+                )
+            self._write_locked(updated)
+            return updated
+
+    def set_instance_default(
+        self,
+        vault_binding_id: str | None,
+        *,
+        provenance: str = DEFAULT_PROVENANCE_EXPLICIT,
+        expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Set or clear the explicit instance default in one locked revision.
+
+        This never reads or writes ``last_active_vault_ref``: the default is
+        instance selection, last-active is interaction history, and MVR-02 keeps
+        them distinct. An unknown binding fails closed instead of falling through
+        to another registration.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        target = _optional_str(vault_binding_id)
+        if target is None:
+            resolved_provenance: str | None = None
+        else:
+            if provenance not in DEFAULT_VAULT_PROVENANCES:
+                raise RegistryError(f"unsupported default provenance: {provenance}")
+            resolved_provenance = provenance
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            if target is not None and target not in current.registrations:
+                raise RegistryError(f"unknown vault_binding_id: {target}")
+            updated = self._with_registrations(current, dict(current.registrations))
+            extensions = copy.deepcopy(updated.extensions)
+            # An explicit command is authoritative over the one-time legacy
+            # materialization, so a later bootstrap can never re-materialize a
+            # deliberately cleared default from last-active history.
+            extensions["defaultVaultMigration"] = _default_migration_marker(
+                resolved_provenance, updated.revision
+            )
+            updated = replace(
+                updated,
+                extensions=extensions,
+                default_vault_binding_id=target,
+                default_vault_provenance=resolved_provenance,
+            )
             self._write_locked(updated)
             return updated
 
@@ -363,6 +564,8 @@ class VaultRegistryStore:
                 transfer_lineage=copy.deepcopy(current.transfer_lineage),
                 settings_rebind=copy.deepcopy(current.settings_rebind),
                 extensions=extensions,
+                default_vault_binding_id=current.default_vault_binding_id,
+                default_vault_provenance=current.default_vault_provenance,
             )
             self._write_locked(updated)
             return updated
@@ -372,20 +575,78 @@ class VaultRegistryStore:
         vault_binding_id: str,
         *,
         expected_revision: int | None = None,
+        clear_default: bool = False,
+        replacement_default_binding_id: str | None = None,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
-        """Remove one dormant registration; production removal remains sealed."""
+        """Remove one registration; production removal remains sealed.
+
+        MVR-02 makes this transaction reference-safe: removing the binding that
+        is currently the explicit instance default is a conflict unless the same
+        locked transaction also supplies ``clear_default`` or exactly one valid
+        authorized replacement. The removal never silently promotes another
+        registration and never leaves a dangling default behind.
+        """
 
         _require_storage_mutation_capability(_capability)
+        replacement = _optional_str(replacement_default_binding_id)
+        if clear_default and replacement is not None:
+            raise RegistryDefaultConflict(
+                "default removal takes either an explicit clear or one replacement, not both"
+            )
         with self._locked():
             self._assert_no_scalar_rollback_session_locked()
             current = self._read_current_locked(recover=True)
             self._assert_revision(current, expected_revision)
             if vault_binding_id not in current.registrations:
                 raise RegistryError(f"unknown vault_binding_id: {vault_binding_id}")
+            floor = current.extensions.get("scalarRollback")
+            if (
+                current.authority == REGISTRY_AUTHORITY_ACTIVE
+                and isinstance(floor, dict)
+                and _optional_str(floor.get("targetVaultBindingId")) == vault_binding_id
+            ):
+                # Reference safety is not only about the MVR-02 default: removing
+                # the MVR-01C scalar rollback target would write a registry whose
+                # own floor no longer resolves. Fail closed instead; retargeting
+                # the floor belongs to its owner, not to this transaction.
+                raise RegistryDefaultConflict(
+                    "removing the MVR-01C scalar rollback target requires an "
+                    "explicit authorized floor retarget"
+                )
             registrations = dict(current.registrations)
             del registrations[vault_binding_id]
             updated = self._with_registrations(current, registrations)
+            removes_default = current.default_vault_binding_id == vault_binding_id
+            if replacement is not None:
+                if replacement == vault_binding_id or replacement not in registrations:
+                    raise RegistryDefaultConflict(
+                        "replacement default must be another current registration"
+                    )
+                if not removes_default:
+                    raise RegistryDefaultConflict(
+                        "a replacement default is only valid when removing the current default"
+                    )
+                updated = replace(
+                    updated,
+                    default_vault_binding_id=replacement,
+                    default_vault_provenance=DEFAULT_PROVENANCE_EXPLICIT,
+                )
+            elif removes_default:
+                if not clear_default:
+                    raise RegistryDefaultConflict(
+                        "removing the current instance default requires an explicit "
+                        "clear_default or one authorized replacement binding"
+                    )
+                updated = replace(
+                    updated,
+                    default_vault_binding_id=None,
+                    default_vault_provenance=None,
+                )
+            elif clear_default:
+                raise RegistryDefaultConflict(
+                    "clear_default is only valid when removing the current default"
+                )
             self._write_locked(updated)
             return updated
 
@@ -397,6 +658,8 @@ class VaultRegistryStore:
         transfer_lineage: tuple[TransferLineage, ...] | None = None,
         extensions: dict[str, Any] | None = None,
         expected_revision: int | None = None,
+        default_vault_binding_id: str | None | _Unchanged = _UNCHANGED,
+        default_vault_provenance: str = DEFAULT_PROVENANCE_EXPLICIT,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Atomically commit one lifecycle/transfer state transition."""
@@ -425,6 +688,24 @@ class VaultRegistryStore:
                     **floor,
                     "forkRegistryRevision": next_revision,
                 }
+            if isinstance(default_vault_binding_id, _Unchanged):
+                next_default = current.default_vault_binding_id
+                next_default_provenance = current.default_vault_provenance
+            else:
+                next_default = _optional_str(default_vault_binding_id)
+                next_default_provenance = (
+                    None if next_default is None else default_vault_provenance
+                )
+                if next_default_provenance is not None and (
+                    next_default_provenance not in DEFAULT_VAULT_PROVENANCES
+                ):
+                    raise RegistryError(
+                        f"unsupported default provenance: {next_default_provenance}"
+                    )
+            if next_default is not None and next_default not in validated:
+                raise RegistryDefaultConflict(
+                    "committed registration state would leave the instance default dangling"
+                )
             updated = RegistrySnapshot(
                 schema=current.schema,
                 authority=current.authority,
@@ -442,6 +723,8 @@ class VaultRegistryStore:
                 ),
                 settings_rebind=copy.deepcopy(current.settings_rebind),
                 extensions=next_extensions,
+                default_vault_binding_id=next_default,
+                default_vault_provenance=next_default_provenance,
             )
             self._write_locked(updated)
             return updated
@@ -463,17 +746,20 @@ class VaultRegistryStore:
         extensions = copy.deepcopy(current.extensions)
         extensions.update(
             {
-                "defaultVaultBindingId": default_vault_binding_id,
                 "dimensions": copy.deepcopy(dict(dimensions)),
                 "principalState": copy.deepcopy(dict(principal_state)),
                 "backgroundState": copy.deepcopy(dict(background_state)),
                 "runtimeFloors": copy.deepcopy(dict(runtime_floors)),
             }
         )
+        # MVR-02 promoted the default from an opaque 01B extension blob to a
+        # validated first-class registry field, so this 01B producer now writes
+        # the authoritative field instead of a parallel extension copy.
         return self.commit_state(
             registrations=dict(current.registrations),
             extensions=extensions,
             expected_revision=current.revision,
+            default_vault_binding_id=default_vault_binding_id,
             _capability=_capability,
         )
 
@@ -556,6 +842,8 @@ class VaultRegistryStore:
                 transfer_lineage=copy.deepcopy(current.transfer_lineage),
                 settings_rebind=copy.deepcopy(current.settings_rebind),
                 extensions=extensions,
+                default_vault_binding_id=current.default_vault_binding_id,
+                default_vault_provenance=current.default_vault_provenance,
             )
             self._write_locked(activated)
             return activated
@@ -786,6 +1074,17 @@ class VaultRegistryStore:
                 **copy.deepcopy(floor),
                 "forkRegistryRevision": current.revision + 1,
             }
+            # MVR-02: the scalar previous image never carried the explicit
+            # default, so roll-forward restores the authoritative new-schema
+            # value rather than inferring one from the returning last-active
+            # projection. The merge verifies the binding still exists first; a
+            # default whose binding is gone is cleared atomically instead of
+            # being left dangling or silently repointed at another registration.
+            merged_default = current.default_vault_binding_id
+            merged_default_provenance = current.default_vault_provenance
+            if merged_default is not None and merged_default not in registrations:
+                merged_default = None
+                merged_default_provenance = None
             merged = RegistrySnapshot(
                 schema=current.schema,
                 authority=current.authority,
@@ -797,6 +1096,8 @@ class VaultRegistryStore:
                 transfer_lineage=copy.deepcopy(current.transfer_lineage),
                 settings_rebind=copy.deepcopy(current.settings_rebind),
                 extensions=extensions,
+                default_vault_binding_id=merged_default,
+                default_vault_provenance=merged_default_provenance,
             )
             self._write_locked(merged, retire_scalar_session=True)
             return merged
@@ -863,6 +1164,8 @@ class VaultRegistryStore:
             transfer_lineage=copy.deepcopy(current.transfer_lineage),
             settings_rebind=copy.deepcopy(current.settings_rebind),
             extensions=extensions,
+            default_vault_binding_id=current.default_vault_binding_id,
+            default_vault_provenance=current.default_vault_provenance,
         )
 
     @contextmanager
@@ -1281,6 +1584,8 @@ class VaultRegistryStore:
                 "revision": snapshot.revision,
                 "appInstallId": snapshot.app_install_id,
                 "lastActiveVaultRef": snapshot.last_active_vault_ref,
+                "defaultVaultBindingId": snapshot.default_vault_binding_id,
+                "defaultVaultProvenance": snapshot.default_vault_provenance,
                 "registrations": {
                     binding_id: _registration_to_frontmatter(item)
                     for binding_id, item in sorted(snapshot.registrations.items())
@@ -1360,6 +1665,9 @@ class VaultRegistryStore:
         settings_rebind = frontmatter.get("settingsRebind")
         if settings_rebind is not None and not isinstance(settings_rebind, dict):
             raise RegistryError("settingsRebind must be a mapping")
+        default_binding_id = _optional_str(frontmatter.get("defaultVaultBindingId"))
+        default_provenance = _optional_str(frontmatter.get("defaultVaultProvenance"))
+        _assert_default_is_resolvable(default_binding_id, default_provenance, registrations)
         return RegistrySnapshot(
             schema=schema,
             authority=authority,
@@ -1371,6 +1679,8 @@ class VaultRegistryStore:
             transfer_lineage=transfer_lineage,
             settings_rebind=copy.deepcopy(settings_rebind),
             extensions=extensions,
+            default_vault_binding_id=default_binding_id,
+            default_vault_provenance=default_provenance,
         )
 
     def _migrate_legacy_frontmatter(self, frontmatter: Mapping[str, Any]) -> RegistrySnapshot:
@@ -1449,16 +1759,49 @@ class VaultRegistryStore:
             "settingsRebind",
             "settingsRebindV1",
             "settings_rebind.v1",
+            "defaultVaultBindingId",
         }
+        last_active_vault_ref = _optional_str(frontmatter.get("lastActiveVaultRef"))
+        extensions = {
+            key: copy.deepcopy(value)
+            for key, value in frontmatter.items()
+            if key not in known_legacy_fields
+        }
+        # A legacy payload may already carry an explicit default. It is untrusted:
+        # binding identity is minted during this migration, so it is adopted only
+        # when it names exactly one migrated registration. Otherwise the raw value
+        # is preserved as lineage rather than silently dropped, and the one-time
+        # last-active materialization below decides the default instead.
+        legacy_default = _optional_str(frontmatter.get("defaultVaultBindingId"))
+        default_binding_id: str | None = None
+        default_provenance: str | None = None
+        if legacy_default is not None and legacy_default in registrations:
+            default_binding_id = legacy_default
+            default_provenance = DEFAULT_PROVENANCE_EXPLICIT
+        elif legacy_default is not None:
+            extensions["legacyDefaultVaultBindingId"] = legacy_default
+        if default_binding_id is None:
+            # MVR-02 one-time materialization: a picker-only legacy install keeps
+            # its restart journey by promoting a valid last-active reference to the
+            # explicit default exactly once, with recorded provenance.
+            default_binding_id = _binding_for_ref(last_active_vault_ref, registrations)
+            default_provenance = (
+                DEFAULT_PROVENANCE_LEGACY_MIGRATION if default_binding_id else None
+            )
+        extensions["defaultVaultMigration"] = _default_migration_marker(
+            default_provenance, 1
+        )
         return RegistrySnapshot(
             schema=CURRENT_REGISTRY_SCHEMA,
             authority=REGISTRY_AUTHORITY_DORMANT,
             revision=1,
             app_install_id=app_install_id,
-            last_active_vault_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
+            last_active_vault_ref=last_active_vault_ref,
             registrations=registrations,
             settings_rebind=rewritten_rebind,
-            extensions={key: copy.deepcopy(value) for key, value in frontmatter.items() if key not in known_legacy_fields},
+            extensions=extensions,
+            default_vault_binding_id=default_binding_id,
+            default_vault_provenance=default_provenance,
         )
 
 
@@ -2055,11 +2398,19 @@ def _is_sha256(value: str) -> bool:
 __all__ = [
     "APP_LOCAL_SCHEMA",
     "CURRENT_REGISTRY_SCHEMA",
+    "DEFAULT_PROVENANCE_EXPLICIT",
+    "DEFAULT_PROVENANCE_FIRST_INITIALIZE",
+    "DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING",
+    "DEFAULT_PROVENANCE_LEGACY_MIGRATION",
+    "DEFAULT_PROVENANCE_ROLL_FORWARD_RESTORE",
+    "DEFAULT_VAULT_MIGRATION_SCHEMA",
+    "DEFAULT_VAULT_PROVENANCES",
     "AppLocalSettings",
     "AppLocalSettingsStore",
     "CapabilityNotReadyError",
     "KnownVaultRef",
     "RegistryActivationProof",
+    "RegistryDefaultConflict",
     "RegistryError",
     "RegistryMigrationError",
     "RegistryRevisionConflict",

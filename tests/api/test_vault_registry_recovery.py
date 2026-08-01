@@ -54,7 +54,11 @@ def test_populated_registry_corruption_never_reseeds_empty(tmp_path) -> None:
 
     assert recovered.revision == migrated.revision
     assert len(recovered.registrations) == 2
-    assert recovered.extensions["defaultVaultBindingId"] == "future-default"
+    # MVR-02 owns ``defaultVaultBindingId`` as a validated registry field. A legacy
+    # value that names no migrated registration is never adopted (that would be a
+    # dangling default) and is never silently dropped either: it survives as lineage.
+    assert recovered.default_vault_binding_id is None
+    assert recovered.extensions["legacyDefaultVaultBindingId"] == "future-default"
     assert recovered.extensions["dimensions"] == {"focus": ["future-default"]}
     assert recovered.extensions["backgroundIntent"] == {"mode": "explicit"}
 

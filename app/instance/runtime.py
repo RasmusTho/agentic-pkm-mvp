@@ -40,10 +40,17 @@ from app.instance.scalar_rollback_guard import (
     ScalarRollbackGuardReceipt,
     preflight_scalar_rollback_guard,
 )
+from app.instance.default_vault import (
+    InstanceDefaultVaultService,
+    VaultSelectionError,
+)
 from app.instance.vault_registry import (
     AppLocalSettings,
     AppLocalSettingsStore,
     CapabilityNotReadyError,
+    DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+    DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING,
+    RegistryDefaultConflict,
     RegistryError,
     RegistryActivationProof,
     RegistrySnapshot,
@@ -237,7 +244,13 @@ class InstanceRegistryRuntime:
             "the active production picker"
         )
 
-    def production_register(self, path: Path, *, producer: str) -> VaultRegistration:
+    def production_register(
+        self,
+        path: Path,
+        *,
+        producer: str,
+        first_default_provenance: str | None = None,
+    ) -> VaultRegistration:
         if producer not in {"picker", "api", "cli", "import", "bootstrap", "direct-service"}:
             raise RegistryError("unknown registry producer")
         with self._bootstrap_locked():
@@ -251,7 +264,110 @@ class InstanceRegistryRuntime:
                 producer=producer,
                 current=current,
                 allow_same_channel_nested=producer == "picker",
+                first_default_provenance=first_default_provenance,
             )
+
+    def register_first_vault(
+        self,
+        path: Path,
+        *,
+        provenance: str,
+    ) -> VaultRegistration:
+        """MVR-02 first-vault default producer for a fresh no-vault instance.
+
+        A no-vault instance that initializes its first vault, or first opens an
+        existing initialized/uninitialized root, records that stable binding as
+        its explicit default inside the same locked registration transaction —
+        exactly once, and only when that transaction itself proves there were no
+        prior registrations and no prior default. A later open, picker change, or
+        last-active write never replaces it, and explicitly initializing a
+        provisional binding later completes its identity through
+        :meth:`complete_initialization` without replacing either the binding or
+        this default.
+
+        The env bootstrap adapter deliberately does **not** route here: an env
+        `VAULT_ROOT` stays an explicit legacy bootstrap, never a hidden default.
+
+        MVR-05B owns the authenticated request ingress that reaches this producer
+        from the picker; MVR-02 owns the transaction and its atomicity.
+        """
+
+        if provenance not in {
+            DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+            DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING,
+        }:
+            raise RegistryError(f"unsupported first-vault provenance: {provenance}")
+        with self._bootstrap_locked():
+            current = self.registry.load()
+            if current.registrations or current.default_vault_binding_id is not None:
+                raise RegistryDefaultConflict(
+                    "the first-vault default producer requires an empty registry "
+                    "with no explicit default"
+                )
+            self._require_established_ownership(current)
+            return self._register_first_locked(
+                path,
+                current=current,
+                first_default_provenance=provenance,
+            )
+
+    def default_vault_service(self) -> InstanceDefaultVaultService:
+        """Return the one service both production default producers share."""
+
+        return InstanceDefaultVaultService(self.registry)
+
+    def _register_first_locked(
+        self,
+        path: Path,
+        *,
+        current: RegistrySnapshot,
+        first_default_provenance: str,
+    ) -> VaultRegistration:
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        self.registry.require_no_scalar_rollback_session()
+        root_identity = resolve_filesystem_root_identity(path)
+        canonical_root = Path(root_identity.canonical_path)
+        pending = (
+            self.ledger.pending_registration(
+                channel_id=self.layout.channel_id,
+                root=canonical_root,
+            )
+            if self.ledger.path.is_file() and self.ledger.key_path.is_file()
+            else None
+        )
+        registration = self._new_registration(
+            canonical_root,
+            vault_binding_id=(
+                pending.vault_binding_id if pending is not None else None
+            ),
+            provenance=first_default_provenance,
+        )
+        validate_registry_disjoint_from_content(
+            self.layout.registry_path,
+            [Path(registration.path)],
+        )
+        self.ledger.reserve(
+            channel_id=self.layout.channel_id,
+            vault_binding_id=registration.vault_binding_id,
+            root=Path(registration.path),
+            allow_same_channel_nested=False,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        # Registration and the explicit default land in one locked registry
+        # revision: a crash between them would otherwise leave a registered
+        # binding with no restart source, or a default with no registration.
+        self.registry.register(
+            registration,
+            expected_revision=current.revision,
+            first_default_provenance=first_default_provenance,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        self.ledger.activate(
+            registration.vault_binding_id,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        return registration
 
     def _register_active_locked(
         self,
@@ -260,6 +376,7 @@ class InstanceRegistryRuntime:
         producer: str,
         current: RegistrySnapshot,
         allow_same_channel_nested: bool = False,
+        first_default_provenance: str | None = None,
     ) -> VaultRegistration:
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
@@ -305,6 +422,7 @@ class InstanceRegistryRuntime:
         self.registry.register(
             registration,
             expected_revision=current.revision,
+            first_default_provenance=first_default_provenance,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         self.ledger.activate(
@@ -579,6 +697,7 @@ class InstanceRegistryRuntime:
         root: Path,
         *,
         vault_binding_id: str | None = None,
+        provenance: str = "legacy_env_bootstrap",
     ) -> VaultRegistration:
         vault_id, local_instance_id = _read_vault_identity(root)
         identity = resolve_filesystem_root_identity(root)
@@ -592,7 +711,7 @@ class InstanceRegistryRuntime:
             extensions={
                 "status": "initialized" if vault_id is not None else "uninitialized",
                 "contentEpoch": 1,
-                "provenance": "legacy_env_bootstrap",
+                "provenance": provenance,
             },
         )
 
@@ -2715,6 +2834,29 @@ def _finish_instance_state_deployment_locked(
     return _complete_instance_state_deployment_cleanup(ownership_root)
 
 
+def _default_vault_command(args: argparse.Namespace) -> int:
+    """Headless MVR-02 get/set/clear through the same service the API uses.
+
+    Prints only the redacted receipt: binding identity, provenance, and registry
+    revision. No content-root path or other raw binding payload leaves the
+    instance through this surface.
+    """
+
+    service = InstanceDefaultVaultService(VaultRegistryStore(Path(args.registry_path)))
+    try:
+        if args.command == "default-vault-get":
+            receipt = service.get()
+        elif args.command == "default-vault-set":
+            receipt = service.set(args.vault_binding_id)
+        else:
+            receipt = service.clear()
+    except (VaultSelectionError, RegistryDefaultConflict) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
+        return 1
+    print(json.dumps({"ok": True, **receipt.as_dict()}, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2780,7 +2922,18 @@ def main(argv: list[str] | None = None) -> int:
     prove.add_argument("--channel", required=True)
     prove.add_argument("--host-global-root", type=Path, required=True)
     prove.add_argument("--inventory-path", type=Path, required=True)
+    for name in ("default-vault-get", "default-vault-set", "default-vault-clear"):
+        command = subparsers.add_parser(name)
+        command.add_argument("--registry-path", type=Path, required=True)
+        if name == "default-vault-set":
+            command.add_argument("--vault-binding-id", required=True)
     args = parser.parse_args(argv)
+    if args.command in {
+        "default-vault-get",
+        "default-vault-set",
+        "default-vault-clear",
+    }:
+        return _default_vault_command(args)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)
     if args.command == "preflight":
