@@ -121,6 +121,16 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "committed before this runs, the JSONL append precedes the DB branch, and the "
         "caller discards the result"
     ),
+    ("app/instance/default_vault.py", "_emit_default_mutation_event"): (
+        "MVR-02 (#3856): the compensating sink is the durable registry revision itself. "
+        "set_instance_default commits the new default to the instance-state volume BEFORE "
+        "this runs, and the Multi-Vault Runtime cross-task invariant is that background "
+        "supervisors reconcile durable registry revisions, never event delivery — wake-up "
+        "hints are explicitly not the transition authority. No caller derives a success "
+        "signal from the return. Classifying it required_db=True would make the headless "
+        "`python -m app.instance.runtime default-vault-set` command unusable on a bare "
+        "instance that has no configured outbox at all"
+    ),
 }
 
 

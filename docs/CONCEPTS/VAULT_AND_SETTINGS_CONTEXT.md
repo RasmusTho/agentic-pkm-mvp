@@ -194,6 +194,35 @@ Examples:
 
 On vault switch, services should stop old watchers/jobs, clear cached vault paths, reload settings, emit or handle `vault.changed`, and restart only when the next context is selected and permissions allow it.
 
+### Which vault a service starts on (shipped, MVR-02 / #3856)
+
+Gating answers *may this service run*. It does not answer *against which binding*. That second
+question is now resolved by one explicit instance-level resolver
+(`app/instance/default_vault.py`), not by interaction history:
+
+- Precedence is **one-request override → retained session selection → explicit
+  `default_vault_binding_id` → explicit legacy bootstrap adapter → no-vault**, and the resolved
+  selection reports which branch produced it. MVR-05 owns the HTTP carriers.
+- An unknown, removed, or unauthorized explicit selection **fails closed**. A service must
+  surface the selection failure rather than degrade to `last_active_vault_ref`, another registry
+  entry, the working directory, or `./vault` — a silent substitution is a write against the
+  wrong vault. No-vault stays a valid, truthful, idle result.
+- `default_vault_binding_id` is durable instance-local mechanical state on the MVR-01
+  instance-state volume, distinct from `last_active_vault_ref` (history) and from the
+  `VAULT_ROOT` env bootstrap (deployment). It survives restart and force-recreate; a
+  request/session selection does not survive unless its own session contract says so, and after
+  session loss the explicit default (or no-vault) is what becomes visible rather than a guessed
+  prior selection.
+- **Selection is not authority.** Resolving a binding never widens permissions: the gating rules
+  above, the write guard, and the GOV boundary still apply per binding before any content use.
+  The default is instance selection only — not authority, not UI state.
+- Setting or clearing the default is an authenticated administrative act through the API or the
+  headless CLI, and it publishes exactly one versioned `instance.default_vault.changed` event
+  (`docs/EVENTS.md`). It never mutates `last_active_vault_ref`.
+
+Full terminology, producers, provenance vocabulary, and the one-time last-active migration live
+in `docs/ENVIRONMENTS.md :: Vault terminology`.
+
 Suggested event payload:
 
 ```json

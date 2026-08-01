@@ -610,3 +610,114 @@ def test_roll_forward_recovers_committed_journal_before_cleanup(
     assert recovered.revision == merged.revision
     assert not runtime.registry.transaction_path.exists()
     assert not runtime.registry.scalar_rollback_session_path.exists()
+
+
+def test_mvr02_default_survives_scalar_projection_round_trip(tmp_path) -> None:
+    """MVR-02 (#3856): the explicit default is new-schema-only lineage.
+
+    Contract: docs/MULTI_VAULT_RUNTIME/RESOLVE_INSTANCE_DEFAULT_VAULT.md.
+    The scalar previous image sees only the already validated explicit rollback
+    target and never an inferred default; roll-forward restores the authoritative
+    ``default_vault_binding_id`` from the new-schema lineage and still rejects a
+    divergent or ambiguous scalar mutation.
+    """
+
+    from app.instance.default_vault import InstanceDefaultVaultService
+    from app.instance.vault_registry import (
+        DEFAULT_PROVENANCE_EXPLICIT,
+        _split_rendered,
+    )
+
+    runtime, first = _active_runtime(tmp_path)
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    second = runtime.production_register(second_root, producer="api")
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    service = InstanceDefaultVaultService(
+        runtime.registry,
+        capability=_STORAGE_MUTATION_CAPABILITY,
+        emit_event=lambda receipt: "",
+    )
+    service.set(second.vault_binding_id)
+    before = runtime.registry.load()
+    assert before.default_vault_binding_id == second.vault_binding_id
+
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _start_scalar_runtime(runtime, first, Path(first.path), rollback_path)
+
+    # The scalar projection carries the validated rollback target only. It never
+    # gains a default field, and the default is never converted into last-active.
+    projected_frontmatter, _ = _split_rendered(
+        rollback_path.read_text(encoding="utf-8"), rollback_path
+    )
+    assert "defaultVaultBindingId" not in projected_frontmatter
+    assert "defaultVaultProvenance" not in projected_frontmatter
+    assert projected_frontmatter["lastActiveVaultRef"] == first.ref
+    assert set(projected_frontmatter["knownVaults"]) == {first.ref}
+    assert projected_frontmatter["mvrRollbackBindingId"] == first.vault_binding_id
+    # The authoritative registry is untouched by projection.
+    assert runtime.registry.load().default_vault_binding_id == second.vault_binding_id
+
+    # The previous image mutates only what it can see.
+    rollback = AppLocalSettingsStore(rollback_path)
+    settings = rollback.load()
+    selected = settings.known_vaults[first.ref]
+    settings.known_vaults[first.ref] = KnownVaultRef(
+        ref=selected.ref,
+        path=selected.path,
+        vault_id=selected.vault_id,
+        vault_name="Renamed on the previous image",
+        local_instance_id=selected.local_instance_id,
+        last_opened_at="2026-07-31T00:00:00Z",
+    )
+    rollback.save(settings)
+
+    proof, owner_inventory, proof_path = _deployment_authority(runtime, rollback_path)
+    assert (
+        _roll_forward_scalar_rollback(
+            channel=runtime.layout.channel_id,
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=owner_inventory,
+            quiescence_proof_path=proof_path,
+        )
+        == 0
+    )
+    merged = runtime.registry.load()
+
+    # Roll-forward verified the default's binding still exists and restored it
+    # unchanged, rather than inferring one from the returning last-active value.
+    assert merged.default_vault_binding_id == second.vault_binding_id
+    assert merged.default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
+    assert merged.registrations[first.vault_binding_id].vault_name == (
+        "Renamed on the previous image"
+    )
+    assert merged.last_active_vault_ref == first.ref
+    assert merged.last_active_vault_ref != second.ref
+    _finish_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=rollback_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "mvr02-backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    # A divergent scalar mutation is still rejected, and the default is unchanged.
+    divergent = tmp_path / "rollback-divergent" / "app-local.md"
+    _start_scalar_runtime(runtime, first, Path(first.path), divergent)
+    divergent_store = AppLocalSettingsStore(divergent)
+    divergent_settings = divergent_store.load()
+    divergent_settings.known_vaults["path:/outside"] = KnownVaultRef(
+        ref="path:/outside", path="/outside"
+    )
+    divergent_store.save(divergent_settings)
+    payload_before = runtime.layout.registry_path.read_bytes()
+    with pytest.raises(RegistryError, match="escaped the selected binding"):
+        runtime.merge_previous_scalar_image(divergent)
+    assert runtime.layout.registry_path.read_bytes() == payload_before
+    assert runtime.registry.load().default_vault_binding_id == second.vault_binding_id

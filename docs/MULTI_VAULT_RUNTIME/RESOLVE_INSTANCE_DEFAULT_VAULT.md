@@ -161,6 +161,24 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 - `pytest -q -m "not pg"`
 - `ruff check app tests`
 
+## Delivered Scope Boundary (recorded at delivery, #3856)
+
+MVR-02 owns the first-vault default **transaction** and its atomicity:
+`InstanceRegistryRuntime.register_first_vault` records the new binding as the
+explicit default inside the same locked registration revision, only when that
+transaction itself proves an empty registry with no prior default. It does **not**
+own the request ingress that reaches that producer from the picker — that is
+MVR-05B's single-use authenticated bootstrap precondition, per
+`README.md :: Identity and selection`. Until 05B lands, the producer has no
+production caller and the first-vault acceptance criteria are proven against the
+production callable rather than through the shipped picker path.
+
+Likewise, the one-time last-active materialization lives in the legacy
+`design-handoff.app-local.v1` → registry schema migration and nowhere else, as
+"during the one-time schema migration only" requires. A registry already on the
+current schema is never given an inferred default: a second materialization arm
+would be a standing last-active precedence rule wearing a migration's name.
+
 ## Restart / Durability Posture
 
 `default_vault_binding_id` survives restart independently of later last-active history. The one-time

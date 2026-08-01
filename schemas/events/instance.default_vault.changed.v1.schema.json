@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/instance.default_vault.changed.v1.schema.json",
+  "title": "instance.default_vault.changed payload (v1)",
+  "description": "Payload of the instance.default_vault.changed outbox event (MVR-02, #3856, docs/MULTI_VAULT_RUNTIME/RESOLVE_INSTANCE_DEFAULT_VAULT.md). Producer: app.instance.default_vault.InstanceDefaultVaultService, the one service behind the authenticated Companion API and the headless CLI get/set/clear commands. Emitted exactly once per durable default mutation (set, replace, or clear). Idempotency key basis: (topic, registry_revision, 'instance-default-vault-changed-v1') so a crash-retry of the same logical mutation cannot produce a second row. Lineage posture: no dispatched consumer; MVR-06 consumes this contract for compatibility rebind. Redaction: the payload carries binding identity and the new registry revision only, never a content-root path, vault name, filesystem identity, or any other raw binding payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_version", "registry_revision", "vault_binding_id"],
+  "properties": {
+    "event_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Payload contract version carried inside the event, independent of the registry filename suffix."
+    },
+    "registry_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The registry revision produced by this mutation."
+    },
+    "vault_binding_id": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "The binding that is now the explicit instance default, or null when the default was cleared."
+    },
+    "previous_vault_binding_id": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "The binding that was the explicit instance default before this mutation, or null when there was none."
+    },
+    "provenance": {
+      "type": ["string", "null"],
+      "enum": [
+        "explicit_default_command",
+        "legacy_last_active_migration",
+        "legacy_unlabelled_adoption",
+        "first_vault_initialize",
+        "first_open_existing",
+        "roll_forward_restored",
+        null
+      ],
+      "description": "Which MVR-02 producer recorded the current default; null when the default is cleared."
+    }
+  }
+}

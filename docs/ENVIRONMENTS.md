@@ -41,6 +41,75 @@ The four senses:
 - A **set-but-missing** content vault is a misconfiguration that fails loud (`VaultRootMisconfiguredError`), not a no-vault state.
 - Vault-settings and the test vault are unaffected by the no-vault-at-initiation contract; only the runtime binding may legitimately be absent at boot.
 
+<a id="instance-default-vault"></a>
+
+### Instance default vault (shipped, MVR-02 / #3856)
+
+A fourth binding-adjacent concept now exists alongside the four senses above, and it is
+**not** a fifth sense of "vault" — it names *which registered binding this instance starts
+on*, not what a vault is:
+
+- **`default_vault_binding_id`** — an explicit, durable, nullable field on the versioned
+  instance vault registry (`app/instance/vault_registry.py`), living on the MVR-01
+  instance-state volume. It survives restart and pinned-image force-recreate and resolves
+  identically in every enabled registry consumer (API, worker, watcher, Heimdal capture
+  watcher).
+- **It is distinct from `last_active_vault_ref`**, which stays interaction history, and from
+  the **`VAULT_ROOT` runtime binding**, which stays a deployment bootstrap. Neither is
+  promoted into the default at runtime. Conflating them is what made restarts
+  nondeterministic and turned an invalid explicit selection into a silent read/write against
+  the wrong vault.
+
+**Selection precedence (shipped resolver, `app/instance/default_vault.py`).** One resolver
+applies, in order: one-request override → retained session selection → instance default →
+explicit legacy bootstrap adapter → no-vault. It reports which branch won, and reports a
+compatibility `DEFAULT_VAULT_ID` win distinctly from a durable operator-set default so "an env var
+resolved this" is never mistaken for "the instance is configured this way". An explicit
+selection that is unknown, removed, or unauthorized **fails closed** — it never falls through
+to last-active, another registry entry, the working directory, or `./vault`. No-vault remains
+a valid result. MVR-05 owns the HTTP carriers (`X-Active-Context-Override` and
+`X-Active-Context-Session`); MVR-02 accepts their parsed values as distinct resolver inputs.
+
+**How a default comes to exist.** Only through explicit producers, each provenance-tagged:
+
+- `explicit_default_command` — the authenticated `GET`/`PUT`/`DELETE /api/instance/default-vault`
+  route or the headless `python -m app.instance.runtime default-vault-get|-set|-clear`
+  commands. Both go through one service, one locked registry transaction, and one redacted
+  receipt, and neither ever writes `last_active_vault_ref`. **This is the only writer of the
+  default.** Lifecycle, transfer, and mechanical instance-state commits carry it through unchanged
+  and refuse a registration set that would orphan it, so no unrelated write can wipe a durable
+  operator default or forge its provenance. A no-op set/clear is not a mutation: it burns no
+  revision and publishes no event.
+- `legacy_last_active_migration` — a **one-time** registry migration that preserves an existing
+  picker-only install's restart journey by promoting a valid `last_active_vault_ref` to the
+  default when no default exists. It lives in the legacy `design-handoff.app-local.v1` → registry
+  schema migration and nowhere else, so the schema transition itself is the once-only guarantee.
+  A registry already on the current schema is never given an inferred default, and every
+  subsequent last-active change leaves the default untouched. A value carried over from a
+  pre-MVR-02 image (an unlabelled `defaultVaultBindingId`) is untrusted: it is adopted only when it
+  names exactly one current registration — under its own `legacy_unlabelled_adoption` provenance,
+  because no operator command set it — and is otherwise preserved as `legacyDefaultVaultBindingId`
+  lineage. It is never dropped, and never a reason to refuse to load an otherwise intact registry.
+- `first_vault_initialize` / `first_open_existing` — the first-vault producers. On a registry
+  that the locked transaction itself proves has no prior registration and no prior default,
+  registration and default land in the same revision, exactly once. A later open, picker
+  change, or last-active write never replaces it, and explicitly initializing a provisional
+  read-only binding completes its identity without replacing the binding or the default.
+  MVR-05B owns the authenticated request ingress that reaches this producer from the picker, so
+  until that slice lands this producer has no production caller.
+- `roll_forward_restored` — reserved for the scalar rollback lineage.
+
+**Compatibility and bootstrap posture.** The env bootstrap adapter deliberately does **not**
+create a default: `VAULT_ROOT` stays an explicit legacy bootstrap, not a hidden default. A
+compatibility `DEFAULT_VAULT_ID` is an untrusted *logical* vault-ID lookup that resolves only
+when that logical ID maps to exactly one local binding, and otherwise fails closed. Removing
+the registration that is currently the default returns a conflict unless the same locked
+transaction supplies either an explicit clear or one valid authorized replacement binding —
+never a silently substituted or dangling default. Every mutation publishes exactly one
+versioned `instance.default_vault.changed` event (see
+[EVENTS.md](EVENTS.md#instancedefault_vaultchanged)) carrying the new registry revision and
+no raw binding payload.
+
 <a id="vault-init"></a>
 
 ### Vault initialization and the personal-vault-write constraint

@@ -4318,11 +4318,17 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
         watcher_vault_path=root,
     )
     runtime.registry.set_extension_state(
-        default_vault_binding_id="binding-default",
-        dimensions={"d": ["binding-default"]},
+        dimensions={"d": [registration.vault_binding_id]},
         principal_state={"operator": "local"},
         background_state={"mode": "compatibility"},
         runtime_floors={"registry": "01b"},
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    # MVR-02 (#3856): the explicit instance default is a first-class registry
+    # field now, so volume loss + verified restore must bring it back too — not
+    # just the 01B mechanical extension state.
+    runtime.registry.set_instance_default(
+        registration.vault_binding_id,
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     _create_canonical_backup(
@@ -4372,16 +4378,23 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
         owner_receipt_path=owner_receipt,
     )
     assert restored.registry_checksum == expected["registry_checksum"]
-    assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
+    restored_snapshot = runtime.registry.load()
+    assert restored_snapshot.extensions["runtimeFloors"] == {"registry": "01b"}
+    assert restored_snapshot.default_vault_binding_id == registration.vault_binding_id
+    assert restored_snapshot.default_vault_provenance == "explicit_default_command"
     assert runtime.ledger.load().leases
     assert not stale_final.exists()
     assert not stale_checksum.exists()
 
     layout.registry_path.unlink()
-    assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
+    assert runtime.registry.load().default_vault_binding_id == (
+        registration.vault_binding_id
+    )
     layout.registry_path.write_bytes(b"torn registry write")
     os.chmod(layout.registry_path, 0o600)
-    assert runtime.registry.load().extensions["runtimeFloors"] == {"registry": "01b"}
+    recovered_snapshot = runtime.registry.load()
+    assert recovered_snapshot.extensions["runtimeFloors"] == {"registry": "01b"}
+    assert recovered_snapshot.default_vault_binding_id == registration.vault_binding_id
 
     (tmp_path / "backup" / "ownership-key.json").unlink()
     with pytest.raises(InstanceStatePreflightError, match="complete ledger/key"):
@@ -4427,7 +4440,6 @@ def test_prod_restore_rejects_noncanonical_quiescence_authority_without_mutation
         host_global_root=runtime.ledger.root,
     )
     runtime.registry.set_extension_state(
-        default_vault_binding_id="new-default",
         dimensions={"new": [registration.vault_binding_id]},
         principal_state={"operator": "changed"},
         background_state={"mode": "changed"},
@@ -4559,8 +4571,7 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
         watcher_vault_path=target_root,
     )
     target_runtime.registry.set_extension_state(
-        default_vault_binding_id="prod-default",
-        dimensions={"prod": ["prod-default"]},
+        dimensions={"prod": [target_registration.vault_binding_id]},
         principal_state={"operator": "prod"},
         background_state={"mode": "prod"},
         runtime_floors={"registry": "prod"},

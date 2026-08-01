@@ -164,11 +164,17 @@ promote public internet readiness.
   smoke, ADR-index, and docs-guard paths remain.
 - The runbook uses affected-subsystem PR tests plus curated fitness gates before merges; the leased full non-PG/alpha-excluded suite is reserved for an explicit contract or cross-system blast-radius escalation.
 - PR-unit test selection maps Heimdal/Mimer implementation, contract-doc, and test paths to the scoped `tests/heimdal` and `tests/knowledge_acquisition` suites; an unmapped changed surface fails selection before pytest rather than producing a false-green run.
-- The dormant instance-local multi-vault registry core lives in `app/instance/vault_registry.py` and
-  is covered by the `vault` PR-unit suite through explicit ownership of `app/instance/**` and
-  `tests/instance/**`. It is a persistence/migration seam only: the legacy scalar app-local setting
-  remains runtime authority until the later default-selection and request-scoped resolution slices
-  ship. Unmapped changed surfaces continue to fail closed.
+- The instance-local multi-vault registry core lives in `app/instance/vault_registry.py` and is
+  covered by the `vault` PR-unit suite through explicit ownership of `app/instance/**` and
+  `tests/instance/**`. The registry stays `authority: dormant` until a deployment-time MVR-01C
+  authority cutover runs; until then the legacy scalar app-local setting remains runtime authority.
+  The **default-selection slice has shipped** (MVR-02, #3856): `default_vault_binding_id` is a
+  durable, validated registry field, and `app/instance/default_vault.py` is the one fail-closed
+  resolver (`override > session > instance default > explicit legacy bootstrap > no-vault`) plus the
+  one service behind the authenticated default-vault API route and the headless CLI.
+  **Request-scoped resolution has not shipped**: the `X-Active-Context-*` HTTP carriers, session
+  storage, and binding-keyed persistence remain MVR-03/05 work, so nothing in the request path
+  consumes the resolver yet. Unmapped changed surfaces continue to fail closed.
 
 Validation posture note:
 - blocking smoke/release gates are anchored to the active baseline in this document
