@@ -75,6 +75,13 @@ class AskRequest(BaseModel):
     # activates the scope prefilter; omitted, the ambient `ASK_DOMAIN_SCOPE` process default
     # applies and behaviour is unchanged. Binding context is not granting access: cross-scope
     # admission remains a governed CrossScopeFlow decision, never something a scope string widens.
+    #
+    # TRANSITIONAL SURFACE. MVR-03 (#3857) versions ActiveContextSet and MVR-05B (#3860) moves
+    # request ingress onto an opaque context_selection_id from which the SERVER derives the
+    # cognitive scope; client-supplied scope strings never become identity or authority there.
+    # This field is the interim carrier, safe only because a bound scope can solely NARROW the
+    # retrieval candidate set. When #3860 lands, replace this with the server-derived scope from
+    # the immutable selection snapshot -- the threading below `run_ask_graph` is unaffected.
     scope: str | None = None
 
 

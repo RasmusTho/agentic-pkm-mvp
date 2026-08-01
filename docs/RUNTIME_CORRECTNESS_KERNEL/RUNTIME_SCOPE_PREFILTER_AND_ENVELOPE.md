@@ -87,6 +87,30 @@ The two alternatives were rejected on evidence, not preference:
   collapse` failure mode `docs/boundaries/WSP.md` names: scope reduced to a scalar vault/folder/
   device pointer. Scope is frame/audience/policy context, not a folder.
 
+### Forward compatibility with the Multi-Vault Runtime lane
+
+This binding deliberately does **not** couple to today's `ActiveContextSet` shape, which is what
+MVR-03 (#3857, `docs/MULTI_VAULT_RUNTIME/VERSION_ACTIVE_CONTEXT_SELECTION.md`) is about to rewrite
+into a versioned, immutable-generation contract.
+
+Split the seam in two:
+
+- **Durable.** `AgentState.active_scope` → `RetrievalRequest.scope` → `scoped_hybrid_search(scope=)`
+  → `_partition_by_scope`. Everything below the HTTP surface is a plain scope string threaded
+  through the retrieval path. MVR-03/05 does not change any of it.
+- **Transitional.** The `scope` field on `AskRequest` and on the `/api/ask/voice` form. MVR-03
+  states that client-supplied scope strings never become identity or authority, and MVR-05B (#3860)
+  moves request ingress onto an opaque `context_selection_id` from which the server derives the
+  cognitive scope. When that lands, the field is replaced by a server-derived scope read off the
+  immutable selection snapshot, and the only edit is the single argument passed to
+  `run_ask_graph(active_scope=...)` in `app/api/routes/ask.py`.
+
+This is safe in the interim because a bound scope can only *narrow* the retrieval candidate set. It
+is a filter input, never an authority claim, so a client-authored value cannot widen what a request
+may see — which is precisely the property MVR's "client-supplied scope strings never become
+identity or authority" rule protects. #3857 and #3860 are the follow-on work that must adapt the
+HTTP surface.
+
 Binding is not authorization. WSP supplies context and never grants access, so a bound scope can
 only narrow what retrieval admits. Cross-scope admission stays a governed `CrossScopeFlow` decision
 (#2314), and excluded-but-relevant material still surfaces as a content-free `ScopeDenial`.
