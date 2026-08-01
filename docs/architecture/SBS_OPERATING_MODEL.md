@@ -211,7 +211,8 @@ in `docs/settings/models/providers.yaml`, including the `prod` channel, are ADR-
 declarations rather than provisioning and must not be read as an enabled production capability. The
 delivered acceptance matrix proves governance semantics above a doubled model-access port — it does
 not prove that design-agent runs work, are enabled, or execute end to end against a real provider.
-Parent #4131 remains open and unaccepted pending a post-promotion fresh independent audit.
+Parent #4131's closure criterion is a post-promotion fresh independent audit of the merged
+promotion diff; GitHub owns its current open/closed state, not this doc.
 
 Classification gaps found while applying this map must not be hidden in prose. If a category cannot
 be assigned an owner, authority level, durability, write path, receipt expectation, Product/Runtime
