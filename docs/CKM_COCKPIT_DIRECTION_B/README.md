@@ -54,14 +54,18 @@ affordance can mutate CKM, GitHub, repo docs, Product/Runtime state, or BuilderO
 
 ## Delivered design-hub panel (dormant capability)
 
-Cockpit mode also renders a read-only design-hub panel supplied by the delivered
+Cockpit mode can also render a read-only design-hub panel supplied by the delivered
 [CKM Design-Agent Integration](../CKM_DESIGN_AGENT_INTEGRATION/README.md) capability (CDH-05,
-issue #4312, merged in PR #4493). The panel projects design-agent availability, design-run state,
-refusal codes, receipt chains, and handoff summaries. It obeys the same boundary as the rest of this
-page: inert, deterministic, no added script, form, link, or control, complete with JavaScript off,
-and incapable of starting, approving, or otherwise mutating a design run. The capability it projects
-ships dormant and fail-closed — no design run can execute, and every registered design agent renders
-as unavailable on every channel.
+issue #4312, merged in PR #4493), but only as an opt-in extension: the panel appears only when
+`ckm overview` is invoked with both `--design-hub` and `--repo-root` together with `--cockpit`. The
+default `ckm overview --cockpit` output (no `--design-hub`) omits the panel entirely, so an absent
+panel on its own does not indicate the receipt-corruption condition described in the bullet below.
+When rendered, the panel projects design-agent availability, design-run state, refusal codes,
+receipt chains, and handoff summaries. It obeys the same boundary as the rest of this page: inert,
+deterministic, no added script, form, link, or control, complete with JavaScript off, and incapable
+of starting, approving, or otherwise mutating a design run. The capability it projects ships dormant
+and fail-closed — no design run can execute, and every registered design agent renders as
+unavailable on every channel.
 
 Two limits bound how this panel may be read:
 
