@@ -548,6 +548,14 @@ def run_with_host_secrets(
     except HostSecretCredentialUnavailableError as exc:
         if not run_on_credential_unavailable:
             raise
+        # The handoff drops the WHOLE layer, not just the failed secret, so an
+        # optional secret must never be able to trigger it: that would let a
+        # misconfigured optional credential silently de-provision a *required*
+        # one declared for the same consumer (#4489). Only a required
+        # credential's unavailability is something a caller may opt into
+        # running without.
+        if selected_contract.is_optional(exc.credential_identity_ref):
+            raise
         # Model Inquiry owns the durable typed terminal receipt. This opt-in
         # handoff carries only the declared logical identifier, never a value,
         # and still launches without any provider credential binding.

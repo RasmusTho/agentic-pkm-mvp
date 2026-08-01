@@ -948,6 +948,41 @@ def test_malformed_optional_secret_fails_closed(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
+def test_optional_secret_failure_never_unlocks_the_run_anyway_handoff(
+    tmp_path: Path,
+) -> None:
+    """An optional secret must not be able to drop a *required* one.
+
+    `run_on_credential_unavailable` launches the command with no layer at all.
+    If an optional secret could trigger it, a malformed `github.token` would
+    silently de-provision `heimdal.raw-store-key` for the same consumer — a
+    fail-*open*. No in-repo caller passes the flag for this consumer today;
+    this guards the CLI surface that allows it.
+    """
+    launched: list[list[str]] = []
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":github.token"):
+            return "short"  # present and malformed
+        return _RAW_KEY
+
+    with pytest.raises(HostSecretBootstrapError):
+        run_with_host_secrets(
+            channel="dev",
+            consumer="heimdal-api-ingress",
+            command=["must-not-start"],
+            keychain_lookup=lookup,
+            runner=lambda command, _env: launched.append(command) or 0,
+            directory=tmp_path,
+            run_on_credential_unavailable=True,
+        )
+
+    assert launched == [], (
+        "a malformed optional secret must not launch the command without the "
+        "layer that also carries the consumer's required secret"
+    )
+
+
 def test_absent_required_secret_still_fails_closed(tmp_path: Path) -> None:
     """#4489 must not weaken the guarantee protecting the ingress lanes."""
     with pytest.raises(HostSecretBootstrapError):
@@ -976,18 +1011,23 @@ def test_every_committed_secret_declares_its_optionality_explicitly() -> None:
 
 
 @pytest.mark.parametrize(
-    "optional_value",
+    ("optional_value", "expected"),
     [
-        pytest.param(..., id="omitted"),
-        pytest.param(1, id="truthy-int"),
-        pytest.param(0, id="falsy-int"),
-        pytest.param("true", id="string"),
-        pytest.param(None, id="null"),
-        pytest.param([], id="list"),
+        # An omitted key is caught by the closed field set; a present non-bool
+        # by the explicit type check. `match=` pins WHICH rule fires, so a
+        # revert cannot make these pass for the wrong reason (on a tree without
+        # `optional` in _SECRET_FIELDS the non-bool cases would otherwise be
+        # rejected as an unknown extra key).
+        pytest.param(..., "invalid host secret declaration", id="omitted"),
+        pytest.param(1, "invalid host secret identifier", id="truthy-int"),
+        pytest.param(0, "invalid host secret identifier", id="falsy-int"),
+        pytest.param("true", "invalid host secret identifier", id="string"),
+        pytest.param(None, "invalid host secret identifier", id="null"),
+        pytest.param([], "invalid host secret identifier", id="list"),
     ],
 )
 def test_loader_rejects_a_declaration_without_an_explicit_boolean_optional(
-    tmp_path: Path, optional_value: object
+    tmp_path: Path, optional_value: object, expected: str
 ) -> None:
     payload = json.loads(
         (_REPO_ROOT / "config/secrets/host_secret_contract.json").read_text(
@@ -1001,5 +1041,5 @@ def test_loader_rejects_a_declaration_without_an_explicit_boolean_optional(
     path = tmp_path / "host_secret_contract.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=expected):
         host_secret_bootstrap.load_host_secret_contract(path)

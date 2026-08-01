@@ -279,11 +279,15 @@ Companion docs:
   `HEIMDAL_RAW_STORE_KEY`. A repo-scoped read-only token suffices — the plane issues GET requests
   only and persists nothing.
 - Because `github.token` is declared `optional`, a host with no token still deploys normally and the
-  Heimdal ingress lanes are unaffected; the plane simply refuses. A token that is *present but
-  malformed* fails the bootstrap closed rather than being silently dropped. Note the coupling: this
-  layer is only materialized when `heimdal.raw-store-key` also resolves, so provisioning the GitHub
-  token alone is not sufficient on the governed deploy path. Identifier and account derivation:
-  `docs/LOCAL_SECRET_PROVISIONING/README.md :: Declared identifier contract`.
+  Heimdal ingress lanes are unaffected; the plane simply refuses.
+- **A token that is present but malformed fails the whole channel deploy.** Fail-closed here is
+  deliberate — a present-but-wrong credential is a misconfiguration, not an opt-out — but the cost is
+  that `docker compose` never runs, so no service starts, not just the cockpit. The error names the
+  logical id (`github.token`), never the value. Fix the Keychain item and re-run. The same has always
+  been true of a malformed `heimdal.raw-store-key`; tracked as deferred defect `KD-4489-malformed-declared-secret-aborts-channel-deploy` on #4172.
+- Note the coupling: this layer is only materialized when `heimdal.raw-store-key` also resolves, so
+  provisioning the GitHub token alone is not sufficient on the governed deploy path. Identifier and
+  account derivation: `docs/LOCAL_SECRET_PROVISIONING/README.md :: Declared identifier contract`.
 - Check it with `curl -s localhost:18001/api/cockpit/registry | jq '.sources[] |
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.

@@ -155,7 +155,8 @@ _deploy_channel_needs_dev_capture_secret() {
 # only rejects an empty value) and is now also true of an optional secret such as
 # github.token. Fail-closed is the intended direction — a present-but-wrong
 # credential is a misconfiguration, not an opt-out — but the operator cost is a
-# whole-channel deploy failure, tracked as a deferred defect on #4172.
+# whole-channel deploy failure, tracked as deferred defect
+# KD-4489-malformed-declared-secret-aborts-channel-deploy on #4172.
 _deploy_channel_api_ingress_bootstrap_available() {
   local channel="${1:?channel required}"
   local root="${2:?repo root required}"
