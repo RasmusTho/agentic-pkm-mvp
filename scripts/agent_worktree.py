@@ -478,7 +478,13 @@ def _locked_removed_generation_branch_authority(
                 "cleanup target removed lifecycle authority changed"
             )
         reservation = canonical / ".agent-worktree-cleanup-reservation"
+        parent_created = False
         try:
+            try:
+                canonical.parent.mkdir(mode=0o700)
+                parent_created = True
+            except FileExistsError:
+                pass
             canonical.mkdir(mode=0o700)
             descriptor = os.open(
                 reservation,
@@ -507,6 +513,11 @@ def _locked_removed_generation_branch_authority(
                 raise WorktreeLifecycleError(
                     "cleanup target path reservation could not be released"
                 ) from exc
+            if parent_created:
+                try:
+                    canonical.parent.rmdir()
+                except OSError:
+                    pass
 
 
 def load_lifecycle_records(
