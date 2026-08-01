@@ -24,6 +24,7 @@ from app.instance.vault_registry import (
     DEFAULT_PROVENANCE_EXPLICIT,
     DEFAULT_PROVENANCE_FIRST_INITIALIZE,
     DEFAULT_PROVENANCE_LEGACY_MIGRATION,
+    DEFAULT_PROVENANCE_LEGACY_UNLABELLED,
     KnownVaultRef,
     RegistryDefaultConflict,
     VaultRegistryStore,
@@ -352,7 +353,8 @@ def test_pre_mvr02_default_key_never_bricks_an_intact_registry(tmp_path) -> None
     )
     adopted = VaultRegistryStore(registry_path).load()
     assert adopted.default_vault_binding_id == first.vault_binding_id
-    assert adopted.default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
+    # Its own label: no operator command set it, so it must not claim one.
+    assert adopted.default_vault_provenance == DEFAULT_PROVENANCE_LEGACY_UNLABELLED
 
     # 2. An unresolvable legacy value is demoted to lineage, never dropped and
     #    never fatal. The instance resolves to no-vault, which is fail-closed.

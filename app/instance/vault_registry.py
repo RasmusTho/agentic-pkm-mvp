@@ -51,10 +51,15 @@ DEFAULT_PROVENANCE_LEGACY_MIGRATION = "legacy_last_active_migration"
 DEFAULT_PROVENANCE_FIRST_INITIALIZE = "first_vault_initialize"
 DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING = "first_open_existing"
 DEFAULT_PROVENANCE_ROLL_FORWARD_RESTORE = "roll_forward_restored"
+# A default carried over from a pre-MVR-02 image, adopted because it resolved.
+# It gets its own label rather than borrowing `explicit_default_command`: no
+# operator command ever set it, and provenance is supposed to be inspectable.
+DEFAULT_PROVENANCE_LEGACY_UNLABELLED = "legacy_unlabelled_adoption"
 DEFAULT_VAULT_PROVENANCES = frozenset(
     {
         DEFAULT_PROVENANCE_EXPLICIT,
         DEFAULT_PROVENANCE_LEGACY_MIGRATION,
+        DEFAULT_PROVENANCE_LEGACY_UNLABELLED,
         DEFAULT_PROVENANCE_FIRST_INITIALIZE,
         DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING,
         DEFAULT_PROVENANCE_ROLL_FORWARD_RESTORE,
@@ -145,7 +150,7 @@ def _read_default_from_frontmatter(
     provenance = _optional_str(frontmatter.get("defaultVaultProvenance"))
     if binding_id is not None and provenance is None:
         if binding_id in registrations:
-            return binding_id, DEFAULT_PROVENANCE_EXPLICIT
+            return binding_id, DEFAULT_PROVENANCE_LEGACY_UNLABELLED
         extensions["legacyDefaultVaultBindingId"] = binding_id
         return None, None
     _assert_default_is_resolvable(binding_id, provenance, registrations)
@@ -2367,6 +2372,7 @@ __all__ = [
     "DEFAULT_PROVENANCE_FIRST_INITIALIZE",
     "DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING",
     "DEFAULT_PROVENANCE_LEGACY_MIGRATION",
+    "DEFAULT_PROVENANCE_LEGACY_UNLABELLED",
     "DEFAULT_PROVENANCE_ROLL_FORWARD_RESTORE",
     "DEFAULT_VAULT_PROVENANCES",
     "AppLocalSettings",

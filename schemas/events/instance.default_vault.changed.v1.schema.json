@@ -32,6 +32,7 @@
       "enum": [
         "explicit_default_command",
         "legacy_last_active_migration",
+        "legacy_unlabelled_adoption",
         "first_vault_initialize",
         "first_open_existing",
         "roll_forward_restored",

@@ -87,9 +87,9 @@ a valid result. MVR-05 owns the HTTP carriers (`X-Active-Context-Override` and
   A registry already on the current schema is never given an inferred default, and every
   subsequent last-active change leaves the default untouched. A value carried over from a
   pre-MVR-02 image (an unlabelled `defaultVaultBindingId`) is untrusted: it is adopted only when it
-  names exactly one current registration, otherwise preserved as
-  `legacyDefaultVaultBindingId` lineage — never dropped, and never a reason to refuse to load an
-  otherwise intact registry.
+  names exactly one current registration — under its own `legacy_unlabelled_adoption` provenance,
+  because no operator command set it — and is otherwise preserved as `legacyDefaultVaultBindingId`
+  lineage. It is never dropped, and never a reason to refuse to load an otherwise intact registry.
 - `first_vault_initialize` / `first_open_existing` — the first-vault producers. On a registry
   that the locked transaction itself proves has no prior registration and no prior default,
   registration and default land in the same revision, exactly once. A later open, picker

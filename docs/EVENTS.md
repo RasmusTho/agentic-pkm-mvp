@@ -669,8 +669,8 @@ Payload (registered schema `schemas/events/instance.default_vault.changed.v1.sch
 - `vault_binding_id` (`string|null`) — the new default, or `null` when cleared
 - `previous_vault_binding_id` (`string|null`)
 - `provenance` (`string|null`) — which MVR-02 producer recorded the default:
-  `explicit_default_command`, `legacy_last_active_migration`, `first_vault_initialize`,
-  `first_open_existing`, or `roll_forward_restored`
+  `explicit_default_command`, `legacy_last_active_migration`, `legacy_unlabelled_adoption`,
+  `first_vault_initialize`, `first_open_existing`, or `roll_forward_restored`
 
 Interpretation:
 - exactly one event per durable default mutation; the idempotency key is derived from
