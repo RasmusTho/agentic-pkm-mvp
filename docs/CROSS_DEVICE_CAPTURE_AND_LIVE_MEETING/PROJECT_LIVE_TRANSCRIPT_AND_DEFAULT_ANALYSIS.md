@@ -18,8 +18,9 @@ through the shared engine seam `app.media.transcribe.run_asr`, and the six accep
 proven by `tests/heimdal/test_meeting_projection.py`. Projection tables ship in migration
 `b8d3f0a5c2e4` (Postgres/PDM) with a file-backed SQLite dev/test lane. The analysis engine in this
 slice is deterministic (`heimdal-meeting-analysis v1`, no LLM), so convergence is structural;
-`generic-default@1` is the only shipped template. The `HEIMDAL_RAW_STORE_KEY` provisioning gap
-(KD-4384-RAWKEY, #4422) bounds live end-to-end derivation the same way it bounds admission.
+`generic-default@1` is the only shipped template. The `HEIMDAL_RAW_STORE_KEY` provisioning gap is
+closed in code (#4422); the residual operator Keychain step bounds live end-to-end derivation the
+same way it bounds admission — see `docs/STATUS.md :: Runtime verification`.
 
 ## Purpose
 

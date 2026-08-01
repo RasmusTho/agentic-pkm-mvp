@@ -18,8 +18,9 @@ admission hook wired into `app/heimdal/media_ingress.py` and the six acceptance 
 by `tests/heimdal/test_meeting_session_ledger.py`; the `heimdal.meeting.segment.late_admitted` event
 contract is recorded in `docs/EVENTS.md`. Ledger tables ship in migration `a7c2e9f4b1d3` (Postgres /
 PDM) with a file-backed SQLite lane for dev/test, so the restart criterion is proven against real
-durable storage. The `HEIMDAL_RAW_STORE_KEY` provisioning gap CDLM-01 states (KD-4384-RAWKEY) bounds
-live end-to-end use of the admission-fed segment path the same way it bounds CDLM-01.
+durable storage. The `HEIMDAL_RAW_STORE_KEY` provisioning gap CDLM-01 stated is closed in code
+(#4422); the residual operator Keychain step bounds live end-to-end use of the admission-fed segment
+path the same way it bounds CDLM-01 — see `docs/STATUS.md :: Runtime verification`.
 
 ## Purpose
 
