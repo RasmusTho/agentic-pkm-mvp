@@ -46,7 +46,10 @@ def _bm25_dominance_margin(query: str, items: List[Dict[str, Any]]) -> float | N
                 [len(query_terms & set(tokens)) / len(query_terms) for tokens in tokenized_docs],
                 dtype=np.float32,
             )
-            return float(abs(coverage[0] - coverage[1]))
+            # ``items`` is already ranked. Only the current top candidate's
+            # coverage can establish lexical dominance; a better runner-up
+            # must still reach the reranker.
+            return float(coverage[0] - coverage[1])
         # Every candidate scores identically -> no dominant top result.
         return 0.0
     norm = (raw - min_v) / (max_v - min_v)

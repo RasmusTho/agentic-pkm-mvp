@@ -133,3 +133,23 @@ def test_conditional_gate_two_result_unique_match_does_not_collapse(
 
     assert maybe_rerank("alpha beta", items) == items
     assert calls == []
+
+
+def test_conditional_gate_reranks_when_lower_coverage_item_is_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A coverage fallback only establishes dominance for the ranked top result."""
+    monkeypatch.setenv("RETRIEVAL_RERANK", "conditional")
+    reset_retrieval_tuning_cache()
+    calls: list[list[dict]] = []
+    monkeypatch.setattr(
+        "app.retrieval.hook_adapter.apply_optional_rerank",
+        lambda _query, items: calls.append(list(items)) or list(reversed(items)),
+    )
+    items = [
+        {"id": "weak", "text": "unrelated gardening note", "score": 0.9},
+        {"id": "exact", "text": "alpha beta exact document", "score": 0.5},
+    ]
+
+    assert [item["id"] for item in maybe_rerank("alpha beta", items)] == ["exact", "weak"]
+    assert calls == [items]
