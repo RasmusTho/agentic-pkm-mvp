@@ -47,6 +47,69 @@ retrieval so agents consume a bounded `ContextEnvelope`, not raw index access.
   `app/`-backed adapter/fixture presenting the same corpus through the live retrieval entrypoint, and
   repoint the skeletons at it (drop the xfail). This does NOT relocate `mimer_runtime` into `app/`.
 
+## Activation in Production
+
+Delivering the mechanism is not the same as running it. Between #2772 and #2921 the prefilter was
+correct and mutation-verified in tests yet **dormant in the default running product**:
+`ASK_DOMAIN_SCOPE` was read by `app/retrieval/hybrid.py::_resolve_domain_scope` and set by no
+production code anywhere, so `scope` resolved to `None`, `_partition_by_scope` admitted every
+document, and I-A5 ("private not in work results") was enforced only where a test set the
+environment variable by hand.
+
+**The activation mechanism is a per-request active-scope binding threaded through the production
+ASK path.** One value is resolved once per turn and reused everywhere:
+
+`app/api/routes/ask.py::AskRequest.scope` (or the matching `scope` form field on `/api/ask/voice`)
+→ `app/agents/ask/graph.py::run_ask_graph(active_scope=...)` → `AgentState.active_scope` →
+`app/retrieval/capability.py::retrieve` via `RetrievalRequest.scope` →
+`app/retrieval/hybrid.py::scoped_hybrid_search(scope=...)` → `_partition_by_scope`.
+
+The same `AgentState.active_scope` also feeds the recall node and the envelope's `active_scope_id`,
+so the scope the prefilter filtered on and the scope the envelope declares cannot diverge within a
+turn. `RetrievalRequest.scope` was previously diagnostic-only metadata; it is now load-bearing.
+
+### Source of truth for the active scope
+
+**Chosen: the request context.** The caller states the active scope for the turn; the process-level
+`ASK_DOMAIN_SCOPE` remains the default when the request binds none.
+
+The two alternatives were rejected on evidence, not preference:
+
+- **`ActiveContextSet` / WSP.** `docs/boundaries/WSP.md` is the documented authority for effective
+  scope, and WSP does have running code — `app/vault/active_context.py::ActiveContextResolver`. But
+  that resolver returns `scope` with status `unknown` and the explicit reason "Scope is not resolved
+  by the current active-vault runtime." Binding retrieval to it today would leave the prefilter
+  exactly as dormant as before. WSP remains the intended long-term authority; when its resolver
+  starts returning a known scope it should take precedence over the request binding, and that
+  precedence rule is the follow-up, not this slice.
+- **Deriving scope from the active vault/workspace selection.** This is available today and would
+  have activated the prefilter without any API change — and it is precisely the `activeVault
+  collapse` failure mode `docs/boundaries/WSP.md` names: scope reduced to a scalar vault/folder/
+  device pointer. Scope is frame/audience/policy context, not a folder.
+
+Binding is not authorization. WSP supplies context and never grants access, so a bound scope can
+only narrow what retrieval admits. Cross-scope admission stays a governed `CrossScopeFlow` decision
+(#2314), and excluded-but-relevant material still surfaces as a content-free `ScopeDenial`.
+
+### Fail-safe posture and what stayed unchanged
+
+- **The unscoped default is unchanged.** No bound scope and no `ASK_DOMAIN_SCOPE` still means every
+  document is eligible. This slice activates a binding channel; it does not flip the default from
+  admit-all to deny-all.
+- **`ASK_DOMAIN_SCOPE` stays supported** as the process-level default, so `tests/evals/_app_adapter.py`,
+  `tests/boundaries/test_domain_separation_defaults.py`, and `app/eval/golden.py` (which deliberately
+  *clears* it so a leaked scope cannot prefilter the deterministic gate) keep their current
+  semantics without edits.
+- **The evidence-role clamp never upgrades.** `evidence_role_in_context` now survives the
+  `RetrievalHit` capability boundary (`from_hybrid` / `to_hybrid_dict`) instead of being dropped and
+  silently re-defaulted to the intrinsic role at the envelope. The seam re-clamps against the hit's
+  own intrinsic role, and the envelope clamps again; both are non-upgrading, so carrying the value
+  can only preserve a downgrade, never manufacture an upgrade.
+- **Entrypoints that do not bind a scope are unchanged**, and still resolve the ambient default:
+  `app/agents/qa/agent.py`, `app/components/retrieval.py`, `app/api/routes/search.py`,
+  `app/api/routes/context_bundles.py`, `app/curation/contradiction.py`, `app/expansion/connect.py`,
+  and `app/retrieval/production_bundle.py`.
+
 ## Concretely
 
 ```bash

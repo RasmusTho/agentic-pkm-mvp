@@ -71,6 +71,11 @@ VOICE_ASK_SUFFIX_BY_CONTENT_TYPE = {
 class AskRequest(BaseModel):
     question: str = Field(validation_alias=AliasChoices("question", "query"))
     zone_strategy: str | None = "default"
+    # The caller's active scope for this turn (#2921). This is the production binding that
+    # activates the scope prefilter; omitted, the ambient `ASK_DOMAIN_SCOPE` process default
+    # applies and behaviour is unchanged. Binding context is not granting access: cross-scope
+    # admission remains a governed CrossScopeFlow decision, never something a scope string widens.
+    scope: str | None = None
 
 
 class AskSource(BaseModel):
@@ -180,7 +185,9 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     ask_settings = get_ask_settings()
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
     try:
-        state = run_ask_graph(req.question, trace_id=trace_id, ask_settings=ask_settings)
+        state = run_ask_graph(
+            req.question, trace_id=trace_id, ask_settings=ask_settings, active_scope=req.scope
+        )
     except LLMBackendTimeout as exc:
         record_ask_error()
         raise HTTPException(
@@ -229,6 +236,9 @@ async def ask_voice(
     audio: UploadFile = File(...),
     session_id: str | None = Form(None),
     zone_strategy: str | None = Form("default"),
+    # Same per-request active-scope binding as `/api/ask` (#2921); a voice turn must not be a
+    # scope-isolation hole just because it arrives as form data.
+    scope: str | None = Form(None),
 ) -> VoiceAskResponse | JSONResponse:
     """Turn transient client audio into a grounded, optionally spoken answer.
 
@@ -278,7 +288,12 @@ async def ask_voice(
     try:
         if not _HYBRID_WARMED:
             _ensure_hybrid_store_loaded()
-        state = run_ask_graph(transcript, trace_id=trace_id, ask_settings=get_ask_settings())
+        state = run_ask_graph(
+            transcript,
+            trace_id=trace_id,
+            ask_settings=get_ask_settings(),
+            active_scope=scope,
+        )
     except Exception:
         # The heard text is still useful, but no ungrounded substitute answer is.
         return JSONResponse(

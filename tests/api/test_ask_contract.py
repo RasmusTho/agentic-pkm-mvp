@@ -83,9 +83,21 @@ def test_ask_contract_propagates_trace_id_from_header(monkeypatch) -> None:
     hybrid.set_documents([])
     captured: dict[str, str | None] = {"trace_id": None}
 
-    def _fake_run_ask_graph(query: str, trace_id: str | None = None, ask_settings=None) -> AgentState:
+    def _fake_run_ask_graph(
+        query: str,
+        trace_id: str | None = None,
+        ask_settings=None,
+        active_scope: str | None = None,
+    ) -> AgentState:
         captured["trace_id"] = trace_id
-        return AgentState(trace_id=trace_id, query=query, hits=[], answer="No results found.")
+        captured["active_scope"] = active_scope
+        return AgentState(
+            trace_id=trace_id,
+            query=query,
+            active_scope=active_scope,
+            hits=[],
+            answer="No results found.",
+        )
 
     monkeypatch.setattr(ask_module, "run_ask_graph", _fake_run_ask_graph)
     client = TestClient(app)
@@ -105,9 +117,21 @@ def test_ask_contract_generates_trace_id_when_missing(monkeypatch) -> None:
     hybrid.set_documents([])
     captured: dict[str, str | None] = {"trace_id": None}
 
-    def _fake_run_ask_graph(query: str, trace_id: str | None = None, ask_settings=None) -> AgentState:
+    def _fake_run_ask_graph(
+        query: str,
+        trace_id: str | None = None,
+        ask_settings=None,
+        active_scope: str | None = None,
+    ) -> AgentState:
         captured["trace_id"] = trace_id
-        return AgentState(trace_id=trace_id, query=query, hits=[], answer="No results found.")
+        captured["active_scope"] = active_scope
+        return AgentState(
+            trace_id=trace_id,
+            query=query,
+            active_scope=active_scope,
+            hits=[],
+            answer="No results found.",
+        )
 
     class _FakeUuid:
         hex = "generated-ask-trace-1"

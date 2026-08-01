@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
-from app.retrieval.hybrid import ScopeDenial, scoped_hybrid_search
+from app.retrieval.hybrid import (
+    ScopeDenial,
+    _clamp_in_context,
+    _intrinsic_evidence_role,
+    scoped_hybrid_search,
+)
 
 ViewFreshnessState = Literal["fresh", "stale", "partial", "unknown"]
 
@@ -70,6 +75,12 @@ class RetrievalHit:
     # store actually holds; see app/episodes/closure_decay.py). Empty (default) when the hit
     # carries no episode binding or an open one.
     signal_payload: "RetrievalSignalPayload" = field(default_factory=lambda: RetrievalSignalPayload())
+    # #2921: the per-hit in-context evidence role computed by the prefilter. This used to be
+    # dropped here, so the production ASK path handed the envelope `None` and the clamp always
+    # fell back to the intrinsic default -- only DOWNGRADES were lost, so the drop failed safe,
+    # but the clamp-through was inert end-to-end. Declared last so existing positional
+    # construction of this frozen dataclass keeps working.
+    evidence_role_in_context: str | None = None
 
     @classmethod
     def from_hybrid(cls, hit: dict[str, Any]) -> "RetrievalHit":
@@ -83,6 +94,13 @@ class RetrievalHit:
             snippet=hit.get("snippet"),
             source_ref=hit.get("source_ref"),
             payload=payload,
+            # Re-clamp at the seam rather than trusting the incoming dict: the role may be lowered
+            # for this context, never raised above the item's intrinsic role. The envelope clamps
+            # again downstream; both are non-upgrading, so carrying the value can only preserve a
+            # downgrade, never manufacture an upgrade.
+            evidence_role_in_context=_clamp_in_context(
+                _intrinsic_evidence_role(payload), hit.get("evidence_role_in_context")
+            ),
         )
 
     def to_hybrid_dict(self) -> dict[str, Any]:
@@ -94,6 +112,7 @@ class RetrievalHit:
             "snippet": self.snippet,
             "source_ref": self.source_ref,
             "payload": dict(self.payload),
+            "evidence_role_in_context": self.evidence_role_in_context,
         }
 
 
@@ -204,11 +223,18 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         k=request.k,
         language=request.language,
         query_vector=request.query_vector,
+        # #2921: `request.scope` used to be diagnostic-only. It is now the load-bearing
+        # per-request active-scope binding, so the prefilter partitions in production instead of
+        # waiting on an ambient `ASK_DOMAIN_SCOPE` that no production code ever set.
+        scope=request.scope,
     )
     raw_hits = scoped.results
     diagnostics: dict[str, Any] = {
         "query": request.query,
         "scope": request.scope,
+        # The scope the prefilter ACTUALLY used: `request.scope` when bound, otherwise the ambient
+        # process default. Recorded so a request-scope/effective-scope divergence is observable.
+        "active_scope": scoped.active_scope,
         "domain": request.domain,
         "trace_id": request.trace_id,
     }
