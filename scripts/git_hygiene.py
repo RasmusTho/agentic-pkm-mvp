@@ -1212,16 +1212,11 @@ def janitor_apply(
                 None,
             )
             pr_state = _pr_state(target_branch, pr_states).get("state")
-            if (
-                skipped_reason == "not_merged_to_origin_main"
-                and pr_state in {"MERGED", "CLOSED"}
-            ):
+            if skipped_reason == "not_merged_to_origin_main" and pr_state == "MERGED":
                 selected_branches = [
                     {
                         "branch": target_branch,
-                        "merge_proof": (
-                            "merged_pr" if pr_state == "MERGED" else "closed_pr"
-                        ),
+                        "merge_proof": "merged_pr",
                     }
                 ]
         if target_branch is None and len(selected) != 1:

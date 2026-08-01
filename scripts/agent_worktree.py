@@ -477,18 +477,36 @@ def _locked_removed_generation_branch_authority(
             raise WorktreeLifecycleError(
                 "cleanup target removed lifecycle authority changed"
             )
-        if canonical.exists():
-            raise WorktreeLifecycleError("cleanup target worktree was recreated")
-        live_entries = git_hygiene._parse_worktrees(
-            git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
-        )
-        if any(
-            entry.get("worktree")
-            and _canonical(Path(entry["worktree"])) == canonical
-            for entry in live_entries
-        ):
-            raise WorktreeLifecycleError("cleanup target worktree was recreated")
-        yield
+        reservation = canonical / ".agent-worktree-cleanup-reservation"
+        try:
+            canonical.mkdir(mode=0o700)
+            descriptor = os.open(
+                reservation,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            os.close(descriptor)
+        except FileExistsError as exc:
+            raise WorktreeLifecycleError("cleanup target worktree was recreated") from exc
+        try:
+            live_entries = git_hygiene._parse_worktrees(
+                git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+            )
+            if any(
+                entry.get("worktree")
+                and _canonical(Path(entry["worktree"])) == canonical
+                for entry in live_entries
+            ):
+                raise WorktreeLifecycleError("cleanup target worktree was recreated")
+            yield
+        finally:
+            try:
+                reservation.unlink()
+                canonical.rmdir()
+            except OSError as exc:
+                raise WorktreeLifecycleError(
+                    "cleanup target path reservation could not be released"
+                ) from exc
 
 
 def load_lifecycle_records(

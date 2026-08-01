@@ -409,8 +409,9 @@ def test_targeted_janitor_apply_resumes_removed_generation_branch_cleanup(tmp_pa
     assert record["status"] == "removed"
 
 
+@pytest.mark.parametrize("authority", ("path_lease", "branch_lease", "binding_change"))
 def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_change(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, authority
 ) -> None:
     repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
         tmp_path
@@ -424,7 +425,17 @@ def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_cha
         calls += 1
         if calls == 1:
             return []
-        return [{"resource_id": f"worktree:{worktree.resolve()}", "expires_at": None}]
+        if authority == "binding_change":
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["worktrees"][str(worktree.resolve())]["branch"] = "codex/replaced"
+            agent_worktree._write_registry(registry_path, payload)
+            return []
+        resource_id = (
+            f"worktree:{worktree.resolve()}"
+            if authority == "path_lease"
+            else f"branch:{branch}"
+        )
+        return [{"resource_id": resource_id, "expires_at": None}]
 
     monkeypatch.setattr(agent_worktree, "_load_active_lease_snapshot", leases_after_plan)
 
@@ -439,16 +450,82 @@ def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_cha
 
     assert result["ok"] is False
     assert branch in git_hygiene._local_branches(repo)
-    assert result["errors"] == [
-        {
-            "artifact": "worktree",
-            "action": "preserve",
-            "reason": "lease_authority_changed",
-            "path": str(worktree.resolve()),
-            "branch": branch,
-            "active_leases": [f"worktree:{worktree.resolve()}"],
-        }
-    ]
+    if authority == "binding_change":
+        assert result["errors"] == [
+            {
+                "artifact": "worktree",
+                "action": "revalidate_lifecycle_registry",
+                "reason": "targeted_branch_lifecycle_authority_changed",
+                "path": str(worktree.resolve()),
+                "branch": branch,
+            }
+        ]
+    else:
+        resource_id = (
+            f"worktree:{worktree.resolve()}"
+            if authority == "path_lease"
+            else f"branch:{branch}"
+        )
+        assert result["errors"] == [
+            {
+                "artifact": "worktree",
+                "action": "preserve",
+                "reason": "lease_authority_changed",
+                "path": str(worktree.resolve()),
+                "branch": branch,
+                "active_leases": [resource_id],
+            }
+        ]
+
+
+def test_targeted_janitor_apply_removed_generation_preserves_closed_unmerged_branch(
+    tmp_path,
+) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={branch: {"state": "CLOSED"}},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=generation,
+    )
+
+    assert result["ok"] is False
+    assert branch in git_hygiene._local_branches(repo)
+    assert result["errors"][0]["reason"] == (
+        "target_not_exactly_one_reclaimable_tombstone_branch"
+    )
+
+
+def test_removed_generation_branch_authority_reserves_target_path(tmp_path) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    replacement_branch = "codex/replacement"
+    subprocess.run(["git", "branch", replacement_branch], cwd=repo, check=True)
+
+    with agent_worktree._locked_removed_generation_branch_authority(
+        repo,
+        registry_path,
+        worktree=str(worktree),
+        branch=branch,
+        generation=generation,
+    ):
+        replacement = subprocess.run(
+            ["git", "worktree", "add", str(worktree), replacement_branch],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        )
+        assert replacement.returncode != 0
+    assert not worktree.exists()
+    assert replacement_branch in git_hygiene._local_branches(repo)
 
 
 def test_bind_live_generations_skips_removal_tombstones(

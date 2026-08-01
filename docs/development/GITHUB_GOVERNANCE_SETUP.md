@@ -143,10 +143,12 @@ remains report-only.
 
 When a selected worktree has already been durably retired as an exact `removed` generation but its
 branch step did not complete, a later targeted apply may resume only that tombstone's bound local
-branch. It requires fresh external PR-state and lease snapshots, preserves every other janitor
+branch. A non-ancestor branch additionally requires fresh external `MERGED` PR-state and lease snapshots, preserves every other janitor
 candidate, confirms the checkout remains absent, and holds the lifecycle lock through the branch
-deletion while rechecking the path, branch, and generation binding. Any replacement checkout,
-lifecycle drift, or active path/branch lease fails closed and leaves the branch intact.
+deletion while rechecking the path, branch, and generation binding. It atomically reserves the
+absent target path for that delete window, so another `git worktree add` cannot reuse it between
+revalidation and branch deletion. Any replacement checkout, lifecycle drift, or active path/branch
+lease fails closed and leaves the branch intact.
 
 ## Enforcement intent
 
