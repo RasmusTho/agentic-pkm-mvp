@@ -8,6 +8,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Mapping
 
+import pytest
+
 from app.builderops.ckm.design_hub import (
     DesignHubProjection,
     build_design_hub_projection,
@@ -30,6 +32,8 @@ from app.builderops.design_run_governance import (
     DESIGN_RUN_RECEIPT_EVENT_TYPE,
     DesignRunGovernance,
     DesignRunReceiptEvent,
+    DesignRunUnavailableError,
+    load_design_run_policy,
 )
 from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.store import SqliteBuilderOpsStore
@@ -87,8 +91,15 @@ class _RecordingAdapter:
     artifact_content: str = "bounded, cited design-run output"
     provider: str = "fixture-provider"
     model: str = "fixture-model"
+    # Per-run terminal behaviour: "success" (default), "timeout", or "failure".
+    modes: dict[str, str] = field(default_factory=dict)
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        mode = self.modes.get(str(request["run_id"]), "success")
+        if mode == "timeout":
+            raise TimeoutError("fixture design agent timed out")
+        if mode == "failure":
+            raise RuntimeError("fixture design agent failed")
         content_hash = hashlib.sha256(
             self.artifact_content.encode("utf-8")
         ).hexdigest()
@@ -112,6 +123,8 @@ class _RecordingRegistry:
 
     adapter: _RecordingAdapter = field(default_factory=_RecordingAdapter)
     design_agent_id: str = "cockpit-fixture-agent"
+    # Run ids for which the exact requested route is unavailable at start time.
+    unavailable_run_ids: frozenset[str] = frozenset()
 
     def descriptors(
         self, *, run_id: str
@@ -141,6 +154,8 @@ class _RecordingRegistry:
     def select(
         self, design_agent_id: str, *, run_id: str
     ) -> ResolvedDesignAgentAdapter:
+        if run_id in self.unavailable_run_ids:
+            raise RuntimeError(f"design agent unavailable: {design_agent_id}")
         return ResolvedDesignAgentAdapter(
             design_agent_id=design_agent_id,
             descriptor=self.descriptors(run_id=run_id)[0],
@@ -166,18 +181,26 @@ def _brief(
     *,
     brief_id: str,
     deliverable: str = "content_review",
+    source_ref_count: int = 1,
 ) -> CuratedDesignBrief:
+    source_refs = tuple(
+        sorted(
+            (
+                DesignSourceRef(
+                    source_type="ckm_observation",
+                    source_id=f"ckm:observation:cockpit-fixture-{index:03d}",
+                    content_hash=SHA_A,
+                )
+                for index in range(source_ref_count)
+            ),
+            key=lambda ref: ref.identity,
+        )
+    )
     return CuratedDesignBrief(
         brief_id=brief_id,
         projection_id="ckm.projection.cockpit",
         requested_deliverable=deliverable,
-        source_refs=(
-            DesignSourceRef(
-                source_type="ckm_observation",
-                source_id="ckm:observation:cockpit-fixture",
-                content_hash=SHA_A,
-            ),
-        ),
+        source_refs=source_refs,
         constraints=("Use explicit evidence only.",),
         yggdrasil_gate_receipt=None,
         non_visual_exemption=True,
@@ -187,7 +210,7 @@ def _brief(
 def _repo_root(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     policy_path = root / "config/builderops/design_run_policy.json"
-    policy_path.parent.mkdir(parents=True)
+    policy_path.parent.mkdir(parents=True, exist_ok=True)
     source_policy = (
         Path(__file__).parents[3] / "config/builderops/design_run_policy.json"
     )
@@ -195,12 +218,17 @@ def _repo_root(tmp_path: Path) -> Path:
     return root
 
 
-def _governance(tmp_path: Path, *, db_name: str = "cockpit.sqlite3") -> DesignRunGovernance:
+def _governance(
+    tmp_path: Path,
+    *,
+    db_name: str = "cockpit.sqlite3",
+    registry: _RecordingRegistry | None = None,
+) -> DesignRunGovernance:
     store = SqliteBuilderOpsStore(tmp_path / db_name)
     store.initialize()
     return DesignRunGovernance(
         store=store,
-        registry=_RecordingRegistry(),
+        registry=registry or _RecordingRegistry(),
         repo_root=_repo_root(tmp_path),
         lease_ttl_seconds=30,
     )
@@ -213,12 +241,18 @@ def _submit(
     adapter: DesignAgentDescriptor | None = None,
     deliverable: str = "content_review",
     evaluated_at: str = T1,
+    source_ref_count: int = 1,
+    request_brief: CuratedDesignBrief | None = None,
 ) -> None:
-    brief = _brief(brief_id=f"{run_id}.brief", deliverable=deliverable)
+    brief = _brief(
+        brief_id=f"{run_id}.brief",
+        deliverable=deliverable,
+        source_ref_count=source_ref_count,
+    )
     resolved_adapter = adapter or _descriptor()
     request = governance.build_request(
         request_id=f"{run_id}.request",
-        brief=brief,
+        brief=request_brief or brief,
         adapter=resolved_adapter,
         requested_at=T0,
     )
@@ -493,16 +527,114 @@ def test_default_overview_is_unchanged_without_design_hub(tmp_path: Path) -> Non
     assert '<section class="design-hub"' in enabled_once
 
 
+def _every_terminal_state_governance(tmp_path: Path) -> DesignRunGovernance:
+    """One store carrying every distinct terminal/refusal state at once.
+
+    CDH-06 (issue #4313) requires the deterministic / JS-off / print /
+    inert-HTML contract to hold across the *whole* state space, not only the
+    pending and succeeded states CDH-05 exercised.
+    """
+
+    adapter = _RecordingAdapter(
+        modes={
+            "run.cockpit.timed-out": "timeout",
+            "run.cockpit.failed": "failure",
+        }
+    )
+    registry = _RecordingRegistry(
+        adapter=adapter,
+        unavailable_run_ids=frozenset({"run.cockpit.unavailable"}),
+    )
+    governance = _governance(tmp_path, registry=registry)
+
+    # approval_pending
+    _submit(governance, run_id="run.cockpit.pending")
+
+    # denied — the repo-governed policy caps explicit source refs.
+    policy = load_design_run_policy(governance.repo_root)
+    _submit(
+        governance,
+        run_id="run.cockpit.denied",
+        source_ref_count=policy.max_source_refs + 1,
+    )
+
+    # malformed — the request does not bind its exact submitted inputs.
+    _submit(
+        governance,
+        run_id="run.cockpit.malformed",
+        request_brief=_brief(brief_id="brief.cockpit.foreign"),
+    )
+
+    # unavailable — the exact requested route cannot be selected at start.
+    _submit(governance, run_id="run.cockpit.unavailable")
+    governance.approve(
+        run_id="run.cockpit.unavailable",
+        approval_id="run.cockpit.unavailable.approval",
+        approved_at=T2,
+    )
+    with pytest.raises(DesignRunUnavailableError):
+        governance.execute(
+            run_id="run.cockpit.unavailable", started_at=T3, completed_at=T4
+        )
+
+    # timed_out and failed — distinct typed terminal failures.
+    for run_id in ("run.cockpit.timed-out", "run.cockpit.failed"):
+        _submit(governance, run_id=run_id)
+        governance.approve(
+            run_id=run_id, approval_id=f"{run_id}.approval", approved_at=T2
+        )
+        governance.execute(run_id=run_id, started_at=T3, completed_at=T4)
+
+    # succeeded — one governed success with a validated handoff.
+    _run_to_succeeded(governance, run_id="run.cockpit.succeeded")
+
+    # excluded — an unverifiable causal chain is refused entirely.
+    _inject_dangling_receipt(governance, run_id="run.cockpit.excluded")
+    return governance
+
+
 def test_design_hub_projection_preserves_direction_b_authority(tmp_path: Path) -> None:
-    governance = _governance(tmp_path)
-    _submit(governance, run_id="run.cockpit.inert")
-    _run_to_succeeded(governance, run_id="run.cockpit.inert-succeeded")
+    governance = _every_terminal_state_governance(tmp_path)
     design_hub = build_design_hub_projection(governance=governance)
-    assert design_hub.runs  # non-trivial fixture
+
+    # Every distinct terminal/refusal state is present exactly once, plus one
+    # entirely excluded run.
+    states = {run.run_id: run.state for run in design_hub.runs}
+    assert states == {
+        "run.cockpit.pending": "approval_pending",
+        "run.cockpit.denied": "denied",
+        "run.cockpit.malformed": "malformed",
+        "run.cockpit.unavailable": "unavailable",
+        "run.cockpit.timed-out": "timed_out",
+        "run.cockpit.failed": "failed",
+        "run.cockpit.succeeded": "succeeded",
+    }
+    assert len(set(states.values())) == 7
+    assert design_hub.excluded_run_ids == ("run.cockpit.excluded",)
+
+    # INV-CDH-9 determinism depends on a total order that does not vary with
+    # set/dict iteration order, so pin it explicitly rather than inferring it
+    # from two renders inside one interpreter (which share a hash seed).
+    assert [run.run_id for run in design_hub.runs] == sorted(states)
+    assert list(design_hub.excluded_run_ids) == sorted(design_hub.excluded_run_ids)
+    assert [item.design_agent_id for item in design_hub.adapters] == sorted(
+        item.design_agent_id for item in design_hub.adapters
+    )
 
     ckm_store = _cockpit_store(tmp_path)
     without_design_hub = _render_with_design_hub(ckm_store, None, generated_at=T0)
     with_design_hub = _render_with_design_hub(ckm_store, design_hub, generated_at=T0)
+
+    # Determinism across the full state space: identical explicit generation
+    # time, CKM batch, and validated projection produce byte-identical HTML.
+    assert with_design_hub == _render_with_design_hub(
+        ckm_store, design_hub, generated_at=T0
+    )
+    assert with_design_hub == _render_with_design_hub(
+        ckm_store,
+        build_design_hub_projection(governance=governance),
+        generated_at=T0,
+    )
 
     safety_before = _parse_html_safety(without_design_hub)
     safety_after = _parse_html_safety(with_design_hub)
@@ -531,5 +663,37 @@ def test_design_hub_projection_preserves_direction_b_authority(tmp_path: Path) -
     for adapter in design_hub.adapters:
         assert f'data-design-hub-adapter="{adapter.design_agent_id}"' in with_design_hub
 
-    # No color-only meaning: every state/availability signal has a textual label.
-    assert "state: succeeded" in with_design_hub or "state: approval_pending" in with_design_hub
+    # No color-only meaning: every state has a textual label in the markup, and
+    # every typed refusal names its code and message as text.
+    for run in design_hub.runs:
+        assert f"state: {run.state}" in with_design_hub
+        if run.refusal_code is not None:
+            assert f"<code>{run.refusal_code}</code>" in with_design_hub
+            assert run.refusal_message is not None
+    assert {
+        run.refusal_code for run in design_hub.runs if run.refusal_code
+    } == {
+        "approval_pending",
+        "admission_denied",
+        "malformed_request",
+        "adapter_unavailable",
+        "timed_out",
+        "execution_failed",
+    }
+
+    # Print completeness: the only collapsible container the design hub uses is
+    # <details>, and the stylesheet forces its content open for print, so no
+    # projected evidence can be lost on paper.
+    assert "@media print" in with_design_hub
+    print_css = with_design_hub.split("@media print", 1)[1]
+    assert "details > :not(summary) { display:block !important; }" in print_css
+    assert "details::details-content { content-visibility:visible !important; }" in print_css
+    assert "[hidden] { display:block !important; }" in print_css
+    assert "hidden" not in design_hub_section
+    assert "display:none" not in design_hub_section
+
+    # Incapable of execution in every state: no script, handler, network, or
+    # storage capability is reachable from any rendered terminal state.
+    assert without_design_hub.count("<script") == with_design_hub.count("<script")
+    for token in ("<script", "javascript:", "srcdoc", "formaction", "http-equiv"):
+        assert token not in design_hub_section

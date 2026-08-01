@@ -1,4 +1,4 @@
-State: Active target-state specification. Parent validation hub #4131 is open and blocked. Child implementation issues #4308–#4313 are filed (see each task doc's `github_issue:` frontmatter); CDH-01 through CDH-04 are delivered, CDH-05 (#4312) and CDH-06 (#4313) remain open.
+State: Active target-state specification. Parent validation hub #4131 is open and unaccepted. Child implementation issues #4308–#4313 are filed (see each task doc's `github_issue:` frontmatter); CDH-01 through CDH-05 carry terminal delivery receipts on #4131, and CDH-06 (#4313) is the terminal child, which posts its own receipt and the conditional-acceptance ledger on merge. `Capability acceptance` below stays unticked: an independent parent audit, not a child slice, decides acceptance and authorizes the later docs-only owner-doc promotion.
 Doc role: Capability specification
 Authority: Owns the bounded CKM design-agent integration capability, cross-task invariants, task order, and acceptance path. Subordinate to ADR-0057, ADR-0064, the delivered CKM Direction B contract, and the BuilderOps authority boundary.
 Owner: Builder System / CKM
