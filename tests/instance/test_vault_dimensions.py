@@ -206,19 +206,80 @@ def test_dimension_and_registration_removal_are_safe(tmp_path) -> None:
     assert store.path.read_bytes() == frozen
 
 
+def test_unrelated_extension_writers_cannot_reach_dimension_state(tmp_path) -> None:
+    """The 01B mechanical extension writer cannot wipe or race durable dimensions.
+
+    Two separate protections, and the AC's durability posture needs both:
+
+    1. **Shape.** `set_extension_state` writes the 01B mechanical slots and no longer
+       accepts `dimensions` at all, so a caller that reads the slots, edits one, and
+       re-supplies the rest cannot destroy durable grouping on a stale or empty payload.
+       MVR-02 removed `default_vault_binding_id` from that writer for the same reason.
+    2. **Race.** `expected_revision` lets a caller pin the revision it actually read, so a
+       write that spans two reads fails closed instead of losing the interleaved one.
+    """
+
+    import inspect
+
+    from app.instance.vault_registry import RegistryRevisionConflict
+
+    store = _registry(tmp_path)
+    service = _service(store)
+    service.create("work", display_name="Work", members=["binding-clone-a"])
+    before = parse_dimensions(store.load().extensions)
+
+    # 1. The wipe is unrepresentable: the parameter is gone from the signature.
+    assert "dimensions" not in inspect.signature(store.set_extension_state).parameters
+    current = store.load()
+    store.set_extension_state(
+        principal_state={"operator": "local"},
+        background_state={"mode": "compatibility"},
+        runtime_floors={"registry": "01b"},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    after = store.load()
+    assert parse_dimensions(after.extensions) == before
+    assert after.extensions["principalState"] == {"operator": "local"}
+
+    # 2. A stale pinned revision fails closed rather than committing over newer state.
+    stale = after.revision
+    service.create("reading", display_name="Reading", members=["binding-other"])
+    frozen = store.path.read_bytes()
+    with pytest.raises(RegistryRevisionConflict):
+        store.set_extension_state(
+            principal_state={"operator": "raced"},
+            background_state={},
+            runtime_floors={},
+            expected_revision=stale,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    assert store.path.read_bytes() == frozen
+    assert set(parse_dimensions(store.load().extensions)) == {"reading", "work"}
+
+    # The same conflict protects the dimension writer itself.
+    conflicting = store.load().revision - 1
+    with pytest.raises(RegistryRevisionConflict):
+        store.set_dimension_state(
+            {"schema": DIMENSION_SCHEMA, "entries": {}},
+            expected_revision=conflicting,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    assert set(parse_dimensions(store.load().extensions)) == {"reading", "work"}
+
+
 def test_dimension_administration_fails_closed_on_bad_input(tmp_path) -> None:
     """Validation refusals, each of which would otherwise be a way to smuggle state in."""
 
-    from app.instance.vault_dimensions import (
-        DimensionResolutionError,
-        VaultDimensionError,
-    )
+    from app.instance.vault_dimensions import VaultDimensionError
 
     store = _registry(tmp_path)
     service = _service(store)
 
-    # An unregistered member cannot be added: additions fail closed.
-    with pytest.raises(DimensionResolutionError):
+    # An unregistered member cannot be added: additions fail closed. This is input
+    # validation on a proposed membership, so it is a plain refusal rather than a
+    # resolution conflict over stored state.
+    with pytest.raises(VaultDimensionError, match="not a current registration"):
         service.create("bad", display_name="Bad", members=["binding-missing"])
     assert service.list() == ()
 

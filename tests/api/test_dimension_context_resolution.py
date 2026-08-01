@@ -219,6 +219,18 @@ def test_selection_endpoint_resolves_dimension_and_derives_context_server_side(
     # An unknown dimension is a 404 and mints nothing -- no fallback to the default.
     assert client.post(SELECTION_URL, json={"dimension_id": "nope"}).status_code == 404
 
+    # A present-but-blank `dimension_id` is a malformed request, not an absent field. It is
+    # refused rather than coerced to "no dimension" -- otherwise a blank value would both be
+    # silently ignored and slip past the both-forms refusal above.
+    for blank in ("", "   ", "\t"):
+        empty = client.post(SELECTION_URL, json={"dimension_id": blank})
+        assert empty.status_code == 400, f"{blank!r} was silently ignored: {empty.text}"
+        smuggled = client.post(
+            SELECTION_URL,
+            json={"dimension_id": blank, "vault_binding_ids": [second.vault_binding_id]},
+        )
+        assert smuggled.status_code == 400, smuggled.text
+
     # -- replace also accepts a dimension, and restates provenance ---------------------
     bearer = created.json()["context_selection_id"]
     headers = {"X-Active-Context-Session": bearer}
@@ -404,14 +416,21 @@ def test_dimension_never_upgrades_authority_or_falls_back(instance, client) -> N
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    # It never mints a verdict, an epoch, or a principal: it can only ask and obey.
-    for forbidden in (
-        "BindingVerdict",
-        "authorization_epoch",
-        "snapshot_authorization_epoch",
-        "PrincipalContext",
-    ):
+    # It never mints a verdict or a principal: it can only ask GOV and obey the answer.
+    # Only names this module actually imports are checked -- asserting the absence of a
+    # symbol that could never appear here would be a check that cannot fail.
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    for forbidden in ("BindingVerdict", "PrincipalContext"):
+        assert forbidden in imported, f"{forbidden} must be imported for this check to bite"
         assert forbidden not in constructed
+    # And it never derives an epoch itself, under any spelling.
+    assert "authorization_epoch(" not in inspect.getsource(dimension_module)
+    assert "snapshot_authorization_epoch" not in inspect.getsource(dimension_module)
 
     # The typed provenance record carried into a snapshot holds two scalars and nothing
     # that could be read as a grant.
@@ -427,18 +446,27 @@ def test_dimension_service_without_capability_cannot_mutate(instance) -> None:
     from app.instance._storage_boundary import CapabilityNotReadyError
 
     runtime, first, _second, _third, _record = instance
+    # The dimension must exist first, or four of the five mutators would fail on
+    # unknown-dimension *before* reaching the capability seal and prove nothing.
+    open_vault_dimension_service(runtime.layout.registry_path).create(
+        "x", display_name="X", members=[first.vault_binding_id]
+    )
     readonly = VaultDimensionService(VaultRegistryStore(runtime.layout.registry_path))
     frozen = runtime.layout.registry_path.read_bytes()
     for call in (
-        lambda: readonly.create("x", display_name="X"),
-        lambda: readonly.rename("x", display_name="Y"),
+        lambda: readonly.create("y", display_name="Y"),
+        lambda: readonly.rename("x", display_name="Renamed"),
         lambda: readonly.set_members("x", []),
         lambda: readonly.remove_member("x", first.vault_binding_id),
         lambda: readonly.delete("x"),
     ):
-        with pytest.raises((CapabilityNotReadyError, DimensionResolutionError)):
+        # Every one of these reaches the seal: `CapabilityNotReadyError`, not a
+        # cheaper validation refusal that would have masked an unsealed writer.
+        with pytest.raises(CapabilityNotReadyError):
             call()
     assert runtime.layout.registry_path.read_bytes() == frozen
+    # Reads still work without the capability: the seal is on mutation only.
+    assert readonly.inspect("x").members == (first.vault_binding_id,)
 
 
 def test_dimension_resolution_needs_no_selection_store(instance) -> None:

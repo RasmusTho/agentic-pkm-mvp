@@ -310,9 +310,11 @@ def record_principal_floor(
     mechanism, so `app/instance/runtime.py::_require_runtime_floor` refuses a credential-only
     scalar image with no additional machinery.
 
-    The existing `dimensions` / `principalState` / `backgroundState` extension state is read
-    back and re-supplied unchanged, because `set_extension_state` writes all four slots
-    together and a partial write would erase a sibling.
+    The existing `principalState` / `backgroundState` extension state is read back and
+    re-supplied unchanged, because `set_extension_state` writes those slots together and a
+    partial write would erase a sibling. `dimensions` is deliberately absent: MVR-04 gave it
+    its own validated producer and removed it from this writer, so this function can no
+    longer reach durable dimension state even by accident.
     """
 
     require_complete_fence(inventory)
@@ -323,7 +325,6 @@ def record_principal_floor(
     principal_state = dict(extensions.get("principalState") or {})
     principal_state["fence"] = json.loads(json.dumps(inventory.as_payload()))
     return registry_store.set_extension_state(
-        dimensions=dict(extensions.get("dimensions") or {}),
         principal_state=principal_state,
         background_state=dict(extensions.get("backgroundState") or {}),
         runtime_floors=floors,

@@ -126,8 +126,10 @@ class ContextSelectionRecord:
     expires_at: float
     #: MVR-04 provenance when the binding set above came from a stored dimension. The
     #: *bindings* remain the selection: this records which dimension produced them and at
-    #: which revision, so a later resolution can tell that membership moved. It is never
-    #: re-expanded, so it cannot widen the selection, and it stores no authority.
+    #: which revision. It is never re-expanded, so it cannot widen the selection, and it
+    #: stores no authority. Note the resolver does not re-check the recorded revision
+    #: against current registry truth -- an already-resolved selection keeps its explicit
+    #: bindings, each of which GOV re-authorizes on every resolution regardless.
     dimension_filter: DimensionFilter | None = None
 
     def redacted(self) -> dict[str, object]:

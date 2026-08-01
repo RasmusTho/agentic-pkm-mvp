@@ -67,9 +67,17 @@ WRITE_CLASS_READ = "read"
 PERMISSION_SELECTION_MANAGE = "wsp.active_context.manage_selection"
 PERMISSION_SELECTION_READ = "wsp.active_context.read_selection"
 
-#: The MVR-04 dimension-resolution command's own GOV decision inputs. They are exactly the
-#: selection-management inputs above: resolving a dimension is not a distinct privilege and
-#: must not acquire one, or grouping would have become an authority path after all.
+#: The MVR-04 dimension-resolution command's own GOV action. It pairs with exactly the
+#: selection-management write class and permission above: resolving a dimension is not a
+#: distinct privilege and must not acquire one, or grouping would have become an authority
+#: path after all.
+#:
+#: Be precise about what this does and does not mean. GOV is told *which command is asking*,
+#: as every caller must be -- so the endpoint contract is legible to a future policy. It is
+#: not told *which dimension*, and no dimension id, display name, or membership reaches the
+#: authorizer. A future policy could therefore distinguish this command from another
+#: command, exactly as it could for any endpoint; it could not distinguish one dimension
+#: from another, or a grouped binding from the same binding named explicitly.
 ACTION_DIMENSION_RESOLVE = "active_context.dimension.resolve"
 
 
@@ -369,6 +377,13 @@ class ActiveContextSelectionService:
         The dimension id is never stored as something to re-expand later.
         """
 
+        if dimension_id is not None and not dimension_id.strip():
+            # Present-but-blank is a malformed request, not an absent field. Coercing it to
+            # "no dimension" would silently ignore client input -- which is precisely what
+            # `docs/contracts/ACTIVE_CONTEXT_SET.md` says must never happen -- and would
+            # also let `{"dimension_id": "  ", "vault_binding_ids": [...]}` slip past the
+            # both-forms refusal below.
+            raise SelectionIntentError("dimension_id was supplied but is blank")
         target = (dimension_id or "").strip() or None
         if target is not None and binding_ids:
             raise SelectionIntentError(

@@ -909,8 +909,16 @@ def test_mvr04_rollforward_preserves_dimensions_across_default_mutation(tmp_path
     )
     merged = runtime.registry.load()
 
-    # The default is reconciled through the normal MVR-02 lineage.
+    # The default is reconciled through the normal MVR-02 lineage -- restored from the
+    # new-schema value with its provenance intact, not inferred from the returning
+    # last-active projection. These are the assertions the sibling MVR-02 test makes, kept
+    # here so MVR-04 cannot quietly weaken the lineage it claims to reconcile through.
+    from app.instance.vault_registry import DEFAULT_PROVENANCE_EXPLICIT
+
     assert merged.default_vault_binding_id == second.vault_binding_id
+    assert merged.default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
+    assert merged.last_active_vault_ref == first.ref
+    assert merged.last_active_vault_ref != second.ref
     assert merged.registrations[first.vault_binding_id].vault_name == (
         "Renamed on the pre-MVR-04 image"
     )

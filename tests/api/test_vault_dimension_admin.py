@@ -155,7 +155,9 @@ def test_production_dimension_commands_drive_registry(instance, client) -> None:
         "api",
     )
     assert refused["_exit_code"] == 1 and refused["ok"] is False
-    assert "dimension_member_unregistered" in refused["error"]
+    # A proposed member that is not a current registration is a client input error, not a
+    # conflict over stored state, so it is reported as a plain refusal.
+    assert "not a current registration" in refused["error"]
     assert runtime.registry.load().revision == before
 
     # -- CLI create + list, then API list, agree -------------------------------------
@@ -319,12 +321,20 @@ def test_admin_can_repair_stale_dimension_membership(instance, client) -> None:
     assert first.vault_binding_id not in detail
     assert third.vault_binding_id not in detail
 
-    # An addition also fails closed while the dimension is broken.
+    # An addition also fails closed while the dimension is broken: a replacement is an
+    # addition path, so it refuses the stale id rather than accepting it. 400 rather than
+    # 409 because the refusal is about the *proposed* membership the client just sent.
     still_closed = client.put(
         f"{DIMENSIONS_URL}/work/members",
         json={"vault_binding_ids": [first.vault_binding_id, "binding-vanished"]},
     )
-    assert still_closed.status_code == 409
+    assert still_closed.status_code == 400
+    # ... and the broken stored membership is untouched by the refusal.
+    assert client.get(f"{DIMENSIONS_URL}/work").json()["vault_binding_ids"] == [
+        first.vault_binding_id,
+        "binding-vanished",
+        third.vault_binding_id,
+    ]
 
     # Instance-authorized repair clears the stale member without resolving it, and the
     # surviving order is preserved.

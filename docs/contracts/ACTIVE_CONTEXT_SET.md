@@ -32,7 +32,10 @@ non-reversible `selection_capability_digest`, `topology_posture`, `expires_at`, 
 `posture` (`healthy` | `degraded`) with a bounded `degraded_reason`.
 `dimension_filter` is shipped by MVR-04 (#3858) as the typed `DimensionFilter` provenance
 record — the resolved `dimension_id` plus its `dimension_revision`, and nothing else. It is
-absent for an explicitly enumerated selection. No client string can become one: the only
+absent for an explicitly enumerated selection. The revision is recorded provenance, not a
+shipped staleness check: nothing re-reads it against current registry truth. What protects a
+selection whose dimension changed underneath it is the ordinary per-binding GOV
+authorization that runs on every resolution. No client string can become one: the only
 producer is the server-side resolver over an id already stored in the instance registry, and
 it is never re-expanded, so it cannot widen a snapshot.
 

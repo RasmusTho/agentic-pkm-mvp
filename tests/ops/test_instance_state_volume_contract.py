@@ -4318,7 +4318,6 @@ def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restor
         watcher_vault_path=root,
     )
     runtime.registry.set_extension_state(
-        dimensions={"d": [registration.vault_binding_id]},
         principal_state={"operator": "local"},
         background_state={"mode": "compatibility"},
         runtime_floors={"registry": "01b"},
@@ -4440,7 +4439,6 @@ def test_prod_restore_rejects_noncanonical_quiescence_authority_without_mutation
         host_global_root=runtime.ledger.root,
     )
     runtime.registry.set_extension_state(
-        dimensions={"new": [registration.vault_binding_id]},
         principal_state={"operator": "changed"},
         background_state={"mode": "changed"},
         runtime_floors={"registry": "changed"},
@@ -4571,7 +4569,6 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
         watcher_vault_path=target_root,
     )
     target_runtime.registry.set_extension_state(
-        dimensions={"prod": [target_registration.vault_binding_id]},
         principal_state={"operator": "prod"},
         background_state={"mode": "prod"},
         runtime_floors={"registry": "prod"},

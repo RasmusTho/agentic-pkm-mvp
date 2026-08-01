@@ -140,7 +140,10 @@ class DimensionFilter:
     the shape is the invariant:
 
     - It records **which stored dimension was resolved, at which dimension revision**. That
-      is provenance and staleness detection, nothing else.
+      is provenance, and it is provenance *only*: nothing in the shipped runtime compares a
+      stored revision against current registry truth. MVR-04 records the value so that a
+      later slice can detect drift and so that context-cache identity separates two
+      snapshots taken at different dimension revisions; it does not itself detect anything.
     - It is **not** an input to anything. `source_bindings` is already the explicit,
       individually authorized binding set the server resolved; no consumer re-expands this
       filter, and expanding it later could not widen the snapshot because GOV authorized

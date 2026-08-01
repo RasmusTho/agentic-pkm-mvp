@@ -16,14 +16,24 @@ Three structural properties make that enforceable rather than merely documented.
    `tests/integration/test_multi_vault_dimensions.py`, so adding one breaks a test.
 2. **Resolution is a pure fan-out over the *same* GOV seam.** :meth:`VaultDimensionService
    .resolve` calls `app/governance/binding_authority.py` once per member with the decision
-   inputs its *caller's* endpoint contract supplied. The dimension id is not one of them and
-   never reaches GOV, so a verdict cannot depend on how a binding was reached. Resolving a
-   dimension is therefore observably identical to naming its members explicitly --
-   the equivalence a test pins directly.
+   inputs its *caller's* endpoint contract supplied. No dimension id, display name, or
+   membership is among them, so a verdict cannot depend on *which* group a binding sits in,
+   or on whether it sat in one at all. (The caller's `action` does name the command doing
+   the asking, as it must for every endpoint; that is command identity, not group identity.)
+   Resolving a dimension is therefore observably identical to naming its members explicitly
+   -- the equivalence a test pins directly.
 3. **Resolution is all-or-nothing.** An unknown, stale, removed, or unauthorized member
    fails the whole resolution with a bounded member-specific error. There is no branch that
    returns an authorized subset, excludes a member, or substitutes another binding, so
    grouping cannot become a way to reach *some* of what you asked for.
+
+One mutation deliberately does not emit an event: the transactional repair performed by
+`repair_dimensions_for_removed_binding` when a registration is removed. It runs inside the
+registry's own locked transaction, which has no outbox access and must not acquire one, so
+its durable receipt is the bounded `lastRepair` field written on each affected dimension.
+`instance.vault_dimension.changed` is therefore the record of *administrative* mutations,
+not of every membership change; a consumer must reconcile the durable registry revision,
+which is what the lane's cross-task invariant requires of it anyway.
 
 Stored membership is deliberately allowed to go stale. A binding may be de-registered or
 lose authorization while a dimension still lists it; that stored row is inert data, not a
@@ -137,7 +147,8 @@ class VaultDimension:
     members: tuple[str, ...] = ()
     #: The last transactional membership repair applied by a registration removal, kept on
     #: the entry itself so the durable receipt is bounded by construction (one per
-    #: dimension) rather than an ever-growing journal in instance state.
+    #: dimension) rather than an ever-growing journal in instance state. Written only by
+    #: `repair_dimensions_for_removed_binding`; never interpreted as membership.
     last_repair: dict[str, Any] | None = None
 
     def redacted(self) -> dict[str, Any]:
@@ -445,8 +456,8 @@ class VaultDimensionService:
         `action`, `write_class`, and `required_permission` are the *caller's* GOV decision
         inputs for this call, derived from its server-owned endpoint/command contract. They
         are passed straight through. The dimension id is deliberately **not** among them:
-        it never reaches GOV, so no verdict can differ because a binding was reached
-        through a group.
+        it never reaches GOV, so no verdict can differ because of *which* group a binding
+        was reached through, or whether it was reached through one at all.
 
         All-or-nothing, by construction: the first unknown, stale, removed, or unauthorized
         member raises. There is no `continue`, no partial accumulation returned to a
@@ -663,14 +674,20 @@ class VaultDimensionService:
     def _require_registered(
         self, snapshot: RegistrySnapshot, members: Iterable[str]
     ) -> None:
+        """Refuse an addition naming a binding this instance does not hold.
+
+        This is input validation on a proposed membership, not a resolution: raising
+        `DimensionResolutionError` here would report a client's bad request as a conflict
+        over stored state, and would have to invent a dimension id to do it.
+        """
+
         unknown = [
             member for member in members if member not in snapshot.registrations
         ]
         if unknown:
-            raise DimensionResolutionError(
-                REASON_MEMBER_UNREGISTERED,
-                dimension_id="<proposed>",
-                vault_binding_id=sorted(unknown)[0],
+            raise VaultDimensionError(
+                "proposed dimension member is not a current registration: "
+                f"{sorted(unknown)[0]}"
             )
 
     def _commit(

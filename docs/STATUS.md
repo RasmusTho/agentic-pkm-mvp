@@ -202,9 +202,18 @@ promote public internet readiness.
   durable, validated registry field, and `app/instance/default_vault.py` is the one fail-closed
   resolver (`override > session > instance default > explicit legacy bootstrap > no-vault`) plus the
   one service behind the authenticated default-vault API route and the headless CLI.
-  **Request-scoped resolution has not shipped**: the `X-Active-Context-*` HTTP carriers, session
-  storage, and binding-keyed persistence remain MVR-03/05 work, so nothing in the request path
-  consumes the resolver yet. Unmapped changed surfaces continue to fail closed.
+  The **versioned selection seam has shipped** (MVR-03, #3857): `active_context_set.v1`, the
+  TTL-bound selection store and resolver, per-binding GOV authorization, and the production
+  create/replace/inspect/clear endpoints — with the deployment-wrapper activation of its principal
+  cutover still open under #4524.
+  **Non-authoritative dimension grouping has shipped** (MVR-04, #3858): durable ordered membership
+  over registered bindings in `app/instance/vault_dimensions.py`, administered through the
+  authenticated `/api/instance/dimensions` route and the headless `dimension-*` CLI, with
+  all-or-nothing member resolution that authorizes every member independently. A dimension grants
+  no authority; it is a grouping convenience over bindings the caller could already name.
+  **Request-scoped resolution has still not shipped**: the `X-Active-Context-*` HTTP carriers and
+  binding-keyed persistence remain MVR-05 work, so nothing in the ordinary request path consumes the
+  resolver yet. Unmapped changed surfaces continue to fail closed.
 
 Validation posture note:
 - blocking smoke/release gates are anchored to the active baseline in this document

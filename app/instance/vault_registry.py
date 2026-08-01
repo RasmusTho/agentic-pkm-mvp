@@ -747,7 +747,6 @@ class VaultRegistryStore:
     def set_extension_state(
         self,
         *,
-        dimensions: Mapping[str, object],
         principal_state: Mapping[str, object],
         background_state: Mapping[str, object],
         runtime_floors: Mapping[str, object],
@@ -763,14 +762,20 @@ class VaultRegistryStore:
         a durable operator default (when passed ``None``) or forge
         ``explicit_default_command`` provenance (when passed a binding).
 
-        MVR-04 makes the ``dimensions`` slot meaningful rather than an opaque
-        placeholder, which turns a latent hazard into a real one: a caller that
-        reads the four slots, edits one, and re-supplies the rest performs a
-        read-modify-write across *two* reads — its own and this method's. A
-        dimension mutation committing between them would be silently overwritten
-        by the stale payload. ``expected_revision`` lets such a caller pin the
-        revision it actually read, so that race fails closed with
-        :class:`RegistryRevisionConflict` instead of losing the write.
+        MVR-04 does exactly the same for ``dimensions``, for exactly the same
+        reason. That slot is no longer an opaque 01B placeholder but durable
+        operator state with its own validated producer
+        (:meth:`set_dimension_state`), so this writer must not be able to reach
+        it at all. Keeping the parameter would leave a standing wipe: any caller
+        that read the slots, edited one, and re-supplied the rest would silently
+        destroy every dimension on a stale or empty payload — with no error, no
+        conflict, and no event. Removing it makes that unrepresentable rather
+        than merely unlikely.
+
+        ``expected_revision`` additionally lets such a caller pin the revision it
+        actually read, so a concurrent write to any *remaining* slot fails closed
+        with :class:`RegistryRevisionConflict` instead of being lost across the
+        two reads this call spans.
         """
 
         _require_storage_mutation_capability(_capability)
@@ -779,7 +784,6 @@ class VaultRegistryStore:
         extensions = copy.deepcopy(current.extensions)
         extensions.update(
             {
-                "dimensions": copy.deepcopy(dict(dimensions)),
                 "principalState": copy.deepcopy(dict(principal_state)),
                 "backgroundState": copy.deepcopy(dict(background_state)),
                 "runtimeFloors": copy.deepcopy(dict(runtime_floors)),
