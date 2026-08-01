@@ -284,6 +284,129 @@ Rollback is a tag-bump + recreate because images are immutable and retained in t
 
 Once a manual rollback has selected and pinned the previous known-good target, failure handling follows the actual service state. If image pull or service recreate fails before the target service set is established, the executor restores the pre-rollback pin and recreates that service set so pin and runtime identity do not diverge. After the rollback target has been recreated successfully, a later verification-gate failure preserves that failure's status and diagnostics and retains the rollback target; it does not automatically restore the pre-rollback candidate that the operator is trying to leave. A successful rollback receipt is still withheld until every required gate passes.
 
+## Minimum runtime principal floor (MVR-03, shipped)
+
+MVR-03 (#3857) introduces a durable private delegated operator-role record and, with it, a
+runtime floor that constrains which images may run. This section records the shipped floor,
+the compatible rollback/roll-forward images, and the operator preflight.
+
+**Shipped floor.** `runtimeFloors.minimumRuntimePrincipal = "mvr-03"`, written into the
+existing MVR-01 `runtimeFloors` extension slot on the instance vault registry — not a second
+floor mechanism. Written by `app/instance/principal_fence.py::record_principal_floor`; read
+by `app/instance/runtime.py::_require_runtime_floor`.
+
+**Cutover order (enforced, not merely documented).** MVR-03 runs inside MVR-01B's *existing*
+stopped window in `scripts/lib/instance_state_deployment.sh` — the same window MVR-01C's
+`authority-cutover` uses. It does not add a second drain, probe, or inventory mechanism,
+because its auth producers are the same processes MVR-01B already fences:
+
+1. The wrapper installs the durable restart fence (`deployment-begin`) and stops `api`,
+   `worker`, `watcher`, `heimdal-capture-watch`.
+2. `scripts/instance_state_writer_inventory.py prove-quiescent` probes production truth twice
+   and `deployment-prove` binds the proof to the channel lease.
+3. `principal-record-floor` runs in that window. It requires the lease in `proved` phase for
+   this channel and nonce, consumes the quiescence proof plus the drained legacy-owner
+   inventory, enumerates `docker-compose.yaml` (failing closed on any unclassified service),
+   and adds the producers MVR-01B does not classify — the Companion proxy, credential
+   rotation, the headless CLI, and bootstrap/init. Only then does it record the floor.
+4. `principal-bootstrap` writes the delegated-role record; it refuses while the floor is
+   absent.
+5. `deployment-finish` closes the window.
+
+`require_complete_fence` refuses steps 3–4 if the inventory is incomplete, if writers were not
+drained, if the inventory was not revalidated after quiescence, if it was probed once, if any
+producer role is missing, or if operations are not fenced. `principal-record-floor` also
+refuses without the proved deployment lease for this channel and nonce, and it preflights the
+auth posture the subsequent role write will use — so a floor can never be recorded on an
+instance where the role could not then be written. A crash before the floor leaves old auth
+state authoritative and the migration untouched.
+
+> **Not yet automated.** `scripts/lib/instance_state_deployment.sh` does **not** invoke steps
+> 3–4. Wiring them requires the credential/listener posture and the native launcher paths to be
+> available inside the `instance-state-init` one-shot, which that service does not currently
+> have; a half-wired cutover would record the floor and then fail the role write, leaving the
+> instance fenced and rollback-blocked. Until that plumbing ships, an operator runs steps 3–4
+> explicitly inside the stopped window using the commands below. This is tracked as bounded
+> follow-up work on #3857.
+
+**Rollback: credential-only images are blocked.** While the floor exists,
+`_preflight_scalar_rollback` raises `CapabilityNotReadyError` before materializing any legacy
+projection. A pre-MVR-03 image has no producer for the role record and would resolve requests
+with no principal at all, so scalar rollback is refused rather than degraded. The MVR-01
+rollback launcher and native preflight inherit this refusal through the same code path.
+
+**Compatible images.** Rollback must target an image that understands
+`agentic-pkm.local-operator-principal.v1`. Compatible roll-forward exports the prior image's
+final credential/auth revision under the store lock
+(`LocalOperatorPrincipalStore.export_final_auth_state`), verifies its recorded fork, and
+reconciles only an *unambiguous* credential rotation into the same role id. Missing,
+divergent, or ambiguous auth state fails closed without overwriting either lineage. The floor
+may be lowered only by a later explicitly verified reversible migration — never by a scalar
+rollback.
+
+**Cutover commands (run inside the stopped window, between `deployment-prove` and
+`deployment-finish`).** Both refuse outside that window.
+
+```bash
+REG=/app/instance-state/agentic-pkm/vault-registry.md
+OWN=/app/instance-ownership
+
+python -m app.instance.runtime principal-record-floor \
+  --channel "$CHANNEL" --registry-path "$REG" --host-global-root "$OWN" \
+  --inventory-path "$OWN/legacy-owner-inventory.json" \
+  --quiescence-proof-path "$OWN/deployment-quiescence-proof.json" \
+  --compose-base <mounted docker-compose.yaml> \
+  --native-producer-root <mounted repo root> \
+  [--loopback-listener]
+
+python -m app.instance.runtime principal-bootstrap \
+  --registry-path "$REG" [--loopback-listener] [--existing-install]
+```
+
+The posture is **read** from server configuration (`API_KEY`, `COMPANION_UI_PROXY_HOSTS`), so
+the subjects bound at bootstrap are the ones the request path will actually admit.
+`--loopback-listener` declares that this deployment exposes a loopback-local listener, which
+makes `trusted_loopback` a *bindable* subject; every request still proves loopback
+independently in `app/auth.py::resolve_auth_subject` before that subject is used.
+
+**Governed commands (run against a live instance, outside the cutover window).**
+
+```bash
+REG=/app/instance-state/agentic-pkm/vault-registry.md
+
+# Confirm the role resolves before enabling request selection.
+python -m app.instance.runtime principal-show --registry-path "$REG" --consumer cli
+
+# Governed credential rotation; preserves the role id and keeps the loopback/proxy subjects.
+# The new key arrives on stdin, never in argv (/proc/<pid>/cmdline and shell history are
+# both readable, so a --credential flag would leak the key it exists to protect).
+printf '%s' "$NEW_KEY" | python -m app.instance.runtime principal-rotate-credential \
+  --registry-path "$REG" --credential-stdin
+
+# Governed role addition; the new role receives a DISTINCT principal id.
+python -m app.instance.runtime principal-add-role \
+  --registry-path "$REG" --kind human --label "owner"
+
+# Governed posture change; the only way to drop a bound subject. Refuses to drop the last one.
+python -m app.instance.runtime principal-revoke-subject \
+  --registry-path "$REG" --subject trusted_companion_proxy
+
+# Roll-forward lineage. The export carries the PRIOR IMAGE's configured credential (read from
+# its environment inside the stopped window), not the role record's own fingerprint. The
+# reconcile consumes the export on success, so it can never be replayed over a later rotation.
+printf '%s' "$OLD_IMAGE_KEY" | python -m app.instance.runtime principal-export-auth-state \
+  --registry-path "$REG" --credential-stdin
+python -m app.instance.runtime principal-roll-forward --registry-path "$REG"
+```
+
+Every receipt is redaction-safe: opaque role id, bound subjects, revision, provenance, and a
+`credential_bound` boolean. No credential, fingerprint, or filesystem path is printed.
+
+`--loopback-listener` declares that this deployment exposes a loopback-local listener, which
+makes `trusted_loopback` a *bindable* subject. It is not a substitute for enforcement: every
+request independently proves loopback in `app/auth.py::resolve_auth_subject` before that
+subject is used.
+
 ## Live post-deploy UI smoke
 
 A deploy is verified by an **end-to-end UI smoke against the live gateway**, not only by container health. This closes the gap noted in memory `project_companion_gateway_topology` (failures observed were transient `[Errno 61]` connection refusals and stale code after a pull-without-restart, with no live post-deploy UI check to catch them).

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
@@ -43,6 +44,11 @@ from app.instance.scalar_rollback_guard import (
 from app.instance.default_vault import (
     InstanceDefaultVaultService,
     VaultSelectionError,
+)
+from app.instance.local_operator_principal import (
+    MINIMUM_RUNTIME_PRINCIPAL_KEY,
+    LocalOperatorPrincipalStore,
+    PRINCIPAL_RECORD_FILENAME,
 )
 from app.instance.vault_registry import (
     AppLocalSettings,
@@ -851,6 +857,17 @@ def _require_runtime_floor(snapshot: RegistrySnapshot, *, scalar_runtime: bool) 
     if scalar_runtime and minimum and minimum != "scalar":
         raise CapabilityNotReadyError(
             "minimum runtime schema blocks scalar API/worker before database or queue startup"
+        )
+    # MVR-03: once the delegated-principal record is authoritative, an earlier
+    # credential-only image cannot be booted. It has no producer for the role record and
+    # would resolve requests with no principal at all, so scalar rollback must refuse it.
+    # Lowering this floor requires a later explicitly verified reversible migration; a
+    # scalar rollback may never do it.
+    principal_floor = str(floors.get(MINIMUM_RUNTIME_PRINCIPAL_KEY) or "").strip()
+    if scalar_runtime and principal_floor:
+        raise CapabilityNotReadyError(
+            "minimum runtime principal blocks a credential-only scalar image; use a "
+            "compatible roll-forward image instead of scalar rollback"
         )
 
 
@@ -2855,6 +2872,36 @@ def open_default_vault_service(registry_path: Path) -> InstanceDefaultVaultServi
     )
 
 
+def local_operator_principal_path(registry_path: Path) -> Path:
+    """The private delegated-role record, a sibling of the registry.
+
+    It lives under the same MVR-01 instance-state boundary (mode-0700 directory,
+    mode-0600 file). Native installs resolve the same layout inside private
+    app-data.
+    """
+
+    return Path(registry_path).parent / PRINCIPAL_RECORD_FILENAME
+
+
+def open_local_operator_principal_store(registry_path: Path) -> LocalOperatorPrincipalStore:
+    """Open the MVR-03 delegated-role store next to the instance registry.
+
+    Mutating methods still require the sealed capability; production callers pass
+    it through `local_operator_storage_capability()` below, matching the MVR-02
+    factory pattern.
+    """
+
+    return LocalOperatorPrincipalStore(local_operator_principal_path(registry_path))
+
+
+def local_operator_storage_capability() -> object:
+    """Hand the sealed storage-mutation capability to MVR-03's durable writers."""
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    return _STORAGE_MUTATION_CAPABILITY
+
+
 def _default_vault_command(args: argparse.Namespace) -> int:
     """Headless MVR-02 get/set/clear through the same service the API uses.
 
@@ -2887,6 +2934,241 @@ def _default_vault_command(args: argparse.Namespace) -> int:
         **receipt.as_dict(),
     }
     print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+PRINCIPAL_COMMANDS = (
+    "principal-show",
+    "principal-record-floor",
+    "principal-bootstrap",
+    "principal-rotate-credential",
+    "principal-add-role",
+    "principal-revoke-subject",
+    "principal-export-auth-state",
+    "principal-roll-forward",
+)
+
+
+def _read_credential(args: argparse.Namespace) -> str | None:
+    """Resolve the credential without ever putting it on the command line.
+
+    `argv` is world-readable on Linux (`/proc/<pid>/cmdline`) and lands in shell history, so
+    a `--credential <key>` flag would be a credential-durability defect in the very slice
+    that exists to stop credentials from leaking. The credential comes from the process
+    environment the server already reads (`API_KEY`), or from stdin for an explicit
+    rotation.
+    """
+
+    if getattr(args, "credential_stdin", False):
+        value = sys.stdin.read().strip()
+        return value or None
+    from app.settings import settings
+
+    return settings.api_key
+
+
+def _require_proved_deployment_lease(
+    *, host_global_root: Path, channel: str, nonce: object
+) -> dict[str, object]:
+    """Assert the MVR-01B stopped window is live, proved, and bound to this deployment.
+
+    Reuses the same lease shape MVR-01C's roll-forward requires rather than a weaker
+    inline check: schema, channel, proved phase, matching nonce, a stopped-consumer
+    attestation, and the bound inventory digest all have to line up. A weaker check would
+    let the floor be recorded outside any stopped window at all.
+    """
+
+    from app.instance.principal_fence import PrincipalFenceError
+
+    def _refuse() -> PrincipalFenceError:
+        return PrincipalFenceError(
+            "the principal floor requires the proved deployment lease for this channel",
+            provisioning_action=(
+                "run the principal cutover inside the stopped deployment window, after "
+                "deployment-prove and before deployment-finish"
+            ),
+        )
+
+    try:
+        lease = _read_deployment_lease(Path(host_global_root))
+    except (OSError, ValueError, InstanceStatePreflightError, RegistryError) as error:
+        # No window was ever opened, or its lease is unreadable/unsafe. Either way the
+        # floor must not be recorded: a live instance with every auth producer running is
+        # exactly the state the fence exists to exclude.
+        raise _refuse() from error
+    if (
+        lease.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
+        or lease.get("channel_id") != channel
+        or lease.get("phase") != "proved"
+        or lease.get("nonce") != nonce
+        or not lease.get("all_consumers_stopped")
+        or not str(lease.get("inventory_digest") or "").strip()
+        or not isinstance(lease.get("controller"), dict)
+    ):
+        raise _refuse()
+    return lease
+
+
+def _principal_command(args: argparse.Namespace) -> int:
+    """Headless MVR-03 delegated-role producers.
+
+    This is the CLI half of the "production API and CLI resolve the same record"
+    requirement: it opens the same private store the API router opens, through the
+    same sanctioned factory. It is also the **only** producer path for the
+    `minimum_runtime_principal` floor, the governed role/subject commands, and the
+    roll-forward export — an invariant with no producer is a latent outage
+    (`AGENTS.md :: Required rules`, invariant -> producers).
+
+    Every receipt is redaction-safe: opaque role id, bound subjects, revision, and
+    provenance. It never prints the credential, the credential fingerprint, or the
+    record's filesystem path.
+    """
+
+    from app.instance.active_context_service import current_auth_posture
+    from app.instance.local_operator_principal import (
+        PrincipalPreflightError,
+        preflight_auth_posture,
+    )
+    from app.instance.principal_fence import (
+        PrincipalFenceError,
+        inventory_from_quiescence,
+        principal_floor_recorded,
+        record_principal_floor,
+    )
+
+    registry_path = Path(args.registry_path)
+    registry = VaultRegistryStore(registry_path)
+    store = open_local_operator_principal_store(registry_path)
+    extra: dict[str, object] = {}
+    try:
+        if args.command == "principal-record-floor":
+            # Runs INSIDE MVR-01B's existing stopped window, after `deployment-prove`, with
+            # the compose policy mounted read-only -- the same shape as
+            # `authority-cutover`. It consumes that window's proof rather than inventing a
+            # second drain/probe mechanism (and rather than depending on a file no producer
+            # writes). The runtime image has no repo checkout, so the compose source is an
+            # explicit mounted path, never derived from `__file__`.
+            proof = json.loads(
+                Path(args.quiescence_proof_path).read_text(encoding="utf-8")
+            )
+            owners = json.loads(Path(args.inventory_path).read_text(encoding="utf-8"))
+            _require_proved_deployment_lease(
+                host_global_root=Path(args.host_global_root),
+                channel=args.channel,
+                nonce=proof.get("nonce"),
+            )
+            # Preflight the posture `principal-bootstrap` will use, BEFORE the floor is
+            # recorded. Recording the floor is irreversible for rollback purposes, so a
+            # deployment that records it and then fails to write the role would leave the
+            # instance fenced, rollback-blocked, and principal-less. Refusing here makes
+            # that ordering unreachable rather than merely unlikely.
+            preflight_auth_posture(
+                current_auth_posture(loopback_listener_proven=args.loopback_listener)
+            )
+            inventory = inventory_from_quiescence(
+                channel_id=args.channel,
+                quiescence_proof=proof,
+                legacy_owner_inventory=owners,
+                compose_path=Path(args.compose_base),
+                repo_root=Path(args.native_producer_root),
+            )
+            snapshot = record_principal_floor(
+                registry,
+                inventory=inventory,
+                _capability=local_operator_storage_capability(),
+            )
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "consumer": args.consumer,
+                        "floor_recorded": True,
+                        "registry_revision": snapshot.revision,
+                        "fenced_producers": len(inventory.producers),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "principal-show":
+            record = store.require()
+        elif args.command == "principal-bootstrap":
+            # The posture is read from server configuration, not asserted by flags, so the
+            # bound subjects match what the request path will actually admit.
+            posture = current_auth_posture(
+                loopback_listener_proven=args.loopback_listener,
+            )
+            record = store.bootstrap(
+                credential=posture.credential,
+                subjects=preflight_auth_posture(posture),
+                migration_provenance=posture.migration_provenance(
+                    existing_install=args.existing_install
+                ),
+                floor_recorded=principal_floor_recorded(registry),
+                _capability=local_operator_storage_capability(),
+            )
+        elif args.command == "principal-rotate-credential":
+            record = store.rotate_credential(
+                credential=_read_credential(args),
+                _capability=local_operator_storage_capability(),
+            )
+        elif args.command == "principal-add-role":
+            record, added = store.add_role(
+                kind="human" if args.kind == "human" else "agent",
+                label=args.label,
+                _capability=local_operator_storage_capability(),
+            )
+            extra = {"added_role_id": added.role_id, "added_role_kind": added.kind}
+        elif args.command == "principal-export-auth-state":
+            # The export is the PRIOR IMAGE's final credential/auth revision, which is the
+            # configured #2223 credential at stopped-window time -- not the delegated-role
+            # record's own fingerprint. Exporting the record back at itself would make the
+            # reconcile branch a permanent no-op and the rotation-reconciliation path dead.
+            record = store.require()
+            configured = _read_credential(args)
+            store.export_final_auth_state(
+                credential=configured,
+                fork_revision=record.revision,
+                _capability=local_operator_storage_capability(),
+            )
+            extra = {
+                "exported_fork_revision": record.revision,
+                "exported_credential_bound": configured is not None,
+            }
+        elif args.command == "principal-revoke-subject":
+            record = store.revoke_subject(
+                args.subject,  # type: ignore[arg-type]
+                _capability=local_operator_storage_capability(),
+            )
+            extra = {"revoked_subject": args.subject}
+        else:
+            record = store.reconcile_roll_forward(
+                _capability=local_operator_storage_capability(),
+            )
+    except (PrincipalFenceError, PrincipalPreflightError, CapabilityNotReadyError) as exc:
+        print(
+            json.dumps(
+                {"ok": False, "consumer": args.consumer, "error": str(exc)},
+                sort_keys=True,
+            )
+        )
+        return 1
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "consumer": args.consumer,
+                "local_operator_role_id": record.local_operator_role_id,
+                "principal_kind": "delegated_operator_role",
+                "revision": record.revision,
+                "subjects": list(record.subjects),
+                "migration_provenance": record.migration_provenance,
+                "credential_bound": record.credential_fingerprint is not None,
+                **extra,
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -2964,6 +3246,45 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--consumer", default=None)
         if name == "default-vault-set":
             command.add_argument("--vault-binding-id", required=True)
+    for name in PRINCIPAL_COMMANDS:
+        command = subparsers.add_parser(name)
+        command.add_argument("--registry-path", type=Path, required=True)
+        command.add_argument("--consumer", default=None)
+        if name == "principal-record-floor":
+            # Explicit mounted source paths, matching `authority-cutover`: the runtime image
+            # contains no repo checkout, so nothing here may be derived from `__file__`.
+            command.add_argument("--channel", required=True)
+            command.add_argument("--host-global-root", type=Path, required=True)
+            command.add_argument("--inventory-path", type=Path, required=True)
+            command.add_argument("--quiescence-proof-path", type=Path, required=True)
+            command.add_argument("--compose-base", type=Path, required=True)
+            command.add_argument("--native-producer-root", type=Path, required=True)
+            # The floor preflights the posture the subsequent role write will use, so it
+            # needs the same declaration `principal-bootstrap` takes.
+            command.add_argument("--loopback-listener", action="store_true")
+        if name == "principal-revoke-subject":
+            command.add_argument(
+                "--subject",
+                choices=(
+                    "trusted_loopback",
+                    "trusted_companion_proxy",
+                    "api_key_credential",
+                ),
+                required=True,
+            )
+        if name == "principal-export-auth-state":
+            command.add_argument("--credential-stdin", action="store_true")
+        if name == "principal-bootstrap":
+            # The credential itself is never a flag; the posture is read from server
+            # configuration. This flag only declares that the deployment exposes a
+            # loopback-local listener, and every request still proves loopback itself.
+            command.add_argument("--loopback-listener", action="store_true")
+            command.add_argument("--existing-install", action="store_true")
+        if name == "principal-rotate-credential":
+            command.add_argument("--credential-stdin", action="store_true")
+        if name == "principal-add-role":
+            command.add_argument("--kind", choices=("human", "agent"), required=True)
+            command.add_argument("--label", required=True)
     args = parser.parse_args(argv)
     if args.command in {
         "default-vault-get",
@@ -2971,6 +3292,8 @@ def main(argv: list[str] | None = None) -> int:
         "default-vault-clear",
     }:
         return _default_vault_command(args)
+    if args.command in set(PRINCIPAL_COMMANDS):
+        return _principal_command(args)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)
     if args.command == "preflight":

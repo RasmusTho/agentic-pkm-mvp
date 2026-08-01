@@ -32,6 +32,13 @@ except ImportError:
     instance_default_vault_router = None
 
 try:
+    from app.api.routes.active_context_selection import (
+        router as active_context_selection_router,
+    )
+except ImportError:
+    active_context_selection_router = None
+
+try:
     from app.api.routes.status import router as status_router
 except ImportError:
     status_router = None
@@ -320,6 +327,8 @@ def _create_app() -> FastAPI:
         application.include_router(companion_router, prefix="/api")
     if instance_default_vault_router is not None:
         application.include_router(instance_default_vault_router, prefix="/api")
+    if active_context_selection_router is not None:
+        application.include_router(active_context_selection_router, prefix="/api")
     if builderops_router is not None:
         application.include_router(builderops_router, prefix="/api")
     if context_bundles_router is not None:

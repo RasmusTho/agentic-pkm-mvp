@@ -77,11 +77,26 @@ class AskRequest(BaseModel):
     # admission remains a governed CrossScopeFlow decision (#2314), which no scope string can
     # substitute for.
     #
-    # TRANSITIONAL SURFACE. MVR-03 (#3857) versions ActiveContextSet and MVR-05B (#3860) moves
-    # request ingress onto an opaque context_selection_id from which the SERVER derives the
-    # cognitive scope; client-supplied scope strings never become identity or authority there.
-    # When #3860 lands, replace this with the server-derived scope from the immutable selection
-    # snapshot -- the threading below `run_ask_graph` is unaffected.
+    # TRANSITIONAL SURFACE. Owned by MVR-05B (#3860). MVR-03 (#3857) has since landed and
+    # deliberately did NOT absorb this field -- ruling recorded here so the marker is not left
+    # naming a resolved issue as its resolver:
+    #
+    #   MVR-03 removed the *reason* this field exists. #2921 chose the request context because
+    #   `ActiveContextResolver` returned scope status `unknown` ("Scope is not resolved by the
+    #   current active-vault runtime"), so binding retrieval to WSP would have left the prefilter
+    #   dormant. `app/vault/active_context_v1.py` + `app/instance/active_context_service.py` now
+    #   resolve a KNOWN server-derived scope (canonical `"default"` until the WSP context policy
+    #   declares narrower), and the selection endpoints reject client-authored scope outright.
+    #
+    #   MVR-03 did not replace this field, because its own contract keeps production HTTP carrier
+    #   propagation sealed until MVR-05B: "This slice owns store/auth semantics; MVR-05B owns the
+    #   production header dependency and call-site test." Rebinding /api/ask here would breach
+    #   that seal and ship an unproven request path.
+    #
+    # When #3860 lands, replace this with the server-derived scope read off the immutable
+    # selection snapshot resolved from `X-Active-Context-Session` / `X-Active-Context-Override`
+    # -- the threading below `run_ask_graph` is unaffected, and the PRECEDENCE HAZARD below goes
+    # away structurally because the scope stops being client-supplied.
     #
     # PRECEDENCE HAZARD, stated honestly: this binding REPLACES `ASK_DOMAIN_SCOPE` rather than
     # narrowing within it. It narrows only relative to the UNSCOPED default. No deployment

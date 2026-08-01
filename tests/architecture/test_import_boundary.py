@@ -302,7 +302,12 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     assert _module_list(capability_section["protected_modules"]) == {
         "app.instance._storage_boundary",
     }
+    # This set is deliberately enumerated rather than pattern-matched: every durable
+    # instance-state writer must be a named, reviewed entry. MVR-03 (#3857) added
+    # `local_operator_principal`, the private delegated operator-role record, which writes
+    # under the same boundary and therefore takes the same seal.
     assert _module_list(capability_section["allowed_importers"]) == {
+        "app.instance.local_operator_principal",
         "app.instance.ownership_ledger",
         "app.instance.runtime",
         "app.instance.vault_registry",

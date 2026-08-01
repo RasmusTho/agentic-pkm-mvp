@@ -1,9 +1,13 @@
 # Multi-vault runtime selection
 
-State: Active capability specification with the MVR-01A/01B mechanical substrate delivered.
+State: Active capability specification. Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical
+substrate and authority cutover, MVR-02 (#3856) explicit instance default, and MVR-03 (#3857, partial) the
+versioned request/session `ActiveContextSet` seam with its selection store, delegated-principal
+producer, and fail-closed runtime floor — whose deployment-wrapper activation is still open. Task 04 onward remains unstarted, so no global "multi-vault delivered"
+claim is allowed: production request-carrier propagation, binding-keyed persistence, and background
+lifecycle binding are still target state.
 Parent validation hub **#2143** remains blocked and must never be claimed as an implementation
-issue. The 17 executable children are filed as **#3853–#3869**. The 01B substrate does not activate
-multi-vault runtime authority; #3855 (01C) and the remaining children still govern that cutover.
+issue. The 17 executable children are filed as **#3853–#3869**.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -232,8 +236,15 @@ member binding independently. Removing a dimension does not remove its vault reg
   not a multi-active implementation, and no duplicate watcher-rebind issue is created here.
 - **#2003 / #2311** delivered no-vault startup, runtime switching foundations, and removal of
   silent `./vault` fallback. This capability preserves those contracts.
-- **#2356** delivered the v0 `ActiveContextSet` containment adapter. Task 03 evolves that seam;
-  it does not create a rival context type.
+- **#2356** delivered the v0 `ActiveContextSet` containment adapter. Task 03 evolved that seam in
+  place (`app/vault/active_context_v1.py` alongside the retained v0 adapter); it did not create a
+  rival context type.
+- **#2921** bound a per-request active scope into the retrieval hot path and marked
+  `AskRequest.scope` a `TRANSITIONAL SURFACE`, naming #3857 and #3860 as its follow-ons. MVR-03
+  removes the *reason* that surface existed — the resolver now returns a known server-derived
+  scope instead of `unknown` — but does not replace the HTTP field, because MVR-03's own contract
+  keeps production request-carrier propagation sealed until MVR-05B. **#3860 remains the sole
+  resolver of that surface.**
 - **ADR-0055 / #3132** govern concurrent writers to a content vault. Multi-vault selection does
   not reopen or duplicate the multi-writer consistency model.
 - host/container mount terminology from #2141 and instance/device/replica identity remain

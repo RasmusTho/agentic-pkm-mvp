@@ -164,12 +164,32 @@ def _effective_client_host(request: Request) -> str | None:
     return forwarded_host or immediate_host
 
 
-def require_loopback_or_api_key(
-    request: Request,
-    api_key: str | None = Depends(api_key_header),
-) -> str:
+# --- Server-derived authentication subject (MVR-03, #3857) ----------------
+#
+# `require_loopback_or_api_key` already decides *whether* a caller is admitted. MVR-03
+# additionally needs to know *which server-derived subject* admitted it, so the auth/GOV
+# boundary can map that subject onto the private delegated operator-role record
+# (`app/instance/local_operator_principal.py`).
+#
+# The two questions share one decision path on purpose: `require_loopback_or_api_key`
+# delegates here, so the admitting subject and the admission decision can never diverge.
+# All three subjects are server-derived — a proxy, forwarding, or client header can claim
+# none of them.
+
+SUBJECT_TRUSTED_LOOPBACK = "trusted_loopback"
+SUBJECT_TRUSTED_COMPANION_PROXY = "trusted_companion_proxy"
+SUBJECT_API_KEY_CREDENTIAL = "api_key_credential"
+
+
+def resolve_auth_subject(request: Request, api_key: str | None) -> str:
+    """Return the server-derived subject that admits this request, or raise 401.
+
+    Ordering matches the historical admission order exactly:
+    loopback -> trusted Companion UI proxy -> configured API key.
+    """
+
     if _is_loopback_host(_effective_client_host(request)):
-        return ""
+        return SUBJECT_TRUSTED_LOOPBACK
     # The Companion UI container is the sole caller of these routes in the
     # documented docker-compose deployment; trust its own server-side proxy call
     # by construction (#3102). Judged on the immediate peer only — never the
@@ -177,7 +197,7 @@ def require_loopback_or_api_key(
     # address, so unrelated non-loopback callers still require the API key.
     immediate_host = request.client.host if request.client else None
     if _is_trusted_companion_ui_proxy(immediate_host):
-        return ""
+        return SUBJECT_TRUSTED_COMPANION_PROXY
     expected = settings.api_key
     if expected is None:
         raise HTTPException(
@@ -186,7 +206,19 @@ def require_loopback_or_api_key(
         )
     if api_key != expected:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-    return expected
+    return SUBJECT_API_KEY_CREDENTIAL
+
+
+def require_loopback_or_api_key(
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> str:
+    subject = resolve_auth_subject(request, api_key)
+    if subject == SUBJECT_API_KEY_CREDENTIAL:
+        # Preserved for backward compatibility: this dependency's historical return value
+        # is the configured key for a key-admitted request and "" otherwise.
+        return settings.api_key or ""
+    return ""
 
 
 limiter = Limiter(key_func=get_remote_address, enabled=settings.rate_limit_enabled)
