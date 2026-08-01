@@ -78,7 +78,10 @@ promote public internet readiness.
   `heimdal.raw-store-key` (`heimdal-api-ingress` in `config/secrets/host_secret_contract.json`,
   dev/test/prod); the governed deploy wrapper bootstraps its secret layer for every `up` that
   includes the api service (degrade-visibly — a missing Keychain item or contract never fails the
-  deploy) and the `api` Compose service consumes it via its own env-file handle, without changing
+  deploy; a Keychain item that resolves to a *malformed* value does fail it, since the bootstrap is
+  fail-closed on validation, and #4489 extended that to the optional `github.token` declared for the
+  same consumer — tracked as `KD-4489-malformed-declared-secret-aborts-channel-deploy` on #4172) and
+  the `api` Compose service consumes it via its own env-file handle, without changing
   how `heimdal-capture-watch` is provisioned. An api startup preflight detects a missing
   `HEIMDAL_RAW_STORE_KEY` before first use, logs it loudly, and reports the media and screen
   ingress lanes `unavailable` on `/api/status` while every other API function keeps serving; the
