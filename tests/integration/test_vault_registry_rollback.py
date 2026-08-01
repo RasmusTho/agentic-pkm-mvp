@@ -632,7 +632,13 @@ def test_mvr02_default_survives_scalar_projection_round_trip(tmp_path) -> None:
     second_root = tmp_path / "second"
     second_root.mkdir()
     second = runtime.production_register(second_root, producer="api")
-    service = InstanceDefaultVaultService(runtime.registry, emit_event=lambda receipt: "")
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    service = InstanceDefaultVaultService(
+        runtime.registry,
+        capability=_STORAGE_MUTATION_CAPABILITY,
+        emit_event=lambda receipt: "",
+    )
     service.set(second.vault_binding_id)
     before = runtime.registry.load()
     assert before.default_vault_binding_id == second.vault_binding_id

@@ -21,8 +21,10 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.events.types import INSTANCE_DEFAULT_VAULT_CHANGED
+from app.instance.default_vault import InstanceDefaultVaultService
 from app.instance.runtime import main as instance_runtime_main
 from app.instance.vault_registry import (
+    CapabilityNotReadyError,
     DEFAULT_PROVENANCE_EXPLICIT,
     RegistryDefaultConflict,
     VaultRegistryStore,
@@ -264,3 +266,30 @@ def test_removing_current_default_requires_atomic_clear_or_replacement(
     # The MVR-01C rollback floor target is protected by the same reference safety.
     with pytest.raises(RegistryDefaultConflict):
         service.remove_registration(first.vault_binding_id, clear_default=True)
+
+
+def test_default_service_without_the_sealed_capability_cannot_mutate(
+    bound_instance, captured_events
+) -> None:
+    """The service receives mutation authority; it never manufactures it.
+
+    Only `app.instance.runtime.open_default_vault_service` (a sanctioned importer
+    of `app/instance/_storage_boundary.py`) hands the capability over, so a
+    directly constructed service is a read-only view rather than a way around
+    the seal.
+    """
+
+    runtime, first, _second = bound_instance
+    unprivileged = InstanceDefaultVaultService(runtime.registry)
+    before = runtime.registry.load()
+
+    assert unprivileged.get().registry_revision == before.revision
+    with pytest.raises(CapabilityNotReadyError):
+        unprivileged.set(first.vault_binding_id)
+    with pytest.raises(CapabilityNotReadyError):
+        unprivileged.clear()
+
+    after = runtime.registry.load()
+    assert after.revision == before.revision
+    assert after.default_vault_binding_id == before.default_vault_binding_id
+    assert captured_events == []

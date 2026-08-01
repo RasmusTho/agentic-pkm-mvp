@@ -40,7 +40,11 @@ from tests._mvr_default_vault_harness import (
 def _service(runtime) -> InstanceDefaultVaultService:
     # No outbox/DB in these unit-level tests: the event contract itself is proven
     # by tests/api/test_default_vault_admin.py against the production emitter.
-    return InstanceDefaultVaultService(runtime.registry, emit_event=lambda receipt: "")
+    return InstanceDefaultVaultService(
+        runtime.registry,
+        capability=_STORAGE_MUTATION_CAPABILITY,
+        emit_event=lambda receipt: "",
+    )
 
 
 def test_production_resolution_precedence_is_explicit(tmp_path) -> None:
@@ -228,7 +232,11 @@ def test_legacy_last_active_materializes_default_once(tmp_path) -> None:
     assert reloaded.default_vault_binding_id == binding_id
 
     # A later selection moves last-active only; the default is not a follower.
-    _service_store = InstanceDefaultVaultService(store, emit_event=lambda receipt: "")
+    _service_store = InstanceDefaultVaultService(
+        store,
+        capability=_STORAGE_MUTATION_CAPABILITY,
+        emit_event=lambda receipt: "",
+    )
     _service_store.clear()
     cleared_revision = store.load().revision
     assert VaultRegistryStore(path).load_or_migrate().default_vault_binding_id is None

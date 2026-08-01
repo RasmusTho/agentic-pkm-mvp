@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.events.types import INSTANCE_DEFAULT_VAULT_CHANGED
-from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.filesystem_identity import (
     FilesystemIdentityError,
     resolve_filesystem_root_identity,
@@ -265,15 +264,24 @@ class InstanceDefaultVaultService:
     Both producers validate registration, mutate through MVR-01's locked
     registry transaction, never touch ``last_active_vault_ref``, and return the
     same redacted receipt.
+
+    This service **receives** its storage-mutation capability rather than holding
+    it: the private capability stays sealed to its existing sanctioned importers
+    (`app/instance/_storage_boundary.py`), and only
+    :func:`app.instance.runtime.open_default_vault_service` — an already-allowed
+    importer — hands it over. Constructing the service without one yields a
+    read-only view whose mutators fail closed with ``CapabilityNotReadyError``.
     """
 
     def __init__(
         self,
         store: VaultRegistryStore,
         *,
+        capability: Any = None,
         emit_event: Any = _emit_default_mutation_event,
     ) -> None:
         self._store = store
+        self._capability = capability
         self._emit_event = emit_event
 
     @property
@@ -311,9 +319,10 @@ class InstanceDefaultVaultService:
         before = self._store.load()
         updated = self._store.remove_registration(
             vault_binding_id,
+            expected_revision=before.revision,
             clear_default=clear_default,
             replacement_default_binding_id=replacement_default_binding_id,
-            _capability=_STORAGE_MUTATION_CAPABILITY,
+            _capability=self._capability,
         )
         receipt = DefaultVaultReceipt(
             vault_binding_id=updated.default_vault_binding_id,
@@ -342,7 +351,7 @@ class InstanceDefaultVaultService:
             vault_binding_id,
             provenance=provenance,
             expected_revision=before.revision,
-            _capability=_STORAGE_MUTATION_CAPABILITY,
+            _capability=self._capability,
         )
         if updated.last_active_vault_ref != before.last_active_vault_ref:
             raise RegistryError("default mutation must not change last-active history")

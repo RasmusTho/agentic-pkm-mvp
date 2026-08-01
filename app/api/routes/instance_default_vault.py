@@ -22,10 +22,10 @@ from app.instance.default_vault import (
     InstanceDefaultVaultService,
     VaultSelectionError,
 )
+from app.instance.runtime import open_default_vault_service
 from app.instance.vault_registry import (
     RegistryDefaultConflict,
     RegistryError,
-    VaultRegistryStore,
 )
 
 router = APIRouter(prefix="/instance", tags=["instance"])
@@ -55,7 +55,9 @@ def _registry_path() -> Path:
 
 
 def get_default_vault_service() -> InstanceDefaultVaultService:
-    return InstanceDefaultVaultService(VaultRegistryStore(_registry_path()))
+    # The sealed storage-mutation capability is handed over by the sanctioned
+    # instance-runtime factory; this route never touches the seal itself.
+    return open_default_vault_service(_registry_path())
 
 
 def _fail(exc: RegistryError) -> HTTPException:

@@ -314,7 +314,11 @@ class InstanceRegistryRuntime:
     def default_vault_service(self) -> InstanceDefaultVaultService:
         """Return the one service both production default producers share."""
 
-        return InstanceDefaultVaultService(self.registry)
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        return InstanceDefaultVaultService(
+            self.registry, capability=_STORAGE_MUTATION_CAPABILITY
+        )
 
     def _register_first_locked(
         self,
@@ -2834,6 +2838,23 @@ def _finish_instance_state_deployment_locked(
     return _complete_instance_state_deployment_cleanup(ownership_root)
 
 
+def open_default_vault_service(registry_path: Path) -> InstanceDefaultVaultService:
+    """Hand the sealed storage-mutation capability to the MVR-02 default service.
+
+    This module is one of the sanctioned importers of the private capability
+    (`importlinter.ini :: instance-storage-capability-protected`), so the API
+    router and the headless CLI can both obtain a mutating service without
+    reaching the seal themselves.
+    """
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    return InstanceDefaultVaultService(
+        VaultRegistryStore(Path(registry_path)),
+        capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+
+
 def _default_vault_command(args: argparse.Namespace) -> int:
     """Headless MVR-02 get/set/clear through the same service the API uses.
 
@@ -2842,7 +2863,7 @@ def _default_vault_command(args: argparse.Namespace) -> int:
     instance through this surface.
     """
 
-    service = InstanceDefaultVaultService(VaultRegistryStore(Path(args.registry_path)))
+    service = open_default_vault_service(Path(args.registry_path))
     try:
         if args.command == "default-vault-get":
             receipt = service.get()
