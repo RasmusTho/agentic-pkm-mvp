@@ -33,6 +33,7 @@ from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
+from app.builderops.ckm.design_hub import build_design_hub_projection
 from app.builderops.ckm.overview_html import CockpitRenderContext, write_overview_html
 from app.builderops.ckm.projections import (
     PROJECTION_FILENAMES as CKM_PROJECTION_FILENAMES,
@@ -764,6 +765,23 @@ def ckm_project(ctx: click.Context, projection_type: str, output_dir: Path) -> N
     default=None,
     help="Finite aggregate projection capture bound (defaults to the store policy).",
 )
+@click.option(
+    "--design-hub",
+    "design_hub_enabled",
+    is_flag=True,
+    help=(
+        "Extend --cockpit with the read-only design_hub projection (sanitized adapter "
+        "availability and validated BuilderOps design-run evidence). Requires --cockpit "
+        "and --repo-root; adds no script, form, or network path."
+    ),
+)
+@click.option(
+    "--repo-root",
+    "design_hub_repo_root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Repo root used only to resolve the design-run policy for --design-hub.",
+)
 @click.pass_context
 def ckm_overview(
     ctx: click.Context,
@@ -771,7 +789,13 @@ def ckm_overview(
     class_capture_limit: int | None,
     aggregate_capture_limit: int | None,
     cockpit: bool,
+    design_hub_enabled: bool,
+    design_hub_repo_root: Path | None,
 ) -> None:
+    if design_hub_enabled and not cockpit:
+        raise click.ClickException("ckm overview --design-hub requires --cockpit")
+    if design_hub_enabled and design_hub_repo_root is None:
+        raise click.ClickException("ckm overview --design-hub requires --repo-root")
     try:
         store = _ckm_store(ctx)
         if not store.db_path.is_file():
@@ -791,8 +815,19 @@ def ckm_overview(
                 )
             except CkmContractError as exc:
                 comparison = {"error": exc.to_dict()}
+            design_hub = None
+            if design_hub_enabled:
+                assert design_hub_repo_root is not None
+                governance = _design_run_governance(
+                    ctx,
+                    repo_root=design_hub_repo_root,
+                    store_mode="existing_read",
+                )
+                design_hub = build_design_hub_projection(governance=governance)
             cockpit_context = CockpitRenderContext(
-                batch=store.load_projection_batch(**capture_limits), comparison=comparison
+                batch=store.load_projection_batch(**capture_limits),
+                comparison=comparison,
+                design_hub=design_hub,
             )
         result = write_overview_html(
             store,
@@ -801,7 +836,7 @@ def ckm_overview(
             aggregate_capture_limit=aggregate_capture_limit,
             cockpit=cockpit_context,
         )
-    except (CkmValidationError, OSError, sqlite3.Error) as exc:
+    except (CkmValidationError, DesignRunGovernanceError, OSError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm overview failed: {exc}") from exc
     click.echo(result)
 

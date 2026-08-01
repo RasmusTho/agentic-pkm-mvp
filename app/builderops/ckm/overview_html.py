@@ -19,6 +19,13 @@ from app.builderops.ckm.models import (
     utc_now,
 )
 from app.builderops.ckm.contracts import canonical_digest, canonical_json
+from app.builderops.ckm.design_hub import (
+    DesignHubHandoffSummary,
+    DesignHubProjection,
+    DesignHubReceiptSummary,
+    DesignHubRunSummary,
+    design_hub_digest,
+)
 from app.builderops.ckm.store import CkmProjectionBatch, CkmStore
 
 
@@ -39,6 +46,7 @@ class CockpitRenderContext:
 
     batch: CkmProjectionBatch
     comparison: Mapping[str, Any] | None = None
+    design_hub: DesignHubProjection | None = None
 
 
 def _cockpit_digest(batch: CkmProjectionBatch) -> str:
@@ -1263,6 +1271,140 @@ def _cockpit_filter_script() -> str:
 })();</script>"""
 
 
+def _design_hub_adapter_markup(item: Any) -> str:
+    status_class = "design-hub-available" if item.available else "design-hub-unavailable"
+    status_label = "Available" if item.available else "Unavailable"
+    identity = (
+        f'<p class="secondary">Identity: <code>{_e(item.effective_identity)}</code></p>'
+        if item.available and item.effective_identity
+        else ""
+    )
+    limitation = (
+        f'<p class="design-hub-limitation">Limitation: <code>{_e(item.limitation_code)}</code>'
+        f" — {_e(item.limitation_detail)}</p>"
+        if not item.available
+        else ""
+    )
+    deliverables = ", ".join(sorted(item.supported_deliverables))
+    return (
+        f'<li class="design-hub-adapter {status_class}" data-design-hub-adapter="{_e(item.design_agent_id)}">'
+        f"<strong>{_e(item.display_name)}</strong> "
+        f'<span class="badge">{status_label}</span> '
+        f'<span class="secondary">({_e(item.design_agent_id)})</span>'
+        f"{identity}"
+        f'<p class="secondary">Supports: {_e(deliverables)}</p>'
+        f"{limitation}"
+        "</li>"
+    )
+
+
+def _design_hub_receipt_markup(receipt: DesignHubReceiptSummary) -> str:
+    if receipt.state is None:
+        transition = ""
+    elif receipt.previous_state is None:
+        transition = f" (→ {_e(receipt.state)})"
+    else:
+        transition = f" ({_e(receipt.previous_state)} → {_e(receipt.state)})"
+    return (
+        f"<li><code>{_e(receipt.receipt_id)}</code> — {_e(receipt.event_type)}"
+        f"{transition} at {_e(receipt.occurred_at)}</li>"
+    )
+
+
+def _design_hub_handoff_markup(handoff: DesignHubHandoffSummary) -> str:
+    limitations = "; ".join(handoff.limitations) or "none stated"
+    sources = ", ".join(handoff.source_ref_ids) or "none"
+    return (
+        '<div class="design-hub-handoff">'
+        f'<p><strong>Handoff</strong> <span class="badge">{_e(handoff.acceptance_state)}</span></p>'
+        f'<p class="secondary">Content hash: <code>{_e(handoff.content_hash)}</code></p>'
+        f'<p class="secondary">Produced: {_e(handoff.produced_at)}</p>'
+        f'<p class="secondary">Limitations: {_e(limitations)}</p>'
+        f'<p class="secondary">Sources: {_e(sources)}</p>'
+        "</div>"
+    )
+
+
+def _design_hub_run_markup(run: DesignHubRunSummary) -> str:
+    receipts_markup = (
+        "".join(_design_hub_receipt_markup(item) for item in run.receipts)
+        or "<li>No causal receipts.</li>"
+    )
+    admission = (
+        f'<p class="secondary">Admission outcome: {_e(run.admission_outcome)}</p>'
+        if run.admission_outcome
+        else ""
+    )
+    approval = (
+        f'<p class="secondary">Approval state: {_e(run.approval_state)}</p>'
+        if run.approval_state
+        else ""
+    )
+    refusal = (
+        f'<p class="design-hub-refusal">Refusal: <code>{_e(run.refusal_code)}</code>'
+        f" — {_e(run.refusal_message)}</p>"
+        if run.refusal_code
+        else ""
+    )
+    handoff = _design_hub_handoff_markup(run.handoff) if run.handoff is not None else ""
+    return (
+        f'<li class="design-hub-run design-hub-state-{_e(run.state)}" data-design-hub-run="{_e(run.run_id)}">'
+        f"<strong>{_e(run.run_id)}</strong> "
+        f'<span class="badge">state: {_e(run.state)}</span>'
+        f"{admission}{approval}{refusal}"
+        "<details><summary>Causal receipts "
+        f"({len(run.receipts)})</summary>"
+        f'<ol class="design-hub-receipts">{receipts_markup}</ol></details>'
+        f"{handoff}"
+        "</li>"
+    )
+
+
+def _design_hub_markup(design_hub: DesignHubProjection | None) -> str:
+    """Render the read-only design-run projection. Adds no script, form, or link."""
+
+    if design_hub is None:
+        return ""
+    adapter_rows = (
+        "".join(_design_hub_adapter_markup(item) for item in design_hub.adapters)
+        or '<p class="empty">No design-agent adapters are registered.</p>'
+    )
+    run_rows = (
+        "".join(_design_hub_run_markup(run) for run in design_hub.runs)
+        or '<p class="empty">No validated design runs.</p>'
+    )
+    excluded = (
+        '<p class="design-hub-excluded">Excluded (unverifiable receipt evidence, refused '
+        "entirely rather than shown partially): "
+        + ", ".join(f"<code>{_e(run_id)}</code>" for run_id in design_hub.excluded_run_ids)
+        + "</p>"
+        if design_hub.excluded_run_ids
+        else ""
+    )
+    return (
+        '<section class="design-hub" aria-labelledby="design-hub-heading">'
+        '<h2 id="design-hub-heading">Design Hub — design-run projections</h2>'
+        '<p class="design-hub-caption">Non-authoritative projection of validated BuilderOps '
+        "design-run evidence and sanitized adapter descriptors. It never selects, admits, "
+        "approves, starts, or executes a run, and it is not Product/Runtime authority.</p>"
+        "<h3>Adapter availability</h3>"
+        f'<ul class="design-hub-adapters">{adapter_rows}</ul>'
+        "<h3>Design runs</h3>"
+        f'<ul class="design-hub-runs">{run_rows}</ul>'
+        f"{excluded}"
+        "</section>"
+    )
+
+
+def _design_hub_footer_digest(design_hub: DesignHubProjection | None) -> str:
+    if design_hub is None:
+        return ""
+    return (
+        "<br>design-hub-input digest (kept separate from the CKM projection digest): "
+        f"<code>{design_hub_digest(design_hub)}</code>"
+    )
+
+
 def _cockpit_print_styles() -> str:
     """Return the cockpit-only print contract without changing screen-state semantics."""
 
@@ -1361,6 +1503,11 @@ def render_overview_html(
         _cockpit_owner_cards_markup(batch, cockpit.comparison) if cockpit else ""
     )
     cockpit_proposals = _cockpit_proposals_markup(batch) if cockpit else ""
+    cockpit_design_hub = (
+        _design_hub_markup(cockpit.design_hub)
+        if cockpit is not None and cockpit.design_hub is not None
+        else ""
+    )
     cockpit_gap_prompt = "<p>Where is evidence weakest?</p>" if cockpit else ""
     cockpit_filters = _cockpit_filter_markup(len(forest)) if cockpit else ""
     cockpit_script = _cockpit_filter_script() if cockpit else ""
@@ -1388,12 +1535,13 @@ def render_overview_html(
     )
     supporting_details = (
         '<details class="supporting-details"><summary>Technical evidence and interpretation</summary>'
-        f"{cockpit_reserved}{subsystem_counts}{legend}{gaps_section}{cockpit_proposals}</details>"
+        f"{cockpit_reserved}{subsystem_counts}{legend}{gaps_section}{cockpit_proposals}{cockpit_design_hub}</details>"
         if cockpit
         else ""
     )
     footer_identity = (
         f"<br>State identity: epoch {_e(batch.state_identity.epoch)} · revision {batch.state_identity.state_revision} · schema {batch.state_identity.schema_version}<br>projection-input digest: <code>{_cockpit_digest(batch)}</code>"
+        f"{_design_hub_footer_digest(cockpit.design_hub) if cockpit is not None else ''}"
         if cockpit
         else ""
     )
@@ -1420,6 +1568,7 @@ def render_overview_html(
     .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-3); text-align:center; line-height:0.55rem; }}
     .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .capability-technical-summary {{ display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
     .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
+    .design-hub {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .design-hub-caption {{ color:var(--fg-2); }} .design-hub-adapters,.design-hub-runs {{ list-style:none; margin:0.5rem 0; padding:0; }} .design-hub-adapter,.design-hub-run {{ margin:0.5rem 0; padding:0.625rem 0.75rem; border:1px solid var(--border-strong); border-left-width:0.2rem; border-left-style:solid; border-left-color:var(--unknown); background:var(--bg-raised); }} .design-hub-available {{ border-left-color:var(--healthy); }} .design-hub-unavailable {{ border-left-color:var(--amber); }} .design-hub-limitation,.design-hub-refusal,.design-hub-excluded {{ color:var(--fg-2); border-left:0.2rem solid var(--amber); padding-left:0.5rem; }} .design-hub-receipts {{ padding-left:1.25rem; }} .design-hub-receipts li {{ margin:0.3rem 0; }} .design-hub-handoff {{ margin-top:0.5rem; padding:0.5rem 0.625rem; border:1px dashed var(--border-strong); }}
     .cockpit-filters {{ margin:0.75rem 0 1rem; padding:0.75rem 1rem; border:1px solid var(--border); background:var(--bg-surface); }} .cockpit-filters h2 {{ margin:0; font-size:1rem; }} .cockpit-filters > p {{ margin:0.25rem 0; color:var(--fg-2); }} .filter-controls {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:0.5rem 0.75rem; align-items:end; }} .filter-control {{ display:flex; flex-direction:column; gap:0.25rem; }} .filter-controls label {{ color:var(--fg-2); }} .filter-controls input,.filter-controls select {{ width:100%; min-height:2.25rem; border:1px solid var(--border-strong); border-radius:0.1875rem; background:var(--bg-raised); color:var(--fg-1); padding:0.375rem; }} .filter-controls input:focus-visible,.filter-controls select:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }} .filter-controls input:disabled,.filter-controls select:disabled {{ opacity:0.65; }} .supporting-details {{ margin:1.5rem 0; border:1px solid var(--border); background:var(--bg-surface); }} .supporting-details > summary {{ padding:0.875rem 1rem; font-weight:600; }} .supporting-details > :not(summary) {{ margin-left:1rem; margin-right:1rem; }}{cockpit_print_styles}
     footer {{ margin-top:1.75rem; padding:1rem 0 2.25rem; border-top:1px solid var(--border); color:var(--fg-2); overflow-wrap:anywhere; }}
     @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .cockpit-trust-summary {{ display:block; }} .technical-identity {{ margin-top:0.75rem; }} .owner-cards {{ grid-template-columns:1fr; }} .owner-attention-fact {{ display:block; }} .owner-attention-fact span {{ display:block; text-align:left; }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .subsystem-counts-grid {{ grid-template-columns:1fr; }} .capability-count {{ grid-template-columns:1fr; gap:0.15rem; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .capability-status {{ width:100%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
