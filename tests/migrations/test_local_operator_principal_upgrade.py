@@ -124,9 +124,42 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
     body = principal_record_path(runtime).read_text(encoding="utf-8")
     assert original_key not in body and rotated_key not in body
 
-    # Idempotent: re-running the same reconcile is a no-op, not a second rotation.
-    again = store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
-    assert again.revision == reconciled.revision
+    # The export is CONSUMED on success. Re-running without a fresh export fails closed
+    # rather than replaying. This is the difference between "idempotent" and "replayable":
+    # a leftover export plus a later governed rotation would otherwise let a stale
+    # credential be written back over the new one.
+    assert not store.export_path.exists()
+    with pytest.raises(PrincipalPreflightError, match="final auth export"):
+        store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
+    assert store.require().revision == reconciled.revision
+
+    # And a *stale* export -- one whose recorded fork is below the current revision, e.g.
+    # left behind before a governed rotation -- is refused rather than accepted. A `>` fork
+    # check instead of `!=` would silently revert the rotation here.
+    third_key = "image-a-third-key"
+    rotated_again = store.rotate_credential(
+        credential_fingerprint=fingerprint_credential(third_key),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    store.export_path.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.local-operator-principal.v1.roll-forward-export",
+                "fork_revision": record.revision,  # stale: predates two rotations
+                "credential_fingerprint": fingerprint_credential(rotated_key),
+                "exported_at": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    store.export_path.chmod(0o600)
+    with pytest.raises(PrincipalPreflightError, match="does not match the current principal lineage"):
+        store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
+    assert store.require().credential_fingerprint == fingerprint_credential(third_key), (
+        "a stale export must not revert a governed credential rotation"
+    )
+    assert store.require().revision == rotated_again.revision
+    store.export_path.unlink()
 
     # -- 4. missing / divergent / ambiguous exports all fail closed ---------------------
     fresh_root = tmp_path / "fresh"

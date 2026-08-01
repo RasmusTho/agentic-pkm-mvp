@@ -26,9 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from app.governance.binding_authority import BindingAuthorizer, RegistryBindingAuthorizer
+from app.governance.binding_authority import RegistryBindingAuthorizer
 from app.instance.context_selection import (
-    ActiveContextSelectionResolver,
     BindingFact,
     ContextSelectionRecord,
     ContextSelectionStore,
@@ -311,21 +310,6 @@ class ActiveContextSelectionService:
             raw_selection_id,
             principal=derived.principal,
             instance_identity=derived.instance_identity,
-        )
-
-    def resolver(self, *, authorizer: BindingAuthorizer | None = None) -> ActiveContextSelectionResolver:
-        """Build a resolver bound to current registry truth.
-
-        Note what is absent: no `VaultManager`, no `get_vault_manager`, no module-global
-        selection. The resolver's only inputs are the registry snapshot and GOV.
-        """
-
-        snapshot = self._registry.load()
-        return ActiveContextSelectionResolver(
-            binding_facts=lambda: binding_facts(self._registry.load()),
-            registry_revision=lambda: self._registry.load().revision,
-            authorizer=authorizer or build_authorizer(snapshot),
-            instance_identity=snapshot.app_install_id,
         )
 
 

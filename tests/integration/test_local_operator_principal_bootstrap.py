@@ -30,6 +30,7 @@ from app.instance.local_operator_principal import (
     fingerprint_credential,
     preflight_auth_posture,
 )
+from app.instance.active_context_service import resolve_principal
 from app.instance.principal_fence import principal_floor_recorded, record_principal_floor
 from app.instance.runtime import main as instance_runtime_main
 from app.instance.runtime import open_local_operator_principal_store
@@ -52,6 +53,14 @@ def _cli(*args: str) -> dict:
     payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
     payload["_exit_code"] = code
     return payload
+
+
+def _cli_help(command: str) -> str:
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        with pytest.raises(SystemExit):
+            instance_runtime_main([command, "--help"])
+    return buffer.getvalue()
 
 
 def _existing_credential_posture(raw_key: str) -> AuthPosture:
@@ -134,12 +143,16 @@ def test_existing_single_user_auth_migrates_to_distinct_delegated_role(
     assert payload["credential_fingerprint"] not in json.dumps(cli)
 
     # -- rotation preserves the role id -------------------------------------------------
+    # The credential comes from stdin, never argv: `/proc/<pid>/cmdline` and shell history
+    # are both readable, so a `--credential <key>` flag would leak the key it exists to
+    # protect. The CLI exposes no such flag.
+    assert "--credential " not in _cli_help("principal-rotate-credential")
+    monkeypatch.setattr("sys.stdin", StringIO("rotated-key\n"))
     rotated = _cli(
         "principal-rotate-credential",
         "--registry-path",
         str(runtime.layout.registry_path),
-        "--credential",
-        "rotated-key",
+        "--credential-stdin",
         "--consumer",
         "cli",
     )
@@ -324,6 +337,34 @@ def test_configured_key_preserves_local_and_trusted_proxy_subjects(
         )
         assert with_key.status_code == 201, with_key.text
         assert with_key.json()["context"]["principal_id"] == record.local_operator_role_id
+
+        # A key rotated *out of band* -- changed in settings without the governed
+        # `principal-rotate-credential` command -- authenticates against #2223 but does not
+        # match the fingerprint bound in the delegated-role record. That must fail closed
+        # rather than resolving the role, otherwise the record's credential binding would be
+        # decorative.
+        settings.api_key = "rotated-out-of-band"
+        out_of_band = remote.post(
+            SELECTION_URL,
+            json={"vault_binding_ids": []},
+            headers={"X-API-Key": "rotated-out-of-band"},
+        )
+        assert out_of_band.status_code == 403, out_of_band.text
+        assert "does not match the bound delegated role" in out_of_band.json()["detail"]
+        # The direct seam agrees.
+        with pytest.raises(PrincipalPreflightError):
+            resolve_principal(
+                record, "api_key_credential", presented_credential="rotated-out-of-band"
+            )
+        assert (
+            resolve_principal(
+                record, "api_key_credential", presented_credential=raw_key
+            ).principal_id
+            == record.local_operator_role_id
+        )
+        # A missing credential on the key subject also fails closed.
+        with pytest.raises(PrincipalPreflightError):
+            resolve_principal(record, "api_key_credential", presented_credential=None)
     finally:
         settings.api_key = original
 
@@ -355,7 +396,7 @@ def test_fresh_channel_bootstrap_and_fixtures_use_the_same_producer(tmp_path) ->
         "principal-bootstrap",
         "--registry-path",
         str(runtime.layout.registry_path),
-        "--loopback-proven",
+        "--loopback-listener",
         "--consumer",
         "bootstrap-init",
     )
@@ -372,7 +413,7 @@ def test_fresh_channel_bootstrap_and_fixtures_use_the_same_producer(tmp_path) ->
         "principal-bootstrap",
         "--registry-path",
         str(runtime.layout.registry_path),
-        "--loopback-proven",
+        "--loopback-listener",
         "--consumer",
         "api",
     )
@@ -387,7 +428,7 @@ def test_fresh_channel_bootstrap_and_fixtures_use_the_same_producer(tmp_path) ->
         "principal-bootstrap",
         "--registry-path",
         str(fresh_runtime.layout.registry_path),
-        "--loopback-proven",
+        "--loopback-listener",
         "--consumer",
         "api",
     )

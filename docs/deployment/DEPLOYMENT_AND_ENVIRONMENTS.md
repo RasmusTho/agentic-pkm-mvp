@@ -327,24 +327,48 @@ divergent, or ambiguous auth state fails closed without overwriting either linea
 may be lowered only by a later explicitly verified reversible migration — never by a scalar
 rollback.
 
-**Operator preflight.**
+**Operator commands (the shipped producers).**
 
 ```bash
-# Confirm the delegated role resolves before enabling request selection.
-python -m app.instance.runtime principal-show \
-  --registry-path <instance-state>/agentic-pkm/vault-registry.md --consumer cli
+REG=<instance-state>/agentic-pkm/vault-registry.md
 
-# First-time / channel bootstrap (refuses to write until the floor is recorded).
+# 1. Record the floor. Consumes the fence inventory the stopped-window deployment wrapper
+#    wrote, re-derives the producer set from production truth, and refuses if the sources
+#    changed after probing. Nothing durable is written on refusal.
+python -m app.instance.runtime principal-record-floor \
+  --registry-path "$REG" --fence-inventory <instance-state>/agentic-pkm/principal-fence-inventory.json
+
+# 2. Bootstrap the delegated role. Refuses until step 1 has landed. The posture is READ from
+#    server configuration (API_KEY, COMPANION_UI_PROXY_HOSTS) -- the credential is never a
+#    command-line argument.
 python -m app.instance.runtime principal-bootstrap \
-  --registry-path <...> --loopback-proven [--companion-proxy] [--credential <key>]
+  --registry-path "$REG" [--loopback-listener] [--existing-install]
 
-# Governed credential rotation; preserves the role id.
-python -m app.instance.runtime principal-rotate-credential \
-  --registry-path <...> --credential <new-key>
+# 3. Confirm the role resolves before enabling request selection.
+python -m app.instance.runtime principal-show --registry-path "$REG" --consumer cli
+
+# Governed credential rotation; preserves the role id. The new key arrives on stdin, never
+# in argv (/proc/<pid>/cmdline and shell history are both readable).
+printf '%s' "$NEW_KEY" | python -m app.instance.runtime principal-rotate-credential \
+  --registry-path "$REG" --credential-stdin
+
+# Governed role addition; the new role gets a distinct principal id.
+python -m app.instance.runtime principal-add-role \
+  --registry-path "$REG" --kind human --label "owner"
+
+# Roll-forward lineage: export the prior image's final auth revision inside the stopped
+# window, then reconcile it on the new image. The export is consumed on success.
+python -m app.instance.runtime principal-export-auth-state --registry-path "$REG"
+python -m app.instance.runtime principal-roll-forward --registry-path "$REG"
 ```
 
-All three receipts are redaction-safe: opaque role id, bound subjects, revision, provenance,
-and a `credential_bound` boolean. No credential, fingerprint, or filesystem path is printed.
+Every receipt is redaction-safe: opaque role id, bound subjects, revision, provenance, and a
+`credential_bound` boolean. No credential, fingerprint, or filesystem path is printed.
+
+`--loopback-listener` declares that this deployment exposes a loopback-local listener, which
+makes `trusted_loopback` a *bindable* subject. It is not a substitute for enforcement: every
+request independently proves loopback in `app/auth.py::resolve_auth_subject` before that
+subject is used.
 
 ## Live post-deploy UI smoke
 

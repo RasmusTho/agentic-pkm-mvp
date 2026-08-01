@@ -7,6 +7,8 @@ requires -- the store is never seeded directly.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -27,8 +29,8 @@ from app.instance.active_context_service import (
 )
 from app.instance.context_selection import (
     ActiveContextSelectionResolver,
-    BindingFact,
     ContextSelectionStore,
+    SelectionPrincipalMismatchError,
 )
 from app.instance.local_operator_principal import AuthPosture, PrincipalPreflightError
 from app.vault.active_context_v1 import (
@@ -296,8 +298,8 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
         required_permission="wsp.read",
     )
     assert authorizer.authorize(unresolved).reason == "binding_unknown"
-    authorizer.set_binding(first.vault_binding_id, 1, available=False)
-    denied_unavailable = authorizer.authorize(
+    authorizer.set_binding(first.vault_binding_id, 1, revoked=True)
+    denied_revoked = authorizer.authorize(
         BindingAuthorizationRequest(
             principal=unresolved.principal,
             vault_binding_id=first.vault_binding_id,
@@ -306,7 +308,22 @@ def test_each_binding_is_authorized_independently(instance, client) -> None:
             required_permission="wsp.read",
         )
     )
-    assert denied_unavailable.reason == "binding_unavailable"
+    assert denied_revoked.reason == "binding_revoked"
+
+    # Availability is NOT an authorization input: an unreachable content root is still a
+    # binding this principal may use, and it degrades rather than denying. Folding it into
+    # GOV would make the degraded posture unreachable in production wiring.
+    authorizer.set_binding(first.vault_binding_id, 1, available=False, revoked=False)
+    still_allowed = authorizer.authorize(
+        BindingAuthorizationRequest(
+            principal=unresolved.principal,
+            vault_binding_id=first.vault_binding_id,
+            action="read",
+            write_class="read",
+            required_permission="wsp.read",
+        )
+    )
+    assert still_allowed.allowed
 
     # Denying one member of a many-binding set fails the whole resolution: no partial set
     # is returned and no member is silently excluded.
@@ -352,26 +369,26 @@ def test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding(
     assert healthy.is_no_vault
     healthy.require_effect_capable()  # does not raise
 
-    # Now the same shape, but with a binding the registry can no longer resolve.
+    # Now the same shape, but with a binding whose content root became unreachable. This is
+    # reached through the *production* wiring: `build_authorizer` still allows the binding
+    # (availability is not an authorization input), so the resolver degrades rather than the
+    # authorizer denying.
+    import shutil
+
     selected = _create(client, [first.vault_binding_id])
     selected_record = _record_for(
         store, selected["context_selection_id"], principal, instance_identity
     )
-    degrading = ActiveContextSelectionResolver(
-        binding_facts=lambda: {
-            first.vault_binding_id: BindingFact(
-                vault_binding_id=first.vault_binding_id,
-                binding_revision=1,
-                available=False,
-            )
-        },
-        registry_revision=lambda: runtime.registry.load().revision,
-        authorizer=RegistryBindingAuthorizer({first.vault_binding_id: 1}),
-        instance_identity=instance_identity,
-    )
-    degraded = degrading.resolve(
-        selection=selected_record, principal=principal, **_READ_GOV_INPUTS
-    ).snapshot
+    root = Path(runtime.registry.lookup(first.vault_binding_id).path)
+    moved = root.with_name(root.name + "-moved")
+    shutil.move(str(root), str(moved))
+    try:
+        production_resolver = _service_resolver(runtime, principal_record)
+        degraded = production_resolver.resolve(
+            selection=selected_record, principal=principal, **_READ_GOV_INPUTS
+        ).snapshot
+    finally:
+        shutil.move(str(moved), str(root))
 
     assert degraded.posture == "degraded"
     assert degraded.degraded_reason == "binding_unavailable"
@@ -483,6 +500,43 @@ def test_selection_id_is_single_user_bearer_with_server_derived_context(
             SELECTION_URL, headers={"X-Active-Context-Session": "someone-elses-bearer"}
         ).status_code
         == 401
+    )
+
+    # A *valid* bearer bound to another principal, or to another instance, cannot reach this
+    # selection either. Over the wire the answer is byte-identical to the unknown-bearer
+    # answer, so the endpoint is not a bearer-existence oracle; the store still raises a
+    # distinguishable type internally for audit purposes.
+    from tests._mvr03_principal_harness import principal_store
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    updated, added = principal_store(runtime).add_role(
+        kind="human", label="second-principal", _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    other_principal = updated.additional_principal(added.role_id, "trusted_loopback")
+    with pytest.raises(SelectionPrincipalMismatchError):
+        store.inspect(
+            bearer, principal=other_principal, instance_identity=instance_identity
+        )
+    with pytest.raises(SelectionPrincipalMismatchError):
+        store.replace_bindings(
+            bearer,
+            principal=other_principal,
+            instance_identity=instance_identity,
+            binding_ids=(second.vault_binding_id,),
+        )
+    with pytest.raises(SelectionPrincipalMismatchError):
+        store.inspect(bearer, principal=principal, instance_identity="another-install")
+    # The mismatch did not mutate the selection.
+    assert store.inspect(
+        bearer, principal=principal, instance_identity=instance_identity
+    ).binding_ids == (first.vault_binding_id,)
+
+    unknown_response = client.get(
+        SELECTION_URL, headers={"X-Active-Context-Session": "someone-elses-bearer"}
+    )
+    assert unknown_response.status_code == 401
+    assert unknown_response.json()["detail"] == (
+        "reselection_required: selection is not resolvable for this caller"
     )
 
     # appInstallId is never principal identity: presenting it as a bearer resolves nothing.

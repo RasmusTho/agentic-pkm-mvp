@@ -69,7 +69,20 @@ COMPOSE_AUTH_SERVICES: Mapping[str, str] = {
     "watcher": "watcher",
     "heimdal-capture-watch": "heimdal-capture-watch",
     "companion-ui": "companion-proxy",
+    "instance-state-init": "bootstrap-init",
 }
+
+#: Compose services explicitly reviewed as *not* auth-bearing. This list exists so
+#: `discover_auth_producers` can enumerate compose and fail closed on anything it has never
+#: seen. Classifying by exception rather than by inclusion is the difference between an
+#: inventory that detects a renamed service and one that also detects an **added** one.
+COMPOSE_NON_AUTH_SERVICES: frozenset[str] = frozenset(
+    {
+        "db",  # Postgres; authenticates with its own DSN, mints no instance principal
+        "migrate",  # one-shot Alembic runner, no request path and no auth state
+        "ollama",  # local model server, no #2223 gate and no auth-state write handle
+    }
+)
 
 #: Native / headless producers, mapped to their producer role.
 NATIVE_AUTH_PRODUCERS: Mapping[str, str] = {
@@ -155,9 +168,15 @@ def discover_auth_producers(
 ) -> tuple[tuple[AuthProducer, ...], str]:
     """Derive the producer set from production truth.
 
-    Compose service names are read from the real `docker-compose.yaml`; native producers are
-    read from the canonical launcher/CLI paths. Both contribute to a digest so a source
-    change after preflight is detectable.
+    **Enumerates** the real `docker-compose.yaml` rather than checking a hand-written list
+    against it. Every service must be classified either auth-bearing
+    (`COMPOSE_AUTH_SERVICES`) or explicitly reviewed as non-auth
+    (`COMPOSE_NON_AUTH_SERVICES`); an unclassified service raises. That direction matters:
+    checking a list against compose detects a *renamed* service but silently misses an
+    *added* one, which is precisely how a new auth producer would escape the fence.
+
+    Native producers are read from the canonical launcher/CLI paths. Both contribute to a
+    digest so a source change after preflight is detectable.
     """
 
     import yaml  # local import: only the fence path needs the compose parser
@@ -165,6 +184,19 @@ def discover_auth_producers(
     raw = compose_path.read_text(encoding="utf-8")
     compose = yaml.safe_load(raw) or {}
     services = compose.get("services") or {}
+
+    unclassified = sorted(
+        set(services) - set(COMPOSE_AUTH_SERVICES) - COMPOSE_NON_AUTH_SERVICES
+    )
+    if unclassified:
+        raise PrincipalFenceError(
+            f"unclassified compose service(s) {unclassified}: the principal fence cannot "
+            "prove they are not auth producers",
+            provisioning_action=(
+                "classify each service in COMPOSE_AUTH_SERVICES or "
+                "COMPOSE_NON_AUTH_SERVICES, then re-run the cutover"
+            ),
+        )
 
     producers: list[AuthProducer] = []
     evidence: list[str] = [f"compose:{hashlib.sha256(raw.encode()).hexdigest()}"]
@@ -180,6 +212,8 @@ def discover_auth_producers(
             )
         )
         evidence.append(f"service:{service_name}:{present}")
+    for service_name in sorted(COMPOSE_NON_AUTH_SERVICES):
+        evidence.append(f"non-auth:{service_name}:{service_name in services}")
 
     for relative, role in sorted(NATIVE_AUTH_PRODUCERS.items()):
         if relative.startswith("scripts/"):
@@ -306,9 +340,68 @@ def principal_floor_recorded(registry_store: Any) -> bool:
     return str(floors.get(MINIMUM_RUNTIME_PRINCIPAL_KEY) or "").strip() == MINIMUM_RUNTIME_PRINCIPAL
 
 
+def load_fence_inventory(path: Path) -> PrincipalFenceInventory:
+    """Read a deployment-produced fence inventory from its private JSON file.
+
+    The deployment wrapper owns proving quiescence and writes this file, exactly as MVR-01B's
+    `deployment-quiescence-inventory.json` works. The runtime never trusts a caller's
+    in-memory claim: it reads the file the stopped-window producer left behind.
+    """
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise PrincipalFenceError(
+            "principal fence inventory is not an object",
+            provisioning_action="re-run the MVR-03 principal cutover producer",
+        )
+    producers = tuple(
+        AuthProducer(
+            name=str(entry["name"]),
+            role=str(entry["role"]),
+            source=str(entry.get("source") or entry["name"]),
+            enabled=bool(entry.get("enabled", True)),
+            stopped=bool(entry.get("stopped", False)),
+            restart_fenced=bool(entry.get("restart_fenced", False)),
+            write_handle_released=bool(entry.get("write_handle_released", False)),
+        )
+        for entry in payload.get("producers") or []
+    )
+    return PrincipalFenceInventory(
+        schema=str(payload.get("schema") or ""),
+        channel_id=str(payload.get("channel_id") or ""),
+        producers=producers,
+        operations_fenced=bool(payload.get("operations_fenced", False)),
+        probe_count=int(payload.get("probe_count") or 0),
+        source_digest=str(payload.get("source_digest") or ""),
+    )
+
+
+def require_matching_source_digest(
+    inventory: PrincipalFenceInventory,
+    *,
+    compose_path: Path,
+    repo_root: Path,
+) -> None:
+    """Refuse an inventory whose production sources changed after it was probed.
+
+    Without this the `source_digest` would be recorded and never compared, which is the same
+    as not recording it.
+    """
+
+    _, digest = discover_auth_producers(compose_path=compose_path, repo_root=repo_root)
+    if inventory.source_digest != digest:
+        raise PrincipalFenceError(
+            "principal fence inventory source changed after it was probed",
+            provisioning_action="re-probe the producer inventory and re-run the cutover",
+        )
+
+
 __all__ = [
     "AUTH_PRODUCER_ROLES",
     "COMPOSE_AUTH_SERVICES",
+    "COMPOSE_NON_AUTH_SERVICES",
+    "load_fence_inventory",
+    "require_matching_source_digest",
     "NATIVE_AUTH_PRODUCERS",
     "PRINCIPAL_FENCE_SCHEMA",
     "AuthProducer",

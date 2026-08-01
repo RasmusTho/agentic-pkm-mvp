@@ -9,6 +9,9 @@ rule against a fiction.
 
 from __future__ import annotations
 
+import json
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 from app.instance.local_operator_principal import (
@@ -23,13 +26,13 @@ from app.instance.principal_fence import (
     build_fence_inventory,
     discover_auth_producers,
     principal_floor_recorded,
-    record_principal_floor,
 )
 from app.instance.runtime import (
     local_operator_principal_path,
     open_default_vault_service,
     open_local_operator_principal_store,
 )
+from app.instance.runtime import main as instance_runtime_main
 from tests._mvr_default_vault_harness import REPO_ROOT, active_runtime
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
@@ -67,6 +70,49 @@ def complete_inventory(channel_id: str = "prod") -> PrincipalFenceInventory:
     )
 
 
+def write_fence_inventory(runtime, *, channel_id: str = "prod") -> Path:
+    """Write the deployment-produced fence inventory the CLI floor producer consumes.
+
+    Mirrors how MVR-01B's stopped-window wrapper writes
+    `deployment-quiescence-inventory.json`: the deployment proves quiescence and leaves the
+    evidence in a private file; the runtime reads the file rather than trusting a caller.
+    """
+
+    path = Path(runtime.layout.root) / "principal-fence-inventory.json"
+    path.write_text(
+        json.dumps(complete_inventory(channel_id).as_payload()), encoding="utf-8"
+    )
+    path.chmod(0o600)
+    return path
+
+
+def record_floor_through_cli(runtime, *, channel_id: str = "prod") -> dict:
+    """Record the floor through the shipped production producer, not a direct call.
+
+    This is deliberate: if the harness called `record_principal_floor` directly, the tests
+    would pass while no operator command could ever record the floor -- the exact
+    invariant-without-producers defect `AGENTS.md :: Required rules` names.
+    """
+
+    inventory_path = write_fence_inventory(runtime, channel_id=channel_id)
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        code = instance_runtime_main(
+            [
+                "principal-record-floor",
+                "--registry-path",
+                str(runtime.layout.registry_path),
+                "--fence-inventory",
+                str(inventory_path),
+                "--consumer",
+                "bootstrap-init",
+            ]
+        )
+    payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
+    payload["_exit_code"] = code
+    return payload
+
+
 def run_principal_cutover(
     runtime,
     *,
@@ -76,11 +122,8 @@ def run_principal_cutover(
 ) -> LocalOperatorPrincipalRecord:
     """Fence -> floor -> first durable role write, in that order."""
 
-    record_principal_floor(
-        runtime.registry,
-        inventory=complete_inventory(channel_id),
-        _capability=STORAGE_MUTATION_CAPABILITY,
-    )
+    receipt = record_floor_through_cli(runtime, channel_id=channel_id)
+    assert receipt["_exit_code"] == 0, receipt
     assert principal_floor_recorded(runtime.registry)
     store = open_local_operator_principal_store(runtime.layout.registry_path)
     return store.bootstrap(
@@ -134,6 +177,8 @@ def provisioned_instance(
 
 __all__ = [
     "complete_inventory",
+    "record_floor_through_cli",
+    "write_fence_inventory",
     "principal_record_path",
     "principal_store",
     "provisioned_instance",

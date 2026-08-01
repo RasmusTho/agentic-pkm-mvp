@@ -32,7 +32,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.auth import api_key_header, resolve_auth_subject
+from app.auth import api_key_header, require_loopback_or_api_key, resolve_auth_subject
 from app.instance.active_context_service import (
     ActiveContextSelectionService,
     ActiveContextServiceError,
@@ -50,7 +50,17 @@ from app.instance.runtime import open_local_operator_principal_store
 from app.instance.vault_registry import RegistryError, VaultRegistryStore
 from app.vault.active_context_v1 import AuthSubject
 
-router = APIRouter(prefix="/companion/active-context", tags=["companion", "active-context"])
+# The #2223 gate is a *router-level* dependency, not a per-handler one. FastAPI resolves
+# router dependencies before a path operation's own parameter dependencies, so an
+# unauthenticated caller is rejected before `get_selection_service` reads instance state from
+# disk. With the gate inside the handler instead, an unauthenticated remote caller could
+# observe a 503 that discloses whether a registry is bound and whether a principal is
+# provisioned.
+router = APIRouter(
+    prefix="/companion/active-context",
+    tags=["companion", "active-context"],
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
 
 _SELECTION_PATH = "/selection"
 
@@ -171,17 +181,22 @@ def _context(record: ContextSelectionRecord) -> SelectionContext:
     return SelectionContext(**record.redacted())  # type: ignore[arg-type]
 
 
+#: Every bearer-resolution failure returns exactly this, whatever went wrong. Expired,
+#: unknown, pre-restart, and bound-to-another-principal are deliberately indistinguishable
+#: over the wire: distinguishing them would make the endpoint a bearer-existence oracle.
+#: The internal exception types stay distinct so a future audit log can tell them apart.
+_RESELECTION_REQUIRED_DETAIL = "reselection_required: selection is not resolvable for this caller"
+
+
 def _selection_failure(exc: Exception) -> HTTPException:
     """Map a selection failure to a response that contains no bearer material.
 
-    `str(exc)` is safe by construction: neither `ReselectionRequiredError` nor
-    `SelectionPrincipalMismatchError` embeds the presented id in its message.
+    The detail is a fixed constant rather than `str(exc)`, so neither the presented bearer
+    nor the reason it failed can leak.
     """
 
-    if isinstance(exc, ReselectionRequiredError):
-        return HTTPException(status_code=401, detail=str(exc))
-    if isinstance(exc, SelectionPrincipalMismatchError):
-        return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, (ReselectionRequiredError, SelectionPrincipalMismatchError)):
+        return HTTPException(status_code=401, detail=_RESELECTION_REQUIRED_DETAIL)
     if isinstance(exc, ActiveContextServiceError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, RegistryError):
@@ -265,6 +280,5 @@ def clear_selection(
 __all__ = [
     "get_selection_service",
     "get_selection_store",
-    "reset_selection_store_for_tests",
     "router",
 ]

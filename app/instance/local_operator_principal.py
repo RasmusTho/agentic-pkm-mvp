@@ -282,24 +282,38 @@ class LocalOperatorPrincipalStore:
             raise
 
     def _read_private_json(self, path: Path) -> dict[str, Any]:
-        metadata = path.lstat()
-        if not stat.S_ISREG(metadata.st_mode):
-            raise PrincipalPreflightError(
-                "principal record is not a regular file",
-                provisioning_action="remove the unsafe path and re-run principal bootstrap",
-            )
-        if metadata.st_uid != os.geteuid():
-            raise PrincipalPreflightError(
-                "principal record ownership is unsafe",
-                provisioning_action="chown the principal record to the runtime user",
-            )
-        if metadata.st_mode & 0o777 != 0o600:
-            raise PrincipalPreflightError(
-                f"principal record mode is unsafe: {oct(metadata.st_mode & 0o777)}",
-                provisioning_action="chmod 0600 the principal record",
-            )
+        # Open first, then validate the *descriptor* and read from it. Validating a path with
+        # `lstat` and then re-resolving it with `read_text` is a TOCTOU window; `O_NOFOLLOW`
+        # plus `fstat` closes it, matching the lock path's posture.
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as error:
+            raise PrincipalPreflightError(
+                "principal record is unreadable or is a symlink",
+                provisioning_action="remove the unsafe path and re-run principal bootstrap",
+            ) from error
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise PrincipalPreflightError(
+                    "principal record is not a regular file",
+                    provisioning_action="remove the unsafe path and re-run principal bootstrap",
+                )
+            if metadata.st_uid != os.geteuid():
+                raise PrincipalPreflightError(
+                    "principal record ownership is unsafe",
+                    provisioning_action="chown the principal record to the runtime user",
+                )
+            if metadata.st_mode & 0o777 != 0o600:
+                raise PrincipalPreflightError(
+                    f"principal record mode is unsafe: {oct(metadata.st_mode & 0o777)}",
+                    provisioning_action="chmod 0600 the principal record",
+                )
+            raw = os.read(descriptor, metadata.st_size)
+        finally:
+            os.close(descriptor)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
         except (OSError, ValueError) as error:
             raise PrincipalPreflightError(
                 "principal record is unreadable or malformed",
@@ -385,6 +399,7 @@ class LocalOperatorPrincipalStore:
                 if (
                     existing.credential_fingerprint == credential_fingerprint
                     and existing.subjects == normalized
+                    and existing.migration_provenance == migration_provenance
                 ):
                     return existing
                 raise PrincipalPreflightError(
@@ -556,9 +571,14 @@ class LocalOperatorPrincipalStore:
                 )
             export = self._read_private_json(self.export_path)
             fork_revision = export.get("fork_revision")
-            if not isinstance(fork_revision, int) or fork_revision > current.revision:
+            # `!=`, not `>`. A fork *below* the current revision is a stale export, and
+            # accepting it would let a leftover file replay an old credential over a later
+            # governed rotation. The export is also consumed on success (below), so a
+            # successful reconcile cannot be replayed at all.
+            if not isinstance(fork_revision, int) or fork_revision != current.revision:
                 raise PrincipalPreflightError(
-                    "roll-forward export fork does not match the current principal lineage",
+                    "roll-forward export fork does not match the current principal lineage "
+                    f"(export fork {fork_revision!r}, record revision {current.revision})",
                     provisioning_action="resolve the divergent auth lineage manually; nothing was overwritten",
                 )
             exported_fingerprint = export.get("credential_fingerprint")
@@ -568,6 +588,9 @@ class LocalOperatorPrincipalStore:
                     provisioning_action="resolve the ambiguous auth lineage manually; nothing was overwritten",
                 )
             if exported_fingerprint == current.credential_fingerprint:
+                # Nothing to reconcile. Consume the export so it cannot be replayed later
+                # against a rotated record.
+                self.export_path.unlink(missing_ok=True)
                 return current
             if exported_fingerprint is None or current.credential_fingerprint is None:
                 raise PrincipalPreflightError(
@@ -587,6 +610,7 @@ class LocalOperatorPrincipalStore:
                 additional_roles=current.additional_roles,
             )
             self._atomic_private_write(self.path, self._serialize(record.as_payload()))
+            self.export_path.unlink(missing_ok=True)
             return record
 
 

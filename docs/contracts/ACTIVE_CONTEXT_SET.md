@@ -65,10 +65,14 @@ Shipped behaviour:
   instance default or no-vault. A request presenting an expired, unknown, or pre-restart id
   fails closed with a reselection-required error; it never falls through to a default, to
   last-active state, or to another session.
-- **Full-context cache identity.** `app/retrieval/context_cache.py` keys entries by every
-  context-affecting input plus the effective settings-bundle digest
-  (`app/vault/settings_bundle.py`) — never by binding plus generation alone. Raw bearer ids
-  are never logged, receipted, or used as cache-key material; only the digest appears.
+- **Full-context cache identity — shipped as an unwired seam.**
+  `app/retrieval/context_cache.py` derives an identity from every context-affecting input
+  plus the effective settings-bundle digest (`app/vault/settings_bundle.py`), never from
+  binding plus generation alone, and raw bearer ids are never key material — only the digest
+  is. **This is not yet the key the production retrieval path uses.**
+  `app/retrieval/hybrid.py` still keys its in-memory document store by the durable index
+  generation alone, and MVR-05B (#3860) owns migrating production retrieval onto this
+  identity together with the request carrier that supplies the snapshot.
 - **Principal.** Derived only from the auth/GOV-owned delegated-role or human record; see
   `docs/SECURITY.md :: Security` for the shipped credential/loopback/proxy subject mapping,
   the separate instance identity, and fail-closed principal resolution.

@@ -267,21 +267,6 @@ class ContextSelectionStore:
         self._records[raw_id] = updated
         return updated
 
-    def rotate_generation(self, raw_id: str) -> ContextSelectionRecord | None:
-        """Advance a live session's generation without changing its bindings.
-
-        Used when a binding revision, registry revision, or still-authorizing GOV verdict
-        changed: the snapshot identity must move before the next lookup even though the
-        selected set did not.
-        """
-
-        current = self._records.get(raw_id)
-        if current is None:
-            return None
-        updated = replace(current, generation=current.generation + 1)
-        self._records[raw_id] = updated
-        return updated
-
     def clear(
         self,
         raw_id: str,
@@ -493,6 +478,9 @@ class ActiveContextSelectionResolver:
                 reason="binding_or_authority_revision_changed",
                 invalidated_identity=previous,
             )
+            # Drop the superseded key rather than accumulating one entry per
+            # (context, generation) forever; nothing can resolve at the old generation again.
+            self._last_identity.pop((context_id, generation), None)
             self._last_identity[(context_id, rotated)] = identity
         else:
             self._last_identity[(context_id, generation)] = identity

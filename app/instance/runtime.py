@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
@@ -2936,40 +2937,102 @@ def _default_vault_command(args: argparse.Namespace) -> int:
     return 0
 
 
+PRINCIPAL_COMMANDS = (
+    "principal-show",
+    "principal-record-floor",
+    "principal-bootstrap",
+    "principal-rotate-credential",
+    "principal-add-role",
+    "principal-export-auth-state",
+    "principal-roll-forward",
+)
+
+
+def _read_credential(args: argparse.Namespace) -> str | None:
+    """Resolve the credential without ever putting it on the command line.
+
+    `argv` is world-readable on Linux (`/proc/<pid>/cmdline`) and lands in shell history, so
+    a `--credential <key>` flag would be a credential-durability defect in the very slice
+    that exists to stop credentials from leaking. The credential comes from the process
+    environment the server already reads (`API_KEY`), or from stdin for an explicit
+    rotation.
+    """
+
+    if getattr(args, "credential_stdin", False):
+        value = sys.stdin.read().strip()
+        return value or None
+    from app.settings import settings
+
+    return settings.api_key
+
+
 def _principal_command(args: argparse.Namespace) -> int:
-    """Headless MVR-03 delegated-role bootstrap / show / rotate.
+    """Headless MVR-03 delegated-role producers.
 
     This is the CLI half of the "production API and CLI resolve the same record"
     requirement: it opens the same private store the API router opens, through the
-    same sanctioned factory.
+    same sanctioned factory. It is also the **only** producer path for the
+    `minimum_runtime_principal` floor, the governed role/subject commands, and the
+    roll-forward export — an invariant with no producer is a latent outage
+    (`AGENTS.md :: Required rules`, invariant -> producers).
 
-    The receipt is redaction-safe: it carries the opaque role id, the bound
-    subjects, the revision, and the provenance. It never prints the credential,
-    the credential fingerprint, or the record's filesystem path.
+    Every receipt is redaction-safe: opaque role id, bound subjects, revision, and
+    provenance. It never prints the credential, the credential fingerprint, or the
+    record's filesystem path.
     """
 
+    from app.instance.active_context_service import current_auth_posture
     from app.instance.local_operator_principal import (
         PrincipalPreflightError,
         fingerprint_credential,
         preflight_auth_posture,
     )
-    from app.instance.principal_fence import principal_floor_recorded
+    from app.instance.principal_fence import (
+        PrincipalFenceError,
+        load_fence_inventory,
+        principal_floor_recorded,
+        record_principal_floor,
+        require_matching_source_digest,
+    )
 
     registry_path = Path(args.registry_path)
+    registry = VaultRegistryStore(registry_path)
     store = open_local_operator_principal_store(registry_path)
+    extra: dict[str, object] = {}
     try:
+        if args.command == "principal-record-floor":
+            repo_root = Path(args.repo_root or Path(__file__).resolve().parents[2])
+            inventory = load_fence_inventory(Path(args.fence_inventory))
+            require_matching_source_digest(
+                inventory,
+                compose_path=repo_root / "docker-compose.yaml",
+                repo_root=repo_root,
+            )
+            snapshot = record_principal_floor(
+                registry,
+                inventory=inventory,
+                _capability=local_operator_storage_capability(),
+            )
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "consumer": args.consumer,
+                        "floor_recorded": True,
+                        "registry_revision": snapshot.revision,
+                        "fenced_producers": len(inventory.producers),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         if args.command == "principal-show":
             record = store.require()
         elif args.command == "principal-bootstrap":
-            from app.instance.local_operator_principal import AuthPosture
-
-            posture = AuthPosture(
-                configured_credentials=1 if args.credential else 0,
-                credential_fingerprint=(
-                    fingerprint_credential(args.credential) if args.credential else None
-                ),
-                loopback_listener_proven=args.loopback_proven,
-                companion_proxy_configured=args.companion_proxy,
+            # The posture is read from server configuration, not asserted by flags, so the
+            # bound subjects match what the request path will actually admit.
+            posture = current_auth_posture(
+                loopback_listener_proven=args.loopback_listener,
             )
             record = store.bootstrap(
                 credential_fingerprint=posture.credential_fingerprint,
@@ -2977,17 +3040,37 @@ def _principal_command(args: argparse.Namespace) -> int:
                 migration_provenance=posture.migration_provenance(
                     existing_install=args.existing_install
                 ),
-                floor_recorded=principal_floor_recorded(VaultRegistryStore(registry_path)),
+                floor_recorded=principal_floor_recorded(registry),
                 _capability=local_operator_storage_capability(),
             )
-        else:
+        elif args.command == "principal-rotate-credential":
+            credential = _read_credential(args)
             record = store.rotate_credential(
                 credential_fingerprint=(
-                    fingerprint_credential(args.credential) if args.credential else None
+                    fingerprint_credential(credential) if credential else None
                 ),
                 _capability=local_operator_storage_capability(),
             )
-    except (PrincipalPreflightError, CapabilityNotReadyError) as exc:
+        elif args.command == "principal-add-role":
+            record, added = store.add_role(
+                kind="human" if args.kind == "human" else "agent",
+                label=args.label,
+                _capability=local_operator_storage_capability(),
+            )
+            extra = {"added_role_id": added.role_id, "added_role_kind": added.kind}
+        elif args.command == "principal-export-auth-state":
+            record = store.require()
+            store.export_final_auth_state(
+                credential_fingerprint=record.credential_fingerprint,
+                fork_revision=record.revision,
+                _capability=local_operator_storage_capability(),
+            )
+            extra = {"exported_fork_revision": record.revision}
+        else:
+            record = store.reconcile_roll_forward(
+                _capability=local_operator_storage_capability(),
+            )
+    except (PrincipalFenceError, PrincipalPreflightError, CapabilityNotReadyError) as exc:
         print(
             json.dumps(
                 {"ok": False, "consumer": args.consumer, "error": str(exc)},
@@ -3006,6 +3089,7 @@ def _principal_command(args: argparse.Namespace) -> int:
                 "subjects": list(record.subjects),
                 "migration_provenance": record.migration_provenance,
                 "credential_bound": record.credential_fingerprint is not None,
+                **extra,
             },
             sort_keys=True,
         )
@@ -3087,16 +3171,24 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--consumer", default=None)
         if name == "default-vault-set":
             command.add_argument("--vault-binding-id", required=True)
-    for name in ("principal-show", "principal-bootstrap", "principal-rotate-credential"):
+    for name in PRINCIPAL_COMMANDS:
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
         command.add_argument("--consumer", default=None)
-        if name != "principal-show":
-            command.add_argument("--credential", default=None)
+        if name == "principal-record-floor":
+            command.add_argument("--fence-inventory", type=Path, required=True)
+            command.add_argument("--repo-root", type=Path, default=None)
         if name == "principal-bootstrap":
-            command.add_argument("--loopback-proven", action="store_true")
-            command.add_argument("--companion-proxy", action="store_true")
+            # The credential itself is never a flag; the posture is read from server
+            # configuration. This flag only declares that the deployment exposes a
+            # loopback-local listener, and every request still proves loopback itself.
+            command.add_argument("--loopback-listener", action="store_true")
             command.add_argument("--existing-install", action="store_true")
+        if name == "principal-rotate-credential":
+            command.add_argument("--credential-stdin", action="store_true")
+        if name == "principal-add-role":
+            command.add_argument("--kind", choices=("human", "agent"), required=True)
+            command.add_argument("--label", required=True)
     args = parser.parse_args(argv)
     if args.command in {
         "default-vault-get",
@@ -3104,11 +3196,7 @@ def main(argv: list[str] | None = None) -> int:
         "default-vault-clear",
     }:
         return _default_vault_command(args)
-    if args.command in {
-        "principal-show",
-        "principal-bootstrap",
-        "principal-rotate-credential",
-    }:
+    if args.command in set(PRINCIPAL_COMMANDS):
         return _principal_command(args)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)

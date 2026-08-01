@@ -28,7 +28,6 @@ VerdictStatus = Literal["allow", "deny"]
 
 #: Bounded deny reasons. A consumer branches on these; it never parses prose.
 DENY_BINDING_UNKNOWN = "binding_unknown"
-DENY_BINDING_UNAVAILABLE = "binding_unavailable"
 DENY_PRINCIPAL_UNRESOLVED = "principal_unresolved"
 DENY_REVOKED = "binding_revoked"
 
@@ -133,15 +132,21 @@ class _KnownBinding:
 class RegistryBindingAuthorizer:
     """The shipped GOV policy for the current single-user runtime.
 
-    It authorizes a binding when, and only when, all of the following hold:
+    It authorizes a binding when, and only when, both of the following hold:
 
     - a principal was resolved by the auth/GOV boundary (an unresolved principal fails
       closed -- there is no anonymous admission),
-    - the binding is a known, registered, currently-available registry entry,
-    - the binding has not been revoked.
+    - the binding is a known, registered, non-revoked registry entry.
 
-    This is honest about what the runtime can decide today. It is a real decision point,
-    not a rubber stamp: each of those three branches denies, and each is exercised by
+    **Availability is deliberately not an authorization input.** A binding whose content root
+    is temporarily unreachable is still a binding this principal is *allowed* to use; it is
+    an unhealthy one. Denying it here would collapse two different states the contract keeps
+    apart: `deny` raises and reissues nothing, while unavailable produces a **degraded**
+    snapshot with a bounded reason. Folding availability into GOV would make the degraded
+    posture unreachable through production wiring, so the resolver owns it instead.
+
+    This is honest about what the runtime can decide today. It is a real decision point, not
+    a rubber stamp: each deny branch is exercised by
     `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`.
 
     Later slices replace the policy without changing this seam's shape.
@@ -215,13 +220,11 @@ class RegistryBindingAuthorizer:
             return _verdict("deny", DENY_BINDING_UNKNOWN)
         if known.revoked:
             return _verdict("deny", DENY_REVOKED)
-        if not known.available:
-            return _verdict("deny", DENY_BINDING_UNAVAILABLE)
+        # Availability is intentionally absent here; see the class docstring.
         return _verdict("allow", "registered_binding_for_resolved_principal")
 
 
 __all__ = [
-    "DENY_BINDING_UNAVAILABLE",
     "DENY_BINDING_UNKNOWN",
     "DENY_PRINCIPAL_UNRESOLVED",
     "DENY_REVOKED",

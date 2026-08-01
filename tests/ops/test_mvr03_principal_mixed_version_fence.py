@@ -11,6 +11,8 @@ Two separate obligations, deliberately kept as two tests:
 from __future__ import annotations
 
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 
 import pytest
 import yaml
@@ -31,12 +33,16 @@ from app.instance.principal_fence import (
     principal_floor_recorded,
     record_principal_floor,
     require_complete_fence,
+    require_matching_source_digest,
 )
+from app.instance.runtime import main as instance_runtime_main
 from app.instance.runtime import open_local_operator_principal_store
 from tests._mvr03_principal_harness import (
     complete_inventory,
     principal_record_path,
     quiesced_producers,
+    record_floor_through_cli,
+    write_fence_inventory,
 )
 from tests._mvr_default_vault_harness import REPO_ROOT, active_runtime
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -156,11 +162,13 @@ def test_every_legacy_auth_producer_stops_before_principal_floor_write(tmp_path)
     assert not principal_record_path(runtime).exists()
 
     # -- the complete fence lets the floor land, and only then the role write ------------
-    record_principal_floor(
-        runtime.registry,
-        inventory=complete_inventory(),
-        _capability=STORAGE_MUTATION_CAPABILITY,
-    )
+    # Recorded through the shipped CLI producer, not a direct call: an invariant whose only
+    # producer is a test fixture is a latent outage the moment an operator runs the real
+    # deployment (`AGENTS.md :: Required rules`, invariant -> producers).
+    receipt = record_floor_through_cli(runtime)
+    assert receipt["_exit_code"] == 0, receipt
+    assert receipt["floor_recorded"] is True
+    assert receipt["fenced_producers"] == len(complete_inventory().producers)
     assert principal_floor_recorded(runtime.registry)
     floor_revision = runtime.registry.load().revision
     assert floor_revision > revision_before
@@ -286,3 +294,54 @@ def test_principal_fence_inventory_covers_every_enabled_auth_producer(tmp_path) 
     payload = json.dumps(inventory.as_payload())
     assert "credential_fingerprint" not in payload
     assert str(REPO_ROOT) not in payload
+
+    # -- an ADDED service cannot escape the fence ---------------------------------------
+    # This is the failure a hand-written list misses: enumerate-and-classify catches it,
+    # check-the-list-against-compose does not.
+    added_path = tmp_path / "docker-compose.added.yaml"
+    added = {"services": dict(services)}
+    added["services"]["api-v2"] = dict(services["api"])
+    added_path.write_text(yaml.safe_dump(added), encoding="utf-8")
+    with pytest.raises(PrincipalFenceError) as unclassified:
+        discover_auth_producers(compose_path=added_path, repo_root=REPO_ROOT)
+    assert "api-v2" in str(unclassified.value)
+    assert "classify each service" in unclassified.value.provisioning_action
+
+    # -- an inventory whose sources changed after probing is refused --------------------
+    stale = build_fence_inventory(
+        channel_id="prod",
+        producers=producers,
+        source_digest="0" * 64,
+        operations_fenced=True,
+        probe_count=2,
+    )
+    with pytest.raises(PrincipalFenceError, match="source changed after it was probed"):
+        require_matching_source_digest(
+            stale, compose_path=compose_path, repo_root=REPO_ROOT
+        )
+    require_matching_source_digest(
+        inventory, compose_path=compose_path, repo_root=REPO_ROOT
+    )
+
+    # -- the CLI floor producer refuses a drifted inventory before writing anything ------
+    runtime, _, _ = active_runtime(tmp_path / "cli-drift")
+    inventory_path = write_fence_inventory(runtime)
+    drifted = json.loads(inventory_path.read_text(encoding="utf-8"))
+    drifted["source_digest"] = "0" * 64
+    inventory_path.write_text(json.dumps(drifted), encoding="utf-8")
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        code = instance_runtime_main(
+            [
+                "principal-record-floor",
+                "--registry-path",
+                str(runtime.layout.registry_path),
+                "--fence-inventory",
+                str(inventory_path),
+                "--consumer",
+                "bootstrap-init",
+            ]
+        )
+    assert code == 1
+    assert "source changed" in json.loads(buffer.getvalue().strip().splitlines()[-1])["error"]
+    assert not principal_floor_recorded(runtime.registry)
