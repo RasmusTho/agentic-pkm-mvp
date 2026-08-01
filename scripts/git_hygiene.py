@@ -1043,6 +1043,11 @@ def janitor_apply(
     ]
     | None = None,
     target_worktree: str | None = None,
+    target_branch: str | None = None,
+    branch_lifecycle_authority_guard: Callable[
+        [dict[str, Any]], AbstractContextManager[None]
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -1096,6 +1101,21 @@ def janitor_apply(
                     "artifact": "worktree",
                     "action": "revalidate_lifecycle_registry",
                     "reason": "authoritative_lifecycle_revalidation_required",
+                }
+            ],
+        }
+    if target_branch is not None and (
+        target_worktree is None or branch_lifecycle_authority_guard is None
+    ):
+        return {
+            "mode": "apply",
+            "ok": False,
+            "destructive_actions": [],
+            "errors": [
+                {
+                    "artifact": "worktree",
+                    "action": "revalidate_lifecycle_registry",
+                    "reason": "targeted_branch_lifecycle_guard_required",
                 }
             ],
         }
@@ -1176,7 +1196,39 @@ def janitor_apply(
             if str(Path(str(worktree.get("path", ""))).resolve(strict=False))
             == target_path
         ]
-        if len(selected) != 1:
+        selected_branches = [
+            {**branch, "merge_proof": "ancestor_of_origin_main"}
+            for branch in plan["candidates"]["local_branches"]
+            if branch.get("branch") == target_branch
+        ]
+        if target_branch is not None and not selected_branches:
+            skipped_reason = next(
+                (
+                    item.get("reason")
+                    for item in plan["skipped"]
+                    if item.get("artifact") == "local_branch"
+                    and item.get("name") == target_branch
+                ),
+                None,
+            )
+            pr = _pr_state(target_branch, pr_states)
+            pr_state = pr.get("state")
+            merged_head = pr.get("head_sha")
+            current_head = run_git(["rev-parse", target_branch], cwd)
+            if (
+                skipped_reason == "not_merged_to_origin_main"
+                and pr_state == "MERGED"
+                and isinstance(merged_head, str)
+                and merged_head == current_head
+            ):
+                selected_branches = [
+                    {
+                        "branch": target_branch,
+                        "merge_proof": "merged_pr",
+                        "merged_pr_head": merged_head,
+                    }
+                ]
+        if target_branch is None and len(selected) != 1:
             return {
                 **plan,
                 "mode": "apply",
@@ -1192,6 +1244,23 @@ def janitor_apply(
                 ],
                 "ok": False,
             }
+        if target_branch is not None and len(selected_branches) != 1:
+            return {
+                **plan,
+                "mode": "apply",
+                "targeted_cleanup": {"worktree": target_path, "branch": target_branch},
+                "destructive_actions": actions,
+                "errors": [
+                    {
+                        "artifact": "local_branch",
+                        "action": "select_target",
+                        "reason": "target_not_exactly_one_reclaimable_tombstone_branch",
+                        "path": target_path,
+                        "branch": target_branch,
+                    }
+                ],
+                "ok": False,
+            }
         # A targeted operation is intentionally narrower than the global janitor:
         # preserve evidence and candidates belonging to other artifacts must not
         # block it, but neither may they become eligible for mutation.
@@ -1199,18 +1268,22 @@ def janitor_apply(
             **plan,
             "candidates": {
                 **plan["candidates"],
-                "local_branches": [],
-                "worktrees": selected,
+                "local_branches": selected_branches,
+                "worktrees": selected if target_branch is None else [],
                 "orphaned_worktrees": [],
                 "remote_branches": [],
                 "remote_branches_requiring_rescue": [],
                 "old_stashes": [],
             },
-            "reclaimable_worktrees": selected,
+            "reclaimable_worktrees": selected if target_branch is None else [],
             "orphaned_worktrees": [],
             "prune_candidates": {"worktree": [], "remote": []},
             "preservation_receipts": [],
-            "targeted_cleanup": {"worktree": target_path},
+            "targeted_cleanup": (
+                {"worktree": target_path, "branch": target_branch}
+                if target_branch is not None
+                else {"worktree": target_path}
+            ),
         }
 
     preservation_receipts = plan.get("preservation_receipts", [])
@@ -1295,6 +1368,72 @@ def janitor_apply(
             return False
         return True
 
+    def apply_with_branch_lifecycle_authority(
+        args: list[str],
+        action: dict[str, Any],
+    ) -> bool:
+        if branch_lifecycle_authority_guard is None:
+            return apply_git(args, action)
+        try:
+            with branch_lifecycle_authority_guard(action):
+                if authority_changed_for(
+                    path=action.get("path"), branch=action.get("branch")
+                ):
+                    return False
+                merged_pr_head = action.get("merged_pr_head")
+                if merged_pr_head is not None:
+                    current_head = run_git(["rev-parse", str(action["branch"])], cwd)
+                    if current_head != merged_pr_head:
+                        errors.append(
+                            {
+                                "artifact": "local_branch",
+                                "action": "revalidate_merged_pr_head",
+                                "reason": "target_branch_head_changed",
+                                "branch": action["branch"],
+                                "expected_head": merged_pr_head,
+                                "current_head": current_head,
+                            }
+                        )
+                        return False
+                return apply_git(args, action)
+        except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
+            errors.append(
+                {
+                    "artifact": "worktree",
+                    "action": "revalidate_lifecycle_registry",
+                    "reason": "targeted_branch_lifecycle_authority_changed",
+                    "path": action.get("path"),
+                    "branch": action.get("branch"),
+                }
+            )
+            return False
+
+    def branch_delete_args(branch: Mapping[str, Any]) -> list[str] | None:
+        """Return a ref-CAS delete for non-ancestor PR-proven branches.
+
+        `git branch -D` cannot bind the delete to the planned ref.  A conditional
+        `update-ref -d` does, so a branch advanced after planning is preserved.
+        """
+
+        branch_name = branch.get("branch")
+        merge_proof = branch.get("merge_proof")
+        if not isinstance(branch_name, str) or not branch_name:
+            raise ValueError("branch cleanup candidate is invalid")
+        if merge_proof not in {"merged_pr", "closed_pr"}:
+            return ["branch", "-d", branch_name]
+        expected_head = branch.get("merged_pr_head", branch.get("head"))
+        if not isinstance(expected_head, str) or not expected_head:
+            errors.append(
+                {
+                    "artifact": "local_branch",
+                    "action": "select_delete_ref",
+                    "reason": "conditional_branch_delete_head_required",
+                    "branch": branch_name,
+                }
+            )
+            return None
+        return ["update-ref", "-d", f"refs/heads/{branch_name}", expected_head]
+
     reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
     cleanup_worktrees = [
         *plan.get(
@@ -1358,19 +1497,27 @@ def janitor_apply(
                     "errors": errors,
                     "ok": False,
                 }
-            # Squash/closed-PR-proven branches are not ancestors of origin/main,
-            # so `git branch -d` refuses them and the branch would be skipped
-            # forever. The merge_proof already establishes safe-to-delete, so use
-            # -D for merged_pr/closed_pr; keep the conservative -d for branches
-            # proven by ancestry.
-            delete_flag = (
-                "-D"
-                if worktree.get("merge_proof") in {"merged_pr", "closed_pr"}
-                else "-d"
-            )
-            apply_git(["branch", delete_flag, worktree["branch"]], {"artifact": "local_branch", "action": "delete_after_worktree_remove", "branch": worktree["branch"]})
+            delete_args = branch_delete_args(worktree)
+            if delete_args is None or not apply_git(
+                delete_args,
+                {
+                    "artifact": "local_branch",
+                    "action": "delete_after_worktree_remove",
+                    "branch": worktree["branch"],
+                },
+            ):
+                return {
+                    **plan,
+                    "mode": "apply",
+                    "destructive_actions": actions,
+                    "errors": errors,
+                    "ok": False,
+                }
     for branch in plan["candidates"]["local_branches"]:
-        if authority_changed_for(branch=branch.get("branch")):
+        if authority_changed_for(
+            path=target_worktree if branch.get("branch") == target_branch else None,
+            branch=branch.get("branch"),
+        ):
             return {
                 **plan,
                 "mode": "apply",
@@ -1378,7 +1525,22 @@ def janitor_apply(
                 "errors": errors,
                 "ok": False,
             }
-        apply_git(["branch", "-d", branch["branch"]], {"artifact": "local_branch", "action": "delete", **branch})
+        action = {"artifact": "local_branch", "action": "delete", **branch}
+        if target_branch is not None and branch.get("branch") == target_branch:
+            action["path"] = target_worktree
+            delete_args = branch_delete_args(branch)
+            if delete_args is None or not apply_with_branch_lifecycle_authority(
+                delete_args, action
+            ):
+                return {
+                    **plan,
+                    "mode": "apply",
+                    "destructive_actions": actions,
+                    "errors": errors,
+                    "ok": False,
+                }
+        else:
+            apply_git(["branch", "-d", branch["branch"]], action)
     for remote in plan["candidates"]["remote_branches"]:
         if authority_changed_for(branch=remote.get("branch")):
             return {

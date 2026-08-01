@@ -147,8 +147,8 @@ def test_apply_uses_force_delete_for_pr_proven_non_ancestor_branch(
     tmp_path, monkeypatch
 ) -> None:
     """A reclaimable worktree whose merge proof is a merged/closed PR (squash
-    merge -> not an ancestor) must be deleted with ``git branch -D``. ``-d`` would
-    be refused by git and leave the branch skipped forever."""
+    merge -> not an ancestor) needs a conditional ref delete. ``git branch -d``
+    would be refused and leave the branch skipped forever."""
     commands: list[list[str]] = []
 
     def fake_run_git_result(args: list[str], _cwd: Path):
@@ -175,11 +175,13 @@ def test_apply_uses_force_delete_for_pr_proven_non_ancestor_branch(
                     "path": str(tmp_path / "deliver-squashed"),
                     "branch": "deliver/squashed",
                     "merge_proof": "merged_pr",
+                    "head": "squashed-head",
                 },
                 {
                     "path": str(tmp_path / "docs-closed"),
                     "branch": "docs/closed",
                     "merge_proof": "closed_pr",
+                    "head": "closed-head",
                 },
                 {
                     "path": str(tmp_path / "deliver-ancestor"),
@@ -207,9 +209,10 @@ def test_apply_uses_force_delete_for_pr_proven_non_ancestor_branch(
     )
 
     assert report["ok"] is True
-    # Squash/closed-PR proofs get the force delete.
-    assert ["branch", "-D", "deliver/squashed"] in commands
-    assert ["branch", "-D", "docs/closed"] in commands
+    # Squash/closed-PR proofs use a compare-and-delete ref update so an advance
+    # after planning cannot delete newer work.
+    assert ["update-ref", "-d", "refs/heads/deliver/squashed", "squashed-head"] in commands
+    assert ["update-ref", "-d", "refs/heads/docs/closed", "closed-head"] in commands
     # Ancestor proof keeps the conservative -d (must NOT be force-deleted).
     assert ["branch", "-d", "deliver/ancestor"] in commands
     assert ["branch", "-D", "deliver/ancestor"] not in commands
@@ -273,7 +276,7 @@ def test_targeted_janitor_apply_mutates_only_selected_worktree(
 
     assert report["ok"] is True
     assert ["worktree", "remove", str(target)] in commands
-    assert ["branch", "-D", "codex/target"] in commands
+    assert ["update-ref", "-d", "refs/heads/codex/target", "codex/target"] in commands
     assert not any(str(other) in command for command in commands)
     assert not any(command[:2] == ["push", "origin"] for command in commands)
     assert not any(command[:2] == ["stash", "drop"] for command in commands)
@@ -334,6 +337,7 @@ def test_apply_real_git_reclaims_squash_merged_worktree_and_branch(tmp_path) -> 
             "expires_at": 0,
         }
     }
+    branch_head = git_hygiene.run_git(["rev-parse", "deliver/squashed"], repo)
     report = git_hygiene.janitor_apply(
         repo,
         pr_states={"deliver/squashed": {"state": "MERGED"}},
@@ -350,7 +354,14 @@ def test_apply_real_git_reclaims_squash_merged_worktree_and_branch(tmp_path) -> 
         action.get("artifact") == "local_branch"
         and action.get("action") == "delete_after_worktree_remove"
         and action.get("branch") == "deliver/squashed"
-        and action.get("command") == ["git", "branch", "-D", "deliver/squashed"]
+        and action.get("command")
+        == [
+            "git",
+            "update-ref",
+            "-d",
+            "refs/heads/deliver/squashed",
+            branch_head,
+        ]
         for action in report["destructive_actions"]
     )
 
@@ -368,7 +379,7 @@ def _init_repo_with_merged_branch(
 
     ``squash=True`` reproduces a GitHub squash merge (branch tip is NOT an
     ancestor of ``origin/main``, so the merge proof is ``merged_pr`` and the
-    apply path uses the irreversible ``git branch -D``). ``squash=False`` keeps
+    apply path uses a conditional ref delete). ``squash=False`` keeps
     the branch an ancestor, which is what makes it an ordinary local-branch
     cleanup candidate on a later restart.
     """
@@ -470,6 +481,75 @@ def test_branch_deletion_fails_closed_on_post_removal_worktree_path_lease(
         error.get("reason") == "lease_authority_changed"
         and error.get("branch") == "codex/candidate"
         and lease["resource_id"] in error.get("active_leases", [])
+        for error in report["errors"]
+    )
+
+
+def test_force_branch_cleanup_preserves_ref_advanced_after_worktree_removal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The conditional ref delete cannot erase a branch advanced after planning."""
+    repo = _init_repo_with_merged_branch(
+        tmp_path, branch="codex/candidate", squash=True
+    )
+    worktree = tmp_path / "candidate-wt"
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree), "codex/candidate"],
+        cwd=repo,
+        check=True,
+    )
+    lifecycle_records = {
+        str(worktree.resolve()): {
+            "path": str(worktree.resolve()),
+            "branch": "codex/candidate",
+            "generation": GENERATION,
+            "owner": "prior-agent",
+            "status": "complete",
+            "registered_at": -20,
+            "heartbeat_at": -10,
+            "complete_at": 0,
+            "expires_at": 0,
+        }
+    }
+    planned_head = git_hygiene.run_git(["rev-parse", "codex/candidate"], repo)
+    tree = git_hygiene.run_git(["rev-parse", "codex/candidate^{tree}"], repo)
+    newer = git_hygiene.run_git(
+        ["commit-tree", tree, "-p", "codex/candidate", "-m", "newer commit"],
+        repo,
+    )
+    original_run_git_result = git_hygiene.run_git_result
+
+    def advance_ref_after_remove(args: list[str], cwd: Path):
+        result = original_run_git_result(args, cwd)
+        if args == ["worktree", "remove", str(worktree)] and result.returncode == 0:
+            git_hygiene.run_git(
+                ["update-ref", "refs/heads/codex/candidate", newer], repo
+            )
+        return result
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", advance_ref_after_remove)
+    report = git_hygiene.janitor_apply(
+        repo,
+        pr_states={"codex/candidate": {"state": "MERGED"}},
+        active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
+        lifecycle_records=lifecycle_records,
+    )
+
+    assert report["ok"] is False
+    assert not worktree.exists()
+    assert git_hygiene.run_git(["rev-parse", "codex/candidate"], repo) == newer
+    assert any(
+        error.get("command")
+        == [
+            "git",
+            "update-ref",
+            "-d",
+            "refs/heads/codex/candidate",
+            planned_head,
+        ]
+        and error.get("returncode") != 0
         for error in report["errors"]
     )
 
