@@ -55,8 +55,11 @@ unit tests or if owner docs claim support before merged-main acceptance.
 - [ ] Final cockpit HTML is deterministic, JS-off complete, print-complete, and incapable of
   execution across every terminal/refusal state.
   Verify: `tests/builderops/ckm/test_design_cockpit.py::test_design_hub_projection_preserves_direction_b_authority`
-- [ ] All focused design-run, CKM, and model-inquiry regressions pass on the exact PR head.
-  Verify: `tests/builderops/test_design_hub_acceptance.py::test_focused_regression_suites_are_bound_to_pr_head`
+- [ ] The named focused design-run, CKM, and model-inquiry regression set is complete at the PR
+  head and every acceptance `Verify:` target resolves to a defined test. Head-bound pass evidence
+  for that set is the `Unit tests (not pg)` CI check run on the PR head plus the evidence pack, not
+  a literal recorded inside the test.
+  Verify: `tests/builderops/test_design_hub_acceptance.py::test_focused_regression_set_is_complete_and_verify_targets_resolve`
 - [ ] Local spec state and parent #4131 receive the exact final child, Yggdrasil, artifact,
   transition-debt, and conditional-acceptance handoff receipts without changing supported owner
   truth.

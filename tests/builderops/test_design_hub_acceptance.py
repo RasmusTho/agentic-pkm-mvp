@@ -1238,11 +1238,11 @@ ACCEPTANCE_VERIFY_TARGETS: tuple[tuple[str, str], ...] = (
     ),
     (
         "tests/builderops/test_design_hub_acceptance.py",
-        "test_focused_regression_suites_are_bound_to_pr_head",
+        "test_focused_regression_set_is_complete_and_verify_targets_resolve",
     ),
 )
 
-def test_focused_regression_suites_are_bound_to_pr_head() -> None:
+def test_focused_regression_set_is_complete_and_verify_targets_resolve() -> None:
     """Prove the named focused-regression set is complete and resolvable here.
 
     This test runs inside the same head-SHA CI lane that runs every suite named
