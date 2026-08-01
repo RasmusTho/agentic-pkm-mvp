@@ -15,16 +15,26 @@ afterwards. The producers are:
    the Postgres test-fixture seed, which builds its row from the same tuple as
    (2).
 
-The migration's identity fields are asserted by parsing the migration source,
-so this runs without Postgres: a `pg`-only parity test would not run in the
-required `Unit tests (not pg)` job, which is exactly where drift needs to be
-caught. Schema parity for the underlying table is owned by `c4f7a1b2d9e3` and
+The migration is asserted by **running its real `upgrade()`** against a
+capturing `op` and reading the SQL it emits, so this needs no Postgres and
+therefore runs in the required `Unit tests (not pg)` job, which is where drift
+has to be caught. Checking only that the migration's module constants match the
+ledger's is not sufficient: the constants can be right while the
+`INSERT ... SELECT` binds them to the wrong columns or hardcodes a literal over
+one, and on an append-only, forward-only table the resulting row can never be
+removed. Schema parity for the underlying table is owned by `c4f7a1b2d9e3` and
 is not re-asserted here -- this migration is data-only.
+
+Not covered here: applying the migration to a real database. Nothing in
+`integration-nightly.yaml`'s bounded pg lane exercises the consent ledger
+either, so the emitted-SQL assertions below are the only automated guard on
+this seed.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -76,6 +86,87 @@ def _migration_module_constants() -> dict[str, object]:
         except ValueError:
             continue
     return values
+
+
+class _CapturingOp:
+    """Stands in for `alembic.op` so `upgrade()` can be run without a database."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, sql: object) -> None:
+        self.statements.append(str(sql))
+
+
+def _rendered_upgrade_sql() -> str:
+    """The SQL the migration's real `upgrade()` emits.
+
+    Runs the actual function with a capturing `op`, rather than reasoning about
+    the source. Comparing the migration's module *constants* to the ledger's
+    constants is not enough: the constants can be correct while the
+    `INSERT … SELECT` binds them to the wrong columns, hardcodes a literal in
+    place of one, or misspells a value — none of which a constants-only
+    comparison can see.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "heimdal_media_capture_migration_under_test", MIGRATION_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    capturing = _CapturingOp()
+    module.op = capturing  # type: ignore[attr-defined]
+    module.upgrade()
+    assert len(capturing.statements) == 1, (
+        f"expected exactly one statement from upgrade(), got {len(capturing.statements)}"
+    )
+    return capturing.statements[0]
+
+
+def _split_sql_list(text: str) -> list[str]:
+    """Split a SQL comma list at depth 0, respecting parens and quoted literals.
+
+    The seed's JSON literals contain commas, so a naive `str.split(",")`
+    mis-aligns every column after `capture_profile`.
+    """
+    items: list[str] = []
+    depth = 0
+    in_quote = False
+    current: list[str] = []
+    for char in text:
+        if char == "'":
+            in_quote = not in_quote
+        elif not in_quote and char == "(":
+            depth += 1
+        elif not in_quote and char == ")":
+            depth -= 1
+        elif char == "," and depth == 0 and not in_quote:
+            items.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def _seeded_columns() -> dict[str, str]:
+    """Map each INSERTed column name to the value expression bound to it."""
+    sql = _rendered_upgrade_sql()
+    match = re.search(
+        r"INSERT INTO heimdal_consent_grant\s*\((?P<cols>[^)]*)\)\s*"
+        r"SELECT\s*(?P<vals>.*?)\s*WHERE NOT EXISTS",
+        sql,
+        re.S,
+    )
+    assert match is not None, "could not parse the seed INSERT ... SELECT"
+    columns = [c.strip() for c in match.group("cols").split(",") if c.strip()]
+    values = _split_sql_list(match.group("vals"))
+    assert len(columns) == len(values), (
+        f"column/value arity mismatch: {len(columns)} columns vs {len(values)} values"
+    )
+    return dict(zip(columns, values))
 
 
 class _RecordingCursor:
@@ -133,10 +224,26 @@ def test_every_producer_seeds_the_same_media_capture_grant() -> None:
     assert constants["_MEDIA_CAPTURE_BASIS"] == MEDIA_CAPTURE_BASIS
     assert constants["_MEDIA_CAPTURE_SCOPE"] == MEDIA_CAPTURE_SCOPE
 
-    migration_profile = json.loads(str(constants["_MEDIA_CAPTURE_CAPTURE_PROFILE"]))
     memory_seed = _media_capture_seed_row(0)
-    assert migration_profile == memory_seed.capture_profile
-    assert migration_profile["modalities"] == list(MEDIA_CAPTURE_MODALITIES)
+
+    # Correct constants are not enough — assert the row the migration actually
+    # EMITS binds each of them to its declared column. A swapped basis/scope
+    # pair, a hardcoded profile, or a typo'd scope literal all leave the
+    # constants intact while seeding a grant that resolves for nothing; on an
+    # append-only, forward-only table that row can never be removed.
+    seeded = _seeded_columns()
+    assert seeded["grant_ref"] == f"'{MEDIA_CAPTURE_GRANT_REF}'"
+    assert seeded["basis"] == f"'{MEDIA_CAPTURE_BASIS}'"
+    assert seeded["scope"] == f"'{MEDIA_CAPTURE_SCOPE}'"
+    assert seeded["granted_by"] == "'operator'"
+    assert seeded["expiry"] == "NULL"
+    assert seeded["revokes_grant_ref"] == "NULL"
+
+    emitted_profile = json.loads(seeded["capture_profile"].removesuffix("::jsonb").strip("'"))
+    assert emitted_profile == memory_seed.capture_profile, (
+        "the migration must emit the same capture_profile the in-process seed builds"
+    )
+    assert emitted_profile["modalities"] == list(MEDIA_CAPTURE_MODALITIES)
 
     # The memory seed's own identity fields match the module constants too, so
     # neither producer can be "fixed" by editing only the other.

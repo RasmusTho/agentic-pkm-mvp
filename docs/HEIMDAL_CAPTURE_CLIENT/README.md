@@ -24,8 +24,10 @@ Substrate facts this spec builds on (verified on hub `main` = `1ce3b013`):
 - **The hub transcribes.** ASR is the shared faster-whisper engine invoked inside Heimdal's trust
   boundary on the runtime host — local-only, fail-loud, no cloud fallback (ADR-0049 §3; the
   one-Whisper rule in `docs/HEIMDAL/FABLE_COMPANION.md`).
-- **Consent + device identity are vault notes.** The standing `self_record` grant lives in the
-  consent ledger (mirrored to `_heimdal/consent.md`); device identity/config is
+- **Consent + device identity are vault notes.** The standing `self_record` grants live in the
+  consent ledger (mirrored to `_heimdal/consent.md`) — since #4492 there are two, one per
+  self-record capture lane, told apart by `scope` (`device+adapter:v1-voice-memo` and
+  `device+adapter:v1-media-ingress`), so `basis` alone no longer selects one; device identity/config is
   `_heimdal/devices/{device_id}.md` (durable slice: `device_id`, `label`, `consent_grant_ref`
   human-editable; `capture_gap_log`, `last_known_snapshot` agent-authored).
 - **Watch constraint:** Tailscale does not run on watchOS and no sanctioned watchOS pattern
