@@ -765,18 +765,30 @@ def scoped_hybrid_search(
     k: int = 8,
     language: Optional[str] = None,
     query_vector: list[float] | None = None,
+    scope: str | None = None,
 ) -> ScopedRetrieval:
     """Scope-prefiltered retrieval with content-free denials — the structured entrypoint.
 
     Partitions the store into eligible/excluded BY SCOPE before ranking, ranks the eligible set
     only, records excluded-but-relevant material as content-free denials, and returns a
     :class:`ScopedRetrieval`. ``hybrid_search`` is the ``List[dict]`` projection of ``.results``.
+
+    ``scope`` is the caller's active scope for THIS request (#2921). It is the binding channel that
+    makes the prefilter live in production: the ASK request path threads the caller's active scope
+    down to here. When the caller binds no scope, the ambient ``ASK_DOMAIN_SCOPE`` remains the
+    process-level default, so every pre-existing caller and eval harness keeps its semantics.
+
+    Blank and whitespace-only values are normalized to "no binding" exactly as
+    :func:`_resolve_domain_scope` normalizes the environment variable, so `" work "` cannot become a
+    scope that matches nothing. Note that "explicitly unscoped, ignore the ambient default" is
+    therefore not expressible through this parameter; no caller needs it today, and the eval gate
+    (``app/eval/golden.py``) achieves it by clearing the environment variable instead.
     """
     # G1res-1 (#2981): revalidate the durable-index cache-through before serving.
     _revalidate_cache_generation()
 
     docs = _STORE.all()
-    scope = _resolve_domain_scope()
+    scope = (scope or "").strip() or _resolve_domain_scope()
     if not docs:
         return ScopedRetrieval(results=[], denials=(), scope_policy_prefiltered=True, active_scope=scope)
 

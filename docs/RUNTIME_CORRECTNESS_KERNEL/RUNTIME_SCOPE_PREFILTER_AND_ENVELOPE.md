@@ -47,6 +47,126 @@ retrieval so agents consume a bounded `ContextEnvelope`, not raw index access.
   `app/`-backed adapter/fixture presenting the same corpus through the live retrieval entrypoint, and
   repoint the skeletons at it (drop the xfail). This does NOT relocate `mimer_runtime` into `app/`.
 
+## Activation in Production
+
+Delivering the mechanism is not the same as running it. Between #2772 and #2921 the prefilter was
+correct and mutation-verified in tests yet **dormant in the default running product**:
+`ASK_DOMAIN_SCOPE` was read by `app/retrieval/hybrid.py::_resolve_domain_scope` and set by no
+production code anywhere, so `scope` resolved to `None`, `_partition_by_scope` admitted every
+document, and I-A5 ("private not in work results") was enforced only where a test set the
+environment variable by hand.
+
+**The activation mechanism is a per-request active-scope binding threaded through the production
+ASK path.** One value is resolved once per turn and reused everywhere:
+
+`app/api/routes/ask.py::AskRequest.scope` (or the matching `scope` form field on `/api/ask/voice`)
+→ `app/agents/ask/graph.py::run_ask_graph(active_scope=...)` → `AgentState.active_scope` →
+`app/retrieval/capability.py::retrieve` via `RetrievalRequest.scope` →
+`app/retrieval/hybrid.py::scoped_hybrid_search(scope=...)` → `_partition_by_scope`.
+
+The same `AgentState.active_scope` also feeds the recall node and the envelope's `active_scope_id`,
+so the scope the prefilter filtered on and the scope the envelope declares cannot diverge within a
+turn. `RetrievalRequest.scope` was previously diagnostic-only metadata; it is now load-bearing.
+
+### Source of truth for the active scope
+
+**Chosen: the request context.** The caller states the active scope for the turn; the process-level
+`ASK_DOMAIN_SCOPE` remains the default when the request binds none.
+
+The two alternatives were rejected on evidence, not preference:
+
+- **`ActiveContextSet` / WSP.** `docs/boundaries/WSP.md` is the documented authority for effective
+  scope, and WSP does have running code — `app/vault/active_context.py::ActiveContextResolver`. But
+  that resolver returns `scope` with status `unknown` and the explicit reason "Scope is not resolved
+  by the current active-vault runtime." Binding retrieval to it today would leave the prefilter
+  exactly as dormant as before. WSP remains the intended long-term authority; when its resolver
+  starts returning a known scope it should take precedence over the request binding, and that
+  precedence rule is the follow-up, not this slice.
+- **Deriving scope from the active vault/workspace selection.** This is available today and would
+  have activated the prefilter without any API change — and it is precisely the `activeVault
+  collapse` failure mode `docs/boundaries/WSP.md` names: scope reduced to a scalar vault/folder/
+  device pointer. Scope is frame/audience/policy context, not a folder.
+
+### Forward compatibility with the Multi-Vault Runtime lane
+
+This binding deliberately does **not** couple to today's `ActiveContextSet` shape, which is what
+MVR-03 (#3857, `docs/MULTI_VAULT_RUNTIME/VERSION_ACTIVE_CONTEXT_SELECTION.md`) is about to rewrite
+into a versioned, immutable-generation contract.
+
+Split the seam in two:
+
+- **Durable.** `AgentState.active_scope` → `RetrievalRequest.scope` → `scoped_hybrid_search(scope=)`
+  → `_partition_by_scope`. Everything below the HTTP surface is a plain scope string threaded
+  through the retrieval path. MVR-03/05 does not change any of it.
+- **Transitional.** The `scope` field on `AskRequest` and on the `/api/ask/voice` form. MVR-03
+  states that client-supplied scope strings never become identity or authority, and MVR-05B (#3860)
+  moves request ingress onto an opaque `context_selection_id` from which the server derives the
+  cognitive scope. When that lands, the field is replaced by a server-derived scope read off the
+  immutable selection snapshot, and the only edit is the single argument passed to
+  `run_ask_graph(active_scope=...)` in `app/api/routes/ask.py`.
+
+#### Exactly what "narrows" means here — and what it does not
+
+A bound scope narrows the retrieval candidate set **relative to the unscoped default**. It does
+**not** narrow relative to a configured ambient scope: the request binding takes strict precedence
+over `ASK_DOMAIN_SCOPE` and *replaces* it (`_active_scope` and `scoped_hybrid_search` both resolve
+"explicit binding first, ambient default second"). `ASK_DOMAIN_SCOPE` is therefore a **default, not
+a containment control**.
+
+The concrete consequence, stated plainly rather than left implicit: if an operator sets
+`ASK_DOMAIN_SCOPE=work` expecting domain containment, a request that binds `scope=private` is
+served the `private` partition, not the `work` one. `/api/ask` carries no authentication of its
+own, so any caller that can reach the endpoint can select any scope. That behaviour is pinned by
+`tests/retrieval/test_active_scope_request_binding.py::test_request_scope_overrides_ambient_env_scope`
+so it is deliberate and visible instead of a surprise.
+
+This is acceptable today for two reasons, both of which are conditions that can expire:
+
+1. No deployment artifact in this repository sets `ASK_DOMAIN_SCOPE` — the effective shipped default
+   is admit-all, under which no scope string can widen anything.
+2. Scope binding supplies context and never grants access, so it cannot reach material a governed
+   `CrossScopeFlow` (#2314) would have to admit; excluded-but-relevant material still surfaces as a
+   content-free `ScopeDenial`.
+
+**If either condition changes — a deployment starts setting `ASK_DOMAIN_SCOPE` as a containment
+control, or `/api/ask` becomes reachable by a caller the operator does not trust — this precedence
+must become intersecting rather than overriding** (an env-set scope becomes a ceiling the request
+may narrow within but not escape). MVR-05B (#3860) removes the hazard structurally by making the
+server derive the scope from the immutable selection snapshot instead of accepting it from the
+client, which is the durable shape. #3857 and #3860 are the follow-on work that must adapt the HTTP
+surface.
+
+### Fail-safe posture and what stayed unchanged
+
+- **The unscoped default is unchanged.** No bound scope and no `ASK_DOMAIN_SCOPE` still means every
+  document is eligible. This slice activates a binding channel; it does not flip the default from
+  admit-all to deny-all.
+- **`ASK_DOMAIN_SCOPE` stays supported** as the process-level default, so `tests/evals/_app_adapter.py`,
+  `tests/boundaries/test_domain_separation_defaults.py`, and `app/eval/golden.py` (which deliberately
+  *clears* it so a leaked scope cannot prefilter the deterministic gate) keep their current
+  semantics without edits.
+- **The evidence-role clamp never upgrades.** `evidence_role_in_context` now survives the
+  `RetrievalHit` capability boundary (`from_hybrid` / `to_hybrid_dict`) instead of being dropped and
+  silently re-defaulted to the intrinsic role at the envelope. The seam re-clamps against the hit's
+  own intrinsic role, and the envelope clamps again; both are non-upgrading, so carrying the value
+  can only preserve a downgrade, never manufacture an upgrade.
+- **"Narrows" applies to retrieval, not to the whole turn.** Binding a scope narrows what the
+  retrieval prefilter admits, but it also makes one previously dead branch live:
+  `app/agents/ask/graph.py::_recall_node` guards provisional-memory recall on
+  `vault_root is not None and active_scope is not None`. Because production `active_scope` was
+  always `None`, `retrieve_relevant_provisional` never ran on the ASK path. A request that binds a
+  scope now admits provisional memory into the turn for the first time. That material is same-scope
+  filtered and admissibility-gated, so it is not a cross-scope leak — but it is an expansion of the
+  turn's admitted context, and it is deliberate rather than incidental.
+- **The retrieval prefilter is the only channel this closes.** Promoted-memory recall
+  (`app/agent_memory/recall_retrieval.py::retrieve_relevant_promoted`) takes no scope and filters on
+  none, so I-A5 is enforced on the retrieval channel and not yet on the promoted-recall channel.
+  Pre-existing and unchanged by this slice; tracked as a deferred defect.
+- **Entrypoints that do not bind a scope are unchanged**, and still resolve the ambient default:
+  `app/agents/qa/agent.py`, `app/components/retrieval.py`, `app/api/routes/search.py`,
+  `app/api/routes/context_bundles.py`, `app/curation/contradiction.py`, `app/expansion/connect.py`,
+  and `app/retrieval/production_bundle.py`.
+
 ## Concretely
 
 ```bash

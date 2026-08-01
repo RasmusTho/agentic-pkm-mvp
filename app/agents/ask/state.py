@@ -33,6 +33,11 @@ class RetrievedHit(BaseModel):
 class AgentState(RuntimeStateModel):
     trace_id: Optional[str] = None
     query: str
+    # The active scope bound for THIS ASK turn (#2921). Resolved ONCE at graph entry — from the
+    # caller's request binding, falling back to the ambient `ASK_DOMAIN_SCOPE` process default —
+    # and then reused by retrieval, recall, and envelope assembly. Resolving it once is what keeps
+    # the scope the prefilter used and the envelope's `active_scope_id` from diverging mid-turn.
+    active_scope: Optional[str] = None
     hits: List[RetrievedHit] = Field(default_factory=list)
     # Authoritative metadata observed on the retrieval response. Shadow
     # experiments may inspect it, but it never feeds ranking or answer text.

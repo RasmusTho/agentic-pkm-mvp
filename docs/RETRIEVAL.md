@@ -190,8 +190,10 @@ Episode-closure decay — a derived, post-fusion rank multiplier per
 
 ### Scope filter
 Optional operational-scope filtering:
-- the current runtime uses `ASK_DOMAIN_SCOPE` and `bridge_domains` as compatibility labels for a
-  narrower scope filter and explicit inclusion mechanism
+- the active scope is bound per request (#2921) and threaded from the ASK request into
+  `scoped_hybrid_search`; `ASK_DOMAIN_SCOPE` remains the process-level default when a request binds
+  none, and `bridge_domains` remains the explicit inclusion mechanism — both are compatibility
+  labels for a narrower scope filter, not the full context model
 - matching may use document payload markers such as `domain` / `bridge_domains`
 - path- or `source_ref`-derived hints are runtime heuristics for current scope handling, not the
   full semantics of human context or artifact meaning

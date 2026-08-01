@@ -419,6 +419,9 @@ Tests: `tests/architecture/test_architecture_tests_validation.py::test_import_bo
 ## Boundary Enforcement
 - Current runtime retrieval uses `ASK_DOMAIN_SCOPE` and `bridge_domains` as compatibility labels
   for a narrower operational-scope filter and explicit inclusion mechanism.
+- The active scope is bound PER REQUEST (#2921): the ASK request carries it down to the retrieval
+  prefilter, and `ASK_DOMAIN_SCOPE` is the process-level default when a request binds none. See
+  `docs/RUNTIME_CORRECTNESS_KERNEL/RUNTIME_SCOPE_PREFILTER_AND_ENVELOPE.md :: Activation in Production`.
 - Read these as current implementation terms, not as the full human context model.
 - By default, retrieval remains conservative and excludes results outside the active operational
   scope unless explicit inclusion is present.

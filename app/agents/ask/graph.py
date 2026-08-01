@@ -50,6 +50,18 @@ DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
 _ASK_LAST_ACTIVE_LOADED_ATTR = "_ask_recall_last_active_loaded"
 
 
+def _active_scope(state: AgentState) -> str | None:
+    """This turn's active scope: the explicit per-request binding, else the ambient default.
+
+    One precedence rule, applied at every read site (#2921) and identical to the one
+    :func:`scoped_hybrid_search` applies at the bottom of the stack. ``run_ask_graph`` normally
+    resolves it once onto the state; keeping the ambient fallback here means a directly constructed
+    ``AgentState`` still honours the process default instead of silently losing its scope — the
+    safe direction for a filter whose failure mode is admitting too much.
+    """
+    return state.active_scope or _resolve_domain_scope()
+
+
 def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> RetrievedHit:
     payload = hit.get("payload") or {}
     return RetrievedHit(
@@ -72,7 +84,16 @@ def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> Re
 
 
 def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
-    response = retrieve(RetrievalRequest(query=state.query, k=k, trace_id=state.trace_id))
+    response = retrieve(
+        RetrievalRequest(
+            query=state.query,
+            k=k,
+            trace_id=state.trace_id,
+            # #2921: bind this turn's active scope so `_partition_by_scope` actually partitions on
+            # the production path instead of relying on an ambient env var nothing ever sets.
+            scope=_active_scope(state),
+        )
+    )
     enriched: list[RetrievedHit] = []
     for retrieval_hit in response.hits:
         hit = retrieval_hit.to_hybrid_dict()
@@ -180,7 +201,8 @@ def _recall_node(
 ) -> AgentState:
     vault_root = _active_recall_vault_root()
     candidates = retrieve_relevant_promoted(state.query, k=RECALL_TOP_K, vault_root=vault_root)
-    active_scope = _resolve_domain_scope()
+    # The same scope retrieval used for this turn (#2921), under the same precedence rule.
+    active_scope = _active_scope(state)
     provisional = (
         retrieve_relevant_provisional(
             state.query,
@@ -346,7 +368,9 @@ def _hits_as_scoped_retrieval(state: AgentState) -> ScopedRetrieval:
         for d in (state.denials or [])
         if isinstance(d, dict) and d.get("reason") and d.get("denial_class")
     )
-    return ScopedRetrieval(results=results, denials=denials, active_scope=_resolve_domain_scope())
+    # The envelope's declared scope must be the scope the prefilter actually used for this turn
+    # (#2921), not a second, independent resolution that could disagree with it.
+    return ScopedRetrieval(results=results, denials=denials, active_scope=_active_scope(state))
 
 
 def _envelope_source_ids(envelope: dict[str, Any]) -> list[str]:
@@ -551,10 +575,23 @@ def build_ask_graph(ask_settings=None):
     return graph.compile()
 
 
-def run_ask_graph(query: str, trace_id: Optional[str] = None, ask_settings=None) -> AgentState:
+def run_ask_graph(
+    query: str,
+    trace_id: Optional[str] = None,
+    ask_settings=None,
+    active_scope: Optional[str] = None,
+) -> AgentState:
+    """Run one ASK turn.
+
+    ``active_scope`` is the caller's active scope binding for this turn (#2921). It is resolved
+    ONCE here — request binding first, ambient ``ASK_DOMAIN_SCOPE`` as the process-level default —
+    and then carried on the state, so retrieval, recall, and envelope assembly all speak about the
+    same scope.
+    """
     ask_settings = ask_settings or get_ask_settings()
     compiled = build_ask_graph(ask_settings)
-    initial = AgentState(trace_id=trace_id, query=query, hits=[])
+    resolved_scope = (active_scope or "").strip() or _resolve_domain_scope()
+    initial = AgentState(trace_id=trace_id, query=query, active_scope=resolved_scope, hits=[])
     result = compiled.invoke(initial)
     if isinstance(result, AgentState):
         return result
@@ -562,7 +599,9 @@ def run_ask_graph(query: str, trace_id: Optional[str] = None, ask_settings=None)
         return AgentState.model_validate(result)
     except Exception:
         # Best-effort fallback if graph returned a plain dict
-        return AgentState(trace_id=trace_id, query=query, hits=[], answer=None)
+        return AgentState(
+            trace_id=trace_id, query=query, active_scope=resolved_scope, hits=[], answer=None
+        )
 
 
 __all__ = ["run_ask_graph", "build_ask_graph", "TOP_K_INITIAL"]

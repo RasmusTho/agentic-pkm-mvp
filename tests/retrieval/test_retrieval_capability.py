@@ -60,6 +60,8 @@ def test_ask_compatibility_metadata_survives_capability_adapter(monkeypatch) -> 
 
 
 def test_retrieval_capability_accepts_surface_neutral_request(monkeypatch) -> None:
+    # Since #2921 `RetrievalRequest.scope` is load-bearing at the prefilter rather than diagnostic
+    # metadata, so it must name a scope the seeded corpus actually contains.
     _patch_embeddings(monkeypatch)
     _seed_store()
     try:
@@ -67,7 +69,7 @@ def test_retrieval_capability_accepts_surface_neutral_request(monkeypatch) -> No
             RetrievalRequest(
                 query="alpha retrieval",
                 k=1,
-                scope="operator",
+                scope="core",
                 domain="core",
                 trace_id="surface-neutral",
             )
@@ -75,7 +77,8 @@ def test_retrieval_capability_accepts_surface_neutral_request(monkeypatch) -> No
 
         assert response.query == "alpha retrieval"
         assert response.trace_id == "surface-neutral"
-        assert response.diagnostics["scope"] == "operator"
+        assert response.diagnostics["scope"] == "core"
+        assert response.diagnostics["active_scope"] == "core"
         assert response.diagnostics["domain"] == "core"
         assert response.hits
     finally:
@@ -90,7 +93,7 @@ def test_retrieval_contract_objects_are_surface_independent(monkeypatch) -> None
             RetrievalRequest(
                 query="alpha retrieval",
                 k=1,
-                scope="operator",
+                scope="core",
                 domain="core",
                 trace_id="contract-1",
             )
@@ -100,7 +103,7 @@ def test_retrieval_contract_objects_are_surface_independent(monkeypatch) -> None
         assert response.trace_id == "contract-1"
         assert response.metadata["provenance"]["capability"] == "retrieval"
         assert response.metadata["provenance"]["adapter"] == "hybrid_search"
-        assert response.metadata["provenance"]["request"] == {"scope": "operator", "domain": "core"}
+        assert response.metadata["provenance"]["request"] == {"scope": "core", "domain": "core"}
         assert response.hits
         assert response.hits[0].doc_id == "alpha"
     finally:

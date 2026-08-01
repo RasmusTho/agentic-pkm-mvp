@@ -83,9 +83,21 @@ def test_ask_contract_propagates_trace_id_from_header(monkeypatch) -> None:
     hybrid.set_documents([])
     captured: dict[str, str | None] = {"trace_id": None}
 
-    def _fake_run_ask_graph(query: str, trace_id: str | None = None, ask_settings=None) -> AgentState:
+    def _fake_run_ask_graph(
+        query: str,
+        trace_id: str | None = None,
+        ask_settings=None,
+        active_scope: str | None = None,
+    ) -> AgentState:
         captured["trace_id"] = trace_id
-        return AgentState(trace_id=trace_id, query=query, hits=[], answer="No results found.")
+        captured["active_scope"] = active_scope
+        return AgentState(
+            trace_id=trace_id,
+            query=query,
+            active_scope=active_scope,
+            hits=[],
+            answer="No results found.",
+        )
 
     monkeypatch.setattr(ask_module, "run_ask_graph", _fake_run_ask_graph)
     client = TestClient(app)
@@ -93,6 +105,8 @@ def test_ask_contract_propagates_trace_id_from_header(monkeypatch) -> None:
         resp = client.post("/api/ask", json={"question": "trace header"}, headers={"x-trace-id": "trace-ask-header-1"})
         assert resp.status_code == 200
         assert captured["trace_id"] == "trace-ask-header-1"
+        # #2921: a request that binds no scope must pass None, not an invented value.
+        assert captured["active_scope"] is None
     finally:
         hybrid.set_documents([])
         ask_module._HYBRID_WARMED = False
@@ -105,9 +119,21 @@ def test_ask_contract_generates_trace_id_when_missing(monkeypatch) -> None:
     hybrid.set_documents([])
     captured: dict[str, str | None] = {"trace_id": None}
 
-    def _fake_run_ask_graph(query: str, trace_id: str | None = None, ask_settings=None) -> AgentState:
+    def _fake_run_ask_graph(
+        query: str,
+        trace_id: str | None = None,
+        ask_settings=None,
+        active_scope: str | None = None,
+    ) -> AgentState:
         captured["trace_id"] = trace_id
-        return AgentState(trace_id=trace_id, query=query, hits=[], answer="No results found.")
+        captured["active_scope"] = active_scope
+        return AgentState(
+            trace_id=trace_id,
+            query=query,
+            active_scope=active_scope,
+            hits=[],
+            answer="No results found.",
+        )
 
     class _FakeUuid:
         hex = "generated-ask-trace-1"
@@ -119,6 +145,7 @@ def test_ask_contract_generates_trace_id_when_missing(monkeypatch) -> None:
         resp = client.post("/api/ask", json={"question": "trace generated"})
         assert resp.status_code == 200
         assert captured["trace_id"] == "generated-ask-trace-1"
+        assert captured["active_scope"] is None
         assert resp.headers.get("x-trace-id") == "generated-ask-trace-1"
     finally:
         hybrid.set_documents([])
