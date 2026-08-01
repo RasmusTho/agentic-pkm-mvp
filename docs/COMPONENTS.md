@@ -81,9 +81,9 @@ Interpretation note:
 - not as evidence that retrieval must remain architecturally centered in one agent surface.
 
 - **Hybrid retrieval** — Combined lexical + semantic retrieval with optional reranking overlays.
-  Current runtime scope filtering uses `ASK_DOMAIN_SCOPE` + `bridge_domains` as compatibility
-  labels for a narrower operational-scope policy, not as the full context model. Maturity:
-  Baseline.
+  Current runtime scope filtering takes the active scope from the per-request binding (#2921),
+  falling back to `ASK_DOMAIN_SCOPE`; that label plus `bridge_domains` are compatibility labels for
+  a narrower operational-scope policy, not the full context model. Maturity: Baseline.
 - **Rerankers** — Optional reranking providers with deterministic fallbacks. Maturity: Baseline.
 - **EmbeddingProvider** — Abstraction boundary for embedding generation. Every embedding is tagged
   with the generating provider/model and remains a derived runtime artifact rather than an identity
