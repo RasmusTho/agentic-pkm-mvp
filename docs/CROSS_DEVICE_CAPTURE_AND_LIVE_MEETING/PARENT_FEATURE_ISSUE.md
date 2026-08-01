@@ -1,4 +1,4 @@
-State: Acceptance evidence complete 2026-07-30 on live parent [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383). All ten children are closed and receipted. The parent remains `agent:blocked` only until the terminal owner-doc promotion merges; GitHub remains the authoritative validation surface.
+State: Accepted and closed 2026-08-01 on live parent [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383). All ten children are closed and receipted; owner-doc PR #4531 merged as `0fadbe5af4a91ee1b36344264c4b43cf66135f89`. GitHub remains the authoritative validation surface.
 Doc role: Parent feature issue contract (feature-breakdown lane)
 
 # Parent feature issue — Cross-Device Capture & Live Meeting
@@ -77,9 +77,10 @@ user-note preservation; and a composed test-channel proof with reconnect chaos.
   head.
 - [x] Every child slice delivered per its own ACs with receipts recorded here. Verify: per-child
   validation receipt comments on this issue.
-- [ ] Owner docs describe the delivered client and meeting contract without claiming prod
+- [x] Owner docs describe the delivered client and meeting contract without claiming prod
   activation or physical-device-only truth. Verify: doc writeback at
-  `docs/contracts/MIMER_CLIENT_CONTRACT.md :: 4. Callable HTTP surface (v1, shipped)`.
+  `docs/contracts/MIMER_CLIENT_CONTRACT.md :: 4. Callable HTTP surface (v1, shipped)` in PR #4531
+  / merge `0fadbe5af4a91ee1b36344264c4b43cf66135f89`.
 
 ## Out of Scope
 
@@ -125,9 +126,9 @@ fail-closed by scratch PR bifrost#61). Composed: the CDLM-10 test-channel run.
 ## Validation / Acceptance Path
 
 Each child merge posted a validation receipt comment here (delivering PR, head SHA, Verify-target
-results). CDLM-10's run report is the capability-level receipt. The one remaining AC is this
-terminal owner-doc promotion (client contract meeting lane + ARCHITECTURE/STATUS wording). Once
-that PR merges, record its merge SHA, check the final AC, and close this parent.
+results). CDLM-10 run `cdlm10-868e042e59` is the capability-level receipt. PR #4531 completed the
+terminal owner-doc promotion, all six parent ACs are checked, and merge
+`0fadbe5af4a91ee1b36344264c4b43cf66135f89` closed this parent.
 
 ---
 
@@ -146,5 +147,5 @@ that PR merges, record its merge SHA, check the final AC, and close this parent.
 | 9 | CDLM-09 | [bifrost#60](https://github.com/RasmusTho/bifrost/issues/60) | `agent:blocked` | closed |
 | 10 | CDLM-10 | hub [#4389](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4389) | `agent:blocked` | closed |
 
-All ten children are closed with receipts on #4383. The parent remains `agent:blocked` as a
-validation hub only until the owner-doc promotion merges; it is never a pickup issue.
+All ten children are closed with receipts on #4383. The parent is accepted and closed; it remains
+the terminal validation ledger and is never a pickup issue.
