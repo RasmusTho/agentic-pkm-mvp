@@ -638,7 +638,7 @@ def test_instance_identity_never_substitutes_for_principal_context(
     # principal is: the role id is minted per record, not derived from the install.
     other_posture = AuthPosture(
         configured_credentials=0,
-        credential_fingerprint=None,
+        credential=None,
         loopback_listener_proven=True,
         companion_proxy_configured=False,
     )

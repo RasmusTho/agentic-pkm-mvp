@@ -3027,7 +3027,6 @@ def _principal_command(args: argparse.Namespace) -> int:
     from app.instance.active_context_service import current_auth_posture
     from app.instance.local_operator_principal import (
         PrincipalPreflightError,
-        fingerprint_credential,
         preflight_auth_posture,
     )
     from app.instance.principal_fence import (
@@ -3100,7 +3099,7 @@ def _principal_command(args: argparse.Namespace) -> int:
                 loopback_listener_proven=args.loopback_listener,
             )
             record = store.bootstrap(
-                credential_fingerprint=posture.credential_fingerprint,
+                credential=posture.credential,
                 subjects=preflight_auth_posture(posture),
                 migration_provenance=posture.migration_provenance(
                     existing_install=args.existing_install
@@ -3109,11 +3108,8 @@ def _principal_command(args: argparse.Namespace) -> int:
                 _capability=local_operator_storage_capability(),
             )
         elif args.command == "principal-rotate-credential":
-            credential = _read_credential(args)
             record = store.rotate_credential(
-                credential_fingerprint=(
-                    fingerprint_credential(credential) if credential else None
-                ),
+                credential=_read_credential(args),
                 _capability=local_operator_storage_capability(),
             )
         elif args.command == "principal-add-role":
@@ -3131,9 +3127,7 @@ def _principal_command(args: argparse.Namespace) -> int:
             record = store.require()
             configured = _read_credential(args)
             store.export_final_auth_state(
-                credential_fingerprint=(
-                    fingerprint_credential(configured) if configured else None
-                ),
+                credential=configured,
                 fork_revision=record.revision,
                 _capability=local_operator_storage_capability(),
             )

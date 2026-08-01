@@ -152,13 +152,13 @@ def test_every_legacy_auth_producer_stops_before_principal_floor_write(tmp_path)
     # -- the role write is refused independently, even with the fence complete ----------
     posture = AuthPosture(
         configured_credentials=0,
-        credential_fingerprint=None,
+        credential=None,
         loopback_listener_proven=True,
         companion_proxy_configured=False,
     )
     with pytest.raises(PrincipalFloorNotRecordedError):
         store.bootstrap(
-            credential_fingerprint=None,
+            credential=None,
             subjects=posture.subjects(),
             migration_provenance=posture.migration_provenance(existing_install=True),
             floor_recorded=False,
@@ -179,7 +179,7 @@ def test_every_legacy_auth_producer_stops_before_principal_floor_write(tmp_path)
     assert floor_revision > revision_before
 
     record = store.bootstrap(
-        credential_fingerprint=None,
+        credential=None,
         subjects=posture.subjects(),
         migration_provenance=posture.migration_provenance(existing_install=True),
         floor_recorded=True,

@@ -19,7 +19,7 @@ from app.instance.local_operator_principal import (
     PROVENANCE_ROLL_FORWARD,
     AuthPosture,
     PrincipalPreflightError,
-    fingerprint_credential,
+    verify_credential,
 )
 from app.instance.principal_fence import principal_floor_recorded
 from app.instance.runtime import (
@@ -50,7 +50,7 @@ def _cli(*args: str) -> dict:
 def _posture(raw_key: str | None) -> AuthPosture:
     return AuthPosture(
         configured_credentials=1 if raw_key else 0,
-        credential_fingerprint=fingerprint_credential(raw_key) if raw_key else None,
+        credential=raw_key,
         loopback_listener_proven=True,
         companion_proxy_configured=False,
     )
@@ -146,7 +146,7 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
     assert reconciled.local_operator_role_id == record.local_operator_role_id, (
         "roll-forward must preserve role identity"
     )
-    assert reconciled.credential_fingerprint == fingerprint_credential(rotated_key)
+    assert verify_credential(reconciled.credential_fingerprint, rotated_key)
     assert reconciled.migration_provenance == PROVENANCE_ROLL_FORWARD
     assert reconciled.revision == record.revision + 1
     # The raw credential never entered durable state at any point.
@@ -167,7 +167,7 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
     # check instead of `!=` would silently revert the rotation here.
     third_key = "image-a-third-key"
     rotated_again = store.rotate_credential(
-        credential_fingerprint=fingerprint_credential(third_key),
+        credential=third_key,
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     store.export_path.write_text(
@@ -175,7 +175,7 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
             {
                 "schema": "agentic-pkm.local-operator-principal.v1.roll-forward-export",
                 "fork_revision": record.revision,  # stale: predates two rotations
-                "credential_fingerprint": fingerprint_credential(rotated_key),
+                "credential_fingerprint": reconciled.credential_fingerprint,
                 "exported_at": 0.0,
             }
         ),
@@ -184,7 +184,7 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
     store.export_path.chmod(0o600)
     with pytest.raises(PrincipalPreflightError, match="does not match the current principal lineage"):
         store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
-    assert store.require().credential_fingerprint == fingerprint_credential(third_key), (
+    assert verify_credential(store.require().credential_fingerprint, third_key), (
         "a stale export must not revert a governed credential rotation"
     )
     assert store.require().revision == rotated_again.revision
@@ -204,19 +204,19 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
 
     # divergent fork
     fresh_store.export_final_auth_state(
-        credential_fingerprint=fingerprint_credential("other-key"),
+        credential="other-key",
         fork_revision=fresh_record.revision + 5,
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     with pytest.raises(PrincipalPreflightError, match="divergent"):
         fresh_store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
-    assert fresh_store.require().credential_fingerprint == fingerprint_credential(
-        "fresh-key"
+    assert verify_credential(
+        fresh_store.require().credential_fingerprint, "fresh-key"
     ), "a divergent lineage must not overwrite either side"
 
     # ambiguous: a credential that vanished cannot be told apart from a revocation
     fresh_store.export_final_auth_state(
-        credential_fingerprint=None,
+        credential=None,
         fork_revision=fresh_record.revision,
         _capability=STORAGE_MUTATION_CAPABILITY,
     )

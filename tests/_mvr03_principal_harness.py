@@ -145,7 +145,7 @@ def run_principal_cutover(
     assert principal_floor_recorded(runtime.registry)
     store = open_local_operator_principal_store(runtime.layout.registry_path)
     return store.bootstrap(
-        credential_fingerprint=posture.credential_fingerprint,
+        credential=posture.credential,
         subjects=preflight_auth_posture(posture),
         migration_provenance=posture.migration_provenance(existing_install=existing_install),
         floor_recorded=True,
@@ -185,7 +185,7 @@ def provisioned_instance(
         posture=posture
         or AuthPosture(
             configured_credentials=0,
-            credential_fingerprint=None,
+            credential=None,
             loopback_listener_proven=True,
             companion_proxy_configured=False,
         ),

@@ -28,7 +28,9 @@ from app.instance.local_operator_principal import (
     PrincipalFloorNotRecordedError,
     PrincipalPreflightError,
     fingerprint_credential,
+    new_credential_salt,
     preflight_auth_posture,
+    verify_credential,
 )
 from app.instance.active_context_service import resolve_principal
 from app.instance.principal_fence import principal_floor_recorded, record_principal_floor
@@ -66,7 +68,7 @@ def _cli_help(command: str) -> str:
 def _existing_credential_posture(raw_key: str) -> AuthPosture:
     return AuthPosture(
         configured_credentials=1,
-        credential_fingerprint=fingerprint_credential(raw_key),
+        credential=raw_key,
         loopback_listener_proven=True,
         companion_proxy_configured=False,
     )
@@ -86,7 +88,7 @@ def test_existing_single_user_auth_migrates_to_distinct_delegated_role(
     assert not principal_floor_recorded(runtime.registry)
     with pytest.raises(PrincipalFloorNotRecordedError):
         store.bootstrap(
-            credential_fingerprint=posture.credential_fingerprint,
+            credential=posture.credential,
             subjects=preflight_auth_posture(posture),
             migration_provenance=PROVENANCE_EXISTING_CREDENTIAL,
             floor_recorded=False,
@@ -108,14 +110,20 @@ def test_existing_single_user_auth_migrates_to_distinct_delegated_role(
     assert payload["revision"] == 1
     assert payload["migration_provenance"] == PROVENANCE_EXISTING_CREDENTIAL
 
-    # The raw key never reaches durable state; only its fingerprint does.
+    # The raw key never reaches durable state; only a salted, memory-hard fingerprint does.
+    # A plain digest would be cheap to brute-force offline if the 0600 file ever leaked.
     assert raw_key not in record_path.read_text(encoding="utf-8")
-    assert payload["credential_fingerprint"] == fingerprint_credential(raw_key)
+    stored = payload["credential_fingerprint"]
+    assert stored.startswith("scrypt.v1$")
+    assert verify_credential(stored, raw_key)
+    assert not verify_credential(stored, raw_key + "x")
+    # Salted: the same credential on another instance produces a different stored value.
+    assert fingerprint_credential(raw_key, new_credential_salt()) != stored
 
     # The role id is distinct from the credential, its fingerprint, and appInstallId.
     snapshot = runtime.registry.load()
     role_id = record.local_operator_role_id
-    assert role_id not in (raw_key, payload["credential_fingerprint"], snapshot.app_install_id)
+    assert role_id not in (raw_key, stored, snapshot.app_install_id)
     assert snapshot.app_install_id not in role_id
     assert raw_key not in role_id
 
@@ -140,7 +148,7 @@ def test_existing_single_user_auth_migrates_to_distinct_delegated_role(
     assert cli["credential_bound"] is True
     # The CLI receipt is redaction-safe.
     assert raw_key not in json.dumps(cli)
-    assert payload["credential_fingerprint"] not in json.dumps(cli)
+    assert stored not in json.dumps(cli)
 
     # -- rotation preserves the role id -------------------------------------------------
     # The credential comes from stdin, never argv: `/proc/<pid>/cmdline` and shell history
@@ -168,7 +176,7 @@ def test_existing_single_user_auth_migrates_to_distinct_delegated_role(
         preflight_auth_posture(
             AuthPosture(
                 configured_credentials=2,
-                credential_fingerprint=None,
+                credential=None,
                 loopback_listener_proven=False,
                 companion_proxy_configured=False,
             )
@@ -210,7 +218,7 @@ def test_zero_key_loopback_and_trusted_companion_proxy_map_to_local_role(
     runtime, first, _ = active_runtime(tmp_path)
     posture = AuthPosture(
         configured_credentials=0,
-        credential_fingerprint=None,
+        credential=None,
         loopback_listener_proven=True,
         companion_proxy_configured=True,
     )
@@ -256,7 +264,7 @@ def test_zero_key_nontrusted_nonloopback_fails_principal_preflight(tmp_path) -> 
         preflight_auth_posture(
             AuthPosture(
                 configured_credentials=0,
-                credential_fingerprint=None,
+                credential=None,
                 loopback_listener_proven=False,
                 companion_proxy_configured=False,
             )
@@ -297,7 +305,7 @@ def test_configured_key_preserves_local_and_trusted_proxy_subjects(
     raw_key = "configured-key"
     posture = AuthPosture(
         configured_credentials=1,
-        credential_fingerprint=fingerprint_credential(raw_key),
+        credential=raw_key,
         loopback_listener_proven=True,
         companion_proxy_configured=True,
     )

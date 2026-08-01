@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -40,6 +41,7 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -100,17 +102,79 @@ class PrincipalFloorNotRecordedError(CapabilityNotReadyError):
     """A durable role write was attempted before the minimum-runtime principal floor."""
 
 
-def fingerprint_credential(raw_credential: str) -> str:
-    """Non-reversible fingerprint of a configured #2223 credential.
+#: Salted, memory-hard KDF parameters for the credential fingerprint. A plain SHA-256 of a
+#: credential is cheap to brute-force offline, which matters here: the fingerprint is stored
+#: at rest, and while the record is mode `0600` the whole point of a fingerprint is that
+#: losing the file must not lose the credential. scrypt at these parameters is the stdlib's
+#: memory-hard option and costs ~100ms, which is why derivation is memoized below.
+_SCRYPT_N = 2**14
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_DKLEN = 32
+_FINGERPRINT_PREFIX = "scrypt.v1"
+
+
+def new_credential_salt() -> str:
+    """A fresh per-record CSPRNG salt, so two instances never share a fingerprint space."""
+
+    return secrets.token_hex(16)
+
+
+@lru_cache(maxsize=32)
+def _derive(raw_credential: str, salt: str) -> str:
+    return hashlib.scrypt(
+        f"mvr03.credential-fingerprint.v1|{raw_credential}".encode(),
+        salt=bytes.fromhex(salt),
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        dklen=_SCRYPT_DKLEN,
+    ).hex()
+
+
+def fingerprint_credential(raw_credential: str, salt: str) -> str:
+    """Salted, memory-hard fingerprint of a configured #2223 credential.
 
     The raw key never reaches durable state, a log, a receipt, or a cache key. Only this
     value is stored, and it is domain-separated so it cannot collide with any other digest
     in the system.
+
+    Derivation is memoized because the configured credential and the record salt are both
+    process-stable, so the ~100ms scrypt cost is paid once per process rather than per
+    request. The cache holds no more than what `app.settings.settings.api_key` already holds
+    in memory.
     """
 
     if not raw_credential:
         raise ValueError("cannot fingerprint an empty credential")
-    return hashlib.sha256(f"mvr03.credential-fingerprint.v1|{raw_credential}".encode()).hexdigest()
+    if not salt:
+        raise ValueError("a credential fingerprint requires a salt")
+    return f"{_FINGERPRINT_PREFIX}${salt}${_derive(raw_credential, salt)}"
+
+
+def verify_credential(stored_fingerprint: str | None, raw_credential: str | None) -> bool:
+    """Constant-time check of a presented credential against the stored fingerprint."""
+
+    if not stored_fingerprint or not raw_credential:
+        return False
+    parts = stored_fingerprint.split("$")
+    if len(parts) != 3 or parts[0] != _FINGERPRINT_PREFIX:
+        return False
+    _, salt, _digest = parts
+    try:
+        candidate = fingerprint_credential(raw_credential, salt)
+    except ValueError:
+        return False
+    return hmac.compare_digest(candidate, stored_fingerprint)
+
+
+def fingerprint_salt(stored_fingerprint: str | None) -> str | None:
+    """The salt a stored fingerprint was derived under, so a re-derivation can match it."""
+
+    if not stored_fingerprint:
+        return None
+    parts = stored_fingerprint.split("$")
+    return parts[1] if len(parts) == 3 and parts[0] == _FINGERPRINT_PREFIX else None
 
 
 @dataclass(frozen=True)
@@ -363,7 +427,7 @@ class LocalOperatorPrincipalStore:
     def bootstrap(
         self,
         *,
-        credential_fingerprint: str | None,
+        credential: str | None,
         subjects: Sequence[AuthSubject],
         migration_provenance: str,
         floor_recorded: bool,
@@ -382,6 +446,9 @@ class LocalOperatorPrincipalStore:
                 "the minimum_runtime_principal floor must be recorded before the first "
                 "durable delegated-role write"
             )
+        credential_fingerprint = (
+            fingerprint_credential(credential, new_credential_salt()) if credential else None
+        )
         if migration_provenance not in MIGRATION_PROVENANCES:
             raise PrincipalPreflightError(
                 f"unknown migration provenance {migration_provenance!r}",
@@ -426,7 +493,7 @@ class LocalOperatorPrincipalStore:
     def rotate_credential(
         self,
         *,
-        credential_fingerprint: str | None,
+        credential: str | None,
         _capability: Any = None,
     ) -> LocalOperatorPrincipalRecord:
         """Rebind a rotated credential to the **same** role id.
@@ -438,6 +505,13 @@ class LocalOperatorPrincipalStore:
         _require_storage_mutation_capability(_capability)
         with self._locked():
             current = self.require()
+            # A rotation keeps the record's salt space fresh: a new credential gets a new
+            # salt, so the stored value changes even if the operator rotates back.
+            credential_fingerprint = (
+                fingerprint_credential(credential, new_credential_salt())
+                if credential
+                else None
+            )
             subjects = set(current.subjects)
             if credential_fingerprint:
                 subjects.add(SUBJECT_API_KEY)
@@ -533,7 +607,7 @@ class LocalOperatorPrincipalStore:
     def export_final_auth_state(
         self,
         *,
-        credential_fingerprint: str | None,
+        credential: str | None,
         fork_revision: int,
         _capability: Any = None,
     ) -> dict[str, Any]:
@@ -545,6 +619,18 @@ class LocalOperatorPrincipalStore:
 
         _require_storage_mutation_capability(_capability)
         with self._locked():
+            # Derived under the CURRENT record's salt so the reconcile below can compare by
+            # equality: an export of the same credential is byte-identical and takes the
+            # no-op branch, while a genuinely rotated credential differs.
+            existing = self.load()
+            salt = fingerprint_salt(
+                existing.credential_fingerprint if existing is not None else None
+            )
+            credential_fingerprint = (
+                fingerprint_credential(credential, salt or new_credential_salt())
+                if credential
+                else None
+            )
             payload = {
                 "schema": f"{LOCAL_OPERATOR_PRINCIPAL_SCHEMA}.roll-forward-export",
                 "fork_revision": fork_revision,
@@ -721,7 +807,10 @@ class AuthPosture:
     """
 
     configured_credentials: int
-    credential_fingerprint: str | None
+    #: The configured credential itself, in memory only. It is derived into a salted,
+    #: memory-hard fingerprint at write time and never stored raw. Holding it here is not a
+    #: new exposure: it is the same value `app.settings.settings.api_key` already holds.
+    credential: str | None
     loopback_listener_proven: bool
     companion_proxy_configured: bool
 
@@ -731,12 +820,12 @@ class AuthPosture:
             subjects.append(SUBJECT_LOOPBACK)
         if self.companion_proxy_configured:
             subjects.append(SUBJECT_COMPANION_PROXY)
-        if self.credential_fingerprint:
+        if self.credential:
             subjects.append(SUBJECT_API_KEY)
         return tuple(subjects)
 
     def migration_provenance(self, *, existing_install: bool) -> str:
-        if self.credential_fingerprint:
+        if self.credential:
             return PROVENANCE_EXISTING_CREDENTIAL if existing_install else PROVENANCE_FRESH_BOOTSTRAP
         return PROVENANCE_ZERO_KEY_LOOPBACK
 
@@ -788,5 +877,8 @@ __all__ = [
     "PrincipalFloorNotRecordedError",
     "PrincipalPreflightError",
     "fingerprint_credential",
+    "fingerprint_salt",
+    "new_credential_salt",
     "preflight_auth_posture",
+    "verify_credential",
 ]

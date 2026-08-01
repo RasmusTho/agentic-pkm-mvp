@@ -35,7 +35,7 @@ from app.instance.local_operator_principal import (
     AuthPosture,
     LocalOperatorPrincipalRecord,
     PrincipalPreflightError,
-    fingerprint_credential,
+    verify_credential,
 )
 from app.instance.vault_registry import RegistrySnapshot, VaultRegistryStore
 from app.vault.active_context_v1 import (
@@ -82,7 +82,7 @@ def resolve_principal(
                 "the api_key_credential subject requires the presented credential",
                 provisioning_action="present the configured #2223 credential",
             )
-        if record.credential_fingerprint != fingerprint_credential(presented_credential):
+        if not verify_credential(record.credential_fingerprint, presented_credential):
             raise PrincipalPreflightError(
                 "presented credential does not match the bound delegated role",
                 provisioning_action="rotate the credential through the governed command",
@@ -330,11 +330,10 @@ def current_auth_posture(*, loopback_listener_proven: bool) -> AuthPosture:
     from app.settings import settings
 
     configured = [value for value in (settings.api_key,) if value]
-    fingerprint = fingerprint_credential(configured[0]) if len(configured) == 1 else None
     proxy_hosts = (settings.companion_ui_proxy_hosts or "").strip()
     return AuthPosture(
         configured_credentials=len(configured),
-        credential_fingerprint=fingerprint,
+        credential=configured[0] if len(configured) == 1 else None,
         loopback_listener_proven=loopback_listener_proven,
         companion_proxy_configured=bool(proxy_hosts),
     )
