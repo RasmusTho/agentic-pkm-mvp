@@ -279,17 +279,24 @@ def test_default_service_without_the_sealed_capability_cannot_mutate(
     the seal.
     """
 
-    runtime, first, _second = bound_instance
+    runtime, first, second = bound_instance
+    # A privileged producer establishes a default so both mutators have real work.
+    runtime.default_vault_service().set(first.vault_binding_id)
+    captured_events.clear()
     unprivileged = InstanceDefaultVaultService(runtime.registry)
     before = runtime.registry.load()
 
     assert unprivileged.get().registry_revision == before.revision
+    assert unprivileged.get().vault_binding_id == first.vault_binding_id
     with pytest.raises(CapabilityNotReadyError):
-        unprivileged.set(first.vault_binding_id)
+        unprivileged.set(second.vault_binding_id)
     with pytest.raises(CapabilityNotReadyError):
         unprivileged.clear()
+    with pytest.raises(CapabilityNotReadyError):
+        unprivileged.remove_registration(second.vault_binding_id)
 
     after = runtime.registry.load()
     assert after.revision == before.revision
-    assert after.default_vault_binding_id == before.default_vault_binding_id
+    assert after.default_vault_binding_id == first.vault_binding_id
+    assert set(after.registrations) == set(before.registrations)
     assert captured_events == []

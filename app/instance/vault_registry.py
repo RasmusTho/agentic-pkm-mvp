@@ -108,13 +108,6 @@ class RegistryDefaultConflict(RegistryError):
     """A mutation would leave the explicit instance default dangling or inferred."""
 
 
-class _Unchanged:
-    """Sentinel distinguishing "leave the default alone" from "clear the default"."""
-
-
-_UNCHANGED = _Unchanged()
-
-
 def _default_migration_applied(extensions: Mapping[str, Any]) -> bool:
     marker = extensions.get("defaultVaultMigration")
     return isinstance(marker, dict) and marker.get("schema") == DEFAULT_VAULT_MIGRATION_SCHEMA
@@ -146,29 +139,39 @@ def _materialize_legacy_last_active_default(
 ) -> RegistrySnapshot | None:
     """Run the one-time MVR-02 default materialization, or return ``None``.
 
-    This is a migration, not a runtime precedence source: it fires at most once
-    per instance, only while no explicit default exists, and only when the legacy
-    ``last_active_vault_ref`` names exactly one current registration. Every later
-    last-active change leaves the default untouched.
+    This is a migration, not a runtime precedence source. The
+    ``defaultVaultMigration`` marker is what makes "at most once" true, so the
+    marker is stamped **whenever this step runs at all** — including when it
+    decides to materialize nothing. Stamping only on success would leave the
+    step armed forever on a store that simply had no resolvable last-active yet,
+    turning a later picker write into a silent default inference. Every registry
+    this codebase creates is stamped at birth (:meth:`_empty_snapshot`) or at
+    legacy migration, so a marker-less current-schema store is by definition a
+    pre-MVR-02 install being seen for the first time.
     """
 
     if _default_migration_applied(current.extensions):
         return None
-    if current.default_vault_binding_id is not None:
-        return None
-    binding_id = _binding_for_ref(current.last_active_vault_ref, current.registrations)
-    if binding_id is None:
-        return None
+    binding_id = (
+        None
+        if current.default_vault_binding_id is not None
+        else _binding_for_ref(current.last_active_vault_ref, current.registrations)
+    )
     next_revision = current.revision + 1
     extensions = copy.deepcopy(current.extensions)
     extensions["defaultVaultMigration"] = _default_migration_marker(
-        DEFAULT_PROVENANCE_LEGACY_MIGRATION, next_revision
+        DEFAULT_PROVENANCE_LEGACY_MIGRATION if binding_id is not None else None,
+        next_revision,
     )
     if current.authority == REGISTRY_AUTHORITY_ACTIVE:
         floor = extensions.get("scalarRollback")
         if not isinstance(floor, dict):
             raise RegistryError("active registry scalar rollback floor is invalid")
         extensions["scalarRollback"] = {**floor, "forkRegistryRevision": next_revision}
+    if binding_id is None:
+        # Nothing to materialize; record that the one-time step has now run so a
+        # later last-active write can never be mistaken for a legacy default.
+        return replace(current, revision=next_revision, extensions=extensions)
     return replace(
         current,
         revision=next_revision,
@@ -658,11 +661,16 @@ class VaultRegistryStore:
         transfer_lineage: tuple[TransferLineage, ...] | None = None,
         extensions: dict[str, Any] | None = None,
         expected_revision: int | None = None,
-        default_vault_binding_id: str | None | _Unchanged = _UNCHANGED,
-        default_vault_provenance: str = DEFAULT_PROVENANCE_EXPLICIT,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
-        """Atomically commit one lifecycle/transfer state transition."""
+        """Atomically commit one lifecycle/transfer state transition.
+
+        The explicit instance default is carried through unchanged: MVR-02 owns
+        it through :meth:`set_instance_default` alone, so no lifecycle or
+        transfer transition can silently move, forge, or wipe it. A committed
+        registration set that would orphan the current default is refused
+        outright rather than quietly clearing it.
+        """
 
         _require_storage_mutation_capability(_capability)
         with self._locked():
@@ -688,20 +696,8 @@ class VaultRegistryStore:
                     **floor,
                     "forkRegistryRevision": next_revision,
                 }
-            if isinstance(default_vault_binding_id, _Unchanged):
-                next_default = current.default_vault_binding_id
-                next_default_provenance = current.default_vault_provenance
-            else:
-                next_default = _optional_str(default_vault_binding_id)
-                next_default_provenance = (
-                    None if next_default is None else default_vault_provenance
-                )
-                if next_default_provenance is not None and (
-                    next_default_provenance not in DEFAULT_VAULT_PROVENANCES
-                ):
-                    raise RegistryError(
-                        f"unsupported default provenance: {next_default_provenance}"
-                    )
+            next_default = current.default_vault_binding_id
+            next_default_provenance = current.default_vault_provenance
             if next_default is not None and next_default not in validated:
                 raise RegistryDefaultConflict(
                     "committed registration state would leave the instance default dangling"
@@ -732,14 +728,21 @@ class VaultRegistryStore:
     def set_extension_state(
         self,
         *,
-        default_vault_binding_id: str | None,
         dimensions: Mapping[str, object],
         principal_state: Mapping[str, object],
         background_state: Mapping[str, object],
         runtime_floors: Mapping[str, object],
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
-        """Persist the 01B mechanical state that must survive backup/restore."""
+        """Persist the 01B mechanical state that must survive backup/restore.
+
+        MVR-02 promoted the default from an opaque extension blob to a validated
+        first-class registry field with its own producer, so this 01B mechanical
+        writer no longer carries ``default_vault_binding_id`` at all. Letting it
+        would mean an unrelated dimensions/principal/background write could wipe
+        a durable operator default (when passed ``None``) or forge
+        ``explicit_default_command`` provenance (when passed a binding).
+        """
 
         _require_storage_mutation_capability(_capability)
         current = self.load()
@@ -752,14 +755,10 @@ class VaultRegistryStore:
                 "runtimeFloors": copy.deepcopy(dict(runtime_floors)),
             }
         )
-        # MVR-02 promoted the default from an opaque 01B extension blob to a
-        # validated first-class registry field, so this 01B producer now writes
-        # the authoritative field instead of a parallel extension copy.
         return self.commit_state(
             registrations=dict(current.registrations),
             extensions=extensions,
             expected_revision=current.revision,
-            default_vault_binding_id=default_vault_binding_id,
             _capability=_capability,
         )
 
@@ -1110,6 +1109,11 @@ class VaultRegistryStore:
             app_install_id=f"app-{uuid4()}",
             last_active_vault_ref=None,
             registrations={},
+            # A registry born after MVR-02 has no legacy to migrate. Stamping the
+            # marker here is what keeps the one-time step from ever firing as a
+            # runtime rule on a fresh install, and keeps it from costing a
+            # spurious revision bump on the first `load_or_migrate`.
+            extensions={"defaultVaultMigration": _default_migration_marker(None, 0)},
         )
 
     def _assert_revision(self, current: RegistrySnapshot, expected: int | None) -> None:

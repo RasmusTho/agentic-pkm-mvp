@@ -225,10 +225,17 @@ def test_default_survives_recreate_after_mvr02(tmp_path) -> None:
 
     observations = {
         consumer: _instance_runtime(
-            "default-vault-get", "--registry-path", registry_path
+            "default-vault-get",
+            "--registry-path",
+            registry_path,
+            "--consumer",
+            consumer,
         )
         for consumer in ENABLED_REGISTRY_CONSUMERS
     }
+    assert {item["consumer"] for item in observations.values()} == set(
+        ENABLED_REGISTRY_CONSUMERS
+    )
     assert {item["vault_binding_id"] for item in observations.values()} == {
         extra[0].vault_binding_id
     }
@@ -249,4 +256,6 @@ def test_default_survives_recreate_after_mvr02(tmp_path) -> None:
     selection = resolve_vault_selection(restored)
     assert selection.vault_binding_id == extra[0].vault_binding_id
     assert selection.provenance == SELECTION_INSTANCE_DEFAULT
-    assert restored.last_active_vault_ref != extra[0].ref
+    # The recreate did not convert the default into last-active history: the env
+    # bootstrap never wrote one, and setting a default must not invent one.
+    assert restored.last_active_vault_ref is None

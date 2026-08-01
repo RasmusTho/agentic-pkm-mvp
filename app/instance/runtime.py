@@ -2872,9 +2872,21 @@ def _default_vault_command(args: argparse.Namespace) -> int:
         else:
             receipt = service.clear()
     except (VaultSelectionError, RegistryDefaultConflict) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
+        print(
+            json.dumps(
+                {"ok": False, "consumer": args.consumer, "error": str(exc)},
+                sort_keys=True,
+            )
+        )
         return 1
-    print(json.dumps({"ok": True, **receipt.as_dict()}, sort_keys=True))
+    # Deliberately no registry/content path in the receipt: `read-revision` owns
+    # path-identity proof, and this surface stays redaction-safe to paste.
+    payload: dict[str, object] = {
+        "ok": True,
+        "consumer": args.consumer,
+        **receipt.as_dict(),
+    }
+    print(json.dumps(payload, sort_keys=True))
     return 0
 
 
@@ -2946,6 +2958,10 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("default-vault-get", "default-vault-set", "default-vault-clear"):
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
+        # `--consumer` mirrors `read-revision`: it names which enabled registry
+        # consumer is asking, so a cross-process durability check can prove each
+        # one resolved the same default rather than repeating one identical call.
+        command.add_argument("--consumer", default=None)
         if name == "default-vault-set":
             command.add_argument("--vault-binding-id", required=True)
     args = parser.parse_args(argv)

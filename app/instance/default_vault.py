@@ -48,6 +48,11 @@ from app.instance.vault_registry import (
 SELECTION_REQUEST_OVERRIDE = "request_override"
 SELECTION_SESSION = "session_selection"
 SELECTION_INSTANCE_DEFAULT = "instance_default"
+# A compatibility DEFAULT_VAULT_ID win is reported distinctly from a durable
+# operator-set default: provenance is meant to be inspectable, and "an env var
+# resolved this" is materially different from "the instance is configured this
+# way" when someone is debugging which vault a background caller reached.
+SELECTION_COMPATIBILITY_DEFAULT = "compatibility_default_vault_id"
 SELECTION_LEGACY_BOOTSTRAP = "legacy_bootstrap"
 SELECTION_NO_VAULT = "no_vault"
 
@@ -169,17 +174,17 @@ def resolve_vault_selection(
         registration = _require_registered(snapshot, session, branch="session")
         return VaultSelection(session, SELECTION_SESSION, registration)
     default_binding_id = snapshot.default_vault_binding_id
+    default_provenance = SELECTION_INSTANCE_DEFAULT
     if default_binding_id is None and compatibility_default_vault_id:
         default_binding_id = resolve_compatibility_default_vault_id(
             snapshot, compatibility_default_vault_id
         )
+        default_provenance = SELECTION_COMPATIBILITY_DEFAULT
     if default_binding_id is not None:
         registration = _require_registered(
             snapshot, default_binding_id, branch="instance default"
         )
-        return VaultSelection(
-            default_binding_id, SELECTION_INSTANCE_DEFAULT, registration
-        )
+        return VaultSelection(default_binding_id, default_provenance, registration)
     if legacy_bootstrap_vault_root is not None:
         binding_id = resolve_legacy_bootstrap_binding(
             snapshot, legacy_bootstrap_vault_root
@@ -346,6 +351,16 @@ class InstanceDefaultVaultService:
             # silently substituted by another registration.
             raise VaultSelectionError(
                 f"unknown or unauthorized vault_binding_id: {vault_binding_id}"
+            )
+        if before.default_vault_binding_id == vault_binding_id:
+            # A no-op is not a mutation: it must not burn a registry revision and
+            # must not publish a rebind event MVR-06 would act on.
+            return DefaultVaultReceipt(
+                vault_binding_id=before.default_vault_binding_id,
+                provenance=before.default_vault_provenance,
+                registry_revision=before.revision,
+                previous_vault_binding_id=before.default_vault_binding_id,
+                changed=False,
             )
         updated = self._store.set_instance_default(
             vault_binding_id,

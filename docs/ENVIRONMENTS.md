@@ -62,7 +62,9 @@ on*, not what a vault is:
 
 **Selection precedence (shipped resolver, `app/instance/default_vault.py`).** One resolver
 applies, in order: one-request override → retained session selection → instance default →
-explicit legacy bootstrap adapter → no-vault. It reports which branch won. An explicit
+explicit legacy bootstrap adapter → no-vault. It reports which branch won, and reports a
+compatibility `DEFAULT_VAULT_ID` win distinctly from a durable operator-set default so "an env var
+resolved this" is never mistaken for "the instance is configured this way". An explicit
 selection that is unknown, removed, or unauthorized **fails closed** — it never falls through
 to last-active, another registry entry, the working directory, or `./vault`. No-vault remains
 a valid result. MVR-05 owns the HTTP carriers (`X-Active-Context-Override` and
@@ -73,7 +75,11 @@ a valid result. MVR-05 owns the HTTP carriers (`X-Active-Context-Override` and
 - `explicit_default_command` — the authenticated `GET`/`PUT`/`DELETE /api/instance/default-vault`
   route or the headless `python -m app.instance.runtime default-vault-get|-set|-clear`
   commands. Both go through one service, one locked registry transaction, and one redacted
-  receipt, and neither ever writes `last_active_vault_ref`.
+  receipt, and neither ever writes `last_active_vault_ref`. **This is the only writer of the
+  default.** Lifecycle, transfer, and mechanical instance-state commits carry it through unchanged
+  and refuse a registration set that would orphan it, so no unrelated write can wipe a durable
+  operator default or forge its provenance. A no-op set/clear is not a mutation: it burns no
+  revision and publishes no event.
 - `legacy_last_active_migration` — a **one-time** registry migration that preserves an existing
   picker-only install's restart journey by promoting a valid `last_active_vault_ref` to the
   default when no default exists. It runs at most once per instance, is recorded in a

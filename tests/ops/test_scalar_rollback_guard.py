@@ -402,7 +402,6 @@ def test_rollback_gateway_and_mounts_enforce_selected_binding(
         match="scalar rollback session blocks",
     ):
         runtime.registry.set_extension_state(
-            default_vault_binding_id=None,
             dimensions={},
             principal_state={},
             background_state={},
@@ -468,7 +467,6 @@ def test_native_scalar_rollback_launcher_enforces_selected_binding_or_fails_clos
 def test_binding_keyed_database_floor_blocks_scalar_runtime(tmp_path) -> None:
     runtime, registration, _ = _runtime(tmp_path)
     runtime.registry.set_extension_state(
-        default_vault_binding_id=None,
         dimensions={},
         principal_state={},
         background_state={},

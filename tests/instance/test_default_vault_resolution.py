@@ -27,6 +27,8 @@ from app.instance.vault_registry import (
     KnownVaultRef,
     RegistryDefaultConflict,
     VaultRegistryStore,
+    _render_markdown_settings,
+    _split_rendered,
 )
 from app.vault.markdown_settings import MarkdownSettingsStore
 from tests._mvr_default_vault_harness import (
@@ -241,6 +243,139 @@ def test_legacy_last_active_materializes_default_once(tmp_path) -> None:
     cleared_revision = store.load().revision
     assert VaultRegistryStore(path).load_or_migrate().default_vault_binding_id is None
     assert VaultRegistryStore(path).load_or_migrate().revision == cleared_revision
+
+
+def test_migration_never_infers_a_default_on_a_post_mvr02_registry(tmp_path) -> None:
+    """The one-time step must not become a standing last-active rule.
+
+    Regression for the two ways "at most once" could quietly become "every load":
+    a registry that never carried legacy state, and a registry whose operator
+    deliberately cleared the default through a *removal* transaction rather than
+    through the explicit clear command.
+    """
+
+    runtime, first, extra = active_runtime(tmp_path, extra_roots=("two", "three"))
+    picked, other = extra
+    store = VaultRegistryStore(runtime.layout.registry_path)
+
+    # 1. A registry born after MVR-02 has no legacy to migrate. A picker write
+    #    that sets last-active must not be promoted into a default, and the
+    #    read-named `load_or_migrate` must not burn a revision doing it.
+    runtime.registry.remember_registration(
+        picked.vault_binding_id,
+        KnownVaultRef(
+            ref=picked.ref,
+            path=picked.path,
+            vault_id=picked.vault_id,
+            local_instance_id=picked.local_instance_id,
+        ),
+        make_active=True,
+        _capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+    before = store.load()
+    assert before.last_active_vault_ref == picked.ref
+    assert before.default_vault_binding_id is None
+
+    migrated = store.load_or_migrate()
+    assert migrated.default_vault_binding_id is None
+    assert migrated.default_vault_provenance is None
+    assert migrated.revision == before.revision
+
+    # 2. An explicit clear through the removal transaction is just as final as
+    #    the clear command: a later load must not promote whatever happens to be
+    #    last-active into the default.
+    service = _service(runtime)
+    service.set(other.vault_binding_id)
+    service.remove_registration(other.vault_binding_id, clear_default=True)
+    after_removal = store.load()
+    assert after_removal.default_vault_binding_id is None
+    assert after_removal.last_active_vault_ref == picked.ref
+
+    reloaded = store.load_or_migrate()
+    assert reloaded.default_vault_binding_id is None
+    assert reloaded.revision == after_removal.revision
+
+    # 3. A mechanical MVR-01B extension write has no say over the default at all.
+    service.set(first.vault_binding_id)
+    revision_with_default = store.load().revision
+    runtime.registry.set_extension_state(
+        dimensions={"focus": [first.vault_binding_id]},
+        principal_state={"operator": "local"},
+        background_state={"mode": "compatibility"},
+        runtime_floors={"registry": "01b"},
+        _capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+    mechanical = store.load()
+    assert mechanical.revision == revision_with_default + 1
+    assert mechanical.default_vault_binding_id == first.vault_binding_id
+    assert mechanical.default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
+
+
+def _strip_mvr02_marker(registry_path: Path, *, last_active_vault_ref: str | None) -> None:
+    """Rewrite a registry file into the shape a pre-MVR-02 install would have."""
+
+    frontmatter, body = _split_rendered(
+        registry_path.read_text(encoding="utf-8"), registry_path
+    )
+    frontmatter.pop("defaultVaultMigration", None)
+    frontmatter["defaultVaultBindingId"] = None
+    frontmatter["defaultVaultProvenance"] = None
+    frontmatter["lastActiveVaultRef"] = last_active_vault_ref
+    registry_path.write_text(
+        _render_markdown_settings(frontmatter, body), encoding="utf-8"
+    )
+    registry_path.chmod(0o600)
+
+
+def test_pre_mvr02_registry_arms_the_migration_exactly_once(tmp_path) -> None:
+    """A genuine pre-MVR-02 store is migrated on sight, even when nothing moves.
+
+    Regression: if the marker were stamped only when a default was actually
+    materialized, a legacy store that happened to have no resolvable last-active
+    at upgrade time would stay armed forever, and the next picker write would be
+    silently promoted into a default with a `legacy_last_active_migration` label
+    that is simply untrue.
+    """
+
+    runtime, first, extra = active_runtime(tmp_path, extra_roots=("two",))
+    picked = extra[0]
+    registry_path = runtime.layout.registry_path
+    _strip_mvr02_marker(registry_path, last_active_vault_ref=None)
+    store = VaultRegistryStore(registry_path)
+    before = store.load()
+    assert "defaultVaultMigration" not in before.extensions
+
+    # First sight of a pre-MVR-02 store: nothing to materialize, but the
+    # one-time step is now recorded as done.
+    armed = store.load_or_migrate()
+    assert armed.default_vault_binding_id is None
+    assert armed.extensions["defaultVaultMigration"]["provenance"] == "none"
+    assert armed.revision == before.revision + 1
+
+    # A later picker write is history, not a default.
+    runtime.registry.remember_registration(
+        picked.vault_binding_id,
+        KnownVaultRef(
+            ref=picked.ref,
+            path=picked.path,
+            vault_id=picked.vault_id,
+            local_instance_id=picked.local_instance_id,
+        ),
+        make_active=True,
+        _capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+    after_picker = store.load()
+    assert after_picker.last_active_vault_ref == picked.ref
+
+    reloaded = store.load_or_migrate()
+    assert reloaded.default_vault_binding_id is None
+    assert reloaded.revision == after_picker.revision
+
+    # And the legacy arm still works when there IS something to preserve.
+    _strip_mvr02_marker(registry_path, last_active_vault_ref=first.ref)
+    materialized = VaultRegistryStore(registry_path).load_or_migrate()
+    assert materialized.default_vault_binding_id == first.vault_binding_id
+    assert materialized.default_vault_provenance == DEFAULT_PROVENANCE_LEGACY_MIGRATION
 
 
 def test_first_vault_initialize_materializes_default_once(tmp_path) -> None:
