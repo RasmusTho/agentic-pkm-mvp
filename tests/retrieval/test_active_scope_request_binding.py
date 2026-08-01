@@ -7,8 +7,15 @@ KERNEL-10 (#2772) delivered the prefilter MECHANISM; these tests bind its ACTIVA
   ``ASK_DOMAIN_SCOPE`` is deliberately absent: the scope must arrive through the request path.
 - ``test_ambient_env_scope_remains_process_default`` — with no request-bound scope, the ambient
   ``ASK_DOMAIN_SCOPE`` still resolves, so existing callers and eval harnesses are unaffected.
+- ``test_unmatched_bound_scope_admits_nothing_and_denies`` — a scope no document matches starves
+  the result set and records a denial; it never falls back to admit-all.
 - ``test_evidence_role_in_context_survives_capability_boundary`` — the per-hit in-context evidence
   role crosses ``RetrievalHit`` instead of being dropped, and the clamp stays non-upgrading.
+- ``test_request_scope_overrides_ambient_env_scope`` — PRECEDENCE: a request binding REPLACES
+  ``ASK_DOMAIN_SCOPE``. It narrows only relative to the UNSCOPED default, so the env var is a
+  default and not a containment control. Pinned so the property is deliberate and visible.
+- ``test_recall_node_uses_request_bound_scope`` — the recall leg of the no-divergence invariant:
+  the recall node consumes the turn's bound scope rather than re-resolving the ambient default.
 """
 
 from __future__ import annotations
