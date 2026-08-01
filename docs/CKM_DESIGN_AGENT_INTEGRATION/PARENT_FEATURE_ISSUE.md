@@ -1,6 +1,6 @@
-State: Active parent validation-hub contract. GitHub Issue #4131 governs acceptance and closure for this capability; GitHub owns its current open/closed state, labels, and comments, not this doc. All six children #4308–#4313 are closed with merged PRs and terminal receipts. The independent parent acceptance audit of 2026-08-01 recorded a conditional PASS that authorized exactly one docs-only owner-doc promotion PR; that audit did not itself accept, close, relabel, or tick #4131. The hub's closure criterion is a post-promotion fresh independent audit of that merged promotion diff, which neither a child slice nor the promotion PR itself may perform or close.
+State: Parent validation-hub contract. GitHub Issue #4131 governs acceptance and closure for this capability; GitHub owns its current open/closed state, labels, and comments, not this doc. All six children #4308–#4313 are closed with merged PRs and terminal receipts. The independent parent acceptance audit of 2026-08-01 recorded a conditional PASS that authorized exactly one docs-only owner-doc promotion PR; that audit did not itself accept, close, relabel, or tick #4131. The hub's closure criterion is a post-promotion fresh independent audit of that merged promotion diff, which neither a child slice nor the promotion PR itself may perform or close.
 Doc role: Parent feature Issue specification
-Authority: Stable acceptance shape for live parent #4131; GitHub owns current labels, comments, and closure state.
+Authority: Stable acceptance shape for parent #4131; GitHub owns current labels, comments, and closure state.
 Owner: Builder System / CKM
 Temporal class: active specification
 
@@ -8,7 +8,7 @@ Temporal class: active specification
 
 ## Context
 
-Live parent [#4131](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4131) governs acceptance of
+Parent [#4131](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4131) governs acceptance of
 the capability specified in this directory. It is a validation hub, not an implementation pickup.
 
 ## Scope

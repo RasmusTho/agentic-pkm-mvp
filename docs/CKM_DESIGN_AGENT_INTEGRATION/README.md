@@ -210,7 +210,7 @@ headless-registered ones.
 
 ## Relationship to GitHub
 
-- Parent validation hub: #4131. It remains blocked and is never a direct pickup Issue.
+- Parent validation hub: #4131. It is never a direct pickup Issue.
 - Child Issues are created only after this specification is merged and their live bodies pass
   strict readiness and Source Anchor validation.
 - External prerequisite: #4286 terminal repo-verifiable Phase 1 acceptance. #4131 depends on that
