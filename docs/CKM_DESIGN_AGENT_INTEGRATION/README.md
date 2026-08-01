@@ -1,11 +1,11 @@
-State: Active target-state specification. Parent validation hub #4131 is open and unaccepted. Child implementation issues #4308–#4313 are filed (see each task doc's `github_issue:` frontmatter); CDH-01 through CDH-05 carry terminal delivery receipts on #4131, and CDH-06 (#4313) is the terminal child, which posts its own receipt and the conditional-acceptance ledger on merge. `Capability acceptance` below stays unticked: an independent parent audit, not a child slice, decides acceptance and authorizes the later docs-only owner-doc promotion.
+State: Delivered specification for a capability that ships dormant and fail-closed. All six child implementation issues #4308–#4313 are closed with merged PRs (see each task doc's `github_issue:` frontmatter) and carry terminal delivery receipts on #4131. No design run can execute: no `builderops-design-run` credential grant exists on any channel, and no doc may describe design-agent runs as working, enabled, or proven end to end against a real provider. Parent validation hub #4131 is open and unaccepted; the conditional acceptance receipt of 2026-08-01 authorized only the docs-only owner-doc promotion. `Capability acceptance` below stays unticked: parent closure requires a separate post-promotion fresh independent audit, not a child slice and not the promotion PR.
 Doc role: Capability specification
 Authority: Owns the bounded CKM design-agent integration capability, cross-task invariants, task order, and acceptance path. Subordinate to ADR-0057, ADR-0064, the delivered CKM Direction B contract, and the BuilderOps authority boundary.
 Owner: Builder System / CKM
 Temporal class: active specification
 Review cadence: event-driven
 Source of truth: this directory for implementation-task shape; live GitHub for pickup and delivery state
-Last reviewed: 2026-07-30
+Last reviewed: 2026-08-01
 
 # CKM Design-Agent Integration Hub
 
