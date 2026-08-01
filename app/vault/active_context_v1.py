@@ -133,6 +133,42 @@ class PrincipalContext:
 
 
 @dataclass(frozen=True)
+class DimensionFilter:
+    """Provenance for a snapshot whose bindings came from a stored MVR-04 dimension.
+
+    This is the seam MVR-03 reserved and MVR-04 fills. Read what it is carefully, because
+    the shape is the invariant:
+
+    - It records **which stored dimension was resolved, at which dimension revision**. That
+      is provenance, and it is provenance *only*: nothing in the shipped runtime compares a
+      stored revision against current registry truth. MVR-04 records the value so that a
+      later slice can detect drift and so that context-cache identity separates two
+      snapshots taken at different dimension revisions; it does not itself detect anything.
+    - It is **not** an input to anything. `source_bindings` is already the explicit,
+      individually authorized binding set the server resolved; no consumer re-expands this
+      filter, and expanding it later could not widen the snapshot because GOV authorized
+      each member before the snapshot existed.
+    - It carries **no** action, write class, permission, scope, sphere, or member list, so
+      there is nothing here for a consumer to mistake for a grant.
+
+    A client can never construct one: the only producer is the server-side dimension
+    resolver, which requires an id already stored in the instance registry.
+    """
+
+    dimension_id: str
+    dimension_revision: int
+
+    def __post_init__(self) -> None:
+        if not self.dimension_id:
+            raise ActiveContextError("a dimension filter requires a stored dimension id")
+        if self.dimension_revision < 1:
+            raise ActiveContextError("dimension revision is monotonic and starts at 1")
+
+    def cache_component(self) -> str:
+        return f"{self.dimension_id}@{self.dimension_revision}"
+
+
+@dataclass(frozen=True)
 class ActiveContextBinding:
     """One immutable source binding inside a snapshot.
 
@@ -180,9 +216,11 @@ class ActiveContextSetV1:
     topology_posture: str = "single-node"
     expires_at: float | None = None
     version: str = ACTIVE_CONTEXT_SET_V1
-    #: Reserved for MVR-04. It stays sealed absent until a durable dimension registry
-    #: exists; no endpoint may set it and no client string can become a dimension.
-    dimension_filter: None = field(default=None)
+    #: MVR-04 provenance: which stored dimension produced `source_bindings`, at which
+    #: dimension revision. Absent for an explicitly enumerated selection. No client string
+    #: can become one -- only the server-side resolver, over an id already stored in the
+    #: instance registry, may produce it, and it grants nothing (see `DimensionFilter`).
+    dimension_filter: DimensionFilter | None = field(default=None)
 
     def __post_init__(self) -> None:
         if not self.context_id:
@@ -201,8 +239,14 @@ class ActiveContextSetV1:
                 )
         elif self.degraded_reason is not None:
             raise ActiveContextError("a healthy context cannot carry a degraded reason")
-        if self.dimension_filter is not None:  # pragma: no cover - typed as None
-            raise ActiveContextError("the dimension filter stays sealed absent until MVR-04")
+        if self.dimension_filter is not None and not isinstance(
+            self.dimension_filter, DimensionFilter
+        ):
+            # A raw client string can never become a dimension: only the typed,
+            # server-produced provenance record is admissible here.
+            raise ActiveContextError(
+                "dimension_filter must be a server-resolved DimensionFilter"
+            )
 
     @property
     def is_no_vault(self) -> bool:
@@ -247,7 +291,8 @@ class ActiveContextSetV1:
             "spheres=" + ",".join(self.sphere_memberships),
             f"situated_identity={self.situated_identity or ''}",
             f"selection_capability_digest={self.selection_capability_digest or ''}",
-            f"dimension_filter={'' if self.dimension_filter is None else self.dimension_filter}",
+            "dimension_filter="
+            + ("" if self.dimension_filter is None else self.dimension_filter.cache_component()),
             "bindings=" + "|".join(binding.cache_component() for binding in self.source_bindings),
             f"posture={self.posture}",
         )
@@ -275,6 +320,7 @@ __all__ = [
     "AuthSubject",
     "ContextPosture",
     "DegradedContextError",
+    "DimensionFilter",
     "PrincipalContext",
     "PrincipalKind",
     "WorkspaceState",

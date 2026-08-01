@@ -210,8 +210,12 @@ def test_binding_selection_endpoints_derive_workspace_and_cognitive_dimensions_s
         "write_class": "governed_content",
         "permission": "hka.write",
         "required_permission": "hka.write",
-        "dimension_id": "dim-1",
+        # MVR-04 (#3858) unsealed `dimension_id` as selection intent; the *projection*
+        # shapes stay rejected, and a dimension id combined with explicit bindings is
+        # refused separately below rather than merged.
         "dimension_filter": ["dim-1"],
+        "dimension": {"members": ["binding-1"]},
+        "dimension_revision": 7,
         "context_id": "ctx-forged",
         "generation": 99,
         "selection_capability_digest": "0" * 64,
@@ -234,6 +238,16 @@ def test_binding_selection_endpoints_derive_workspace_and_cognitive_dimensions_s
                 f"{verb.upper()} accepted client-authored {field!r}: {response.text}"
             )
 
+    # `dimension_id` is legitimate MVR-04 intent, but it is an alternative to explicit
+    # bindings, never an addition to them: a union would be a client-authored projection
+    # wearing a stored dimension's name.
+    both = client.post(
+        SELECTION_URL,
+        json={"vault_binding_ids": [first.vault_binding_id], "dimension_id": "dim-1"},
+    )
+    assert both.status_code == 400, both.text
+    assert "never both" in both.json()["detail"]
+
     # None of the rejected attempts reached the stored snapshot.
     read_back = client.get(
         SELECTION_URL,
@@ -244,9 +258,11 @@ def test_binding_selection_endpoints_derive_workspace_and_cognitive_dimensions_s
     assert read_back["situated_identity"] is None
     assert read_back["principal_id"] == principal_record.local_operator_role_id
 
-    # A dimension payload stays sealed until MVR-04 supplies its registry: there is no
-    # dimension field on the response model at all.
-    assert "dimension" not in str(read_back)
+    # MVR-04 (#3858) added dimension *provenance* to the response, and an explicitly
+    # enumerated selection carries none: no rejected attempt turned this into a dimension
+    # selection, and the field is absent-valued rather than fabricated.
+    assert read_back["dimension_id"] is None
+    assert read_back["dimension_revision"] is None
 
     # An unknown binding id is refused rather than silently dropped.
     unknown = client.post(SELECTION_URL, json={"vault_binding_ids": ["never-registered"]})

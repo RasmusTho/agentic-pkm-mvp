@@ -127,6 +127,9 @@ KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_le
 # new registry revision and binding identity only: never a content-root path,
 # vault name, or other raw binding payload.
 INSTANCE_DEFAULT_VAULT_CHANGED = "instance.default_vault.changed"
+# MVR-04: a non-authoritative vault-dimension grouping changed. Grouping only; it
+# carries no authority and no consumer may read admission from it.
+INSTANCE_VAULT_DIMENSION_CHANGED = "instance.vault_dimension.changed"
 
 YOUTUBE_SOURCE_DISCOVERED = "youtube.source.discovered"
 ACQUISITION_REQUESTED = "acquisition.requested"
@@ -211,6 +214,7 @@ HEIMDAL_MEETING_FINALIZED = "heimdal.meeting.finalized"
 
 __all__ = [
     "INSTANCE_DEFAULT_VAULT_CHANGED",
+    "INSTANCE_VAULT_DIMENSION_CHANGED",
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
     "INGEST_OBJECT_METADATA",

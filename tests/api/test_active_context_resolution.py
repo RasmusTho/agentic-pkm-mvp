@@ -489,10 +489,21 @@ def test_selection_id_is_single_user_bearer_with_server_derived_context(
         {"vault_binding_ids": [], "required_permission": "hka.write"},
         {"vault_binding_ids": [], "action": "hka.write_note"},
         {"vault_binding_ids": [], "correlation_id": "c-1"},
-        {"vault_binding_ids": [], "dimension_id": "dim-1"},
+        # MVR-04 unsealed `dimension_id` as selection intent, but only as an *id already
+        # stored in the instance registry*. A client-authored dimension projection is
+        # still 422, exactly as it was while the field was sealed.
+        {"vault_binding_ids": [], "dimension_filter": ["dim-1"]},
+        {"vault_binding_ids": [], "dimension": {"members": ["binding-1"]}},
+        {"vault_binding_ids": [], "dimension_revision": 7},
     ):
         response = client.post(SELECTION_URL, json=spoof)
         assert response.status_code == 422, f"{spoof} was not rejected: {response.text}"
+
+    # An unknown `dimension_id` is a fail-closed 404 rather than a 422, because the field
+    # is now legitimate intent. It still mints nothing and still cannot become a
+    # dimension: only stored membership resolves (MVR-04, #3858).
+    unknown = client.post(SELECTION_URL, json={"dimension_id": "dim-1"})
+    assert unknown.status_code == 404, unknown.text
 
     # A different id cannot reach this selection.
     assert (

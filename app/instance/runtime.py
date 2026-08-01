@@ -13,10 +13,13 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import TYPE_CHECKING, Iterator, Mapping
 from uuid import uuid4
 
 import yaml
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.instance.vault_dimensions import VaultDimensionService
 
 from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
@@ -49,6 +52,7 @@ from app.instance.local_operator_principal import (
     MINIMUM_RUNTIME_PRINCIPAL_KEY,
     LocalOperatorPrincipalStore,
     PRINCIPAL_RECORD_FILENAME,
+    PrincipalPreflightError,
 )
 from app.instance.vault_registry import (
     AppLocalSettings,
@@ -2872,6 +2876,26 @@ def open_default_vault_service(registry_path: Path) -> InstanceDefaultVaultServi
     )
 
 
+def open_vault_dimension_service(registry_path: Path) -> "VaultDimensionService":
+    """Hand the sealed storage-mutation capability to the MVR-04 dimension service.
+
+    Same sanctioned-importer pattern as :func:`open_default_vault_service`: the API router
+    and the headless CLI both obtain a mutating service without reaching the seal.
+    """
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+    from app.instance.vault_dimensions import (
+        VaultDimensionService,
+        emit_dimension_mutation_event,
+    )
+
+    return VaultDimensionService(
+        VaultRegistryStore(Path(registry_path)),
+        capability=_STORAGE_MUTATION_CAPABILITY,
+        emit_event=emit_dimension_mutation_event,
+    )
+
+
 def local_operator_principal_path(registry_path: Path) -> Path:
     """The private delegated-role record, a sibling of the registry.
 
@@ -2934,6 +2958,107 @@ def _default_vault_command(args: argparse.Namespace) -> int:
         **receipt.as_dict(),
     }
     print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+DIMENSION_COMMANDS = (
+    "dimension-list",
+    "dimension-create",
+    "dimension-rename",
+    "dimension-set-members",
+    "dimension-remove-member",
+    "dimension-delete",
+    "dimension-resolve",
+)
+
+
+def _dimension_command(args: argparse.Namespace) -> int:
+    """Headless MVR-04 administration through the same service the API uses.
+
+    Prints only the redacted receipt: dimension identity, display metadata, ordered opaque
+    member ids, and revisions. No content-root path or other raw binding payload leaves the
+    instance through this surface.
+
+    `dimension-resolve` is the one command that authorizes: it resolves the principal from
+    the same delegated-role record the API uses and asks GOV about every member
+    independently, all-or-nothing. It is deliberately not a variant of `dimension-list`.
+    """
+
+    from app.instance.active_context_service import (
+        ACTION_DIMENSION_RESOLVE,
+        PERMISSION_SELECTION_MANAGE,
+        WRITE_CLASS_READ,
+        build_authorizer,
+        resolve_principal,
+    )
+    from app.instance.vault_dimensions import VaultDimensionError
+
+    registry_path = Path(args.registry_path)
+    service = open_vault_dimension_service(registry_path)
+    try:
+        if args.command == "dimension-list":
+            payload: dict[str, object] = {
+                "dimensions": [
+                    dimension.redacted() for dimension in service.list()
+                ]
+            }
+        elif args.command == "dimension-resolve":
+            record = open_local_operator_principal_store(registry_path).require()
+            snapshot = service.store.load()
+            resolution = service.resolve(
+                args.dimension_id,
+                # The headless CLI runs on the instance host, so its subject is the
+                # loopback-local delegated role -- resolved from the same durable record
+                # the API path uses, never invented here.
+                principal=resolve_principal(record, "trusted_loopback"),
+                action=ACTION_DIMENSION_RESOLVE,
+                write_class=WRITE_CLASS_READ,
+                required_permission=PERMISSION_SELECTION_MANAGE,
+                authorizer=build_authorizer(snapshot),
+                snapshot=snapshot,
+            )
+            payload = {
+                **resolution.redacted(),
+                "members": [
+                    {
+                        "vault_binding_id": member.vault_binding_id,
+                        "binding_revision": member.binding_revision,
+                        "authorization_epoch": member.authorization_epoch,
+                        "vault_id": member.vault_id,
+                        "local_instance_id": member.local_instance_id,
+                    }
+                    for member in resolution.members
+                ],
+            }
+        elif args.command == "dimension-create":
+            payload = service.create(
+                args.dimension_id,
+                display_name=args.display_name,
+                members=args.vault_binding_id or [],
+            ).as_dict()
+        elif args.command == "dimension-rename":
+            payload = service.rename(
+                args.dimension_id, display_name=args.display_name
+            ).as_dict()
+        elif args.command == "dimension-set-members":
+            payload = service.set_members(
+                args.dimension_id, args.vault_binding_id or []
+            ).as_dict()
+        elif args.command == "dimension-remove-member":
+            payload = service.remove_member(
+                args.dimension_id, args.vault_binding_id_value
+            ).as_dict()
+        else:
+            payload = service.delete(args.dimension_id).as_dict()
+    except (VaultDimensionError, PrincipalPreflightError, RegistryError) as exc:
+        print(
+            json.dumps(
+                {"ok": False, "consumer": args.consumer, "error": str(exc)},
+                sort_keys=True,
+            )
+        )
+        return 1
+    print(json.dumps({"ok": True, "consumer": args.consumer, **payload}, sort_keys=True))
     return 0
 
 
@@ -3246,6 +3371,20 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--consumer", default=None)
         if name == "default-vault-set":
             command.add_argument("--vault-binding-id", required=True)
+    for name in DIMENSION_COMMANDS:
+        command = subparsers.add_parser(name)
+        command.add_argument("--registry-path", type=Path, required=True)
+        command.add_argument("--consumer", default=None)
+        if name != "dimension-list":
+            command.add_argument("--dimension-id", required=True)
+        if name in {"dimension-create", "dimension-rename"}:
+            command.add_argument("--display-name", required=True)
+        if name in {"dimension-create", "dimension-set-members"}:
+            # Repeatable and order-preserving: membership order is the operator's stated
+            # order and is stored exactly as given.
+            command.add_argument("--vault-binding-id", action="append", default=[])
+        if name == "dimension-remove-member":
+            command.add_argument("--vault-binding-id-value", required=True)
     for name in PRINCIPAL_COMMANDS:
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
@@ -3292,6 +3431,8 @@ def main(argv: list[str] | None = None) -> int:
         "default-vault-clear",
     }:
         return _default_vault_command(args)
+    if args.command in set(DIMENSION_COMMANDS):
+        return _dimension_command(args)
     if args.command in set(PRINCIPAL_COMMANDS):
         return _principal_command(args)
     if args.command == "read-revision":

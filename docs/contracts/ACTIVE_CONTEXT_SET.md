@@ -1,5 +1,6 @@
-State: V1 runtime seam shipped for request/session selection (MVR-03); production request-carrier
-propagation and binding-keyed persistence remain target state.
+State: V1 runtime seam shipped for request/session selection (MVR-03) with non-authoritative
+dimension membership shipped by MVR-04 (#3858); production request-carrier propagation and
+binding-keyed persistence remain target state.
 Doc role: Contract
 Authority: Owns the ActiveContextSet seam for WSP.
 Owner subsystem: WSP - Workspace, Scope & Principal Context
@@ -29,8 +30,14 @@ canonical `"default"` fallback, `sphere_memberships`, `situated_identity`,
 `registry_revision`, snapshot `authorization_epoch`, `selection_provenance`,
 non-reversible `selection_capability_digest`, `topology_posture`, `expires_at`, and a typed
 `posture` (`healthy` | `degraded`) with a bounded `degraded_reason`.
-`dimension_filter` is present but **sealed absent** until MVR-04 supplies its durable
-dimension registry; no endpoint may set it and no client string can become a dimension.
+`dimension_filter` is shipped by MVR-04 (#3858) as the typed `DimensionFilter` provenance
+record — the resolved `dimension_id` plus its `dimension_revision`, and nothing else. It is
+absent for an explicitly enumerated selection. The revision is recorded provenance, not a
+shipped staleness check: nothing re-reads it against current registry truth. What protects a
+selection whose dimension changed underneath it is the ordinary per-binding GOV
+authorization that runs on every resolution. No client string can become one: the only
+producer is the server-side resolver over an id already stored in the instance registry, and
+it is never re-expanded, so it cannot widen a snapshot.
 
 Shipped behaviour:
 
@@ -51,8 +58,12 @@ Shipped behaviour:
 - **Server-derived context only.** The production endpoints
   (`POST`/`PUT`/`GET`/`DELETE /api/companion/active-context/selection`) accept explicit
   binding-selection intent and nothing else. A client-authored workspace, scope, sphere
-  membership, situated identity, principal, action, permission, or dimension payload is
-  rejected with `422`, never silently ignored. Workspace, scope, spheres, and situated
+  membership, situated identity, principal, action, permission, or arbitrary dimension
+  projection is rejected with `422`, never silently ignored. MVR-04 adds exactly one further
+  admissible input: one `dimension_id` that already exists in the instance registry, which the
+  server resolves through the locked dimension service into the same explicit binding set. An
+  unknown, stale, or unauthorized member fails the whole request; explicit bindings combined
+  with a `dimension_id` are refused rather than merged. Workspace, scope, spheres, and situated
   identity are derived by `app/instance/active_context_service.py` from the authenticated WSP
   context; principal comes from auth/GOV. Workspace is never inferred from vault, path,
   scope, or principal.
@@ -77,9 +88,18 @@ Shipped behaviour:
   `docs/SECURITY.md :: Security` for the shipped credential/loopback/proxy subject mapping,
   the separate instance identity, and fail-closed principal resolution.
 
-Still target state after MVR-03: production request-header carrier propagation
-(`X-Active-Context-Session` / `X-Active-Context-Override`) is owned by MVR-05B (#3860),
-binding-keyed persistence by MVR-05A, and dimension membership by MVR-04.
+## Shipped dimension membership (MVR-04, #3858)
+
+Durable, non-authoritative grouping over registered bindings, owned by
+`docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Dimensions` and implemented in
+`app/instance/vault_dimensions.py`. Resolution is all-or-nothing and authorizes every member
+independently through the same `app/governance/binding_authority.py` seam, with the calling
+contract's own decision inputs; the dimension is never one of them. What a snapshot stores is the
+resolved explicit binding set plus `dimension_filter` provenance — a dimension grants nothing.
+
+Still target state after MVR-04: production request-header carrier propagation
+(`X-Active-Context-Session` / `X-Active-Context-Override`) is owned by MVR-05B (#3860) and
+binding-keyed persistence by MVR-05A.
 
 ## Inputs
 

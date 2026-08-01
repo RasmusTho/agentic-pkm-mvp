@@ -721,3 +721,240 @@ def test_mvr02_default_survives_scalar_projection_round_trip(tmp_path) -> None:
         runtime.merge_previous_scalar_image(divergent)
     assert runtime.layout.registry_path.read_bytes() == payload_before
     assert runtime.registry.load().default_vault_binding_id == second.vault_binding_id
+
+
+def _mvr04_dimension_service(runtime):
+    """The MVR-04 production dimension producer over this runtime's registry."""
+
+    from app.instance.runtime import open_vault_dimension_service
+
+    return open_vault_dimension_service(runtime.layout.registry_path)
+
+
+def test_mvr04_dimensions_survive_principal_capable_rollback_round_trip(tmp_path) -> None:
+    """MVR-04 (#3858): dimensions are unknown state to a pre-MVR-04 image, and survive.
+
+    Contract: docs/MULTI_VAULT_RUNTIME/GROUP_VAULT_BINDINGS_BY_DIMENSION.md.
+
+    The old image here is MVR-03-capable but pre-MVR-04: it never learned the dimension
+    schema. Two things therefore have to hold. Its scalar projection must *omit* dimensions
+    entirely rather than flattening or guessing them, and any registry mutation it can
+    still execute at that runtime floor -- an explicit instance-default change, which
+    MVR-02 shipped -- must carry the complete dimension state through untouched, including
+    member order.
+
+    It deliberately does not pretend the still-dormant registration-removal command can
+    run: that stays `capability_not_ready` until MVR-06B, and this test asserts that rather
+    than routing around it.
+    """
+
+    from app.instance.default_vault import InstanceDefaultVaultService
+    from app.instance.vault_dimensions import parse_dimensions
+    from app.instance.vault_registry import _split_rendered
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    runtime, first = _active_runtime(tmp_path)
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    second = runtime.production_register(second_root, producer="api")
+    third_root = tmp_path / "third"
+    third_root.mkdir()
+    third = runtime.production_register(third_root, producer="api")
+
+    # Ordered, deliberately non-alphabetical membership across two dimensions.
+    dimensions = _mvr04_dimension_service(runtime)
+    dimensions.create(
+        "work",
+        display_name="Work",
+        members=[third.vault_binding_id, first.vault_binding_id],
+    )
+    dimensions.create("reading", display_name="Reading", members=[second.vault_binding_id])
+    before = parse_dimensions(runtime.registry.load().extensions)
+    assert before["work"].members == (third.vault_binding_id, first.vault_binding_id)
+
+    # -- a mutation the pre-MVR-04 runtime floor *can* execute ------------------------
+    # An MVR-03-capable image knows `set_instance_default` (MVR-02) and knows nothing about
+    # dimensions. It rewrites the whole registry document, so this is the real test of
+    # unknown-field preservation at that floor.
+    service = InstanceDefaultVaultService(
+        runtime.registry,
+        capability=_STORAGE_MUTATION_CAPABILITY,
+        emit_event=lambda receipt: "",
+    )
+    service.set(second.vault_binding_id)
+    after_default = runtime.registry.load()
+    assert after_default.default_vault_binding_id == second.vault_binding_id
+    # Every dimension, every display name, every revision, and every member order intact.
+    assert parse_dimensions(after_default.extensions) == before
+    registrations_before = dict(after_default.registrations)
+
+    # -- the scalar projection a pre-MVR-04 image reads carries no dimensions ----------
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _start_scalar_runtime(runtime, first, Path(first.path), rollback_path)
+    projected, _ = _split_rendered(
+        rollback_path.read_text(encoding="utf-8"), rollback_path
+    )
+    assert "dimensions" not in projected
+    assert "vaultDimensions" not in projected
+    assert set(projected["knownVaults"]) == {first.ref}
+    assert "work" not in rollback_path.read_text(encoding="utf-8")
+    # The authoritative registry is untouched by projection: the complete dimension state
+    # stays immutable while the old image is live.
+    assert parse_dimensions(runtime.registry.load().extensions) == before
+
+    # -- and comes back exactly on roll-forward ---------------------------------------
+    # The old image changed nothing it could see, so every registration must restore
+    # exactly and every dimension with it.
+    proof, owner_inventory, proof_path = _deployment_authority(runtime, rollback_path)
+    assert (
+        _roll_forward_scalar_rollback(
+            channel=runtime.layout.channel_id,
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=owner_inventory,
+            quiescence_proof_path=proof_path,
+        )
+        == 0
+    )
+    merged = runtime.registry.load()
+    assert parse_dimensions(merged.extensions) == before
+    assert merged.registrations == registrations_before
+    assert merged.default_vault_binding_id == second.vault_binding_id
+    _finish_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=rollback_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "mvr04-roundtrip-backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    # -- registration removal is still dormant; this test does not pretend otherwise ---
+    frozen = runtime.layout.registry_path.read_bytes()
+    with pytest.raises(CapabilityNotReadyError):
+        runtime.registry.remove_registration(third.vault_binding_id)
+    assert runtime.layout.registry_path.read_bytes() == frozen
+
+
+def test_mvr04_rollforward_preserves_dimensions_across_default_mutation(tmp_path) -> None:
+    """MVR-04 (#3858): roll-forward keeps the complete unknown dimension set.
+
+    Contract: docs/MULTI_VAULT_RUNTIME/GROUP_VAULT_BINDINGS_BY_DIMENSION.md.
+
+    The previous image mutates only what it can see, then the new image rolls forward. The
+    merge reconciles the default through the normal MVR-02 lineage and must carry the whole
+    dimension set across unchanged -- inventing no removal and pruning no member, including
+    members of dimensions the mutation never touched.
+    """
+
+    from app.instance.default_vault import InstanceDefaultVaultService
+    from app.instance.vault_dimensions import parse_dimensions
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    runtime, first = _active_runtime(tmp_path)
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    second = runtime.production_register(second_root, producer="api")
+    third_root = tmp_path / "third"
+    third_root.mkdir()
+    third = runtime.production_register(third_root, producer="api")
+
+    dimensions = _mvr04_dimension_service(runtime)
+    dimensions.create(
+        "work",
+        display_name="Work",
+        members=[third.vault_binding_id, first.vault_binding_id, second.vault_binding_id],
+    )
+    dimensions.create("untouched", display_name="Untouched", members=[second.vault_binding_id])
+
+    # The new-schema explicit default the scalar image never sees.
+    InstanceDefaultVaultService(
+        runtime.registry,
+        capability=_STORAGE_MUTATION_CAPABILITY,
+        emit_event=lambda receipt: "",
+    ).set(second.vault_binding_id)
+    before = parse_dimensions(runtime.registry.load().extensions)
+
+    rollback_path = tmp_path / "rollback" / "app-local.md"
+    _start_scalar_runtime(runtime, first, Path(first.path), rollback_path)
+
+    # The previous image mutates the one binding it can see.
+    rollback = AppLocalSettingsStore(rollback_path)
+    settings = rollback.load()
+    selected = settings.known_vaults[first.ref]
+    settings.known_vaults[first.ref] = KnownVaultRef(
+        ref=selected.ref,
+        path=selected.path,
+        vault_id=selected.vault_id,
+        vault_name="Renamed on the pre-MVR-04 image",
+        local_instance_id=selected.local_instance_id,
+        last_opened_at="2026-08-01T00:00:00Z",
+    )
+    rollback.save(settings)
+
+    proof, owner_inventory, proof_path = _deployment_authority(runtime, rollback_path)
+    assert (
+        _roll_forward_scalar_rollback(
+            channel=runtime.layout.channel_id,
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            legacy_path=rollback_path,
+            inventory_path=owner_inventory,
+            quiescence_proof_path=proof_path,
+        )
+        == 0
+    )
+    merged = runtime.registry.load()
+
+    # The default is reconciled through the normal MVR-02 lineage -- restored from the
+    # new-schema value with its provenance intact, not inferred from the returning
+    # last-active projection. These are the assertions the sibling MVR-02 test makes, kept
+    # here so MVR-04 cannot quietly weaken the lineage it claims to reconcile through.
+    from app.instance.vault_registry import DEFAULT_PROVENANCE_EXPLICIT
+
+    assert merged.default_vault_binding_id == second.vault_binding_id
+    assert merged.default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
+    assert merged.last_active_vault_ref == first.ref
+    assert merged.last_active_vault_ref != second.ref
+    assert merged.registrations[first.vault_binding_id].vault_name == (
+        "Renamed on the pre-MVR-04 image"
+    )
+
+    # The complete dimension set survives, with ordered membership intact. No removal was
+    # invented for a binding the old image never mentioned, and the dimension the mutation
+    # never touched is byte-identical.
+    after = parse_dimensions(merged.extensions)
+    assert after == before
+    assert after["work"].members == (
+        third.vault_binding_id,
+        first.vault_binding_id,
+        second.vault_binding_id,
+    )
+    assert after["untouched"].members == (second.vault_binding_id,)
+    assert all(dimension.last_repair is None for dimension in after.values())
+    assert set(merged.registrations) == {
+        first.vault_binding_id,
+        second.vault_binding_id,
+        third.vault_binding_id,
+    }
+
+    _finish_instance_state_deployment(
+        channel=runtime.layout.channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=rollback_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "mvr04-backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    # Dimension administration still works after roll-forward, on the merged revision.
+    dimensions.set_members("work", [first.vault_binding_id, second.vault_binding_id])
+    assert parse_dimensions(runtime.registry.load().extensions)["work"].members == (
+        first.vault_binding_id,
+        second.vault_binding_id,
+    )

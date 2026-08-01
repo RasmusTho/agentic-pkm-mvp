@@ -131,6 +131,19 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "`python -m app.instance.runtime default-vault-set` command unusable on a bare "
         "instance that has no configured outbox at all"
     ),
+    ("app/instance/vault_dimensions.py", "emit_dimension_mutation_event"): (
+        "MVR-04 (#3858): identical durability posture to the MVR-02 default mutation "
+        "above, and for the same reason. set_dimension_state commits the new membership "
+        "to the instance-state volume under the registry writer lock BEFORE this runs, so "
+        "the durable registry revision is the compensating sink; the Multi-Vault Runtime "
+        "cross-task invariant is that background supervisors reconcile durable registry "
+        "revisions, never event delivery. The event is additionally non-authoritative by "
+        "construction — a dimension grants nothing, so a dropped mirror cannot cost a "
+        "consumer any authority decision. No caller derives a success signal from the "
+        "return. Classifying it required_db=True would make the headless "
+        "`python -m app.instance.runtime dimension-*` commands unusable on a bare "
+        "instance that has no configured outbox at all"
+    ),
 }
 
 

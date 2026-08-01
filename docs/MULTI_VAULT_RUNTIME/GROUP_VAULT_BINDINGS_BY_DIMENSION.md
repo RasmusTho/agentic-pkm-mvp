@@ -11,6 +11,31 @@ can_parallelize_with: []
 
 # Group Vault Bindings By Dimension
 
+State: **Delivered** by #3858. Shipped: the versioned durable dimension schema in the instance
+registry with its own locked producer, the authenticated Companion API `/api/instance/dimensions`
+and headless `python -m app.instance.runtime dimension-*` commands, all-or-nothing member
+resolution with independent per-binding GOV authorization, `dimension_id` as selection intent on the
+MVR-03 create/replace endpoints with the `dimension_filter` seam unsealed as typed provenance, the
+transactional membership-repair hook in the shared registry removal transaction, and dimension
+preservation across the MVR-01 rollback/roll-forward lineage. Shipped truth lives in
+`docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Dimensions` and
+`docs/contracts/ACTIVE_CONTEXT_SET.md :: Shipped dimension membership (MVR-04, #3858)`.
+**Not shipped here**, and both exclusions follow from the same still-dormant capability:
+
+- Production registration removal stays `capability_not_ready` until MVR-06B activates the consumer
+  floor, so this slice installs the transactional repair hook rather than enabling the command it
+  will run under.
+- The `What This Task Does` bullet about importing *a valid old-image registration removal* in the
+  same locked transaction that repairs membership is **not implemented and is not exercisable at
+  this runtime floor.** `merge_scalar_rollback` refuses any scalar fork whose `knownVaults` set
+  differs from the single validated rollback target, so an old image cannot express a registration
+  removal at all; the merge rebuilds registrations from current truth and can neither add nor drop a
+  key. There is therefore no dangling-member hazard today — the removal is refused, not
+  mis-imported. AC 9 states this limit explicitly ("It does not pretend the still-dormant
+  registration-removal command can run") and the tests match the ACs rather than that bullet. The
+  bullet becomes implementable only once MVR-06B makes registration removal a real command, and it
+  belongs to whichever slice does that.
+
 ## Purpose
 
 #2143 names dimensions as the owner's grouping axis. Existing scope, sphere, confidentiality,

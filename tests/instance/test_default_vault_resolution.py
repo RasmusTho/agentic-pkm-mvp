@@ -298,7 +298,6 @@ def test_migration_never_infers_a_default_on_a_post_mvr02_registry(tmp_path) -> 
     service.set(first.vault_binding_id)
     revision_with_default = store.load().revision
     runtime.registry.set_extension_state(
-        dimensions={"focus": [first.vault_binding_id]},
         principal_state={"operator": "local"},
         background_state={"mode": "compatibility"},
         runtime_floors={"registry": "01b"},

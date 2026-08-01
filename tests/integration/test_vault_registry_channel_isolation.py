@@ -337,7 +337,6 @@ def test_store_and_ledger_mutators_reject_uncapable_callers(tmp_path) -> None:
             expected_revision=snapshot.revision,
         ),
         lambda: runtime.registry.set_extension_state(
-            dimensions={},
             principal_state={},
             background_state={},
             runtime_floors={},

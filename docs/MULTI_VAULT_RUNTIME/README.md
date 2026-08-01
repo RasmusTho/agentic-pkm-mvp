@@ -3,7 +3,9 @@
 State: Active capability specification. Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical
 substrate and authority cutover, MVR-02 (#3856) explicit instance default, and MVR-03 (#3857, partial) the
 versioned request/session `ActiveContextSet` seam with its selection store, delegated-principal
-producer, and fail-closed runtime floor — whose deployment-wrapper activation is still open. Task 04 onward remains unstarted, so no global "multi-vault delivered"
+producer, and fail-closed runtime floor — whose deployment-wrapper activation is still open — and
+MVR-04 (#3858) non-authoritative dimension membership with all-or-nothing member resolution.
+Task 05 onward remains unstarted, so no global "multi-vault delivered"
 claim is allowed: production request-carrier propagation, binding-keyed persistence, and background
 lifecycle binding are still target state.
 Parent validation hub **#2143** remains blocked and must never be claimed as an implementation
@@ -210,10 +212,20 @@ Raw bearer IDs are never logged, receipted, or used directly as cache-key materi
 
 ### Dimensions
 
+Shipped by MVR-04 (#3858); owner contract
+`docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Dimensions`.
+
 `dimension_id` is an instance-local opaque identifier with display metadata and ordered
 `vault_binding_id` membership. It is useful for filtering or selecting several bindings. It does not grant access,
 merge identities, choose a default, or imply a master/satellite topology. GOV evaluates every
 member binding independently. Removing a dimension does not remove its vault registrations.
+
+Resolution is all-or-nothing: an unknown, stale, removed, or unauthorized member fails the whole
+production resolution, never an authorized subset. A dimension may seed an explicit many-binding
+selection, and what the immutable snapshot stores is the resolved explicit binding set plus the
+dimension revision as provenance. Registration removal transactionally strips that binding from
+every dimension in the same locked registry transaction; production registration removal itself
+stays `capability_not_ready` until MVR-06B.
 
 ## Reconciliation — do not duplicate
 
