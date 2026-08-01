@@ -466,6 +466,14 @@ class LocalOperatorPrincipalStore:
         _require_storage_mutation_capability(_capability)
         with self._locked():
             current = self.require()
+            if subject not in current.subjects:
+                # Reporting success for a subject that was never bound would be a false
+                # governed receipt, and the revision bump would silently invalidate any
+                # roll-forward export already taken at the current revision.
+                raise PrincipalPreflightError(
+                    f"subject {subject} is not bound to the local delegated role",
+                    provisioning_action="revoke only a currently bound subject",
+                )
             remaining = tuple(item for item in current.subjects if item != subject)
             if not remaining:
                 raise PrincipalPreflightError(

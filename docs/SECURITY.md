@@ -26,9 +26,10 @@ Shipped mapping — `app/instance/local_operator_principal.py`, `app/auth.py`:
   monotonic revision, and migration provenance.
 - `local_operator_role_id` is CSPRNG-minted and opaque. It is **not derived** from the
   credential, from its fingerprint, from `appInstallId`, or from any path.
-- Three **server-derived** subjects map to that one role: `trusted_loopback` (bound at
-  bootstrap when the deployment declares a loopback-local listener, and re-proved on **every
-  request** from the effective client host before it is used),
+- Three **server-derived** subjects map to that one role: `trusted_loopback` (bindable when
+  the operator declares a loopback-local listener at bootstrap, and re-proved on **every
+  request** from the effective client host before it is ever used — the request-path proof is
+  what enforces it, the bootstrap flag only decides whether the subject exists),
   `trusted_companion_proxy` (the immediate peer is the server-configured,
   middleware-validated Companion UI container), and
   `api_key_credential` (the configured #2223 key, matched by non-reversible fingerprint —

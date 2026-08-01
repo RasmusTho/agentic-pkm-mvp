@@ -377,6 +377,15 @@ def test_configured_key_preserves_local_and_trusted_proxy_subjects(
     assert revoked.local_operator_role_id == record.local_operator_role_id
     assert revoked.revision == record.revision + 1
 
+    # Revoking a subject that was never bound is refused rather than reported as success:
+    # a false governed receipt is bad on its own, and the revision bump would silently
+    # invalidate any roll-forward export already taken at the current revision.
+    with pytest.raises(PrincipalPreflightError, match="is not bound"):
+        store.revoke_subject(
+            "trusted_companion_proxy", _capability=STORAGE_MUTATION_CAPABILITY
+        )
+    assert store.require().revision == revoked.revision
+
 
 def test_fresh_channel_bootstrap_and_fixtures_use_the_same_producer(tmp_path) -> None:
     """New channel bootstrap and test fixtures produce the record the same way.

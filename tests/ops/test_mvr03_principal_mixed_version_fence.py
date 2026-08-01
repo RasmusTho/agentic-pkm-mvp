@@ -10,7 +10,10 @@ Two separate obligations, deliberately kept as two tests:
 
 from __future__ import annotations
 
+import inspect
 import json
+from contextlib import redirect_stdout
+from io import StringIO
 
 import pytest
 import yaml
@@ -33,6 +36,8 @@ from app.instance.principal_fence import (
     record_principal_floor,
     require_complete_fence,
 )
+import app.instance.runtime as runtime_module
+from app.instance.runtime import main as instance_runtime_main
 from app.instance.runtime import open_local_operator_principal_store
 from tests._mvr03_principal_harness import (
     complete_inventory,
@@ -40,7 +45,11 @@ from tests._mvr03_principal_harness import (
     quiesced_producers,
     record_floor_through_cli,
 )
-from tests._mvr_default_vault_harness import REPO_ROOT, active_runtime
+from tests._mvr_default_vault_harness import (
+    REPO_ROOT,
+    active_runtime,
+    deployment_authority,
+)
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
@@ -322,34 +331,34 @@ def test_principal_fence_inventory_covers_every_enabled_auth_producer(tmp_path) 
         == digest
     )
 
-    # -- the shipped deployment wrapper actually invokes the producer -------------------
-    # An ordering assertion against the REAL shell wrapper, mirroring MVR-01B's
-    # `test_real_deployment_wrapper_probes_all_domains_twice_before_proof`. Without this the
-    # CLI could exist while no deployment ever calls it -- which is how the round-1 P0
-    # happened.
+    # -- the deployment wrapper is deliberately NOT wired yet ---------------------------
+    # Honest scope boundary, asserted so it cannot drift into an accidental claim. The
+    # floor/fence mechanism is implemented and proven here, but automated activation from
+    # `scripts/deploy_channel.sh` is NOT shipped: it needs credential/listener posture
+    # plumbed into the `instance-state-init` one-shot and the native launcher paths mounted
+    # into it, neither of which this slice delivers. Three independent review rounds found
+    # blockers in that link; it is handed back as bounded follow-up work rather than shipped
+    # half-wired, because a cutover that records the floor and then fails to write the role
+    # leaves the instance fenced and rollback-blocked.
+    #
+    # The operator path today is the explicit governed commands documented in
+    # `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime principal floor`.
     wrapper = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text(
         encoding="utf-8"
     )
-    assert "principal-record-floor" in wrapper
-    assert "principal-bootstrap" in wrapper
-    assert "MVR03_PRINCIPAL_CUTOVER" in wrapper, (
-        "advancing the floor must be explicit, never an inferred side effect of deploying "
-        "a capable image"
+    assert "principal-record-floor" not in wrapper, (
+        "wiring the cutover into the deployment wrapper requires the posture and launcher "
+        "mounts named in the MVR-03 follow-up; do not enable it without them"
     )
-    # It runs inside the stopped window: after the quiescence proof, before finish.
-    assert wrapper.index("deployment-prove") < wrapper.index("principal-record-floor")
-    assert wrapper.index("principal-record-floor") < wrapper.index("principal-bootstrap")
-    assert wrapper.index("principal-bootstrap") < wrapper.rindex(
-        "python -m app.instance.runtime deployment-finish"
+
+    # The ordering hazard that made half-wiring dangerous is closed in code regardless:
+    # `principal-record-floor` preflights the posture the subsequent role write will use, so
+    # a floor can never be recorded on an instance where the role could not then be written.
+    floor_source = inspect.getsource(runtime_module._principal_command)
+    assert "preflight_auth_posture(" in floor_source
+    assert floor_source.index("preflight_auth_posture(") < floor_source.index(
+        "record_principal_floor("
     )
-    # It consumes THIS window's proof and drained-owner inventory rather than probing again.
-    floor_call = wrapper[
-        wrapper.index("principal-record-floor") : wrapper.index("principal-bootstrap")
-    ]
-    assert "deployment-quiescence-proof.json" in floor_call
-    assert "--inventory-path" in floor_call
-    # Sources are explicit mounted paths: the runtime image has no repo checkout.
-    assert "--compose-base" in floor_call and "--native-producer-root" in floor_call
 
     # -- fail-closed inputs to the reworked inventory ------------------------------------
     good_proof = {"channel_id": "prod", "nonce": "n1"}
@@ -387,6 +396,78 @@ def test_principal_fence_inventory_covers_every_enabled_auth_producer(tmp_path) 
                 compose_path=compose_path,
                 repo_root=REPO_ROOT,
             )
+
+    # -- the floor requires the proved stopped window ------------------------------------
+    # Without this the whole "MVR-03 runs inside MVR-01B's stopped window" claim is prose:
+    # the floor could be recorded on a live instance with every auth producer running.
+    runtime, _, _ = active_runtime(tmp_path / "lease")
+    proof_path = runtime.ledger.root / "deployment-quiescence-proof.json"
+    owners_path = runtime.ledger.root / "legacy-owner-inventory.json"
+    owners_path.write_text(
+        json.dumps(
+            {
+                "inventory_complete": True,
+                "writers_drained": True,
+                "validated_after_quiescence": True,
+                "source_probe_count": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    owners_path.chmod(0o600)
+
+    def _floor_cli(nonce: str, channel: str = "prod") -> dict:
+        proof_path.write_text(
+            json.dumps({"channel_id": channel, "nonce": nonce}), encoding="utf-8"
+        )
+        proof_path.chmod(0o600)
+        buffer = StringIO()
+        with redirect_stdout(buffer):
+            code = instance_runtime_main(
+                [
+                    "principal-record-floor",
+                    "--channel",
+                    channel,
+                    "--registry-path",
+                    str(runtime.layout.registry_path),
+                    "--host-global-root",
+                    str(runtime.ledger.root),
+                    "--inventory-path",
+                    str(owners_path),
+                    "--quiescence-proof-path",
+                    str(proof_path),
+                    "--compose-base",
+                    str(compose_path),
+                    "--native-producer-root",
+                    str(REPO_ROOT),
+                    "--loopback-listener",
+                ]
+            )
+        payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
+        payload["_exit_code"] = code
+        return payload
+
+    # No deployment lease at all: the window was never opened.
+    no_lease = _floor_cli("n-absent")
+    assert no_lease["_exit_code"] == 1
+    assert "proved deployment lease" in no_lease["error"]
+    assert not principal_floor_recorded(runtime.registry)
+
+    # A real window, but the nonce does not match this proof.
+    proof, _ = deployment_authority(runtime, runtime.layout.root / "missing-legacy.md")
+    mismatched = _floor_cli("not-the-lease-nonce")
+    assert mismatched["_exit_code"] == 1
+    assert not principal_floor_recorded(runtime.registry)
+
+    # The right window, wrong channel.
+    wrong_channel = _floor_cli(proof.nonce, channel="dev")
+    assert wrong_channel["_exit_code"] == 1
+    assert not principal_floor_recorded(runtime.registry)
+
+    # Matching proved lease for this channel and nonce: accepted.
+    accepted = _floor_cli(proof.nonce)
+    assert accepted["_exit_code"] == 0, accepted
+    assert principal_floor_recorded(runtime.registry)
 
     # One probe is not production truth, and it is rejected at the fence gate.
     single_probe = inventory_from_quiescence(

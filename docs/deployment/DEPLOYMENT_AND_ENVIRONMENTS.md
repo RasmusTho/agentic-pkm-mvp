@@ -313,14 +313,21 @@ because its auth producers are the same processes MVR-01B already fences:
    absent.
 5. `deployment-finish` closes the window.
 
-Advancing the floor is **explicit**: the wrapper runs steps 3–4 only under
-`MVR03_PRINCIPAL_CUTOVER=1`. Deploying a capable image does not advance it, because advancing
-it blocks every credential-only rollback image afterwards.
-
 `require_complete_fence` refuses steps 3–4 if the inventory is incomplete, if writers were not
 drained, if the inventory was not revalidated after quiescence, if it was probed once, if any
-producer role is missing, or if operations are not fenced. A crash before the floor leaves old
-auth state authoritative and the migration untouched.
+producer role is missing, or if operations are not fenced. `principal-record-floor` also
+refuses without the proved deployment lease for this channel and nonce, and it preflights the
+auth posture the subsequent role write will use — so a floor can never be recorded on an
+instance where the role could not then be written. A crash before the floor leaves old auth
+state authoritative and the migration untouched.
+
+> **Not yet automated.** `scripts/lib/instance_state_deployment.sh` does **not** invoke steps
+> 3–4. Wiring them requires the credential/listener posture and the native launcher paths to be
+> available inside the `instance-state-init` one-shot, which that service does not currently
+> have; a half-wired cutover would record the floor and then fail the role write, leaving the
+> instance fenced and rollback-blocked. Until that plumbing ships, an operator runs steps 3–4
+> explicitly inside the stopped window using the commands below. This is tracked as bounded
+> follow-up work on #3857.
 
 **Rollback: credential-only images are blocked.** While the floor exists,
 `_preflight_scalar_rollback` raises `CapabilityNotReadyError` before materializing any legacy
@@ -337,12 +344,30 @@ divergent, or ambiguous auth state fails closed without overwriting either linea
 may be lowered only by a later explicitly verified reversible migration — never by a scalar
 rollback.
 
-**Operator invocation.** Steps 1–5 above are performed by the existing deployment wrapper;
-the operator opts in rather than running them by hand:
+**Cutover commands (run inside the stopped window, between `deployment-prove` and
+`deployment-finish`).** Both refuse outside that window.
 
 ```bash
-MVR03_PRINCIPAL_CUTOVER=1 ./scripts/deploy_channel.sh <channel> ...
+REG=/app/instance-state/agentic-pkm/vault-registry.md
+OWN=/app/instance-ownership
+
+python -m app.instance.runtime principal-record-floor \
+  --channel "$CHANNEL" --registry-path "$REG" --host-global-root "$OWN" \
+  --inventory-path "$OWN/legacy-owner-inventory.json" \
+  --quiescence-proof-path "$OWN/deployment-quiescence-proof.json" \
+  --compose-base <mounted docker-compose.yaml> \
+  --native-producer-root <mounted repo root> \
+  [--loopback-listener]
+
+python -m app.instance.runtime principal-bootstrap \
+  --registry-path "$REG" [--loopback-listener] [--existing-install]
 ```
+
+The posture is **read** from server configuration (`API_KEY`, `COMPANION_UI_PROXY_HOSTS`), so
+the subjects bound at bootstrap are the ones the request path will actually admit.
+`--loopback-listener` declares that this deployment exposes a loopback-local listener, which
+makes `trusted_loopback` a *bindable* subject; every request still proves loopback
+independently in `app/auth.py::resolve_auth_subject` before that subject is used.
 
 **Governed commands (run against a live instance, outside the cutover window).**
 

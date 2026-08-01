@@ -111,6 +111,7 @@ def record_floor_through_cli(runtime, *, channel_id: str = "prod") -> dict:
                 str(REPO_ROOT / "docker-compose.yaml"),
                 "--native-producer-root",
                 str(REPO_ROOT),
+                "--loopback-listener",
                 "--consumer",
                 "bootstrap-init",
             ]

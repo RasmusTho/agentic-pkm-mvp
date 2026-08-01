@@ -2967,6 +2967,48 @@ def _read_credential(args: argparse.Namespace) -> str | None:
     return settings.api_key
 
 
+def _require_proved_deployment_lease(
+    *, host_global_root: Path, channel: str, nonce: object
+) -> dict[str, object]:
+    """Assert the MVR-01B stopped window is live, proved, and bound to this deployment.
+
+    Reuses the same lease shape MVR-01C's roll-forward requires rather than a weaker
+    inline check: schema, channel, proved phase, matching nonce, a stopped-consumer
+    attestation, and the bound inventory digest all have to line up. A weaker check would
+    let the floor be recorded outside any stopped window at all.
+    """
+
+    from app.instance.principal_fence import PrincipalFenceError
+
+    def _refuse() -> PrincipalFenceError:
+        return PrincipalFenceError(
+            "the principal floor requires the proved deployment lease for this channel",
+            provisioning_action=(
+                "run the principal cutover inside the stopped deployment window, after "
+                "deployment-prove and before deployment-finish"
+            ),
+        )
+
+    try:
+        lease = _read_deployment_lease(Path(host_global_root))
+    except (OSError, ValueError, InstanceStatePreflightError, RegistryError) as error:
+        # No window was ever opened, or its lease is unreadable/unsafe. Either way the
+        # floor must not be recorded: a live instance with every auth producer running is
+        # exactly the state the fence exists to exclude.
+        raise _refuse() from error
+    if (
+        lease.get("schema") != _DEPLOYMENT_LEASE_SCHEMA
+        or lease.get("channel_id") != channel
+        or lease.get("phase") != "proved"
+        or lease.get("nonce") != nonce
+        or not lease.get("all_consumers_stopped")
+        or not str(lease.get("inventory_digest") or "").strip()
+        or not isinstance(lease.get("controller"), dict)
+    ):
+        raise _refuse()
+    return lease
+
+
 def _principal_command(args: argparse.Namespace) -> int:
     """Headless MVR-03 delegated-role producers.
 
@@ -3011,19 +3053,19 @@ def _principal_command(args: argparse.Namespace) -> int:
                 Path(args.quiescence_proof_path).read_text(encoding="utf-8")
             )
             owners = json.loads(Path(args.inventory_path).read_text(encoding="utf-8"))
-            lease = _read_deployment_lease(Path(args.host_global_root))
-            if (
-                lease.get("phase") != "proved"
-                or lease.get("channel_id") != args.channel
-                or lease.get("nonce") != proof.get("nonce")
-            ):
-                raise PrincipalFenceError(
-                    "the principal floor requires the proved deployment lease for this "
-                    "channel",
-                    provisioning_action=(
-                        "run the principal cutover inside the stopped deployment window"
-                    ),
-                )
+            _require_proved_deployment_lease(
+                host_global_root=Path(args.host_global_root),
+                channel=args.channel,
+                nonce=proof.get("nonce"),
+            )
+            # Preflight the posture `principal-bootstrap` will use, BEFORE the floor is
+            # recorded. Recording the floor is irreversible for rollback purposes, so a
+            # deployment that records it and then fails to write the role would leave the
+            # instance fenced, rollback-blocked, and principal-less. Refusing here makes
+            # that ordering unreachable rather than merely unlikely.
+            preflight_auth_posture(
+                current_auth_posture(loopback_listener_proven=args.loopback_listener)
+            )
             inventory = inventory_from_quiescence(
                 channel_id=args.channel,
                 quiescence_proof=proof,
@@ -3223,6 +3265,9 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--quiescence-proof-path", type=Path, required=True)
             command.add_argument("--compose-base", type=Path, required=True)
             command.add_argument("--native-producer-root", type=Path, required=True)
+            # The floor preflights the posture the subsequent role write will use, so it
+            # needs the same declaration `principal-bootstrap` takes.
+            command.add_argument("--loopback-listener", action="store_true")
         if name == "principal-revoke-subject":
             command.add_argument(
                 "--subject",
