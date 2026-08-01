@@ -1211,12 +1211,21 @@ def janitor_apply(
                 ),
                 None,
             )
-            pr_state = _pr_state(target_branch, pr_states).get("state")
-            if skipped_reason == "not_merged_to_origin_main" and pr_state == "MERGED":
+            pr = _pr_state(target_branch, pr_states)
+            pr_state = pr.get("state")
+            merged_head = pr.get("head_sha")
+            current_head = run_git(["rev-parse", target_branch], cwd)
+            if (
+                skipped_reason == "not_merged_to_origin_main"
+                and pr_state == "MERGED"
+                and isinstance(merged_head, str)
+                and merged_head == current_head
+            ):
                 selected_branches = [
                     {
                         "branch": target_branch,
                         "merge_proof": "merged_pr",
+                        "merged_pr_head": merged_head,
                     }
                 ]
         if target_branch is None and len(selected) != 1:
@@ -1371,6 +1380,21 @@ def janitor_apply(
                     path=action.get("path"), branch=action.get("branch")
                 ):
                     return False
+                merged_pr_head = action.get("merged_pr_head")
+                if merged_pr_head is not None:
+                    current_head = run_git(["rev-parse", str(action["branch"])], cwd)
+                    if current_head != merged_pr_head:
+                        errors.append(
+                            {
+                                "artifact": "local_branch",
+                                "action": "revalidate_merged_pr_head",
+                                "reason": "target_branch_head_changed",
+                                "branch": action["branch"],
+                                "expected_head": merged_pr_head,
+                                "current_head": current_head,
+                            }
+                        )
+                        return False
                 return apply_git(args, action)
         except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
             errors.append(

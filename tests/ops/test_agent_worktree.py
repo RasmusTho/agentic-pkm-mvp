@@ -5,7 +5,7 @@ import os
 import stat
 import subprocess
 import threading
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import pytest
@@ -163,6 +163,10 @@ def _init_repo_with_tombstoned_branch(
     agent_worktree._mark_generation_removed(record, removed_at=2)
     agent_worktree._write_registry(registry_path, payload)
     return repo, worktree, registry_path, branch, registration["generation"]
+
+
+def _merged_pr_state(repo: Path, branch: str) -> dict[str, str]:
+    return {"state": "MERGED", "head_sha": git_hygiene.run_git(["rev-parse", branch], repo)}
 
 
 def test_registry_write_fsyncs_parent_directory_after_replace(
@@ -388,7 +392,7 @@ def test_targeted_janitor_apply_resumes_removed_generation_branch_cleanup(tmp_pa
     result = agent_worktree.janitor_apply(
         repo,
         registry_path=registry_path,
-        pr_states={branch: {"state": "MERGED"}},
+        pr_states={branch: _merged_pr_state(repo, branch)},
         lease_path=lease_path,
         target_worktree=worktree,
         target_generation=generation,
@@ -447,7 +451,7 @@ def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_cha
     result = agent_worktree.janitor_apply(
         repo,
         registry_path=registry_path,
-        pr_states={branch: {"state": "MERGED"}},
+        pr_states={branch: _merged_pr_state(repo, branch)},
         lease_path=lease_path,
         target_worktree=worktree,
         target_generation=generation,
@@ -495,7 +499,12 @@ def test_targeted_janitor_apply_removed_generation_preserves_closed_unmerged_bra
     result = agent_worktree.janitor_apply(
         repo,
         registry_path=registry_path,
-        pr_states={branch: {"state": "CLOSED"}},
+        pr_states={
+            branch: {
+                "state": "CLOSED",
+                "head_sha": git_hygiene.run_git(["rev-parse", branch], repo),
+            }
+        },
         lease_path=lease_path,
         target_worktree=worktree,
         target_generation=generation,
@@ -506,6 +515,86 @@ def test_targeted_janitor_apply_removed_generation_preserves_closed_unmerged_bra
     assert result["errors"][0]["reason"] == (
         "target_not_exactly_one_reclaimable_tombstone_branch"
     )
+
+
+def test_targeted_janitor_apply_removed_generation_preserves_newer_local_commits(
+    tmp_path,
+) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    merged_pr = _merged_pr_state(repo, branch)
+    tree = git_hygiene.run_git(["rev-parse", f"{branch}^{{tree}}"], repo)
+    newer = git_hygiene.run_git(
+        ["commit-tree", tree, "-p", branch, "-m", "newer local commit"], repo
+    )
+    git_hygiene.run_git(["update-ref", f"refs/heads/{branch}", newer], repo)
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={branch: merged_pr},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=generation,
+    )
+
+    assert result["ok"] is False
+    assert branch in git_hygiene._local_branches(repo)
+    assert git_hygiene.run_git(["rev-parse", branch], repo) == newer
+
+
+def test_targeted_janitor_apply_revalidates_merged_head_inside_final_guard(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    merged_pr = _merged_pr_state(repo, branch)
+    tree = git_hygiene.run_git(["rev-parse", f"{branch}^{{tree}}"], repo)
+    newer = git_hygiene.run_git(
+        ["commit-tree", tree, "-p", branch, "-m", "newer local commit"], repo
+    )
+    original_guard = agent_worktree._locked_removed_generation_branch_authority
+
+    @contextmanager
+    def advance_branch_inside_guard(*args, **kwargs):
+        with original_guard(*args, **kwargs):
+            git_hygiene.run_git(["update-ref", f"refs/heads/{branch}", newer], repo)
+            yield
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_locked_removed_generation_branch_authority",
+        advance_branch_inside_guard,
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={branch: merged_pr},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=generation,
+    )
+
+    assert result["ok"] is False
+    assert branch in git_hygiene._local_branches(repo)
+    assert git_hygiene.run_git(["rev-parse", branch], repo) == newer
+    assert result["errors"] == [
+        {
+            "artifact": "local_branch",
+            "action": "revalidate_merged_pr_head",
+            "reason": "target_branch_head_changed",
+            "branch": branch,
+            "expected_head": merged_pr["head_sha"],
+            "current_head": newer,
+        }
+    ]
 
 
 def test_removed_generation_branch_authority_reserves_target_path(tmp_path) -> None:
