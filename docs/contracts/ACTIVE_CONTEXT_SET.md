@@ -1,17 +1,81 @@
-State: Target-state contract stub; not fully implemented.
-Doc role: Contract stub
-Authority: Owns the target ActiveContextSet seam for WSP.
+State: V1 runtime seam shipped for request/session selection (MVR-03); production request-carrier
+propagation and binding-keyed persistence remain target state.
+Doc role: Contract
+Authority: Owns the ActiveContextSet seam for WSP.
 Owner subsystem: WSP - Workspace, Scope & Principal Context
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-21
+Last reviewed: 2026-08-01
 
 # ActiveContextSet
 
 ## Purpose
 
 Declare the active cognitive context as a versioned set of bindings rather than a scalar active vault.
+
+## Shipped V1 seam (MVR-03, #3857)
+
+`active_context_set.v1` is implemented in `app/vault/active_context_v1.py::ActiveContextSetV1`
+as one immutable, generation-stamped snapshot. The v0 adapter in
+`app/vault/active_context.py` remains the transitional projection for callers that still only
+hold a scalar `VaultContext`; V1 is the same seam versioned forward, not a rival type.
+
+Shipped fields: `context_id`, monotonic `generation`, explicit `WorkspaceState`
+(bound workspace id **or** the typed `no_workspace` state), server-derived `scope` with the
+canonical `"default"` fallback, `sphere_memberships`, `situated_identity`,
+`principal_context`, separate `instance_identity`, zero/one/many immutable
+`source_bindings` each carrying its own `binding_revision` and `authorization_epoch`,
+`registry_revision`, snapshot `authorization_epoch`, `selection_provenance`,
+non-reversible `selection_capability_digest`, `topology_posture`, `expires_at`, and a typed
+`posture` (`healthy` | `degraded`) with a bounded `degraded_reason`.
+`dimension_filter` is present but **sealed absent** until MVR-04 supplies its durable
+dimension registry; no endpoint may set it and no client string can become a dimension.
+
+Shipped behaviour:
+
+- **Selection store.** `app/instance/context_selection.py::ContextSelectionStore` is a
+  TTL-bound, ephemeral, in-process map keyed by a high-entropy opaque server-minted
+  `context_selection_id`. In the current single-user product that id is an expiring **bearer
+  capability**, used *in addition to* the #2223 Companion authentication gate — not a claim
+  of multi-user identity. Possession of a different id is required to reach a different
+  session's selection.
+- **Selection stores no authority.** The record has no action, write class, or permission
+  field. Each request derives those independently from the server-owned endpoint/command
+  contract and passes them to GOV as separate decision inputs, which is what lets one
+  selection serve a separately authorized read and a separately authorized write without an
+  over-broad stored scope or a scope mismatch.
+- **Per-binding GOV.** `app/governance/binding_authority.py` authorizes every member binding
+  independently. A deny raises rather than returning a partial set: no snapshot containing a
+  denied binding is ever reissued.
+- **Server-derived context only.** The production endpoints
+  (`POST`/`PUT`/`GET`/`DELETE /api/companion/active-context/selection`) accept explicit
+  binding-selection intent and nothing else. A client-authored workspace, scope, sphere
+  membership, situated identity, principal, action, permission, or dimension payload is
+  rejected with `422`, never silently ignored. Workspace, scope, spheres, and situated
+  identity are derived by `app/instance/active_context_service.py` from the authenticated WSP
+  context; principal comes from auth/GOV. Workspace is never inferred from vault, path,
+  scope, or principal.
+- **Generation transitions.** Switching a session's bindings advances only that session's
+  generation; other sessions and the instance default are untouched. In-flight work holds an
+  already-resolved immutable snapshot, so there is no in-flight rebinding. A changed binding
+  revision, registry revision, or still-authorizing GOV verdict rotates to a new generation
+  plus a cache-invalidation descriptor before the next snapshot is issued.
+- **Truthful expiry and restart.** A request that omits a selection resolves the explicit
+  instance default or no-vault. A request presenting an expired, unknown, or pre-restart id
+  fails closed with a reselection-required error; it never falls through to a default, to
+  last-active state, or to another session.
+- **Full-context cache identity.** `app/retrieval/context_cache.py` keys entries by every
+  context-affecting input plus the effective settings-bundle digest
+  (`app/vault/settings_bundle.py`) — never by binding plus generation alone. Raw bearer ids
+  are never logged, receipted, or used as cache-key material; only the digest appears.
+- **Principal.** Derived only from the auth/GOV-owned delegated-role or human record; see
+  `docs/SECURITY.md :: Security` for the shipped credential/loopback/proxy subject mapping,
+  the separate instance identity, and fail-closed principal resolution.
+
+Still target state after MVR-03: production request-header carrier propagation
+(`X-Active-Context-Session` / `X-Active-Context-Override`) is owned by MVR-05B (#3860),
+binding-keyed persistence by MVR-05A, and dimension membership by MVR-04.
 
 ## Inputs
 

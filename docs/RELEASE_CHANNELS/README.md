@@ -270,6 +270,31 @@ If this check fails, promotion aborts fail-closed with a reconciliation-PR instr
 - Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR. After merge, prod is updated to the merged `origin/stable` rollback commit before reversible migrations are reversed; `stable-prev` remains the rollback target/anchor.
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
 
+### Runtime floors constrain which images are valid rollback targets
+
+Rollback is a tag-bump, but not every previous tag is a legal target. A shipped **runtime
+floor** recorded in instance state names the minimum image capability that may run, and the
+runtime refuses an older one rather than starting degraded.
+
+Currently recorded floors:
+
+| Floor key | Value | Shipped by | Blocks |
+| --- | --- | --- | --- |
+| `minimumRuntimeSchema` | per MVR-01 | MVR-01B/01C (#3854/#3855) | scalar API/worker startup before the registry/queue schema it needs |
+| `minimumRuntimePrincipal` | `mvr-03` | MVR-03 (#3857) | a credential-only image with no delegated-principal producer |
+
+`minimumRuntimePrincipal` is set once the private delegated operator-role record becomes
+authoritative. A pre-MVR-03 image cannot resolve a principal at all, so
+`app/instance/runtime.py::_require_runtime_floor` refuses it during scalar-rollback preflight,
+*before* any legacy projection is materialized. The compatible path is roll-forward: the prior
+image's final credential/auth revision is exported under lock and reconciled into the same
+role id, and an ambiguous or divergent lineage fails closed without overwriting either side.
+
+A floor is lowered only by a later explicitly verified reversible migration. Rolling the
+`stable` ref back does not lower it, and forward-only acknowledgement at promotion time does
+not authorize crossing it. Full operator preflight and the exact commands live in
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime principal floor`.
+
 ### Vault is not release state
 
 The real prod vault is the operator's authored content. It is **never rewound by a release rollback operation**. Rolling back the `stable` ref and reversing DB migrations does not alter vault notes, companion notes, or any operator-authored file under the vault root.

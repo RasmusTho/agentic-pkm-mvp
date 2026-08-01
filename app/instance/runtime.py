@@ -44,6 +44,11 @@ from app.instance.default_vault import (
     InstanceDefaultVaultService,
     VaultSelectionError,
 )
+from app.instance.local_operator_principal import (
+    MINIMUM_RUNTIME_PRINCIPAL_KEY,
+    LocalOperatorPrincipalStore,
+    PRINCIPAL_RECORD_FILENAME,
+)
 from app.instance.vault_registry import (
     AppLocalSettings,
     AppLocalSettingsStore,
@@ -851,6 +856,17 @@ def _require_runtime_floor(snapshot: RegistrySnapshot, *, scalar_runtime: bool) 
     if scalar_runtime and minimum and minimum != "scalar":
         raise CapabilityNotReadyError(
             "minimum runtime schema blocks scalar API/worker before database or queue startup"
+        )
+    # MVR-03: once the delegated-principal record is authoritative, an earlier
+    # credential-only image cannot be booted. It has no producer for the role record and
+    # would resolve requests with no principal at all, so scalar rollback must refuse it.
+    # Lowering this floor requires a later explicitly verified reversible migration; a
+    # scalar rollback may never do it.
+    principal_floor = str(floors.get(MINIMUM_RUNTIME_PRINCIPAL_KEY) or "").strip()
+    if scalar_runtime and principal_floor:
+        raise CapabilityNotReadyError(
+            "minimum runtime principal blocks a credential-only scalar image; use a "
+            "compatible roll-forward image instead of scalar rollback"
         )
 
 
@@ -2855,6 +2871,36 @@ def open_default_vault_service(registry_path: Path) -> InstanceDefaultVaultServi
     )
 
 
+def local_operator_principal_path(registry_path: Path) -> Path:
+    """The private delegated-role record, a sibling of the registry.
+
+    It lives under the same MVR-01 instance-state boundary (mode-0700 directory,
+    mode-0600 file). Native installs resolve the same layout inside private
+    app-data.
+    """
+
+    return Path(registry_path).parent / PRINCIPAL_RECORD_FILENAME
+
+
+def open_local_operator_principal_store(registry_path: Path) -> LocalOperatorPrincipalStore:
+    """Open the MVR-03 delegated-role store next to the instance registry.
+
+    Mutating methods still require the sealed capability; production callers pass
+    it through `local_operator_storage_capability()` below, matching the MVR-02
+    factory pattern.
+    """
+
+    return LocalOperatorPrincipalStore(local_operator_principal_path(registry_path))
+
+
+def local_operator_storage_capability() -> object:
+    """Hand the sealed storage-mutation capability to MVR-03's durable writers."""
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    return _STORAGE_MUTATION_CAPABILITY
+
+
 def _default_vault_command(args: argparse.Namespace) -> int:
     """Headless MVR-02 get/set/clear through the same service the API uses.
 
@@ -2887,6 +2933,83 @@ def _default_vault_command(args: argparse.Namespace) -> int:
         **receipt.as_dict(),
     }
     print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+def _principal_command(args: argparse.Namespace) -> int:
+    """Headless MVR-03 delegated-role bootstrap / show / rotate.
+
+    This is the CLI half of the "production API and CLI resolve the same record"
+    requirement: it opens the same private store the API router opens, through the
+    same sanctioned factory.
+
+    The receipt is redaction-safe: it carries the opaque role id, the bound
+    subjects, the revision, and the provenance. It never prints the credential,
+    the credential fingerprint, or the record's filesystem path.
+    """
+
+    from app.instance.local_operator_principal import (
+        PrincipalPreflightError,
+        fingerprint_credential,
+        preflight_auth_posture,
+    )
+    from app.instance.principal_fence import principal_floor_recorded
+
+    registry_path = Path(args.registry_path)
+    store = open_local_operator_principal_store(registry_path)
+    try:
+        if args.command == "principal-show":
+            record = store.require()
+        elif args.command == "principal-bootstrap":
+            from app.instance.local_operator_principal import AuthPosture
+
+            posture = AuthPosture(
+                configured_credentials=1 if args.credential else 0,
+                credential_fingerprint=(
+                    fingerprint_credential(args.credential) if args.credential else None
+                ),
+                loopback_listener_proven=args.loopback_proven,
+                companion_proxy_configured=args.companion_proxy,
+            )
+            record = store.bootstrap(
+                credential_fingerprint=posture.credential_fingerprint,
+                subjects=preflight_auth_posture(posture),
+                migration_provenance=posture.migration_provenance(
+                    existing_install=args.existing_install
+                ),
+                floor_recorded=principal_floor_recorded(VaultRegistryStore(registry_path)),
+                _capability=local_operator_storage_capability(),
+            )
+        else:
+            record = store.rotate_credential(
+                credential_fingerprint=(
+                    fingerprint_credential(args.credential) if args.credential else None
+                ),
+                _capability=local_operator_storage_capability(),
+            )
+    except (PrincipalPreflightError, CapabilityNotReadyError) as exc:
+        print(
+            json.dumps(
+                {"ok": False, "consumer": args.consumer, "error": str(exc)},
+                sort_keys=True,
+            )
+        )
+        return 1
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "consumer": args.consumer,
+                "local_operator_role_id": record.local_operator_role_id,
+                "principal_kind": "delegated_operator_role",
+                "revision": record.revision,
+                "subjects": list(record.subjects),
+                "migration_provenance": record.migration_provenance,
+                "credential_bound": record.credential_fingerprint is not None,
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -2964,6 +3087,16 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--consumer", default=None)
         if name == "default-vault-set":
             command.add_argument("--vault-binding-id", required=True)
+    for name in ("principal-show", "principal-bootstrap", "principal-rotate-credential"):
+        command = subparsers.add_parser(name)
+        command.add_argument("--registry-path", type=Path, required=True)
+        command.add_argument("--consumer", default=None)
+        if name != "principal-show":
+            command.add_argument("--credential", default=None)
+        if name == "principal-bootstrap":
+            command.add_argument("--loopback-proven", action="store_true")
+            command.add_argument("--companion-proxy", action="store_true")
+            command.add_argument("--existing-install", action="store_true")
     args = parser.parse_args(argv)
     if args.command in {
         "default-vault-get",
@@ -2971,6 +3104,12 @@ def main(argv: list[str] | None = None) -> int:
         "default-vault-clear",
     }:
         return _default_vault_command(args)
+    if args.command in {
+        "principal-show",
+        "principal-bootstrap",
+        "principal-rotate-credential",
+    }:
+        return _principal_command(args)
     if args.command == "read-revision":
         return _read_revision(args.registry_path, args.consumer)
     if args.command == "preflight":

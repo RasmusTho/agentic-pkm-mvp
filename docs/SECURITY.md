@@ -11,6 +11,48 @@ Lightweight policy for local and CI runs.
 - For Companion UI non-loopback UAT, set `CUI_BIND_LAN=1` deliberately. API and Ollama host binding changes are runtime/config changes and should be made deliberately outside the Companion UI launcher default.
 - Do not expose the API, Ollama, or Companion UI to untrusted networks without an explicit access-control boundary such as an SSH tunnel, VPN, or reverse-proxy design with auth and TLS.
 
+## Delegated local operator principal (MVR-03, shipped)
+
+An API key is a **credential**, and `appInstallId` is **instance identity**. Neither is a
+principal. MVR-03 (#3857) ships the missing producer: a private, versioned delegated
+operator-role record that governed operations resolve a principal from.
+
+Shipped mapping — `app/instance/local_operator_principal.py`, `app/auth.py`:
+
+- The record lives at `<instance-state>/agentic-pkm/local-operator-principal.json` under the
+  MVR-01 instance-state boundary: mode `0600` inside a mode-`0700` directory, written through
+  a lock + atomic-replace + `fsync` path. Native installs use the same layout in private
+  app-data. It carries its own schema (`agentic-pkm.local-operator-principal.v1`), a
+  monotonic revision, and migration provenance.
+- `local_operator_role_id` is CSPRNG-minted and opaque. It is **not derived** from the
+  credential, from its fingerprint, from `appInstallId`, or from any path.
+- Three **server-derived** subjects map to that one role: `trusted_loopback` (the effective
+  listener and request path are loopback-local), `trusted_companion_proxy` (the immediate
+  peer is the server-configured, middleware-validated Companion UI container), and
+  `api_key_credential` (the configured #2223 key, matched by non-reversible fingerprint —
+  the raw key never reaches durable state, a log, a receipt, or a cache key). A proxy,
+  forwarding, or client header can claim none of them; `resolve_auth_subject` and
+  `require_loopback_or_api_key` share one decision path so the admitting subject and the
+  admission decision cannot diverge.
+- Configuring or rotating an API key binds the credential fingerprint to the **same** role id
+  and does not disable the already-supported loopback/proxy subjects. Only an explicit
+  governed posture change (`revoke_subject`) may drop one, and it is atomic.
+- An explicitly added human or agent role receives a **distinct** principal id; roles never
+  merge or alias.
+- **Fail-closed principal resolution.** A governed operation with no resolved
+  principal/delegated role fails closed — there is no anonymous fallback and no
+  "derive it from the instance" branch. Multiple ambiguous credentials, any other
+  zero-credential non-loopback posture, unsafe ownership or mode, missing durable storage,
+  and a partial record each raise `PrincipalPreflightError` carrying an explicit
+  provisioning action.
+- The instance identity is carried separately in every snapshot and can never derive, equal,
+  or substitute for a principal.
+
+Selection carries no authority. The active-context selection bearer
+(`docs/contracts/ACTIVE_CONTEXT_SET.md :: ActiveContextSet`) is an expiring capability used
+*in addition to* the #2223 gate; it stores no action, write class, or permission, and GOV
+authorizes every binding independently per call.
+
 ## Least privilege
 - The Postgres account (`DATABASE_URL`) uses `app:app` for local dev. In production create a dedicated role with only the required `INSERT/SELECT/UPDATE`.
 - CLI smoke commands append to the JSONL audit log (`INDEX_OUTBOX_PATH`). Runtime watcher/worker flows use the DB outbox; keep database permissions minimal and scoped to the outbox/index tables.

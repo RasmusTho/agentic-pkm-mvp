@@ -1,0 +1,216 @@
+"""MVR-03 (#3857): the selection store and resolver at unit level.
+
+`tests/api/test_active_context_resolution.py` drives the same machinery through the
+production endpoints. This file pins the two properties that are structural rather than
+behavioural, and that a request-level test cannot see: that resolution never reaches mutable
+global selection, and that a changed binding revision or authority verdict rotates the
+generation before the next snapshot is issued.
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+
+import pytest
+
+import app.instance.context_selection as context_selection
+from app.governance.binding_authority import (
+    BindingAuthorizationError,
+    RegistryBindingAuthorizer,
+)
+from app.instance.context_selection import (
+    ActiveContextSelectionResolver,
+    BindingFact,
+    ContextSelectionStore,
+    ReselectionRequiredError,
+)
+from app.vault.active_context_v1 import (
+    ACTIVE_CONTEXT_SET_V1,
+    ActiveContextSetV1,
+    PrincipalContext,
+    WorkspaceState,
+)
+
+PRINCIPAL = PrincipalContext(
+    principal_id="lor_test_role",
+    principal_kind="delegated_operator_role",
+    subject="trusted_loopback",
+)
+
+
+def _resolver(facts: dict[str, BindingFact], authorizer, *, revision: int = 7):
+    state = {"facts": facts, "revision": revision}
+    return (
+        ActiveContextSelectionResolver(
+            binding_facts=lambda: state["facts"],
+            registry_revision=lambda: state["revision"],
+            authorizer=authorizer,
+            instance_identity="app-install-abc",
+        ),
+        state,
+    )
+
+
+def test_selection_resolution_is_immutable_and_global_free() -> None:
+    """One immutable, versioned snapshot from explicit inputs, with no global read.
+
+    Three independent claims, because "global-free" is easy to assert loosely:
+
+    1. *Structural*: neither the resolver module nor the store module references
+       `VaultManager` / `get_vault_manager` / `active_context` at all. A future edit that
+       reached for process-global selection would fail here before any behaviour changed.
+    2. *Immutable*: the returned snapshot is a frozen dataclass and rejects mutation.
+    3. *Explicit*: the snapshot's binding set is exactly the explicitly selected set, and a
+       binding that exists in the registry but was not selected does not appear.
+
+    Production HTTP carrier propagation stays sealed until MVR-05B: the carrier header names
+    are declared here, but nothing in the request path depends on them yet.
+    """
+
+    # AST rather than raw text, so the module may *name* the forbidden globals in prose
+    # while proving it never references them in code.
+    tree = ast.parse(inspect.getsource(context_selection))
+    referenced: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            referenced.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            referenced.add(node.attr)
+        elif isinstance(node, ast.Import):
+            referenced.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            referenced.add(node.module or "")
+            referenced.update(alias.name for alias in node.names)
+    for forbidden in (
+        "VaultManager",
+        "get_vault_manager",
+        "app.vault.manager",
+        "active_context",
+    ):
+        assert forbidden not in referenced, (
+            f"the selection resolver must not reach mutable global selection ({forbidden})"
+        )
+
+    facts = {
+        "bind-a": BindingFact(vault_binding_id="bind-a", binding_revision=3, vault_id="v-a"),
+        "bind-b": BindingFact(vault_binding_id="bind-b", binding_revision=4, vault_id="v-b"),
+    }
+    authorizer = RegistryBindingAuthorizer({"bind-a": 3, "bind-b": 4})
+    resolver, _ = _resolver(facts, authorizer)
+
+    store = ContextSelectionStore()
+    raw_id, record = store.create(
+        principal=PRINCIPAL,
+        instance_identity="app-install-abc",
+        workspace=WorkspaceState.none(),
+        scope="default",
+        sphere_memberships=(),
+        situated_identity=None,
+        binding_ids=("bind-a",),
+    )
+
+    result = resolver.resolve(
+        selection=record,
+        principal=PRINCIPAL,
+        action="read",
+        write_class="read",
+        required_permission="wsp.read",
+    )
+    snapshot = result.snapshot
+
+    assert isinstance(snapshot, ActiveContextSetV1)
+    assert snapshot.version == ACTIVE_CONTEXT_SET_V1
+    assert snapshot.generation == 1
+    # Only the explicitly selected binding, never the other registered one.
+    assert snapshot.binding_ids == ("bind-a",)
+    assert snapshot.registry_revision == 7
+    assert snapshot.posture == "healthy"
+    # The raw bearer never reaches the snapshot; only its non-reversible digest.
+    assert snapshot.selection_capability_digest == record.selection_capability_digest
+    assert raw_id not in str(snapshot)
+
+    with pytest.raises(Exception):
+        snapshot.generation = 2  # type: ignore[misc]
+
+    # Sealed until MVR-05B: the carriers are named, but no production request path reads
+    # them in this slice.
+    assert context_selection.HEADER_ACTIVE_CONTEXT_SESSION == "X-Active-Context-Session"
+    assert context_selection.HEADER_ACTIVE_CONTEXT_OVERRIDE == "X-Active-Context-Override"
+
+
+def test_binding_revision_rotates_resolver_generation() -> None:
+    """A changed binding revision or verdict rotates generation before the next snapshot.
+
+    Three branches, all in one place because they share the rotation mechanism:
+
+    - a **changed binding revision** under a still-authorizing verdict rotates to a new
+      immutable generation and emits a cache-invalidation descriptor;
+    - a **changed authority epoch** (still allow) does the same;
+    - a **deny** verdict instead invalidates the selection and raises an explicit
+      authorization error -- no ActiveContextSet containing the denied binding is reissued.
+
+    Neither branch touches the still-sealed HTTP carrier or the relocation production gate;
+    MVR-05B/06C own those call sites.
+    """
+
+    facts = {"bind-a": BindingFact(vault_binding_id="bind-a", binding_revision=3)}
+    authorizer = RegistryBindingAuthorizer({"bind-a": 3})
+    resolver, state = _resolver(facts, authorizer)
+
+    store = ContextSelectionStore()
+    _, record = store.create(
+        principal=PRINCIPAL,
+        instance_identity="app-install-abc",
+        workspace=WorkspaceState.none(),
+        scope="default",
+        sphere_memberships=(),
+        situated_identity=None,
+        binding_ids=("bind-a",),
+    )
+
+    kwargs = dict(
+        principal=PRINCIPAL,
+        action="read",
+        write_class="read",
+        required_permission="wsp.read",
+    )
+    first = resolver.resolve(selection=record, **kwargs)  # type: ignore[arg-type]
+    assert first.snapshot.generation == 1
+    assert first.invalidation is None
+    assert first.snapshot.source_bindings[0].binding_revision == 3
+
+    # -- branch 1: the binding revision moved (relocation / provenance change) ----------
+    state["facts"] = {"bind-a": BindingFact(vault_binding_id="bind-a", binding_revision=4)}
+    authorizer.set_binding("bind-a", 4)
+    second = resolver.resolve(selection=record, **kwargs)  # type: ignore[arg-type]
+    assert second.snapshot.generation == 2, "a changed binding revision must rotate generation"
+    assert second.invalidation is not None
+    assert second.invalidation.previous_generation == 1
+    assert second.invalidation.generation == 2
+    assert second.invalidation.context_id == record.context_id
+    assert second.snapshot.source_bindings[0].binding_revision == 4
+    # The authorization epoch is bound to the revision, so it moved too.
+    assert (
+        second.snapshot.source_bindings[0].authorization_epoch
+        != first.snapshot.source_bindings[0].authorization_epoch
+    )
+
+    # A steady state does not keep rotating: rotation is a change signal, not a counter.
+    # It also never goes backwards -- the rotated generation is retained.
+    third = resolver.resolve(selection=record, **kwargs)  # type: ignore[arg-type]
+    assert third.snapshot.generation == 2
+    assert third.invalidation is None
+
+    # -- branch 2: a deny verdict invalidates instead of reissuing -----------------------
+    authorizer.set_binding("bind-a", 4, revoked=True)
+    with pytest.raises(BindingAuthorizationError) as denied:
+        resolver.resolve(selection=record, **kwargs)  # type: ignore[arg-type]
+    assert denied.value.verdict.status == "deny"
+    assert denied.value.verdict.reason == "binding_revoked"
+
+    store.invalidate_digest(record.selection_capability_digest)
+    with pytest.raises(ReselectionRequiredError):
+        store.inspect(
+            "any-bearer", principal=PRINCIPAL, instance_identity="app-install-abc"
+        )

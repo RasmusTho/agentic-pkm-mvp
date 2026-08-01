@@ -284,6 +284,68 @@ Rollback is a tag-bump + recreate because images are immutable and retained in t
 
 Once a manual rollback has selected and pinned the previous known-good target, failure handling follows the actual service state. If image pull or service recreate fails before the target service set is established, the executor restores the pre-rollback pin and recreates that service set so pin and runtime identity do not diverge. After the rollback target has been recreated successfully, a later verification-gate failure preserves that failure's status and diagnostics and retains the rollback target; it does not automatically restore the pre-rollback candidate that the operator is trying to leave. A successful rollback receipt is still withheld until every required gate passes.
 
+## Minimum runtime principal floor (MVR-03, shipped)
+
+MVR-03 (#3857) introduces a durable private delegated operator-role record and, with it, a
+runtime floor that constrains which images may run. This section records the shipped floor,
+the compatible rollback/roll-forward images, and the operator preflight.
+
+**Shipped floor.** `runtimeFloors.minimumRuntimePrincipal = "mvr-03"`, written into the
+existing MVR-01 `runtimeFloors` extension slot on the instance vault registry — not a second
+floor mechanism. Written by `app/instance/principal_fence.py::record_principal_floor`; read
+by `app/instance/runtime.py::_require_runtime_floor`.
+
+**Cutover order (enforced, not merely documented).**
+
+1. Derive the auth-producer inventory from production truth (`docker-compose.yaml` service
+   commands plus the canonical launcher/CLI paths), probed twice.
+2. Fence new governed/auth operations.
+3. Drain, stop, and restart-fence every enabled producer, proving each released its
+   auth-state write handle: `api`, `worker`, `watcher`, `heimdal-capture-watch`, the
+   Companion UI proxy, the headless `python -m app.instance.runtime` CLI, the
+   credential-rotation path, and channel/native bootstrap init.
+4. Record the `minimum_runtime_principal` floor.
+5. Only then write/migrate the delegated-role record.
+
+`require_complete_fence` refuses steps 4–5 if any producer is still live, restartable, or
+holding a write handle, if operations are not fenced, if the inventory was probed once, or if
+any producer role is missing. A crash before the floor leaves old auth state authoritative
+and the migration untouched.
+
+**Rollback: credential-only images are blocked.** While the floor exists,
+`_preflight_scalar_rollback` raises `CapabilityNotReadyError` before materializing any legacy
+projection. A pre-MVR-03 image has no producer for the role record and would resolve requests
+with no principal at all, so scalar rollback is refused rather than degraded. The MVR-01
+rollback launcher and native preflight inherit this refusal through the same code path.
+
+**Compatible images.** Rollback must target an image that understands
+`agentic-pkm.local-operator-principal.v1`. Compatible roll-forward exports the prior image's
+final credential/auth revision under the store lock
+(`LocalOperatorPrincipalStore.export_final_auth_state`), verifies its recorded fork, and
+reconciles only an *unambiguous* credential rotation into the same role id. Missing,
+divergent, or ambiguous auth state fails closed without overwriting either lineage. The floor
+may be lowered only by a later explicitly verified reversible migration — never by a scalar
+rollback.
+
+**Operator preflight.**
+
+```bash
+# Confirm the delegated role resolves before enabling request selection.
+python -m app.instance.runtime principal-show \
+  --registry-path <instance-state>/agentic-pkm/vault-registry.md --consumer cli
+
+# First-time / channel bootstrap (refuses to write until the floor is recorded).
+python -m app.instance.runtime principal-bootstrap \
+  --registry-path <...> --loopback-proven [--companion-proxy] [--credential <key>]
+
+# Governed credential rotation; preserves the role id.
+python -m app.instance.runtime principal-rotate-credential \
+  --registry-path <...> --credential <new-key>
+```
+
+All three receipts are redaction-safe: opaque role id, bound subjects, revision, provenance,
+and a `credential_bound` boolean. No credential, fingerprint, or filesystem path is printed.
+
 ## Live post-deploy UI smoke
 
 A deploy is verified by an **end-to-end UI smoke against the live gateway**, not only by container health. This closes the gap noted in memory `project_companion_gateway_topology` (failures observed were transient `[Errno 61]` connection refusals and stale code after a pull-without-restart, with no live post-deploy UI check to catch them).

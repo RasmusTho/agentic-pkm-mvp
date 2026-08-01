@@ -11,6 +11,15 @@ can_parallelize_with: []
 
 # Version Active Context Selection
 
+State: **Delivered** by #3857 / PR #4511. The V1 seam, the TTL-bound selection store, the
+delegated local-operator principal record with its `minimum_runtime_principal` floor and cutover
+fence, the production create/replace/inspect/clear endpoints, and full-context cache identity are
+shipped. Production request-carrier propagation stays sealed for MVR-05B (#3860) and the dimension
+field stays sealed for MVR-04 (#3858). Shipped truth lives in
+`docs/contracts/ACTIVE_CONTEXT_SET.md :: Shipped V1 seam (MVR-03, #3857)`,
+`docs/SECURITY.md :: Delegated local operator principal`, and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime principal floor`.
+
 ## Purpose
 
 The v0 `ActiveContextSet` adapter wraps at most one `VaultContext` and leaves context identity and
@@ -231,8 +240,8 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - [ ] **MVR-03:** Deployment and release-channel owner docs record the shipped
   `minimum_runtime_principal` floor, compatible rollback/roll-forward images, and operator preflight
   in the same PR that advances the floor.
-  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
-    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
+  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments`
+  - Verify: doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 - [ ] Existing auth-disabled/no-key loopback and server-configured trusted Companion proxy installs
   bootstrap the same private delegated role and keep production selection/governed writes working;
   forwarded-header spoofing and every other non-loopback peer fail until governed credential
@@ -244,8 +253,8 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_configured_key_preserves_local_and_trusted_proxy_subjects`
 - [ ] Security and ActiveContextSet owner contracts describe the shipped credential/loopback/proxy subject
   to delegated-role mapping, separate instance identity, and fail-closed principal resolution.
-  - Verify: doc writeback at `docs/SECURITY.md :: Security` + doc writeback at
-    `docs/contracts/ACTIVE_CONTEXT_SET.md :: ActiveContextSet`
+  - Verify: doc writeback at `docs/SECURITY.md :: Security`
+  - Verify: doc writeback at `docs/contracts/ACTIVE_CONTEXT_SET.md :: ActiveContextSet`
 - [ ] Production create/replace/inspect/clear commands drive the selection store, enforce #2223
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
