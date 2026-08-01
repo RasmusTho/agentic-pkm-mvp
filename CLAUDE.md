@@ -11,4 +11,12 @@ For specialist subagent roles, use `docs/development/BUILDER_SUBAGENT_ROLES.md`;
 
 Read scope for every citation in this chain is `.codex/skills/_shared/READ_SCOPE.md`: `FILE :: Section` means read that section only, a citation with no `::` is a whole-file read that must state its reason, and `docs/DOCS_INDEX.md` is grep-only.
 
+## Response length
+
+Answer short by default: lead with the outcome and what it means for the next step. Keep verification
+evidence — diff walkthroughs, comment tables, quoted receipts — out of the reply unless asked, or unless
+the decision cannot be understood without it. Durable evidence belongs in the receipt, Issue, or PR that
+already owns it, not restated in chat. Length must be earned by the task (a plan, a comparison, a
+multi-file change), not by how much material happens to be in context.
+
 This file is only a Claude compatibility entrypoint. If a Claude-specific workflow note is ever needed, keep it here and keep `AGENTS.md` authoritative.
