@@ -51,6 +51,22 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     assert "tests/eval/test_classification_golden.py" in job
 
 
+def test_ci_smoke_installs_acl_tools_for_linux_acl_fixture() -> None:
+    job = _unit_tests_job_text()
+
+    install_start = job.index("- name: Install Linux ACL tools")
+    install_end = job.index("- name: Install dependencies", install_start)
+    selected_test_run = job.index("- name: Run not-pg unit tests")
+    install_step = job[install_start:install_end]
+
+    assert "runs-on: ubuntu-latest" in job
+    assert "steps.changes.outputs.code == 'true'" in install_step
+    assert "sudo apt-get update" in install_step
+    assert "sudo apt-get install -y acl" in install_step
+    assert "continue-on-error" not in install_step
+    assert install_start < selected_test_run
+
+
 def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     workflow = _smoke_text()
 

@@ -5,8 +5,8 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-07-29
-Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py`
+Last reviewed: 2026-08-01
+Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py`
 
 # Test Strategy for the Hot Path
 
@@ -26,6 +26,14 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Every `builder_system` match includes `tests/architecture/test_builderops_store_boundary.py` as an exact run target, not only as an ownership prefix. Ordinary `app/builderops/**` changes must execute the audited store-access guard so new direct-store sites cannot bypass it while their own subsystem tests remain green.
 - The neutral top-level `llm_contract/**` leaf is owned by the `model_access` selector. A kernel change runs its direct contract suite, the BuilderOps adapter/runner compatibility suites, and the exact neutral-kernel/import-boundary architecture guards.
 - Every `vault` match includes `tests/architecture/test_no_hardcoded_vault_layout.py` as an exact run target, not only as an ownership prefix. Ordinary `app/vault/**` changes must execute the vault-layout guard without widening the subsystem to all architecture tests.
+- A vault-file replacement may claim Linux ACL preservation only after the real named-user ACL
+  fixture in `tests/knowledge/test_linux_acl_fixture.py` passes. The fixture compares the complete
+  numeric access ACL before and after a same-directory staged atomic replacement; mode bits alone
+  are insufficient. `Unit tests (not pg)` installs Ubuntu's `acl` package before the selected suite,
+  and a Linux runner without working `getfacl`/`setfacl` support fails loud rather than skipping or
+  emulating the proof. Non-Linux local runs may skip because they do not implement the governed
+  Ubuntu platform semantics. This fixture is prerequisite evidence only; it does not claim that an
+  unpublished vault replacement mechanism is delivered.
 - Runtime-start harness tests that exercise `scripts/start_full_system.sh` and its process-cleanup behavior are owned by the `ops_deploy` selector, even when the touched files live under `tests/helpers/` or `tests/runtime/`.
 - Store and vault-ingest changes are owned by the `store_ingest` selection and run its focused
   `tests/stores`, `tests/ingest`, and architecture contracts in the ordinary `not pg` job. That job

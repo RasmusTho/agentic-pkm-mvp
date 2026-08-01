@@ -606,6 +606,12 @@ jobs:
             dev-requirements.txt
             pyproject.toml
 
+      - name: Install Linux ACL tools
+        if: steps.changes.outputs.code == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y acl
+
       - name: Install dependencies
         if: steps.changes.outputs.code == 'true'
         run: |
