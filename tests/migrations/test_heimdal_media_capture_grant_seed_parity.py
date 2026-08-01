@@ -239,11 +239,39 @@ def test_every_producer_seeds_the_same_media_capture_grant() -> None:
     assert seeded["expiry"] == "NULL"
     assert seeded["revokes_grant_ref"] == "NULL"
 
-    emitted_profile = json.loads(seeded["capture_profile"].removesuffix("::jsonb").strip("'"))
+    def _emitted_json(column: str) -> object:
+        return json.loads(seeded[column].removesuffix("::jsonb").strip("'"))
+
+    emitted_profile = _emitted_json("capture_profile")
     assert emitted_profile == memory_seed.capture_profile, (
         "the migration must emit the same capture_profile the in-process seed builds"
     )
     assert emitted_profile["modalities"] == list(MEDIA_CAPTURE_MODALITIES)
+
+    # The B-shaped consent-posture columns too, not just identity. The migration
+    # docstring promises "the same v1-inert B-shaped defaults"; without these,
+    # flipping `erasure.supported` to true, widening `third_party_policy` to
+    # 'allow', swapping vad_gate/third_party, or setting a retention bound each
+    # seeds a production row whose consent posture silently diverges from
+    # `_default_b_shaped_fields()` — and on an append-only, forward-only table
+    # that row cannot be corrected except by another migration.
+    assert seeded["third_party_policy"] == f"'{memory_seed.third_party_policy}'"
+    assert _emitted_json("vad_gate") == memory_seed.vad_gate
+    assert _emitted_json("third_party") == memory_seed.third_party
+    assert _emitted_json("retention") == memory_seed.retention
+    assert _emitted_json("erasure") == memory_seed.erasure
+    # The payload is provenance prose rather than posture, so only its shape is
+    # pinned — it must be an object carrying a note, not silently empty.
+    assert isinstance(_emitted_json("payload"), dict)
+    assert "note" in _emitted_json("payload")  # type: ignore[operator]
+
+    # Every column the INSERT declares is now asserted, so a later column can
+    # not be added to the seed without this test being extended too.
+    assert set(seeded) == {
+        "id", "grant_ref", "basis", "scope", "granted_by", "granted_at",
+        "expiry", "capture_profile", "third_party_policy", "vad_gate",
+        "third_party", "retention", "erasure", "revokes_grant_ref", "payload",
+    }
 
     # The memory seed's own identity fields match the module constants too, so
     # neither producer can be "fixed" by editing only the other.
@@ -273,9 +301,13 @@ def test_migration_seed_is_idempotent_and_forward_only() -> None:
     # media ingress would 409 forever. Substring-checking "WHERE NOT EXISTS"
     # alone does not catch that, so assert the subquery's predicate.
     assert "INSERT INTO heimdal_consent_grant" in source
+    # Anchored on the closing paren: a prefix match would accept an appended
+    # `OR TRUE` (guard always true -> the insert never fires while
+    # alembic_version still advances -> media ingress 409s forever) or
+    # `AND 1 = 0` (guard never true -> a duplicate grant on every rerun).
     guard = re.search(
         r"WHERE NOT EXISTS\s*\(\s*SELECT 1 FROM heimdal_consent_grant\s*"
-        r"WHERE grant_ref = '\{(?P<ref_const>\w+)\}'",
+        r"WHERE grant_ref = '\{(?P<ref_const>\w+)\}'\s*\)",
         source,
     )
     assert guard is not None, (
