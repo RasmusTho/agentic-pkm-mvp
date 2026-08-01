@@ -164,10 +164,27 @@ earlier slices. CDH-05 may begin only after the Yggdrasil design-handoff gate pa
 
 ## Capability acceptance
 
+Registered design agents are partitioned into **headless-registered** routes (`codex`, `fable`) and
+**interactive-only** routes (`claude-design-via-claude-code`). The partition follows from
+INV-CDH-5A rather than exempting anything from it: an interactive-only route is hard-refused as
+`interactive_subscription_only` inside `DesignAgentAdapterRegistry` before any adapter lookup, so
+requiring a governed *success* for it would require the invariant to be broken. The two buckets must
+stay exhaustive and disjoint over `DESIGN_AGENT_IDS` — see `HEADLESS_CAPABLE_AGENT_IDS` and
+`INTERACTIVE_ONLY_AGENT_IDS` in `tests/builderops/test_design_hub_acceptance.py` — so a newly
+registered adapter lands on exactly one side and cannot escape the matrix by appearing in neither.
+
+This narrows what a success proves; it does not narrow the fail-closed guarantee. Every registered
+route that is not proven by a governed success must instead be proven by an exact,
+zero-provider-call, no-fallback refusal, and the shipped production posture grants no
+`builderops-design-run` secret, so the dormant registry must refuse every route including the
+headless-registered ones.
+
 - [ ] All six task Issues are closed with exact PR/SHA/Verify receipts on parent #4131.
   Verify: `runtime receipt: ckm_design_hub.child_ledger.v1`
-- [ ] The production path proves one governed success per registered adapter and distinct unknown,
-  unavailable, denied, pending, malformed, timed-out, and failed states with no fallback.
+- [ ] The production path proves one governed success per headless-registered adapter, an exact
+  zero-provider-call `interactive_subscription_only` refusal for every interactive-only registered
+  adapter, and distinct unknown, unavailable, denied, pending, malformed, timed-out, and failed
+  states with no fallback.
   Verify: `tests/builderops/test_design_hub_acceptance.py::test_design_hub_production_matrix_is_fail_closed`
 - [ ] Cockpit output remains projection-only, deterministic, JavaScript-off complete, printable,
   and incapable of starting a run.
