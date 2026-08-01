@@ -119,6 +119,58 @@ Multiple vaults are allowed when, and only when, they preserve the cognitive and
 5. **Human authority and provenance survive the split.** Every topology must preserve human authority over machine edits, provenance for retained material, receipts for executed intents, and write guards on machine-touched artifacts, per `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md`, and `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`. A topology that weakens any of these is not a legitimate topology.
 6. **Reversibility to single vault.** Every multi-vault topology must remain reducible to a single-vault topology without loss of meaning, attribution, or receipts. The single-vault layout is the floor of the contract.
 
+## Dimensions
+
+Shipped by MVR-04 (#3858). A **dimension** is instance-local grouping metadata over registered
+vault bindings: a bounded `dimension_id`, display metadata, a monotonic dimension revision, and an
+**ordered** list of `vault_binding_id` values. It is durable registry state
+(`app/instance/vault_dimensions.py`, stored in the instance registry's `dimensions` extension
+slot), administered through the authenticated Companion API `/api/instance/dimensions` and the
+headless `python -m app.instance.runtime dimension-*` commands.
+
+A dimension is **not** an authority object, and that is the whole point of the shape:
+
+- It never grants, upgrades, or implies authority. It carries no action, write class, permission,
+  scope, sphere, principal, role, or confidentiality field.
+- It is not a topology. Grouping A and B does not make either a master, a satellite, or a mount of
+  the other, and it does not change which topology rules above apply to them.
+- It does not merge identity. Two local clones of one logical vault are two members, never one, and
+  every resolved member keeps its own binding id, local instance id, revision, and provenance.
+- It never chooses a default. The explicit instance default is separate durable state with its own
+  producer; a dimension cannot set, seed, or substitute for it.
+
+**Member resolution is all-or-nothing.** Resolving a dimension asks GOV about every member
+independently, with the decision inputs the calling endpoint or command contract supplied — the
+dimension itself is never one of them, so a binding reached through a group is authorized exactly
+as one named directly. An unknown, stale, removed, or unauthorized member fails the **entire**
+resolution with a bounded, redacted, member-specific error. It never returns an authorized subset,
+never excludes the offending member, never substitutes another binding, and never falls back to the
+instance default.
+
+Stored membership may legitimately go stale, and that stored row is inert data rather than a grant.
+Authenticated instance administration may **inspect** stored membership — including stale or
+unauthorized rows, so an operator can see them — and **repair** it by removing a member or deleting
+the dimension. That inspection is registry administration: it is not an `ActiveContextSet` and not a
+permission result. Additions and resolution still fail closed.
+
+**Deleting a dimension deletes nothing else.** Registrations, content roots, and receipts are
+untouched; the bindings remain independently selectable. Conversely, removing a registration
+transactionally removes that binding from every dimension in the same locked registry transaction,
+preserving the remaining member order and recording a bounded repair receipt on each affected
+dimension — so a dangling member is never observable. Production registration removal itself remains
+`capability_not_ready` until MVR-06B activates the consumer floor.
+
+A dimension may seed an explicit many-binding selection: `POST`/`PUT
+/api/companion/active-context/selection` accepts one stored `dimension_id` as selection *intent*.
+The server resolves it through the locked dimension service and persists the resulting validated
+explicit binding set plus the dimension revision. Workspace, scope, sphere memberships, situated
+identity, principal, action, and permission stay server-derived. A client cannot author a member
+list, a filter expression, or an unknown dimension, and combining explicit bindings with a
+`dimension_id` is refused rather than merged.
+
+See `docs/contracts/ACTIVE_CONTEXT_SET.md` for the snapshot seam and
+`docs/MULTI_VAULT_RUNTIME/GROUP_VAULT_BINDINGS_BY_DIMENSION.md` for the delivering specification.
+
 ## What this contract does not do
 
 This contract does not:
@@ -128,6 +180,7 @@ This contract does not:
 - change ingest, retrieval, or write-guard behavior;
 - define companion-ui implementation, onboarding flow, or any UI surface;
 - change context-bundle, memory, or sync semantics;
+- turn dimensions into roles, confidentiality boundaries, or topology authority;
 - replace `docs/SEPARATING_PERSISTENCE_SURFACES/README.md` as the SoT for the persistence surface trichotomy; this contract is the topology layer on top of that vocabulary.
 
 ## Relationship to neighbouring contracts

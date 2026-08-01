@@ -39,6 +39,11 @@ except ImportError:
     active_context_selection_router = None
 
 try:
+    from app.api.routes.vault_dimensions import router as vault_dimensions_router
+except ImportError:
+    vault_dimensions_router = None
+
+try:
     from app.api.routes.status import router as status_router
 except ImportError:
     status_router = None
@@ -329,6 +334,8 @@ def _create_app() -> FastAPI:
         application.include_router(instance_default_vault_router, prefix="/api")
     if active_context_selection_router is not None:
         application.include_router(active_context_selection_router, prefix="/api")
+    if vault_dimensions_router is not None:
+        application.include_router(vault_dimensions_router, prefix="/api")
     if builderops_router is not None:
         application.include_router(builderops_router, prefix="/api")
     if context_bundles_router is not None:

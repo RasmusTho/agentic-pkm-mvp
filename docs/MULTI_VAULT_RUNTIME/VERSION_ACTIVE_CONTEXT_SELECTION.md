@@ -17,8 +17,8 @@ governed commands, the `minimum_runtime_principal` floor and auth-producer fence
 operator-invoked), the production create/replace/inspect/clear endpoints, and full-context cache
 identity. **Not shipped:** automated activation of the principal cutover from
 `scripts/lib/instance_state_deployment.sh` — it needs credential/listener posture and the native
-launcher paths inside the `instance-state-init` one-shot, and #3857 remains open for it. Production request-carrier propagation stays sealed for MVR-05B (#3860) and the dimension
-field stays sealed for MVR-04 (#3858). Shipped truth lives in
+launcher paths inside the `instance-state-init` one-shot, and #3857 remains open for it. Production request-carrier propagation stays sealed for MVR-05B (#3860); the dimension field was
+unsealed by MVR-04 (#3858) as typed `DimensionFilter` provenance. Shipped truth lives in
 `docs/contracts/ACTIVE_CONTEXT_SET.md :: Shipped V1 seam (MVR-03, #3857)`,
 `docs/SECURITY.md :: Delegated local operator principal`, and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Minimum runtime principal floor`.

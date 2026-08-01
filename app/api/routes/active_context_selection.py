@@ -2,16 +2,23 @@
 
 Four commands drive the one `ContextSelectionStore`: create, replace, inspect, clear.
 
-What these endpoints accept: **explicit binding-selection intent only.** A request body may
-name `vault_binding_ids` and nothing else -- `extra="forbid"` makes a client-authored
-workspace, scope, sphere membership, situated identity, principal, action, permission, or
-dimension payload a 422 rather than a silently-ignored field. That matters: silently
-ignoring such a field would let a caller believe it had set cognitive context.
+What these endpoints accept: **binding-selection intent only.** A request body may name
+`vault_binding_ids`, or (MVR-04) one `dimension_id` that already exists in the instance
+registry, and nothing else -- `extra="forbid"` makes a client-authored workspace, scope,
+sphere membership, situated identity, principal, action, permission, or arbitrary dimension
+projection a 422 rather than a silently-ignored field. That matters: silently ignoring such
+a field would let a caller believe it had set cognitive context.
+
+`dimension_id` is selection *intent*, never a payload. The server resolves it through the
+locked MVR-04 registry service, which authorizes every member independently and fails the
+whole request on any unknown, stale, or unauthorized member. What gets stored is the
+resulting explicit binding set plus the dimension revision -- so a dimension can never widen
+what the caller reaches, only name bindings the caller could already have listed.
 
 What they never do:
 
 - mutate process-global `VaultManager` state (this module does not import it),
-- accept or resolve a dimension payload (sealed until MVR-04 supplies its registry),
+- accept a client-authored member list, filter expression, or unknown dimension,
 - store operation authority in the selection.
 
 The existing `/api/companion/vault/select` stays a named legacy-global adapter until task 05
@@ -37,6 +44,7 @@ from app.instance.active_context_service import (
     ActiveContextSelectionService,
     ActiveContextServiceError,
     DerivedContext,
+    SelectionIntentError,
 )
 from app.instance.context_selection import (
     HEADER_ACTIVE_CONTEXT_SESSION,
@@ -46,6 +54,11 @@ from app.instance.context_selection import (
     SelectionPrincipalMismatchError,
 )
 from app.instance.local_operator_principal import PrincipalPreflightError
+from app.instance.vault_dimensions import (
+    REASON_DIMENSION_UNKNOWN,
+    REASON_MEMBER_UNAUTHORIZED,
+    DimensionResolutionError,
+)
 from app.instance.runtime import open_local_operator_principal_store
 from app.instance.vault_registry import RegistryError, VaultRegistryStore
 from app.vault.active_context_v1 import AuthSubject
@@ -83,11 +96,17 @@ def reset_selection_store_for_tests() -> ContextSelectionStore:
 
 
 class SelectionRequest(BaseModel):
-    """Explicit binding-selection intent. Nothing else is accepted."""
+    """Binding-selection intent. Nothing else is accepted.
+
+    Exactly one form: an explicit `vault_binding_ids` list, or one stored `dimension_id`.
+    Both together is a 400, not a merge -- see
+    `ActiveContextSelectionService._resolve_selection_intent`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     vault_binding_ids: list[str] = Field(default_factory=list)
+    dimension_id: str | None = Field(default=None, max_length=64)
 
 
 class SelectionContext(BaseModel):
@@ -108,6 +127,10 @@ class SelectionContext(BaseModel):
     sphere_memberships: list[str]
     situated_identity: str | None = None
     vault_binding_ids: list[str]
+    #: MVR-04 provenance only. Present when the binding set above was resolved from a
+    #: stored dimension; it grants nothing and is never re-expanded.
+    dimension_id: str | None = None
+    dimension_revision: int | None = None
     expires_at: float
 
 
@@ -197,6 +220,18 @@ def _selection_failure(exc: Exception) -> HTTPException:
 
     if isinstance(exc, (ReselectionRequiredError, SelectionPrincipalMismatchError)):
         return HTTPException(status_code=401, detail=_RESELECTION_REQUIRED_DETAIL)
+    if isinstance(exc, SelectionIntentError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, DimensionResolutionError):
+        # All-or-nothing, and the status distinguishes *why* the whole resolution failed
+        # so an operator can repair the dimension. The detail carries the opaque dimension
+        # and member ids only -- never a content root, and never the members that passed,
+        # because publishing those would be the authorized partial set the contract bans.
+        if exc.reason == REASON_DIMENSION_UNKNOWN:
+            return HTTPException(status_code=404, detail=str(exc))
+        if exc.reason == REASON_MEMBER_UNAUTHORIZED:
+            return HTTPException(status_code=403, detail=str(exc))
+        return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, ActiveContextServiceError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, RegistryError):
@@ -214,7 +249,9 @@ def create_selection(
     derived = _derive(request, api_key, service)
     try:
         raw_id, record = service.create(
-            derived=derived, binding_ids=payload.vault_binding_ids
+            derived=derived,
+            binding_ids=payload.vault_binding_ids,
+            dimension_id=payload.dimension_id,
         )
     except (ActiveContextServiceError, RegistryError) as exc:
         raise _selection_failure(exc) from exc
@@ -233,7 +270,10 @@ def replace_selection(
     bearer = _require_bearer(x_active_context_session)
     try:
         record = service.replace(
-            bearer, derived=derived, binding_ids=payload.vault_binding_ids
+            bearer,
+            derived=derived,
+            binding_ids=payload.vault_binding_ids,
+            dimension_id=payload.dimension_id,
         )
     except (
         ReselectionRequiredError,

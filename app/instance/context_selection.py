@@ -50,6 +50,7 @@ from app.governance.binding_authority import (
 from app.vault.active_context_v1 import (
     ActiveContextBinding,
     ActiveContextSetV1,
+    DimensionFilter,
     PrincipalContext,
     WorkspaceState,
     selection_capability_digest,
@@ -123,6 +124,11 @@ class ContextSelectionRecord:
     binding_ids: tuple[str, ...]
     created_at: float
     expires_at: float
+    #: MVR-04 provenance when the binding set above came from a stored dimension. The
+    #: *bindings* remain the selection: this records which dimension produced them and at
+    #: which revision, so a later resolution can tell that membership moved. It is never
+    #: re-expanded, so it cannot widen the selection, and it stores no authority.
+    dimension_filter: DimensionFilter | None = None
 
     def redacted(self) -> dict[str, object]:
         """A receipt-safe projection. The raw bearer is structurally absent."""
@@ -139,6 +145,14 @@ class ContextSelectionRecord:
             "sphere_memberships": list(self.sphere_memberships),
             "situated_identity": self.situated_identity,
             "vault_binding_ids": list(self.binding_ids),
+            "dimension_id": (
+                None if self.dimension_filter is None else self.dimension_filter.dimension_id
+            ),
+            "dimension_revision": (
+                None
+                if self.dimension_filter is None
+                else self.dimension_filter.dimension_revision
+            ),
             "expires_at": self.expires_at,
         }
 
@@ -194,6 +208,7 @@ class ContextSelectionStore:
         sphere_memberships: Sequence[str],
         situated_identity: str | None,
         binding_ids: Sequence[str],
+        dimension_filter: DimensionFilter | None = None,
     ) -> tuple[str, ContextSelectionRecord]:
         """Mint a selection and return `(raw_selection_id, record)`.
 
@@ -216,6 +231,7 @@ class ContextSelectionStore:
             binding_ids=tuple(binding_ids),
             created_at=now,
             expires_at=now + self._ttl,
+            dimension_filter=dimension_filter,
         )
         with self._lock:
             self._prune()
@@ -263,6 +279,7 @@ class ContextSelectionStore:
         principal: PrincipalContext,
         instance_identity: str,
         binding_ids: Sequence[str],
+        dimension_filter: DimensionFilter | None = None,
     ) -> ContextSelectionRecord:
         """Switch a session's bindings, atomically advancing its generation.
 
@@ -280,6 +297,10 @@ class ContextSelectionStore:
                 current,
                 generation=current.generation + 1,
                 binding_ids=tuple(binding_ids),
+                # A replace always restates provenance. Carrying a previous dimension
+                # filter across an explicit binding replacement would leave the record
+                # claiming a group it no longer reflects.
+                dimension_filter=dimension_filter,
             )
             self._records[raw_id] = updated
             return updated
@@ -409,6 +430,7 @@ class ActiveContextSelectionResolver:
             digest: str | None = selection.selection_capability_digest
             provenance = SELECTION_PROVENANCE_SESSION
             expires_at: float | None = selection.expires_at
+            dimension_filter: DimensionFilter | None = selection.dimension_filter
         else:
             binding_ids = (default_binding_id,) if default_binding_id else ()
             context_id = f"ctx_default_{self._instance_identity}"
@@ -424,6 +446,9 @@ class ActiveContextSelectionResolver:
                 else SELECTION_PROVENANCE_NO_VAULT
             )
             expires_at = None
+            # The instance default is a single explicit binding. A dimension is never a
+            # default and never seeds one, so this branch has no filter by construction.
+            dimension_filter = None
 
         bindings: list[ActiveContextBinding] = []
         verdicts: list[BindingVerdict] = []
@@ -497,6 +522,7 @@ class ActiveContextSelectionResolver:
             degraded_reason=degraded_reason,
             selection_capability_digest=digest,
             expires_at=expires_at,
+            dimension_filter=dimension_filter,
         )
 
         # Revision / verdict drift detection. The identity excludes `generation` on

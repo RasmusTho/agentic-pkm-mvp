@@ -11,6 +11,19 @@ can_parallelize_with: []
 
 # Group Vault Bindings By Dimension
 
+State: **Delivered** by #3858. Shipped: the versioned durable dimension schema in the instance
+registry with its own locked producer, the authenticated Companion API `/api/instance/dimensions`
+and headless `python -m app.instance.runtime dimension-*` commands, all-or-nothing member
+resolution with independent per-binding GOV authorization, `dimension_id` as selection intent on the
+MVR-03 create/replace endpoints with the `dimension_filter` seam unsealed as typed provenance, the
+transactional membership-repair hook in the shared registry removal transaction, and dimension
+preservation across the MVR-01 rollback/roll-forward lineage. Shipped truth lives in
+`docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Dimensions` and
+`docs/contracts/ACTIVE_CONTEXT_SET.md :: Shipped dimension membership (MVR-04, #3858)`.
+**Not shipped here:** production registration removal stays `capability_not_ready` until MVR-06B
+activates the consumer floor, so this slice installs the repair hook rather than enabling the
+command it will run under.
+
 ## Purpose
 
 #2143 names dimensions as the owner's grouping axis. Existing scope, sphere, confidentiality,

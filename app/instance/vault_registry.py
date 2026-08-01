@@ -590,6 +590,25 @@ class VaultRegistryStore:
             registrations = dict(current.registrations)
             del registrations[vault_binding_id]
             updated = self._with_registrations(current, registrations)
+            # MVR-04 transactional membership repair. `_with_registrations` already
+            # deep-copied `extensions`, so this mutates the *pending* generation only, and
+            # the single `_write_locked` below commits the deregistration and the
+            # membership repair together. A dangling member is therefore never observable:
+            # there is no window in which the registration is gone but a dimension still
+            # lists it. Remaining member order is preserved and each repaired dimension
+            # records a bounded receipt.
+            # Deferred import: `app.instance.vault_dimensions` reads this module's snapshot
+            # types, so importing it at module scope would be a cycle. The hook itself
+            # takes only a plain mapping.
+            from app.instance.vault_dimensions import (
+                repair_dimensions_for_removed_binding,
+            )
+
+            repair_dimensions_for_removed_binding(
+                updated.extensions,
+                vault_binding_id=vault_binding_id,
+                registry_revision=updated.revision,
+            )
             removes_default = current.default_vault_binding_id == vault_binding_id
             if replacement is not None:
                 if replacement == vault_binding_id or replacement not in registrations:
@@ -692,6 +711,36 @@ class VaultRegistryStore:
                 default_vault_binding_id=next_default,
                 default_vault_provenance=next_default_provenance,
             )
+            self._write_locked(updated)
+            return updated
+
+    def set_dimension_state(
+        self,
+        dimensions: Mapping[str, object],
+        *,
+        expected_revision: int | None = None,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Persist the MVR-04 dimension set in one locked registry revision.
+
+        This is a *dedicated* producer rather than a call into
+        :meth:`set_extension_state`, for the same reason MVR-02 gave the explicit default
+        its own writer: that method rewrites four slots at once, so routing dimensions
+        through it would let an unrelated principal/background/floor write wipe durable
+        grouping (when passed a stale value) with no way to tell that it had.
+
+        It touches dimensions and nothing else. Registrations, tombstones, transfer
+        lineage, the explicit default, and every other extension slot are carried through
+        unchanged, so a grouping write can never move authority-bearing state.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            updated = self._with_registrations(current, dict(current.registrations))
+            updated.extensions["dimensions"] = copy.deepcopy(dict(dimensions))
             self._write_locked(updated)
             return updated
 

@@ -16,14 +16,18 @@ typed, unit-testable place:
 - **action / write class / permission**: *not* derived here at all. They belong to the
   endpoint contract and reach GOV as separate decision inputs per call.
 
-A client can supply exactly one thing: which registered bindings to select.
+A client can supply exactly one thing: which bindings to select -- either as an explicit
+list of registered `vault_binding_id` values, or (MVR-04) as one `dimension_id` that already
+exists in the instance registry, which the server resolves here into that same explicit
+list. A dimension is a shorthand for bindings the operator already stored; it is never a
+projection the client authors, and it changes none of the derivations above.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from app.governance.binding_authority import RegistryBindingAuthorizer
 from app.instance.context_selection import (
@@ -36,6 +40,10 @@ from app.instance.local_operator_principal import (
     LocalOperatorPrincipalRecord,
     PrincipalPreflightError,
     verify_credential,
+)
+from app.instance.vault_dimensions import (
+    DimensionResolution,
+    VaultDimensionService,
 )
 from app.instance.vault_registry import RegistrySnapshot, VaultRegistryStore
 from app.vault.active_context_v1 import (
@@ -59,9 +67,18 @@ WRITE_CLASS_READ = "read"
 PERMISSION_SELECTION_MANAGE = "wsp.active_context.manage_selection"
 PERMISSION_SELECTION_READ = "wsp.active_context.read_selection"
 
+#: The MVR-04 dimension-resolution command's own GOV decision inputs. They are exactly the
+#: selection-management inputs above: resolving a dimension is not a distinct privilege and
+#: must not acquire one, or grouping would have become an authority path after all.
+ACTION_DIMENSION_RESOLVE = "active_context.dimension.resolve"
+
 
 class ActiveContextServiceError(RuntimeError):
     """Fail-closed service error."""
+
+
+class SelectionIntentError(ActiveContextServiceError):
+    """The request combined two mutually exclusive forms of selection intent."""
 
 
 def resolve_principal(
@@ -263,13 +280,47 @@ class ActiveContextSelectionService:
                 f"unknown vault binding id(s): {sorted(unknown)}"
             )
 
+    def resolve_dimension(
+        self,
+        dimension_id: str,
+        *,
+        derived: DerivedContext,
+    ) -> DimensionResolution:
+        """Turn one stored dimension id into an explicit, authorized binding set.
+
+        The client supplies an *id that must already exist in the instance registry*, and
+        nothing else. The server loads the registry, builds the same GOV authorizer the
+        normal selection path builds, and asks it about every member independently with
+        the endpoint contract's own decision inputs. An unknown, stale, removed, or
+        unauthorized member fails the whole call.
+
+        Note what this method does not do: it does not accept a member list, a projection,
+        a filter expression, or any dimension the registry does not already hold. There is
+        no path from a client string to a binding set except through stored membership
+        that an authenticated administrator previously validated.
+        """
+
+        snapshot = self._registry.load()
+        return VaultDimensionService(self._registry).resolve(
+            dimension_id,
+            principal=derived.principal,
+            action=ACTION_DIMENSION_RESOLVE,
+            write_class=WRITE_CLASS_READ,
+            required_permission=PERMISSION_SELECTION_MANAGE,
+            authorizer=build_authorizer(snapshot),
+            snapshot=snapshot,
+        )
+
     def create(
         self,
         *,
         derived: DerivedContext,
-        binding_ids: Sequence[str],
+        binding_ids: Sequence[str] = (),
+        dimension_id: str | None = None,
     ) -> tuple[str, ContextSelectionRecord]:
-        self.validate_bindings(binding_ids)
+        resolved_ids, dimension_filter = self._resolve_selection_intent(
+            derived=derived, binding_ids=binding_ids, dimension_id=dimension_id
+        )
         return self._selections.create(
             principal=derived.principal,
             instance_identity=derived.instance_identity,
@@ -277,7 +328,8 @@ class ActiveContextSelectionService:
             scope=derived.scope,
             sphere_memberships=derived.sphere_memberships,
             situated_identity=derived.situated_identity,
-            binding_ids=binding_ids,
+            binding_ids=resolved_ids,
+            dimension_filter=dimension_filter,
         )
 
     def replace(
@@ -285,15 +337,49 @@ class ActiveContextSelectionService:
         raw_selection_id: str,
         *,
         derived: DerivedContext,
-        binding_ids: Sequence[str],
+        binding_ids: Sequence[str] = (),
+        dimension_id: str | None = None,
     ) -> ContextSelectionRecord:
-        self.validate_bindings(binding_ids)
+        resolved_ids, dimension_filter = self._resolve_selection_intent(
+            derived=derived, binding_ids=binding_ids, dimension_id=dimension_id
+        )
         return self._selections.replace_bindings(
             raw_selection_id,
             principal=derived.principal,
             instance_identity=derived.instance_identity,
-            binding_ids=binding_ids,
+            binding_ids=resolved_ids,
+            dimension_filter=dimension_filter,
         )
+
+    def _resolve_selection_intent(
+        self,
+        *,
+        derived: DerivedContext,
+        binding_ids: Sequence[str],
+        dimension_id: str | None,
+    ) -> tuple[tuple[str, ...], Any]:
+        """Turn selection intent into the validated explicit binding set that gets stored.
+
+        Exactly one form of intent is accepted. Supplying both an explicit binding list and
+        a dimension id is refused rather than merged: a union would be a client-authored
+        projection wearing a stored dimension's name, and it is the one shape that could
+        let a caller reach past what the dimension actually holds.
+
+        Only the resolved explicit binding set plus the dimension revision is persisted.
+        The dimension id is never stored as something to re-expand later.
+        """
+
+        target = (dimension_id or "").strip() or None
+        if target is not None and binding_ids:
+            raise SelectionIntentError(
+                "selection intent is either explicit vault_binding_ids or one dimension_id, "
+                "never both"
+            )
+        if target is None:
+            self.validate_bindings(binding_ids)
+            return tuple(binding_ids), None
+        resolution = self.resolve_dimension(target, derived=derived)
+        return resolution.binding_ids, resolution.as_filter()
 
     def inspect(
         self, raw_selection_id: str, *, derived: DerivedContext
@@ -340,6 +426,7 @@ def current_auth_posture(*, loopback_listener_proven: bool) -> AuthPosture:
 
 
 __all__ = [
+    "ACTION_DIMENSION_RESOLVE",
     "ACTION_SELECTION_CLEAR",
     "ACTION_SELECTION_CREATE",
     "ACTION_SELECTION_INSPECT",
@@ -350,6 +437,7 @@ __all__ = [
     "WRITE_CLASS_READ",
     "ActiveContextSelectionService",
     "ActiveContextServiceError",
+    "SelectionIntentError",
     "DerivedContext",
     "binding_facts",
     "binding_revision_for",
