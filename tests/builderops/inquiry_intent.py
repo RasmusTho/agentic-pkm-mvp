@@ -141,6 +141,9 @@ def contract_with_role_targets(
                             .replace("-", "_")
                             .upper(),
                             "kind": secret.rsplit(".", maxsplit=1)[1],
+                            # Model-provider credentials are required: a role
+                            # cannot resolve without its declared key (#4489).
+                            "optional": False,
                         }
                     )
                     declared.add(secret)

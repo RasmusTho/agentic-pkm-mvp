@@ -271,10 +271,23 @@ Companion docs:
   `COCKPIT_GITHUB_REPO=RasmusTho/agentic-pkm-mvp`; `test` and `prod` deliberately leave it unset and
   render the source as *not enabled* rather than broken. Turning another channel on is a
   promotion-lane act, not a config default.
-- The token is host-supplied, never committed: put `GITHUB_TOKEN` on the `api` consumer's existing
-  host-secret env layer (`HOST_SECRET_RUNTIME_ENV_FILE_API`, the same layer that delivers
-  `HEIMDAL_RAW_STORE_KEY`). A repo-scoped read-only token suffices — the plane issues GET requests
-  only and persists nothing. Without a token the plane refuses cleanly; nothing else degrades.
+- The token is host-supplied, never committed. Provision it as the **Keychain item** for the declared
+  optional identifier `github.token` under consumer `heimdal-api-ingress` (#4489) — do not hand-write
+  an env file: on a governed `scripts/deploy_channel.sh` run the layer's file is bootstrap-owned and
+  rebuilt from declared identifiers only, so a hand-written value is discarded. The bootstrap then
+  materializes `GITHUB_TOKEN` onto `HOST_SECRET_RUNTIME_ENV_FILE_API`, the same layer that delivers
+  `HEIMDAL_RAW_STORE_KEY`. A repo-scoped read-only token suffices — the plane issues GET requests
+  only and persists nothing.
+- Because `github.token` is declared `optional`, a host with no token still deploys normally and the
+  Heimdal ingress lanes are unaffected; the plane simply refuses.
+- **A token that is present but malformed fails the whole channel deploy.** Fail-closed here is
+  deliberate — a present-but-wrong credential is a misconfiguration, not an opt-out — but the cost is
+  that `docker compose` never runs, so no service starts, not just the cockpit. The error names the
+  logical id (`github.token`), never the value. Fix the Keychain item and re-run. The same has always
+  been true of a malformed `heimdal.raw-store-key`; tracked as deferred defect `KD-4489-malformed-declared-secret-aborts-channel-deploy` on #4172.
+- Note the coupling: this layer is only materialized when `heimdal.raw-store-key` also resolves, so
+  provisioning the GitHub token alone is not sufficient on the governed deploy path. Identifier and
+  account derivation: `docs/LOCAL_SECRET_PROVISIONING/README.md :: Declared identifier contract`.
 - Check it with `curl -s localhost:18001/api/cockpit/registry | jq '.sources[] |
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.

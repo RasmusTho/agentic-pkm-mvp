@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 import ctypes
+import json
 import os
 from pathlib import Path
 import signal
@@ -29,6 +30,7 @@ from app.ops.host_secret_bootstrap import (
 _RAW_KEY = "a" * 64
 _OPENAI_KEY = "openai-key-" + ("o" * 32)
 _ANTHROPIC_KEY = "anthropic-key-" + ("a" * 32)
+_GITHUB_TOKEN = "ghp_" + ("g" * 36)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -858,3 +860,186 @@ deploy_channel_compose \\
         f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
     )
     assert not secret_file.exists()
+
+
+# --- Optional declared secrets (#4489) -------------------------------------
+#
+# The host-secret layer is fail-closed over *every* secret declared for a
+# consumer, which is why #4484 could not simply declare the cockpit's GitHub
+# token: doing so would make a Keychain item mandatory on dev, test, and prod,
+# and a host missing it would lose the Heimdal ingress lanes. `optional` makes
+# the required/optional distinction — which
+# `docs/LOCAL_SECRET_PROVISIONING/README.md :: Fixed constraints` #3 already
+# relies on in prose — something the schema can express. Optionality covers
+# *absence* only: a malformed value fails closed exactly as before.
+
+
+def _absent(*absent_suffixes: str) -> KeychainLookup:
+    """Keychain lookup where the named accounts are missing, others resolve."""
+
+    def lookup(_service: str, account: str) -> str:
+        for suffix in absent_suffixes:
+            if account.endswith(suffix):
+                # Mirrors _security_keychain_lookup's non-zero-exit path: the
+                # bootstrap cannot tell "no such item" from any other lookup
+                # failure, so absence surfaces as this exception.
+                raise HostSecretBootstrapError(
+                    "host secret bootstrap failed for declared consumer"
+                )
+        if account.endswith(":heimdal.raw-store-key"):
+            return _RAW_KEY
+        if account.endswith(":github.token"):
+            return _GITHUB_TOKEN
+        pytest.fail(f"unexpected account lookup: {account}")
+
+    return lookup
+
+
+def test_absent_optional_secret_does_not_fail_the_consumer(tmp_path: Path) -> None:
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    # Guard the *pairing*, not just the code path: without this declaration the
+    # assertions below would hold vacuously (nothing would ever look the secret
+    # up), so the test would keep passing against a revert of the mechanism.
+    contract.require_declared(
+        channel="dev", consumer="heimdal-api-ingress", secret="github.token"
+    )
+    assert contract.is_optional("github.token") is True
+
+    consulted: list[str] = []
+    absent = _absent(":github.token")
+
+    def lookup(service: str, account: str) -> str:
+        consulted.append(account)
+        return absent(service, account)
+
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-api-ingress",
+        keychain_lookup=lookup,
+        directory=tmp_path,
+    ) as env_file:
+        assert env_file.read_text(encoding="utf-8") == f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+
+    assert "dev:heimdal-api-ingress:github.token" in consulted, (
+        "the optional secret must actually be attempted and skipped, not simply "
+        "absent from the consumer's declared set"
+    )
+
+
+def test_malformed_optional_secret_fails_closed(tmp_path: Path) -> None:
+    """Optionality covers absence, never a value that is present and wrong."""
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":github.token"):
+            return "short"  # present, but not a valid token value
+        return _RAW_KEY
+
+    with pytest.raises(HostSecretBootstrapError):
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-api-ingress",
+            keychain_lookup=lookup,
+            directory=tmp_path,
+        ):
+            pytest.fail("a malformed optional secret must not materialize a layer")
+
+    # Nothing was written: the whole consumer fails, so a partially-populated
+    # layer can never be handed to the child.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_optional_secret_failure_never_unlocks_the_run_anyway_handoff(
+    tmp_path: Path,
+) -> None:
+    """An optional secret must not be able to drop a *required* one.
+
+    `run_on_credential_unavailable` launches the command with no layer at all.
+    If an optional secret could trigger it, a malformed `github.token` would
+    silently de-provision `heimdal.raw-store-key` for the same consumer — a
+    fail-*open*. No in-repo caller passes the flag for this consumer today;
+    this guards the CLI surface that allows it.
+    """
+    launched: list[list[str]] = []
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":github.token"):
+            return "short"  # present and malformed
+        return _RAW_KEY
+
+    with pytest.raises(HostSecretBootstrapError):
+        run_with_host_secrets(
+            channel="dev",
+            consumer="heimdal-api-ingress",
+            command=["must-not-start"],
+            keychain_lookup=lookup,
+            runner=lambda command, _env: launched.append(command) or 0,
+            directory=tmp_path,
+            run_on_credential_unavailable=True,
+        )
+
+    assert launched == [], (
+        "a malformed optional secret must not launch the command without the "
+        "layer that also carries the consumer's required secret"
+    )
+
+
+def test_absent_required_secret_still_fails_closed(tmp_path: Path) -> None:
+    """#4489 must not weaken the guarantee protecting the ingress lanes."""
+    with pytest.raises(HostSecretBootstrapError):
+        with materialize_consumer_environment(
+            channel="dev",
+            consumer="heimdal-api-ingress",
+            keychain_lookup=_absent(":heimdal.raw-store-key"),
+            directory=tmp_path,
+        ):
+            pytest.fail("an absent required secret must not materialize a layer")
+
+
+def test_every_committed_secret_declares_its_optionality_explicitly() -> None:
+    """No implicit default: the closed schema stays closed.
+
+    Asserting `isinstance(..., bool)` would be vacuous — `is_optional` returns a
+    membership test. The real guarantee is that the *loader* refuses a
+    declaration that omits `optional` or states it as anything but a JSON
+    boolean, so silence can never be read as "required" by accident.
+    """
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    # Everything that existed before #4489 stays required.
+    for logical_id in ("heimdal.raw-store-key", "openai.api-key", "anthropic.api-key"):
+        assert contract.is_optional(logical_id) is False
+    assert contract.is_optional("github.token") is True
+
+
+@pytest.mark.parametrize(
+    ("optional_value", "expected"),
+    [
+        # An omitted key is caught by the closed field set; a present non-bool
+        # by the explicit type check. `match=` pins WHICH rule fires, so a
+        # revert cannot make these pass for the wrong reason (on a tree without
+        # `optional` in _SECRET_FIELDS the non-bool cases would otherwise be
+        # rejected as an unknown extra key).
+        pytest.param(..., "invalid host secret declaration", id="omitted"),
+        pytest.param(1, "invalid host secret identifier", id="truthy-int"),
+        pytest.param(0, "invalid host secret identifier", id="falsy-int"),
+        pytest.param("true", "invalid host secret identifier", id="string"),
+        pytest.param(None, "invalid host secret identifier", id="null"),
+        pytest.param([], "invalid host secret identifier", id="list"),
+    ],
+)
+def test_loader_rejects_a_declaration_without_an_explicit_boolean_optional(
+    tmp_path: Path, optional_value: object, expected: str
+) -> None:
+    payload = json.loads(
+        (_REPO_ROOT / "config/secrets/host_secret_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if optional_value is ...:
+        del payload["secrets"][0]["optional"]
+    else:
+        payload["secrets"][0]["optional"] = optional_value
+    path = tmp_path / "host_secret_contract.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
+        host_secret_bootstrap.load_host_secret_contract(path)

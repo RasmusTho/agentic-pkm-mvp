@@ -193,23 +193,34 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "logical_id": "heimdal.raw-store-key",
             "child_binding": "HEIMDAL_RAW_STORE_KEY",
             "kind": "raw-store-key",
+            "optional": False,
         },
         {
             "logical_id": "openai.api-key",
             "child_binding": "OPENAI_API_KEY",
             "kind": "api-key",
+            "optional": False,
         },
         {
             "logical_id": "anthropic.api-key",
             "child_binding": "ANTHROPIC_API_KEY",
             "kind": "api-key",
+            "optional": False,
+        },
+        # #4489: the cockpit's live GitHub read wants a token, but the api
+        # consumer's layer must keep materializing for hosts that have none.
+        {
+            "logical_id": "github.token",
+            "child_binding": "GITHUB_TOKEN",
+            "kind": "token",
+            "optional": True,
         },
     ]
     assert payload["consumers"] == [
         {
             "consumer": "heimdal-api-ingress",
             "channels": ["dev", "test", "prod"],
-            "secrets": ["heimdal.raw-store-key"],
+            "secrets": ["heimdal.raw-store-key", "github.token"],
             "role_requirements": {},
         },
         {

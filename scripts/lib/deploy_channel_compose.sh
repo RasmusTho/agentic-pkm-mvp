@@ -145,8 +145,18 @@ _deploy_channel_needs_dev_capture_secret() {
 # secret contract cannot be loaded or does not declare the api consumer in this
 # environment (e.g. a harness root without config/secrets), the deploy proceeds
 # WITHOUT the layer — loudly — and the api startup preflight reports the
-# ingress lanes unavailable. A deploy never fails because this layer could not
-# be prepared.
+# ingress lanes unavailable.
+#
+# Scope of that promise (corrected #4489): it covers a layer that cannot be
+# *prepared* — absent contract, undeclared consumer, unprovisioned item. It does
+# NOT cover a declared secret whose Keychain item resolves to a MALFORMED value:
+# the bootstrap fails closed on that, so the wrap fails and the deploy aborts.
+# That was already true of a malformed heimdal.raw-store-key (the precheck below
+# only rejects an empty value) and is now also true of an optional secret such as
+# github.token. Fail-closed is the intended direction — a present-but-wrong
+# credential is a misconfiguration, not an opt-out — but the operator cost is a
+# whole-channel deploy failure, tracked as deferred defect
+# KD-4489-malformed-declared-secret-aborts-channel-deploy on #4172.
 _deploy_channel_api_ingress_bootstrap_available() {
   local channel="${1:?channel required}"
   local root="${2:?repo root required}"
@@ -345,9 +355,12 @@ deploy_channel_compose() {
       # (possibly nested) capture-watch bootstrap runs — that inner bootstrap
       # scrubs the shared HOST_SECRET_RUNTIME_ENV_FILE name from the child
       # environment, and the renamed handle is what the api service's
-      # env_file layer reads. The precheck above already proved the contract
-      # AND the Keychain item resolve, so a bootstrap failure here is a real
-      # fault, not the unprovisioned-key case (which skips the wrap). Runs
+      # env_file layer reads. The precheck above proved the contract loads and
+      # that heimdal.raw-store-key resolves non-empty — it does not validate
+      # that value, and does not look at the consumer's other declared secrets
+      # at all (#4489) — so a bootstrap failure here is a real fault
+      # (malformed value) rather than the unprovisioned-key case, which skips
+      # the wrap. Runs
       # from ${root} with ${root} on PYTHONPATH so the contract and app
       # package are this deploy's; every compose path in the command is
       # absolute or compose-file-relative, so the cd is inert for Compose.

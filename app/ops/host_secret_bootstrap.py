@@ -80,7 +80,13 @@ def _temporary_signal_handlers(handler: SignalHandler) -> Iterator[None]:
 
 
 def _security_keychain_lookup(service: str, account: str) -> str:
-    if account.endswith(".api-key"):
+    # The framework path returns exact Keychain bytes; the `security` CLI below
+    # strips one trailing newline, which would let a stray-newline value pass a
+    # `value == value.strip()` grammar that was written to reject it (#4289).
+    # Every kind validated by that grammar must take the exact-bytes path — so
+    # `token` joins `api-key` here rather than inheriting the CLI's trimming
+    # (#4489).
+    if account.endswith(".api-key") or account.endswith(".token"):
         return _security_framework_keychain_lookup(service, account)
     try:
         result = subprocess.run(
@@ -193,7 +199,12 @@ def _declared_secrets(
 def _validate_secret(kind: str, value: str) -> bool:
     if kind == "raw-store-key":
         return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
-    if kind == "api-key":
+    # `token` shares the api-key grammar deliberately (#4489): both are opaque
+    # provider-issued bearer strings, and a second near-identical grammar would
+    # be a place for the two to drift apart rather than a real distinction. The
+    # kind exists at all because the contract derives it from the logical id's
+    # suffix, and `GITHUB_TOKEN` requires the logical id `github.token`.
+    if kind in {"api-key", "token"}:
         return (
             value == value.strip()
             and 20 <= len(value) <= 512
@@ -281,7 +292,12 @@ def _read_runtime_secret_file(path: Path) -> str | None:
 
 
 def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:
-    if kind == "api-key":
+    # The identifier-bearing variant names the logical id (never a value), which
+    # is what an operator needs to find the right Keychain item. `token` shares
+    # it for that reason; the only behavioral difference is the
+    # `run_on_credential_unavailable` opt-in, which no consumer granted a
+    # `token` secret uses (#4489).
+    if kind in {"api-key", "token"}:
         return HostSecretCredentialUnavailableError(secret)
     return HostSecretBootstrapError(
         "host secret bootstrap failed for declared consumer"
@@ -312,7 +328,16 @@ def _resolve_consumer_environment(
             try:
                 value = keychain_lookup(contract.keychain_service, account)
             except Exception as exc:
+                # An optional declaration tolerates *absence* only, and the
+                # lookup cannot distinguish "no such item" from any other
+                # failure, so an unresolvable optional secret simply does not
+                # bind. Its consumer runs without it; a required one still
+                # fails the whole bootstrap (#4489).
+                if contract.is_optional(secret):
+                    continue
                 raise _secret_failure(secret=secret, kind=kind) from exc
+            # Validation is deliberately outside that tolerance: a value that
+            # is present and wrong is a misconfiguration, never an opt-out.
             if not _validate_secret(kind, value):
                 raise _secret_failure(secret=secret, kind=kind)
             resolved[env_name] = value
@@ -522,6 +547,14 @@ def run_with_host_secrets(
             return runner(selected_command, child_env)
     except HostSecretCredentialUnavailableError as exc:
         if not run_on_credential_unavailable:
+            raise
+        # The handoff drops the WHOLE layer, not just the failed secret, so an
+        # optional secret must never be able to trigger it: that would let a
+        # misconfigured optional credential silently de-provision a *required*
+        # one declared for the same consumer (#4489). Only a required
+        # credential's unavailability is something a caller may opt into
+        # running without.
+        if selected_contract.is_optional(exc.credential_identity_ref):
             raise
         # Model Inquiry owns the durable typed terminal receipt. This opt-in
         # handoff carries only the declared logical identifier, never a value,
