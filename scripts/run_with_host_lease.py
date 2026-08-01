@@ -19,6 +19,7 @@ from typing import Sequence
 
 
 _RESOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+HOST_GLOBAL_RESOURCE_NAMES = frozenset({"pytest-not-pg"})
 _TEMPFAIL = 75
 
 
@@ -43,6 +44,11 @@ def repo_common_lock_path(resource: str) -> Path:
         raise ValueError(
             "resource must start with an alphanumeric character and contain only "
             "letters, numbers, dot, underscore, or hyphen (max 80 chars)"
+        )
+    if resource not in HOST_GLOBAL_RESOURCE_NAMES:
+        allowed = ", ".join(sorted(HOST_GLOBAL_RESOURCE_NAMES))
+        raise ValueError(
+            f"unrecognised host-global resource {resource!r}; expected one of: {allowed}"
         )
     try:
         common_dir = _git_path("--path-format=absolute", "--git-common-dir")

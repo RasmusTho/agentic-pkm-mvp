@@ -8,14 +8,39 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Iterator
 
 import pytest
 
-from scripts.run_with_host_lease import repo_common_lock_path
+from scripts.run_with_host_lease import (
+    HOST_GLOBAL_RESOURCE_NAMES,
+    repo_common_lock_path,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LEASE_SCRIPT = REPO_ROOT / "scripts/run_with_host_lease.py"
+
+
+@pytest.fixture
+def lease_repo(tmp_path: Path) -> Iterator[Path]:
+    repo = tmp_path / "lease-repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    lock_path = _lease_lock_path(repo)
+    try:
+        yield repo
+    finally:
+        lock_path.unlink(missing_ok=True)
+        assert not lock_path.exists()
+
+
+def _canonical_resource() -> str:
+    assert len(HOST_GLOBAL_RESOURCE_NAMES) == 1
+    return next(iter(HOST_GLOBAL_RESOURCE_NAMES))
+
+
+def _lease_lock_path(repo: Path) -> Path:
+    return repo / ".git" / "host-global-leases" / f"{_canonical_resource()}.lock"
 
 
 def _lease_command(
@@ -42,16 +67,45 @@ def test_repo_common_lock_path_rejects_unsafe_resource() -> None:
         repo_common_lock_path("../escape")
 
 
-def test_host_lease_is_atomic_across_processes_and_releases_after_exit() -> None:
-    resource = f"test-host-lease-{time.time_ns()}"
+def test_unrecognised_resource_name_is_rejected(lease_repo: Path) -> None:
+    rejected_resource = "not-a-real-resource"
+    result = subprocess.run(
+        _lease_command(rejected_resource, "rejected", "pass"),
+        cwd=lease_repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert rejected_resource in result.stderr
+    assert not (
+        lease_repo / ".git" / "host-global-leases" / f"{rejected_resource}.lock"
+    ).exists()
+
+
+def test_documented_full_suite_resource_is_on_allowlist() -> None:
+    workflow = (REPO_ROOT / "docs/development/DEV_WORKFLOW.md").read_text()
+    documented_resources = {
+        token.split()[0]
+        for token in workflow.split("--resource ")[1:]
+    }
+
+    assert documented_resources == HOST_GLOBAL_RESOURCE_NAMES
+
+
+def test_host_lease_is_atomic_across_processes_and_releases_after_exit(
+    lease_repo: Path,
+) -> None:
+    resource = _canonical_resource()
     holder = subprocess.Popen(
         _lease_command(resource, "holder", "import time; time.sleep(0.8)"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    lock_path = repo_common_lock_path(resource)
+    lock_path = _lease_lock_path(lease_repo)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if lock_path.exists():
@@ -68,7 +122,7 @@ def test_host_lease_is_atomic_across_processes_and_releases_after_exit() -> None
 
     contender = subprocess.run(
         _lease_command(resource, "contender", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -82,24 +136,26 @@ def test_host_lease_is_atomic_across_processes_and_releases_after_exit() -> None
 
     successor = subprocess.run(
         _lease_command(resource, "successor", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
     )
     assert successor.returncode == 0
     assert '"event": "host_lease_released"' in successor.stderr
+    lock_path.unlink()
+    assert not lock_path.exists()
 
 
-def test_child_keeps_lease_if_wrapper_is_killed() -> None:
-    resource = f"test-host-lease-crash-{time.time_ns()}"
+def test_child_keeps_lease_if_wrapper_is_killed(lease_repo: Path) -> None:
+    resource = _canonical_resource()
     holder = subprocess.Popen(
         _lease_command(resource, "crash-holder", "import time; time.sleep(0.8)"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    lock_path = repo_common_lock_path(resource)
+    lock_path = _lease_lock_path(lease_repo)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if lock_path.exists():
@@ -118,7 +174,7 @@ def test_child_keeps_lease_if_wrapper_is_killed() -> None:
     holder.wait(timeout=2)
     contender = subprocess.run(
         _lease_command(resource, "early-successor", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -128,7 +184,7 @@ def test_child_keeps_lease_if_wrapper_is_killed() -> None:
     time.sleep(0.9)
     successor = subprocess.run(
         _lease_command(resource, "late-successor", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -136,16 +192,18 @@ def test_child_keeps_lease_if_wrapper_is_killed() -> None:
     assert successor.returncode == 0
 
 
-def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed() -> None:
-    resource = f"test-host-lease-group-crash-{time.time_ns()}"
+def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed(
+    lease_repo: Path,
+) -> None:
+    resource = _canonical_resource()
     holder = subprocess.Popen(
         _lease_command(resource, "group-crash-holder", "import time; time.sleep(0.8)"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    lock_path = repo_common_lock_path(resource)
+    lock_path = _lease_lock_path(lease_repo)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if lock_path.exists():
@@ -164,7 +222,7 @@ def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed() -> None:
     holder.wait(timeout=2)
     contender = subprocess.run(
         _lease_command(resource, "group-crash-contender", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -174,7 +232,7 @@ def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed() -> None:
     time.sleep(0.9)
     successor = subprocess.run(
         _lease_command(resource, "group-crash-successor", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -184,12 +242,12 @@ def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed() -> None:
 
 @pytest.mark.parametrize("termination_signal", [signal.SIGTERM, signal.SIGINT])
 def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
-    termination_signal: signal.Signals,
+    termination_signal: signal.Signals, lease_repo: Path
 ) -> None:
-    resource = f"test-host-lease-signal-{termination_signal.value}-{time.time_ns()}"
+    resource = _canonical_resource()
     holder = subprocess.Popen(
         _lease_command(resource, "signal-holder", "import time; time.sleep(30)"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -208,7 +266,7 @@ def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
 
     successor = subprocess.run(
         _lease_command(resource, "signal-successor", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -216,8 +274,10 @@ def test_termination_signal_is_forwarded_and_lease_releases_after_command_exits(
     assert successor.returncode == 0
 
 
-def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
-    resource = f"test-host-lease-descendant-{time.time_ns()}"
+def test_descendant_does_not_inherit_lease_or_delay_release_receipt(
+    lease_repo: Path,
+) -> None:
+    resource = _canonical_resource()
     child = (
         "import subprocess, sys; "
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'], "
@@ -226,7 +286,7 @@ def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
     )
     holder = subprocess.run(
         _lease_command(resource, "descendant-holder", child),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -237,7 +297,7 @@ def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
 
     successor = subprocess.run(
         _lease_command(resource, "descendant-successor", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -247,17 +307,17 @@ def test_descendant_does_not_inherit_lease_or_delay_release_receipt() -> None:
 
 @pytest.mark.parametrize("termination_signal", [signal.SIGTERM, signal.SIGINT])
 def test_signalled_waiting_contender_never_runs_command(
-    termination_signal: signal.Signals, tmp_path: Path
+    termination_signal: signal.Signals, tmp_path: Path, lease_repo: Path
 ) -> None:
-    resource = f"test-host-lease-wait-signal-{termination_signal.value}-{time.time_ns()}"
+    resource = _canonical_resource()
     marker = tmp_path / "contender-ran"
     holder = subprocess.Popen(
         _lease_command(resource, "wait-holder", "import time; time.sleep(2)"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    lock_path = repo_common_lock_path(resource)
+    lock_path = _lease_lock_path(lease_repo)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if lock_path.exists():
@@ -280,7 +340,7 @@ def test_signalled_waiting_contender_never_runs_command(
             contender_child,
             wait_seconds=3,
         ),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -312,8 +372,8 @@ def test_signalled_waiting_contender_never_runs_command(
     assert not marker.exists()
 
 
-def test_exec_child_restores_default_sigpipe_disposition() -> None:
-    resource = f"test-host-lease-sigpipe-{time.time_ns()}"
+def test_exec_child_restores_default_sigpipe_disposition(lease_repo: Path) -> None:
+    resource = _canonical_resource()
     command = [
         sys.executable,
         str(LEASE_SCRIPT),
@@ -330,7 +390,7 @@ def test_exec_child_restores_default_sigpipe_disposition() -> None:
     ]
     result = subprocess.run(
         command,
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -340,9 +400,9 @@ def test_exec_child_restores_default_sigpipe_disposition() -> None:
 
 @pytest.mark.parametrize("kill_process_group", [False, True])
 def test_orphaned_waiting_supervisor_never_runs_command(
-    kill_process_group: bool, tmp_path: Path
+    kill_process_group: bool, tmp_path: Path, lease_repo: Path
 ) -> None:
-    resource = f"test-host-lease-orphan-waiter-{kill_process_group}-{time.time_ns()}"
+    resource = _canonical_resource()
     marker = tmp_path / "orphan-waiter-ran"
     release_holder = tmp_path / "release-holder"
     holder_child = (
@@ -353,11 +413,11 @@ def test_orphaned_waiting_supervisor_never_runs_command(
     )
     holder = subprocess.Popen(
         _lease_command(resource, "orphan-wait-holder", holder_child),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    lock_path = repo_common_lock_path(resource)
+    lock_path = _lease_lock_path(lease_repo)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if lock_path.exists():
@@ -380,7 +440,7 @@ def test_orphaned_waiting_supervisor_never_runs_command(
             waiter_child,
             wait_seconds=3,
         ),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
@@ -418,7 +478,7 @@ def test_orphaned_waiting_supervisor_never_runs_command(
 
     successor = subprocess.run(
         _lease_command(resource, "orphan-wait-successor", "pass", wait_seconds=1),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -429,9 +489,9 @@ def test_orphaned_waiting_supervisor_never_runs_command(
 
 
 def test_outer_owner_keeps_lease_until_command_dies_if_supervisor_is_killed(
-    tmp_path: Path,
+    tmp_path: Path, lease_repo: Path
 ) -> None:
-    resource = f"test-host-lease-supervisor-crash-{time.time_ns()}"
+    resource = _canonical_resource()
     command_pid_path = tmp_path / "command.pid"
     child = (
         "import os, signal, time; from pathlib import Path; "
@@ -440,12 +500,12 @@ def test_outer_owner_keeps_lease_until_command_dies_if_supervisor_is_killed(
     )
     holder = subprocess.Popen(
         _lease_command(resource, "supervisor-crash-holder", child),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    lock_path = repo_common_lock_path(resource)
+    lock_path = _lease_lock_path(lease_repo)
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         if command_pid_path.exists():
@@ -462,7 +522,7 @@ def test_outer_owner_keeps_lease_until_command_dies_if_supervisor_is_killed(
 
     contender = subprocess.run(
         _lease_command(resource, "recovery-contender", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,
@@ -477,7 +537,7 @@ def test_outer_owner_keeps_lease_until_command_dies_if_supervisor_is_killed(
 
     successor = subprocess.run(
         _lease_command(resource, "recovery-successor", "pass"),
-        cwd=REPO_ROOT,
+        cwd=lease_repo,
         capture_output=True,
         text=True,
         check=False,

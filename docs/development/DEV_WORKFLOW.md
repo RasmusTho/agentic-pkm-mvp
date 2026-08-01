@@ -86,6 +86,11 @@ process census, or quiet-period check is useful diagnosis but is not mutual excl
 is already held, do not start another suite and do not kill the holder; retry only with bounded wait
 or after the holder's receipt shows terminal state.
 
+The closed canonical resource allowlist is declared once as `HOST_GLOBAL_RESOURCE_NAMES` in
+`scripts/run_with_host_lease.py`. Callers must use a name from that allowlist; the wrapper rejects
+ad-hoc aliases before creating a lock file, and the host-lease regression tests keep this documented
+command aligned with the allowlist.
+
 Enforcement note:
 - The applicable command list above is a required pre-merge gate, not advisory; do not substitute a
   repo-wide suite for identifying and running the affected subsystem's verification targets.
