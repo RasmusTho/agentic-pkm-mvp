@@ -34,6 +34,7 @@ inputs.
 from __future__ import annotations
 
 import secrets
+import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -160,6 +161,13 @@ class ContextSelectionStore:
         self._ttl = float(ttl_seconds)
         self._clock = clock
         self._records: dict[str, ContextSelectionRecord] = {}
+        #: FastAPI runs sync handlers in a thread pool, so two requests can execute against
+        #: this process-wide store concurrently. Individual dict operations are atomic under
+        #: the GIL, but every mutation here is a read-modify-write: without this lock a PUT
+        #: could read a record, lose a race to a concurrent DELETE, and then write the
+        #: replacement back -- resurrecting a bearer that was reported cleared. Two
+        #: concurrent PUTs could likewise both publish the same generation.
+        self._lock = threading.RLock()
         #: A fresh epoch per store instance. A process restart builds a new store, so a
         #: pre-restart bearer cannot resolve even if its raw value were replayed.
         self._process_epoch = uuid.uuid4().hex
@@ -169,6 +177,8 @@ class ContextSelectionStore:
         return self._process_epoch
 
     def _prune(self) -> None:
+        """Caller must hold `self._lock`."""
+
         now = self._clock()
         expired = [key for key, record in self._records.items() if record.expires_at <= now]
         for key in expired:
@@ -191,7 +201,6 @@ class ContextSelectionStore:
         surface; only the digest is retained anywhere else.
         """
 
-        self._prune()
         raw_id = secrets.token_urlsafe(_SELECTION_ID_BYTES)
         now = self._clock()
         record = ContextSelectionRecord(
@@ -208,7 +217,9 @@ class ContextSelectionStore:
             created_at=now,
             expires_at=now + self._ttl,
         )
-        self._records[raw_id] = record
+        with self._lock:
+            self._prune()
+            self._records[raw_id] = record
         return raw_id, record
 
     def _require(
@@ -218,6 +229,8 @@ class ContextSelectionStore:
         principal: PrincipalContext,
         instance_identity: str,
     ) -> ContextSelectionRecord:
+        """Caller must hold `self._lock`."""
+
         self._prune()
         record = self._records.get(raw_id)
         if record is None:
@@ -238,7 +251,10 @@ class ContextSelectionStore:
         principal: PrincipalContext,
         instance_identity: str,
     ) -> ContextSelectionRecord:
-        return self._require(raw_id, principal=principal, instance_identity=instance_identity)
+        with self._lock:
+            return self._require(
+                raw_id, principal=principal, instance_identity=instance_identity
+            )
 
     def replace_bindings(
         self,
@@ -256,16 +272,17 @@ class ContextSelectionStore:
         touched.
         """
 
-        current = self._require(
-            raw_id, principal=principal, instance_identity=instance_identity
-        )
-        updated = replace(
-            current,
-            generation=current.generation + 1,
-            binding_ids=tuple(binding_ids),
-        )
-        self._records[raw_id] = updated
-        return updated
+        with self._lock:
+            current = self._require(
+                raw_id, principal=principal, instance_identity=instance_identity
+            )
+            updated = replace(
+                current,
+                generation=current.generation + 1,
+                binding_ids=tuple(binding_ids),
+            )
+            self._records[raw_id] = updated
+            return updated
 
     def clear(
         self,
@@ -274,19 +291,22 @@ class ContextSelectionStore:
         principal: PrincipalContext,
         instance_identity: str,
     ) -> None:
-        self._require(raw_id, principal=principal, instance_identity=instance_identity)
-        self._records.pop(raw_id, None)
+        with self._lock:
+            self._require(raw_id, principal=principal, instance_identity=instance_identity)
+            self._records.pop(raw_id, None)
 
     def invalidate_digest(self, digest: str) -> None:
         """Drop every selection matching a capability digest (deny-verdict path)."""
 
-        for key, record in list(self._records.items()):
-            if record.selection_capability_digest == digest:
-                del self._records[key]
+        with self._lock:
+            for key, record in list(self._records.items()):
+                if record.selection_capability_digest == digest:
+                    del self._records[key]
 
     def __len__(self) -> int:
-        self._prune()
-        return len(self._records)
+        with self._lock:
+            self._prune()
+            return len(self._records)
 
 
 @dataclass(frozen=True)

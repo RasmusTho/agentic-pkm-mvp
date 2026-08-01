@@ -224,6 +224,56 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
         fresh_store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
     assert fresh_store.require().revision == fresh_record.revision
 
+    # -- an incompatible export schema fails closed --------------------------------------
+    # Without a schema check, any private JSON object carrying a matching fork_revision and
+    # a string fingerprint would be interpreted as v1 and could overwrite the record with the
+    # wrong credential during a mixed-version roll-forward.
+    fresh_store.export_path.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.local-operator-principal.v2.roll-forward-export",
+                "fork_revision": fresh_record.revision,
+                "credential_fingerprint": fresh_record.credential_fingerprint,
+                "exported_at": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    fresh_store.export_path.chmod(0o600)
+    with pytest.raises(PrincipalPreflightError, match="unknown roll-forward export schema"):
+        fresh_store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
+    assert fresh_store.require().revision == fresh_record.revision
+
+    # A malformed fingerprint (not the salted `scrypt.v1$salt$digest` shape) is ambiguous.
+    fresh_store.export_path.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.local-operator-principal.v1.roll-forward-export",
+                "fork_revision": fresh_record.revision,
+                "credential_fingerprint": "deadbeef",
+                "exported_at": 0.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    fresh_store.export_path.chmod(0o600)
+    with pytest.raises(PrincipalPreflightError, match="ambiguous"):
+        fresh_store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
+    assert fresh_store.require().revision == fresh_record.revision
+    fresh_store.export_path.unlink()
+
+    # -- an empty credential is not a rotation -------------------------------------------
+    # Rotating to nothing would keep `api_key_credential` bound with no fingerprint, so every
+    # admitted key would fail verification and the instance would have no usable principal —
+    # routing around `revoke_subject`'s last-subject safeguard.
+    assert "api_key_credential" in fresh_store.require().subjects
+    with pytest.raises(PrincipalPreflightError, match="not a rotation"):
+        fresh_store.rotate_credential(
+            credential=None, _capability=STORAGE_MUTATION_CAPABILITY
+        )
+    assert fresh_store.require().revision == fresh_record.revision
+    assert verify_credential(fresh_store.require().credential_fingerprint, "fresh-key")
+
     # The floor is never lowered by any of this; only a later explicitly verified
     # reversible migration may do that.
     assert principal_floor_recorded(fresh_runtime.registry)

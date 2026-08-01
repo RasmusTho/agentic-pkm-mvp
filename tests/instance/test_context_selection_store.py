@@ -22,6 +22,7 @@ from app.governance.binding_authority import (
 from app.instance.context_selection import (
     ActiveContextSelectionResolver,
     BindingFact,
+    ContextSelectionError,
     ContextSelectionStore,
     ReselectionRequiredError,
 )
@@ -224,3 +225,101 @@ def test_binding_revision_rotates_resolver_generation() -> None:
     assert len(store) == 0
     with pytest.raises(ReselectionRequiredError):
         store.inspect(raw_id, principal=PRINCIPAL, instance_identity="app-install-abc")
+
+
+def test_concurrent_store_mutations_are_serialized() -> None:
+    """A replace racing a clear cannot resurrect a cleared bearer.
+
+    FastAPI runs sync handlers in a thread pool, so two requests really can execute against
+    the process-wide store at once. Each mutation is a read-modify-write, so without a lock
+    a PUT could read a record, lose the race to a concurrent DELETE, and then write the
+    replacement back over the deletion — reporting a bearer cleared while leaving it live.
+    """
+
+    import threading
+
+    store = ContextSelectionStore()
+    bearers = []
+    for _ in range(40):
+        raw_id, _record = store.create(
+            principal=PRINCIPAL,
+            instance_identity="app-install-abc",
+            workspace=WorkspaceState.none(),
+            scope="default",
+            sphere_memberships=(),
+            situated_identity=None,
+            binding_ids=("bind-a",),
+        )
+        bearers.append(raw_id)
+
+    kwargs = dict(principal=PRINCIPAL, instance_identity="app-install-abc")
+    barrier = threading.Barrier(2)
+    survivors: list[str] = []
+    errors: list[BaseException] = []
+
+    def _clear(raw_id: str) -> None:
+        barrier.wait()
+        try:
+            store.clear(raw_id, **kwargs)  # type: ignore[arg-type]
+        except ContextSelectionError:
+            pass
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    def _replace(raw_id: str) -> None:
+        barrier.wait()
+        try:
+            store.replace_bindings(raw_id, binding_ids=("bind-b",), **kwargs)  # type: ignore[arg-type]
+        except ContextSelectionError:
+            pass
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    for raw_id in bearers:
+        barrier.reset()
+        threads = [
+            threading.Thread(target=_clear, args=(raw_id,)),
+            threading.Thread(target=_replace, args=(raw_id,)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        try:
+            store.inspect(raw_id, **kwargs)  # type: ignore[arg-type]
+            survivors.append(raw_id)
+        except ContextSelectionError:
+            pass
+
+    assert not errors, errors
+    # Every bearer was cleared. A surviving one means a replace wrote back over a completed
+    # clear, which is exactly the resurrection this lock exists to prevent.
+    assert survivors == [], f"{len(survivors)} cleared bearer(s) were resurrected"
+
+    # Concurrent replaces on one bearer publish strictly increasing generations rather than
+    # two handlers both returning the same one.
+    raw_id, _ = store.create(
+        principal=PRINCIPAL,
+        instance_identity="app-install-abc",
+        workspace=WorkspaceState.none(),
+        scope="default",
+        sphere_memberships=(),
+        situated_identity=None,
+        binding_ids=("bind-a",),
+    )
+    generations: list[int] = []
+    lock = threading.Lock()
+    start = threading.Barrier(8)
+
+    def _bump() -> None:
+        start.wait()
+        record = store.replace_bindings(raw_id, binding_ids=("bind-b",), **kwargs)  # type: ignore[arg-type]
+        with lock:
+            generations.append(record.generation)
+
+    workers = [threading.Thread(target=_bump) for _ in range(8)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert sorted(generations) == list(range(2, 10)), generations

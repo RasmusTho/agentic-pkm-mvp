@@ -63,6 +63,10 @@ MINIMUM_RUNTIME_PRINCIPAL = "mvr-03"
 #: instance-state directory (native installs get the same file in private app-data).
 PRINCIPAL_RECORD_FILENAME = "local-operator-principal.json"
 
+#: The stopped-window export is its own versioned artifact, checked before its contents are
+#: trusted for lineage.
+_ROLL_FORWARD_EXPORT_SCHEMA = f"{LOCAL_OPERATOR_PRINCIPAL_SCHEMA}.roll-forward-export"
+
 SUBJECT_LOOPBACK: AuthSubject = "trusted_loopback"
 SUBJECT_COMPANION_PROXY: AuthSubject = "trusted_companion_proxy"
 SUBJECT_API_KEY: AuthSubject = "api_key_credential"
@@ -390,6 +394,23 @@ class LocalOperatorPrincipalStore:
             )
         return payload
 
+    def _consume_export(self) -> None:
+        """Unlink the export and fsync its parent, so the deletion survives power loss.
+
+        Without the directory fsync a consumed export can reappear after a crash while the
+        principal revision has already advanced; the next roll-forward would then reject its
+        now-stale fork and block recovery.
+        """
+
+        self.export_path.unlink(missing_ok=True)
+        directory = os.open(
+            self.export_path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
     @staticmethod
     def _serialize(payload: Mapping[str, Any]) -> bytes:
         return json.dumps(dict(payload), sort_keys=True, separators=(",", ":")).encode() + b"\n"
@@ -505,6 +526,19 @@ class LocalOperatorPrincipalStore:
         _require_storage_mutation_capability(_capability)
         with self._locked():
             current = self.require()
+            if not credential and SUBJECT_API_KEY in current.subjects:
+                # An empty rotation would keep `api_key_credential` bound with no
+                # fingerprint, so every admitted key would then fail verification and the
+                # instance could be left with no usable principal -- routing around
+                # `revoke_subject`'s last-subject safeguard. Dropping a credential is a
+                # governed posture change, not a rotation.
+                raise PrincipalPreflightError(
+                    "an empty credential is not a rotation",
+                    provisioning_action=(
+                        "supply the new credential on stdin, or use "
+                        "`principal-revoke-subject --subject api_key_credential` to drop it"
+                    ),
+                )
             # A rotation keeps the record's salt space fresh: a new credential gets a new
             # salt, so the stored value changes even if the operator rotates back.
             credential_fingerprint = (
@@ -632,7 +666,7 @@ class LocalOperatorPrincipalStore:
                 else None
             )
             payload = {
-                "schema": f"{LOCAL_OPERATOR_PRINCIPAL_SCHEMA}.roll-forward-export",
+                "schema": _ROLL_FORWARD_EXPORT_SCHEMA,
                 "fork_revision": fork_revision,
                 "credential_fingerprint": credential_fingerprint,
                 "exported_at": _now(),
@@ -664,6 +698,18 @@ class LocalOperatorPrincipalStore:
                     provisioning_action="re-run the stopped-window export before roll-forward",
                 )
             export = self._read_private_json(self.export_path)
+            if export.get("schema") != _ROLL_FORWARD_EXPORT_SCHEMA:
+                # A mixed-version or corrupted export must not be interpreted as v1. Without
+                # this, any private JSON object carrying a matching `fork_revision` and a
+                # string fingerprint could overwrite the principal record with the wrong
+                # credential instead of failing closed.
+                raise PrincipalPreflightError(
+                    f"unknown roll-forward export schema {export.get('schema')!r}",
+                    provisioning_action=(
+                        "re-run the stopped-window export with a compatible image; nothing "
+                        "was overwritten"
+                    ),
+                )
             fork_revision = export.get("fork_revision")
             # `!=`, not `>`. A fork *below* the current revision is a stale export, and
             # accepting it would let a leftover file replay an old credential over a later
@@ -676,7 +722,10 @@ class LocalOperatorPrincipalStore:
                     provisioning_action="resolve the divergent auth lineage manually; nothing was overwritten",
                 )
             exported_fingerprint = export.get("credential_fingerprint")
-            if exported_fingerprint is not None and not isinstance(exported_fingerprint, str):
+            if exported_fingerprint is not None and (
+                not isinstance(exported_fingerprint, str)
+                or fingerprint_salt(exported_fingerprint) is None
+            ):
                 raise PrincipalPreflightError(
                     "roll-forward export credential state is ambiguous",
                     provisioning_action="resolve the ambiguous auth lineage manually; nothing was overwritten",
@@ -684,7 +733,7 @@ class LocalOperatorPrincipalStore:
             if exported_fingerprint == current.credential_fingerprint:
                 # Nothing to reconcile. Consume the export so it cannot be replayed later
                 # against a rotated record.
-                self.export_path.unlink(missing_ok=True)
+                self._consume_export()
                 return current
             if exported_fingerprint is None or current.credential_fingerprint is None:
                 raise PrincipalPreflightError(
@@ -704,7 +753,7 @@ class LocalOperatorPrincipalStore:
                 additional_roles=current.additional_roles,
             )
             self._atomic_private_write(self.path, self._serialize(record.as_payload()))
-            self.export_path.unlink(missing_ok=True)
+            self._consume_export()
             return record
 
 
