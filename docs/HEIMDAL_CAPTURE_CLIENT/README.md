@@ -80,7 +80,7 @@ streaming) stays "do not build" (R-EXTERNAL).
 | [WATCH_ONE_TAP_RECORD_WITH_HAPTIC_STATUS.md](WATCH_ONE_TAP_RECORD_WITH_HAPTIC_STATUS.md) | `RasmusTho/bifrost` | watchOS target: one-tap record, pause/resume haptics, WatchConnectivity file relay into the phone's delivery queue |
 | [CAPTURE_TIME_METADATA_SIDECAR.md](CAPTURE_TIME_METADATA_SIDECAR.md) | both | Versioned sidecar with capture-time context (episode-dimension signals, ADR-0051); bifrost writes it, hub adapter consumes it |
 | [PROVE_CAPTURE_ROUND_TRIP_ON_TEST_CHANNEL.md](PROVE_CAPTURE_ROUND_TRIP_ON_TEST_CHANNEL.md) | `RasmusTho/agentic-pkm-mvp` (hub) | Real-runtime receipt: app-delivered file → watched dir → raw-store admission (→ manually driven ASR/note stages); EXP-1 latency observation |
-| [PROVE_CAPTURE_UAT_JOURNEYS.md](PROVE_CAPTURE_UAT_JOURNEYS.md) | `RasmusTho/bifrost` | XCUITest capture journeys in CI + operator device walkthrough (background capture, interruptions, Watch haptics) |
+| [PROVE_CAPTURE_UAT_JOURNEYS.md](PROVE_CAPTURE_UAT_JOURNEYS.md) | `RasmusTho/bifrost` | XCUITest journeys delivered by PR #56; operator device walkthrough remains on bifrost#21 (`agent:needs-human`) |
 | [RECONCILE_AND_CLOSE_B3_TRACKING.md](RECONCILE_AND_CLOSE_B3_TRACKING.md) | `RasmusTho/agentic-pkm-mvp` (hub) | Assemble the ledger on #3026, close truthfully, update Epic B #3020 |
 
 ## Execution order
@@ -95,7 +95,8 @@ streaming) stays "do not build" (R-EXTERNAL).
 7. `CAPTURE_TIME_METADATA_SIDECAR` — Bifrost producer half **delivered** by bifrost#20 / PR #37;
    hub consumer half remains its own issue, sequenced with the ERE lane.
 8. `PROVE_CAPTURE_ROUND_TRIP_ON_TEST_CHANNEL` — after 3 and 4 (registered device delivering real files).
-9. `PROVE_CAPTURE_UAT_JOURNEYS` — after 2–6 merge.
+9. `PROVE_CAPTURE_UAT_JOURNEYS` — agent-verifiable journeys **delivered** by bifrost PR #56;
+   physical-device walkthrough receipt remains on bifrost#21 (`agent:needs-human`).
 10. `RECONCILE_AND_CLOSE_B3_TRACKING` — strictly last; blocked on 8's and 9's receipts.
 
 ## Gates (slice-granular, recorded on #3026)

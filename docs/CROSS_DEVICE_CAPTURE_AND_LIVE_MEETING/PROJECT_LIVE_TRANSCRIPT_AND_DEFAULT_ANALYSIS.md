@@ -2,6 +2,7 @@
 name: Project Live Transcript And Default Analysis
 description: Hub-side per-segment ASR into a revisable transcript projection plus a generic-default-template analysis projection with revision and derivation provenance.
 task_id: CDLM-06
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-02]

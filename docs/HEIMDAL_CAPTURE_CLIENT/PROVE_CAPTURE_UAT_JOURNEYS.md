@@ -2,6 +2,7 @@
 name: Prove Capture UAT Journeys
 description: The B3 capture journeys run as XCUITests in bifrost CI, plus the operator's scripted device walkthrough — background capture, interruptions, Watch haptics — receipted on #3026.
 task_id: HCAP-09
+github_issue: "https://github.com/RasmusTho/bifrost/issues/21"
 source_anchor: docs/HEIMDAL_CAPTURE_CLIENT/README.md :: Capability acceptance criteria
 parent_capability: Heimdal Capture Client
 prerequisites: [HCAP-02, HCAP-03, HCAP-04, HCAP-05, HCAP-06]
@@ -10,6 +11,10 @@ can_parallelize_with: [PROVE_CAPTURE_ROUND_TRIP_ON_TEST_CHANNEL]
 ---
 
 # Prove Capture UAT Journeys
+
+State: Agent-verifiable scope delivered by Bifrost PR #56 on 2026-07-30 (merge commit
+`364a283d84dd2c3d2e274b4aaedcff18a96f82af`). Bifrost #21 remains open with
+`agent:needs-human` only for the physical-device walkthrough receipt on hub #3026.
 
 Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
 
@@ -49,13 +54,13 @@ receipts instead of claims.
 
 ## Acceptance Criteria
 
-- [ ] The three composed journeys run green as XCUITests in bifrost CI. `Verify:` bifrost
-  `Yggdrasil/YggdrasilUITests/HeimdalCaptureJourneyTests.swift::{testCaptureJourney,testIdentityAndHealthJourney,testRecoveryJourney}`
-  (new).
-- [ ] Existing B1/B2 journeys stay green on the same head. `Verify:` bifrost CI, both
+- [x] The three recomposed journeys run green as XCUITests in bifrost CI.
+  - Verify: `Yggdrasil/YggdrasilUITests/HeimdalCaptureJourneyTests.swift::{testCaptureAndDurableCustodyJourney,testIdentityHealthAndQueueJourney,testRecoveryAndDiskRebuiltTruthJourney}`
+- [x] Existing B1/B2 journeys stay green on the same reviewed head across both configured
   destinations.
+  - Verify: runtime receipt: bifrost.capture_uat.pr56_full_suite.v1
 - [ ] The scripted device walkthrough exists and the operator's receipt is posted on #3026.
-  `Verify:` receipt comment on #3026 referencing the walked SHA (non-behavioral; the human step).
+  - Verify: runtime receipt: heimdal.capture_uat.physical_device_walkthrough.v1
 
 ## How to Verify (Pre-Merge)
 
@@ -74,6 +79,6 @@ receipts instead of claims.
 
 ## Related GitHub Issues
 
-One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:blocked` on the HCAP-02..06
-issues), linking hub #3026 and this spec file. TCD hint: Sonnet / medium effort — journey
-composition + a precise checklist.
+Bifrost #21 is not an implementation pickup: PR #56 delivered the agent-verifiable journey work,
+and `agent:needs-human` now truthfully marks the one remaining operator walkthrough receipt on hub
+#3026.

@@ -1,11 +1,11 @@
-State: Canonical hub client contract (owner rulings 2026-07-07, enacted via `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`). Closes the ecosystem audit's remaining T2 work: the "Mimer client contract" named by Epic B #3020 / #3023 / `bifrost#1` now exists as a committed hub artifact. Current-state contract over shipped surfaces; every named gap is marked as follow-on work, not claimed solved.
+State: Canonical hub client contract (owner rulings 2026-07-07, enacted via `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`; governed media and meeting lanes promoted 2026-08-01 after CDLM acceptance). Current-state contract over shipped surfaces; every named gap is marked as follow-on work, not claimed solved.
 Doc role: Core SoT contract
 Authority: Canonical for how external clients attach to Mimer: the callable surface, the two write transports (governed HTTP API and direct filesystem), the authority envelope, and the concurrent-writer client discipline. Serves BOTH client families — Bifrost native shells (`RasmusTho/bifrost`, ADR-0050) and external app agents (Claude app, Codex app, and peers). Subordinate to `docs/INTEGRATION_FABRIC_CONTRACT.md` (class taxonomy + authority rule), `docs/AGENT-FLOWS.md` (participation modes and zones), `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (the decided multi-writer mechanism, supersedes ADR-0053, resolves #3114; VMW-01 through VMW-04 and INV-VW2 are delivered, while versionless-writer migration remains in #3570), and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` / `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` (runtime write mechanics). `docs/ARCHITECTURE.md` and `docs/STATUS.md` win on current runtime truth.
 Owner: Architecture spine (Rasmus)
 Temporal class: strategic
 Review cadence: event-driven (re-verify at each Epic B wave boundary and each remaining ADR-0055 enactment change)
 Source of truth: mixed
-Last reviewed: 2026-07-07
+Last reviewed: 2026-08-01
 
 # Mimer Client Contract
 
@@ -61,6 +61,11 @@ Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `m
 | Capture (write) | `POST /api/companion/capture` | Friction-free intake into the vault inbox note | `x-trace-id`; actor currently fixed (§9 F1) | Full governed chain (§4.1) |
 | Media capture (write) | `POST /api/heimdal/capture/media` | Admit one captured original (audio/image/video/document) and return its durable-acceptance receipt | `x-trace-id` / response `trace_id`; client-minted `capture_id` + `content_sha256` | Governed chain, acknowledged only on durable acceptance (§4.4) |
 | Receipt query | `GET /api/heimdal/capture/receipts?capture_id=` | Answer `admitted` or `unknown` per capture id — the reconnect/recovery answer after a lost response | `x-trace-id` / response `trace_id` | Read-only; discloses admission state, same LAN posture (§4.4) |
+| Meeting session (write) | `POST /api/heimdal/meeting/session` | Open or replay one client-minted meeting session | `x-trace-id` / response `trace_id`; stable `session_id` | Durable idempotent ledger write (§4.5) |
+| Meeting close + finalization (write) | `POST /api/heimdal/meeting/{session_id}/close` | Record the final segment count and trigger idempotent finalization | `x-trace-id` / response `trace_id`; stable `session_id` | Durable close; finalization status is explicit (§4.5) |
+| Meeting gap report | `GET /api/heimdal/meeting/{session_id}/segments` | Return received and missing sequence numbers, conflicts, and completeness | `x-trace-id` / response `trace_id` | Read-only projection over the durable ledger (§4.5) |
+| Meeting live projection | `GET /api/heimdal/meeting/{session_id}/projection` | Return revisable transcript/default-analysis blocks plus finalization receipt | `x-trace-id` / response `trace_id`; revision/provenance per block | Read-only, derived, never canonical (§4.5) |
+| User note (write) | `POST /api/heimdal/meeting/{session_id}/user-note` | Persist one editor-authored note revision without exposing it to derived writers | `x-trace-id` / response `trace_id`; `(note_block_id, revision)` | Editor-only fail-closed block guard; durable ack (§4.5) |
 | Retrieve | `GET /search?q=` | Hybrid retrieval over the durable index (KERNEL-05) | `x-trace-id` | Read-only |
 | Ask | `POST /api/ask` | Grounded Q&A with per-source citations | `x-trace-id` | Read-only |
 | Voice ask | `POST /api/ask/voice` | One turn from transient audio to a grounded ASK answer and optional local speech | `x-trace-id` / response `trace_id` | **Read-only**; no transcript, capture intent, or audio is written |
@@ -185,6 +190,46 @@ channel; until that is done for a channel, every admission there still answers
 `500 raw_store_key_unavailable` / `not_acknowledged` rather than a receipt. See
 `docs/STATUS.md :: Runtime verification`.
 
+### 4.5 Governed meeting lane (session, projection, notes, and finalization)
+
+Implementation: `app/api/routes/heimdal_meeting.py` over the durable ledger, projection,
+block-ownership, and finalization modules in `app/heimdal/`. Shipped by CDLM-02/06/07/08 and
+consumed by the Bifrost live-meeting surface delivered in bifrost#60. Every route has the §4
+LAN/loopback/tailnet posture; none is a public-ingress surface.
+
+**Session and segment identity.** `POST /api/heimdal/meeting/session` takes
+`{session_id, device_id, template_selection}` and replays the recorded open for the same
+client-minted `session_id`. Media parts join the session through §4.4 sidecar fields
+`(session_id, session_seq)`: the ledger admits one content hash per pair, preserves the original on
+conflict, and exposes exact gaps through `GET .../segments`. Reconnect clients ask for that durable
+gap set and resend only missing segments; they never infer completeness from a local prefix.
+
+**Projection is revisable evidence, not truth.** `GET .../projection` returns sequence-ordered
+transcript blocks with explicit gaps and `generic-default@1` analysis blocks. Derived blocks carry
+revision, `derived_from`, template, and engine provenance. Template resolution is user selection
+over explicitly permitted metadata over the default; the current shipped template set contains
+only the default. Late segments create a new convergent revision. No voice, face, diarization, or
+other uncertain signal assigns a participant, person, or owner.
+
+**User notes are a separate authority class.** `POST .../user-note` takes a client-minted UUID
+`note_block_id`, client-monotonic `revision`, `text`, and `editor_identity`. It is idempotent by
+`(note_block_id, revision)` and returns 2xx only after the text is durable and the
+`heimdal.meeting.user_note.written` event commits. `user_note` is writable only through the user
+editor seam. Analysis, reconciliation, template rerender, and finalization are structurally
+confined to `derived_projection`; unknown or conflicting ownership fails closed with the existing
+note bytes untouched. The client UI must keep “your notes” separate from “AI keeps updating.”
+
+**Close and final artifacts.** `POST .../close` takes `{final_seq_count}` and never reopens a
+session. It triggers idempotent finalization and returns its status explicitly; a gap remains
+`needs_attention` with exact missing sequence numbers. The resulting transcript, final analysis,
+and verbatim user notes are three separate create-once Sources-zone artifacts. Late admission
+supersedes with lineage rather than rewriting the previous artifacts. The iPad presents these
+separately and never merges user notes into derived analysis.
+
+This lane grants no entity-merge authority. Bifrost may project candidates and carry an explicit
+human approval, but the Hub alone executes and journals entity merges under
+`docs/ENTITY_REVIEW_OPERATION_JOURNAL/`; the client never emits a canonical merge command.
+
 ## 5. Direct-filesystem write transport (owner-permitted, 2026-07-07)
 
 The owner has ruled that direct filesystem vault writes by external clients are **permitted now** — this extends the writer set that `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` governs (Mac runtime, Obsidian human, iCloud sync, Bifrost clients) with the external-app-agent class, ahead of that model's complete enactment. Enacted via ADR-0056. Permission is not safety; §6 is the discipline that makes the permission survivable while versionless writers remain in migration.
@@ -301,10 +346,11 @@ Therefore: the rules below remain **binding client discipline around the progres
 - **W2 — Read-fresh, write-promptly, verify-staleness.** Before any whole-file write: read the file and record its raw-byte content hash; keep the read→write window as short as possible; immediately before writing, re-check the hash. Callers using the shared Mimer filesystem seam pass that hash as `expected_version` with their `writer_identity`, so VMW-02 can write atomically or stage an initially stale proposal. A direct filesystem client outside that seam must still re-read and re-apply its edit when the hash changed; its check remains advisory and the TOCTOU window remains real.
 - **W3 — Ownership courtesy.** Default to creating and editing files the client itself authored (workspace roots, §5). Edit a human-authored note only on explicit human direction in the live session, and prefer append/patch-shaped edits over whole-file rewrites of prose the human may have open in Obsidian.
 - **W4 — Atomic replace.** Whole-file writes land as write-to-temp-then-rename within the same directory, so the watcher and other readers never observe a half-written note. Never leave temp files in the vault on failure.
-- **W5 — Idempotency by verification, not by retry — except on the media lane.** No client-supplied idempotency key exists on the *text* capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So for `POST /api/companion/capture` and direct FS writes: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target (the inbox note tail for captures; the file content for FS writes) before any retry. Direct FS whole-file writes are idempotent by content (re-applying the identical content is safe); appends are not — check for the marker/timestamp line before re-appending. **`POST /api/heimdal/capture/media` is the exception:** it carries a client-minted `(capture_id, content_sha256)` identity, so a lost response is resolved either by re-sending the identical pair or by asking `GET /api/heimdal/capture/receipts` — never by guessing (§4.4).
+- **W5 — Idempotency by verification, not by retry — except on the receipted media/meeting lanes.** No client-supplied idempotency key exists on the *text* capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So for `POST /api/companion/capture` and direct FS writes: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target before any retry. Direct FS whole-file writes are idempotent by content; appends are not. **The §4.4/§4.5 lanes are the exception:** retain the original/note revision until a durable ack, then resolve ambiguity through the stable capture/session/note identity and the matching receipt or ledger query. Never mint a replacement identity for a retry.
 - **W6 — Write-ordering vs the watcher.** The watcher detects changes by mtime + sha256 and feeds ingest; the index trails the file. After a write, the file is truth and the index is eventually consistent. Never re-write a file to "fix" perceived index lag, and never treat index state as evidence the write failed.
 - **W7 — One transport per note; reconciling FS vs API writes.** The only note both transports touch by design is excluded from FS writes (the capture inbox, §5), so a governed API write and a direct FS write to the same note should not occur under this contract. If a client nevertheless observes it caused such a collision (e.g. it rewrote a note between another writer's read and write), the reconciliation is: the file's current content is the outcome (LWW), the AuthorityReceipt/outbox event remains the truthful record of *what the governed write did at its time*, and the client surfaces the suspected collision to the human rather than silently re-asserting its own version. Receipts are authoritative for what happened, never for what is currently true (AGENT-FLOWS §10).
 - **W8 — iCloud conflict artifacts.** If a client encounters a `… (conflicted copy …)` sibling, it must not merge, delete, or adopt it silently: surface it to the human. The production vault Markdown iterator uses the VMW-01 shared classifier to quarantine both iCloud and runtime-staged conflict artifacts before watcher/ingest/index parsing, preserves the artifact on disk, and emits a legible classification receipt (VMW-03 / #3452). VMW-04 / #3453 reconciled this as shipped INV-VW3 enforcement.
+- **W9 — Meeting block ownership is not presentation convention.** A Bifrost client keeps user-note edits on the §4.5 editor endpoint and treats transcript/analysis as revisable projections. It must not copy a derived block into a user-note write, rewrite a `user_note` from reconciliation/template/finalization output, or turn an entity approval into a canonical merge command.
 
 ### Failure modes and degradation (both transports)
 
@@ -312,7 +358,7 @@ Therefore: the rules below remain **binding client discipline around the progres
 | --- | --- |
 | API unreachable | Degrade to read-only over the declared filesystem roots (if granted) and say so. No shadow write queue that replays later without the human (invariant 3: hidden truth in transit). |
 | WriteGuard blocked / vault unselected | Surface the structured reason verbatim. Never fall back from a blocked governed write to a direct FS write (invariant 2). |
-| `not_acknowledged` (500) | Treat as "written-but-unaccounted": verify by read (W5); no blind retry. |
+| `not_acknowledged` (500) | Text capture/direct FS: verify by read (W5). Receipted media/meeting lane: retain local custody and retry/query with the same stable identity (§4.4/§4.5). |
 | Retrieval/ask failure | Propagate; never answer from client memory while claiming vault grounding. |
 | Suspected same-note collision | Report to the human with both versions' evidence; do not silently re-write (W7). |
 | Filesystem access absent | Operate API-only; the contract's API surface is sufficient for capture/retrieve/ask. |
@@ -344,9 +390,9 @@ Answers per `docs/INTEGRATION_FABRIC_CONTRACT.md` §Contract fields.
 
 | Field | Answer |
 | --- | --- |
-| Allowed role | Interface: render Mimer/Heimdal surfaces; capture/review/steer/confirm hot paths; read/write vault notes incl. `_heimdal/**` control notes (design-of-record: `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`). |
-| Authority limits | The three invariants (§3); the shell is the runtime container, not the human — it transports the human's actions and never originates authority. No journey becomes app-only (topology doc): Obsidian + the notes alone must remain sufficient. |
-| Persistence class | None inside Mimer beyond vault Markdown written on the human's behalf; shell-local state is opaque and rebuildable. |
+| Allowed role | Interface: render Mimer/Heimdal surfaces; capture into the receipted outbox; show durable transfer state; record meetings; edit user notes; project revisable transcript/analysis; review/steer/confirm hot paths; read/write permitted vault/control notes (design-of-record: `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`). |
+| Authority limits | The three invariants (§3); the shell transports the human's actions and never originates semantic authority. It cannot mutate `user_note` from a derived context and cannot execute a canonical entity merge; Hub guards and journals those effects. No journey becomes app-only. |
+| Persistence class | Captured originals and unacknowledged user-note revisions may live durably client-side only as transfer custody, retained until the Hub's durable receipt. Transcript/analysis caches are rebuildable projections. No client-local meaning becomes canonical. |
 | Provenance requirement | `x-trace-id` on API calls; provenance block on created notes (§5); per-device identity is F2 follow-on (audit: "no per-device identity/session model"). |
 | Event boundary | HTTP API + watcher ingest, as above. |
 | Health / observability | §7; additionally B1 cites ADR-0055, not a client-side invention, as its consistency posture. |
@@ -357,7 +403,7 @@ Answers per `docs/INTEGRATION_FABRIC_CONTRACT.md` §Contract fields.
 Named follow-on work; each routes through `feature-breakdown`/`docs-to-issue`, none blocks v1 clients operating under the postures above:
 
 - **F1 — Capture provenance field + per-agent actor.** The capture schema is `{text}` with `extra="forbid"`; the actor is hardcoded `companion.capture`, so a Claude-app capture and a Bifrost capture are indistinguishable in DecisionToken/AuthorityReceipt/event. Add an optional provenance object to the schema and thread it through the governed chain.
-- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the four client routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). Owner-ruled as the first hardening slice, not a v1 blocker.
+- **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the client-facing routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). Owner-ruled as the first hardening slice, not a v1 blocker.
 - **F3 — uuid-resolving note fetch or enriched search payload.** Close the §4.2 uuid→path gap at the API instead of by client-side filesystem enrichment.
 - **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of 23+ route modules (audit §3; the surface is still growing); a client-publishable contract needs both.
 - **F5 — Client-visible idempotency key on the *text* capture endpoint.** Still open for `POST /api/companion/capture`: no client-supplied key exists there, so a client must verify-by-read after `not_acknowledged`/timeout instead of retrying (§6 W5). **Delivered for the media lane** by #4384 / PR #4400: `POST /api/heimdal/capture/media` takes `(capture_id, content_sha256)` as its client-minted identity and answers a resend with the same `receipt_id` (§4.4), so that lane retries safely and needs no verify-by-read.

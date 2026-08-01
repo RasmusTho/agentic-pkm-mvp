@@ -1,11 +1,11 @@
-State: Filed target-state specification (authored 2026-07-29). Parent validation hub #4383 (`agent:blocked`); children hub #4384–#4389 and bifrost #57–#60 filed 2026-07-29; only CDLM-01 (#4384) is `agent:ready`. No runtime behavior described here is implemented until a child PR delivers it.
+State: Delivery-complete specification (authored 2026-07-29; acceptance reconciled 2026-08-01). All ten children are closed with validation receipts on parent #4383. Parent acceptance evidence is complete; #4383 remains open only until the single owner-doc promotion lands. The capability is shipped on `main` and test-channel-proven; prod activation and physical-device-only HCAP-09 truth are not claimed.
 Doc role: Specification directory (feature-breakdown lane)
 Authority: Owns the bounded implementation order, cross-task durability/authority invariants, and acceptance path for the first Bifrost product vertical: durable cross-device capture ingress plus live meeting analysis. Subordinate to `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` (ingestion organ, hub-side ASR, Topology C), `docs/adr/ADR-0060-capture-posture-b-full-voice-identity.md` (posture target and consent classes), `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` / `docs/adr/ADR-0056-mimer-client-contract-and-transports.md` / `docs/contracts/MIMER_CLIENT_CONTRACT.md` (transports, writer discipline, Sources zone), and the entity-review authority boundary in `docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md`. ADRs win on conflict.
 Owner: Product/Runtime — Heimdal ingestion + Mimer meeting cognition + Bifrost client surfaces
-Temporal class: target-state delivery contract
+Temporal class: delivered capability contract (authored as target state; acceptance promoted 2026-08-01)
 Review cadence: event-driven (filing, each child merge, terminal acceptance)
 Source of truth: this directory for task shape; the owner documents named above for current authority and shipped behavior
-Last reviewed: 2026-07-29
+Last reviewed: 2026-08-01
 
 # Cross-Device Capture & Live Meeting (CDLM)
 
@@ -16,31 +16,35 @@ vertical: capture audio, photos, video, receipts, and documents on Apple Watch, 
 transfer them to the hub reliably; and run live meeting capture with a provisional, revisable
 analysis surface on iPad.
 
-The delivered substrate is honest but insufficient for that contract:
+At authoring time, the delivered substrate was honest but insufficient for that contract:
 
-- **Delivery today is placement-gated, not receipt-gated.** B3's shipped delivery discipline
+- **Delivery was placement-gated, not receipt-gated.** B3's shipped delivery discipline
   (`docs/HEIMDAL_CAPTURE_CLIENT/DELIVER_RECORDINGS_TO_WATCHED_FOLDER.md`, bifrost#16 / PR #36)
   deletes the local original after confirmed *placement in the watched folder*. Placement is not
   hub admission: the 2026-07-29 prod bring-up found owner recordings that "should have landed"
   with the entire capture tree empty (#4369) while the test channel's capture watcher had been
-  crash-looping behind a healthy healthcheck for weeks (#4362). Nothing in the shipped chain can
-  tell the client — or the owner — whether an original is durably accepted.
-- **The governed capture surface has no media lane and no client idempotency key.**
-  `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 ships text capture only, and names the missing
-  client-visible idempotency key as gap F5. Audio ingress is filesystem-only.
-- **Nothing produces a live, revisable meeting projection.** ASR is hub-side and shared
-  (ADR-0049 §3; `app/media/transcribe.py`), but the capture→ASR→note chain has no unattended
+  crash-looping behind a healthy healthcheck for weeks (#4362). Nothing in that chain could tell
+  the client — or the owner — whether an original was durably accepted.
+- **The governed capture surface had no media lane and no client idempotency key.** The Mimer
+  client contract shipped text capture only, and named the missing client-visible idempotency key
+  as gap F5. Audio ingress was filesystem-only.
+- **Nothing produced a live, revisable meeting projection.** ASR was hub-side and shared
+  (ADR-0049 §3; `app/media/transcribe.py`), but the capture→ASR→note chain had no unattended
   orchestrator, no session/segment model, no analysis projection, and no block-ownership model
   for a meeting surface.
 
-This directory specifies that vertical as ten bounded, independently verifiable tasks across the
-hub (`RasmusTho/agentic-pkm-mvp`) and the Bifrost client repo (`RasmusTho/bifrost`).
+The ten bounded, independently verifiable tasks in this directory closed those gaps across the
+hub (`RasmusTho/agentic-pkm-mvp`) and the Bifrost client repo (`RasmusTho/bifrost`). The current
+shipped contract now lives in `docs/contracts/MIMER_CLIENT_CONTRACT.md` §§4.4–4.5; this directory
+retains the decomposition, invariants, and acceptance evidence.
 
 ## Classification and authority boundary
 
-**Change classification:** target-state / future-state work. This docs-only breakdown claims no
-shipped behavior. Delivered B3 slices (HCAP-01/02/03/06 and the sidecar producer) remain truthful
-history; where this spec supersedes their semantics, the supersession is stated explicitly below.
+**Change classification:** current-state correction and terminal acceptance promotion. The
+directory was authored as target-state work; its children are now delivered. Current-state claims
+are limited to merged `main` behavior and the test-channel receipt on #4383. Prod activation and
+physical-device-only behavior remain explicitly outside that claim. Earlier B3 slices remain
+truthful history; superseded semantics are stated explicitly below.
 
 **SBS classification:** Product/Runtime.
 
@@ -105,9 +109,8 @@ CDLM-01 durable admission + receipts            (hub, first — everything depen
           -> CDLM-10 round-trip + reconnect proof (strictly last)
 ```
 
-Only CDLM-01 may be `agent:ready` after strict issue-contract validation. Every other child and
-the parent validation hub stay `agent:blocked` until their named prerequisites' acceptance
-receipts are recorded on the parent issue.
+This was the governed delivery order. All ten children are now closed with their prerequisite and
+acceptance receipts recorded on parent #4383; none is available for pickup.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -179,8 +182,8 @@ receipts are recorded on the parent issue.
   walkthrough (locked-screen capture, real calls, wrist haptics, on-device app-lifecycle truths).
   CDLM-10's scripted proof (#4389, `scripts/cdlm_roundtrip_proof.py`) covers the hub contract and
   the simulator-verifiable composition only; those simulator-only limits are stated in its run
-  report on #4383. With CDLM-03/05/08/09 delivered and the CDLM-10 receipt posted, bifrost#21 is
-  unblocked for the operator's walkthrough.
+  report on #4383. Bifrost PR #56 delivered the agent-verifiable journeys; bifrost#21 is now
+  `agent:needs-human` because only the operator's build-bound physical-device receipt remains.
 - **Execution gate G-CI is retired (2026-07-30).** This directory originally required bifrost#52
   to be fixed, or local `xcodebuild test` evidence attached, before any bifrost child could merge.
   That gate rested on a stale premise: all three defects bifrost#52 described had already been
@@ -203,34 +206,45 @@ receipts are recorded on the parent issue.
 
 The parent feature issue can be closed when all of the following hold:
 
-- [ ] A capture on iPhone or iPad (audio, photo, document/receipt, video) reaches the hub with a
+- [x] A capture on iPhone or iPad (audio, photo, document/receipt, video) reaches the hub with a
   durable-acceptance receipt, retained locally until that receipt, surviving kill/relaunch at any
   point, with duplicate-free resend proven (CDLM-01/03/04, receipts on the parent).
-- [ ] The iPad queue shows the five states truthfully across restart and reconnect (CDLM-05).
-- [ ] A live meeting session yields a revisable transcript + generic-template analysis on iPad
+  - Verify: parent #4383 CDLM-10 stages 1–3 receipt plus bifrost
+    `Yggdrasil/YggdrasilTests/TransferOutboxTests.swift::{testDeletionRequiresPersistedReceipt,testIdentityStableAcrossRelaunchAndResend}`.
+- [x] The iPad queue shows the five states truthfully across restart and reconnect (CDLM-05).
+  - Verify: bifrost
+    `Yggdrasil/YggdrasilUITests/TransferQueueJourneyTests.swift::testOfflineToCompleteJourney`
+    plus parent #4383 CDLM-10 stage 2 receipt.
+- [x] A live meeting session yields a revisable transcript + generic-template analysis on iPad
   while recording, reconciles a forced disconnect by resending missing segments and re-deriving,
   and separates "your notes" from "AI keeps updating" per INV-CDLM-6 (CDLM-02/06/07/09).
-- [ ] Meeting end produces the consolidated transcript and final derived analysis with user notes
+  - Verify: parent #4383 CDLM-10 stage 4 receipt plus
+    `tests/heimdal/test_meeting_block_ownership.py::test_user_notes_survive_all_derived_passes`
+    (production writers; byte-identical note assertion).
+- [x] Meeting end produces the consolidated transcript and final derived analysis with user notes
   preserved as their own artifact, and known gaps surfaced as needs-attention (CDLM-08).
-- [ ] The composed round trip with chaos steps runs on the test channel with receipts on the
+  - Verify: parent #4383 CDLM-10 stage 5 receipt plus
+    `tests/heimdal/test_meeting_finalization.py::{test_three_artifacts_materialize_with_correct_classes,test_user_notes_materialize_verbatim_via_guard}`.
+- [x] The composed round trip with chaos steps runs on the test channel with receipts on the
   parent issue (CDLM-10).
+  - Verify: parent #4383 terminal run `cdlm10-868e042e59` and
+    `tests/heimdal/test_cdlm_roundtrip_script.py::test_script_stages_and_evidence_contract`.
 
 ## Relationship to GitHub issues
 
 - **Parent / validation hub:** [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383),
-  filed 2026-07-29 with `agent:blocked` — a validation hub, never a pickup issue. It carries the
-  live child table and the capability acceptance ledger.
-- **Hub children:** CDLM-01 [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384)
-  (`agent:ready`), CDLM-02 [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385),
+  still `agent:blocked` only for the terminal owner-doc promotion. All child and capability
+  receipts are present; it remains a validation hub, never a pickup issue.
+- **Hub children (all closed):** CDLM-01 [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384),
+  CDLM-02 [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385),
   CDLM-06 [#4386](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386),
   CDLM-07 [#4387](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4387),
   CDLM-08 [#4388](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4388),
   CDLM-10 [#4389](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4389).
-- **Bifrost children:** CDLM-03 [bifrost#57](https://github.com/RasmusTho/bifrost/issues/57),
+- **Bifrost children (all closed):** CDLM-03 [bifrost#57](https://github.com/RasmusTho/bifrost/issues/57),
   CDLM-04 [bifrost#58](https://github.com/RasmusTho/bifrost/issues/58),
   CDLM-05 [bifrost#59](https://github.com/RasmusTho/bifrost/issues/59),
   CDLM-09 [bifrost#60](https://github.com/RasmusTho/bifrost/issues/60) (same repo split as B3).
-  Every child except CDLM-01 is `agent:blocked` on its named prerequisite's acceptance receipt.
 - **Adjacent, not owned here:** #4362 (capture-watch env delivery bug) and #4369 (locate the
   legacy recording path — owner-gated) repair the Model-1 floor; #3026/B3 remains the audio
   floor's validation hub.
@@ -246,6 +260,6 @@ its receipts on the parent issue.
 
 ## Evidence surface
 
-Validation receipts accumulate as comments on the parent feature issue. Owner-doc promotion
-(client contract media lane, ARCHITECTURE/STATUS claims) happens once, at acceptance, per
-`.codex/skills/feature-breakdown/SKILL.md` — not per child merge.
+All validation receipts are comments on parent #4383. The single terminal owner-doc promotion
+reconciles the Mimer client contract, ARCHITECTURE, STATUS, this directory, and DOCS_INDEX; it does
+not expand runtime scope or claim prod activation.

@@ -2,6 +2,7 @@
 name: Prove Cross-Device Round Trip With Reconnect
 description: Test-channel proof of the composed vertical — multi-modality round trip with kill/restart and disconnect/reconnect chaos steps, duplicate-free idempotency evidence, and receipts on the parent issue.
 task_id: CDLM-10
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4389"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Capability acceptance criteria
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-04, CDLM-05, CDLM-08, CDLM-09]
@@ -10,6 +11,10 @@ can_parallelize_with: []
 ---
 
 # Prove Cross-Device Round Trip With Reconnect
+
+State: Delivered by hub issue #4389 / PR #4433 on 2026-07-30 (merge commit
+`c1164516785c3e3263bbadae6cdfc57786f2ec3b`). Test-channel run `cdlm10-868e042e59` is the
+terminal composed receipt on parent #4383; physical-device-only truth remains Bifrost #21.
 
 ## Purpose
 

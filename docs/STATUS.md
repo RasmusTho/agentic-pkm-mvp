@@ -105,8 +105,8 @@ promote public internet readiness.
   resumes; revoke `grant-media-capture-v1` as well to keep it stopped — programmatic today, since
   no CLI or route grants or revokes. Contract detail
   is owned by `docs/EVENTS.md :: Heimdal governed media ingress + durable receipts` and
-  `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`; promotion into
-  `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 remains parent-acceptance work on #4383.
+  `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`; the callable
+  client contract is promoted in `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4.4–§4.5.
 - The meeting session/segment ledger is shipped (CDLM-02, #4385): `POST /api/heimdal/meeting/session`
   and `POST /api/heimdal/meeting/{session_id}/close` are idempotent by client-minted identity and
   never fork or re-open a session; every governed media admission carrying `(session_id, session_seq)`
@@ -161,6 +161,21 @@ promote public internet readiness.
   acknowledgement (migration `d0f5b2c7e4a6`). Finalization writes its own block through the CDLM-07
   guard as a derived writer and is structurally refused any user-note mutation. The vault root
   resolves from `HEIMDAL_MEETING_VAULT_ROOT`; unconfigured is a named, honest skip.
+- The first Bifrost product vertical is delivered across the Hub and native client (CDLM-01–10;
+  parent #4383): iPhone/iPad capture of audio, image, receipt/document, and bounded video enters a
+  disk-backed outbox under one stable capture identity; Watch audio relays through the phone into
+  the same custody path. Originals remain until the Hub's durable receipt is persisted locally;
+  reconnect queries receipts before resending unknowns. The iPad queue renders `pending locally`,
+  `transferring`, `backend durably received`, `processing`, and `complete` / `needs attention`
+  only from durable evidence and rebuilds after relaunch. Its live-meeting surface keeps the user's
+  editor-owned notes structurally separate from revisable AI transcript/analysis blocks, resends
+  ledger-missing segments, and presents the three final artifacts separately. Bifrost issues
+  #57–#60 and Hub issues #4384–#4389 are closed; composed test-channel run
+  `cdlm10-868e042e59` proves restart, duplicate replay, reconnect, gap legibility, and byte-identical
+  note survival. This is shipped/test-channel truth, not a prod activation claim. Bifrost PR #56
+  delivered the simulator journeys; physical locked-screen/call/Watch-haptic evidence remains the
+  named operator-only receipt on bifrost#21 (`agent:needs-human`). Hub alone executes and journals
+  entity merges; the iPad remains projection/approval only.
 - The System Entry Point capability (#1782) is delivered. All twelve implementation children shipped: server-declared entry state (#1783/PR #1800), latency-ladder re-entry treatments (#1784/PR #1801), unified topbar/overlay host (#1785/PR #1802), the ⌘K Panel command palette (#1786/PR #1817), the system map overlay (#1787/PR #1846), the opt-in guidance layer (#1788/PR #1847), the settings drawer (#1789/PR #1834), governed capture append plus the ⌘N capture modal (#1790/PR #1799, #1791/PR #1816), memory review-queue endpoints plus drawer (#1792/PR #1798, #1793/PR #1818), and the read-only receipts history modal (#1794/PR #1833). The fixture-driven state-gallery validation harness (#1795, SEP-11; `tests/companion_ui/test_entry_state_gallery.py`) proves the composition: declared transitions render and undeclared transitions are rejected, cold/first-contact/no-vault render no re-entry overlay, the governed-vs-body-edit receipt asymmetry holds, no UI-derived authority classification renders, the display budget stays at or below the server caps, reduced-motion end-states are fully visible, and narrow mode preserves every critical affordance. The source-peek popover presentation and posture emphasis switch remain truthfully unshipped (declared overlay ids that do not mount); the context lane / place band stay parked under the gated decision issue #1796. Epic #1782 closure is performed by the delivery coordinator on the #1795 validation receipt.
 - `app/resurfacing/runtime.py` now provides a minimal non-mutating resurfacing evaluator seam that
   does not require a query, derives relevance-change candidates from runtime status signals, emits

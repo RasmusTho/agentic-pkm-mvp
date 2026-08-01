@@ -2,6 +2,7 @@
 name: Enforce Meeting Block Ownership
 description: Meeting block model with stable id, owner, type, and provenance; user_note writable only through the user's editor seam; derived writers confined to derived_projection; ambiguity fails closed.
 task_id: CDLM-07
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4387"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-06]
