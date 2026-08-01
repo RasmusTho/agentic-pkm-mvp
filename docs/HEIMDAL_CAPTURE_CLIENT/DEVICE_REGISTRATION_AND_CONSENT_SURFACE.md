@@ -33,6 +33,13 @@ truthfully (INV-B3-3).
   standing self-record grant as mirrored in `_heimdal/consent.md` (read the grant ref from the
   consent note's `grants`; if the consent note is missing/empty, the surface says so and offers
   registration with the ref left for the hub/human to bind — never a fabricated grant ref).
+  **Since #4492 `basis: self_record` no longer identifies a unique grant**: `consent.md` lists two
+  standing self-record grants, told apart by `scope` — `device+adapter:v1-voice-memo` (the
+  watched-folder/voice-memo lane) and `device+adapter:v1-media-ingress` (the governed media ingress
+  lane, `POST /api/heimdal/capture/media`). Select by `scope`, never by `basis` or by append order:
+  a device whose uploads go through the governed media lane is stamped `grant-media-capture-v1`, so
+  binding it to the voice-memo grant would make the device note disagree with the device's own raw
+  records.
 - **JC surface:** shows the standing grant (scope, granted_at, from the consent note — read-only,
   same note `ConsentLensView` reads), this device's registration state (note exists / fields),
   and an explicit statement of what capture means under Posture A (single-party, discrete,

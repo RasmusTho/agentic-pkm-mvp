@@ -25,6 +25,8 @@ from pathlib import Path
 import pytest
 
 from app.heimdal.consent_ledger import (
+    MEDIA_CAPTURE_GRANT_REF,
+    MEDIA_CAPTURE_SCOPE,
     SELF_RECORD_BASIS,
     SELF_RECORD_GRANT_REF,
     SELF_RECORD_SCOPE,
@@ -75,17 +77,21 @@ def _grant_refs(values: dict) -> set[str]:
 
 
 def test_selfrecord_readout(tmp_path: Path) -> None:
-    """`consent.md` mirrors the standing `self_record` grant, driven by real
-    ledger state -- not a hardcoded string. Granting/revoking changes the
-    rendered readout, proving the readout is actually derived."""
+    """`consent.md` mirrors the standing grants, driven by real ledger state --
+    not a hardcoded string. Granting/revoking changes the rendered readout,
+    proving the readout is actually derived."""
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
 
-    # 1. With only the standing seeded self_record grant active, the readout
-    #    reflects exactly that one grant, faithfully (every field mirrored).
+    # 1. With the seeded standing grants active, the readout reflects exactly
+    #    those grants, faithfully (every field mirrored). Since #4492 there are
+    #    two: the voice-memo `self_record` grant and the media-capture grant.
     note = write_consent_readout(vault_root, write_guard=guard)
     assert note.values["grants"], "readout must include the standing self_record grant"
-    assert len(note.values["grants"]) == 1
+    # Cardinality as well as identity: a set comparison alone would not notice a
+    # duplicated seed row.
+    assert len(note.values["grants"]) == 2
+    assert _grant_refs(note.values) == {SELF_RECORD_GRANT_REF, MEDIA_CAPTURE_GRANT_REF}
     mirrored = note.values["grants"][0]
     assert mirrored["grant_ref"] == SELF_RECORD_GRANT_REF
     assert mirrored["basis"] == SELF_RECORD_BASIS
@@ -121,22 +127,36 @@ def test_selfrecord_readout(tmp_path: Path) -> None:
         granted_by="operator",
     )
     rebuilt = write_consent_readout(vault_root, write_guard=guard)
-    assert _grant_refs(rebuilt.values) == {SELF_RECORD_GRANT_REF, "grant-session-extra-1"}
+    assert _grant_refs(rebuilt.values) == {
+        SELF_RECORD_GRANT_REF,
+        MEDIA_CAPTURE_GRANT_REF,
+        "grant-session-extra-1",
+    }
 
     # 5. Revoking the standing self_record grant and rebuilding removes it
     #    from the readout (mirrors the ledger's `list_active_grants`, which
     #    excludes revoked grants) -- further proof the readout is a live
-    #    mirror, not a cache of the first render.
+    #    mirror, not a cache of the first render. The media-capture grant is a
+    #    separate grant and is untouched by that revocation (#4492).
     revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="operator")
     after_revoke = write_consent_readout(vault_root, write_guard=guard)
-    assert _grant_refs(after_revoke.values) == {"grant-session-extra-1"}
+    assert _grant_refs(after_revoke.values) == {
+        MEDIA_CAPTURE_GRANT_REF,
+        "grant-session-extra-1",
+    }
     assert SELF_RECORD_GRANT_REF not in _grant_refs(after_revoke.values)
 
 
 def test_readout_reflects_no_active_grants() -> None:
     """Negative/completeness coverage: an empty ledger (nothing active)
-    renders an empty grants list, not an error or a stale default."""
+    renders an empty grants list, not an error or a stale default.
+
+    Every standing grant must be revoked to reach that state since #4492;
+    revoking only one leaves the other rendered, which is the point of them
+    being separate grants."""
     revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="operator")
+    assert _grant_refs(build_consent_readout_values()) == {MEDIA_CAPTURE_GRANT_REF}
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="operator")
     values = build_consent_readout_values()
     assert values["grants"] == []
 
@@ -149,7 +169,27 @@ def test_readout_orders_grants_by_ledger_append_order() -> None:
     grant_consent(grant_ref="grant-third", basis="session_optin", scope="device+adapter:s3", granted_by="operator")
     values = build_consent_readout_values()
     refs_in_order = [g["grant_ref"] for g in values["grants"]]
-    assert refs_in_order == [SELF_RECORD_GRANT_REF, "grant-second", "grant-third"]
+    assert refs_in_order == [
+        SELF_RECORD_GRANT_REF,
+        MEDIA_CAPTURE_GRANT_REF,
+        "grant-second",
+        "grant-third",
+    ]
+
+
+def test_readout_mirrors_the_media_capture_grants_modalities() -> None:
+    """The read-only surface renders the media lane's `capture_profile`
+    verbatim (#4492), so `consent.md` states what the lane may actually
+    capture instead of the borrowed speech-only profile."""
+    values = build_consent_readout_values()
+    media = next(g for g in values["grants"] if g["grant_ref"] == MEDIA_CAPTURE_GRANT_REF)
+    assert media["scope"] == MEDIA_CAPTURE_SCOPE
+    assert media["capture_profile"]["modalities"] == [
+        "audio",
+        "image",
+        "video",
+        "document",
+    ]
 
 
 def test_readout_is_read_mostly_not_an_independent_write_path() -> None:

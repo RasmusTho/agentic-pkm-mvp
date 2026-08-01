@@ -27,6 +27,10 @@ import pytest
 
 from app.heimdal import consent_ledger
 from app.heimdal.consent_ledger import (
+    MEDIA_CAPTURE_BASIS,
+    MEDIA_CAPTURE_GRANT_REF,
+    MEDIA_CAPTURE_MODALITIES,
+    MEDIA_CAPTURE_SCOPE,
     SELF_RECORD_BASIS,
     SELF_RECORD_GRANT_REF,
     SELF_RECORD_SCOPE,
@@ -330,3 +334,91 @@ def test_list_active_grants_excludes_revocation_rows_themselves() -> None:
     # were themselves grants (basis == "revocation" is not a valid active grant).
     all_active = list_active_grants()
     assert all(g.basis != "revocation" for g in all_active)
+
+
+# --- #4492: the governed media ingress lane's own standing grant ---------------
+
+
+def test_media_capture_grant_is_seeded_and_names_every_admitted_kind() -> None:
+    """The media lane's standing grant is active by default and its descriptive
+    `capture_profile.modalities` names exactly the kinds the lane admits.
+
+    The set equality against `media_ingress.MEDIA_KINDS` is the load-bearing
+    half: `KD-4E7228960927` existed because the stamped grant named `speech`
+    while the lane admitted four kinds, so a fifth admitted kind added without
+    extending this grant would recreate the same provenance gap silently.
+    """
+    from app.heimdal.media_ingress import MEDIA_KINDS
+
+    grant = resolve_active_grant(scope=MEDIA_CAPTURE_SCOPE)
+    assert grant is not None, "the media-capture grant must be seeded, not set up per test"
+    assert grant.grant_ref == MEDIA_CAPTURE_GRANT_REF
+    assert grant.basis == MEDIA_CAPTURE_BASIS
+    assert grant.scope == MEDIA_CAPTURE_SCOPE
+
+    modalities = grant.capture_profile["modalities"]
+    assert set(modalities) == set(MEDIA_KINDS), (
+        "the seeded grant's modalities must name exactly the admitted media kinds; "
+        f"grant={sorted(modalities)} lane={sorted(MEDIA_KINDS)}"
+    )
+    assert set(modalities) == set(MEDIA_CAPTURE_MODALITIES)
+    # The owner ruling of 2026-07-30 (#4172): one grant covering all four kinds.
+    assert set(modalities) == {"audio", "image", "video", "document"}
+    # Audio and video can carry third-party speech, so the §6.3 degradation
+    # posture is inherited rather than dropped.
+    assert grant.capture_profile["degradation_rules"] == ["third_party_speech"]
+
+
+def test_media_capture_and_self_record_are_separate_grants() -> None:
+    """Two standing grants, two scopes, revoked independently.
+
+    Before #4492 one grant covered both lanes, so revoking voice memos also
+    disabled media ingress. `list_active_grants` sees both, and a revocation of
+    either leaves the other resolvable.
+    """
+    assert MEDIA_CAPTURE_SCOPE != SELF_RECORD_SCOPE
+    assert MEDIA_CAPTURE_GRANT_REF != SELF_RECORD_GRANT_REF
+    seeded = {g.grant_ref for g in list_active_grants()}
+    assert {SELF_RECORD_GRANT_REF, MEDIA_CAPTURE_GRANT_REF} <= seeded
+
+    revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="operator")
+    assert resolve_active_grant(scope=SELF_RECORD_SCOPE) is None
+    still_active = resolve_active_grant(scope=MEDIA_CAPTURE_SCOPE)
+    assert still_active is not None and still_active.grant_ref == MEDIA_CAPTURE_GRANT_REF
+
+    reset_memory_consent_ledger()
+
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="operator")
+    assert resolve_active_grant(scope=MEDIA_CAPTURE_SCOPE) is None
+    voice_memo = resolve_active_grant(scope=SELF_RECORD_SCOPE)
+    assert voice_memo is not None and voice_memo.grant_ref == SELF_RECORD_GRANT_REF
+
+
+def test_reset_reseeds_every_standing_grant() -> None:
+    """`reset_memory_consent_ledger` restores a *valid freshly-migrated* ledger.
+
+    The property the reset hook exists for, now that there is more than one
+    standing grant: a reset ledger with only some of them would make the
+    un-reseeded lane spuriously refuse every capture.
+    """
+    revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="operator")
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="operator")
+    assert resolve_active_grant(scope=SELF_RECORD_SCOPE) is None
+    assert resolve_active_grant(scope=MEDIA_CAPTURE_SCOPE) is None
+
+    reset_memory_consent_ledger()
+
+    assert {g.grant_ref for g in list_active_grants()} == {
+        SELF_RECORD_GRANT_REF,
+        MEDIA_CAPTURE_GRANT_REF,
+    }
+    for scope in (SELF_RECORD_SCOPE, MEDIA_CAPTURE_SCOPE):
+        assert resolve_active_grant(scope=scope) is not None
+
+
+def test_media_capture_grant_carries_the_b_shaped_dormant_shape() -> None:
+    """The new standing grant is B-shaped-but-dormant like every other grant
+    (ADR-0049 §3), so Posture B stays a grant change rather than a redesign."""
+    grant = resolve_active_grant(scope=MEDIA_CAPTURE_SCOPE)
+    assert grant is not None
+    _assert_b_shaped_dormant(grant)

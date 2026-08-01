@@ -1,4 +1,4 @@
-"""Startup preflight for the governed ingress lanes' raw-store key (#4422).
+"""Startup preflight for the governed ingress lanes' runtime preconditions (#4422, #4492).
 
 The media (`POST /api/heimdal/capture/media`) and screen
 (`POST /api/heimdal/screen/capture`) ingress lanes encrypt through the raw
@@ -6,12 +6,32 @@ store, so they need ``HEIMDAL_RAW_STORE_KEY`` in the api process. Before this
 preflight, a missing key was invisible until the first upload returned the
 named 500 — a dead lane that looked calm (#4369's failure class).
 
+The media lane has a second precondition (#4492): its standing consent grant
+(`consent_ledger.MEDIA_CAPTURE_SCOPE`, seeded by migration `a9f3c2d7b6e1`).
+Without it every admission refuses with the named 409 `consent_refused`, which
+is the *same* invisible-dead-lane shape — a database that never ran the
+migration, or a lane whose grant was revoked, looks calm until the first
+upload. Checking it here is the `AGENTS.md :: Required rules`
+invariant→producers preflight for that seeded grant.
+
+The check is a read against the ledger and never grants, revokes, or repairs
+consent **in production**. One caveat worth naming: under
+``STORE_SCHEMA_AUTOCREATE=1`` (a test-fixture opt-in, `tests/conftest.py`) the
+Postgres ledger backend bootstraps its own schema and standing-grant seeds on
+construction — and `consent_ledger._backend()` constructs a fresh
+`_PgConsentLedger` per call — so in that environment resolving the grant can
+create the table and seed it, meaning the preflight cannot report
+`media_consent_grant_missing` for a missing table there. Production never sets
+that flag and takes `consent_ledger._assert_pg_schema` instead, so the read-only
+property holds on the path that matters.
+
 Posture is **degrade-visibly, never fail-exit**: the api process also serves
-search, ask, note-read, and text capture, so a missing key must not take the
-runtime down. The preflight runs once from the api lifespan, records a named
-result, logs loudly when the lanes are unavailable, and surfaces the lane
-state on ``/api/status`` — the request-time ``raw_store_key_unavailable``
-contract in the routes is unchanged and remains the per-request truth.
+search, ask, note-read, and text capture, so a missing precondition must not
+take the runtime down. The preflight runs once from the api lifespan, records a
+named result, logs loudly when a lane is unavailable, and surfaces the lane
+state on ``/api/status`` — the request-time ``raw_store_key_unavailable`` /
+``consent_refused`` contracts in the routes are unchanged and remain the
+per-request truth.
 
 Never logs, stores, or echoes key material — only availability.
 """
@@ -21,73 +41,127 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
+from app.heimdal.consent_ledger import MEDIA_CAPTURE_SCOPE, resolve_active_grant
 from app.heimdal.raw_store import RawStoreKeyMissingError, resolve_raw_store_key
 
 logger = logging.getLogger(__name__)
 
 LANE_MEDIA = "media_ingress"
 LANE_SCREEN = "screen_capture"
-_KEY_LANES = (LANE_MEDIA, LANE_SCREEN)
 
 STATE_AVAILABLE = "available"
 STATE_UNAVAILABLE = "unavailable"
 
+# Named detail classes. Never an exception message: a future error embedding
+# env material must not flow to the status surface.
+DETAIL_RAW_STORE_KEY_MISSING = "raw_store_key_missing"
+DETAIL_RAW_STORE_KEY_INVALID = "raw_store_key_invalid"
+DETAIL_MEDIA_CONSENT_GRANT_MISSING = "media_consent_grant_missing"
+DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE = "media_consent_ledger_unreadable"
+
 
 @dataclass(frozen=True)
 class IngressPreflightResult:
-    """One recorded preflight outcome (no key material, ever)."""
+    """One recorded preflight outcome (no key material, ever).
+
+    ``detail`` is a comma-joined list of named detail classes, empty when every
+    checked precondition holds. Two preconditions can fail at once, so it is
+    never a single cause.
+    """
 
     raw_store_key_available: bool
     lanes: Dict[str, str] = field(default_factory=dict)
     detail: str = ""
     checked_at: Optional[datetime] = None
+    media_consent_grant_available: bool = True
 
 
 _LAST_RESULT: Optional[IngressPreflightResult] = None
 
 
-def run_ingress_preflight() -> IngressPreflightResult:
-    """Check the raw-store key once and record the lane availability.
-
-    Called from the api lifespan startup. Never raises and never exits the
-    process: an unavailable key is a named, logged, surfaced degradation of
-    exactly the ingress lanes, not a runtime failure.
-    """
-    global _LAST_RESULT
+def _check_raw_store_key(details: List[str]) -> bool:
     try:
         resolve_raw_store_key()
-        available = True
-        detail = ""
+        return True
     except RawStoreKeyMissingError:
-        available = False
-        detail = "raw_store_key_missing"
+        details.append(DETAIL_RAW_STORE_KEY_MISSING)
     except Exception as exc:  # malformed key material etc. — same degradation
-        # Named class only, never the exception text: a future error embedding
-        # env material must not flow to the status surface.
-        available = False
-        detail = f"raw_store_key_invalid:{type(exc).__name__}"
+        details.append(f"{DETAIL_RAW_STORE_KEY_INVALID}:{type(exc).__name__}")
+    return False
 
-    state = STATE_AVAILABLE if available else STATE_UNAVAILABLE
+
+def _check_media_consent_grant(details: List[str]) -> bool:
+    """Whether the media lane's standing consent grant resolves right now.
+
+    A read-only ledger query. An unreadable ledger (no migration, DSN down) is
+    reported as its own named class rather than conflated with "revoked": the
+    operator remedies differ.
+    """
+    try:
+        grant = resolve_active_grant(scope=MEDIA_CAPTURE_SCOPE)
+    except Exception as exc:
+        details.append(f"{DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE}:{type(exc).__name__}")
+        return False
+    if grant is None:
+        details.append(DETAIL_MEDIA_CONSENT_GRANT_MISSING)
+        return False
+    return True
+
+
+def run_ingress_preflight() -> IngressPreflightResult:
+    """Check every ingress-lane precondition once and record lane availability.
+
+    Called from the api lifespan startup. Never raises and never exits the
+    process: an unavailable precondition is a named, logged, surfaced
+    degradation of exactly the affected ingress lane, not a runtime failure.
+    """
+    global _LAST_RESULT
+    details: List[str] = []
+    key_available = _check_raw_store_key(details)
+    # The screen lane's `screen_always_on` scope carries no seeded grant, so
+    # this check is the media lane's alone.
+    media_grant_available = _check_media_consent_grant(details)
+
+    key_state = STATE_AVAILABLE if key_available else STATE_UNAVAILABLE
+    media_available = key_available and media_grant_available
     result = IngressPreflightResult(
-        raw_store_key_available=available,
-        lanes={lane: state for lane in _KEY_LANES},
-        detail=detail,
+        raw_store_key_available=key_available,
+        lanes={
+            LANE_MEDIA: STATE_AVAILABLE if media_available else STATE_UNAVAILABLE,
+            LANE_SCREEN: key_state,
+        },
+        detail=",".join(details),
         checked_at=datetime.now(timezone.utc),
+        media_consent_grant_available=media_grant_available,
     )
     _LAST_RESULT = result
-    if not available:
+    if not key_available:
         logger.error(
             "Heimdal ingress preflight: HEIMDAL_RAW_STORE_KEY is not available to "
             "this process — the media and screen ingress lanes will refuse every "
             "admission with the named raw_store_key_unavailable 500 until it is "
             "provisioned (host secret contract consumer 'heimdal-api-ingress'). All other API "
             "functions keep serving. Detail: %s",
-            detail,
+            result.detail,
         )
-    else:
-        logger.info("Heimdal ingress preflight: raw-store key available; ingress lanes ready.")
+    if not media_grant_available:
+        logger.error(
+            "Heimdal ingress preflight: no active consent grant for scope %r — the "
+            "media ingress lane will refuse every admission with the named 409 "
+            "consent_refused until the grant is present. Seeded by migration "
+            "a9f3c2d7b6e1; run 'alembic upgrade head' against this database, or "
+            "re-grant if it was revoked. All other API functions keep serving. "
+            "Detail: %s",
+            MEDIA_CAPTURE_SCOPE,
+            result.detail,
+        )
+    if key_available and media_grant_available:
+        logger.info(
+            "Heimdal ingress preflight: raw-store key and media consent grant "
+            "available; ingress lanes ready."
+        )
     return result
 
 
@@ -103,6 +177,10 @@ def reset_ingress_preflight() -> None:
 
 
 __all__ = [
+    "DETAIL_MEDIA_CONSENT_GRANT_MISSING",
+    "DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE",
+    "DETAIL_RAW_STORE_KEY_INVALID",
+    "DETAIL_RAW_STORE_KEY_MISSING",
     "LANE_MEDIA",
     "LANE_SCREEN",
     "STATE_AVAILABLE",

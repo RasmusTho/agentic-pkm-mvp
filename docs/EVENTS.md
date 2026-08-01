@@ -269,9 +269,17 @@ Karakeep adapter and additive candidate behavior are not shipped by this docs/te
 specified by `docs/HEIMDAL/FABLE_COMPANION.md` §6.1/§6.2/§8 HEIM-3).
 
 An append-only ledger of consent grants and revocations (its own table,
-`heimdal_consent_grant`, migration `c4f7a1b2d9e3`), seeded with the standing
-`self_record` grant (v1 Posture A — "the act of deliberately recording is
-the grant", FABLE_COMPANION §6.1 basis 1). Grants are appended; a
+`heimdal_consent_grant`, migration `c4f7a1b2d9e3`), seeded with one standing
+grant for each of the two **self-record** capture lanes: the voice-memo grant
+(v1 Posture A — "the act of deliberately recording is the grant",
+FABLE_COMPANION §6.1 basis 1, scope `device+adapter:v1-voice-memo`, migration
+`c4f7a1b2d9e3`) and the media-capture grant for the governed media ingress lane
+(scope `device+adapter:v1-media-ingress`, migration `a9f3c2d7b6e1`, #4492).
+They resolve and revoke independently, and are distinguished by `scope` /
+`grant_ref` — **not** by `basis`, which is `self_record` on both. Not every
+governed capture lane has a seeded grant: the screen-capture lane
+(`screen_capture.SCREEN_CAPTURE_SCOPE` = `screen_always_on`) has none, so
+screen capture is not consented by default. Grants are appended; a
 revocation is a NEW row (`basis='revocation'`, `revokes_grant_ref` naming
 the lapsed grant) — never an edit of the grant it lapses, same HEIM-1
 discipline as `heimdal_observation_log`, enforced by an identical
@@ -619,14 +627,45 @@ Contract:
   receipt-aware retention interaction must land before that. Tracked as a deferred
   defect on the Known Defects registry (#4172, `KD-4384-RETENTION`), not claimed as
   solved here.
-- **Consent scope, stated honestly.** Every kind is admitted under the standing
-  self-record grant the voice-memo lane uses
-  (`consent_ledger.SELF_RECORD_SCOPE`), whose descriptive
-  `capture_profile.modalities` names `speech` only. No modality enforcement reads
-  that field today, so this is a provenance-accuracy gap rather than an
-  admission bypass; giving the media lane its own grant naming its modalities is
-  an owner decision, deferred on the Known Defects registry (#4172,
-  `KD-4384-MODALITY`).
+- **Consent scope names what the lane captures.** The lane admits under its own
+  standing grant (`consent_ledger.MEDIA_CAPTURE_SCOPE` =
+  `device+adapter:v1-media-ingress`, `grant_ref` `grant-media-capture-v1`,
+  seeded by migration `a9f3c2d7b6e1`), whose descriptive
+  `capture_profile.modalities` names all four admitted kinds — audio, image,
+  video, document — per the owner ruling of 2026-07-30 on #4172. So the consent
+  block stamped onto a photo, video, or document raw record references a grant
+  that actually covers it. It borrowed the voice-memo lane's speech-only
+  `self_record` grant until #4492 (`KD-4384-MODALITY`, now resolved). The two
+  grants are independent: revoking voice memos no longer disables media ingress,
+  and the watched-folder lane still admits under `SELF_RECORD_SCOPE`.
+  `capture_profile` remains **descriptive** — no admission path compares a
+  request's modality against it, so it is provenance, not a gate. The grant is a
+  runtime precondition: the startup preflight
+  (`app.heimdal.ingress_preflight`) reports `media_ingress` as `unavailable` on
+  `/api/status` when it is absent, rather than leaving a dead lane that looks
+  calm. Two named detail classes, because the operator remedies differ:
+  `media_consent_grant_missing` (the ledger is readable and no active grant
+  covers the scope — **most often a database that has not yet run
+  `a9f3c2d7b6e1`**, since the ledger *table* belongs to `c4f7a1b2d9e3`; also a
+  revoked or expired grant) and `media_consent_ledger_unreadable:<ErrorClass>`
+  (the ledger cannot be queried at all — the table is absent because
+  `c4f7a1b2d9e3` never ran, or the database is unreachable).
+  **Migrating a deployment whose voice-memo grant was revoked re-enables media
+  ingress.** Before #4492 both lanes resolved `SELF_RECORD_SCOPE`, so revoking
+  the voice-memo grant stopped media ingress too. `a9f3c2d7b6e1` seeds a
+  *different* `grant_ref` that has never existed on that database, so its
+  `WHERE NOT EXISTS` guard cannot match the revocation and the upgrade inserts
+  an **active** media-capture grant — media ingress starts admitting again
+  without a separate operator action. That is the intended consequence of
+  separating the grants under the 2026-07-30 ruling, and `/api/status` shows
+  the lane going live; note that `_heimdal/consent.md` will **not** reflect it,
+  because nothing in the shipped runtime calls
+  `consent_surface.write_consent_readout` — the note stays at whatever it last
+  showed until something rebuilds it. An operator who revoked voice memos in
+  order to stop *all* capture must revoke `grant-media-capture-v1` as well
+  after upgrading; that is programmatic today, since no route or CLI grants or
+  revokes. (A rerun of the migration after that revocation is a no-op — the
+  guard matches the existing row.)
 - **LAN/loopback/tailnet posture only.** Both routes refuse a peer outside
   loopback, RFC1918/ULA, link-local, or the tailnet CGNAT range with 403
   `public_ingress_refused`, judged on the immediate peer and never on

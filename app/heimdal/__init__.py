@@ -16,9 +16,13 @@ Mimer-side integration points that substrate hands off to:
 - `app/heimdal/consent_ledger.py` (#3042, Epic #3019 slice A5) -- the
   append-only consent-grant ledger + the HEIM-3 capture-time check
   (`admit_raw_evidence`, the one sanctioned signal->raw admission call),
-  seeded with the standing `self_record` grant (ADR-0049 §3 Posture A;
-  FABLE_COMPANION §6.1/§6.2; see
-  `docs/EVENTS.md :: Heimdal consent ledger v0 + capture-time check`).
+  seeded with one standing grant for each of the two self-record capture
+  lanes -- the voice-memo grant (ADR-0049 §3 Posture A;
+  FABLE_COMPANION §6.1/§6.2) and the media-capture grant naming every kind the
+  governed media ingress lane admits (#4492). Both carry basis `self_record`
+  and are told apart by `scope`. The screen-capture lane has no seeded grant;
+  see
+  `docs/EVENTS.md :: Heimdal consent ledger v0 + capture-time check`.
 - `app/heimdal/settings_notes.py` (#3034, Epic #3019 slice A14) is the
   writable `_heimdal/**` markdown control-surface substrate + schema
   (ADR-0049 §2 "markdown-first control surface"; `docs/HEIMDAL/

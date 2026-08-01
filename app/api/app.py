@@ -248,12 +248,14 @@ def _ingest_settings_at_startup() -> None:
 
 
 def _run_ingress_key_preflight() -> None:
-    """Detect a missing HEIMDAL_RAW_STORE_KEY before first use (#4422).
+    """Detect a missing ingress-lane precondition before first use (#4422, #4492).
 
-    Degrade-visibly, never fail-exit: the preflight records and logs the
-    ingress-lane availability (surfaced on /api/status) while every other API
-    function keeps serving; the request-time raw_store_key_unavailable
-    contract on the capture routes is unchanged.
+    Covers HEIMDAL_RAW_STORE_KEY for both governed ingress lanes and the media
+    lane's standing consent grant. Degrade-visibly, never fail-exit: the
+    preflight records and logs the ingress-lane availability (surfaced on
+    /api/status) while every other API function keeps serving; the request-time
+    raw_store_key_unavailable / consent_refused contracts on the capture routes
+    are unchanged.
     """
     try:
         from app.heimdal.ingress_preflight import run_ingress_preflight

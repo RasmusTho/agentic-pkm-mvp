@@ -88,7 +88,22 @@ promote public internet readiness.
   request-time named 500 `raw_store_key_unavailable` / `not_acknowledged` contract is unchanged.
   The one remaining operator step is placing the actual key material into the Keychain item for
   the `heimdal-api-ingress` consumer per channel (`{channel}:heimdal-api-ingress:heimdal.raw-store-key`
-  under service `yggdrasil.host-secrets`). Contract detail
+  under service `yggdrasil.host-secrets`). **The lane now admits under its own consent grant
+  (#4492):** `device+adapter:v1-media-ingress` (`grant-media-capture-v1`, seeded by migration
+  `a9f3c2d7b6e1`), whose descriptive `capture_profile.modalities` names all four admitted kinds —
+  audio, image, video, document — per the owner ruling of 2026-07-30 on #4172, instead of borrowing
+  the voice-memo lane's speech-only `self_record` grant. The two grants revoke independently and the
+  watched-folder lane keeps admitting under the voice-memo grant; `capture_profile` stays
+  descriptive (no modality enforcement). The same startup preflight also resolves this grant and
+  reports `media_ingress` `unavailable` when it is absent, with detail `media_consent_grant_missing`
+  when the ledger is readable but no active grant covers the scope (most often a database that has
+  not yet run `a9f3c2d7b6e1` — the ledger table itself belongs to `c4f7a1b2d9e3`; also a revoked or
+  expired grant), or `media_consent_ledger_unreadable:<ErrorClass>` when the ledger cannot be
+  queried at all (table absent because `c4f7a1b2d9e3` never ran, or the database is unreachable).
+  Operator note: on a deployment whose voice-memo grant was revoked (which used to stop media
+  ingress too), applying the migration seeds an active media-capture grant and media ingress
+  resumes; revoke `grant-media-capture-v1` as well to keep it stopped — programmatic today, since
+  no CLI or route grants or revokes. Contract detail
   is owned by `docs/EVENTS.md :: Heimdal governed media ingress + durable receipts` and
   `docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/ADMIT_MEDIA_WITH_DURABLE_RECEIPTS.md`; promotion into
   `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 remains parent-acceptance work on #4383.

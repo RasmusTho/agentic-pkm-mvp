@@ -1256,6 +1256,7 @@ def _get_heimdal_ingress_status():
         lanes=dict(result.lanes),
         detail=result.detail,
         checked_at=result.checked_at,
+        media_consent_grant_available=result.media_consent_grant_available,
     )
 
 
