@@ -40,7 +40,11 @@ services:
       - builderops_wal_encryption_key
     networks: [builderops-internal, builderops-recovery-egress]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U builderops_owner -d builderops"]
+      # Probing 127.0.0.1 would pass even under the buggy listen_addresses=localhost
+      # default, since loopback is reachable regardless. Probe the container's own
+      # builderops-internal network address so migrate/api/worker only see healthy
+      # once the server actually accepts connections from other containers.
+      test: ["CMD-SHELL", "pg_isready -h \"$(hostname -i)\" -U builderops_owner -d builderops"]
       interval: 5s
       timeout: 3s
       retries: 30
