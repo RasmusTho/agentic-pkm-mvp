@@ -352,9 +352,17 @@ class InstanceDefaultVaultService:
             raise VaultSelectionError(
                 f"unknown or unauthorized vault_binding_id: {vault_binding_id}"
             )
-        if before.default_vault_binding_id == vault_binding_id:
+        if (
+            before.default_vault_binding_id == vault_binding_id
+            and before.default_vault_provenance == (
+                None if vault_binding_id is None else provenance
+            )
+        ):
             # A no-op is not a mutation: it must not burn a registry revision and
-            # must not publish a rebind event MVR-06 would act on.
+            # must not publish a rebind event MVR-06 would act on. Provenance is
+            # part of "no-op" — an operator pinning a binding the first-vault
+            # producer chose is a real change from an inferred default to an
+            # explicit one, and must be recorded, not swallowed.
             return DefaultVaultReceipt(
                 vault_binding_id=before.default_vault_binding_id,
                 provenance=before.default_vault_provenance,

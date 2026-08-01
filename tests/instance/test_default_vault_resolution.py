@@ -27,6 +27,7 @@ from app.instance.vault_registry import (
     KnownVaultRef,
     RegistryDefaultConflict,
     VaultRegistryStore,
+    _assert_default_is_resolvable,
     _render_markdown_settings,
     _split_rendered,
 )
@@ -219,9 +220,6 @@ def test_legacy_last_active_materializes_default_once(tmp_path) -> None:
     binding_id = next(iter(migrated.registrations))
     assert migrated.default_vault_binding_id == binding_id
     assert migrated.default_vault_provenance == DEFAULT_PROVENANCE_LEGACY_MIGRATION
-    assert migrated.extensions["defaultVaultMigration"]["provenance"] == (
-        DEFAULT_PROVENANCE_LEGACY_MIGRATION
-    )
     # The restart journey is preserved: resolution lands on the same binding.
     assert (
         resolve_vault_selection(migrated).vault_binding_id == binding_id
@@ -246,21 +244,21 @@ def test_legacy_last_active_materializes_default_once(tmp_path) -> None:
 
 
 def test_migration_never_infers_a_default_on_a_post_mvr02_registry(tmp_path) -> None:
-    """The one-time step must not become a standing last-active rule.
+    """An explicit clear is final, and no mechanical write can undo it.
 
-    Regression for the two ways "at most once" could quietly become "every load":
-    a registry that never carried legacy state, and a registry whose operator
-    deliberately cleared the default through a *removal* transaction rather than
-    through the explicit clear command.
+    Companion to `test_load_or_migrate_never_materializes_on_a_current_schema_registry`:
+    that one proves the read path never infers, this one proves the two *write*
+    paths that could otherwise resurrect or forge a default do not — a clear
+    performed through the removal transaction, and an unrelated MVR-01B
+    mechanical state write.
     """
 
     runtime, first, extra = active_runtime(tmp_path, extra_roots=("two", "three"))
     picked, other = extra
     store = VaultRegistryStore(runtime.layout.registry_path)
 
-    # 1. A registry born after MVR-02 has no legacy to migrate. A picker write
-    #    that sets last-active must not be promoted into a default, and the
-    #    read-named `load_or_migrate` must not burn a revision doing it.
+    # 1. Establish a picker last-active so every later arm has something that an
+    #    inference bug could latch onto.
     runtime.registry.remember_registration(
         picked.vault_binding_id,
         KnownVaultRef(
@@ -311,48 +309,105 @@ def test_migration_never_infers_a_default_on_a_post_mvr02_registry(tmp_path) -> 
     assert mechanical.default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
 
 
-def _strip_mvr02_marker(registry_path: Path, *, last_active_vault_ref: str | None) -> None:
-    """Rewrite a registry file into the shape a pre-MVR-02 install would have."""
+def _rewrite_frontmatter(registry_path: Path, **fields: object) -> None:
+    """Rewrite registry frontmatter in place, as an older image could have left it."""
 
     frontmatter, body = _split_rendered(
         registry_path.read_text(encoding="utf-8"), registry_path
     )
-    frontmatter.pop("defaultVaultMigration", None)
-    frontmatter["defaultVaultBindingId"] = None
-    frontmatter["defaultVaultProvenance"] = None
-    frontmatter["lastActiveVaultRef"] = last_active_vault_ref
+    for key, value in fields.items():
+        if value is _DROP:
+            frontmatter.pop(key, None)
+        else:
+            frontmatter[key] = value
     registry_path.write_text(
         _render_markdown_settings(frontmatter, body), encoding="utf-8"
     )
     registry_path.chmod(0o600)
 
 
-def test_pre_mvr02_registry_arms_the_migration_exactly_once(tmp_path) -> None:
-    """A genuine pre-MVR-02 store is migrated on sight, even when nothing moves.
+_DROP = object()
 
-    Regression: if the marker were stamped only when a default was actually
-    materialized, a legacy store that happened to have no resolvable last-active
-    at upgrade time would stay armed forever, and the next picker write would be
-    silently promoted into a default with a `legacy_last_active_migration` label
-    that is simply untrue.
+
+def test_pre_mvr02_default_key_never_bricks_an_intact_registry(tmp_path) -> None:
+    """An unlabelled `defaultVaultBindingId` is untrusted lineage, not a fatal error.
+
+    MVR-01 flattened `extensions` into the same frontmatter, so a registry written
+    by the previous image can legitimately carry `defaultVaultBindingId` with no
+    `defaultVaultProvenance`. Promoting that key to a validated first-class field
+    must not make an otherwise intact registry unloadable — recovery cannot save
+    it either, because the last-good snapshot holds the identical bytes, so every
+    consumer's startup preflight would fail on the exact population this slice
+    exists to upgrade.
+    """
+
+    runtime, first, extra = active_runtime(tmp_path, extra_roots=("two",))
+    registry_path = runtime.layout.registry_path
+
+    # 1. A resolvable legacy value with no provenance is adopted as explicit.
+    _rewrite_frontmatter(
+        registry_path,
+        defaultVaultBindingId=first.vault_binding_id,
+        defaultVaultProvenance=_DROP,
+    )
+    adopted = VaultRegistryStore(registry_path).load()
+    assert adopted.default_vault_binding_id == first.vault_binding_id
+    assert adopted.default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
+
+    # 2. An unresolvable legacy value is demoted to lineage, never dropped and
+    #    never fatal. The instance resolves to no-vault, which is fail-closed.
+    _rewrite_frontmatter(
+        registry_path,
+        defaultVaultBindingId="binding-from-a-previous-image",
+        defaultVaultProvenance=_DROP,
+    )
+    demoted = VaultRegistryStore(registry_path).load()
+    assert demoted.default_vault_binding_id is None
+    assert demoted.default_vault_provenance is None
+    assert demoted.extensions["legacyDefaultVaultBindingId"] == (
+        "binding-from-a-previous-image"
+    )
+    assert resolve_vault_selection(demoted).is_no_vault
+    assert set(demoted.registrations) == {
+        first.vault_binding_id,
+        extra[0].vault_binding_id,
+    }
+
+    # 3. A *labelled* default is still held to the full fail-closed contract:
+    #    MVR-02 wrote it, so a dangling binding is rejected outright rather than
+    #    demoted to lineage. The strict rule is asserted directly, because a
+    #    store-level load would legitimately mask it by recovering the last-good
+    #    snapshot (which is exactly what recovery is for).
+    with pytest.raises(RegistryDefaultConflict):
+        _assert_default_is_resolvable(
+            "binding-that-is-not-registered",
+            DEFAULT_PROVENANCE_EXPLICIT,
+            demoted.registrations,
+        )
+    _rewrite_frontmatter(
+        registry_path,
+        defaultVaultBindingId="binding-that-is-not-registered",
+        defaultVaultProvenance=DEFAULT_PROVENANCE_EXPLICIT,
+    )
+    recovered = VaultRegistryStore(registry_path).load()
+    assert recovered.default_vault_binding_id != "binding-that-is-not-registered"
+
+
+def test_load_or_migrate_never_materializes_on_a_current_schema_registry(
+    tmp_path,
+) -> None:
+    """The last-active promotion lives in the schema migration and nowhere else.
+
+    The spec materializes a legacy last-active "during the one-time schema
+    migration only". A second materialization arm on the already-migrated schema
+    would be a standing last-active rule wearing a migration's name, and would
+    make this read-named entry point a writer that skips the scalar-rollback
+    session guard every other writer holds.
     """
 
     runtime, first, extra = active_runtime(tmp_path, extra_roots=("two",))
     picked = extra[0]
-    registry_path = runtime.layout.registry_path
-    _strip_mvr02_marker(registry_path, last_active_vault_ref=None)
-    store = VaultRegistryStore(registry_path)
-    before = store.load()
-    assert "defaultVaultMigration" not in before.extensions
-
-    # First sight of a pre-MVR-02 store: nothing to materialize, but the
-    # one-time step is now recorded as done.
-    armed = store.load_or_migrate()
-    assert armed.default_vault_binding_id is None
-    assert armed.extensions["defaultVaultMigration"]["provenance"] == "none"
-    assert armed.revision == before.revision + 1
-
-    # A later picker write is history, not a default.
+    store = VaultRegistryStore(runtime.layout.registry_path)
     runtime.registry.remember_registration(
         picked.vault_binding_id,
         KnownVaultRef(
@@ -364,18 +419,19 @@ def test_pre_mvr02_registry_arms_the_migration_exactly_once(tmp_path) -> None:
         make_active=True,
         _capability=_STORAGE_MUTATION_CAPABILITY,
     )
-    after_picker = store.load()
-    assert after_picker.last_active_vault_ref == picked.ref
+    before = store.load()
+    payload_before = runtime.layout.registry_path.read_bytes()
+    assert before.last_active_vault_ref == picked.ref
+    assert before.default_vault_binding_id is None
 
-    reloaded = store.load_or_migrate()
-    assert reloaded.default_vault_binding_id is None
-    assert reloaded.revision == after_picker.revision
+    migrated = store.load_or_migrate()
 
-    # And the legacy arm still works when there IS something to preserve.
-    _strip_mvr02_marker(registry_path, last_active_vault_ref=first.ref)
-    materialized = VaultRegistryStore(registry_path).load_or_migrate()
-    assert materialized.default_vault_binding_id == first.vault_binding_id
-    assert materialized.default_vault_provenance == DEFAULT_PROVENANCE_LEGACY_MIGRATION
+    assert migrated.default_vault_binding_id is None
+    assert migrated.default_vault_provenance is None
+    # Read-named, and genuinely a read: no revision burned, not one byte written.
+    assert migrated.revision == before.revision
+    assert runtime.layout.registry_path.read_bytes() == payload_before
+    assert resolve_vault_selection(migrated).is_no_vault
 
 
 def test_first_vault_initialize_materializes_default_once(tmp_path) -> None:
@@ -436,3 +492,19 @@ def test_first_vault_initialize_materializes_default_once(tmp_path) -> None:
         reopen_runtime(runtime, tmp_path).registry.load().default_vault_binding_id
         == registration.vault_binding_id
     )
+
+    # An operator pinning the binding the first-vault producer chose is a real
+    # change — inferred provenance becomes explicit — not a swallowed no-op.
+    service = _service(runtime)
+    promoted = service.set(registration.vault_binding_id)
+    assert promoted.changed is True
+    assert promoted.provenance == DEFAULT_PROVENANCE_EXPLICIT
+    assert (
+        runtime.registry.load().default_vault_provenance == DEFAULT_PROVENANCE_EXPLICIT
+    )
+    # Re-issuing the now-identical command is genuinely a no-op: no revision, no
+    # event, nothing for MVR-06 to act on.
+    revision_after_promote = runtime.registry.load().revision
+    repeated = service.set(registration.vault_binding_id)
+    assert repeated.changed is False
+    assert runtime.registry.load().revision == revision_after_promote

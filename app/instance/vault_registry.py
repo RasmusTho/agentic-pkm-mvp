@@ -42,7 +42,6 @@ REGISTRY_AUTHORITY_DORMANT = "dormant"
 REGISTRY_AUTHORITY_ACTIVE = "active"
 SCALAR_ROLLBACK_SCHEMA = "agentic-pkm.scalar-rollback-floor.v1"
 ROLL_FORWARD_LINEAGE_SCHEMA = "agentic-pkm.scalar-roll-forward-lineage.v1"
-DEFAULT_VAULT_MIGRATION_SCHEMA = "agentic-pkm.instance-default-vault-migration.v1"
 _TRANSACTION_SCHEMA = "agentic-pkm.instance-vault-registry-transaction.v1"
 
 # MVR-02 explicit-default provenance vocabulary. ``last_active_vault_ref`` is
@@ -108,19 +107,6 @@ class RegistryDefaultConflict(RegistryError):
     """A mutation would leave the explicit instance default dangling or inferred."""
 
 
-def _default_migration_applied(extensions: Mapping[str, Any]) -> bool:
-    marker = extensions.get("defaultVaultMigration")
-    return isinstance(marker, dict) and marker.get("schema") == DEFAULT_VAULT_MIGRATION_SCHEMA
-
-
-def _default_migration_marker(provenance: str | None, revision: int) -> dict[str, Any]:
-    return {
-        "schema": DEFAULT_VAULT_MIGRATION_SCHEMA,
-        "appliedAtRevision": revision,
-        "provenance": provenance or "none",
-    }
-
-
 def _binding_for_ref(
     ref: str | None, registrations: Mapping[str, VaultRegistration]
 ) -> str | None:
@@ -134,51 +120,36 @@ def _binding_for_ref(
     return matches[0] if len(matches) == 1 else None
 
 
-def _materialize_legacy_last_active_default(
-    current: RegistrySnapshot,
-) -> RegistrySnapshot | None:
-    """Run the one-time MVR-02 default materialization, or return ``None``.
+def _read_default_from_frontmatter(
+    frontmatter: Mapping[str, Any],
+    registrations: Mapping[str, VaultRegistration],
+    extensions: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Read the explicit default, tolerating a pre-MVR-02 unlabelled value.
 
-    This is a migration, not a runtime precedence source. The
-    ``defaultVaultMigration`` marker is what makes "at most once" true, so the
-    marker is stamped **whenever this step runs at all** — including when it
-    decides to materialize nothing. Stamping only on success would leave the
-    step armed forever on a store that simply had no resolvable last-active yet,
-    turning a later picker write into a silent default inference. Every registry
-    this codebase creates is stamped at birth (:meth:`_empty_snapshot`) or at
-    legacy migration, so a marker-less current-schema store is by definition a
-    pre-MVR-02 install being seen for the first time.
+    MVR-02 always writes ``defaultVaultBindingId`` and ``defaultVaultProvenance``
+    together, so an id with **no** provenance is definitionally a value written
+    before this field existed — MVR-01 flattened `extensions` into the same
+    frontmatter, and `defaultVaultBindingId` was one of the keys it could carry.
+    Such a value is untrusted: it is adopted only when it names exactly one
+    current registration, and otherwise demoted to lineage. It is never an error,
+    because refusing to load an otherwise intact registry would take every
+    consumer's startup down on the exact population this slice upgrades.
+
+    A *labelled* default is held to the full fail-closed contract below: a
+    dangling binding or an unknown provenance is a hard error, because MVR-02
+    itself wrote it and no writer is allowed to produce that state.
     """
 
-    if _default_migration_applied(current.extensions):
-        return None
-    binding_id = (
-        None
-        if current.default_vault_binding_id is not None
-        else _binding_for_ref(current.last_active_vault_ref, current.registrations)
-    )
-    next_revision = current.revision + 1
-    extensions = copy.deepcopy(current.extensions)
-    extensions["defaultVaultMigration"] = _default_migration_marker(
-        DEFAULT_PROVENANCE_LEGACY_MIGRATION if binding_id is not None else None,
-        next_revision,
-    )
-    if current.authority == REGISTRY_AUTHORITY_ACTIVE:
-        floor = extensions.get("scalarRollback")
-        if not isinstance(floor, dict):
-            raise RegistryError("active registry scalar rollback floor is invalid")
-        extensions["scalarRollback"] = {**floor, "forkRegistryRevision": next_revision}
-    if binding_id is None:
-        # Nothing to materialize; record that the one-time step has now run so a
-        # later last-active write can never be mistaken for a legacy default.
-        return replace(current, revision=next_revision, extensions=extensions)
-    return replace(
-        current,
-        revision=next_revision,
-        extensions=extensions,
-        default_vault_binding_id=binding_id,
-        default_vault_provenance=DEFAULT_PROVENANCE_LEGACY_MIGRATION,
-    )
+    binding_id = _optional_str(frontmatter.get("defaultVaultBindingId"))
+    provenance = _optional_str(frontmatter.get("defaultVaultProvenance"))
+    if binding_id is not None and provenance is None:
+        if binding_id in registrations:
+            return binding_id, DEFAULT_PROVENANCE_EXPLICIT
+        extensions["legacyDefaultVaultBindingId"] = binding_id
+        return None, None
+    _assert_default_is_resolvable(binding_id, provenance, registrations)
+    return binding_id, provenance
 
 
 def _assert_default_is_resolvable(
@@ -351,13 +322,16 @@ class VaultRegistryStore:
                 return self._read_current_locked(recover=True)
             schema = _optional_str(document.frontmatter.get("schema"))
             if schema == CURRENT_REGISTRY_SCHEMA:
+                # Already migrated: nothing to do, and deliberately no write. The
+                # spec materializes a legacy last-active "during the one-time
+                # schema migration only", so the promotion lives in
+                # `_migrate_legacy_frontmatter` and nowhere else. A second
+                # materialization arm here would be a standing last-active rule
+                # wearing a migration's name, and would turn this read-named
+                # entry point into a writer that bypasses the scalar-rollback
+                # session guard every other writer holds.
                 _assert_private(self.path, directory=False)
-                current = self._snapshot_from_frontmatter(document.frontmatter)
-                materialized = _materialize_legacy_last_active_default(current)
-                if materialized is None:
-                    return current
-                self._write_locked(materialized)
-                return materialized
+                return self._snapshot_from_frontmatter(document.frontmatter)
             if schema != APP_LOCAL_SCHEMA:
                 raise RegistryMigrationError(f"unsupported registry migration schema: {schema or '<missing>'}")
             migrated = self._migrate_legacy_frontmatter(document.frontmatter)
@@ -451,17 +425,8 @@ class VaultRegistryStore:
             self._assert_revision(current, expected_revision)
             if target is not None and target not in current.registrations:
                 raise RegistryError(f"unknown vault_binding_id: {target}")
-            updated = self._with_registrations(current, dict(current.registrations))
-            extensions = copy.deepcopy(updated.extensions)
-            # An explicit command is authoritative over the one-time legacy
-            # materialization, so a later bootstrap can never re-materialize a
-            # deliberately cleared default from last-active history.
-            extensions["defaultVaultMigration"] = _default_migration_marker(
-                resolved_provenance, updated.revision
-            )
             updated = replace(
-                updated,
-                extensions=extensions,
+                self._with_registrations(current, dict(current.registrations)),
                 default_vault_binding_id=target,
                 default_vault_provenance=resolved_provenance,
             )
@@ -1109,11 +1074,6 @@ class VaultRegistryStore:
             app_install_id=f"app-{uuid4()}",
             last_active_vault_ref=None,
             registrations={},
-            # A registry born after MVR-02 has no legacy to migrate. Stamping the
-            # marker here is what keeps the one-time step from ever firing as a
-            # runtime rule on a fresh install, and keeps it from costing a
-            # spurious revision bump on the first `load_or_migrate`.
-            extensions={"defaultVaultMigration": _default_migration_marker(None, 0)},
         )
 
     def _assert_revision(self, current: RegistrySnapshot, expected: int | None) -> None:
@@ -1669,9 +1629,9 @@ class VaultRegistryStore:
         settings_rebind = frontmatter.get("settingsRebind")
         if settings_rebind is not None and not isinstance(settings_rebind, dict):
             raise RegistryError("settingsRebind must be a mapping")
-        default_binding_id = _optional_str(frontmatter.get("defaultVaultBindingId"))
-        default_provenance = _optional_str(frontmatter.get("defaultVaultProvenance"))
-        _assert_default_is_resolvable(default_binding_id, default_provenance, registrations)
+        default_binding_id, default_provenance = _read_default_from_frontmatter(
+            frontmatter, registrations, extensions
+        )
         return RegistrySnapshot(
             schema=schema,
             authority=authority,
@@ -1792,9 +1752,10 @@ class VaultRegistryStore:
             default_provenance = (
                 DEFAULT_PROVENANCE_LEGACY_MIGRATION if default_binding_id else None
             )
-        extensions["defaultVaultMigration"] = _default_migration_marker(
-            default_provenance, 1
-        )
+        # No separate "migration applied" marker: this branch runs only for an
+        # `APP_LOCAL_SCHEMA` document, and the schema transition it performs is
+        # itself the once-only guarantee. `default_vault_provenance` already
+        # records which producer set the default, which is what the spec asks for.
         return RegistrySnapshot(
             schema=CURRENT_REGISTRY_SCHEMA,
             authority=REGISTRY_AUTHORITY_DORMANT,
@@ -2407,7 +2368,6 @@ __all__ = [
     "DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING",
     "DEFAULT_PROVENANCE_LEGACY_MIGRATION",
     "DEFAULT_PROVENANCE_ROLL_FORWARD_RESTORE",
-    "DEFAULT_VAULT_MIGRATION_SCHEMA",
     "DEFAULT_VAULT_PROVENANCES",
     "AppLocalSettings",
     "AppLocalSettingsStore",

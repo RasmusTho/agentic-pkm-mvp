@@ -82,15 +82,21 @@ a valid result. MVR-05 owns the HTTP carriers (`X-Active-Context-Override` and
   revision and publishes no event.
 - `legacy_last_active_migration` — a **one-time** registry migration that preserves an existing
   picker-only install's restart journey by promoting a valid `last_active_vault_ref` to the
-  default when no default exists. It runs at most once per instance, is recorded in a
-  `defaultVaultMigration` marker, and is a migration only — never a later runtime precedence
-  source. Every subsequent last-active change leaves the default untouched.
+  default when no default exists. It lives in the legacy `design-handoff.app-local.v1` → registry
+  schema migration and nowhere else, so the schema transition itself is the once-only guarantee.
+  A registry already on the current schema is never given an inferred default, and every
+  subsequent last-active change leaves the default untouched. A value carried over from a
+  pre-MVR-02 image (an unlabelled `defaultVaultBindingId`) is untrusted: it is adopted only when it
+  names exactly one current registration, otherwise preserved as
+  `legacyDefaultVaultBindingId` lineage — never dropped, and never a reason to refuse to load an
+  otherwise intact registry.
 - `first_vault_initialize` / `first_open_existing` — the first-vault producers. On a registry
   that the locked transaction itself proves has no prior registration and no prior default,
   registration and default land in the same revision, exactly once. A later open, picker
   change, or last-active write never replaces it, and explicitly initializing a provisional
   read-only binding completes its identity without replacing the binding or the default.
-  MVR-05B owns the authenticated request ingress that reaches this producer from the picker.
+  MVR-05B owns the authenticated request ingress that reaches this producer from the picker, so
+  until that slice lands this producer has no production caller.
 - `roll_forward_restored` — reserved for the scalar rollback lineage.
 
 **Compatibility and bootstrap posture.** The env bootstrap adapter deliberately does **not**
