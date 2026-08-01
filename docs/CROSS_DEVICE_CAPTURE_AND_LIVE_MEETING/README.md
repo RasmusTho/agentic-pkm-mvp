@@ -1,4 +1,4 @@
-State: Delivery-complete specification (authored 2026-07-29; acceptance reconciled 2026-08-01). All ten children are closed with validation receipts on parent #4383. Parent acceptance evidence is complete; #4383 remains open only until the single owner-doc promotion lands. The capability is shipped on `main` and test-channel-proven; prod activation and physical-device-only HCAP-09 truth are not claimed.
+State: Accepted and delivery-complete (authored 2026-07-29; parent #4383 closed 2026-08-01). All ten children are closed and receipted; owner-doc promotion landed in PR #4531 / merge `0fadbe5af4a91ee1b36344264c4b43cf66135f89`. The capability is shipped on `main` and test-channel-proven; prod activation and physical-device-only HCAP-09 truth are not claimed.
 Doc role: Specification directory (feature-breakdown lane)
 Authority: Owns the bounded implementation order, cross-task durability/authority invariants, and acceptance path for the first Bifrost product vertical: durable cross-device capture ingress plus live meeting analysis. Subordinate to `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` (ingestion organ, hub-side ASR, Topology C), `docs/adr/ADR-0060-capture-posture-b-full-voice-identity.md` (posture target and consent classes), `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` / `docs/adr/ADR-0056-mimer-client-contract-and-transports.md` / `docs/contracts/MIMER_CLIENT_CONTRACT.md` (transports, writer discipline, Sources zone), and the entity-review authority boundary in `docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md`. ADRs win on conflict.
 Owner: Product/Runtime — Heimdal ingestion + Mimer meeting cognition + Bifrost client surfaces
@@ -233,8 +233,8 @@ The parent feature issue can be closed when all of the following hold:
 ## Relationship to GitHub issues
 
 - **Parent / validation hub:** [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383),
-  still `agent:blocked` only for the terminal owner-doc promotion. All child and capability
-  receipts are present; it remains a validation hub, never a pickup issue.
+  accepted and closed by owner-doc PR #4531. All child and capability receipts are present; it
+  remains the terminal validation ledger, never a pickup issue.
 - **Hub children (all closed):** CDLM-01 [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384),
   CDLM-02 [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385),
   CDLM-06 [#4386](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386),
@@ -260,6 +260,6 @@ its receipts on the parent issue.
 
 ## Evidence surface
 
-All validation receipts are comments on parent #4383. The single terminal owner-doc promotion
-reconciles the Mimer client contract, ARCHITECTURE, STATUS, this directory, and DOCS_INDEX; it does
-not expand runtime scope or claim prod activation.
+All validation receipts are comments on closed parent #4383. PR #4531 completed the single
+terminal owner-doc promotion across the Mimer client contract, ARCHITECTURE, STATUS, this
+directory, and DOCS_INDEX; it did not expand runtime scope or claim prod activation.

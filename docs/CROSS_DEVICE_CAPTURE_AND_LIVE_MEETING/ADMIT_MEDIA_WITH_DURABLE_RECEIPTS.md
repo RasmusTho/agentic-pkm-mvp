@@ -26,9 +26,9 @@ named 500 `raw_store_key_unavailable` / `not_acknowledged` rather than a receipt
 api process as the `heimdal-api-ingress` consumer, wired the governed deploy wrapper and the `api`
 Compose service to deliver the key, and added an api startup preflight that reports both ingress
 lanes `unavailable` on `/api/status` before first use. Placing key material into each channel's
-Keychain item remains an operator step — see `docs/STATUS.md :: Runtime verification`. Second,
-promotion of this lane into `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4 (closing client-contract gap
-F5 for the media lane) remains parent-acceptance work on #4383.
+Keychain item remains an operator step — see `docs/STATUS.md :: Runtime verification`. Second, the
+parent-acceptance promotion of this lane into `docs/contracts/MIMER_CLIENT_CONTRACT.md` §4.4 landed
+in PR #4531 / merge `0fadbe5af4a91ee1b36344264c4b43cf66135f89`.
 
 ## Purpose
 
