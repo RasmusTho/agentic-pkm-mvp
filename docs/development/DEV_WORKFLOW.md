@@ -345,6 +345,11 @@ Enforcement surfaces:
   - `scripts/agent_workspace_cleanup.sh --report`
 - Safe cleanup apply (clean tree required):
   - `scripts/agent_workspace_cleanup.sh --apply --pr-state-file <path> --lease-file <path>`
+  - To reclaim exactly one completed worktree, add both `--target-worktree <absolute-path>` and
+    `--target-generation <32-hex-generation>`. Targeted apply limits mutations to that eligible
+    worktree and its associated local branch; it never acts on unrelated worktrees, branches,
+    remotes, stashes, or prune candidates. Missing, mismatched, or non-candidate selectors fail
+    closed before removal.
 - Register dedicated issue worktrees with `scripts/agent_worktree.py register`, renew them with
   `heartbeat`, and record `release` or `complete` when ownership ends. Cleanup is report-only by
   default. Apply may remove only a registered, expired, clean, unlocked worktree whose live

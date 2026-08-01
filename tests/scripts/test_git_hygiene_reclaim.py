@@ -219,6 +219,67 @@ def test_apply_uses_force_delete_for_pr_proven_non_ancestor_branch(
     )
 
 
+def test_targeted_janitor_apply_mutates_only_selected_worktree(
+    tmp_path, monkeypatch
+) -> None:
+    """Targeted apply must not inherit unrelated plan candidates."""
+    commands: list[list[str]] = []
+    target = tmp_path / "target"
+    other = tmp_path / "other"
+
+    def fake_run_git_result(args: list[str], _cwd: Path):
+        commands.append(args)
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    def candidate(path: Path, branch: str) -> dict[str, str]:
+        return {
+            "path": str(path),
+            "branch": branch,
+            "head": branch,
+            "merge_proof": "merged_pr",
+        }
+
+    target_candidate = candidate(target, "codex/target")
+    other_candidate = candidate(other, "codex/other")
+    monkeypatch.setattr(git_hygiene, "run_git_result", fake_run_git_result)
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *args, **kwargs: {
+            "mode": "report",
+            "candidates": {
+                "local_branches": [{"branch": "codex/unrelated"}],
+                "worktrees": [target_candidate, other_candidate],
+                "orphaned_worktrees": [],
+                "remote_branches": [{"branch": "codex/remote"}],
+                "remote_branches_requiring_rescue": [],
+                "old_stashes": [{"sha": "a" * 40}],
+            },
+            "reclaimable_worktrees": [target_candidate, other_candidate],
+            "orphaned_worktrees": [],
+            "prune_candidates": {"worktree": ["stale"], "remote": ["stale"]},
+            "preservation_receipts": [{"path": str(other), "reason": "unregistered"}],
+        },
+    )
+
+    report = git_hygiene.janitor_apply(
+        tmp_path,
+        pr_states={"codex/target": {"state": "MERGED"}},
+        active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
+        lifecycle_records={},
+        target_worktree=str(target),
+    )
+
+    assert report["ok"] is True
+    assert ["worktree", "remove", str(target)] in commands
+    assert ["branch", "-D", "codex/target"] in commands
+    assert not any(str(other) in command for command in commands)
+    assert not any(command[:2] == ["push", "origin"] for command in commands)
+    assert not any(command[:2] == ["stash", "drop"] for command in commands)
+    assert ["branch", "-d", "codex/unrelated"] not in commands
+
+
 def test_apply_real_git_reclaims_squash_merged_worktree_and_branch(tmp_path) -> None:
     """Real-git regression: a true squash-merge leaves the feature branch as a
     NON-ancestor of origin/main. With a merged PR proof, apply must remove the

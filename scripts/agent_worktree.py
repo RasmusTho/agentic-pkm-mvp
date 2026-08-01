@@ -659,7 +659,15 @@ def janitor_apply(
     pr_states: dict[str, dict[str, Any]] | None,
     lease_path: Path,
     stale_after_days: int = 14,
+    target_worktree: Path | None = None,
+    target_generation: str | None = None,
 ) -> dict[str, Any]:
+    if (target_worktree is None) != (target_generation is None):
+        raise WorktreeLifecycleError(
+            "targeted cleanup requires both worktree path and lifecycle generation"
+        )
+    if target_generation is not None and not _valid_generation(target_generation):
+        raise WorktreeLifecycleError("targeted cleanup generation is invalid")
     path = _canonical(registry_path or _default_registry_path(cwd))
     if not path.exists():
         # Absence is not "nothing was ever registered": the registry is the only
@@ -672,6 +680,19 @@ def janitor_apply(
         raise WorktreeLifecycleError("worktree lifecycle registry is missing")
     _reconcile_removed_generations(cwd, path)
     records = _bind_live_generations(cwd, _locked_lifecycle_snapshot(path))
+    target_path: str | None = None
+    if target_worktree is not None:
+        target = _canonical(target_worktree)
+        record = records.get(str(target))
+        if (
+            not isinstance(record, dict)
+            or record.get("generation") != target_generation
+            or record.get("status") not in {"active", "released", "complete"}
+        ):
+            raise WorktreeLifecycleError(
+                "targeted cleanup lifecycle generation does not match"
+            )
+        target_path = str(target)
     return git_hygiene.janitor_apply(
         cwd,
         active_lease_loader=lambda: _load_active_lease_snapshot(lease_path),
@@ -683,6 +704,7 @@ def janitor_apply(
         stale_after_days=stale_after_days,
         pr_states=pr_states,
         lifecycle_records=records,
+        target_worktree=target_path,
     )
 
 
@@ -722,6 +744,8 @@ def main(argv: list[str] | None = None) -> int:
         operation.add_argument("--mode", choices=("report", "apply"), default="report")
         operation.add_argument("--stale-after-days", type=int, default=14)
         operation.add_argument("--pr-state-file")
+        operation.add_argument("--target-worktree")
+        operation.add_argument("--target-generation")
 
     args = parser.parse_args(argv)
     cwd = _canonical(Path(args.cwd))
@@ -763,6 +787,12 @@ def main(argv: list[str] | None = None) -> int:
                 registry_path=registry_path,
             )
         else:
+            if bool(args.target_worktree) != bool(args.target_generation):
+                raise WorktreeLifecycleError(
+                    "targeted cleanup requires both worktree path and lifecycle generation"
+                )
+            if args.mode == "report" and args.target_worktree:
+                raise WorktreeLifecycleError("target selectors are only valid for apply mode")
             pr_states = None
             if args.pr_state_file:
                 pr_states = json.loads(
@@ -783,6 +813,12 @@ def main(argv: list[str] | None = None) -> int:
                     pr_states=pr_states,
                     lease_path=lease_path,
                     stale_after_days=args.stale_after_days,
+                    target_worktree=(
+                        Path(args.target_worktree)
+                        if args.target_worktree is not None
+                        else None
+                    ),
+                    target_generation=args.target_generation,
                 )
             else:
                 active_leases = (

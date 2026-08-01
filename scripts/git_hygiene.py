@@ -1042,6 +1042,7 @@ def janitor_apply(
         [list[dict[str, Any]]], AbstractContextManager[Callable[[], None]]
     ]
     | None = None,
+    target_worktree: str | None = None,
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -1165,6 +1166,52 @@ def janitor_apply(
         pr_states=pr_states,
         lifecycle_records=lifecycle_records,
     )
+
+    if target_worktree is not None:
+        target_path = str(Path(target_worktree).resolve(strict=False))
+        reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
+        selected = [
+            worktree
+            for worktree in reclaimable
+            if str(Path(str(worktree.get("path", ""))).resolve(strict=False))
+            == target_path
+        ]
+        if len(selected) != 1:
+            return {
+                **plan,
+                "mode": "apply",
+                "targeted_cleanup": {"worktree": target_path},
+                "destructive_actions": actions,
+                "errors": [
+                    {
+                        "artifact": "worktree",
+                        "action": "select_target",
+                        "reason": "target_not_exactly_one_reclaimable_worktree",
+                        "path": target_path,
+                    }
+                ],
+                "ok": False,
+            }
+        # A targeted operation is intentionally narrower than the global janitor:
+        # preserve evidence and candidates belonging to other artifacts must not
+        # block it, but neither may they become eligible for mutation.
+        plan = {
+            **plan,
+            "candidates": {
+                **plan["candidates"],
+                "local_branches": [],
+                "worktrees": selected,
+                "orphaned_worktrees": [],
+                "remote_branches": [],
+                "remote_branches_requiring_rescue": [],
+                "old_stashes": [],
+            },
+            "reclaimable_worktrees": selected,
+            "orphaned_worktrees": [],
+            "prune_candidates": {"worktree": [], "remote": []},
+            "preservation_receipts": [],
+            "targeted_cleanup": {"worktree": target_path},
+        }
 
     preservation_receipts = plan.get("preservation_receipts", [])
     if preservation_receipts:
