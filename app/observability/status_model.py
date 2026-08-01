@@ -191,10 +191,12 @@ class HeimdalIngressStatus(BaseModel):
     """
 
     raw_store_key_available: bool
+    # Required, mirroring `IngressPreflightResult`: a defaulted `True` would let
+    # an omitted precondition render as available on the status surface.
+    media_consent_grant_available: bool
     lanes: Dict[str, str] = Field(default_factory=dict)
     detail: str = ""
     checked_at: Optional[datetime] = None
-    media_consent_grant_available: bool = True
 
 
 class SystemStatus(BaseModel):

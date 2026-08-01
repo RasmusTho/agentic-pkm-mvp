@@ -33,10 +33,14 @@ truthfully (INV-B3-3).
   standing self-record grant as mirrored in `_heimdal/consent.md` (read the grant ref from the
   consent note's `grants`; if the consent note is missing/empty, the surface says so and offers
   registration with the ref left for the hub/human to bind — never a fabricated grant ref).
-  **Since #4492 `basis: self_record` no longer identifies a unique grant**: `consent.md` lists two
+  **Since #4492 `basis: self_record` no longer identifies a unique grant**: the ledger holds two
   standing self-record grants, told apart by `scope` — `device+adapter:v1-voice-memo` (the
   watched-folder/voice-memo lane) and `device+adapter:v1-media-ingress` (the governed media ingress
-  lane, `POST /api/heimdal/capture/media`). Select by `scope`, never by `basis` or by append order:
+  lane, `POST /api/heimdal/capture/media`). A rendered `consent.md` therefore lists both — but note
+  that nothing in the shipped runtime calls `consent_surface.write_consent_readout`, so an on-disk
+  `consent.md` may predate the second grant entirely; treat a single-grant note as possibly stale
+  rather than as evidence that only one grant exists. Select by `scope`, never by `basis` or by
+  append order:
   a device whose uploads go through the governed media lane is stamped `grant-media-capture-v1`, so
   binding it to the voice-memo grant would make the device note disagree with the device's own raw
   records.

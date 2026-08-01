@@ -278,8 +278,14 @@ FABLE_COMPANION §6.1 basis 1, scope `device+adapter:v1-voice-memo`, migration
 They resolve and revoke independently, and are distinguished by `scope` /
 `grant_ref` — **not** by `basis`, which is `self_record` on both. Not every
 governed capture lane has a seeded grant: the screen-capture lane
-(`screen_capture.SCREEN_CAPTURE_SCOPE` = `screen_always_on`) has none, so
-screen capture is not consented by default. Grants are appended; a
+(`screen_capture.SCREEN_CAPTURE_SCOPE` = `screen_always_on`) has none, so a
+screen bundle admitting under **its own scope** is refused until an operator
+grants it. That is *not* the same as saying screen capture cannot be admitted:
+`ingest_screen_bundle` resolves its scope from the client-supplied bundle, so a
+client naming either seeded self-record scope is admitted today and the raw
+record is stamped with that other lane's `grant_ref`. That is a pre-existing
+defect tracked as #4497, not a property of this design; seeding a second
+always-active scope widens what such a client can name. Grants are appended; a
 revocation is a NEW row (`basis='revocation'`, `revokes_grant_ref` naming
 the lapsed grant) — never an edit of the grant it lapses, same HEIM-1
 discipline as `heimdal_observation_log`, enforced by an identical

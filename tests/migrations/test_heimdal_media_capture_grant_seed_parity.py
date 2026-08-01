@@ -31,13 +31,17 @@ from pathlib import Path
 
 import pytest
 
+from app.heimdal import consent_ledger
 from app.heimdal.consent_ledger import (
     MEDIA_CAPTURE_BASIS,
     MEDIA_CAPTURE_GRANT_REF,
     MEDIA_CAPTURE_MODALITIES,
     MEDIA_CAPTURE_SCOPE,
+    SELF_RECORD_GRANT_REF,
     _media_capture_seed_row,
     _STANDING_SEED_ROW_BUILDERS,
+    list_active_grants,
+    reset_memory_consent_ledger,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -72,6 +76,44 @@ def _migration_module_constants() -> dict[str, object]:
         except ValueError:
             continue
     return values
+
+
+class _RecordingCursor:
+    """Minimal DB-API cursor stand-in that records what was executed.
+
+    `fetchone()` returns None so every standing-grant existence probe reports
+    "not seeded yet" and the bootstrap takes its INSERT branch for each one —
+    which is the branch under test.
+    """
+
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple]] = []
+
+    def execute(self, sql: str, params: tuple | None = None) -> None:
+        self.executed.append((sql, params or ()))
+
+    def fetchone(self) -> None:
+        return None
+
+    def seeded_grant_refs(self) -> set[str]:
+        """The `grant_ref` of every row this bootstrap actually INSERTed.
+
+        `grant_ref` is the second bound parameter of the seed INSERT, matching
+        the column order in `consent_ledger._bootstrap_pg`.
+        """
+        return {
+            params[1]
+            for sql, params in self.executed
+            if "INSERT INTO" in sql and len(params) > 1
+        }
+
+
+class _RecordingConn:
+    def __init__(self) -> None:
+        self.cursor_obj = _RecordingCursor()
+
+    def cursor(self) -> _RecordingCursor:
+        return self.cursor_obj
 
 
 def _producer_sources() -> dict[str, str]:
@@ -143,28 +185,60 @@ def test_migration_seed_is_idempotent_and_forward_only() -> None:
     assert re.search(r"def downgrade\(\)[\s\S]*raise RuntimeError", source), (
         "downgrade must raise rather than silently no-op"
     )
-    # Guarded insert, same shape as c4f7a1b2d9e3's self_record seed.
-    assert "WHERE NOT EXISTS" in source
+    # Guarded insert, same shape as c4f7a1b2d9e3's self_record seed. The guard
+    # must key on *this* migration's grant_ref: a guard naming any already-seeded
+    # ref (e.g. the self-record grant) is true on every database, so the insert
+    # would silently never happen, alembic_version would still advance, and
+    # media ingress would 409 forever. Substring-checking "WHERE NOT EXISTS"
+    # alone does not catch that, so assert the subquery's predicate.
     assert "INSERT INTO heimdal_consent_grant" in source
+    guard = re.search(
+        r"WHERE NOT EXISTS\s*\(\s*SELECT 1 FROM heimdal_consent_grant\s*"
+        r"WHERE grant_ref = '\{(?P<ref_const>\w+)\}'",
+        source,
+    )
+    assert guard is not None, (
+        "the seed must be guarded by NOT EXISTS on a grant_ref predicate"
+    )
+    assert constants[guard.group("ref_const")] == MEDIA_CAPTURE_GRANT_REF, (
+        "the idempotency guard must name this migration's own grant_ref; naming an "
+        "already-seeded ref makes the guard true everywhere and the insert dead"
+    )
     # Data-only: the table, its indexes, and its append-only trigger belong to
     # c4f7a1b2d9e3 and must not be redefined here.
     for ddl in ("CREATE TABLE", "ALTER TABLE", "DROP TABLE", "CREATE TRIGGER"):
         assert ddl not in source, f"{ddl} does not belong in a data-only seed migration"
 
 
-def test_in_process_producers_share_one_builder_tuple() -> None:
-    """`_MemoryConsentLedger._seed` and the `_bootstrap_pg` autocreate branch
-    both iterate `_STANDING_SEED_ROW_BUILDERS`, so a standing grant cannot land
-    in one in-process producer and not the other."""
+def test_in_process_producers_share_one_builder_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both in-process producers actually seed **both** standing grants.
+
+    Asserted **behaviorally**, by running each producer and reading what it
+    emitted — not by checking that its source mentions
+    `_STANDING_SEED_ROW_BUILDERS`. A source-text assertion cannot distinguish a
+    producer that iterates the shared tuple from one that iterates it and then
+    filters a grant back out (`if grant_ref != SELF_RECORD_GRANT_REF: continue`),
+    which is exactly the regression this test exists to catch.
+    """
     builders = dict(_STANDING_SEED_ROW_BUILDERS)
-    assert MEDIA_CAPTURE_GRANT_REF in builders
+    assert builders.keys() == {SELF_RECORD_GRANT_REF, MEDIA_CAPTURE_GRANT_REF}
     assert builders[MEDIA_CAPTURE_GRANT_REF] is _media_capture_seed_row
 
-    # Extract each producer's source via the AST rather than a regex span: a
-    # regex bounded by "the next def" also swallows any comment sitting between
-    # the two definitions, which would let this assertion pass vacuously on a
-    # hardcoded producer that merely *mentions* the tuple nearby.
-    for name, body in _producer_sources().items():
-        assert "_STANDING_SEED_ROW_BUILDERS" in body, (
-            f"{name} must iterate the shared builder tuple, not a hardcoded grant list"
-        )
+    # Producer 1: the memory backend. Drive the real reset hook and read the
+    # ledger's own active grants.
+    reset_memory_consent_ledger()
+    memory_refs = {grant.grant_ref for grant in list_active_grants()}
+    assert memory_refs == {SELF_RECORD_GRANT_REF, MEDIA_CAPTURE_GRANT_REF}
+
+    # Producer 2: the STORE_SCHEMA_AUTOCREATE Postgres bootstrap. Driven
+    # against a stub connection, so this needs no Postgres and therefore runs
+    # in the required `Unit tests (not pg)` job, where drift must be caught.
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    conn = _RecordingConn()
+    consent_ledger._bootstrap_pg(conn)
+    assert conn.cursor_obj.seeded_grant_refs() == {
+        SELF_RECORD_GRANT_REF,
+        MEDIA_CAPTURE_GRANT_REF,
+    }, "the autocreate bootstrap must INSERT every standing grant"

@@ -33,6 +33,7 @@ from app.api.app import app
 from app.heimdal import media_ingress, media_receipts
 from app.heimdal.capture_adapter import admit_capture_file
 from app.heimdal.consent_ledger import (
+    ConsentLedgerSchemaMissingError,
     ConsentRefusedError,
     MEDIA_CAPTURE_GRANT_REF,
     MEDIA_CAPTURE_SCOPE,
@@ -1291,6 +1292,40 @@ def test_startup_preflight_reports_missing_media_consent_grant(
         assert refused.json()["detail"]["state"] == "not_acknowledged"
         assert all_raw_records() == []
         assert all_media_receipts() == []
+
+
+def test_startup_preflight_reports_an_unreadable_consent_ledger(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4492: a ledger that cannot be queried at all is its own named class.
+
+    This is the branch where a false `available` hurts most — an unmigrated or
+    unreachable database — and it must not be conflated with
+    `media_consent_grant_missing`, because the operator remedies differ
+    (`alembic upgrade head` for the missing *table* vs re-granting a revoked
+    grant). Raised from the real ledger read the preflight performs.
+    """
+    from app.heimdal import ingress_preflight
+
+    def _unreadable(**_kwargs: Any):
+        raise ConsentLedgerSchemaMissingError("Missing table 'heimdal_consent_grant'.")
+
+    monkeypatch.setattr(ingress_preflight, "resolve_active_grant", _unreadable)
+    ingress_preflight.reset_ingress_preflight()
+
+    recorded = ingress_preflight.run_ingress_preflight()
+    assert recorded.media_consent_grant_available is False
+    assert recorded.raw_store_key_available is True
+    assert recorded.lanes["media_ingress"] == "unavailable"
+    # The screen lane has no consent precondition of its own, so it stays up.
+    assert recorded.lanes["screen_capture"] == "available"
+    # Named class plus the concrete error type, and never the grant-missing
+    # class, which would send the operator hunting for a revocation.
+    assert recorded.detail.startswith(
+        ingress_preflight.DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE + ":"
+    )
+    assert "ConsentLedgerSchemaMissingError" in recorded.detail
+    assert ingress_preflight.DETAIL_MEDIA_CONSENT_GRANT_MISSING not in recorded.detail
 
 
 def test_admission_succeeds_when_key_provisioned(client: TestClient) -> None:

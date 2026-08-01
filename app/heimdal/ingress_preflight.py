@@ -72,10 +72,12 @@ class IngressPreflightResult:
     """
 
     raw_store_key_available: bool
+    # Required, not defaulted: an omitted precondition must not read as
+    # "available". Both preconditions are equally load-bearing for this lane.
+    media_consent_grant_available: bool
     lanes: Dict[str, str] = field(default_factory=dict)
     detail: str = ""
     checked_at: Optional[datetime] = None
-    media_consent_grant_available: bool = True
 
 
 _LAST_RESULT: Optional[IngressPreflightResult] = None
@@ -147,14 +149,27 @@ def run_ingress_preflight() -> IngressPreflightResult:
             result.detail,
         )
     if not media_grant_available:
+        # Two causes, two remedies — do not give the operator the wrong one.
+        if DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE in result.detail:
+            remedy = (
+                "the consent ledger could not be read at all: the "
+                "heimdal_consent_grant table is absent (migration c4f7a1b2d9e3 "
+                "never ran) or the database is unreachable. Check the DSN, then "
+                "run 'alembic upgrade head'"
+            )
+        else:
+            remedy = (
+                "no active grant covers the scope: most often this database has "
+                "not yet run migration a9f3c2d7b6e1 (run 'alembic upgrade head'); "
+                "otherwise the grant was revoked and must be re-granted"
+            )
         logger.error(
-            "Heimdal ingress preflight: no active consent grant for scope %r — the "
-            "media ingress lane will refuse every admission with the named 409 "
-            "consent_refused until the grant is present. Seeded by migration "
-            "a9f3c2d7b6e1; run 'alembic upgrade head' against this database, or "
-            "re-grant if it was revoked. All other API functions keep serving. "
+            "Heimdal ingress preflight: media ingress lane unavailable for scope "
+            "%r — every admission will refuse with the named 409 consent_refused "
+            "until this is resolved. %s. All other API functions keep serving. "
             "Detail: %s",
             MEDIA_CAPTURE_SCOPE,
+            remedy,
             result.detail,
         )
     if key_available and media_grant_available:
