@@ -496,18 +496,38 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/agents/ask/",
             "app/activation/ask_synthesis.py",
             "app/retrieval/envelope.py",
+            # The ASK HTTP surface owns BOTH ask entrypoints. `companion_ui` already
+            # claims this path for `tests/api`, and subsystems union rather than steal,
+            # so listing it here strictly widens: it adds the ASK graph/retrieval lane
+            # plus the voice-contract test that `tests/api` alone does not cover.
+            "app/api/routes/ask.py",
             "tests/agents/ask/",
         ),
         (
             "tests/agents/ask",
             "tests/retrieval",
             "tests/agent_memory",
+            # `app/agents/ask/state.py` defines AgentState. These two suites are the
+            # ONLY gates in the repo asserting the shared RuntimeStateModel authority
+            # /trace spine on it. Without them an `ask`-only selection goes green while
+            # a state class that dropped the spine merges -- a false-green CI window
+            # this subsystem would otherwise newly open (these paths previously exited
+            # 2, i.e. fail-closed).
+            "tests/architecture/test_agent_state_spine.py",
+            "tests/agents/test_runtime_state_contract.py",
+            # `app/activation/ask_synthesis.py` is an ask prefix; this invariant
+            # hard-codes the receipt path and mkdir+append sequence that module owns.
+            "tests/invariants/test_receipt_surface_writable.py",
             "tests/api/test_ask_api.py",
             "tests/api/test_ask_alias.py",
             "tests/api/test_ask_contract.py",
             "tests/api/test_ask_llm_answer.py",
             "tests/api/test_ask_rerank_origin.py",
             "tests/api/test_ask_route.py",
+            # `/api/ask/voice` binds the same active scope from a form field. Every other
+            # voice test monkeypatches `run_ask_graph` away, so this is the only gate that
+            # proves the voice turn is not a scope-isolation hole.
+            "tests/voice/test_voice_ask_contract.py",
         ),
     ),
     (

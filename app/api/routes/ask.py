@@ -74,14 +74,22 @@ class AskRequest(BaseModel):
     # The caller's active scope for this turn (#2921). This is the production binding that
     # activates the scope prefilter; omitted, the ambient `ASK_DOMAIN_SCOPE` process default
     # applies and behaviour is unchanged. Binding context is not granting access: cross-scope
-    # admission remains a governed CrossScopeFlow decision, never something a scope string widens.
+    # admission remains a governed CrossScopeFlow decision (#2314), which no scope string can
+    # substitute for.
     #
     # TRANSITIONAL SURFACE. MVR-03 (#3857) versions ActiveContextSet and MVR-05B (#3860) moves
     # request ingress onto an opaque context_selection_id from which the SERVER derives the
     # cognitive scope; client-supplied scope strings never become identity or authority there.
-    # This field is the interim carrier, safe only because a bound scope can solely NARROW the
-    # retrieval candidate set. When #3860 lands, replace this with the server-derived scope from
-    # the immutable selection snapshot -- the threading below `run_ask_graph` is unaffected.
+    # When #3860 lands, replace this with the server-derived scope from the immutable selection
+    # snapshot -- the threading below `run_ask_graph` is unaffected.
+    #
+    # PRECEDENCE HAZARD, stated honestly: this binding REPLACES `ASK_DOMAIN_SCOPE` rather than
+    # narrowing within it. It narrows only relative to the UNSCOPED default. No deployment
+    # artifact in this repo sets `ASK_DOMAIN_SCOPE`, and this route has no authentication of its
+    # own, so if a deployment ever sets that variable as a containment control this precedence
+    # must become intersecting (env scope as a ceiling). Pinned by
+    # tests/retrieval/test_active_scope_request_binding.py::test_request_scope_overrides_ambient_env_scope
+    # and documented in RUNTIME_SCOPE_PREFILTER_AND_ENVELOPE.md :: Activation in Production.
     scope: str | None = None
 
 

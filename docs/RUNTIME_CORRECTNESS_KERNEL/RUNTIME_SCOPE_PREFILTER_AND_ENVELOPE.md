@@ -105,15 +105,36 @@ Split the seam in two:
   immutable selection snapshot, and the only edit is the single argument passed to
   `run_ask_graph(active_scope=...)` in `app/api/routes/ask.py`.
 
-This is safe in the interim because a bound scope can only *narrow* the retrieval candidate set. It
-is a filter input, never an authority claim, so a client-authored value cannot widen what a request
-may see — which is precisely the property MVR's "client-supplied scope strings never become
-identity or authority" rule protects. #3857 and #3860 are the follow-on work that must adapt the
-HTTP surface.
+#### Exactly what "narrows" means here — and what it does not
 
-Binding is not authorization. WSP supplies context and never grants access, so a bound scope can
-only narrow what retrieval admits. Cross-scope admission stays a governed `CrossScopeFlow` decision
-(#2314), and excluded-but-relevant material still surfaces as a content-free `ScopeDenial`.
+A bound scope narrows the retrieval candidate set **relative to the unscoped default**. It does
+**not** narrow relative to a configured ambient scope: the request binding takes strict precedence
+over `ASK_DOMAIN_SCOPE` and *replaces* it (`_active_scope` and `scoped_hybrid_search` both resolve
+"explicit binding first, ambient default second"). `ASK_DOMAIN_SCOPE` is therefore a **default, not
+a containment control**.
+
+The concrete consequence, stated plainly rather than left implicit: if an operator sets
+`ASK_DOMAIN_SCOPE=work` expecting domain containment, a request that binds `scope=private` is
+served the `private` partition, not the `work` one. `/api/ask` carries no authentication of its
+own, so any caller that can reach the endpoint can select any scope. That behaviour is pinned by
+`tests/retrieval/test_active_scope_request_binding.py::test_request_scope_overrides_ambient_env_scope`
+so it is deliberate and visible instead of a surprise.
+
+This is acceptable today for two reasons, both of which are conditions that can expire:
+
+1. No deployment artifact in this repository sets `ASK_DOMAIN_SCOPE` — the effective shipped default
+   is admit-all, under which no scope string can widen anything.
+2. Scope binding supplies context and never grants access, so it cannot reach material a governed
+   `CrossScopeFlow` (#2314) would have to admit; excluded-but-relevant material still surfaces as a
+   content-free `ScopeDenial`.
+
+**If either condition changes — a deployment starts setting `ASK_DOMAIN_SCOPE` as a containment
+control, or `/api/ask` becomes reachable by a caller the operator does not trust — this precedence
+must become intersecting rather than overriding** (an env-set scope becomes a ceiling the request
+may narrow within but not escape). MVR-05B (#3860) removes the hazard structurally by making the
+server derive the scope from the immutable selection snapshot instead of accepting it from the
+client, which is the durable shape. #3857 and #3860 are the follow-on work that must adapt the HTTP
+surface.
 
 ### Fail-safe posture and what stayed unchanged
 

@@ -13,11 +13,14 @@ KERNEL-10 (#2772) delivered the prefilter MECHANISM; these tests bind its ACTIVA
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 import app.retrieval.hybrid as hybrid
 from app.agents.ask import graph as ask_graph
+from app.agents.ask.state import AgentState
 from app.api.app import app
 from app.retrieval.capability import RetrievalHit, RetrievalRequest, retrieve
 from app.retrieval.hybrid import get_store
@@ -208,3 +211,67 @@ def test_evidence_role_in_context_survives_capability_boundary(monkeypatch) -> N
     )
     assert upgraded.evidence_role_in_context == "background", "the clamp must never upgrade a role"
     assert order.index(upgraded.evidence_role_in_context) <= order.index("background")
+
+
+def test_request_scope_overrides_ambient_env_scope(monkeypatch) -> None:
+    """PRECEDENCE, pinned deliberately: a request binding REPLACES `ASK_DOMAIN_SCOPE`.
+
+    The binding narrows only relative to the UNSCOPED default. It does not narrow within a
+    configured ambient scope — it overrides it, so `ASK_DOMAIN_SCOPE` is a default and NOT a
+    containment control. This test exists so that property is visible and deliberate rather than an
+    unstated consequence of the resolution order; see
+    `docs/RUNTIME_CORRECTNESS_KERNEL/RUNTIME_SCOPE_PREFILTER_AND_ENVELOPE.md :: Activation in Production`.
+    """
+    monkeypatch.setenv("ASK_DOMAIN_SCOPE", "work")
+    _seed_two_scopes()
+    seen = _spy_partition(monkeypatch)
+
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *a, **k: [])
+    monkeypatch.setattr(
+        ask_graph, "llm_answer", lambda question, context, ask_settings: ("Bound.", {"provider": "mock"})
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/ask", json={"question": "stateful workflow engine", "scope": "private"}
+    )
+
+    assert response.status_code == 200
+    # The REQUEST scope wins outright; the ambient "work" never reaches the guard.
+    assert set(seen) == {"private"}, f"request binding must override the ambient default, saw {seen}"
+    source_paths = {source.get("path") for source in response.json()["sources"]}
+    assert source_paths == {"private/journal.md"}, (
+        "the request-bound partition is served, not the ambient one -- if this ever needs to be a "
+        "ceiling instead of an override, make the precedence intersecting"
+    )
+
+
+def test_recall_node_uses_request_bound_scope(monkeypatch) -> None:
+    """The recall leg of the no-divergence invariant.
+
+    `_recall_node` must consume the SAME scope retrieval used, not re-resolve the ambient default.
+    Without this, provisional memory from the ambient scope could be recalled into a turn the
+    caller bound to a different scope.
+    """
+    monkeypatch.setenv("ASK_DOMAIN_SCOPE", "work")
+    _seed_two_scopes()
+
+    seen_scopes: list[str | None] = []
+
+    def _spy_provisional(query, *, k, vault_root, receipt_store, active_scope_id):
+        seen_scopes.append(active_scope_id)
+        return None
+
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *a, **k: [])
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_provisional", _spy_provisional)
+    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: Path("/nonexistent-vault"))
+
+    state = ask_graph._recall_node(  # noqa: SLF001 - production node proof
+        AgentState(query="stateful workflow engine", active_scope="private"),
+        ask_settings=object(),
+    )
+
+    assert state is not None
+    assert seen_scopes == ["private"], (
+        f"recall must use the turn's bound scope, not the ambient default, saw {seen_scopes}"
+    )
