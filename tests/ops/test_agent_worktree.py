@@ -622,6 +622,41 @@ def test_removed_generation_branch_authority_reserves_target_path(tmp_path) -> N
     assert replacement_branch in git_hygiene._local_branches(repo)
 
 
+def test_removed_generation_branch_authority_reserves_target_with_absent_parent(
+    tmp_path,
+) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    parent = tmp_path / "retired-parent"
+    worktree = parent / "target"
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    record = payload["worktrees"].pop(str((tmp_path / "target").resolve()))
+    record["path"] = str(worktree.resolve())
+    payload["worktrees"][str(worktree.resolve())] = record
+    agent_worktree._write_registry(registry_path, payload)
+    assert not parent.exists()
+
+    with agent_worktree._locked_removed_generation_branch_authority(
+        repo,
+        registry_path,
+        worktree=str(worktree),
+        branch=branch,
+        generation=generation,
+    ):
+        reservation = worktree / ".agent-worktree-cleanup-reservation"
+        assert reservation.is_file()
+        assert not (worktree / ".git").exists()
+
+    assert not worktree.exists()
+    assert not parent.exists()
+    record = agent_worktree.load_lifecycle_records(repo, registry_path=registry_path)[
+        str(worktree.resolve())
+    ]
+    assert record["generation"] == generation
+    assert record["status"] == "removed"
+
+
 def test_bind_live_generations_skips_removal_tombstones(
     tmp_path,
     monkeypatch,
