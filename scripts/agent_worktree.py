@@ -453,6 +453,44 @@ def _locked_lifecycle_authority(
             _write_registry(path, payload)
 
 
+@contextmanager
+def _locked_removed_generation_branch_authority(
+    cwd: Path,
+    path: Path,
+    *,
+    worktree: str,
+    branch: str,
+    generation: str,
+) -> Iterator[None]:
+    """Hold the exact tombstone authority through its resumed branch deletion."""
+
+    canonical = _canonical(Path(worktree))
+    with _registry_lock(path):
+        payload = _read_registry(path)
+        record = payload["worktrees"].get(str(canonical))
+        if (
+            not isinstance(record, dict)
+            or record.get("generation") != generation
+            or record.get("branch") != branch
+            or record.get("status") != "removed"
+        ):
+            raise WorktreeLifecycleError(
+                "cleanup target removed lifecycle authority changed"
+            )
+        if canonical.exists():
+            raise WorktreeLifecycleError("cleanup target worktree was recreated")
+        live_entries = git_hygiene._parse_worktrees(
+            git_hygiene.run_git(["worktree", "list", "--porcelain"], cwd)
+        )
+        if any(
+            entry.get("worktree")
+            and _canonical(Path(entry["worktree"])) == canonical
+            for entry in live_entries
+        ):
+            raise WorktreeLifecycleError("cleanup target worktree was recreated")
+        yield
+
+
 def load_lifecycle_records(
     cwd: Path,
     *,
@@ -681,18 +719,31 @@ def janitor_apply(
     _reconcile_removed_generations(cwd, path)
     records = _bind_live_generations(cwd, _locked_lifecycle_snapshot(path))
     target_path: str | None = None
+    target_branch: str | None = None
     if target_worktree is not None:
         target = _canonical(target_worktree)
         record = records.get(str(target))
         if (
             not isinstance(record, dict)
             or record.get("generation") != target_generation
-            or record.get("status") not in {"active", "released", "complete"}
         ):
             raise WorktreeLifecycleError(
                 "targeted cleanup lifecycle generation does not match"
             )
         target_path = str(target)
+        if record.get("status") == "removed":
+            branch = record.get("branch")
+            if not isinstance(branch, str) or not branch:
+                raise WorktreeLifecycleError(
+                    "targeted cleanup removed lifecycle binding is invalid"
+                )
+            if target.exists():
+                raise WorktreeLifecycleError("targeted cleanup worktree was recreated")
+            target_branch = branch
+        elif record.get("status") not in {"active", "released", "complete"}:
+            raise WorktreeLifecycleError(
+                "targeted cleanup lifecycle generation does not match"
+            )
     return git_hygiene.janitor_apply(
         cwd,
         active_lease_loader=lambda: _load_active_lease_snapshot(lease_path),
@@ -705,6 +756,20 @@ def janitor_apply(
         pr_states=pr_states,
         lifecycle_records=records,
         target_worktree=target_path,
+        target_branch=target_branch,
+        branch_lifecycle_authority_guard=(
+            (
+                lambda target: _locked_removed_generation_branch_authority(
+                    cwd,
+                    path,
+                    worktree=str(target["path"]),
+                    branch=str(target["branch"]),
+                    generation=target_generation,
+                )
+            )
+            if target_branch is not None
+            else None
+        ),
     )
 
 

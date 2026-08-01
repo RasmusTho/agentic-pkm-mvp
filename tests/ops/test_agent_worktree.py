@@ -113,6 +113,58 @@ def _worktree_porcelain(
     )
 
 
+def _init_repo_with_tombstoned_branch(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, str, str]:
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", remote],
+        check=True,
+    )
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--initial-branch=main", repo], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True)
+
+    branch = "codex/tombstoned-target"
+    subprocess.run(["git", "branch", branch], cwd=repo, check=True)
+    worktree = tmp_path / "target"
+    subprocess.run(["git", "worktree", "add", str(worktree), branch], cwd=repo, check=True)
+    (worktree / "feature.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature.txt"], cwd=worktree, check=True)
+    subprocess.run(["git", "commit", "-m", "feature"], cwd=worktree, check=True)
+    registry_path = tmp_path / "agent-worktrees.json"
+    registration = agent_worktree.register_worktree(
+        repo,
+        worktree=worktree,
+        owner="prior-owner",
+        ttl_seconds=1,
+        registry_path=registry_path,
+        now=0,
+    )
+    agent_worktree.complete_worktree(
+        repo,
+        worktree=worktree,
+        owner="prior-owner",
+        registry_path=registry_path,
+        now=1,
+    )
+    subprocess.run(["git", "merge", "--squash", branch], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "squash feature"], cwd=repo, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "worktree", "remove", str(worktree)], cwd=repo, check=True)
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    record = payload["worktrees"][str(worktree.resolve())]
+    agent_worktree._mark_generation_removed(record, removed_at=2)
+    agent_worktree._write_registry(registry_path, payload)
+    return repo, worktree, registry_path, branch, registration["generation"]
+
+
 def test_registry_write_fsyncs_parent_directory_after_replace(
     tmp_path,
     monkeypatch,
@@ -324,6 +376,79 @@ def test_targeted_janitor_apply_retires_selected_generation(tmp_path, monkeypatc
     ]
     assert record["status"] == "removed"
     assert record["generation"] == registration["generation"]
+
+
+def test_targeted_janitor_apply_resumes_removed_generation_branch_cleanup(tmp_path) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={branch: {"state": "MERGED"}},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=generation,
+    )
+
+    assert result["ok"] is True, result["errors"]
+    assert result["targeted_cleanup"] == {
+        "worktree": str(worktree.resolve()),
+        "branch": branch,
+    }
+    assert git_hygiene._is_ancestor(repo, branch, "origin/main") is False
+    assert not worktree.exists()
+    assert branch not in git_hygiene._local_branches(repo)
+    record = agent_worktree.load_lifecycle_records(repo, registry_path=registry_path)[
+        str(worktree.resolve())
+    ]
+    assert record["generation"] == generation
+    assert record["status"] == "removed"
+
+
+def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_change(
+    tmp_path, monkeypatch
+) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    calls = 0
+
+    def leases_after_plan(_path: Path) -> list[dict[str, object]]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return []
+        return [{"resource_id": f"worktree:{worktree.resolve()}", "expires_at": None}]
+
+    monkeypatch.setattr(agent_worktree, "_load_active_lease_snapshot", leases_after_plan)
+
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={branch: {"state": "MERGED"}},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=generation,
+    )
+
+    assert result["ok"] is False
+    assert branch in git_hygiene._local_branches(repo)
+    assert result["errors"] == [
+        {
+            "artifact": "worktree",
+            "action": "preserve",
+            "reason": "lease_authority_changed",
+            "path": str(worktree.resolve()),
+            "branch": branch,
+            "active_leases": [f"worktree:{worktree.resolve()}"],
+        }
+    ]
 
 
 def test_bind_live_generations_skips_removal_tombstones(
