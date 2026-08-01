@@ -5,7 +5,7 @@ Owner: BuilderOps governance / Capability Knowledge Model
 Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: this directory for Direction B implementation-task shape; ADR-0057 for CKM authority posture; `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` for the delivered presentation contract being amended; `docs/CKM_MEASUREMENT_AND_ACCESS/README.md` for retained-observation semantics.
-Last reviewed: 2026-07-30
+Last reviewed: 2026-08-01
 
 # CKM Cockpit Direction B
 
@@ -51,6 +51,31 @@ affordance can mutate CKM, GitHub, repo docs, Product/Runtime state, or BuilderO
 - repairing evidence linkage, changing scorers, retaining observations automatically, or changing
   the accepted 365-day retention policy;
 - implementing the already-ratified CKM Evidence Profile Phase 1 work inside Direction B.
+
+## Delivered design-hub panel (dormant capability)
+
+Cockpit mode also renders a read-only design-hub panel supplied by the delivered
+[CKM Design-Agent Integration](../CKM_DESIGN_AGENT_INTEGRATION/README.md) capability (CDH-05,
+issue #4312, merged in PR #4493). The panel projects design-agent availability, design-run state,
+refusal codes, receipt chains, and handoff summaries. It obeys the same boundary as the rest of this
+page: inert, deterministic, no added script, form, link, or control, complete with JavaScript off,
+and incapable of starting, approving, or otherwise mutating a design run. The capability it projects
+ships dormant and fail-closed — no design run can execute, and every registered design agent renders
+as unavailable on every channel.
+
+Two limits bound how this panel may be read:
+
+- **It is not visually or print-verified.** No browser render of the design-hub panel was performed
+  for acceptance. Print completeness is asserted structurally only — the `@media print` rules are
+  tested present and the section carries no `hidden` / `display:none` — which is not a paginated
+  browser proof. The print digest recorded during CDH-06 is machine-local and is not reproducible
+  evidence.
+- **An empty panel is not evidence that no runs exist.** Deferred known defect `KD-7C4378C00F83`
+  (P2, recorded on [#4172](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4172)) means one
+  malformed design-run receipt raises during chain load and moves *every* run into
+  `excluded_run_ids`, emptying the whole panel. Read an empty design-hub panel as possible receipt
+  corruption. Until that defect is repaired the panel is not a trustworthy operational status
+  surface for more than one run.
 
 ## Design provenance and authority
 

@@ -1,4 +1,4 @@
-State: Active parent validation-hub contract. GitHub Issue #4131 exists and remains open and unaccepted; children #4308–#4313 are filed, #4308–#4312 carry terminal receipts, and terminal child #4313 posts its receipt and the conditional-acceptance ledger on merge. The remaining work is then the independent parent acceptance audit, which a child slice may not perform or close.
+State: Active parent validation-hub contract. GitHub Issue #4131 remains open and unaccepted; all six children #4308–#4313 are closed with merged PRs and terminal receipts. The independent parent acceptance audit of 2026-08-01 recorded a conditional PASS that authorized exactly one docs-only owner-doc promotion PR; it did not accept, close, relabel, or tick #4131. The remaining work is the post-promotion fresh independent audit of that merged promotion diff, which neither a child slice nor the promotion PR itself may perform or close.
 Doc role: Parent feature Issue specification
 Authority: Stable acceptance shape for live parent #4131; GitHub owns current labels, comments, and closure state.
 Owner: Builder System / CKM

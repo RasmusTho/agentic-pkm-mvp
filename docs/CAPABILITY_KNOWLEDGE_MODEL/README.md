@@ -5,7 +5,7 @@ Owner: BuilderOps governance
 Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: mixed (this directory for task shape; ADR-0057 for decisions)
-Last reviewed: 2026-07-28
+Last reviewed: 2026-08-01
 
 # Capability Knowledge Model (CKM / Kvasir) — MVP Specification
 
@@ -50,6 +50,53 @@ Product/Runtime, or network write authority. Direction A remains the script-free
 B is the supported opt-in cockpit mode. Exact acceptance and closure receipts are recorded on
 [#4080](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102696743) and its
 [terminal closure receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4080#issuecomment-5102745391).
+
+## Adjacent Builder capability: design-agent integration (delivered, dormant)
+
+[CKM Design-Agent Integration](../CKM_DESIGN_AGENT_INTEGRATION/README.md) is delivered and merged.
+Its six child slices #4308–#4313 are closed with merged PRs on `main`, supplying the
+provider-neutral design-run contracts, the exact three-adapter registry
+(`claude-design-via-claude-code`, `codex`, `fable`) above the ADR-0064 model-access substrate, the
+governed admission/approval/receipt lifecycle, the `builderops design-run` operator CLI, and the
+read-only Direction B cockpit projection. It is Builder System machinery *around* the CKM, not a new
+CKM authority class: INV-CKM-2 is unchanged, the design hub is not a Product/Runtime capability,
+there is no provider ranking, recommendation, selection, or fallback, and no design result is
+accepted repo or product truth.
+
+**The capability ships dormant and fail-closed, and no design run can execute.** The host secret
+contract declares no `builderops-design-run` consumer on any channel, so all three registered design
+agents report `available=False` on `dev`, `test`, and `prod` — `codex` and `fable` with
+`model_access_unavailable`, `claude-design-via-claude-code` with `interactive_subscription_only` —
+and no credential is read on the availability path.
+
+What the production acceptance matrix proves is *governance semantics*: exact admission and approval
+hash binding, append-only causal receipts, one provider turn at most, no fallback, sanitized adapter
+identity, Yggdrasil-gated visual deliverables, and handoffs labelled unaccepted Builder material. It
+does not prove provider execution. Those governed-success rows run above a doubled model-access
+resolver and turn-adapter port, and therefore also bypass production host-secret-contract
+authorization; they demonstrate governance above a *successful resolution*, not that a real
+credential grant would execute. Nothing in this repository establishes that design-agent runs work,
+are available, are enabled, or have been proven end to end against a real provider.
+
+`claude-design-via-claude-code` is never headless-available. That follows from INV-CDH-5A as an
+invariant — not from configuration and not from the absent grant: the route is hard-refused inside
+the adapter registry before any adapter lookup, and stays refused even when the other two routes
+resolve. Its `interactive_subscription_only` string is an availability-**descriptor** code; at run
+level that route yields the generic `adapter_unavailable`, the same code the dormant no-adapter case
+yields, so no distinct run-level refusal code exists for it.
+
+The `design_agent_profiles` entries in `docs/settings/models/providers.yaml` — including the `prod`
+rows that name real frontier models and real credential identifiers — are ADR-0064 census
+declarations, not provisioning. They do not make this an enabled production capability. Dormancy
+rests on the absent `builderops-design-run` consumer in the host secret contract; enabling a run
+would require a separate governed change to that contract.
+
+Parent validation hub [#4131](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4131) remains open
+and unaccepted. The
+[conditional acceptance receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4131#issuecomment-5149608088)
+authorized exactly this docs-only owner-doc promotion and no acceptance criterion is ticked by it;
+parent closure requires a separate post-promotion fresh independent audit of the merged promotion
+diff.
 
 ## Execution order
 
