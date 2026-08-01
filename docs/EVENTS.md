@@ -616,13 +616,17 @@ Contract:
   rather than admitting evidence the operator believed was bounded.
 - **Operator precondition.** Admission encrypts through
   `app.heimdal.raw_store`, so `HEIMDAL_RAW_STORE_KEY` must be provisioned to the
-  process serving the API. Today `config/secrets/host_secret_contract.json`
-  declares that secret for the `heimdal-capture-watch` consumer only, so an api
-  process without it refuses every admission with 500
+  process serving the API. `config/secrets/host_secret_contract.json` declares
+  that secret for the `heimdal-api-ingress` consumer (the api process, which the
+  pre-existing `POST /api/heimdal/screen/capture` needs equally) alongside
+  `heimdal-capture-watch`, and the governed deploy wrapper delivers it (#4422).
+  An api process still without the key refuses every admission with 500
   `raw_store_key_unavailable` / `not_acknowledged` — named and remediable, never
-  a silent or ambiguous failure. Provisioning it to the api consumer (which the
-  pre-existing `POST /api/heimdal/screen/capture` needs equally) is a deferred
-  defect on the Known Defects registry (#4172, `KD-4384-RAWKEY`), not claimed here.
+  a silent or ambiguous failure — and an api startup preflight
+  (`app.heimdal.ingress_preflight`) reports the media and screen lanes
+  `unavailable` on `/api/status` before first use instead of letting a dead lane
+  look calm. Placing key material into each channel's Keychain item remains an
+  operator step; see `docs/STATUS.md :: Runtime verification`.
 - **Receipts are not retention-aware, stated honestly.**
   `app.heimdal.retention.enforce_hard_retention_bound` hard-deletes raw records
   past the retention window without consulting receipts, so a receipt can outlive

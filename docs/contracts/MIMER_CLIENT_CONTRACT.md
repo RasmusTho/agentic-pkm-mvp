@@ -176,9 +176,14 @@ only. The posture is enforced hub-side on the immediate peer and deliberately ig
 `X-Forwarded-For`, so a client behind a relay cannot present itself as local.
 
 **One operator precondition, stated honestly:** admission encrypts through the raw store, so the api
-process needs `HEIMDAL_RAW_STORE_KEY`. It is not yet provisioned to that consumer, so until it is,
-every admission answers `500 raw_store_key_unavailable` / `not_acknowledged` rather than a receipt.
-Tracked as `KD-4384-RAWKEY` on the Known Defects registry #4172.
+process needs `HEIMDAL_RAW_STORE_KEY`. Provisioning is delivered (#4422): the api process is a
+declared consumer of `heimdal.raw-store-key` (`heimdal-api-ingress`, dev/test/prod), the governed
+deploy wrapper materializes its secret layer, and an api startup preflight reports the ingress lanes
+`unavailable` on `/api/status` before first use rather than letting the lane look healthy. What
+remains is the operator step of placing key material into the Keychain item for that consumer per
+channel; until that is done for a channel, every admission there still answers
+`500 raw_store_key_unavailable` / `not_acknowledged` rather than a receipt. See
+`docs/STATUS.md :: Runtime verification`.
 
 ## 5. Direct-filesystem write transport (owner-permitted, 2026-07-07)
 
