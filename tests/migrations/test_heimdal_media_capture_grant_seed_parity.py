@@ -95,16 +95,18 @@ class _RecordingCursor:
     def fetchone(self) -> None:
         return None
 
-    def seeded_grant_refs(self) -> set[str]:
-        """The `grant_ref` of every row this bootstrap actually INSERTed.
+    def seeded_identities(self) -> set[tuple[str, str, str]]:
+        """`(grant_ref, basis, scope)` of every row this bootstrap INSERTed.
 
-        `grant_ref` is the second bound parameter of the seed INSERT, matching
-        the column order in `consent_ledger._bootstrap_pg`.
+        Positions 1/2/3 of the bound parameters, matching the column order in
+        `consent_ledger._bootstrap_pg`'s INSERT. All three, not `grant_ref`
+        alone: a producer that emitted the right ref under the wrong scope
+        would seed a grant no admission can resolve.
         """
         return {
-            params[1]
+            (params[1], params[2], params[3])
             for sql, params in self.executed
-            if "INSERT INTO" in sql and len(params) > 1
+            if "INSERT INTO" in sql and len(params) > 3
         }
 
 
@@ -114,34 +116,6 @@ class _RecordingConn:
 
     def cursor(self) -> _RecordingCursor:
         return self.cursor_obj
-
-
-def _producer_sources() -> dict[str, str]:
-    """Exact source of each in-process seed producer, via the AST.
-
-    Returns `{"_MemoryConsentLedger._seed": ..., "_bootstrap_pg": ...}`. Each
-    value spans only that definition's own lines, so a mention of the shared
-    tuple *outside* the definition cannot be mistaken for use inside it.
-    """
-    path = REPO_ROOT / "app" / "heimdal" / "consent_ledger.py"
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    found: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == "_MemoryConsentLedger":
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == "_seed":
-                    segment = ast.get_source_segment(source, item)
-                    assert segment is not None
-                    found["_MemoryConsentLedger._seed"] = segment
-        elif isinstance(node, ast.FunctionDef) and node.name == "_bootstrap_pg":
-            segment = ast.get_source_segment(source, node)
-            assert segment is not None
-            found["_bootstrap_pg"] = segment
-    assert set(found) == {"_MemoryConsentLedger._seed", "_bootstrap_pg"}, (
-        f"expected both in-process producers to be found, got {sorted(found)}"
-    )
-    return found
 
 
 def test_every_producer_seeds_the_same_media_capture_grant() -> None:
@@ -238,7 +212,11 @@ def test_in_process_producers_share_one_builder_tuple(
     monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
     conn = _RecordingConn()
     consent_ledger._bootstrap_pg(conn)
-    assert conn.cursor_obj.seeded_grant_refs() == {
+    seeded = conn.cursor_obj.seeded_identities()
+    assert {ref for ref, _basis, _scope in seeded} == {
         SELF_RECORD_GRANT_REF,
         MEDIA_CAPTURE_GRANT_REF,
     }, "the autocreate bootstrap must INSERT every standing grant"
+    # ...and under the right scope: a grant seeded against the wrong scope
+    # resolves for nothing, which no grant_ref-only assertion would catch.
+    assert (MEDIA_CAPTURE_GRANT_REF, MEDIA_CAPTURE_BASIS, MEDIA_CAPTURE_SCOPE) in seeded

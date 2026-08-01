@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import secrets
 from pathlib import Path
 from typing import Any
@@ -1326,6 +1327,46 @@ def test_startup_preflight_reports_an_unreadable_consent_ledger(
     )
     assert "ConsentLedgerSchemaMissingError" in recorded.detail
     assert ingress_preflight.DETAIL_MEDIA_CONSENT_GRANT_MISSING not in recorded.detail
+
+
+def test_preflight_logs_the_remedy_matching_the_failing_precondition(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#4492: the two detail classes have different operator remedies, so the
+    log must not hand the operator the wrong one.
+
+    The log line is what an operator actually reads when a lane goes dark; a
+    single shared remedy would send someone hunting for a revocation that does
+    not exist (or vice versa).
+    """
+    from app.heimdal import ingress_preflight
+
+    # 1. Unreadable ledger -> point at the *table*-owning migration and the DSN.
+    def _unreadable(**_kwargs: Any):
+        raise ConsentLedgerSchemaMissingError("Missing table 'heimdal_consent_grant'.")
+
+    monkeypatch.setattr(ingress_preflight, "resolve_active_grant", _unreadable)
+    ingress_preflight.reset_ingress_preflight()
+    with caplog.at_level(logging.ERROR, logger="app.heimdal.ingress_preflight"):
+        ingress_preflight.run_ingress_preflight()
+    unreadable_log = caplog.text
+    assert "could not be read at all" in unreadable_log
+    assert "c4f7a1b2d9e3" in unreadable_log, "must name the table-owning migration"
+    assert "re-granted" not in unreadable_log, "wrong remedy for an unreadable ledger"
+
+    # 2. Readable ledger, no active grant -> point at *this* slice's migration
+    #    and at re-granting.
+    monkeypatch.undo()
+    caplog.clear()
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="test-operator")
+    ingress_preflight.reset_ingress_preflight()
+    with caplog.at_level(logging.ERROR, logger="app.heimdal.ingress_preflight"):
+        ingress_preflight.run_ingress_preflight()
+    missing_log = caplog.text
+    assert "no active grant covers the scope" in missing_log
+    assert "a9f3c2d7b6e1" in missing_log, "must name the grant-seeding migration"
+    assert "re-granted" in missing_log
+    assert "could not be read at all" not in missing_log
 
 
 def test_admission_succeeds_when_key_provisioned(client: TestClient) -> None:
