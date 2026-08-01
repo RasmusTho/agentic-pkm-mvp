@@ -486,6 +486,31 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "ask",
+        (
+            # The ASK graph is the retrieval CONSUMPTION seam: it binds the active
+            # scope (#2921), assembles the ContextEnvelope, and drives recall. It
+            # was unowned, so any change here failed closed as unowned runtime
+            # code. Its blast radius is retrieval + agent memory + the ASK HTTP
+            # contract, which is exactly what these targets cover.
+            "app/agents/ask/",
+            "app/activation/ask_synthesis.py",
+            "app/retrieval/envelope.py",
+            "tests/agents/ask/",
+        ),
+        (
+            "tests/agents/ask",
+            "tests/retrieval",
+            "tests/agent_memory",
+            "tests/api/test_ask_api.py",
+            "tests/api/test_ask_alias.py",
+            "tests/api/test_ask_contract.py",
+            "tests/api/test_ask_llm_answer.py",
+            "tests/api/test_ask_rerank_origin.py",
+            "tests/api/test_ask_route.py",
+        ),
+    ),
+    (
         "episodes",
         (
             "app/episodes/",
