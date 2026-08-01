@@ -2,6 +2,7 @@
 name: Run Live Meeting On iPad
 description: iPad live meeting surface — segment capture into the outbox, clearly labeled provisional AI blocks beside the user's own notes editor, reconnect resend and reconciled refresh, and the final view separation.
 task_id: CDLM-09
+github_issue: "https://github.com/RasmusTho/bifrost/issues/60"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-03, CDLM-06, CDLM-07]
@@ -10,6 +11,9 @@ can_parallelize_with: [CONSOLIDATE_MEETING_ON_END.md]
 ---
 
 # Run Live Meeting On iPad
+
+State: Delivered by Bifrost issue #60 / PR #65 on 2026-07-30 (merge commit
+`bd9415a7f5cd4a6b8c9d451603583d8deced448a`).
 
 ## Purpose
 

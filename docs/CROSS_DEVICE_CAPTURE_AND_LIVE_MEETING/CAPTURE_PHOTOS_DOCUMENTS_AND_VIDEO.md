@@ -2,6 +2,7 @@
 name: Capture Photos Documents And Video
 description: iPhone/iPad capture surfaces for photos, receipt/document scans, and video that feed the durable transfer outbox with typed sidecars; the Watch remains audio-relay-only.
 task_id: CDLM-04
+github_issue: "https://github.com/RasmusTho/bifrost/issues/58"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-03]
@@ -10,6 +11,9 @@ can_parallelize_with: [SHOW_DURABLE_TRANSFER_QUEUE_ON_IPAD.md, PROJECT_LIVE_TRAN
 ---
 
 # Capture Photos Documents And Video
+
+State: Delivered by Bifrost issue #58 / PR #64 on 2026-07-30 (merge commit
+`47fea6d5b1a1c1f46f01fd29d592cae312a5ca11`).
 
 ## Purpose
 

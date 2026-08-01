@@ -2,6 +2,7 @@
 name: Track Meeting Sessions And Segment Gaps
 description: Hub-side meeting session ledger over admitted segments with open/close, monotonic sequence tracking, gap detection, and late-segment reconciliation.
 task_id: CDLM-02
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-01]

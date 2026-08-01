@@ -2,6 +2,7 @@
 name: Retain Originals Until Backend Receipt
 description: Bifrost durable transfer outbox that keeps every captured original until the hub's durable-acceptance receipt is persisted locally, with idempotent resend and disk-rebuilt state.
 task_id: CDLM-03
+github_issue: "https://github.com/RasmusTho/bifrost/issues/57"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-01]
@@ -10,6 +11,10 @@ can_parallelize_with: [TRACK_MEETING_SESSIONS_AND_SEGMENT_GAPS.md]
 ---
 
 # Retain Originals Until Backend Receipt
+
+State: Delivered by Bifrost issue #57 / PR #62 on 2026-07-30 (merge commit
+`fe7b257021e99732f1e19effabf24c882d0a5a85`). The receipt-gated outbox is current client
+behavior; the watched-folder lane remains the explicitly separate legacy floor.
 
 ## Purpose
 

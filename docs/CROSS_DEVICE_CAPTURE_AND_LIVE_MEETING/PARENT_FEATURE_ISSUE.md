@@ -1,4 +1,4 @@
-State: Filed 2026-07-29 as live parent validation hub [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383) (`agent:blocked`). GitHub issue #4383 is now the authoritative backlog and validation surface; this file records the authored contract, and the live issue body carries the child table with filed numbers.
+State: Acceptance evidence complete 2026-07-30 on live parent [#4383](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4383). All ten children are closed and receipted. The parent remains `agent:blocked` only until the terminal owner-doc promotion merges; GitHub remains the authoritative validation surface.
 Doc role: Parent feature issue contract (feature-breakdown lane)
 
 # Parent feature issue — Cross-Device Capture & Live Meeting
@@ -65,18 +65,21 @@ user-note preservation; and a composed test-channel proof with reconnect chaos.
 
 ## Acceptance Criteria
 
-- [ ] Multi-modality capture round trip with receipt-gated retention proven, kill/relaunch-safe,
+- [x] Multi-modality capture round trip with receipt-gated retention proven, kill/relaunch-safe,
   duplicate-free. Verify: CDLM-10 stage 1–3 receipt on this issue.
-- [ ] iPad queue shows the five states truthfully across restart/reconnect. Verify: bifrost
+- [x] iPad queue shows the five states truthfully across restart/reconnect. Verify: bifrost
   `Yggdrasil/YggdrasilUITests/TransferQueueJourneyTests.swift::testOfflineToCompleteJourney` green
   + CDLM-10 receipt.
-- [ ] Live meeting with reconnect reconciliation and the user-note/derived separation holds
+- [x] Live meeting with reconnect reconciliation and the user-note/derived separation holds
   end-to-end. Verify: CDLM-10 stage 4 receipt (user-note hash comparison inline).
-- [ ] Finalization produces the three separated artifacts with gap legibility. Verify: CDLM-10
+- [x] Finalization produces the three separated artifacts with gap legibility. Verify: CDLM-10
   stage 5 receipt + `tests/heimdal/test_meeting_finalization.py` suite green on the delivering
   head.
-- [ ] Every child slice delivered per its own ACs with receipts recorded here. Verify: per-child
+- [x] Every child slice delivered per its own ACs with receipts recorded here. Verify: per-child
   validation receipt comments on this issue.
+- [ ] Owner docs describe the delivered client and meeting contract without claiming prod
+  activation or physical-device-only truth. Verify: doc writeback at
+  `docs/contracts/MIMER_CLIENT_CONTRACT.md :: 4. Callable HTTP surface (v1, shipped)`.
 
 ## Out of Scope
 
@@ -121,30 +124,27 @@ fail-closed by scratch PR bifrost#61). Composed: the CDLM-10 test-channel run.
 
 ## Validation / Acceptance Path
 
-Each child merge posts a validation receipt comment here (delivering PR, head SHA, Verify-target
-results). CDLM-10's run report is the capability-level receipt. When all ACs above are checked
-with receipts, close this issue and open the single owner-doc promotion PR (client contract media
-lane + ARCHITECTURE/STATUS wording). Until then, owner docs continue to claim nothing from this
-vertical.
+Each child merge posted a validation receipt comment here (delivering PR, head SHA, Verify-target
+results). CDLM-10's run report is the capability-level receipt. The one remaining AC is this
+terminal owner-doc promotion (client contract meeting lane + ARCHITECTURE/STATUS wording). Once
+that PR merges, record its merge SHA, check the final AC, and close this parent.
 
 ---
 
 ## Relationship to child issues (recorded at filing, 2026-07-29)
 
-| Order | ID | Issue | Initial label |
-| --- | --- | --- | --- |
-| 1 | CDLM-01 | hub [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384) | `agent:ready` |
-| 2 | CDLM-02 | hub [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385) | `agent:blocked` |
-| 3 | CDLM-03 | [bifrost#57](https://github.com/RasmusTho/bifrost/issues/57) | `agent:blocked` |
-| 4 | CDLM-04 | [bifrost#58](https://github.com/RasmusTho/bifrost/issues/58) | `agent:blocked` |
-| 5 | CDLM-05 | [bifrost#59](https://github.com/RasmusTho/bifrost/issues/59) | `agent:blocked` |
-| 6 | CDLM-06 | hub [#4386](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386) | `agent:blocked` |
-| 7 | CDLM-07 | hub [#4387](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4387) | `agent:blocked` |
-| 8 | CDLM-08 | hub [#4388](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4388) | `agent:blocked` |
-| 9 | CDLM-09 | [bifrost#60](https://github.com/RasmusTho/bifrost/issues/60) | `agent:blocked` |
-| 10 | CDLM-10 | hub [#4389](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4389) | `agent:blocked` |
+| Order | ID | Issue | Initial label | Current state |
+| --- | --- | --- | --- | --- |
+| 1 | CDLM-01 | hub [#4384](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384) | `agent:ready` | closed |
+| 2 | CDLM-02 | hub [#4385](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4385) | `agent:blocked` | closed |
+| 3 | CDLM-03 | [bifrost#57](https://github.com/RasmusTho/bifrost/issues/57) | `agent:blocked` | closed |
+| 4 | CDLM-04 | [bifrost#58](https://github.com/RasmusTho/bifrost/issues/58) | `agent:blocked` | closed |
+| 5 | CDLM-05 | [bifrost#59](https://github.com/RasmusTho/bifrost/issues/59) | `agent:blocked` | closed |
+| 6 | CDLM-06 | hub [#4386](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4386) | `agent:blocked` | closed |
+| 7 | CDLM-07 | hub [#4387](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4387) | `agent:blocked` | closed |
+| 8 | CDLM-08 | hub [#4388](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4388) | `agent:blocked` | closed |
+| 9 | CDLM-09 | [bifrost#60](https://github.com/RasmusTho/bifrost/issues/60) | `agent:blocked` | closed |
+| 10 | CDLM-10 | hub [#4389](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4389) | `agent:blocked` | closed |
 
-The parent (#4383) is `agent:blocked` as a validation hub, never a pickup issue. Only CDLM-01 was
-filed `agent:ready`, after strict readiness validation passed on its body
-(`scripts/validate_issue_readiness.py` → `ready_candidate`; `scripts/validate_source_anchors.py`
-→ pass). Every other child is `agent:blocked` on its named prerequisite's acceptance receipt.
+All ten children are closed with receipts on #4383. The parent remains `agent:blocked` as a
+validation hub only until the owner-doc promotion merges; it is never a pickup issue.

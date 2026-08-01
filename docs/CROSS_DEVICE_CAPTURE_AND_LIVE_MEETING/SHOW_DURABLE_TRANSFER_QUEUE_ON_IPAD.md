@@ -2,6 +2,7 @@
 name: Show Durable Transfer Queue On iPad
 description: iPad transfer-queue surface rendering the five truthful item states from durable local state plus hub answers, surviving relaunch and reconnect.
 task_id: CDLM-05
+github_issue: "https://github.com/RasmusTho/bifrost/issues/59"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-03]
@@ -10,6 +11,9 @@ can_parallelize_with: [CAPTURE_PHOTOS_DOCUMENTS_AND_VIDEO.md, PROJECT_LIVE_TRANS
 ---
 
 # Show Durable Transfer Queue On iPad
+
+State: Delivered by Bifrost issue #59 / PR #63 on 2026-07-30 (merge commit
+`e29ea38021fe37f41913627c0b46e45a212c5ac2`).
 
 ## Purpose
 

@@ -282,6 +282,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/ARCHITECTURE.md",
+      "category": "iv",
+      "why_load_bearing": "The current-runtime owner doc names Bifrost custody and the Hub-only authority boundary for the delivered CDLM vertical.",
+      "disposition": "stay",
+      "issue": "#4383"
+    },
+    {
       "artifact": "docs/BIFROST/APP_DEPLOYMENT_POSTURE.md",
       "category": "ii",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",

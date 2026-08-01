@@ -2,6 +2,7 @@
 name: Consolidate Meeting On End
 description: Meeting finalization that materializes the consolidated transcript and final derived analysis create-once into the Sources zone, preserves user notes as their own artifact, and surfaces gaps as needs-attention.
 task_id: CDLM-08
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4388"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: [CDLM-07]

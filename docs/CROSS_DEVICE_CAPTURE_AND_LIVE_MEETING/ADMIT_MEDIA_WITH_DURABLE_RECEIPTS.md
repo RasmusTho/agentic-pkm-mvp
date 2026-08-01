@@ -2,6 +2,7 @@
 name: Admit Media With Durable Receipts
 description: Governed hub media ingress that admits capture bytes idempotently and acknowledges only durable acceptance, with queryable receipts.
 task_id: CDLM-01
+github_issue: "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4384"
 source_anchor: docs/CROSS_DEVICE_CAPTURE_AND_LIVE_MEETING/README.md :: Fixed scope
 parent_capability: Cross-Device Capture & Live Meeting
 prerequisites: []
