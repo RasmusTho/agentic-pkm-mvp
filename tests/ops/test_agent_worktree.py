@@ -233,6 +233,99 @@ def test_registration_generation_does_not_replay_after_worktree_recreation(
     )
 
 
+def test_targeted_janitor_apply_requires_matching_generation(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--initial-branch=main", repo], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "branch", "codex/target"], cwd=repo, check=True)
+    worktree = tmp_path / "target"
+    subprocess.run(["git", "worktree", "add", str(worktree), "codex/target"], cwd=repo, check=True)
+    registry_path = tmp_path / "agent-worktrees.json"
+    registration = agent_worktree.register_worktree(
+        repo, worktree=worktree, owner="owner", registry_path=registry_path
+    )
+    agent_worktree.complete_worktree(
+        repo, worktree=worktree, owner="owner", registry_path=registry_path
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(agent_worktree.WorktreeLifecycleError):
+        agent_worktree.janitor_apply(
+            repo,
+            registry_path=registry_path,
+            pr_states={},
+            lease_path=lease_path,
+            target_worktree=worktree,
+        )
+    with pytest.raises(agent_worktree.WorktreeLifecycleError):
+        agent_worktree.janitor_apply(
+            repo,
+            registry_path=registry_path,
+            pr_states={},
+            lease_path=lease_path,
+            target_worktree=worktree,
+            target_generation="b" * 32,
+        )
+    assert registration["generation"] != "b" * 32
+
+
+def test_targeted_janitor_apply_retires_selected_generation(tmp_path, monkeypatch) -> None:
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--initial-branch=main", repo], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "branch", "codex/target"], cwd=repo, check=True)
+    worktree = tmp_path / "target"
+    subprocess.run(["git", "worktree", "add", str(worktree), "codex/target"], cwd=repo, check=True)
+    registry_path = tmp_path / "agent-worktrees.json"
+    registration = agent_worktree.register_worktree(
+        repo, worktree=worktree, owner="owner", registry_path=registry_path
+    )
+    agent_worktree.complete_worktree(
+        repo, worktree=worktree, owner="owner", registry_path=registry_path
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def simulate_hygiene_apply(_cwd, **kwargs):
+        captured.update(kwargs)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=worktree, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        with kwargs["lifecycle_authority_guard"](
+            [{"path": str(worktree), "branch": "codex/target", "head": head}]
+        ) as mark_succeeded:
+            mark_succeeded()
+        return {"ok": True}
+
+    monkeypatch.setattr(git_hygiene, "janitor_apply", simulate_hygiene_apply)
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=registration["generation"],
+    )
+
+    assert result["ok"] is True
+    assert captured["target_worktree"] == str(worktree.resolve())
+    record = agent_worktree.load_lifecycle_records(repo, registry_path=registry_path)[
+        str(worktree.resolve())
+    ]
+    assert record["status"] == "removed"
+    assert record["generation"] == registration["generation"]
+
+
 def test_bind_live_generations_skips_removal_tombstones(
     tmp_path,
     monkeypatch,
