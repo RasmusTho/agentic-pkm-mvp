@@ -409,7 +409,10 @@ def test_targeted_janitor_apply_resumes_removed_generation_branch_cleanup(tmp_pa
     assert record["status"] == "removed"
 
 
-@pytest.mark.parametrize("authority", ("path_lease", "branch_lease", "binding_change"))
+@pytest.mark.parametrize(
+    "authority",
+    ("path_lease", "branch_lease", "late_path_lease", "late_branch_lease", "binding_change"),
+)
 def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_change(
     tmp_path, monkeypatch, authority
 ) -> None:
@@ -425,6 +428,8 @@ def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_cha
         calls += 1
         if calls == 1:
             return []
+        if authority.startswith("late_") and calls == 2:
+            return []
         if authority == "binding_change":
             payload = json.loads(registry_path.read_text(encoding="utf-8"))
             payload["worktrees"][str(worktree.resolve())]["branch"] = "codex/replaced"
@@ -432,7 +437,7 @@ def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_cha
             return []
         resource_id = (
             f"worktree:{worktree.resolve()}"
-            if authority == "path_lease"
+            if authority in {"path_lease", "late_path_lease"}
             else f"branch:{branch}"
         )
         return [{"resource_id": resource_id, "expires_at": None}]
@@ -463,7 +468,7 @@ def test_targeted_janitor_apply_removed_generation_fails_closed_on_authority_cha
     else:
         resource_id = (
             f"worktree:{worktree.resolve()}"
-            if authority == "path_lease"
+            if authority in {"path_lease", "late_path_lease"}
             else f"branch:{branch}"
         )
         assert result["errors"] == [

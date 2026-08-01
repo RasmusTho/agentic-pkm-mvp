@@ -1367,6 +1367,10 @@ def janitor_apply(
             return apply_git(args, action)
         try:
             with branch_lifecycle_authority_guard(action):
+                if authority_changed_for(
+                    path=action.get("path"), branch=action.get("branch")
+                ):
+                    return False
                 return apply_git(args, action)
         except (OSError, RuntimeError, TypeError, ValueError, subprocess.SubprocessError):
             errors.append(
