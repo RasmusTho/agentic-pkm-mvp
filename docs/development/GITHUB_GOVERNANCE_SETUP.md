@@ -149,7 +149,8 @@ again in the final locked deletion window, then uses a compare-and-delete ref up
 preserves every other janitor candidate, confirms the checkout remains absent, and holds the
 lifecycle lock through the branch deletion while rechecking the path, branch, and generation
 binding. It atomically reserves the absent target path for that delete window, creating a missing
-parent directory only to place the temporary reservation and removing it again when empty. Another
+immediate parent directory only to place the temporary reservation and removing it again only when
+this guard created it. Another
 `git worktree add` therefore cannot reuse the target between revalidation and branch deletion. Any
 replacement checkout, lifecycle drift, or active path/branch lease fails closed and leaves the
 branch intact.

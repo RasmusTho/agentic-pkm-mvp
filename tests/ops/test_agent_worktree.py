@@ -657,6 +657,45 @@ def test_removed_generation_branch_authority_reserves_target_with_absent_parent(
     assert record["status"] == "removed"
 
 
+def test_removed_generation_branch_authority_preserves_racing_parent_creator(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    parent = tmp_path / "racing-parent"
+    worktree = parent / "target"
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    record = payload["worktrees"].pop(str((tmp_path / "target").resolve()))
+    record["path"] = str(worktree.resolve())
+    payload["worktrees"][str(worktree.resolve())] = record
+    agent_worktree._write_registry(registry_path, payload)
+    original_mkdir = Path.mkdir
+    parent_created = False
+
+    def create_parent_first(path: Path, *args, **kwargs) -> None:
+        nonlocal parent_created
+        if path == parent and not parent_created:
+            parent_created = True
+            original_mkdir(path, *args, **kwargs)
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", create_parent_first)
+
+    with agent_worktree._locked_removed_generation_branch_authority(
+        repo,
+        registry_path,
+        worktree=str(worktree),
+        branch=branch,
+        generation=generation,
+    ):
+        assert (worktree / ".agent-worktree-cleanup-reservation").is_file()
+
+    assert parent.exists()
+    assert not worktree.exists()
+
+
 def test_bind_live_generations_skips_removal_tombstones(
     tmp_path,
     monkeypatch,
