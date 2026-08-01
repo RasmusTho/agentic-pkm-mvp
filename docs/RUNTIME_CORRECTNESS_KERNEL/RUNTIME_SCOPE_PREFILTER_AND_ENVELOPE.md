@@ -105,6 +105,18 @@ only narrow what retrieval admits. Cross-scope admission stays a governed `Cross
   silently re-defaulted to the intrinsic role at the envelope. The seam re-clamps against the hit's
   own intrinsic role, and the envelope clamps again; both are non-upgrading, so carrying the value
   can only preserve a downgrade, never manufacture an upgrade.
+- **"Narrows" applies to retrieval, not to the whole turn.** Binding a scope narrows what the
+  retrieval prefilter admits, but it also makes one previously dead branch live:
+  `app/agents/ask/graph.py::_recall_node` guards provisional-memory recall on
+  `vault_root is not None and active_scope is not None`. Because production `active_scope` was
+  always `None`, `retrieve_relevant_provisional` never ran on the ASK path. A request that binds a
+  scope now admits provisional memory into the turn for the first time. That material is same-scope
+  filtered and admissibility-gated, so it is not a cross-scope leak — but it is an expansion of the
+  turn's admitted context, and it is deliberate rather than incidental.
+- **The retrieval prefilter is the only channel this closes.** Promoted-memory recall
+  (`app/agent_memory/recall_retrieval.py::retrieve_relevant_promoted`) takes no scope and filters on
+  none, so I-A5 is enforced on the retrieval channel and not yet on the promoted-recall channel.
+  Pre-existing and unchanged by this slice; tracked as a deferred defect.
 - **Entrypoints that do not bind a scope are unchanged**, and still resolve the ambient default:
   `app/agents/qa/agent.py`, `app/components/retrieval.py`, `app/api/routes/search.py`,
   `app/api/routes/context_bundles.py`, `app/curation/contradiction.py`, `app/expansion/connect.py`,

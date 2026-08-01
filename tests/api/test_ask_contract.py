@@ -105,6 +105,8 @@ def test_ask_contract_propagates_trace_id_from_header(monkeypatch) -> None:
         resp = client.post("/api/ask", json={"question": "trace header"}, headers={"x-trace-id": "trace-ask-header-1"})
         assert resp.status_code == 200
         assert captured["trace_id"] == "trace-ask-header-1"
+        # #2921: a request that binds no scope must pass None, not an invented value.
+        assert captured["active_scope"] is None
     finally:
         hybrid.set_documents([])
         ask_module._HYBRID_WARMED = False
@@ -143,6 +145,7 @@ def test_ask_contract_generates_trace_id_when_missing(monkeypatch) -> None:
         resp = client.post("/api/ask", json={"question": "trace generated"})
         assert resp.status_code == 200
         assert captured["trace_id"] == "generated-ask-trace-1"
+        assert captured["active_scope"] is None
         assert resp.headers.get("x-trace-id") == "generated-ask-trace-1"
     finally:
         hybrid.set_documents([])

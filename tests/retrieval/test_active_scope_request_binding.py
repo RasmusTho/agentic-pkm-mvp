@@ -136,6 +136,27 @@ def test_ambient_env_scope_remains_process_default(monkeypatch) -> None:
     assert retrieve(RetrievalRequest(query="stateful workflow engine")).hits
 
 
+def test_unmatched_bound_scope_admits_nothing_and_denies(monkeypatch) -> None:
+    """A bound scope no document matches admits NOTHING and records a content-free denial.
+
+    The fail-safe direction: an unmatched scope must starve the result set rather than fall back to
+    admit-all. Whitespace around the scope is normalized, so `" work "` cannot silently become an
+    unmatchable scope.
+    """
+    monkeypatch.delenv("ASK_DOMAIN_SCOPE", raising=False)
+    _seed_two_scopes()
+
+    unmatched = retrieve(RetrievalRequest(query="stateful workflow engine", k=5, scope="operator"))
+    assert unmatched.hits == [], "an unmatched bound scope must not fall back to admit-all"
+    assert unmatched.denials, "relevant excluded material must be recorded, never silently dropped"
+    assert {d.denial_class for d in unmatched.denials} == {"cross_scope_no_flow"}
+    assert unmatched.diagnostics["active_scope"] == "operator"
+
+    padded = retrieve(RetrievalRequest(query="stateful workflow engine", k=5, scope="  work  "))
+    assert {hit.doc_id for hit in padded.hits} == {"work-1"}
+    assert padded.diagnostics["active_scope"] == "work"
+
+
 def test_evidence_role_in_context_survives_capability_boundary(monkeypatch) -> None:
     """The per-hit in-context evidence role crosses ``RetrievalHit`` and never upgrades.
 
