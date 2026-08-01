@@ -91,12 +91,13 @@ declarations, not provisioning. They do not make this an enabled production capa
 rests on the absent `builderops-design-run` consumer in the host secret contract; enabling a run
 would require a separate governed change to that contract.
 
-Parent validation hub [#4131](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4131) remains open
-and unaccepted. The
+Parent validation hub [#4131](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4131) governs
+acceptance and closure for this capability; GitHub owns its current open/closed state and labels,
+not this doc. The
 [conditional acceptance receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4131#issuecomment-5149608088)
-authorized exactly this docs-only owner-doc promotion and no acceptance criterion is ticked by it;
-parent closure requires a separate post-promotion fresh independent audit of the merged promotion
-diff.
+authorized exactly this docs-only owner-doc promotion and, by itself, ticks no acceptance criterion;
+the hub's closure criterion is a separate post-promotion fresh independent audit of the merged
+promotion diff.
 
 ## Execution order
 
