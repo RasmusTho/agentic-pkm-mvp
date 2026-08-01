@@ -181,13 +181,19 @@ class IntegratedRuntimeCapabilityStatus(BaseModel):
 
 
 class HeimdalIngressStatus(BaseModel):
-    """Startup-preflight availability of the governed ingress lanes (#4422).
+    """Startup-preflight availability of the governed ingress lanes (#4422, #4492).
 
     Carries availability only — never key material. ``lanes`` maps
     media_ingress/screen_capture to "available" or "unavailable".
+    ``media_consent_grant_available`` is the media lane's second precondition
+    (its standing consent grant); ``detail`` is a comma-joined list of named
+    detail classes, because more than one precondition can fail at once.
     """
 
     raw_store_key_available: bool
+    # Required, mirroring `IngressPreflightResult`: a defaulted `True` would let
+    # an omitted precondition render as available on the status surface.
+    media_consent_grant_available: bool
     lanes: Dict[str, str] = Field(default_factory=dict)
     detail: str = ""
     checked_at: Optional[datetime] = None

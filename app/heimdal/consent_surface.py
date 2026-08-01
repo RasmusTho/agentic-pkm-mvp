@@ -27,9 +27,13 @@ Contract (binding for this slice):
   from, or worse override, the ledger (the named boundary risk: "the readout
   must not become a control that mutates consent independently of the
   ledger").
-- **v1 exercises only `self_record`.** The readout renders whatever grants
-  are active; v1's only populated basis is the standing `self_record` grant
-  (A5), so v1's `consent.md` reflects exactly that one grant.
+- **v1 exercises only the `self_record` basis.** The readout renders whatever
+  grants are active; v1's only populated basis is `self_record`. Since #4492
+  that basis has **two** standing grants -- the voice-memo grant
+  (`SELF_RECORD_SCOPE`) and the media-capture grant (`MEDIA_CAPTURE_SCOPE`) --
+  so v1's `consent.md` reflects both, distinguished by `scope` and
+  `grant_ref`, not by `basis`. A consumer that needs one specific lane's grant
+  must key on `scope`; a "the one self_record grant" read is wrong.
 - **B-shaped fields present-but-dormant (ADR-0049 §3).** The rendered readout
   always includes a `withhold_span_review` block and a `retention_erasure`
   block, both structurally present but inert in v1 (`enabled: False` /

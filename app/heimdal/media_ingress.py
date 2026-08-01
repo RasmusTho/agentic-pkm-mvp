@@ -62,7 +62,7 @@ from app.heimdal import (
     raw_store,
 )
 from app.heimdal.capture_adapter import SensorIdentity
-from app.heimdal.consent_ledger import admit_raw_evidence
+from app.heimdal.consent_ledger import MEDIA_CAPTURE_SCOPE, admit_raw_evidence
 from app.heimdal.media_receipts import MediaReceipt
 from app.heimdal.raw_read_gate import raw_ref_for
 from app.outbox.events import INDEX_OUTBOX_PATH
@@ -370,10 +370,13 @@ def admit_media_bytes(
 ) -> MediaAdmission:
     """Admit one media original and return its durable-acceptance receipt.
 
-    ``scope`` defaults to the standing self-record consent scope the voice-memo
-    lane already admits under (`capture_adapter.DEFAULT_CAPTURE_SCOPE`): an
-    operator transferring their own device captures *is* self-record, so this
-    lane needs no new grant. A caller may narrow it; no active grant for the
+    ``scope`` defaults to this lane's own standing consent scope
+    (`consent_ledger.MEDIA_CAPTURE_SCOPE`), whose seeded grant's
+    `capture_profile.modalities` names every kind in :data:`MEDIA_KINDS` -- so
+    the consent block stamped onto a photo, video, or document references a
+    grant that actually covers it. It borrowed the voice-memo lane's
+    speech-only `self_record` grant until #4492; the two now revoke
+    independently. A caller may still narrow it; no active grant for the
     resolved scope raises `ConsentRefusedError` (HEIM-3) before any bytes land.
 
     Raises the named refusals in the order the HTTP contract publishes them:
@@ -424,7 +427,7 @@ def admit_media_bytes(
     )
     capture_adapter._assert_sensor_registered(sensor)
 
-    resolved_scope = scope or capture_adapter.DEFAULT_CAPTURE_SCOPE
+    resolved_scope = scope or MEDIA_CAPTURE_SCOPE
     admitted = admit_raw_evidence(scope=resolved_scope)
 
     lineage: Dict[str, Any] = {

@@ -32,6 +32,14 @@ Substrate facts this spec builds on (verified on hub `main` = `1ce3b013`):
   exists for streaming mic audio (`CAPTURE_TRANSPORT_FEASIBILITY.md` Model 3, "do not build" +
   R-EXTERNAL). The sanctioned Watch path is file-based relay.
 
+Changed since that snapshot:
+
+- **Two standing `self_record` grants, not one (#4492).** The consent ledger now seeds one per
+  self-record capture lane — `device+adapter:v1-voice-memo` (this spec's watched-folder lane) and
+  `device+adapter:v1-media-ingress` (the governed media ingress lane) — so `basis: self_record` no
+  longer identifies a unique grant. Select by `scope`. See
+  `DEVICE_REGISTRATION_AND_CONSENT_SURFACE.md` for the binding rule.
+
 ## The ASR ruling (read before executing anything)
 
 Issue #3026 as originally filed asked for "on-device ASR", and the design-of-record's §3 assigns

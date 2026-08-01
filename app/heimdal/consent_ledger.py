@@ -20,6 +20,16 @@ Contract:
   deliberately recording is the grant" (FABLE_COMPANION §6.1 basis 1) -- so
   v1 capture is consented without per-memo ceremony, while still flowing
   through the same ledger + capture-time check every later posture uses.
+- **Standing media-capture grant (#4492).** One standing grant per capture
+  lane, not one shared grant: the governed media ingress lane
+  (`app.heimdal.media_ingress`) admits audio, image, video, and document, so
+  it carries its own scope and a `capture_profile` naming all four rather
+  than borrowing the voice-memo grant whose profile names `speech` only.
+  Seeded by migration `a9f3c2d7b6e1`. Per the owner ruling of 2026-07-30
+  (#4172), one grant covers all four admitted kinds. The two grants revoke
+  independently -- revoking voice memos no longer disables media ingress.
+  `capture_profile` stays **descriptive**: no admission path compares a
+  modality against it, so this is provenance accuracy, not a new gate.
 - **Capture-time check (HEIM-3), the one enforcement point.**
   :func:`admit_raw_evidence` is the *only* sanctioned signal->raw admission
   call. It resolves an active grant for a scope BEFORE returning an
@@ -50,9 +60,9 @@ Contract:
 Backend selection mirrors `app.heimdal.observation_log` (dual-backend,
 fail-loud resolution via `app.heimdal._backend.resolve_heimdal_backend`):
 ``STORE_BACKEND=memory`` (or no Postgres DSN configured) uses an in-process
-append-only list seeded with the same standing `self_record` grant the
-migration seeds for Postgres; a resolvable Postgres DSN uses the real
-`heimdal_consent_grant` table.
+append-only list seeded with the same standing grants the migrations seed for
+Postgres; a resolvable Postgres DSN uses the real `heimdal_consent_grant`
+table.
 
 Out of scope for this slice (per governing Issue #3042): the capture
 adapter itself, ASR, third-party voice detection, place/session grant
@@ -85,6 +95,27 @@ _MIGRATION_HINT = (
 SELF_RECORD_GRANT_REF = "grant-self-record-v1"
 SELF_RECORD_BASIS = "self_record"
 SELF_RECORD_SCOPE = "device+adapter:v1-voice-memo"
+
+# Standing grant for the governed media ingress lane (#4492, owner ruling
+# 2026-07-30 on #4172). The lane admits four kinds, so it gets its own scope
+# and a `capture_profile` that actually names them, instead of borrowing the
+# voice-memo grant whose profile names `speech` only -- the consent block
+# stamped onto a photo/video/document must reference a grant that covers it.
+# Same per-lane shape as `screen_capture.SCREEN_CAPTURE_SCOPE`.
+MEDIA_CAPTURE_GRANT_REF = "grant-media-capture-v1"
+# Same *basis* as the voice-memo grant: the reason consent exists is unchanged
+# ("the act of deliberately recording is the grant", FABLE_COMPANION §6.1
+# basis 1 -- an operator transferring their own device capture IS self-record).
+# Only the scope and the modality profile differ, so nothing downstream that
+# reads `consent.basis` changes meaning.
+MEDIA_CAPTURE_BASIS = "self_record"
+MEDIA_CAPTURE_SCOPE = "device+adapter:v1-media-ingress"
+# Every kind the governed media ingress lane admits. Held here rather than
+# imported from `app.heimdal.media_ingress` (which imports this module), and
+# pinned to `media_ingress.MEDIA_KINDS` by
+# `tests/heimdal/test_consent_ledger.py::test_media_capture_grant_is_seeded_and_names_every_admitted_kind`
+# so a fifth admitted kind cannot ship without extending this grant.
+MEDIA_CAPTURE_MODALITIES = ("audio", "image", "video", "document")
 
 # Consent event topics (values only -- app.events.types constants are owned
 # by sibling slice A4; referencing the string here does not redefine it).
@@ -166,36 +197,98 @@ def _default_b_shaped_fields() -> Dict[str, Dict[str, Any]]:
     }
 
 
-def _self_record_seed_row(sequence: int) -> ConsentGrant:
+def _standing_seed_row(
+    *,
+    grant_ref: str,
+    basis: str,
+    scope: str,
+    capture_profile: Dict[str, Any],
+    note: str,
+    sequence: int,
+) -> ConsentGrant:
+    """Build one standing grant row, mirroring its owning migration's seed exactly.
+
+    Shared by every standing grant so the memory backend and the
+    ``STORE_SCHEMA_AUTOCREATE`` Postgres bootstrap cannot drift apart in the
+    B-shaped defaults, the ``granted_by``, or the expiry posture.
+    """
     b_shaped = _default_b_shaped_fields()
     now = datetime.now(timezone.utc)
     return ConsentGrant(
         id=str(uuid4()),
-        grant_ref=SELF_RECORD_GRANT_REF,
-        basis=SELF_RECORD_BASIS,
-        scope=SELF_RECORD_SCOPE,
+        grant_ref=grant_ref,
+        basis=basis,
+        scope=scope,
         granted_by="operator",
         granted_at=now,
         expiry=None,
-        capture_profile={"modalities": ["speech"], "degradation_rules": ["third_party_speech"]},
+        capture_profile=dict(capture_profile),
         third_party_policy=_THIRD_PARTY_POLICY_DEFAULT,
         vad_gate=b_shaped["vad_gate"],
         third_party=b_shaped["third_party"],
         retention=b_shaped["retention"],
         erasure=b_shaped["erasure"],
         revokes_grant_ref=None,
-        payload={"note": "standing self_record grant (memory backend seed, mirrors migration c4f7a1b2d9e3)"},
+        payload={"note": note},
         created_at=now,
         sequence=sequence,
     )
 
 
+def _self_record_seed_row(sequence: int) -> ConsentGrant:
+    return _standing_seed_row(
+        grant_ref=SELF_RECORD_GRANT_REF,
+        basis=SELF_RECORD_BASIS,
+        scope=SELF_RECORD_SCOPE,
+        capture_profile={"modalities": ["speech"], "degradation_rules": ["third_party_speech"]},
+        note="standing self_record grant (memory backend seed, mirrors migration c4f7a1b2d9e3)",
+        sequence=sequence,
+    )
+
+
+def _media_capture_seed_row(sequence: int) -> ConsentGrant:
+    """The governed media ingress lane's standing grant (#4492).
+
+    ``degradation_rules`` keeps ``third_party_speech``: audio and video are
+    admitted kinds and can carry third-party speech, so the same §6.3
+    degradation posture applies here as on the voice-memo grant.
+    """
+    return _standing_seed_row(
+        grant_ref=MEDIA_CAPTURE_GRANT_REF,
+        basis=MEDIA_CAPTURE_BASIS,
+        scope=MEDIA_CAPTURE_SCOPE,
+        capture_profile={
+            "modalities": list(MEDIA_CAPTURE_MODALITIES),
+            "degradation_rules": ["third_party_speech"],
+        },
+        note=(
+            "standing media-capture grant (memory backend seed, mirrors migration "
+            "a9f3c2d7b6e1)"
+        ),
+        sequence=sequence,
+    )
+
+
+# Every standing grant the ledger seeds, in append order. Both in-process
+# producers (`_MemoryConsentLedger._seed` and the STORE_SCHEMA_AUTOCREATE
+# branch of `_bootstrap_pg`) iterate this one tuple, so adding a standing grant
+# cannot half-apply across them -- the invariant->producers rule
+# (`AGENTS.md :: Required rules`) in structural form. The Postgres production
+# producer is the owning migration; `tests/migrations/
+# test_heimdal_media_capture_grant_seed_parity.py` pins the two together.
+_STANDING_SEED_ROW_BUILDERS = (
+    (SELF_RECORD_GRANT_REF, _self_record_seed_row),
+    (MEDIA_CAPTURE_GRANT_REF, _media_capture_seed_row),
+)
+
+
 class _MemoryConsentLedger:
     """In-process append-only ledger. Test/dev backend; volatile by design.
 
-    Seeded with the standing `self_record` grant at construction, mirroring
-    the Postgres migration's seed row, so `STORE_BACKEND=memory` behaves
-    like a freshly-migrated database rather than an empty one.
+    Seeded with every standing grant at construction (`self_record` for the
+    voice-memo lane, media-capture for the governed media ingress lane),
+    mirroring the Postgres migrations' seed rows, so `STORE_BACKEND=memory`
+    behaves like a freshly-migrated database rather than an empty one.
     """
 
     def __init__(self) -> None:
@@ -205,9 +298,10 @@ class _MemoryConsentLedger:
 
     def _seed(self) -> None:
         with self._lock:
-            if any(r.grant_ref == SELF_RECORD_GRANT_REF and not r.is_revocation for r in self._rows):
-                return
-            self._rows.append(_self_record_seed_row(sequence=len(self._rows)))
+            for grant_ref, build_row in _STANDING_SEED_ROW_BUILDERS:
+                if any(r.grant_ref == grant_ref and not r.is_revocation for r in self._rows):
+                    continue
+                self._rows.append(build_row(len(self._rows)))
 
     def append(self, grant: ConsentGrant) -> ConsentGrant:
         with self._lock:
@@ -248,10 +342,11 @@ _MEMORY_LEDGER = _MemoryConsentLedger()
 def reset_memory_consent_ledger() -> None:
     """Test-only reset hook, mirroring the other memory-backend reset helpers.
 
-    Re-seeds the standing `self_record` grant after clearing, so a reset
-    ledger is still a *valid* freshly-migrated ledger, not an empty one that
-    would make every capture attempt (including the standing-grant tests)
-    spuriously refuse.
+    Re-seeds **every** standing grant after clearing, so a reset ledger is
+    still a *valid* freshly-migrated ledger, not an empty one that would make
+    every capture attempt (including the standing-grant tests) spuriously
+    refuse. A standing grant added to `_STANDING_SEED_ROW_BUILDERS` inherits
+    this automatically; one seeded outside it would silently lose the property.
     """
     _MEMORY_LEDGER.clear()
     _MEMORY_LEDGER._seed()
@@ -340,13 +435,17 @@ def _bootstrap_pg(conn: Any) -> None:
         FOR EACH ROW EXECUTE FUNCTION heimdal_consent_grant_reject_mutation()
         """
     )
-    # Seed the standing self_record grant (idempotent).
-    cur.execute(
-        f"SELECT 1 FROM {_TABLE} WHERE grant_ref = %s AND basis != 'revocation'",
-        (SELF_RECORD_GRANT_REF,),
-    )
-    if cur.fetchone() is None:
-        seed = _self_record_seed_row(sequence=0)
+    # Seed every standing grant (idempotent), from the same builder tuple the
+    # memory backend uses -- a standing grant cannot land in one in-process
+    # producer and not the other.
+    for grant_ref, build_row in _STANDING_SEED_ROW_BUILDERS:
+        cur.execute(
+            f"SELECT 1 FROM {_TABLE} WHERE grant_ref = %s AND basis != 'revocation'",
+            (grant_ref,),
+        )
+        if cur.fetchone() is not None:
+            continue
+        seed = build_row(0)
         cur.execute(
             f"""
             INSERT INTO {_TABLE} (
@@ -706,6 +805,10 @@ __all__ = [
     "ConsentGrant",
     "ConsentLedgerSchemaMissingError",
     "ConsentRefusedError",
+    "MEDIA_CAPTURE_BASIS",
+    "MEDIA_CAPTURE_GRANT_REF",
+    "MEDIA_CAPTURE_MODALITIES",
+    "MEDIA_CAPTURE_SCOPE",
     "SELF_RECORD_BASIS",
     "SELF_RECORD_GRANT_REF",
     "SELF_RECORD_SCOPE",

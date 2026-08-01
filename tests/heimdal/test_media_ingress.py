@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import secrets
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,13 @@ from app.api.app import app
 from app.heimdal import media_ingress, media_receipts
 from app.heimdal.capture_adapter import admit_capture_file
 from app.heimdal.consent_ledger import (
+    ConsentLedgerSchemaMissingError,
+    ConsentRefusedError,
+    MEDIA_CAPTURE_GRANT_REF,
+    MEDIA_CAPTURE_SCOPE,
     SELF_RECORD_GRANT_REF,
     reset_memory_consent_ledger,
+    resolve_active_grant,
     revoke_consent,
 )
 from app.heimdal.media_receipts import (
@@ -383,8 +389,14 @@ def test_one_capture_id_spans_both_lanes(client: TestClient, tmp_path: Path) -> 
 
 
 def test_consent_refusal_admits_nothing(client: TestClient) -> None:
-    """HEIM-3 is the one signal->raw gate, and its refusal is a named 409."""
-    revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="test-operator")
+    """HEIM-3 is the one signal->raw gate, and its refusal is a named 409.
+
+    Follows this lane's own consent scope since #4492: revoking the
+    media-capture grant is what refuses media ingress. Revoking the voice-memo
+    grant no longer does — that separation is
+    `test_media_and_voice_memo_grants_revoke_independently`.
+    """
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="test-operator")
 
     media = b"no-active-grant-covers-this"
     refused = _post_media(client, media, _sidecar(media))
@@ -394,6 +406,116 @@ def test_consent_refusal_admits_nothing(client: TestClient) -> None:
     assert detail["state"] == "not_acknowledged"
     assert all_raw_records() == []
     assert all_media_receipts() == []
+
+
+# ---------------------------------------------------------------------------
+# #4492: the lane's own consent scope, naming every admitted modality
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["audio", "image", "video", "document"])
+def test_admitted_media_stamps_the_media_capture_grant(client: TestClient, kind: str) -> None:
+    """Every admitted kind is stamped with a grant whose profile names that kind.
+
+    This is the defect `KD-4E7228960927` recorded: a photo, video, or document
+    raw record carried a consent block pointing at the voice-memo grant, whose
+    `capture_profile.modalities` is `["speech"]`. Asserted on the durable raw
+    record written by the production route, not on the seam's return value.
+    """
+    media = f"admitted-{kind}-bytes".encode()
+    admitted = _post_media(client, media, _sidecar(media, kind=kind))
+    assert admitted.status_code == 200, admitted.text
+
+    records = all_raw_records()
+    assert len(records) == 1
+    consent = records[0].consent
+    assert consent["grant_ref"] == MEDIA_CAPTURE_GRANT_REF
+    assert consent["grant_ref"] != SELF_RECORD_GRANT_REF
+
+    # The grant the record points at actually covers what was captured.
+    grant = resolve_active_grant(scope=MEDIA_CAPTURE_SCOPE)
+    assert grant is not None and grant.grant_ref == consent["grant_ref"]
+    assert kind in grant.capture_profile["modalities"]
+
+
+def test_media_and_voice_memo_grants_revoke_independently(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Two lanes, two grants: revoking one must not disable the other.
+
+    Before #4492 both lanes resolved `SELF_RECORD_SCOPE`, so consenting to
+    voice memos also consented to photo/video/document ingress from any device
+    — and revoking voice memos silently killed media ingress.
+    """
+    # 1. Revoking the voice-memo grant leaves the governed media lane admitting.
+    revoke_consent(grant_ref=SELF_RECORD_GRANT_REF, revoked_by="test-operator")
+    media = b"media-ingress-survives-voice-memo-revocation"
+    admitted = _post_media(client, media, _sidecar(media))
+    assert admitted.status_code == 200, admitted.text
+    assert admitted.json()["outcome"] == "admitted"
+
+    # ...while the watched-folder lane, which still admits under the voice-memo
+    # grant, is correctly refused by that same revocation.
+    watch_dir = tmp_path / "watched-refused"
+    watch_dir.mkdir()
+    memo = watch_dir / "memo-after-revocation.m4a"
+    memo.write_bytes(b"a voice memo after the voice-memo grant was revoked")
+    with pytest.raises(ConsentRefusedError):
+        admit_capture_file(memo, key=_KEY, stability_delay=0.0)
+
+    # 2. The mirror image: revoking only the media grant leaves the
+    #    watched-folder lane admitting.
+    reset_memory_consent_ledger()
+    reset_memory_raw_store()
+    reset_memory_media_receipts()
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="test-operator")
+
+    watched = tmp_path / "watched-admitted"
+    watched.mkdir()
+    surviving = watched / "memo-survives.m4a"
+    surviving.write_bytes(b"a voice memo after the media grant was revoked")
+    result = admit_capture_file(surviving, key=_KEY, stability_delay=0.0)
+    assert result.created
+    assert result.record.consent["grant_ref"] == SELF_RECORD_GRANT_REF
+
+    refused_media = b"media-ingress-is-the-one-that-stops"
+    refused = _post_media(client, refused_media, _sidecar(refused_media))
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "consent_refused"
+
+
+def test_capture_profile_is_not_an_enforcement_gate(client: TestClient) -> None:
+    """`capture_profile` stays descriptive: no admission path reads it as a gate.
+
+    The defect was rated P2 rather than an authority-integrity P1 precisely
+    because nothing compares a modality against `capture_profile`, and #4492
+    must not quietly change that — introducing modality enforcement would be a
+    new gate with no contract demand behind it. Proven by narrowing the active
+    grant's profile to a modality the request does not use and asserting the
+    admission still succeeds.
+    """
+    from app.heimdal.consent_ledger import grant_consent
+
+    # A later grant on the same scope wins (last-appended-wins), so this is the
+    # profile the admission resolves — and it names nothing the request sends.
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="test-operator")
+    grant_consent(
+        grant_ref="grant-media-capture-narrowed-profile",
+        basis="self_record",
+        scope=MEDIA_CAPTURE_SCOPE,
+        granted_by="operator",
+        capture_profile={"modalities": ["semaphore"], "degradation_rules": []},
+    )
+
+    media = b"an image admitted under a profile that names only semaphore"
+    admitted = _post_media(client, media, _sidecar(media, kind="image"))
+    assert admitted.status_code == 200, (
+        "capture_profile must remain descriptive; a mismatch is a provenance "
+        "concern, not an admission gate this slice may introduce"
+    )
+    records = all_raw_records()
+    assert len(records) == 1
+    assert records[0].consent["grant_ref"] == "grant-media-capture-narrowed-profile"
 
 
 def test_unregistered_sensor_admits_nothing(
@@ -1120,6 +1242,133 @@ def test_startup_preflight_reports_ingress_unavailable_without_exiting(
         assert refused.json()["detail"]["state"] == "not_acknowledged"
 
 
+def test_startup_preflight_reports_missing_media_consent_grant(
+    client: TestClient,
+) -> None:
+    """#4492 enforcement: the media lane's standing consent grant is a runtime
+    precondition, so the api LIFESPAN preflight reports the lane unavailable
+    with a named detail before any request — not only on the first upload.
+
+    The raw-store key is present here, so the only failing precondition is the
+    grant: the screen lane must stay `available`, proving the check is scoped
+    to the media lane rather than degrading both.
+    """
+    from app.heimdal import ingress_preflight
+
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="test-operator")
+    ingress_preflight.reset_ingress_preflight()
+    assert ingress_preflight.current_ingress_status() is None
+
+    # TestClient's context manager runs the real lifespan — the production
+    # startup path (`app/api/app.py :: lifespan`), not the helper in isolation.
+    with TestClient(app) as started:
+        recorded = ingress_preflight.current_ingress_status()
+        assert recorded is not None, "the lifespan must have run the preflight"
+        assert recorded.raw_store_key_available is True
+        assert recorded.media_consent_grant_available is False
+        assert recorded.lanes == {
+            "media_ingress": "unavailable",
+            "screen_capture": "available",
+        }
+        assert (
+            ingress_preflight.DETAIL_MEDIA_CONSENT_GRANT_MISSING in recorded.detail
+        )
+
+        # Surfaced on the status endpoint before any ingress request was made.
+        status = started.get("/api/status")
+        assert status.status_code == 200
+        ingress = status.json()["heimdal_ingress"]
+        assert ingress["media_consent_grant_available"] is False
+        assert ingress["lanes"]["media_ingress"] == "unavailable"
+        assert ingress["lanes"]["screen_capture"] == "available"
+
+        # Unrelated routes keep serving: degrade-visibly, never fail-exit.
+        assert started.get("/api/health").status_code in (200, 503)
+
+        # The request-time named contract is unchanged.
+        media = b"still refused bytes"
+        refused = _post_media(started, media, _sidecar(media))
+        assert refused.status_code == 409
+        assert refused.json()["detail"]["error"] == "consent_refused"
+        assert refused.json()["detail"]["state"] == "not_acknowledged"
+        assert all_raw_records() == []
+        assert all_media_receipts() == []
+
+
+def test_startup_preflight_reports_an_unreadable_consent_ledger(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#4492: a ledger that cannot be queried at all is its own named class.
+
+    This is the branch where a false `available` hurts most — an unmigrated or
+    unreachable database — and it must not be conflated with
+    `media_consent_grant_missing`, because the operator remedies differ
+    (`alembic upgrade head` for the missing *table* vs re-granting a revoked
+    grant). Raised from the real ledger read the preflight performs.
+    """
+    from app.heimdal import ingress_preflight
+
+    def _unreadable(**_kwargs: Any):
+        raise ConsentLedgerSchemaMissingError("Missing table 'heimdal_consent_grant'.")
+
+    monkeypatch.setattr(ingress_preflight, "resolve_active_grant", _unreadable)
+    ingress_preflight.reset_ingress_preflight()
+
+    recorded = ingress_preflight.run_ingress_preflight()
+    assert recorded.media_consent_grant_available is False
+    assert recorded.raw_store_key_available is True
+    assert recorded.lanes["media_ingress"] == "unavailable"
+    # The screen lane has no consent precondition of its own, so it stays up.
+    assert recorded.lanes["screen_capture"] == "available"
+    # Named class plus the concrete error type, and never the grant-missing
+    # class, which would send the operator hunting for a revocation.
+    assert recorded.detail.startswith(
+        ingress_preflight.DETAIL_MEDIA_CONSENT_LEDGER_UNREADABLE + ":"
+    )
+    assert "ConsentLedgerSchemaMissingError" in recorded.detail
+    assert ingress_preflight.DETAIL_MEDIA_CONSENT_GRANT_MISSING not in recorded.detail
+
+
+def test_preflight_logs_the_remedy_matching_the_failing_precondition(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#4492: the two detail classes have different operator remedies, so the
+    log must not hand the operator the wrong one.
+
+    The log line is what an operator actually reads when a lane goes dark; a
+    single shared remedy would send someone hunting for a revocation that does
+    not exist (or vice versa).
+    """
+    from app.heimdal import ingress_preflight
+
+    # 1. Unreadable ledger -> point at the *table*-owning migration and the DSN.
+    def _unreadable(**_kwargs: Any):
+        raise ConsentLedgerSchemaMissingError("Missing table 'heimdal_consent_grant'.")
+
+    monkeypatch.setattr(ingress_preflight, "resolve_active_grant", _unreadable)
+    ingress_preflight.reset_ingress_preflight()
+    with caplog.at_level(logging.ERROR, logger="app.heimdal.ingress_preflight"):
+        ingress_preflight.run_ingress_preflight()
+    unreadable_log = caplog.text
+    assert "could not be read at all" in unreadable_log
+    assert "c4f7a1b2d9e3" in unreadable_log, "must name the table-owning migration"
+    assert "re-granted" not in unreadable_log, "wrong remedy for an unreadable ledger"
+
+    # 2. Readable ledger, no active grant -> point at *this* slice's migration
+    #    and at re-granting.
+    monkeypatch.undo()
+    caplog.clear()
+    revoke_consent(grant_ref=MEDIA_CAPTURE_GRANT_REF, revoked_by="test-operator")
+    ingress_preflight.reset_ingress_preflight()
+    with caplog.at_level(logging.ERROR, logger="app.heimdal.ingress_preflight"):
+        ingress_preflight.run_ingress_preflight()
+    missing_log = caplog.text
+    assert "no active grant covers the scope" in missing_log
+    assert "a9f3c2d7b6e1" in missing_log, "must name the grant-seeding migration"
+    assert "re-granted" in missing_log
+    assert "could not be read at all" not in missing_log
+
+
 def test_admission_succeeds_when_key_provisioned(client: TestClient) -> None:
     """#4422: with the key present, the preflight passes and admission returns
     a durable receipt through the production route."""
@@ -1130,6 +1379,8 @@ def test_admission_succeeds_when_key_provisioned(client: TestClient) -> None:
         recorded = ingress_preflight.current_ingress_status()
         assert recorded is not None
         assert recorded.raw_store_key_available is True
+        assert recorded.media_consent_grant_available is True
+        assert recorded.detail == ""
         assert recorded.lanes == {
             "media_ingress": "available",
             "screen_capture": "available",
