@@ -170,6 +170,9 @@ def test_completeness_report_cli_outputs_unavailable_storage(tmp_path: Path) -> 
     assert payload["storage"]["available"] is False
     assert payload["storage"]["reason"] == "missing_builderops_db"
     assert payload["mutations_performed"] is False
+    assert "unavailable" in payload["receipt_body"]
+    assert "last_retrospective_receipt" not in payload
+    assert "terminal_outcomes" not in payload
 
 
 def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:

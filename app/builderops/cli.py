@@ -2089,7 +2089,7 @@ def completeness_report_check(
     learning_log_file: Path | None,
     as_json: bool,
 ) -> None:
-    records: list[Any]
+    records: list[Mapping[str, Any]] | None
     candidates: list[Mapping[str, Any]] = []
     if records_file is not None:
         payload = _load_json_value_file(records_file, field="records-file")
@@ -2097,7 +2097,7 @@ def completeness_report_check(
             records = payload
             storage = {"available": True, "source": str(records_file), "record_count": len(records)}
         elif isinstance(payload, dict) and isinstance(payload.get("records"), list):
-            records = cast(list[Any], payload["records"])
+            records = cast(list[Mapping[str, Any]], payload["records"])
             candidates = _completeness_report_candidates(payload)
             storage = {"available": True, "source": str(records_file), "record_count": len(records)}
         else:
@@ -2107,7 +2107,7 @@ def completeness_report_check(
         if db_path is None:
             db_path = load_paths().db_path
         loaded_records, storage = load_records_from_db(Path(db_path))
-        records = list(loaded_records or [])
+        records = cast(list[Mapping[str, Any]] | None, loaded_records)
 
     learning_log_text = (
         learning_log_file.read_text(encoding="utf-8")
