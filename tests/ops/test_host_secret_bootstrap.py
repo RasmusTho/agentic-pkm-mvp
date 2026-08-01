@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 import ctypes
+import json
 import os
 from pathlib import Path
 import signal
@@ -895,13 +896,34 @@ def _absent(*absent_suffixes: str) -> KeychainLookup:
 
 
 def test_absent_optional_secret_does_not_fail_the_consumer(tmp_path: Path) -> None:
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    # Guard the *pairing*, not just the code path: without this declaration the
+    # assertions below would hold vacuously (nothing would ever look the secret
+    # up), so the test would keep passing against a revert of the mechanism.
+    contract.require_declared(
+        channel="dev", consumer="heimdal-api-ingress", secret="github.token"
+    )
+    assert contract.is_optional("github.token") is True
+
+    consulted: list[str] = []
+    absent = _absent(":github.token")
+
+    def lookup(service: str, account: str) -> str:
+        consulted.append(account)
+        return absent(service, account)
+
     with materialize_consumer_environment(
         channel="dev",
         consumer="heimdal-api-ingress",
-        keychain_lookup=_absent(":github.token"),
+        keychain_lookup=lookup,
         directory=tmp_path,
     ) as env_file:
         assert env_file.read_text(encoding="utf-8") == f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+
+    assert "dev:heimdal-api-ingress:github.token" in consulted, (
+        "the optional secret must actually be attempted and skipped, not simply "
+        "absent from the consumer's declared set"
+    )
 
 
 def test_malformed_optional_secret_fails_closed(tmp_path: Path) -> None:
@@ -939,10 +961,45 @@ def test_absent_required_secret_still_fails_closed(tmp_path: Path) -> None:
 
 
 def test_every_committed_secret_declares_its_optionality_explicitly() -> None:
-    """No implicit default: the closed schema stays closed."""
+    """No implicit default: the closed schema stays closed.
+
+    Asserting `isinstance(..., bool)` would be vacuous — `is_optional` returns a
+    membership test. The real guarantee is that the *loader* refuses a
+    declaration that omits `optional` or states it as anything but a JSON
+    boolean, so silence can never be read as "required" by accident.
+    """
     contract = host_secret_bootstrap.load_host_secret_contract()
-    for logical_id, _binding, _kind in contract.secret_definitions:
-        assert isinstance(contract.is_optional(logical_id), bool)
     # Everything that existed before #4489 stays required.
     for logical_id in ("heimdal.raw-store-key", "openai.api-key", "anthropic.api-key"):
         assert contract.is_optional(logical_id) is False
+    assert contract.is_optional("github.token") is True
+
+
+@pytest.mark.parametrize(
+    "optional_value",
+    [
+        pytest.param(..., id="omitted"),
+        pytest.param(1, id="truthy-int"),
+        pytest.param(0, id="falsy-int"),
+        pytest.param("true", id="string"),
+        pytest.param(None, id="null"),
+        pytest.param([], id="list"),
+    ],
+)
+def test_loader_rejects_a_declaration_without_an_explicit_boolean_optional(
+    tmp_path: Path, optional_value: object
+) -> None:
+    payload = json.loads(
+        (_REPO_ROOT / "config/secrets/host_secret_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if optional_value is ...:
+        del payload["secrets"][0]["optional"]
+    else:
+        payload["secrets"][0]["optional"] = optional_value
+    path = tmp_path / "host_secret_contract.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        host_secret_bootstrap.load_host_secret_contract(path)

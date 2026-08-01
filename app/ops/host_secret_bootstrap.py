@@ -80,7 +80,13 @@ def _temporary_signal_handlers(handler: SignalHandler) -> Iterator[None]:
 
 
 def _security_keychain_lookup(service: str, account: str) -> str:
-    if account.endswith(".api-key"):
+    # The framework path returns exact Keychain bytes; the `security` CLI below
+    # strips one trailing newline, which would let a stray-newline value pass a
+    # `value == value.strip()` grammar that was written to reject it (#4289).
+    # Every kind validated by that grammar must take the exact-bytes path — so
+    # `token` joins `api-key` here rather than inheriting the CLI's trimming
+    # (#4489).
+    if account.endswith(".api-key") or account.endswith(".token"):
         return _security_framework_keychain_lookup(service, account)
     try:
         result = subprocess.run(
@@ -286,7 +292,12 @@ def _read_runtime_secret_file(path: Path) -> str | None:
 
 
 def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:
-    if kind == "api-key":
+    # The identifier-bearing variant names the logical id (never a value), which
+    # is what an operator needs to find the right Keychain item. `token` shares
+    # it for that reason; the only behavioral difference is the
+    # `run_on_credential_unavailable` opt-in, which no consumer granted a
+    # `token` secret uses (#4489).
+    if kind in {"api-key", "token"}:
         return HostSecretCredentialUnavailableError(secret)
     return HostSecretBootstrapError(
         "host secret bootstrap failed for declared consumer"
