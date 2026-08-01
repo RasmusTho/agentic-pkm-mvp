@@ -125,6 +125,12 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   `pkm-*` stacks; no Product lifecycle event can stop, restart, or resource-starve the builder plane
   (ADR-0062 A2). A native host service is outside this task's selected deployment contract.
 - Do not cut production clients or expose the service as authority until BCP-03/04/05 gates pass.
+- PostgreSQL's custom `config_file` bypasses the official image's default `listen_addresses='*'`
+  handling, so `config/builderops/postgresql.conf` must set `listen_addresses = '*'` explicitly or
+  `migrate`/`api`/`worker` cannot connect at all. This is bounded by the `builderops-internal`
+  network's `internal: true` declaration, not host exposure; do not "harden" it back to a narrower
+  value without re-verifying the network is still internal-only, and do not publish a host port or
+  attach `db` to a non-internal network.
 
 ## Acceptance Criteria
 

@@ -95,6 +95,20 @@ def test_builderops_compose_is_lifecycle_isolated() -> None:
     assert "runtime/dispatcher" not in text
 
 
+def test_builderops_postgres_listens_on_the_internal_network() -> None:
+    conf = (ROOT / "config/builderops/postgresql.conf").read_text(encoding="utf-8")
+    assert "listen_addresses = '*'" in conf
+    assert "internal: true" in conf
+
+
+def test_builderops_db_healthcheck_probes_the_container_network_address() -> None:
+    compose = _compose()
+    test_cmd = compose["services"]["db"]["healthcheck"]["test"][-1]
+    assert "127.0.0.1" not in test_cmd
+    assert "hostname -i" in test_cmd
+    assert "pg_isready" in test_cmd
+
+
 def test_builderops_image_has_a_dedicated_non_root_entrypoint() -> None:
     dockerfile = (ROOT / "Dockerfile.builderops").read_text(encoding="utf-8")
     assert "FROM python:3.12-slim" in dockerfile
