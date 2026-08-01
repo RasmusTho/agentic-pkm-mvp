@@ -335,7 +335,12 @@ class ActiveContextSelectionResolver:
         registry_revision: Callable[[], int],
         authorizer: BindingAuthorizer,
         instance_identity: str,
+        invalidate_selection: Callable[[str], None] | None = None,
     ) -> None:
+        #: Called with the capability digest when GOV denies a member binding, so the denied
+        #: selection is dropped rather than left resolvable. `ContextSelectionStore
+        #: .invalidate_digest` is the production implementation.
+        self._invalidate = invalidate_selection or (lambda _digest: None)
         self._binding_facts = binding_facts
         self._registry_revision = registry_revision
         self._authorizer = authorizer
@@ -420,7 +425,24 @@ class ActiveContextSelectionResolver:
             )
             verdicts.append(verdict)
             if not verdict.allowed:
-                raise BindingAuthorizationError(verdict)
+                # A deny invalidates the selection outright: the resolver drops it from the
+                # store and attaches the cache-invalidation descriptor to the error, so no
+                # caller has to remember to invalidate and no ActiveContextSet containing the
+                # denied binding is reissued.
+                if digest is not None:
+                    self._invalidate(digest)
+                error = BindingAuthorizationError(verdict)
+                error.invalidation = CacheInvalidationDescriptor(  # type: ignore[attr-defined]
+                    context_id=context_id,
+                    previous_generation=generation,
+                    generation=generation,
+                    reason=f"binding_denied:{verdict.reason}",
+                    invalidated_identity=self._last_identity.get(
+                        (context_id, generation), ""
+                    ),
+                )
+                self._last_identity.pop((context_id, generation), None)
+                raise error
             if fact is None:
                 degraded_reason = "binding_unavailable"
                 continue

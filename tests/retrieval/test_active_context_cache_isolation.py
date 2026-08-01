@@ -12,11 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.retrieval.context_cache import (
-    ContextCacheIdentity,
-    ContextScopedCache,
-    context_cache_identity,
-)
+from app.retrieval.context_cache import ContextCacheIdentity, context_cache_identity
 from app.vault.active_context_v1 import (
     ActiveContextBinding,
     ActiveContextSetV1,
@@ -207,9 +203,11 @@ def test_settings_reload_changes_cache_identity_before_next_lookup(tmp_path: Pat
     snapshot = _snapshot()
     identity_before = context_cache_identity(snapshot, settings_bundle_digest=before_digest)
 
-    cache = ContextScopedCache()
-    cache.put(identity_before, "answer", "computed-under-old-bundle", context_id=snapshot.context_id)
-    assert cache.get(identity_before, "answer") == "computed-under-old-bundle"
+    # A plain dict stands in for whatever cache a consumer keeps. The invariant belongs to
+    # the *identity*, not to a bespoke cache class: if the key changes, a lookup under the
+    # new bundle cannot reach the old entry, whatever the store is.
+    cache: dict[str, str] = {identity_before.key: "computed-under-old-bundle"}
+    assert cache.get(identity_before.key) == "computed-under-old-bundle"
 
     # A no-op reload must NOT invalidate: a digest changes if and only if a value changed.
     unchanged = settings_bundle_digest(service.reload(context).settings)
@@ -235,11 +233,9 @@ def test_settings_reload_changes_cache_identity_before_next_lookup(tmp_path: Pat
 
     # The next lookup under the new bundle misses -- no result computed under the old
     # bundle is reused, even though context id, generation, and bindings are identical.
-    assert cache.get(identity_after, "answer") is None
-
-    # And the explicit invalidation path removes the stale entry entirely.
-    assert cache.invalidate_context(snapshot.context_id) == 1
-    assert cache.get(identity_before, "answer") is None
-    assert len(cache) == 0
+    assert cache.get(identity_after.key) is None
+    # Which is exactly why "invalidate before the next lookup" needs no separate mechanism:
+    # a changed bundle digest makes the old entry unreachable rather than merely stale.
+    assert identity_after.key not in cache
 
     assert isinstance(identity_after, ContextCacheIdentity)

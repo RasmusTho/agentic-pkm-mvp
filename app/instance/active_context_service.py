@@ -21,7 +21,6 @@ A client can supply exactly one thing: which registered bindings to select.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -316,17 +315,21 @@ class ActiveContextSelectionService:
 def current_auth_posture(*, loopback_listener_proven: bool) -> AuthPosture:
     """Read the deployment's real auth posture from server configuration.
 
-    `configured_credentials` counts the credentials the server can see. More than one is
-    ambiguous and rejected by `preflight_auth_posture`.
+    Exactly the sources `app/auth.py` itself reads, so the posture the bootstrap binds and
+    the posture the request path admits cannot disagree: `settings.api_key` (env `API_KEY`)
+    and `settings.companion_ui_proxy_hosts`.
+
+    `configured_credentials` is therefore 0 or 1 today -- the runtime has one credential
+    slot. `AuthPosture` can still *represent* an ambiguous multi-credential posture and
+    `preflight_auth_posture` rejects it, because that is a real posture on a native install
+    with more than one auth source; it is simply not reachable from this configuration
+    reader. Inventing a second env var here would let an operator make bootstrap and the
+    admission path disagree about what a credential is.
     """
 
     from app.settings import settings
 
-    configured = [
-        value
-        for value in (settings.api_key, os.getenv("API_KEY_SECONDARY", "").strip() or None)
-        if value
-    ]
+    configured = [value for value in (settings.api_key,) if value]
     fingerprint = fingerprint_credential(configured[0]) if len(configured) == 1 else None
     proxy_hosts = (settings.companion_ui_proxy_hosts or "").strip()
     return AuthPosture(

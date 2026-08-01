@@ -26,12 +26,25 @@ from app.instance.runtime import (
     _preflight_scalar_rollback,
     open_local_operator_principal_store,
 )
+from app.instance.runtime import main as instance_runtime_main
 from tests._mvr03_principal_harness import (
     principal_record_path,
     run_principal_cutover,
 )
 from tests._mvr_default_vault_harness import REPO_ROOT, active_runtime
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+
+def _cli(*args: str) -> dict:
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        code = instance_runtime_main(list(args))
+    payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
+    payload["_exit_code"] = code
+    return payload
 
 
 def _posture(raw_key: str | None) -> AuthPosture:
@@ -104,14 +117,30 @@ def test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rol
     assert store.require().revision == 1
 
     # -- 3. compatible roll-forward preserves identity and reconciles rotation ----------
-    # The prior image rotated its credential before stopping; the stopped-window export is
-    # its final auth revision.
+    # The prior image rotated its credential before stopping. The stopped-window export
+    # carries the *prior image's configured credential*, not the delegated-role record's own
+    # fingerprint -- exporting the record back at itself would make this branch a permanent
+    # no-op. Driven through the shipped CLI, which reads the configured credential.
     rotated_key = "image-a-rotated-key"
-    store.export_final_auth_state(
-        credential_fingerprint=fingerprint_credential(rotated_key),
-        fork_revision=record.revision,
-        _capability=STORAGE_MUTATION_CAPABILITY,
-    )
+    from app.settings import settings
+
+    settings_backup = settings.api_key
+    settings.api_key = rotated_key
+    try:
+        exported = _cli(
+            "principal-export-auth-state",
+            "--registry-path",
+            str(runtime.layout.registry_path),
+            "--consumer",
+            "bootstrap-init",
+        )
+    finally:
+        settings.api_key = settings_backup
+    assert exported["_exit_code"] == 0
+    assert exported["exported_credential_bound"] is True
+    assert exported["exported_fork_revision"] == record.revision
+    assert rotated_key not in json.dumps(exported)
+
     reconciled = store.reconcile_roll_forward(_capability=STORAGE_MUTATION_CAPABILITY)
 
     assert reconciled.local_operator_role_id == record.local_operator_role_id, (

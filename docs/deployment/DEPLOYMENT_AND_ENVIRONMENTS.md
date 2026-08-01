@@ -295,22 +295,32 @@ existing MVR-01 `runtimeFloors` extension slot on the instance vault registry �
 floor mechanism. Written by `app/instance/principal_fence.py::record_principal_floor`; read
 by `app/instance/runtime.py::_require_runtime_floor`.
 
-**Cutover order (enforced, not merely documented).**
+**Cutover order (enforced, not merely documented).** MVR-03 runs inside MVR-01B's *existing*
+stopped window in `scripts/lib/instance_state_deployment.sh` — the same window MVR-01C's
+`authority-cutover` uses. It does not add a second drain, probe, or inventory mechanism,
+because its auth producers are the same processes MVR-01B already fences:
 
-1. Derive the auth-producer inventory from production truth (`docker-compose.yaml` service
-   commands plus the canonical launcher/CLI paths), probed twice.
-2. Fence new governed/auth operations.
-3. Drain, stop, and restart-fence every enabled producer, proving each released its
-   auth-state write handle: `api`, `worker`, `watcher`, `heimdal-capture-watch`, the
-   Companion UI proxy, the headless `python -m app.instance.runtime` CLI, the
-   credential-rotation path, and channel/native bootstrap init.
-4. Record the `minimum_runtime_principal` floor.
-5. Only then write/migrate the delegated-role record.
+1. The wrapper installs the durable restart fence (`deployment-begin`) and stops `api`,
+   `worker`, `watcher`, `heimdal-capture-watch`.
+2. `scripts/instance_state_writer_inventory.py prove-quiescent` probes production truth twice
+   and `deployment-prove` binds the proof to the channel lease.
+3. `principal-record-floor` runs in that window. It requires the lease in `proved` phase for
+   this channel and nonce, consumes the quiescence proof plus the drained legacy-owner
+   inventory, enumerates `docker-compose.yaml` (failing closed on any unclassified service),
+   and adds the producers MVR-01B does not classify — the Companion proxy, credential
+   rotation, the headless CLI, and bootstrap/init. Only then does it record the floor.
+4. `principal-bootstrap` writes the delegated-role record; it refuses while the floor is
+   absent.
+5. `deployment-finish` closes the window.
 
-`require_complete_fence` refuses steps 4–5 if any producer is still live, restartable, or
-holding a write handle, if operations are not fenced, if the inventory was probed once, or if
-any producer role is missing. A crash before the floor leaves old auth state authoritative
-and the migration untouched.
+Advancing the floor is **explicit**: the wrapper runs steps 3–4 only under
+`MVR03_PRINCIPAL_CUTOVER=1`. Deploying a capable image does not advance it, because advancing
+it blocks every credential-only rollback image afterwards.
+
+`require_complete_fence` refuses steps 3–4 if the inventory is incomplete, if writers were not
+drained, if the inventory was not revalidated after quiescence, if it was probed once, if any
+producer role is missing, or if operations are not fenced. A crash before the floor leaves old
+auth state authoritative and the migration untouched.
 
 **Rollback: credential-only images are blocked.** While the floor exists,
 `_preflight_scalar_rollback` raises `CapabilityNotReadyError` before materializing any legacy
@@ -327,38 +337,40 @@ divergent, or ambiguous auth state fails closed without overwriting either linea
 may be lowered only by a later explicitly verified reversible migration — never by a scalar
 rollback.
 
-**Operator commands (the shipped producers).**
+**Operator invocation.** Steps 1–5 above are performed by the existing deployment wrapper;
+the operator opts in rather than running them by hand:
 
 ```bash
-REG=<instance-state>/agentic-pkm/vault-registry.md
+MVR03_PRINCIPAL_CUTOVER=1 ./scripts/deploy_channel.sh <channel> ...
+```
 
-# 1. Record the floor. Consumes the fence inventory the stopped-window deployment wrapper
-#    wrote, re-derives the producer set from production truth, and refuses if the sources
-#    changed after probing. Nothing durable is written on refusal.
-python -m app.instance.runtime principal-record-floor \
-  --registry-path "$REG" --fence-inventory <instance-state>/agentic-pkm/principal-fence-inventory.json
+**Governed commands (run against a live instance, outside the cutover window).**
 
-# 2. Bootstrap the delegated role. Refuses until step 1 has landed. The posture is READ from
-#    server configuration (API_KEY, COMPANION_UI_PROXY_HOSTS) -- the credential is never a
-#    command-line argument.
-python -m app.instance.runtime principal-bootstrap \
-  --registry-path "$REG" [--loopback-listener] [--existing-install]
+```bash
+REG=/app/instance-state/agentic-pkm/vault-registry.md
 
-# 3. Confirm the role resolves before enabling request selection.
+# Confirm the role resolves before enabling request selection.
 python -m app.instance.runtime principal-show --registry-path "$REG" --consumer cli
 
-# Governed credential rotation; preserves the role id. The new key arrives on stdin, never
-# in argv (/proc/<pid>/cmdline and shell history are both readable).
+# Governed credential rotation; preserves the role id and keeps the loopback/proxy subjects.
+# The new key arrives on stdin, never in argv (/proc/<pid>/cmdline and shell history are
+# both readable, so a --credential flag would leak the key it exists to protect).
 printf '%s' "$NEW_KEY" | python -m app.instance.runtime principal-rotate-credential \
   --registry-path "$REG" --credential-stdin
 
-# Governed role addition; the new role gets a distinct principal id.
+# Governed role addition; the new role receives a DISTINCT principal id.
 python -m app.instance.runtime principal-add-role \
   --registry-path "$REG" --kind human --label "owner"
 
-# Roll-forward lineage: export the prior image's final auth revision inside the stopped
-# window, then reconcile it on the new image. The export is consumed on success.
-python -m app.instance.runtime principal-export-auth-state --registry-path "$REG"
+# Governed posture change; the only way to drop a bound subject. Refuses to drop the last one.
+python -m app.instance.runtime principal-revoke-subject \
+  --registry-path "$REG" --subject trusted_companion_proxy
+
+# Roll-forward lineage. The export carries the PRIOR IMAGE's configured credential (read from
+# its environment inside the stopped window), not the role record's own fingerprint. The
+# reconcile consumes the export on success, so it can never be replayed over a later rotation.
+printf '%s' "$OLD_IMAGE_KEY" | python -m app.instance.runtime principal-export-auth-state \
+  --registry-path "$REG" --credential-stdin
 python -m app.instance.runtime principal-roll-forward --registry-path "$REG"
 ```
 

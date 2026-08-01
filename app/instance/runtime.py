@@ -2943,6 +2943,7 @@ PRINCIPAL_COMMANDS = (
     "principal-bootstrap",
     "principal-rotate-credential",
     "principal-add-role",
+    "principal-revoke-subject",
     "principal-export-auth-state",
     "principal-roll-forward",
 )
@@ -2989,10 +2990,9 @@ def _principal_command(args: argparse.Namespace) -> int:
     )
     from app.instance.principal_fence import (
         PrincipalFenceError,
-        load_fence_inventory,
+        inventory_from_quiescence,
         principal_floor_recorded,
         record_principal_floor,
-        require_matching_source_digest,
     )
 
     registry_path = Path(args.registry_path)
@@ -3001,12 +3001,35 @@ def _principal_command(args: argparse.Namespace) -> int:
     extra: dict[str, object] = {}
     try:
         if args.command == "principal-record-floor":
-            repo_root = Path(args.repo_root or Path(__file__).resolve().parents[2])
-            inventory = load_fence_inventory(Path(args.fence_inventory))
-            require_matching_source_digest(
-                inventory,
-                compose_path=repo_root / "docker-compose.yaml",
-                repo_root=repo_root,
+            # Runs INSIDE MVR-01B's existing stopped window, after `deployment-prove`, with
+            # the compose policy mounted read-only -- the same shape as
+            # `authority-cutover`. It consumes that window's proof rather than inventing a
+            # second drain/probe mechanism (and rather than depending on a file no producer
+            # writes). The runtime image has no repo checkout, so the compose source is an
+            # explicit mounted path, never derived from `__file__`.
+            proof = json.loads(
+                Path(args.quiescence_proof_path).read_text(encoding="utf-8")
+            )
+            owners = json.loads(Path(args.inventory_path).read_text(encoding="utf-8"))
+            lease = _read_deployment_lease(Path(args.host_global_root))
+            if (
+                lease.get("phase") != "proved"
+                or lease.get("channel_id") != args.channel
+                or lease.get("nonce") != proof.get("nonce")
+            ):
+                raise PrincipalFenceError(
+                    "the principal floor requires the proved deployment lease for this "
+                    "channel",
+                    provisioning_action=(
+                        "run the principal cutover inside the stopped deployment window"
+                    ),
+                )
+            inventory = inventory_from_quiescence(
+                channel_id=args.channel,
+                quiescence_proof=proof,
+                legacy_owner_inventory=owners,
+                compose_path=Path(args.compose_base),
+                repo_root=Path(args.native_producer_root),
             )
             snapshot = record_principal_floor(
                 registry,
@@ -3059,13 +3082,29 @@ def _principal_command(args: argparse.Namespace) -> int:
             )
             extra = {"added_role_id": added.role_id, "added_role_kind": added.kind}
         elif args.command == "principal-export-auth-state":
+            # The export is the PRIOR IMAGE's final credential/auth revision, which is the
+            # configured #2223 credential at stopped-window time -- not the delegated-role
+            # record's own fingerprint. Exporting the record back at itself would make the
+            # reconcile branch a permanent no-op and the rotation-reconciliation path dead.
             record = store.require()
+            configured = _read_credential(args)
             store.export_final_auth_state(
-                credential_fingerprint=record.credential_fingerprint,
+                credential_fingerprint=(
+                    fingerprint_credential(configured) if configured else None
+                ),
                 fork_revision=record.revision,
                 _capability=local_operator_storage_capability(),
             )
-            extra = {"exported_fork_revision": record.revision}
+            extra = {
+                "exported_fork_revision": record.revision,
+                "exported_credential_bound": configured is not None,
+            }
+        elif args.command == "principal-revoke-subject":
+            record = store.revoke_subject(
+                args.subject,  # type: ignore[arg-type]
+                _capability=local_operator_storage_capability(),
+            )
+            extra = {"revoked_subject": args.subject}
         else:
             record = store.reconcile_roll_forward(
                 _capability=local_operator_storage_capability(),
@@ -3176,8 +3215,26 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--registry-path", type=Path, required=True)
         command.add_argument("--consumer", default=None)
         if name == "principal-record-floor":
-            command.add_argument("--fence-inventory", type=Path, required=True)
-            command.add_argument("--repo-root", type=Path, default=None)
+            # Explicit mounted source paths, matching `authority-cutover`: the runtime image
+            # contains no repo checkout, so nothing here may be derived from `__file__`.
+            command.add_argument("--channel", required=True)
+            command.add_argument("--host-global-root", type=Path, required=True)
+            command.add_argument("--inventory-path", type=Path, required=True)
+            command.add_argument("--quiescence-proof-path", type=Path, required=True)
+            command.add_argument("--compose-base", type=Path, required=True)
+            command.add_argument("--native-producer-root", type=Path, required=True)
+        if name == "principal-revoke-subject":
+            command.add_argument(
+                "--subject",
+                choices=(
+                    "trusted_loopback",
+                    "trusted_companion_proxy",
+                    "api_key_credential",
+                ),
+                required=True,
+            )
+        if name == "principal-export-auth-state":
+            command.add_argument("--credential-stdin", action="store_true")
         if name == "principal-bootstrap":
             # The credential itself is never a flag; the posture is read from server
             # configuration. This flag only declares that the deployment exposes a

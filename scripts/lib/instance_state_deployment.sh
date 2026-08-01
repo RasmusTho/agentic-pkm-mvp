@@ -213,6 +213,40 @@ prepare_instance_state_deployment() {
     fi
   fi
 
+  # MVR-03 records the minimum_runtime_principal floor and writes the delegated
+  # operator-role record. It runs inside this same stopped window, after
+  # deployment-prove, so it consumes the quiescence proof and drained-owner
+  # inventory this wrapper already produced rather than probing a second time.
+  # Explicit, never inferred: the deploying image may be capable without the
+  # operator having chosen to advance the floor, and advancing it blocks every
+  # credential-only rollback image afterwards.
+  if [ "${MVR03_PRINCIPAL_CUTOVER:-0}" = "1" ]; then
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime principal-record-floor \
+        --channel "${channel}" \
+        --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+        --host-global-root /app/instance-ownership \
+        --inventory-path "${inventory_path}" \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+        --compose-base /run/scalar-rollback-policy/docker-compose.yaml \
+        --native-producer-root /run/scalar-rollback-policy \
+        --consumer bootstrap-init
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      return "${inventory_rc}"
+    fi
+
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime principal-bootstrap \
+        --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
+        --existing-install \
+        --consumer bootstrap-init
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      return "${inventory_rc}"
+    fi
+  fi
+
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime deployment-finish \
       "${finish_args[@]}"

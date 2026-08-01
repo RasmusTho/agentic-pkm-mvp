@@ -18,6 +18,7 @@ import app.api.routes.active_context_selection as selection_routes
 from app.api.app import app
 from app.vault.manager import get_vault_manager
 from tests._mvr03_principal_harness import provisioned_instance
+from tests._mvr_default_vault_harness import active_runtime
 
 SELECTION_URL = "/api/companion/active-context/selection"
 
@@ -113,6 +114,61 @@ def test_production_selection_lifecycle_is_scoped_and_global_free(instance, clie
     legacy = client.get("/api/companion/vault/context")
     assert legacy.status_code == 200
     assert "/vault/select" != SELECTION_URL
+
+
+def test_unauthenticated_callers_are_rejected_before_instance_state_is_read(
+    tmp_path, monkeypatch
+) -> None:
+    """The #2223 gate runs before any instance state is touched.
+
+    Pins the *ordering*, not just the outcome. If the gate moved back inside the handler,
+    an unauthenticated non-loopback caller would get a 503 that discloses whether a registry
+    is bound and whether a principal is provisioned — an information leak to a caller who
+    was never admitted. Both provisioning states are checked, because they are two different
+    503s.
+    """
+
+    from app.settings import settings
+
+    selection_routes.reset_selection_store_for_tests()
+    remote = TestClient(app, client=("203.0.113.10", 40000))
+    original = settings.api_key
+    settings.api_key = "configured-key"
+    try:
+        # (a) no registry bound at all
+        monkeypatch.delenv("INSTANCE_VAULT_REGISTRY_PATH", raising=False)
+        for verb, kwargs in (
+            ("post", {"json": {"vault_binding_ids": []}}),
+            ("put", {"json": {"vault_binding_ids": []}}),
+            ("get", {}),
+            ("delete", {}),
+        ):
+            response = getattr(remote, verb)(SELECTION_URL, **kwargs)
+            assert response.status_code == 401, (
+                f"{verb.upper()} leaked pre-auth state: {response.status_code} {response.text}"
+            )
+            assert "registry" not in response.text
+            assert "principal" not in response.text
+
+        # (b) registry bound, but no delegated role provisioned
+        runtime, _, _ = active_runtime(tmp_path)
+        monkeypatch.setenv(
+            "INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path)
+        )
+        for verb, kwargs in (
+            ("post", {"json": {"vault_binding_ids": []}}),
+            ("put", {"json": {"vault_binding_ids": []}}),
+            ("get", {}),
+            ("delete", {}),
+        ):
+            response = getattr(remote, verb)(SELECTION_URL, **kwargs)
+            assert response.status_code == 401, (
+                f"{verb.upper()} leaked provisioning state: "
+                f"{response.status_code} {response.text}"
+            )
+            assert "principal-bootstrap" not in response.text
+    finally:
+        settings.api_key = original
 
 
 def test_binding_selection_endpoints_derive_workspace_and_cognitive_dimensions_server_side(

@@ -11,8 +11,6 @@ Two separate obligations, deliberately kept as two tests:
 from __future__ import annotations
 
 import json
-from contextlib import redirect_stdout
-from io import StringIO
 
 import pytest
 import yaml
@@ -30,19 +28,17 @@ from app.instance.principal_fence import (
     PrincipalFenceError,
     build_fence_inventory,
     discover_auth_producers,
+    inventory_from_quiescence,
     principal_floor_recorded,
     record_principal_floor,
     require_complete_fence,
-    require_matching_source_digest,
 )
-from app.instance.runtime import main as instance_runtime_main
 from app.instance.runtime import open_local_operator_principal_store
 from tests._mvr03_principal_harness import (
     complete_inventory,
     principal_record_path,
     quiesced_producers,
     record_floor_through_cli,
-    write_fence_inventory,
 )
 from tests._mvr_default_vault_harness import REPO_ROOT, active_runtime
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -307,41 +303,98 @@ def test_principal_fence_inventory_covers_every_enabled_auth_producer(tmp_path) 
     assert "api-v2" in str(unclassified.value)
     assert "classify each service" in unclassified.value.provisioning_action
 
-    # -- an inventory whose sources changed after probing is refused --------------------
-    stale = build_fence_inventory(
-        channel_id="prod",
-        producers=producers,
-        source_digest="0" * 64,
-        operations_fenced=True,
-        probe_count=2,
-    )
-    with pytest.raises(PrincipalFenceError, match="source changed after it was probed"):
-        require_matching_source_digest(
-            stale, compose_path=compose_path, repo_root=REPO_ROOT
-        )
-    require_matching_source_digest(
-        inventory, compose_path=compose_path, repo_root=REPO_ROOT
+    # The digest is recomputed at the moment the floor is recorded rather than carried in
+    # from a caller, so there is no window in which a recorded digest can go stale: the
+    # producer set the fence approves is the one just read off production sources.
+    assert (
+        inventory_from_quiescence(
+            channel_id="prod",
+            quiescence_proof={"channel_id": "prod", "nonce": "n"},
+            legacy_owner_inventory={
+                "inventory_complete": True,
+                "writers_drained": True,
+                "validated_after_quiescence": True,
+                "source_probe_count": 2,
+            },
+            compose_path=compose_path,
+            repo_root=REPO_ROOT,
+        ).source_digest
+        == digest
     )
 
-    # -- the CLI floor producer refuses a drifted inventory before writing anything ------
-    runtime, _, _ = active_runtime(tmp_path / "cli-drift")
-    inventory_path = write_fence_inventory(runtime)
-    drifted = json.loads(inventory_path.read_text(encoding="utf-8"))
-    drifted["source_digest"] = "0" * 64
-    inventory_path.write_text(json.dumps(drifted), encoding="utf-8")
-    buffer = StringIO()
-    with redirect_stdout(buffer):
-        code = instance_runtime_main(
-            [
-                "principal-record-floor",
-                "--registry-path",
-                str(runtime.layout.registry_path),
-                "--fence-inventory",
-                str(inventory_path),
-                "--consumer",
-                "bootstrap-init",
-            ]
-        )
-    assert code == 1
-    assert "source changed" in json.loads(buffer.getvalue().strip().splitlines()[-1])["error"]
-    assert not principal_floor_recorded(runtime.registry)
+    # -- the shipped deployment wrapper actually invokes the producer -------------------
+    # An ordering assertion against the REAL shell wrapper, mirroring MVR-01B's
+    # `test_real_deployment_wrapper_probes_all_domains_twice_before_proof`. Without this the
+    # CLI could exist while no deployment ever calls it -- which is how the round-1 P0
+    # happened.
+    wrapper = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "principal-record-floor" in wrapper
+    assert "principal-bootstrap" in wrapper
+    assert "MVR03_PRINCIPAL_CUTOVER" in wrapper, (
+        "advancing the floor must be explicit, never an inferred side effect of deploying "
+        "a capable image"
+    )
+    # It runs inside the stopped window: after the quiescence proof, before finish.
+    assert wrapper.index("deployment-prove") < wrapper.index("principal-record-floor")
+    assert wrapper.index("principal-record-floor") < wrapper.index("principal-bootstrap")
+    assert wrapper.index("principal-bootstrap") < wrapper.rindex(
+        "python -m app.instance.runtime deployment-finish"
+    )
+    # It consumes THIS window's proof and drained-owner inventory rather than probing again.
+    floor_call = wrapper[
+        wrapper.index("principal-record-floor") : wrapper.index("principal-bootstrap")
+    ]
+    assert "deployment-quiescence-proof.json" in floor_call
+    assert "--inventory-path" in floor_call
+    # Sources are explicit mounted paths: the runtime image has no repo checkout.
+    assert "--compose-base" in floor_call and "--native-producer-root" in floor_call
+
+    # -- fail-closed inputs to the reworked inventory ------------------------------------
+    good_proof = {"channel_id": "prod", "nonce": "n1"}
+    good_owners = {
+        "inventory_complete": True,
+        "writers_drained": True,
+        "validated_after_quiescence": True,
+        "source_probe_count": 2,
+    }
+    built = inventory_from_quiescence(
+        channel_id="prod",
+        quiescence_proof=good_proof,
+        legacy_owner_inventory=good_owners,
+        compose_path=compose_path,
+        repo_root=REPO_ROOT,
+    )
+    require_complete_fence(built)
+    assert built.missing_roles == frozenset()
+
+    for bad_proof, bad_owners, expected in (
+        ({"channel_id": "dev", "nonce": "n1"}, good_owners, "another channel"),
+        (good_proof, {**good_owners, "inventory_complete": False}, "incomplete"),
+        (good_proof, {**good_owners, "writers_drained": False}, "not drained"),
+        (
+            good_proof,
+            {**good_owners, "validated_after_quiescence": False},
+            "not revalidated",
+        ),
+    ):
+        with pytest.raises(PrincipalFenceError, match=expected):
+            inventory_from_quiescence(
+                channel_id="prod",
+                quiescence_proof=bad_proof,
+                legacy_owner_inventory=bad_owners,
+                compose_path=compose_path,
+                repo_root=REPO_ROOT,
+            )
+
+    # One probe is not production truth, and it is rejected at the fence gate.
+    single_probe = inventory_from_quiescence(
+        channel_id="prod",
+        quiescence_proof=good_proof,
+        legacy_owner_inventory={**good_owners, "source_probe_count": 1},
+        compose_path=compose_path,
+        repo_root=REPO_ROOT,
+    )
+    with pytest.raises(PrincipalFenceError, match="two reproducing probes"):
+        require_complete_fence(single_probe)

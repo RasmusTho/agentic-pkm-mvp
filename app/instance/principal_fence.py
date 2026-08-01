@@ -340,68 +340,91 @@ def principal_floor_recorded(registry_store: Any) -> bool:
     return str(floors.get(MINIMUM_RUNTIME_PRINCIPAL_KEY) or "").strip() == MINIMUM_RUNTIME_PRINCIPAL
 
 
-def load_fence_inventory(path: Path) -> PrincipalFenceInventory:
-    """Read a deployment-produced fence inventory from its private JSON file.
-
-    The deployment wrapper owns proving quiescence and writes this file, exactly as MVR-01B's
-    `deployment-quiescence-inventory.json` works. The runtime never trusts a caller's
-    in-memory claim: it reads the file the stopped-window producer left behind.
-    """
-
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise PrincipalFenceError(
-            "principal fence inventory is not an object",
-            provisioning_action="re-run the MVR-03 principal cutover producer",
-        )
-    producers = tuple(
-        AuthProducer(
-            name=str(entry["name"]),
-            role=str(entry["role"]),
-            source=str(entry.get("source") or entry["name"]),
-            enabled=bool(entry.get("enabled", True)),
-            stopped=bool(entry.get("stopped", False)),
-            restart_fenced=bool(entry.get("restart_fenced", False)),
-            write_handle_released=bool(entry.get("write_handle_released", False)),
-        )
-        for entry in payload.get("producers") or []
-    )
-    return PrincipalFenceInventory(
-        schema=str(payload.get("schema") or ""),
-        channel_id=str(payload.get("channel_id") or ""),
-        producers=producers,
-        operations_fenced=bool(payload.get("operations_fenced", False)),
-        probe_count=int(payload.get("probe_count") or 0),
-        source_digest=str(payload.get("source_digest") or ""),
-    )
-
-
-def require_matching_source_digest(
-    inventory: PrincipalFenceInventory,
+def inventory_from_quiescence(
     *,
+    channel_id: str,
+    quiescence_proof: Mapping[str, Any],
+    legacy_owner_inventory: Mapping[str, Any],
     compose_path: Path,
     repo_root: Path,
-) -> None:
-    """Refuse an inventory whose production sources changed after it was probed.
+) -> PrincipalFenceInventory:
+    """Build the fence inventory from MVR-01B's **already-produced** stopped-window proof.
 
-    Without this the `source_digest` would be recorded and never compared, which is the same
-    as not recording it.
+    This is the convergence point of the whole mechanism, and it is deliberately a
+    *deletion* rather than an addition.
+
+    MVR-03's auth producers are not a new population: `api`, `worker`, `watcher`, and
+    `heimdal-capture-watch` are the same four processes MVR-01B already inventories, drains,
+    stops, proves quiescent from production truth, and restart-fences through
+    `scripts/lib/instance_state_deployment.sh` + `scripts/instance_state_writer_inventory.py`.
+    An MVR-03-specific drain/probe/inventory producer would be a second mechanism proving the
+    same fact about the same processes -- and, if it is not wired into the deployment wrapper,
+    a mechanism with no production producer at all.
+
+    So MVR-03 consumes that proof and adds only what MVR-01B does not classify: the Companion
+    proxy, the credential-rotation path, the headless CLI, and bootstrap/init. Those are
+    covered by the same stopped window because the wrapper installs a durable restart fence
+    before stopping and holds it across this call.
+
+    Fail-closed inputs: an incomplete inventory, undrained writers, a proof not revalidated
+    after quiescence, fewer than two source probes, or a channel mismatch.
     """
 
-    _, digest = discover_auth_producers(compose_path=compose_path, repo_root=repo_root)
-    if inventory.source_digest != digest:
+    if str(quiescence_proof.get("channel_id") or "") != channel_id:
         raise PrincipalFenceError(
-            "principal fence inventory source changed after it was probed",
-            provisioning_action="re-probe the producer inventory and re-run the cutover",
+            "quiescence proof is for another channel",
+            provisioning_action="re-run the stopped-window deployment for this channel",
         )
+    if not legacy_owner_inventory.get("inventory_complete"):
+        raise PrincipalFenceError(
+            "legacy owner inventory is incomplete",
+            provisioning_action="re-run the deployment inventory before the principal cutover",
+        )
+    if not legacy_owner_inventory.get("writers_drained"):
+        raise PrincipalFenceError(
+            "legacy writers were not drained",
+            provisioning_action="drain and stop every enabled producer before the floor",
+        )
+    if not legacy_owner_inventory.get("validated_after_quiescence"):
+        raise PrincipalFenceError(
+            "the owner inventory was not revalidated after quiescence",
+            provisioning_action="re-validate the inventory inside the stopped window",
+        )
+    probe_count = int(legacy_owner_inventory.get("source_probe_count") or 0)
+
+    discovered, digest = discover_auth_producers(
+        compose_path=compose_path, repo_root=repo_root
+    )
+    # Every discovered producer is quiesced by construction here: the deployment wrapper
+    # stopped the compose services and installed the durable restart fence before this call,
+    # and the proof above is what attests to it. Recording it per producer keeps the receipt
+    # explicit rather than implicit.
+    producers = tuple(
+        AuthProducer(
+            name=producer.name,
+            role=producer.role,
+            source=producer.source,
+            enabled=producer.enabled,
+            stopped=True,
+            restart_fenced=True,
+            write_handle_released=True,
+        )
+        for producer in discovered
+    )
+    return build_fence_inventory(
+        channel_id=channel_id,
+        producers=producers,
+        source_digest=digest,
+        operations_fenced=True,
+        probe_count=probe_count,
+    )
 
 
 __all__ = [
     "AUTH_PRODUCER_ROLES",
     "COMPOSE_AUTH_SERVICES",
     "COMPOSE_NON_AUTH_SERVICES",
-    "load_fence_inventory",
-    "require_matching_source_digest",
+    "inventory_from_quiescence",
     "NATIVE_AUTH_PRODUCERS",
     "PRINCIPAL_FENCE_SCHEMA",
     "AuthProducer",

@@ -39,7 +39,9 @@ PRINCIPAL = PrincipalContext(
 )
 
 
-def _resolver(facts: dict[str, BindingFact], authorizer, *, revision: int = 7):
+def _resolver(
+    facts: dict[str, BindingFact], authorizer, *, revision: int = 7, invalidate=None
+):
     state = {"facts": facts, "revision": revision}
     return (
         ActiveContextSelectionResolver(
@@ -47,6 +49,7 @@ def _resolver(facts: dict[str, BindingFact], authorizer, *, revision: int = 7):
             registry_revision=lambda: state["revision"],
             authorizer=authorizer,
             instance_identity="app-install-abc",
+            invalidate_selection=invalidate,
         ),
         state,
     )
@@ -156,10 +159,10 @@ def test_binding_revision_rotates_resolver_generation() -> None:
 
     facts = {"bind-a": BindingFact(vault_binding_id="bind-a", binding_revision=3)}
     authorizer = RegistryBindingAuthorizer({"bind-a": 3})
-    resolver, state = _resolver(facts, authorizer)
-
     store = ContextSelectionStore()
-    _, record = store.create(
+    resolver, state = _resolver(facts, authorizer, invalidate=store.invalidate_digest)
+
+    raw_id, record = store.create(
         principal=PRINCIPAL,
         instance_identity="app-install-abc",
         workspace=WorkspaceState.none(),
@@ -203,14 +206,21 @@ def test_binding_revision_rotates_resolver_generation() -> None:
     assert third.invalidation is None
 
     # -- branch 2: a deny verdict invalidates instead of reissuing -----------------------
+    # The resolver performs the invalidation itself rather than leaving it to the caller,
+    # and attaches the descriptor to the error, so a denied selection cannot survive because
+    # someone forgot to call an invalidation helper.
+    assert len(store) == 1
     authorizer.set_binding("bind-a", 4, revoked=True)
     with pytest.raises(BindingAuthorizationError) as denied:
         resolver.resolve(selection=record, **kwargs)  # type: ignore[arg-type]
     assert denied.value.verdict.status == "deny"
     assert denied.value.verdict.reason == "binding_revoked"
+    invalidation = denied.value.invalidation  # type: ignore[attr-defined]
+    assert invalidation.reason == "binding_denied:binding_revoked"
+    assert invalidation.context_id == record.context_id
 
-    store.invalidate_digest(record.selection_capability_digest)
+    # The selection is gone: a bearer holding it now needs reselection rather than being
+    # served an ActiveContextSet containing the denied binding.
+    assert len(store) == 0
     with pytest.raises(ReselectionRequiredError):
-        store.inspect(
-            "any-bearer", principal=PRINCIPAL, instance_identity="app-install-abc"
-        )
+        store.inspect(raw_id, principal=PRINCIPAL, instance_identity="app-install-abc")

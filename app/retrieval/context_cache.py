@@ -61,58 +61,8 @@ def context_cache_identity(
     return ContextCacheIdentity(key=key, components=components)
 
 
-class ContextScopedCache:
-    """A minimal cache whose entries are addressed by full-context identity.
-
-    Deliberately tiny: the contract needs a place where "invalidate before the next lookup"
-    is a real, testable operation, not a new caching subsystem. `app/retrieval/hybrid.py`
-    keeps owning the document store; this owns context-keyed derived entries.
-    """
-
-    def __init__(self) -> None:
-        self._entries: dict[str, dict[str, object]] = {}
-        #: context_id -> the identity keys derived under it, so a generation rotation can
-        #: invalidate every entry for that context without reversing any digest.
-        self._context_index: dict[str, set[str]] = {}
-
-    def get(self, identity: ContextCacheIdentity, key: str) -> object | None:
-        return self._entries.get(identity.key, {}).get(key)
-
-    def put(
-        self,
-        identity: ContextCacheIdentity,
-        key: str,
-        value: object,
-        *,
-        context_id: str | None = None,
-    ) -> None:
-        self._entries.setdefault(identity.key, {})[key] = value
-        if context_id is not None:
-            self._context_index.setdefault(context_id, set()).add(identity.key)
-
-    def invalidate(self, identity: ContextCacheIdentity) -> None:
-        self._entries.pop(identity.key, None)
-
-    def invalidate_context(self, context_id: str) -> int:
-        """Drop every entry whose identity was derived for one context id.
-
-        Used by the resolver's cache-invalidation descriptor when a binding revision,
-        registry revision, or authority verdict changed and the generation rotated.
-        """
-
-        dropped = 0
-        for cache_key in self._context_index.pop(context_id, set()):
-            if self._entries.pop(cache_key, None) is not None:
-                dropped += 1
-        return dropped
-
-    def __len__(self) -> int:
-        return sum(len(entries) for entries in self._entries.values())
-
-
 __all__ = [
     "CONTEXT_CACHE_KEY_VERSION",
     "ContextCacheIdentity",
-    "ContextScopedCache",
     "context_cache_identity",
 ]

@@ -32,8 +32,13 @@ from app.instance.runtime import (
     open_default_vault_service,
     open_local_operator_principal_store,
 )
+from app.instance.runtime import _finish_instance_state_deployment
 from app.instance.runtime import main as instance_runtime_main
-from tests._mvr_default_vault_harness import REPO_ROOT, active_runtime
+from tests._mvr_default_vault_harness import (
+    REPO_ROOT,
+    active_runtime,
+    deployment_authority,
+)
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
@@ -70,46 +75,58 @@ def complete_inventory(channel_id: str = "prod") -> PrincipalFenceInventory:
     )
 
 
-def write_fence_inventory(runtime, *, channel_id: str = "prod") -> Path:
-    """Write the deployment-produced fence inventory the CLI floor producer consumes.
-
-    Mirrors how MVR-01B's stopped-window wrapper writes
-    `deployment-quiescence-inventory.json`: the deployment proves quiescence and leaves the
-    evidence in a private file; the runtime reads the file rather than trusting a caller.
-    """
-
-    path = Path(runtime.layout.root) / "principal-fence-inventory.json"
-    path.write_text(
-        json.dumps(complete_inventory(channel_id).as_payload()), encoding="utf-8"
-    )
-    path.chmod(0o600)
-    return path
-
-
 def record_floor_through_cli(runtime, *, channel_id: str = "prod") -> dict:
     """Record the floor through the shipped production producer, not a direct call.
 
-    This is deliberate: if the harness called `record_principal_floor` directly, the tests
-    would pass while no operator command could ever record the floor -- the exact
+    This drives the real `principal-record-floor` command with the same inputs the
+    deployment wrapper passes it: the MVR-01B deployment lease in `proved` phase, that
+    window's quiescence proof, its drained legacy-owner inventory, and the mounted compose
+    policy path. If the harness called `record_principal_floor` directly, the tests would
+    pass while no operator command could ever record the floor -- the exact
     invariant-without-producers defect `AGENTS.md :: Required rules` names.
+
+    The stopped window is left open (no `deployment-finish`) exactly as the wrapper does
+    around the MVR-01C cutover, then closed by the caller.
     """
 
-    inventory_path = write_fence_inventory(runtime, channel_id=channel_id)
+    proof, inventory_path = deployment_authority(
+        runtime, runtime.layout.root / "missing-legacy.md"
+    )
     buffer = StringIO()
     with redirect_stdout(buffer):
         code = instance_runtime_main(
             [
                 "principal-record-floor",
+                "--channel",
+                channel_id,
                 "--registry-path",
                 str(runtime.layout.registry_path),
-                "--fence-inventory",
+                "--host-global-root",
+                str(runtime.ledger.root),
+                "--inventory-path",
                 str(inventory_path),
+                "--quiescence-proof-path",
+                str(runtime.ledger.root / "deployment-quiescence-proof.json"),
+                "--compose-base",
+                str(REPO_ROOT / "docker-compose.yaml"),
+                "--native-producer-root",
+                str(REPO_ROOT),
                 "--consumer",
                 "bootstrap-init",
             ]
         )
     payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
     payload["_exit_code"] = code
+    _finish_instance_state_deployment(
+        channel=channel_id,
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        legacy_path=runtime.layout.root / "missing-legacy.md",
+        inventory_path=inventory_path,
+        backup_root=runtime.layout.root / "principal-cutover-backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
     return payload
 
 
@@ -178,7 +195,6 @@ def provisioned_instance(
 __all__ = [
     "complete_inventory",
     "record_floor_through_cli",
-    "write_fence_inventory",
     "principal_record_path",
     "principal_store",
     "provisioned_instance",
