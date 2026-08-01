@@ -46,10 +46,13 @@ from app.instance.vault_dimensions import (
     REASON_MEMBER_UNAUTHORIZED,
     DimensionReceipt,
     DimensionResolutionError,
-    VaultDimensionError,
     VaultDimensionService,
 )
-from app.instance.vault_registry import RegistryError, VaultRegistryStore
+from app.instance.vault_registry import (
+    RegistryError,
+    RegistryRevisionConflict,
+    VaultRegistryStore,
+)
 from app.vault.active_context_v1 import AuthSubject
 
 # Router-level #2223 gate, matching the selection router: an unauthenticated caller is
@@ -180,8 +183,11 @@ def _fail(exc: RegistryError) -> HTTPException:
         if exc.reason == REASON_MEMBER_UNAUTHORIZED:
             return HTTPException(status_code=403, detail=str(exc))
         return HTTPException(status_code=409, detail=str(exc))
-    if isinstance(exc, VaultDimensionError):
-        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, RegistryRevisionConflict):
+        # Optimistic concurrency: another writer committed between this command's read
+        # and its locked write, so the write was refused rather than applied over stale
+        # state. A conflict is retryable after a reload, which a 400 would not convey.
+        return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=400, detail=str(exc))
 
 

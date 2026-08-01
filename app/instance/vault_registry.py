@@ -751,6 +751,7 @@ class VaultRegistryStore:
         principal_state: Mapping[str, object],
         background_state: Mapping[str, object],
         runtime_floors: Mapping[str, object],
+        expected_revision: int | None = None,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Persist the 01B mechanical state that must survive backup/restore.
@@ -761,10 +762,20 @@ class VaultRegistryStore:
         would mean an unrelated dimensions/principal/background write could wipe
         a durable operator default (when passed ``None``) or forge
         ``explicit_default_command`` provenance (when passed a binding).
+
+        MVR-04 makes the ``dimensions`` slot meaningful rather than an opaque
+        placeholder, which turns a latent hazard into a real one: a caller that
+        reads the four slots, edits one, and re-supplies the rest performs a
+        read-modify-write across *two* reads — its own and this method's. A
+        dimension mutation committing between them would be silently overwritten
+        by the stale payload. ``expected_revision`` lets such a caller pin the
+        revision it actually read, so that race fails closed with
+        :class:`RegistryRevisionConflict` instead of losing the write.
         """
 
         _require_storage_mutation_capability(_capability)
         current = self.load()
+        self._assert_revision(current, expected_revision)
         extensions = copy.deepcopy(current.extensions)
         extensions.update(
             {

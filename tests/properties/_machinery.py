@@ -485,17 +485,18 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
     ),
-    ("app/instance/vault_registry.py", 2266): (
+    ("app/instance/vault_registry.py", 2315): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "
         "plane Sigma (formal-model.md sec 2.3), not a Human Knowledge Artifact. "
-        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 (site unchanged); "
-        "re-pinned after directly related MVR-02 (#3856) insertions earlier in "
-        "vault_registry.py, which added the explicit-default field, its "
-        "producers, and the tolerant legacy read. MVR-02 adds no new "
-        "write_frontmatter site: it writes the registry through "
-        "_atomic_private_write, not the vault-content seam."
+        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 -> 2315 (site "
+        "unchanged); re-pinned after directly related MVR-04 (#3858) insertions "
+        "earlier in vault_registry.py, which added the locked dimension writer "
+        "and the transactional dimension-membership repair hook in "
+        "remove_registration. MVR-04 adds no new write_frontmatter site: like "
+        "MVR-02 before it, it writes the registry through _atomic_private_write, "
+        "not the vault-content seam."
     ),
 }
 

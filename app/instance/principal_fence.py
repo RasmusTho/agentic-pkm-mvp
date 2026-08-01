@@ -327,6 +327,10 @@ def record_principal_floor(
         principal_state=principal_state,
         background_state=dict(extensions.get("backgroundState") or {}),
         runtime_floors=floors,
+        # Pin the revision this function actually read. Without it a dimension or
+        # background write committing between that read and the locked write would be
+        # silently clobbered by the payload re-supplied above (MVR-04, #3858).
+        expected_revision=snapshot.revision,
         _capability=_capability,
     )
 
