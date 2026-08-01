@@ -26,7 +26,10 @@ truth or closing the parent from the child.
 ## Concretely
 
 - Exercise no adapters, unknown/unavailable adapter, policy denial, approval pending, malformed
-  output, timeout, provider failure, and one governed success per registered adapter.
+  output, timeout, provider failure, one governed success per headless-registered adapter, and an
+  exact zero-provider-call `interactive_subscription_only` refusal for every interactive-only
+  registered adapter (see `README.md :: Capability acceptance` for why the partition is required by
+  INV-CDH-5A and does not relax the refusal requirement).
 - Exercise missing/stale/revoked/mismatched approval and missing/drifted Yggdrasil parity with zero
   provider calls.
 - Prove one provider call at most, no fallback, exact admission/approval binding, causal receipt
