@@ -55,6 +55,13 @@ class _RecCursor:
         self.rowcount = 0
         self._fetch = None
         self._fetchall = []
+        # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
+        # file_state key before any statement. Matched first, because the
+        # preflight's index subquery mentions `pg_attribute` and would otherwise
+        # be swallowed by the generic column-introspection matcher below.
+        if norm.startswith("select to_regclass('public.file_state') is not null"):
+            self._fetch = (True, ["vault_binding_id", "path"], [])
+            return
         if norm.startswith("select to_regclass(%s) as oid"):
             self._fetch = (params[0],)
             return
@@ -80,11 +87,6 @@ class _RecCursor:
         if norm.startswith("insert into file_state"):
             self.conn.log.append("file_state_write")
             self.rowcount = 1
-            return
-        # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
-        # file_state key before any statement.
-        if norm.startswith("select to_regclass('public.file_state') is not null"):
-            self._fetch = (True, ["vault_binding_id", "path"])
             return
         # MVR-05A0 (#4543): file_state statements lead with vault_binding_id, so
         # the path/uuid predicate is now the second bound parameter.

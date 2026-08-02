@@ -72,13 +72,14 @@ class _FakeCursor:
         normalized = " ".join(sql.split()).lower()
         self.rowcount = 0
         self._fetchone = None
-
         # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
-        # file_state key before any statement. These fakes stand in for an
-        # already-migrated database.
+        # file_state key before any statement. Matched first, because the
+        # preflight's index subquery mentions `pg_attribute` and would otherwise
+        # be swallowed by the generic column-introspection matcher below.
         if normalized.startswith("select to_regclass('public.file_state') is not null"):
-            self._fetchone = (True, ["vault_binding_id", "path"])
+            self._fetchone = (True, ["vault_binding_id", "path"], [])
             return
+
         # MVR-05A0 (#4543): file_state statements lead with vault_binding_id.
         if normalized.startswith(
             "delete from file_state where vault_binding_id = %s and path = %s"
