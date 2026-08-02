@@ -40,11 +40,10 @@ def run_merge(base_path: Path, a_path: Path, b_path: Path) -> int:
       1 => needs human review
       2 => usage error
 
-    Stdout:
-      <merged_markdown>
-      ---
-      MERGE_STATUS=<status>
-      MERGE_REASON=<reason>
+    Git's custom-merge-driver contract requires the merge result to be written to
+    `a_path` (%A) — that is the path git reads the result back from. Diagnostics
+    (MERGE_STATUS / MERGE_REASON) are informational only and must never be written
+    into `a_path`; they go to stderr so they cannot contaminate merged markdown.
     """
     base = _read_text(base_path)
     a = _read_text(a_path)
@@ -55,13 +54,13 @@ def run_merge(base_path: Path, a_path: Path, b_path: Path) -> int:
 
     # Safety rail:
     # If these two notes don't even share uuid, they're not the same logical note.
-    # We refuse to silently merge. We surface THEIRS and force exit code 1.
+    # We refuse to silently merge. Leave a_path untouched so git's non-zero exit
+    # surfaces this as a conflict for a human to resolve.
     if uuid_a and uuid_b and uuid_a != uuid_b:
         status = "conflict"
         reason = "uuid mismatch"
-        sys.stdout.write(f"{b}\n")
-        sys.stdout.write(f"---\nMERGE_STATUS={status}\nMERGE_REASON={reason}\n")
-        sys.stdout.flush()
+        sys.stderr.write(f"MERGE_STATUS={status}\nMERGE_REASON={reason}\n")
+        sys.stderr.flush()
         return 1
 
     # Otherwise treat them as revisions of the same logical note and run semantic merge.
@@ -70,9 +69,12 @@ def run_merge(base_path: Path, a_path: Path, b_path: Path) -> int:
     status = info.get("status", "unknown")
     reason = info.get("reason", "")
 
-    sys.stdout.write(f"{merged}\n")
-    sys.stdout.write(f"---\nMERGE_STATUS={status}\nMERGE_REASON={reason}\n")
-    sys.stdout.flush()
+    if status == "resolved":
+        # Fulfil the merge-driver contract: git reads the result back from a_path.
+        a_path.write_text(merged, encoding="utf-8")
+
+    sys.stderr.write(f"MERGE_STATUS={status}\nMERGE_REASON={reason}\n")
+    sys.stderr.flush()
 
     # Exit code policy:
     # - 0 => "resolved": safe automatic result
