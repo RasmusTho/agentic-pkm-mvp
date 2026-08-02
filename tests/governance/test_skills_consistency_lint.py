@@ -326,6 +326,56 @@ def test_lint_fails_when_pr_contract_validator_diverges_from_workflow(tmp_path: 
     ), errors
 
 
+def test_lint_fails_when_pr_contract_validator_flags_diverge_from_workflow(
+    tmp_path: Path,
+) -> None:
+    """Dropping a regex *flag* (not pattern text) on one side must fail the lint.
+
+    Reproduces the exact drift class from issue #4342: Check 10 previously
+    compared only regex pattern text and discarded the JS trailing flag
+    suffix / the Python flags argument entirely, so a flag-only divergence
+    (e.g. losing `re.IGNORECASE` from `TIER1_LANE_PATTERN` while the
+    workflow's JS `tier1LanePattern` stays `/im`) passed silently.
+    """
+    root = _seed_tree(tmp_path)
+
+    workflow = REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
+    contract = REPO_ROOT / "app" / "dispatcher" / "verification_contract.py"
+
+    dest_workflows = root / ".github" / "workflows"
+    dest_workflows.mkdir(parents=True, exist_ok=True)
+    (dest_workflows / "issue-pr-governance.yml").write_text(
+        workflow.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    dest_app = root / "app" / "dispatcher"
+    dest_app.mkdir(parents=True, exist_ok=True)
+    (dest_app / "verification_contract.py").write_text(
+        contract.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    baseline_errors = run_lint(root)
+    assert not any("verification_contract.py" in e for e in baseline_errors), baseline_errors
+
+    # Drift the Python TIER1_LANE_PATTERN alone: drop `re.IGNORECASE`,
+    # leaving the workflow's JS `tier1LanePattern` at `/im` unchanged. The
+    # pattern text on both sides is still byte-identical.
+    drifted = contract.read_text(encoding="utf-8").replace(
+        'TIER1_LANE_PATTERN = re.compile(\n'
+        r'    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b", re.IGNORECASE | re.MULTILINE'
+        "\n)",
+        'TIER1_LANE_PATTERN = re.compile(\n'
+        r'    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b", re.MULTILINE'
+        "\n)",
+    )
+    assert drifted != contract.read_text(encoding="utf-8"), "fixture swap did not apply"
+    (dest_app / "verification_contract.py").write_text(drifted, encoding="utf-8")
+
+    errors = run_lint(root)
+    assert any(
+        "TIER1_LANE_PATTERN" in e and "flags" in e for e in errors
+    ), errors
+
+
 def test_planned_marker_allows_unknown_reference(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     skills_root = root / ".codex" / "skills"

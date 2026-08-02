@@ -397,27 +397,54 @@ def _strip_js_line_comments(text: str) -> str:
     return "\n".join(re.sub(r"//.*$", "", line) for line in text.splitlines())
 
 
-_JS_REGEX_LITERAL_RE = re.compile(r"/((?:\\.|[^/\\\n])*)/[a-z]*")
+_JS_REGEX_LITERAL_RE = re.compile(r"/((?:\\.|[^/\\\n])*)/([a-z]*)")
+
+# JS regex flag letter -> Python `re` flag constant name. Only flags this
+# repo's twins actually use are mapped; this is deliberately not a general
+# regex-equivalence engine (issue #4342 Constraints). Letters with no Python
+# `re.compile` counterpart (JS `g`, `u`, `y`, `d`, ...) are ignored: they
+# change how `.match`/`.test` iterate or what `\d`/unicode mean in JS, not
+# what a single Python `re.compile(pattern, flags)` call can express.
+_JS_FLAG_TO_PYTHON = {
+    "i": "IGNORECASE",
+    "m": "MULTILINE",
+    "s": "DOTALL",
+}
 
 
-def _extract_js_regex_literals(block: str) -> list[str]:
-    """Extract regex-literal source text (unescaped `\\/` -> `/`), in order.
+def _js_flags_to_python_flag_names(js_flags: str) -> set[str]:
+    return {
+        _JS_FLAG_TO_PYTHON[letter] for letter in js_flags if letter in _JS_FLAG_TO_PYTHON
+    }
+
+
+def _extract_js_regex_literals(block: str) -> list[tuple[str, str]]:
+    """Extract regex-literal source text (unescaped `\\/` -> `/`) and flags, in order.
 
     Comments are stripped first so a `/`-containing path or URL in prose
-    (e.g. `app/dispatcher/...`) is never mistaken for a regex literal.
+    (e.g. `app/dispatcher/...`) is never mistaken for a regex literal. Each
+    result is `(pattern, flag_letters)`, e.g. `("^foo$", "im")`.
     """
     stripped = _strip_js_line_comments(block)
     return [
-        match.group(1).replace("\\/", "/")
+        (match.group(1).replace("\\/", "/"), match.group(2))
         for match in _JS_REGEX_LITERAL_RE.finditer(stripped)
     ]
 
 
-def _extract_python_regex_pattern(text: str, name: str) -> str | None:
+def _extract_python_regex_pattern(text: str, name: str) -> tuple[str, set[str]] | None:
     match = re.search(
-        re.escape(name) + r"\s*=\s*re\.compile\(\s*\n?\s*r\"([^\"]*)\"", text
+        re.escape(name)
+        + r"\s*=\s*re\.compile\(\s*\n?\s*r\"([^\"]*)\""
+        + r"(?:\s*,\s*\n?\s*([^)]*?)\s*\n?\s*)?\)",
+        text,
     )
-    return match.group(1) if match else None
+    if match is None:
+        return None
+    pattern = match.group(1)
+    flags_expr = match.group(2) or ""
+    flag_names = set(re.findall(r"re\.([A-Z]+)", flags_expr))
+    return pattern, flag_names
 
 
 # Order matters: this is the exact order the corresponding regex literals
@@ -455,15 +482,24 @@ def _check_pr_contract_marker_block(
             f"`{start_marker}` and `{end_marker}`, found {len(js_literals)}"
         ]
     errors: list[str] = []
-    for name, js_pattern in zip(py_names, js_literals):
-        py_pattern = _extract_python_regex_pattern(contract_text, name)
-        if py_pattern is None:
+    for name, (js_pattern, js_flags) in zip(py_names, js_literals):
+        py_extracted = _extract_python_regex_pattern(contract_text, name)
+        if py_extracted is None:
             errors.append(f"{contract_rel}: could not locate regex constant `{name}`")
             continue
+        py_pattern, py_flag_names = py_extracted
         if py_pattern != js_pattern:
             errors.append(
                 f"{contract_rel}::{name} pattern ({py_pattern!r}) does not match "
                 f"{workflow_rel} regex between `{start_marker}`/`{end_marker}` ({js_pattern!r})"
+            )
+            continue
+        expected_flag_names = _js_flags_to_python_flag_names(js_flags)
+        if expected_flag_names != py_flag_names:
+            errors.append(
+                f"{contract_rel}::{name} flags ({sorted(py_flag_names)!r}) do not match "
+                f"{workflow_rel} regex flags `{js_flags!r}` between `{start_marker}`/`{end_marker}` "
+                f"(expected Python flags {sorted(expected_flag_names)!r})"
             )
     return errors
 
