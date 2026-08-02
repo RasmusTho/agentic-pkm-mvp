@@ -51,6 +51,7 @@ promote public internet readiness.
 
 ## Health spine
 - HealthContract + WriteGuard + incident logging now form the deterministic spine for startup readiness; this snapshot is the baseline for initial go-live visibility.
+- `POST /ingest` now asserts `DEFAULT_WRITE_GUARD.assert_writes_allowed("ingest.object_create")` at the seam before any I/O, fail-closed like the other named WriteGuard seams (owner-decided epic #2778 F-D, `docs/architecture/formal-model.md :: 7. Divergences`); previously this seam was guardless.
 
 ## Runtime verification
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
