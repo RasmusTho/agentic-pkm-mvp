@@ -2831,6 +2831,15 @@ def release_lease(
 @click.option("--receipt-body", required=True)
 @click.option("--lifecycle-state", default=None)
 @click.option("--promotion-status", default=None)
+@click.option(
+    "--successor-ref",
+    multiple=True,
+    help=(
+        "JSON ref or shorthand ref_type:ref naming the successor artifact "
+        "(github_issue, github_pr, or promotion_intent). Required when a "
+        "LearningSignal transitions to superseded or discarded."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def transition(
@@ -2845,6 +2854,7 @@ def transition(
     receipt_body: str,
     lifecycle_state: str | None,
     promotion_status: str | None,
+    successor_ref: tuple[str, ...],
     as_json: bool,
 ) -> None:
     try:
@@ -2859,6 +2869,7 @@ def transition(
             receipt_body=receipt_body,
             lifecycle_state=lifecycle_state,
             promotion_status=promotion_status,
+            successor_refs=_parse_refs(successor_ref) if successor_ref else None,
         )
     except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc

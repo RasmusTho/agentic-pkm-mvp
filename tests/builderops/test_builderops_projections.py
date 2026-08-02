@@ -434,6 +434,7 @@ def test_learning_summary_keeps_terminal_learning_records(
         lifecycle_state="discarded",
         promotion_status="discarded",
         source_refs=[{"ref_type": "github_issue", "ref": "#4002"}],
+        successor_refs=[{"ref_type": "github_issue", "ref": "#4002"}],
         receipt_refs=["receipt_lrn_discarded_001"],
         created_by=_actor(),
     )
@@ -445,6 +446,7 @@ def test_learning_summary_keeps_terminal_learning_records(
         lifecycle_state="superseded",
         promotion_status="superseded",
         source_refs=[{"ref_type": "github_issue", "ref": "#4003"}],
+        successor_refs=[{"ref_type": "github_pr", "ref": "#4004"}],
         receipt_refs=["receipt_lrn_superseded_001"],
         created_by=_actor(),
     )
@@ -528,6 +530,7 @@ def test_write_projections_emits_expected_repo_markdown_files(
         lifecycle_state="discarded",
         promotion_status="discarded",
         source_refs=[{"ref_type": "github_issue", "ref": "#1506"}],
+        successor_refs=[{"ref_type": "github_issue", "ref": "#1506"}],
         receipt_refs=["receipt_lrn_projection_discarded_001"],
         created_by=_actor(),
     )
@@ -539,6 +542,7 @@ def test_write_projections_emits_expected_repo_markdown_files(
         lifecycle_state="superseded",
         promotion_status="superseded",
         source_refs=[{"ref_type": "github_issue", "ref": "#1507"}],
+        successor_refs=[{"ref_type": "github_pr", "ref": "#1519"}],
         receipt_refs=["receipt_lrn_projection_superseded_001"],
         created_by=_actor(),
     )

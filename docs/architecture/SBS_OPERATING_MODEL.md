@@ -310,6 +310,22 @@ signal in scope must end as applied, already satisfied, issue created, promotion
 debt/fitness recorded, or discarded/superseded with a receipt. "Carry forward later" is not a
 terminal outcome unless represented by a bounded GitHub Issue or PromotionIntent.
 
+Terminal disposition linkage rule (#4267): a `LearningSignal` reaching a `superseded` or
+`discarded` terminal disposition must name, in its `successor_refs`, the linked successor artifact
+— the GitHub Issue, PR, or `PromotionIntent` — that actually enacted or explicitly declined the
+divergence. A bare status transition is not a terminal outcome: a signal marked handled without an
+enacting artifact creates false confidence that the divergence is tracked while the defect stays
+unrepaired (the 2026-06 `publish-pr` template gap re-derived from scratch by the #3927–#4162 audit
+and repaired only via #4187/#4192 is the motivating case). Another `LearningSignal` is not a valid
+successor — supersession by newer material still points at whatever artifact enacts or declines
+the repair. Mechanically enforced at the BuilderOps write path
+(`app/builderops/models.py::validate_terminal_signal_successor`, exercised by
+`app/builderops/store.py::transition_record_state`); legacy terminal records without a successor
+are machine-flaggable via the observe-only
+`python3 -m app.builderops builderops completeness-report check`
+(`terminal_signals_missing_successor_refs`). Verified by
+`tests/builderops/test_learning_signal_terminal_disposition.py`.
+
 Runtime/user memory contamination is a blocking failure mode. Failed prompts, quota/context failures,
 delivery receipts, BuilderOps records, TCD rationales, review comments, and skill retrospectives must
 not become HKA/MEM/user memory, runtime instructions, retrieval context, or product semantics unless
