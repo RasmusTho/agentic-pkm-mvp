@@ -28,6 +28,15 @@ This guard is the durable half of the fix. It fails if any of those surfaces
 regains a second production DDL owner, and if the runtime ever starts issuing
 schema statements again.
 
+MVR-05A2 (#4576) widened it past `app/db/db.py`. The seam population is now
+**derived** — every durable DDL statement under `app/**` targeting a table the
+Alembic revision chain creates — so `app/stores/pg.py`, the Heimdal bootstrap
+modules and the outbox are covered without being named, and so is the next seam
+nobody names. That scan is also what found the `store_vector_index` autocreate
+branch issuing three unconditional `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+statements without the "skip the group if the table already exists" probe
+`app/db/db.py` had.
+
 The test-fixture create-on-demand path in `app/db/db.py`
 (`STORE_SCHEMA_AUTOCREATE=1`) is not a second owner: it mirrors the established
 KERNEL-04 (#2766) / KERNEL-05 (#2850) contract for `store_*` and `outbox`, is
@@ -44,6 +53,13 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+
+from tests.architecture.durable_table_classification import (
+    RECORDED_ATTACHED_DDL_DEBT,
+    discover_durable_tables,
+    discover_runtime_ddl_seams,
+    observed_attached_ddl_debt,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -154,6 +170,242 @@ def _statements_executed_by_ensure_schema(
     return conn.executed
 
 
+# --------------------------------------------------------------------------- #
+# The same behavioural proof, for the store seam (MVR-05A2, #4576)
+# --------------------------------------------------------------------------- #
+#
+# `app/db/db.py` has had the recording-connection proof above since MVR-05A1.
+# `app/stores/pg.py` had none, so a structural read of its source was carrying
+# the whole weight for the store tables — and three review rounds each found a
+# new way to satisfy a structural read while the runtime still reshaped a
+# migration-owned table: a stray `sqlite3.connect` in the same function, a
+# predicate named `*autocreate*` that never reads the flag, a `continue` guarded
+# by a constant that is never true. Every one of those is a statement about the
+# *shape* of the code. None of them survives being asked what the function
+# actually executes.
+
+
+class _UnobservedConnection(BaseException):
+    """Raised when the seam opens a connection this harness cannot record.
+
+    Deriving from `BaseException`, not `Exception`, on purpose: the seam under
+    test is allowed to wrap work in `try/except Exception`, and a sentinel that
+    a bare `except Exception: pass` can swallow proves nothing.
+    """
+
+
+#: The five migration-owned store tables (Alembic revision `c2766a04d001`).
+STORE_TABLES = frozenset(
+    {
+        "store_objects",
+        "store_vector_index",
+        "store_relations",
+        "store_relation_memberships",
+        "vector_index_meta",
+    }
+)
+
+
+class _StoreRecordingCursor:
+    def __init__(self, conn: "_StoreRecordingConn") -> None:
+        self._conn = conn
+        self._last_params: tuple = ()
+
+    def __enter__(self) -> "_StoreRecordingCursor":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def execute(self, statement: str, params: tuple = (), *args, **kwargs) -> None:
+        self._conn.executed.append(statement)
+        self._last_params = tuple(params or ())
+
+    def fetchone(self):
+        # The `to_regclass` existence probe answers **for the table it was
+        # asked about**. A fake that returned one blanket answer would let a
+        # group probe table A and then reshape table B: the probe would report
+        # B present, the group would be skipped, and the gate would see no
+        # statements — while against a real database the ALTERs run on every
+        # boot. `_every_group_only_touches_its_own_table` closes the same hole
+        # from the other side.
+        probed = self._last_params[0] if self._last_params else None
+        return {"present": probed in self._conn.tables_present, "oid": 1}
+
+    def fetchall(self):
+        # `assert_store_schema_with_connection`'s identity-column census.
+        return [{"column_name": column} for column in ("dim", "model", "provider", "normalize")]
+
+
+class _StoreRecordingConn:
+    def __init__(self, *, tables_present: frozenset[str]) -> None:
+        self.executed: list[str] = []
+        self.tables_present = tables_present
+
+    def __enter__(self) -> "_StoreRecordingConn":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def cursor(self) -> _StoreRecordingCursor:
+        return _StoreRecordingCursor(self)
+
+    def close(self) -> None:
+        return None
+
+
+def _statements_executed_by_ensure_tables(
+    *, autocreate: bool, tables_present: frozenset[str]
+) -> list[str]:
+    from app.stores import pg as pg_module
+
+    env = {key: value for key, value in os.environ.items() if key != "STORE_SCHEMA_AUTOCREATE"}
+    if autocreate:
+        env["STORE_SCHEMA_AUTOCREATE"] = "1"
+    conn = _StoreRecordingConn(tables_present=tables_present)
+    previous = pg_module._TABLES_READY
+    try:
+        pg_module._TABLES_READY = False
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch.object(pg_module, "_connect", lambda: conn):
+                # Patching `_connect` alone records only the statements that go
+                # through it. A `psycopg.connect(...)` opened directly inside
+                # `_ensure_tables` would execute against a real database and be
+                # invisible here, so it is made impossible rather than assumed
+                # absent.
+                with mock.patch.object(
+                    pg_module.psycopg,
+                    "connect",
+                    side_effect=_UnobservedConnection(
+                        "_ensure_tables opened a connection outside _connect(); every "
+                        "statement it issues must be observable by this harness"
+                    ),
+                ):
+                    pg_module._ensure_tables()
+    finally:
+        pg_module._TABLES_READY = previous
+    return conn.executed
+
+
+_SQL_COMMENT = re.compile(r"(?s)/\*.*?\*/|--[^\n]*")
+_SCHEMA_VERB = re.compile(
+    r"(?is)\b(?:create|alter|drop)\s+"
+    r"(?:or\s+replace\s+)?"
+    r"(?:unlogged\s+|temporary\s+|temp\s+|unique\s+|materialized\s+)*"
+    r"(?:table|index|view|trigger|function|sequence|extension|rule|type)\b"
+    r"|\bselect\b[^;]*\binto\s+(?!temporary\b|temp\b)"
+)
+
+
+def _schema_statements(statements: list[str]) -> list[str]:
+    """The DDL among ``statements`` — data repairs are not schema changes.
+
+    Comments are stripped and `;`-separated statements split before matching,
+    and the verb is searched for rather than anchored at position 0. Anchoring
+    meant a single leading `-- keep retrieval fast` hid a
+    `DROP INDEX` / `CREATE UNIQUE INDEX` pair from this test entirely; the
+    vocabulary is wider than table DDL because an index, trigger or function
+    dropped and recreated against a migration-owned table is the same
+    drop-and-re-add mechanism MVR-05A1 (#4560) removed from `objects_pkey`.
+    """
+    schema: list[str] = []
+    for statement in statements:
+        for fragment in _SQL_COMMENT.sub(" ", statement).split(";"):
+            normalized = " ".join(fragment.split())
+            if normalized and _SCHEMA_VERB.search(normalized):
+                schema.append(normalized)
+    return schema
+
+
+def test_every_autocreate_group_only_touches_the_table_it_probes() -> None:
+    """A group's statements name the table its existence probe asked about.
+
+    The probe is per table and the skip is per group, so a statement in group
+    A that targets table B runs whenever A is absent — regardless of whether B
+    already exists. Nothing in the loop's shape prevents that, and the
+    behavioural harness cannot see it either: it would observe a skipped group
+    and no statements. This is the pairing the two mechanisms both assume.
+    """
+    from app.stores.pg import _MIGRATION_OWNED_AUTOCREATE_SQL
+
+    assert {table for table, _ in _MIGRATION_OWNED_AUTOCREATE_SQL} == set(STORE_TABLES)
+    for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
+        for statement in statements:
+            targets = set(re.findall(r"(?i)\b(?:table|index|on)\s+(?:if\s+not\s+exists\s+)?"
+                                     r"(?:public\.)?(\w+)", statement)) & set(STORE_TABLES)
+            assert targets <= {table}, (
+                f"the {table!r} autocreate group issues {statement.split()[0:4]} against "
+                f"{sorted(targets - {table})}. A group runs when *its* table is absent, so a "
+                "statement here reshapes a table nobody probed."
+            )
+
+
+def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
+    """`app/stores/pg.py::_ensure_tables`, asked what it executes.
+
+    Three cases, and the third is the one that matters:
+
+    * with no `STORE_SCHEMA_AUTOCREATE` opt-in, production issues **no schema
+      statement at all** — only the read-only assertions;
+    * with the opt-in against an empty database, it creates the five store
+      tables, and may `ALTER` the one it has just created;
+    * with the opt-in against a database that already holds them, it issues
+      **zero** schema statements.
+
+    That third assertion is the whole guard. Before MVR-05A2 the three
+    `ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS` statements ran on
+    every boot of the fixture path, so a scratch database stamped at a
+    pre-EMBEDREL-06 revision had its migration-owned table reshaped from the
+    runtime — the same mechanism, one seam over, that silently reverted the
+    `objects` primary key before #4560.
+
+    Being behavioural is what makes it hold. It does not ask whether the DDL
+    sits in a probed loop, whether the guard's condition looks right, or
+    whether the enclosing function imports `sqlite3`; it runs the function and
+    reads the statement list.
+    """
+    # Both database states, because with only the populated one a gate that
+    # *defaults the opt-in on* — `os.getenv("STORE_SCHEMA_AUTOCREATE", "1") != "0"`,
+    # autocreate enabled in production — still looks clean: the existence probe
+    # skips every group, so nothing is issued. On an empty database it creates
+    # all five tables, which is the behaviour that distinguishes the two.
+    for tables_present in (STORE_TABLES, frozenset()):
+        production = _schema_statements(
+            _statements_executed_by_ensure_tables(autocreate=False, tables_present=tables_present)
+        )
+        assert production == [], (
+            f"_ensure_tables issued {production!r} without the STORE_SCHEMA_AUTOCREATE "
+            f"test-fixture opt-in (tables_present={tables_present}). Outside tests the "
+            "store schema is migration-owned (KERNEL-04, #2766) and this path is "
+            "assert-only; a fixture flag that defaults to on is not a fixture flag."
+        )
+
+    fresh = _schema_statements(
+        _statements_executed_by_ensure_tables(autocreate=True, tables_present=frozenset())
+    )
+    created = {
+        match.group(1)
+        for statement in fresh
+        for match in [re.match(r"(?i)^CREATE TABLE IF NOT EXISTS (\w+)", statement)]
+        if match
+    }
+    assert created == set(STORE_TABLES), (
+        f"the fixture path created {sorted(created)} on an empty database"
+    )
+
+    existing = _schema_statements(
+        _statements_executed_by_ensure_tables(autocreate=True, tables_present=STORE_TABLES)
+    )
+    assert existing == [], (
+        f"_ensure_tables issued {existing!r} against tables that already exist. The "
+        "runtime may not reshape a migration-owned table: `CREATE TABLE IF NOT EXISTS` "
+        "no-ops silently against an older shape while the ALTERs after it still run "
+        "against that shape, which is how a fixture becomes a second schema owner. "
+        "Idempotence has to come from the existence probe, not from `IF NOT EXISTS`."
+    )
+
+
 def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
     """`ensure_schema` issues no schema statements outside the test-fixture opt-in.
 
@@ -219,10 +471,141 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
         statement for statement in existing if not statement.strip().upper().startswith("SELECT")
     ] == [], existing
 
+    # ------------------------------------------------------------------ #
+    # MVR-05A2 (#4576): the same property, derived rather than named
+    # ------------------------------------------------------------------ #
+    #
+    # A structural backstop, not the primary proof. The two seams that carry
+    # a recording-connection harness — `app/db/db.py` above and
+    # `app/stores/pg.py` in
+    # `test_the_store_seam_never_reshapes_a_table_that_already_exists` — are
+    # proved behaviourally, by running them and reading the statement list.
+    # This scan covers the seams that have no such harness (the twelve Heimdal
+    # bootstrap modules, the entity-review journal, the four
+    # knowledge-acquisition stores, the outbox), and the next seam nobody
+    # names. Every one of those issues `CREATE` only, so the weaker
+    # `existence_probed` half is not load-bearing for them; if one ever starts
+    # issuing `ALTER` or `DROP`, give it the harness rather than trusting the
+    # shape of its guard.
+    #
+    # Everything above is scoped to `app/db/db.py` because that is the seam
+    # MVR-05A1 found. The seam inventory below is derived instead: every
+    # durable DDL statement anywhere under `app/**` that targets a table the
+    # Alembic revision chain creates, which today reaches `app/stores/pg.py`,
+    # the twelve Heimdal bootstrap modules, the entity-review journal, the
+    # four knowledge-acquisition stores and `app/services/outbox.py` without
+    # any of them being listed here. A thirteenth Heimdal module, or a seam
+    # nobody thought to name, is covered on the commit that adds it.
+    tables = discover_durable_tables()
+    seams = discover_runtime_ddl_seams(tables)
+    assert seams, "the durable DDL seam scan found nothing, so it is proving nothing"
+
+    # A table created under `app/**` that the revision chain does not own is a
+    # second schema authority the classification gate cannot even see, because
+    # its population comes from `app/alembic/versions/**`. Without this,
+    # `cur.execute("CREATE TABLE rogue (...)")` in a production module leaves
+    # both gates green. The four modules that legitimately create their own
+    # tables are SQLite-backed local stores, which the scan reads off their
+    # imports rather than off a path allowlist.
+    unowned = [
+        f"{seam.path}:{seam.lineno} CREATE TABLE {seam.table}"
+        for seam in seams
+        if seam.durable_database_source and not seam.owned_by_revision_chain
+    ]
+    assert unowned == [], (
+        "these statements create a durable table the Alembic revision chain does not "
+        "own, from a file that can reach the durable PostgreSQL database:\n  "
+        + "\n  ".join(unowned)
+        + "\nA table created this way has no migration, no classification, and no "
+        "owner. Add the revision, or move the table to a store that is not the "
+        "durable database."
+    )
+
+    ungated = [
+        f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
+        f"(in {seam.function or '<module level>'})"
+        for seam in seams
+        if seam.durable_database_source and seam.owned_by_revision_chain
+        and not seam.autocreate_gated
+    ]
+    assert ungated == [], (
+        "these durable DDL statements run outside the STORE_SCHEMA_AUTOCREATE "
+        "test-fixture opt-in, so production issues schema statements against a "
+        "migration-owned table:\n  " + "\n  ".join(ungated)
+    )
+
+    # Statements already recorded as debt are excluded here and pinned by
+    # `test_the_attached_object_ddl_debt_is_exactly_what_is_recorded` instead.
+    # A *new* attached-object statement is in neither place and fails here.
+    recorded = dict(RECORDED_ATTACHED_DDL_DEBT)
+    unprobed: list[str] = []
+    for seam in seams:
+        if not (seam.durable_database_source and seam.owned_by_revision_chain):
+            continue
+        if seam.verb == "create table" or seam.existence_probed:
+            continue
+        key = (seam.path, seam.verb, seam.table)
+        if seam.autocreate_gated and recorded.get(key, 0) > 0:
+            recorded[key] -= 1
+            continue
+        unprobed.append(
+            f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
+            f"(in {seam.function or '<module level>'})"
+        )
+    assert unprobed == [], (
+        "these statements reshape a durable table from the runtime without first "
+        "skipping the group when the table already exists:\n  "
+        + "\n  ".join(unprobed)
+        + "\nIf this is a *new* seam, give it the probe. If it belongs to the debt "
+        "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598 owns, that Issue is "
+        "where it retires — do not widen RECORDED_ATTACHED_DDL_DEBT to make this pass. "
+        "Idempotence must come from the `to_regclass` probe `app/db/db.py` uses, "
+        "not from `IF NOT EXISTS`: `CREATE TABLE IF NOT EXISTS` no-ops silently "
+        "against an older shape while the ALTERs after it still run against it. "
+        "This is the defect MVR-05A2 (#4576) closed in `app/stores/pg.py`, whose "
+        "three `ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS` statements "
+        "previously ran unconditionally in the autocreate branch."
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Every adopted surface has exactly one production DDL owner
 # --------------------------------------------------------------------------- #
+
+
+def test_the_attached_object_ddl_debt_is_exactly_what_is_recorded() -> None:
+    """The recorded attached-object DDL debt is a measurement, not a waiver.
+
+    MVR-05A2 widened this scan's vocabulary past table-level DDL, because an
+    index or trigger dropped and recreated against a migration-owned table is
+    the same drop-and-re-add mechanism MVR-05A1 (#4560) removed from
+    `objects_pkey`. Forty-five such statements across fourteen modules already
+    run without an existence probe, including six
+    `DROP TRIGGER` / `CREATE TRIGGER` pairs —
+    `app/heimdal/raw_read_gate.py`'s own docstring records that migration
+    `f1c7e2a9b4d6` installs an identical trigger, so a migration owns the object
+    and the runtime recreates it.
+
+    MVR-05A2's AC-5 asks for the existence probe in exactly one place
+    (`app/stores/pg.py`, delivered), so repairing the rest belongs to
+    https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598, which owns both
+    the repair and shrinking this mapping as statements retire. Pinning the
+    count is what keeps it evidence: a statement that goes away must come off
+    the pin, and a statement that appears is in neither the pin nor the
+    exclusion and fails the guard above.
+
+    **This mapping is not a clean bill of health.** Reading it as one is the
+    mistake it exists to prevent.
+    """
+    observed = observed_attached_ddl_debt(discover_runtime_ddl_seams(discover_durable_tables()))
+    assert dict(observed) == dict(RECORDED_ATTACHED_DDL_DEBT), (
+        "the recorded attached-object DDL debt no longer matches the tree.\n"
+        f"  gone:  {sorted(set(RECORDED_ATTACHED_DDL_DEBT) - set(observed))}\n"
+        f"  new:   {sorted(set(observed) - set(RECORDED_ATTACHED_DDL_DEBT))}\n"
+        f"  moved: {sorted(k for k in set(observed) & set(RECORDED_ATTACHED_DDL_DEBT) if observed[k] != RECORDED_ATTACHED_DDL_DEBT[k])}\n"
+        "If a statement retired, lower its count here — that is #4598 making progress. "
+        "If one appeared, it needs the existence probe, not a bigger pin."
+    )
 
 
 def test_no_durable_ddl_has_two_owners() -> None:
