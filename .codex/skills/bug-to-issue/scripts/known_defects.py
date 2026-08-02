@@ -162,6 +162,7 @@ class KnownDefect:
     workaround: str
     trigger: str
     defect_key: str | None = None
+    defect_id_override: str | None = None
 
     @classmethod
     def validated(
@@ -178,6 +179,7 @@ class KnownDefect:
         workaround: str,
         trigger: str,
         defect_key: str | None = None,
+        defect_id_override: str | None = None,
     ) -> "KnownDefect":
         repo = _validate_repo(repo)
         if source_pr <= 0:
@@ -217,6 +219,13 @@ class KnownDefect:
             if defect_key is not None
             else None
         )
+        normalized_override = None
+        if defect_id_override is not None:
+            normalized_override = " ".join(defect_id_override.split())
+            if not ENTRY_ID_RE.fullmatch(normalized_override):
+                raise KnownDefectsError(
+                    "defect_id_override must have form KD-<12 uppercase hex>"
+                )
         return cls(
             repo=repo,
             source_pr=source_pr,
@@ -229,10 +238,13 @@ class KnownDefect:
             workaround=_require_text("workaround", workaround),
             trigger=_require_text("trigger", trigger),
             defect_key=normalized_key,
+            defect_id_override=normalized_override,
         )
 
     @property
     def defect_id(self) -> str:
+        if self.defect_id_override is not None:
+            return self.defect_id_override
         if self.defect_key is not None:
             identity = {
                 "repo": self.repo.casefold(),
@@ -1877,6 +1889,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--defect-key",
         help="optional stable dedupe key when evidence wording or source SHA may evolve",
     )
+    intake.add_argument(
+        "--defect-id",
+        help=(
+            "optional explicit KD-<12 uppercase hex> id to re-intake an existing "
+            "entry (e.g. from a prior receipt or `lookup`) without re-deriving it "
+            "from --defect-key or source identity; skips derivation entirely"
+        ),
+    )
     intake.add_argument("--registry-issue", type=int)
 
     lookup = subparsers.add_parser("lookup", help="look up one deterministic defect id")
@@ -1930,6 +1950,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     workaround=args.workaround,
                     trigger=args.trigger,
                     defect_key=args.defect_key,
+                    defect_id_override=args.defect_id,
                 )
                 receipt = intake_defect(
                     defect,
