@@ -91,6 +91,11 @@ class _FakeCursor:
         if normalized.startswith("select to_regclass('public.file_state') is not null"):
             self._fetchone = (True, ["vault_binding_id", "path"], [])
             return
+        # MVR-05A1 (#4560): and the migrated `objects` key, for the same
+        # reason -- every `objects` upsert below is binding-scoped.
+        if normalized.startswith("select to_regclass('public.objects') is not null"):
+            self._fetchone = (True, True, ["vault_binding_id", "id"])
+            return
 
         if normalized.startswith("select to_regclass(%s) as oid"):
             self._fetchone = (params[0],)
@@ -108,8 +113,11 @@ class _FakeCursor:
             self._fetchone = (row["payload"],) if row else None
             return
 
-        if normalized.startswith("insert into objects(id, kind, payload, path)"):
-            object_id, kind, payload_json, path = params
+        # MVR-05A1 (#4560): the `objects` upserts lead with vault_binding_id too,
+        # because `ON CONFLICT (id)` / `(uuid)` no longer match a unique index
+        # once the key is `(vault_binding_id, id)`.
+        if normalized.startswith("insert into objects(vault_binding_id, id, kind, payload, path)"):
+            _binding_id, object_id, kind, payload_json, path = params
             self.conn.objects[object_id] = {
                 "id": object_id,
                 "kind": kind,
@@ -118,8 +126,10 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
-        if normalized.startswith("insert into objects(uuid, kind, payload, path)"):
-            object_id, kind, payload_json, path = params
+        if normalized.startswith(
+            "insert into objects(vault_binding_id, uuid, kind, payload, path)"
+        ):
+            _binding_id, object_id, kind, payload_json, path = params
             self.conn.objects[object_id] = {
                 "id": object_id,
                 "kind": kind,

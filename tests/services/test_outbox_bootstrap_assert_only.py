@@ -78,15 +78,6 @@ def scratch_db(scratch_db_factory, monkeypatch: pytest.MonkeyPatch):
     return dsn
 
 
-def _run_legacy_sql_runner(dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from scripts import run_migration
-
-    monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.delenv("DB_DSN", raising=False)
-    monkeypatch.chdir(REPO_ROOT)
-    run_migration.main()
-
-
 def _outbox_snapshot(dsn: str) -> tuple[list[tuple], list[tuple]]:
     with psycopg.connect(dsn) as conn:
         columns = conn.execute(
@@ -157,14 +148,23 @@ def test_migrated_schema_passes_assert_only(scratch_db, monkeypatch: pytest.Monk
     outbox_module.bootstrap()  # must not raise
 
 
-def test_legacy_sql_runner_cannot_create_or_mutate_outbox_before_assert_only_startup(
+def test_startup_never_repairs_outbox_schema_on_an_unmigrated_database(
     scratch_db_factory, scratch_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The production startup path fails loud after legacy SQL and never repairs schema."""
+    """The production startup path fails loud and never repairs schema.
+
+    This used to run `scripts/run_migration.py` first, to prove the legacy SQL
+    runner could not create the outbox before assert-only startup. MVR-05A1
+    (#4560) deleted that script along with the bootstrap SQL it replayed — there
+    is no runtime DDL path left for it to beat — so the test now starts from a
+    virgin database directly. The subject is unchanged and is the part that still
+    exists: `bootstrap()` must raise with a "run migrations" hint and must leave
+    the schema exactly as it found it, whether the table is absent or present in
+    an incompatible shape.
+    """
     from app.services import outbox as outbox_module
 
     legacy_dsn = scratch_db_factory()
-    _run_legacy_sql_runner(legacy_dsn, monkeypatch)
     monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
 
     with pytest.raises(OutboxSchemaMissingError, match="alembic upgrade head"):

@@ -421,9 +421,21 @@ def test_decisions_producers_reject_additional_legacy_foreign_key(
     scratch_dsn: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A canonical FK plus any extra legacy FK is not migration-complete."""
+    """A canonical FK plus any extra legacy FK is not migration-complete.
+
+    Since MVR-05A1 (#4560) rekeyed `objects` to `(vault_binding_id, id)`, `id`
+    alone is no longer a unique key, so this FK can no longer be created against
+    the shipped schema at all — and the rekey itself refuses to run on a database
+    that still has one, so the state simulated here is now unreachable through
+    the migration path. The single-column unique index below exists only to make
+    the fixture constructible, keeping the decisions-producer staleness guard
+    (the actual subject of this test) covered as defence in depth.
+    """
     _upgrade("head")
     with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "CREATE UNIQUE INDEX objects_id_legacy_fixture_idx ON public.objects(id)"
+        )
         conn.execute(
             "ALTER TABLE decisions ADD CONSTRAINT decisions_object_id_legacy_extra_fk "
             "FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE SET NULL"

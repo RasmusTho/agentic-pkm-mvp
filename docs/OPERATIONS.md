@@ -57,11 +57,49 @@ payloads nor performs archive, retention, or storage lifecycle work.
   `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
 
+### Forward-only migration floor: `objects` binding key (MVR-05A1, #4560)
+
+Alembic revision `d1e8a0c5f37b` takes ownership of `objects` and `agent_memories`, changes the
+`objects` primary key from `(id)` to `(vault_binding_id, id)`, and scopes `objects_uuid_idx` to
+`UNIQUE (vault_binding_id, uuid)`. The same change **deletes** `app/db/migrations_obsidian.sql` and
+`scripts/run_migration.py`. Operator consequences:
+
+- **A stale database is now refused at startup, not silently reshaped.** The vault-sync seam runs
+  `app/db/db.py::assert_objects_schema` alongside the existing `file_state` preflight, so a database
+  that never ran `alembic upgrade head` fails with a message naming that command instead of an
+  opaque `UndefinedColumn` part-way through a watcher tick. Before #4560 the runtime bootstrap
+  reshaped `objects` on every process boot, which is why the stale state used to be survivable.
+- **Migration authority is unchanged and is now the only authority.** `scripts/run_migrations.sh`
+  (`alembic upgrade head`) applies it, and the compose `migrate` one-shot still gates every runtime
+  container. What changed is that application processes no longer issue any schema statements at
+  startup: before #4560 the first `conn_rw()` of every process replayed the bootstrap SQL, which
+  dropped and re-added `objects_pkey` unconditionally. Existing rows in both tables are adopted in
+  place and attributed to the `legacy-compatibility-binding` sentinel; nothing is recreated, moved,
+  or dropped.
+- **The migration refuses rather than repairs three states.** It stops with an explicit hint if an
+  inbound foreign key still references `objects` (run the #3510 cutover first), if the database
+  holds duplicate `(vault_binding_id, uuid)` rows (reconcile them first — `app/objects/identity.py`
+  already refuses to resolve a duplicated `objects.uuid`), or if a single-column unique index on
+  `uuid` or on `id` survives under some other name (drop it with `DROP INDEX`, or
+  `ALTER TABLE public.objects DROP CONSTRAINT` if it backs a constraint — either one re-imposes the
+  exact constraint the rekey removes). All three refusals are atomic and leave every row untouched.
+- **The revision is forward-only** per `docs/RELEASE_CHANNELS/README.md :: Rollback posture`. Rolling
+  the `stable` ref back to a pre-#4560 image has two possible outcomes, both measured:
+  - on a **single-binding** database the old image starts and its startup bootstrap **silently
+    restores `PRIMARY KEY (id)`**. Rows survive, and `objects_uuid_idx` stays binding-scoped because
+    `CREATE UNIQUE INDEX IF NOT EXISTS` matches on name — which means the old image's
+    `on conflict (uuid)` upsert fallback raises `InvalidColumnReference`. Its primary
+    `on conflict (id)` path works again once the key is restored, so vault-sync ingest continues.
+    Re-run `alembic upgrade head` on a post-#4560 image before creating a second vault binding.
+  - on a database that already holds **two bindings for one artifact UUID** the old image cannot
+    start: `conn_rw()` raises `UniqueViolation: could not create unique index "objects_pkey"` and
+    the schema is left untouched. Roll forward rather than back.
+
 ### Forward-only migration floor: `file_state` binding key (MVR-05A0, #4543)
 
 Alembic revision `c7f4b1a83d29` takes ownership of the vault-sync `file_state` table (previously
-created at runtime by `app/db/migrations_obsidian.sql`) and changes its primary key from `path` to
-`(vault_binding_id, path)`. Operator consequences:
+created at runtime by the legacy bootstrap SQL, deleted by #4560) and changes its primary key from
+`path` to `(vault_binding_id, path)`. Operator consequences:
 
 - **Migration authority is unchanged.** `scripts/run_migrations.sh` (`alembic upgrade head`) applies
   it. Existing rows are adopted in place and attributed to the `legacy-compatibility-binding`
