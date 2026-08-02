@@ -55,8 +55,10 @@ from unittest import mock
 import pytest
 
 from tests.architecture.durable_table_classification import (
+    RECORDED_ATTACHED_DDL_DEBT,
     discover_durable_tables,
     discover_runtime_ddl_seams,
+    observed_attached_ddl_debt,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -532,20 +534,32 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
         "migration-owned table:\n  " + "\n  ".join(ungated)
     )
 
-    unprobed = [
-        f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
-        f"(in {seam.function or '<module level>'})"
-        for seam in seams
-        if seam.durable_database_source
-        and seam.owned_by_revision_chain
-        and seam.verb != "create table"
-        and not seam.existence_probed
-    ]
+    # Statements already recorded as debt are excluded here and pinned by
+    # `test_the_attached_object_ddl_debt_is_exactly_what_is_recorded` instead.
+    # A *new* attached-object statement is in neither place and fails here.
+    recorded = dict(RECORDED_ATTACHED_DDL_DEBT)
+    unprobed: list[str] = []
+    for seam in seams:
+        if not (seam.durable_database_source and seam.owned_by_revision_chain):
+            continue
+        if seam.verb == "create table" or seam.existence_probed:
+            continue
+        key = (seam.path, seam.verb, seam.table)
+        if seam.autocreate_gated and recorded.get(key, 0) > 0:
+            recorded[key] -= 1
+            continue
+        unprobed.append(
+            f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
+            f"(in {seam.function or '<module level>'})"
+        )
     assert unprobed == [], (
         "these statements reshape a durable table from the runtime without first "
         "skipping the group when the table already exists:\n  "
         + "\n  ".join(unprobed)
-        + "\nIdempotence must come from the `to_regclass` probe `app/db/db.py` uses, "
+        + "\nIf this is a *new* seam, give it the probe. If it belongs to the debt "
+        "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598 owns, that Issue is "
+        "where it retires — do not widen RECORDED_ATTACHED_DDL_DEBT to make this pass. "
+        "Idempotence must come from the `to_regclass` probe `app/db/db.py` uses, "
         "not from `IF NOT EXISTS`: `CREATE TABLE IF NOT EXISTS` no-ops silently "
         "against an older shape while the ALTERs after it still run against it. "
         "This is the defect MVR-05A2 (#4576) closed in `app/stores/pg.py`, whose "
@@ -557,6 +571,41 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
 # --------------------------------------------------------------------------- #
 # Every adopted surface has exactly one production DDL owner
 # --------------------------------------------------------------------------- #
+
+
+def test_the_attached_object_ddl_debt_is_exactly_what_is_recorded() -> None:
+    """The recorded attached-object DDL debt is a measurement, not a waiver.
+
+    MVR-05A2 widened this scan's vocabulary past table-level DDL, because an
+    index or trigger dropped and recreated against a migration-owned table is
+    the same drop-and-re-add mechanism MVR-05A1 (#4560) removed from
+    `objects_pkey`. Forty-five such statements across fourteen modules already
+    run without an existence probe, including six
+    `DROP TRIGGER` / `CREATE TRIGGER` pairs —
+    `app/heimdal/raw_read_gate.py`'s own docstring records that migration
+    `f1c7e2a9b4d6` installs an identical trigger, so a migration owns the object
+    and the runtime recreates it.
+
+    MVR-05A2's AC-5 asks for the existence probe in exactly one place
+    (`app/stores/pg.py`, delivered), so repairing the rest belongs to
+    https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598, which owns both
+    the repair and shrinking this mapping as statements retire. Pinning the
+    count is what keeps it evidence: a statement that goes away must come off
+    the pin, and a statement that appears is in neither the pin nor the
+    exclusion and fails the guard above.
+
+    **This mapping is not a clean bill of health.** Reading it as one is the
+    mistake it exists to prevent.
+    """
+    observed = observed_attached_ddl_debt(discover_runtime_ddl_seams(discover_durable_tables()))
+    assert dict(observed) == dict(RECORDED_ATTACHED_DDL_DEBT), (
+        "the recorded attached-object DDL debt no longer matches the tree.\n"
+        f"  gone:  {sorted(set(RECORDED_ATTACHED_DDL_DEBT) - set(observed))}\n"
+        f"  new:   {sorted(set(observed) - set(RECORDED_ATTACHED_DDL_DEBT))}\n"
+        f"  moved: {sorted(k for k in set(observed) & set(RECORDED_ATTACHED_DDL_DEBT) if observed[k] != RECORDED_ATTACHED_DDL_DEBT[k])}\n"
+        "If a statement retired, lower its count here — that is #4598 making progress. "
+        "If one appeared, it needs the existence probe, not a bigger pin."
+    )
 
 
 def test_no_durable_ddl_has_two_owners() -> None:
