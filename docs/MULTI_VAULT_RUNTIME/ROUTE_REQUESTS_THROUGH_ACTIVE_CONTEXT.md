@@ -158,10 +158,13 @@ not background lifecycles.
   independently safe `global` work. The worker releases the global fence after the stable snapshot
   but holds the shared lease through external dispatch, acknowledgement, and receipt; revocation,
   relocation, or removal therefore waits for an already-authorized effect or blocks it before effect.
-  Before 05A enables that dispatch, it migrates every already-enabled GOV revocation producer to
-  acquire the host-global ownership fence and the same binding's exclusive effect lease before
-  advancing the authorization epoch. Removal and relocation remain capability-not-ready, but an
-  enabled revocation can no longer cross the worker validation-to-dispatch window.
+  Before 05A enables that dispatch, it seals the GOV revocation seam: any enabled production path
+  must acquire the host-global ownership fence and the same binding's exclusive effect lease before
+  advancing the authorization epoch, and the enabled production set is closed by inventory. That set
+  is empty at 05A — the one production caller of the binding authorizer seeds binding facts and never
+  revokes — so the seal guards against the first producer landing unfenced rather than migrating
+  producers that already exist. Removal and relocation remain capability-not-ready, and no enabled
+  revocation can cross the worker validation-to-dispatch window.
   MVR-06 owns multi-binding dispatch and governed quarantine
   recovery; until it lands no ambiguous row can execute against an env-selected vault.
 - While every old DB/outbox producer is fenced and before any upgraded producer is enabled, classify
@@ -257,8 +260,9 @@ acceptance criteria prefixed with its ID:
 1. **MVR-05A — binding-keyed persistence cutover:** projection/outbox schema and backfill,
    idempotency classification, all-process mixed-version fence, minimum-runtime floor, duplicate-
    binding projection isolation, and an immediately shipped scalar-worker poll/ack compatibility
-   gate holding the per-binding shared effect lease through dispatch/ack/receipt plus migration of
-   every enabled GOV-revocation producer to the matching exclusive lease before dispatch activates,
+   gate holding the per-binding shared effect lease through dispatch/ack/receipt plus a sealed
+   GOV-revocation seam requiring the matching exclusive lease before dispatch activates, with the
+   enabled production producer set closed by inventory and empty on delivery,
    with a non-skippable
    real-PostgreSQL CI receipt and DB/deployment/release owner-doc
    writebacks.
@@ -424,11 +428,16 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   It holds the binding shared-effect lease from final validation through dispatch, acknowledgement,
   and receipt, so concurrent revocation/removal/relocation cannot complete across an effect window.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch`
-- [ ] **MVR-05A:** Before vault-bound worker dispatch activates, every enabled GOV-revocation
-  production path takes the ownership fence and matching exclusive binding lease before advancing
-  authorization state; a revocation after worker validation either blocks dispatch or waits for the
-  authorized dispatch, acknowledgement, and receipt to finish. Removal/relocation stay dormant.
+- [ ] **MVR-05A:** Before vault-bound worker dispatch activates, the GOV-revocation seam is sealed:
+  no enabled production path may advance binding authorization state without first taking the
+  host-global ownership fence and the matching exclusive binding lease. The enabled production
+  producer set is closed by a checked-in inventory and is **empty on delivery** — production seeds
+  binding facts but never revokes — so this criterion is discharged by proving that set empty and by
+  the gate failing when a producer is added without the fence, not by migrating existing producers.
+  A revocation that does reach the seam after worker validation either blocks dispatch or waits for
+  the authorized dispatch, acknowledgement, and receipt to finish. Removal/relocation stay dormant.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_revocation_cannot_cross_worker_dispatch_effect_window`
+  - Verify: `tests/architecture/test_multi_vault_projection_inventory.py::test_enabled_gov_revocation_producers_are_fenced_or_absent`
 - [ ] **MVR-05C:** Production capture/governed-write paths require one explicit authorized target,
   reject an otherwise registered/owned/GOV-authorized target outside the immutable selected binding
   set (and any batch that is not a subset), and record vault/context provenance in their receipt.
