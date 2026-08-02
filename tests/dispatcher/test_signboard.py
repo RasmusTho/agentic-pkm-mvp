@@ -416,6 +416,58 @@ def test_validate_detects_stale_card_for_missing_task(tmp_env, store, tmp_path: 
     assert any(finding["kind"] == "stale_card" for finding in result["findings"])
 
 
+# ---------------------------------------------------------------------------
+# #4324: same-column content drift (stale title/priority/claim/PR metadata)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_signboard_detects_same_column_content_drift(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """A card whose column is still correct but whose generated content has
+    drifted from the live task (title, priority, claim, or linked PR) must
+    still fail validation. `validate_signboard` previously only compared
+    column placement, so a same-column stale card passed silently."""
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    card = next((board / "Ready").glob(f"{ready.task_id}--*.md"))
+
+    # Task changes without a re-export: title, priority, claim, and linked PR
+    # drift while status/column stay "ready"/"Ready".
+    ready.title = "Test: implement feature A (renamed)"
+    ready.priority = "high" if ready.priority != "high" else "med"
+    ready.claimed_by = "agent-drift"
+    ready.linked_pr = "9999"
+    store.upsert_task(ready)
+
+    result = validate_signboard(store, board)
+
+    drift_findings = [f for f in result["findings"] if f["kind"] == "content_drift"]
+    assert len(drift_findings) == 1
+    assert drift_findings[0]["path"] == str(card.relative_to(board))
+    assert not any(f["kind"] == "stale_card" for f in result["findings"])
+    assert not any(f["kind"] == "column_status_mismatch" for f in result["findings"])
+
+
+def test_validate_signboard_reports_repair_for_content_drift(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """Content-drift findings must name the normal export repair path, the
+    same as the existing stale-card repair guidance (#4198)."""
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+
+    ready.claimed_by = "agent-drift"
+    store.upsert_task(ready)
+
+    result = validate_signboard(store, board)
+
+    assert any(f["kind"] == "content_drift" for f in result["findings"])
+    assert "export-signboard" in result["repair"]
+
+
 def test_validate_detects_malformed_generated_card(tmp_env, store, tmp_path: Path) -> None:
     seed_tasks(store)
     board = tmp_path / "board"

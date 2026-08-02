@@ -473,6 +473,23 @@ def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
                     f"{column_for_status(task.status)!r}"
                 ),
             })
+        else:
+            # #4324: the column can still be correct while the generated
+            # card's own content (title, priority, claim, or linked PR) has
+            # drifted from the live task. A same-column comparison is the gap
+            # left open in PR #3487's review thread — `validate_signboard`
+            # only ever checked placement, so a same-column stale card passed
+            # silently.
+            drifted_fields = _content_drift_fields(frontmatter, task)
+            if drifted_fields:
+                findings.append({
+                    "kind": "content_drift",
+                    "path": relative_path,
+                    "detail": (
+                        f"task {task_id!r} column is unchanged but the card's "
+                        f"{', '.join(drifted_fields)} no longer match the dispatcher task"
+                    ),
+                })
 
     for task_id, paths in cards_by_task.items():
         if len(paths) > 1:
@@ -494,11 +511,51 @@ def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
         # Name the repair in the lint output itself. A finding an operator
         # cannot act on is the bug this replaces (#4198).
         result["repair"] = "python -m app.dispatcher export-signboard [path] --prune-absent"
+    elif any(finding["kind"] == "content_drift" for finding in findings):
+        # No cards are absent from the store, so a plain re-export (no
+        # --prune-absent) is the same normal export repair path (#4198).
+        result["repair"] = "python -m app.dispatcher export-signboard [path]"
     return result
 
 
-def _parse_generated_frontmatter(text: str) -> dict[str, str] | None:
-    """Parse the minimal generated-card schema without accepting loose YAML."""
+def _content_drift_fields(frontmatter: dict[str, Any], task: TaskRecord) -> list[str]:
+    """Return the human-readable names of fields where a same-column generated
+    card's frontmatter no longer matches its live dispatcher task.
+
+    Only fields the exporter itself renders are compared (see ``_render_task``):
+    title, priority, claim ownership, and linked PR. Status/column drift is
+    already caught as ``stale_card`` before this runs.
+    """
+    expected_labels: list[str] = []
+    if task.sync_state:
+        raw_labels = task.sync_state.get("labels") or []
+        if isinstance(raw_labels, list):
+            expected_labels = [str(label) for label in raw_labels]
+
+    drift: list[str] = []
+    if frontmatter.get("title") != task.title:
+        drift.append("title")
+    if frontmatter.get("priority") != task.priority:
+        drift.append("priority")
+    if (frontmatter.get("claimed_by") or None) != (task.claimed_by or None):
+        drift.append("claim metadata")
+    if (frontmatter.get("linked_pr") or None) != (task.linked_pr or None):
+        drift.append("linked PR data")
+    if (frontmatter.get("labels") or []) != expected_labels:
+        drift.append("labels")
+    return drift
+
+
+def _parse_generated_frontmatter(text: str) -> dict[str, Any] | None:
+    """Parse the minimal generated-card schema without accepting loose YAML.
+
+    ``title``, ``priority``, ``claimed_by``, ``linked_pr``, and ``labels`` are
+    parsed leniently (defaulting to ``None``/absent when missing or of the
+    wrong shape) because they exist only to support the #4324 same-column
+    content-drift comparison; they are not part of the required minimal
+    schema validated above and must never turn an otherwise-valid card into a
+    ``malformed_generated_card`` finding.
+    """
     if not text.startswith("---\n"):
         return None
     try:
@@ -525,7 +582,22 @@ def _parse_generated_frontmatter(text: str) -> dict[str, str] | None:
         canonical = canonical_status(status)
     except ValueError:
         return None
-    return {"id": task_id, "status": canonical, "column": column}
+
+    title = data.get("title")
+    priority = data.get("priority")
+    claimed_by = data.get("claimed_by")
+    linked_pr = data.get("linked_pr")
+    labels = data.get("labels")
+    return {
+        "id": task_id,
+        "status": canonical,
+        "column": column,
+        "title": title if isinstance(title, str) else None,
+        "priority": priority if isinstance(priority, str) else None,
+        "claimed_by": claimed_by if isinstance(claimed_by, str) else None,
+        "linked_pr": linked_pr if isinstance(linked_pr, str) else None,
+        "labels": [str(item) for item in labels] if isinstance(labels, list) else None,
+    }
 
 
 def _task_filename(task: TaskRecord) -> str:
