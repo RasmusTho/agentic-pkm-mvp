@@ -177,6 +177,57 @@ def test_raw_frames_refuse_a_destination_that_is_not_host_local(
     assert screen_derivation.resolve_local_vision_endpoint() == "http://ollama:11434"
 
 
+def test_local_vision_refuses_to_follow_a_redirect_off_the_validated_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A validated destination must stay validated for every hop.
+
+    A 3xx from the local endpoint would otherwise make `requests` resend the
+    frame body to a `Location` the endpoint validator never saw -- the same
+    escape the proxy guard closes, one hop later. The request must not follow
+    it, and the refusal must surface as an egress refusal rather than be
+    laundered into a generic "model unavailable".
+    """
+
+    class _Redirect:
+        is_redirect = True
+        is_permanent_redirect = False
+        headers = {"Location": "https://vision.example.com/api/chat"}
+
+        def raise_for_status(self) -> None:  # pragma: no cover - never reached
+            raise AssertionError("redirect must be refused before raise_for_status")
+
+        def json(self) -> Any:  # pragma: no cover - never reached
+            raise AssertionError("redirect must be refused before the body is read")
+
+    sent: List[Any] = []
+
+    class _Session:
+        trust_env = True
+
+        def post(self, url: str, **kwargs: Any) -> Any:
+            sent.append(kwargs)
+            assert kwargs.get("allow_redirects") is False, "redirects must not be followed"
+            return _Redirect()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(screen_derivation, "local_vision_session", lambda: _Session())
+    for variable in ("OLLAMA_HOST", "OLLAMA_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+
+    with pytest.raises(screen_derivation.RawEgressRefusedError, match="redirect"):
+        derive_activity_observations(
+            [land_frame(frame="frame-redirect", observed_at="2026-07-11T10:20:00Z")],
+            episode_id="screen-session-redirect",
+            key=RAW_STORE_KEY,
+        )
+    assert len(sent) == 1, "exactly one request should have been attempted"
+    assert count_observations() == 0
+
+
 def test_local_vision_request_ignores_ambient_proxy_configuration() -> None:
     """A validated loopback address must not be re-routed by an ambient proxy.
 

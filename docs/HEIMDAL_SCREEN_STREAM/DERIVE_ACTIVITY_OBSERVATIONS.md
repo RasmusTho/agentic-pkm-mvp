@@ -145,9 +145,17 @@ rejected).
 
 The derivation stage is a stateless tick over durable inputs (the raw store) and durable outputs (the
 observation log): a crash mid-tick loses no published observation (idempotency-keyed publish dedups on
-replay) and no raw frame (frames stay in the buffer until derived or aged out). An **open span**
-(activity still ongoing at crash) is reconstructed on the next tick from the buffered frames — nothing
-user-facing is lost. This is why frame discard is gated on successful publish, not on the tick starting.
+replay) and no raw frame (frames stay in the buffer until derived or aged out). This is why frame
+discard is gated on successful publish, not on the tick starting.
+
+**As delivered, a batch has no open span**: `derive_activity_observations` flushes its final span
+before returning, and `observation_id` is derived from the covered frames' content identities, so a
+re-derive of the *same* grouping dedups exactly. The consequence to know before building the tick
+driver (SCREEN-06): an activity still ongoing at the batch boundary is published as a closed span, and
+a later batch that groups those frames differently mints a different identity over overlapping frames
+rather than extending the earlier span. Carrying an open span across ticks — the reconstruction this
+section originally described — needs durable cross-tick span state and belongs with the tick driver,
+not here. SCREEN-04's segmenter can merge adjacent spans; that is the cheap direction.
 
 ## Related Docs
 

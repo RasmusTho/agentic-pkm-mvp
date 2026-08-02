@@ -528,6 +528,10 @@ def _invoke_local_vision(
             endpoint,
             {"model": request.model, "messages": [message], "stream": False},
         )
+    except RawEgressRefusedError:
+        # An egress refusal is not a model outage and must never be laundered
+        # into one: it has to reach the operator as what it is.
+        raise
     except Exception as exc:
         raise LocalVisionUnavailableError(
             f"Local vision model {request.model!r} failed on the host: {exc}. Screen derivation "
@@ -555,14 +559,30 @@ def local_vision_session() -> Any:
 
 
 def _post_local_vision(endpoint: str, body: Mapping[str, Any]) -> Any:
-    """POST one already-validated host-local vision request."""
+    """POST one already-validated host-local vision request.
+
+    Every hop between this call and the socket must stay inside the validated
+    destination, so redirects are refused rather than followed: a 3xx from the
+    local endpoint would otherwise resend the frame body to a ``Location`` that
+    :func:`resolve_local_vision_endpoint` never saw -- the same escape the
+    proxy guard closes, one hop later. A local model has no legitimate reason
+    to redirect ``/api/chat`` elsewhere, so this is fail-loud, not a downgrade.
+    """
     session = local_vision_session()
     try:
         response = session.post(
             endpoint.rstrip("/") + "/api/chat",
             json=dict(body),
             timeout=float(os.getenv("HEIMDAL_SCREEN_VISION_TIMEOUT", "120")),
+            allow_redirects=False,
         )
+        if response.is_redirect or response.is_permanent_redirect:
+            raise RawEgressRefusedError(
+                f"Refusing to follow a redirect from the local vision endpoint "
+                f"{endpoint!r} to {response.headers.get('Location')!r}: the redirect target "
+                "was never validated as host-local, and following it would resend the raw "
+                "frame off the validated destination (HEIM-12)."
+            )
         response.raise_for_status()
         return response.json()["message"]["content"]
     finally:
@@ -639,6 +659,16 @@ def _derive_frame(
         dimensions=dict(dimensions),
     )
     activity = _normalize_activity(_invoke_local_vision(request, vision_runner=vision_runner))
+    # The derived goal is this stage's own contribution to the segmenter axes.
+    # It is held to the same one-writer-per-dimension rule as the providers:
+    # overwriting a provider's `goal` here would make the stage a silent third
+    # writer and could merge away a boundary the provider drew.
+    if "goal" in dimensions:
+        raise ContextDimensionConflictError(
+            "A context provider claims the 'goal' dimension, which the derivation stage itself "
+            "contributes from the local model. Rename the provider's axis: the later write would "
+            "silently move a span boundary."
+        )
     dimensions["goal"] = activity.goal
     return activity, dimensions, facts, provider_mentions, gated.receipt.content_identity
 

@@ -135,6 +135,30 @@ def test_two_providers_cannot_claim_one_segmenter_dimension() -> None:
             vision_runner=stub_vision_runner(),
             key=RAW_STORE_KEY,
         )
+    unregister_context_provider("shadow")
+
+
+def test_the_stage_is_not_an_unguarded_third_writer_of_the_goal_axis() -> None:
+    """The stage's own `goal` contribution obeys the one-writer rule too.
+
+    The derived goal is a segmenter axis like any other. If a provider claims
+    `goal`, the stage overwriting it would silently move a span boundary --
+    the same defect the provider-vs-provider guard exists to prevent, with the
+    stage as the unguarded writer.
+    """
+
+    def goal_provider(context: FrameContext) -> ContextContribution:
+        return ContextContribution(provider="planner", dimensions={"goal": "provider goal"})
+
+    register_context_provider("planner", goal_provider)
+    frame = land_frame(frame="providers-goal-conflict", observed_at="2026-07-11T13:04:00Z")
+    with pytest.raises(ContextDimensionConflictError, match="goal"):
+        derive_activity_observations(
+            [frame],
+            episode_id="screen-session-providers",
+            vision_runner=stub_vision_runner(),
+            key=RAW_STORE_KEY,
+        )
 
 
 def test_frontmost_app_provider_supplies_the_segmenter_dimensions() -> None:
