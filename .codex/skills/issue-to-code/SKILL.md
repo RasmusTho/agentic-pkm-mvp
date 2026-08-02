@@ -34,8 +34,14 @@ insufficient for the case in front of you.
 
 Before claiming an Issue or producing any implementation, answer the following. Stop as indicated if the answer is unresolvable.
 
-**System boundary** — classify the issue using
-`docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`:
+**System boundary** — classify the issue using the categories below, inlined from
+`docs/architecture/SBS_OPERATING_MODEL.md :: Classification Procedure` (the tie-breaker below is the
+one rule from that subsection this skill does not otherwise reproduce). The parent heading's other
+subsections are already covered elsewhere: `:: Builder System SBS Impact Guidance` and
+`:: Builder System Artifact And Workflow Map` are cited separately and conditionally below (SBS
+Impact / Builder System branch only). Read `:: Builder-Agent Authority Model` or
+`:: Builder Learning, Evaluation, And TCD Governance Loop` only when the categories below are
+genuinely insufficient to classify the case in front of you:
 
 - Product/Runtime System work changes product behavior, runtime code, user-facing semantics,
   Product SBS contracts, durable human knowledge authority, machine memory, retrieval, execution,

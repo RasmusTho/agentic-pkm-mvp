@@ -24,10 +24,28 @@ in one of two shapes, and the shape is the instruction.
 ## Why this is safe
 
 Reducing read scope removes a *read*, never a *check*. Every rule whose read is narrowed here is
-still enforced by a downstream pre-merge gate — CI (`pr-contract`, `Unit tests (not pg)`,
-`harness-selfverify`), `scripts/lint_skills_consistency.py`, `scripts/docs_guard.py`, the branch-truth
-gate, or the verification step in `verification-and-closure`. If a rule has no such gate, its read
-stays mandatory and unconditional.
+still enforced by a downstream pre-merge gate. What actually runs as an unconditional pre-merge check
+depends on the diff class:
+
+- On every PR, regardless of diff class: CI's `pr-contract` job, plus the `smoke` job's three
+  unconditional steps in `.github/workflows/ci-smoke.yaml` — `scripts/lint_skills_consistency.py`
+  ("Skills consistency lint"), "Doc integrity", and `tests/architecture/test_pr_hot_path_governance.py`
+  ("Hot path governance architecture test").
+- Only when the diff touches code paths matched by the `code` filter in `ci-smoke.yaml`: CI's
+  `Unit tests (not pg)` job (`pr-unit-tests-not-pg`); an instruction-file-only diff
+  (`.codex/**`, `AGENTS.md`, `CLAUDE.md`, `docs/**`) does not trip this filter, so this job's real
+  steps do not run against such a diff.
+- Only when the diff touches the release/promotion harness surface named in
+  `harness-selfverify.yml`'s `paths:` trigger (for example `tests/uat/**`, `app/ops/**`,
+  `.codex/skills/promote-to-test/**`) or via its cron/manual dispatch: the `harness-selfverify`
+  workflow.
+- Only via manual `workflow_dispatch` (`architecture-ci.yaml` has no `pull_request` trigger):
+  `scripts/docs_guard.py`.
+- The branch-truth gate and the verification step in `verification-and-closure` apply per their own
+  governing procedures.
+
+If a rule has no gate that actually fires for the diff class in front of you, its read stays
+mandatory and unconditional.
 
 The corollary is a maintenance rule: **before narrowing a citation, confirm the omitted content is
 either reproduced at the citation site or caught by an existing fail-loud gate.** Content that is
