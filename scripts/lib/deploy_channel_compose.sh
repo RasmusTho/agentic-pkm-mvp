@@ -318,19 +318,32 @@ deploy_channel_compose() {
     else
       unset SIGNBOARD_ROOT
     fi
-    # Deliver the override document through process substitution rather than
+    # Deliver the override document through a private temp file rather than
     # `-f -`/heredoc on the command's own stdin (fd 0): a bare `-f -` binds to
     # whatever the caller supplied on stdin, so any caller piping real data
     # into this wrapper (#4536, e.g. prepare_instance_state_deployment feeding
     # a host-produced inventory into the container) had that data silently
     # replaced by this override document instead of reaching the container.
-    # Process substitution opens the document on its own fd, leaving fd 0
-    # untouched so it still carries whatever the caller attached. The
-    # override document itself carries no value of its own (Compose forwards
-    # SIGNBOARD_ROOT from this governed shell); a temporary file is avoided
-    # only to preserve the existing in-memory-only delivery posture, not
-    # because this specific document could leak anything.
-    compose_args+=(-f <(_deploy_channel_signboard_override_document))
+    # Process substitution (`-f <(...)`) was tried first and works with a
+    # plain command, but `docker compose` invokes its compose plugin as a
+    # separate child process that inherits only stdin/stdout/stderr from the
+    # `docker` CLI (Go's os/exec does not forward arbitrary fds without
+    # ExtraFiles), so the plugin process cannot see a process-substitution fd
+    # opened by this shell — confirmed by CI's real docker: `open
+    # /dev/fd/63: no such file or directory`. The override document itself
+    # carries no value of its own and no operator path or secret (Compose
+    # forwards SIGNBOARD_ROOT from this governed shell via the bare `KEY:`
+    # form), so a private temp file does not weaken the runtime env ownership
+    # boundary the earlier in-memory-only comment protected.
+    local signboard_override_file
+    signboard_override_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-signboard-override.XXXXXX")"
+    # EXIT here is scoped to this `( ... )` subshell only (traps set inside a
+    # subshell do not leak into the parent shell), so this fires exactly once
+    # when the subshell running the actual Compose invocation exits, on every
+    # path including an early `exit 1` above or a failing Compose command.
+    trap 'rm -f -- "${signboard_override_file}"' EXIT
+    _deploy_channel_signboard_override_document > "${signboard_override_file}"
+    compose_args+=(-f "${signboard_override_file}")
 
     # Compose gives the caller shell precedence over --env-file values. Pin the
     # governed selectors here so a stale parent shell cannot swap the selected
@@ -398,9 +411,11 @@ deploy_channel_compose() {
       )
     fi
 
-    # fd 0 is left untouched above, so it still carries whatever the caller
-    # attached to this function call (e.g. a host-produced inventory piped
-    # into a `run -T ...` invocation).
+    # fd 0 is left untouched above (the override document is a temp file, not
+    # a stdin heredoc), so it still carries whatever the caller attached to
+    # this function call (e.g. a host-produced inventory piped into a
+    # `run -T ...` invocation). The temp file itself is removed by the EXIT
+    # trap set above once this command returns.
     "${compose_command[@]}"
   )
 }
