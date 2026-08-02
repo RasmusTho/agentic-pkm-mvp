@@ -1,7 +1,7 @@
 State: Design record (issue #4545, 2026-08-02; the bounded docs-only deliverable owner decision OD-3 option (a) committed to — `docs/architecture/evolution-graph.md :: Owner decisions`, epic #2778). Resolves the Layer-2 event-bus direction and the Heimdal/KAP-backbone question **at design level only**. It authorizes no build work, schedules nothing, and asserts nowhere that the Layer-2 substrate is built or scheduled; build work waits on the named substrate prerequisites below.
 Doc role: Architecture design record (Layer-2 platform substrate)
 Authority: Authoritative for the chosen event-bus direction and the KAP-backbone contract decision, as design. Subordinate to owner docs (`docs/ROADMAP.md`, `docs/STATUS.md`, `docs/ARCHITECTURE.md`) and to the owner-gated enactment channel: formal promotion of any mechanism to the Layer-2 substrate remains R-PROMOTE (`docs/HEIMDAL/OWNER_DECISIONS.md`) and lands via ADR/CES, not via this doc. Shipped-runtime truth stays with `docs/EVENTS.md` and the code it documents.
-Owner: Architecture / CES stewardship (Rasmus)
+Owner: Architecture / CES stewardship
 Temporal class: strategic
 Review cadence: event-driven
 
