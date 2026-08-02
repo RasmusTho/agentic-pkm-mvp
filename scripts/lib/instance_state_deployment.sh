@@ -4,6 +4,34 @@ _instance_state_deployment_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 source "${_instance_state_deployment_lib_dir}/instance_ownership_host_state.sh"
 unset _instance_state_deployment_lib_dir
 
+# Best-effort self-release of the host-global deployment lease this producer
+# claimed when it began. Called only on a failure path after that successful
+# claim and before a successful finalization, so an abandoned deployment does
+# not strand the lease, the public lease copy, and the channel restart fence
+# that block every later runtime consumer and deploy attempt. The release is
+# self-scoped: it only ever clears a lease whose recorded channel and
+# controller identity match the ones passed here, so it can never disturb a
+# lease still owned by another deployment. Its own failure is logged and
+# swallowed; the caller's original failure is always the reported outcome.
+_release_abandoned_instance_state_deployment_lease() {
+  local compose_function="$1"
+  local channel="$2"
+  local runtime_user="$3"
+  local controller_pid="$4"
+  local controller_start_token="$5"
+  if [ -z "${controller_start_token}" ]; then
+    return 0
+  fi
+  if ! "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+    python -m app.instance.runtime deployment-release \
+      --channel "${channel}" \
+      --host-global-root /app/instance-ownership \
+      --controller-pid "${controller_pid}" \
+      --controller-start-token "${controller_start_token}"; then
+    echo "warning: failed to release the abandoned host-global deployment lease" >&2
+  fi
+}
+
 # MVR-01B deploy/start producer. The caller supplies its channel-aware compose
 # function so the same fenced sequence is used by pinned deploys and local
 # full-system starts.
@@ -103,6 +131,9 @@ prepare_instance_state_deployment() {
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${inventory_host_path}"
     rm -f -- "${owner_inventory_host_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
 
@@ -117,6 +148,9 @@ prepare_instance_state_deployment() {
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${inventory_host_path}"
     rm -f -- "${owner_inventory_host_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
@@ -125,6 +159,9 @@ prepare_instance_state_deployment() {
   rm -f -- "${inventory_host_path}"
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${owner_inventory_host_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
 
@@ -136,6 +173,9 @@ prepare_instance_state_deployment() {
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${owner_inventory_host_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
 
@@ -151,6 +191,9 @@ prepare_instance_state_deployment() {
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${owner_inventory_host_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
@@ -158,6 +201,9 @@ prepare_instance_state_deployment() {
   inventory_rc=$?
   rm -f -- "${owner_inventory_host_path}"
   if [ "${inventory_rc}" -ne 0 ]; then
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
 
@@ -167,6 +213,9 @@ prepare_instance_state_deployment() {
   if [ -n "${MVR01C_ROLL_FORWARD_LEGACY_PATH:-}" ]; then
     if [ "${MVR01C_ROLL_FORWARD_LEGACY_PATH}" != "/app/scalar-rollback/app-local.md" ]; then
       echo "MVR-01C roll-forward source must be the governed scalar volume" >&2
+      _release_abandoned_instance_state_deployment_lease \
+        "${compose_function}" "${channel}" "${runtime_user}" \
+        "${controller_pid}" "${controller_start_token}"
       return 78
     fi
     "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
@@ -179,6 +228,9 @@ prepare_instance_state_deployment() {
         --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
     inventory_rc=$?
     if [ "${inventory_rc}" -ne 0 ]; then
+      _release_abandoned_instance_state_deployment_lease \
+        "${compose_function}" "${channel}" "${runtime_user}" \
+        "${controller_pid}" "${controller_start_token}"
       return "${inventory_rc}"
     fi
   fi
@@ -190,6 +242,9 @@ prepare_instance_state_deployment() {
   if [ -n "${MVR01C_ROLLBACK_VAULT_BINDING_ID:-}" ] || [ -n "${MVR01C_ROLLBACK_VAULT_ROOT:-}" ]; then
     if [ -z "${MVR01C_ROLLBACK_VAULT_BINDING_ID:-}" ] || [ -z "${MVR01C_ROLLBACK_VAULT_ROOT:-}" ]; then
       echo "MVR-01C cutover requires both rollback binding and root" >&2
+      _release_abandoned_instance_state_deployment_lease \
+        "${compose_function}" "${channel}" "${runtime_user}" \
+        "${controller_pid}" "${controller_start_token}"
       return 78
     fi
     "${compose_function}" run --rm --no-deps -T \
@@ -209,6 +264,9 @@ prepare_instance_state_deployment() {
         --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json
     inventory_rc=$?
     if [ "${inventory_rc}" -ne 0 ]; then
+      _release_abandoned_instance_state_deployment_lease \
+        "${compose_function}" "${channel}" "${runtime_user}" \
+        "${controller_pid}" "${controller_start_token}"
       return "${inventory_rc}"
     fi
   fi
