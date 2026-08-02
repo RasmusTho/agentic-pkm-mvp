@@ -81,20 +81,25 @@ class _RecCursor:
             self.conn.log.append("file_state_write")
             self.rowcount = 1
             return
-        if norm.startswith("delete from file_state where path"):
+        # MVR-05A0 (#4543): file_state statements lead with vault_binding_id, so
+        # the path/uuid predicate is now the second bound parameter.
+        if norm.startswith("delete from file_state where vault_binding_id = %s and path"):
             self.conn.log.append("file_state_delete")
             self.rowcount = 1 if self.conn.has_file_state else 0
             return
         if norm.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where path"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and path"
         ):
             self._fetch = (
-                {"path": params[0], "uuid": "00000000-0000-0000-0000-000000000002", "mtime": "test"}
+                {"path": params[1], "uuid": "00000000-0000-0000-0000-000000000002", "mtime": "test"}
                 if self.conn.has_file_state
                 else None
             )
             return
-        if norm.startswith("select count(*) from file_state where uuid"):
+        if norm.startswith(
+            "select count(*) from file_state where vault_binding_id = %s and uuid"
+        ):
             # Zero remaining paths for the uuid → delete_note emits the event.
             self._fetch = (0,)
             return

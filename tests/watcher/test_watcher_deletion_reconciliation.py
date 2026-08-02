@@ -73,8 +73,11 @@ class _FakeCursor:
         self.rowcount = 0
         self._fetchone = None
 
-        if normalized.startswith("delete from file_state where path = %s"):
-            (path,) = params
+        # MVR-05A0 (#4543): file_state statements lead with vault_binding_id.
+        if normalized.startswith(
+            "delete from file_state where vault_binding_id = %s and path = %s"
+        ):
+            _binding_id, path = params
             self.rowcount = 1 if self.conn.file_state.pop(path, None) else 0
             return
         if normalized.startswith("select id::text, count(*) over ()"):
@@ -91,8 +94,10 @@ class _FakeCursor:
             mirror = uuid_value in self.conn.objects
             self._fetchone = (canonical, mirror, canonical and self.conn.store_objects[str(canonical_id)]["source_ref"] == expected)
             return
-        if normalized.startswith("select count(*) from file_state where uuid = %s"):
-            (uuid_value,) = params
+        if normalized.startswith(
+            "select count(*) from file_state where vault_binding_id = %s and uuid = %s"
+        ):
+            _binding_id, uuid_value = params
             count = sum(1 for row in self.conn.file_state.values() if row.get("uuid") == uuid_value)
             self._fetchone = (count,)
             return
@@ -116,9 +121,10 @@ class _FakeCursor:
                 self.rowcount = 1
             return
         if normalized.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and path = %s"
         ):
-            (path,) = params
+            _binding_id, path = params
             self._fetchone = self.conn.file_state.get(path)
             return
         raise AssertionError(f"Unhandled SQL in fake conn: {normalized}")

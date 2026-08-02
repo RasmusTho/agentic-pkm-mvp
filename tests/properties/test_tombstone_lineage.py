@@ -167,10 +167,9 @@ class _FakeCursor:
                 row["source_ref"] = source_ref
                 self.rowcount = 1
             return
-        if normalized.startswith(
-            "insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"
-        ):
-            path, uuid_value, fm_hash, body_hash, mtime = params
+        # MVR-05A0 (#4543): file_state statements lead with vault_binding_id.
+        if normalized.startswith("insert into file_state("):
+            _binding_id, path, uuid_value, fm_hash, body_hash, mtime = params
             self.conn.file_state[path] = {
                 "path": path,
                 "uuid": uuid_value,
@@ -180,8 +179,10 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
-        if normalized.startswith("delete from file_state where uuid = %s and path <> %s"):
-            uuid_value, keep_path = params
+        if normalized.startswith(
+            "delete from file_state where vault_binding_id = %s and uuid = %s and path <> %s"
+        ):
+            _binding_id, uuid_value, keep_path = params
             before = len(self.conn.file_state)
             self.conn.file_state = {
                 path: row
@@ -191,27 +192,33 @@ class _FakeCursor:
             self.rowcount = before - len(self.conn.file_state)
             return
         if normalized.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and path = %s"
         ):
-            (path,) = params
+            _binding_id, path = params
             self._fetchone = self.conn.file_state.get(path)
             return
         if normalized.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and uuid = %s"
         ):
-            (uuid_value,) = params
+            _binding_id, uuid_value = params
             match = next(
                 (row for row in self.conn.file_state.values() if row.get("uuid") == uuid_value),
                 None,
             )
             self._fetchone = match
             return
-        if normalized.startswith("delete from file_state where path = %s"):
-            (path,) = params
+        if normalized.startswith(
+            "delete from file_state where vault_binding_id = %s and path = %s"
+        ):
+            _binding_id, path = params
             self.rowcount = 1 if self.conn.file_state.pop(path, None) else 0
             return
-        if normalized.startswith("select count(*) from file_state where uuid = %s"):
-            (uuid_value,) = params
+        if normalized.startswith(
+            "select count(*) from file_state where vault_binding_id = %s and uuid = %s"
+        ):
+            _binding_id, uuid_value = params
             count = sum(1 for row in self.conn.file_state.values() if row.get("uuid") == uuid_value)
             self._fetchone = (count,)
             return
