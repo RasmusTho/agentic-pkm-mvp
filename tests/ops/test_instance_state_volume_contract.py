@@ -2457,15 +2457,19 @@ def test_foreground_controller_inventory_helper_passes_without_self_observation(
     assert payload["snapshot_digests"][0] == payload["snapshot_digests"][1]
 
 
-@pytest.mark.parametrize("separate_session", [True, False])
-def test_actual_native_launcher_blocks_regardless_of_session_or_ancestry(
-    tmp_path, separate_session
-) -> None:
+def test_actual_native_launcher_in_foreign_process_group_blocks(tmp_path) -> None:
+    """A launcher started in its own session (a foreign process group) must
+    still be detected as a live native writer.
+
+    This is the case the guard exists to catch: a genuinely concurrent,
+    unrelated deployment that does not share the controller's process tree.
+    """
+
     env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
     token = _controller_token(controller_pid, env=env)
     launcher = _start_blocking_launcher(
-        _write_blocking_launcher(tmp_path), separate_session=separate_session
+        _write_blocking_launcher(tmp_path), separate_session=True
     )
     try:
         result, output = _run_quiescence_helper(
@@ -2479,6 +2483,33 @@ def test_actual_native_launcher_blocks_regardless_of_session_or_ancestry(
     assert result.returncode != 0
     assert result.stderr == "host-wide writer inventory is live or racing\n"
     assert not output.exists()
+
+
+def test_actual_native_launcher_in_controllers_process_group_is_not_a_writer(
+    tmp_path,
+) -> None:
+    """A launcher started inside the controller's own process group -- the
+    shape of a deploy script's own forked subshell -- must not be reported as
+    a native writer (Issue #4538).
+    """
+
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    token = _controller_token(controller_pid, env=env)
+    launcher = _start_blocking_launcher(
+        _write_blocking_launcher(tmp_path), separate_session=False
+    )
+    try:
+        result, output = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=token,
+            env=env,
+        )
+    finally:
+        _stop_blocking_launcher(launcher)
+    assert result.returncode == 0, result.stderr
+    assert output.exists()
 
 
 def test_actual_launcher_appearing_between_real_probes_blocks_without_sleep(tmp_path) -> None:
@@ -2733,9 +2764,12 @@ def test_native_outbox_worker_blocks_quiescence_for_supported_python_aliases(
         lambda *, linux_boot_id: processes,
     )
 
+    unrelated_controller_pgid = 424242
+
     assert writer_inventory._native_writers(
         controller_pid=controller_pid,
         controller_start_token=controller_start_token,
+        controller_pgid=unrelated_controller_pgid,
         linux_boot_id="boot-fixture",
     ) == [
         {
@@ -2756,6 +2790,7 @@ def test_native_outbox_worker_blocks_quiescence_for_supported_python_aliases(
     assert writer_inventory._native_writers(
         controller_pid=controller_pid,
         controller_start_token=controller_start_token,
+        controller_pgid=unrelated_controller_pgid,
         linux_boot_id="boot-fixture",
     ) == []
 
@@ -3019,9 +3054,10 @@ def test_linux_snapshot_reads_boot_id_once(monkeypatch) -> None:
     )
     monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
 
-    def native_writers(*, controller_pid, controller_start_token, linux_boot_id):
+    def native_writers(*, controller_pid, controller_start_token, controller_pgid, linux_boot_id):
         assert controller_pid == pid
         assert controller_start_token == token
+        assert controller_pgid == pid
         assert linux_boot_id == "boot-fixture"
         return []
 
@@ -3086,6 +3122,11 @@ def test_linux_actual_harmless_process_with_empty_argv_is_enumerated(tmp_path) -
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc contract")
 def test_linux_actual_empty_argv0_shell_launcher_blocks(tmp_path) -> None:
+    """An empty-argv0 launcher must still be detected -- when it is a foreign
+    process (its own process group), not a fork inside the controller's own
+    tree (Issue #4538: same-process-group launcher forks are excluded).
+    """
+
     env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
     token = _controller_token(controller_pid, env=env)
@@ -3096,6 +3137,7 @@ def test_linux_actual_empty_argv0_shell_launcher_blocks(tmp_path) -> None:
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
     assert process.stdout is not None
     assert process.stdout.read(1) == b"R"
