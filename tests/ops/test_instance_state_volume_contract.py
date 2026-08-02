@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -4660,3 +4661,268 @@ def test_prod_restore_rejects_foreign_channel_before_writing_target_state(tmp_pa
         if path.is_file()
     }
     assert after == before
+
+
+def _run_fenced_deployment(
+    *,
+    channel: str,
+    instance_state_root: Path,
+    host_global_root: Path,
+    legacy_path: Path,
+    inventory_payload: dict[str, object],
+    backup_root: Path,
+) -> dict[str, object]:
+    """Run one complete begin -> prove -> finish deployment on the production path."""
+
+    _begin_instance_state_deployment(
+        channel=channel,
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
+    )
+    inventory_path = host_global_root / "legacy-owner-inventory.json"
+    inventory_path.write_text(json.dumps(inventory_payload), encoding="utf-8")
+    os.chmod(inventory_path, 0o600)
+    return _finish_instance_state_deployment(
+        channel=channel,
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        inventory_path=inventory_path,
+        backup_root=backup_root,
+        restore_root=None,
+        quiescence_proof=_prove_empty_quiescence(
+            channel=channel, host_global_root=host_global_root
+        ),
+    )
+
+
+def test_staged_backup_verification_succeeds_on_fresh_deployment(tmp_path) -> None:
+    """#4371 AC1: staged-backup verification must not require the drained
+    inventory's owner roots to be visible in the verifying process.
+
+    Mirrors the `CI Smoke` `smoke-docker` shape on `main`: an earlier
+    deployment completed legacy bootstrap against an empty owner inventory,
+    `docker compose down -v` recreated the channel's instance-state volume
+    while the host-global ownership root persisted, and a fresh deployment now
+    runs with a newly config-bound vault root that (a) holds no ledger lease
+    yet and (b) is outside the verifying container's mount namespace.
+    """
+
+    instance_state_root = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    instance_state_root.mkdir()
+    host_global_root.mkdir()
+    legacy_path = tmp_path / "missing-legacy.md"
+
+    first = _run_fenced_deployment(
+        channel="dev",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        inventory_payload=_legacy_owner_inventory_payload([]),
+        backup_root=host_global_root / "backups" / "dev" / "latest",
+    )
+    assert first["restart_fence_cleared"] is True
+
+    # The channel volume is recreated fresh; host-global ownership persists.
+    shutil.rmtree(instance_state_root)
+    instance_state_root.mkdir()
+
+    # Produce the inventory while the owner root is materialized (the host
+    # view), then remove it so the deployment-finish verification runs in a
+    # view that cannot see the owner root (the container view).
+    vault_root = tmp_path / "ci-vault"
+    vault_root.mkdir()
+    inventory_payload = _legacy_owner_inventory_payload(
+        [{"channel_id": "dev", "root": str(vault_root)}]
+    )
+    shutil.rmtree(vault_root)
+
+    second = _run_fenced_deployment(
+        channel="dev",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        inventory_payload=inventory_payload,
+        backup_root=host_global_root / "backups" / "dev" / "latest",
+    )
+    assert second["restart_fence_cleared"] is True
+    backup_manifest = Path(str(second["backup_manifest"]))
+    assert backup_manifest.is_file()
+    assert not _deployment_fence_path(host_global_root, "dev").exists()
+
+    # The unadopted config candidate must not have minted ownership: backup
+    # verification tolerates it without weakening the ledger.
+    layout = InstanceStateLayout.for_channel(instance_state_root, "dev")
+    ledger_snapshot = InstanceRegistryRuntime.for_paths(
+        layout,
+        host_global_root,
+        initialize_layout=False,
+    ).ledger.load()
+    assert ledger_snapshot.legacy_bootstrap_complete is True
+    assert ledger_snapshot.leases == {}
+
+
+@pytest.mark.parametrize(
+    ("owner_entry", "expected_field"),
+    [
+        ({"channel_id": "", "root": "/somewhere/vault"}, "channel_id"),
+        ({"channel_id": "dev", "root": ""}, "root"),
+    ],
+)
+def test_staged_backup_failure_surfaces_underlying_cause(
+    tmp_path, owner_entry, expected_field
+) -> None:
+    """#4371 AC2: a rejected owner inventory must surface a message naming the
+    invalid inventory and the failing owner field, readable from the top-level
+    error without reconstructing the chained traceback."""
+
+    instance_state_root = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    instance_state_root.mkdir()
+    host_global_root.mkdir()
+    legacy_path = tmp_path / "missing-legacy.md"
+
+    first = _run_fenced_deployment(
+        channel="dev",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        inventory_payload=_legacy_owner_inventory_payload([]),
+        backup_root=host_global_root / "backups" / "dev" / "latest",
+    )
+    assert first["restart_fence_cleared"] is True
+    shutil.rmtree(instance_state_root)
+    instance_state_root.mkdir()
+
+    with pytest.raises(InstanceStatePreflightError) as excinfo:
+        _run_fenced_deployment(
+            channel="dev",
+            instance_state_root=instance_state_root,
+            host_global_root=host_global_root,
+            legacy_path=legacy_path,
+            inventory_payload=_legacy_owner_inventory_payload([owner_entry]),
+            backup_root=host_global_root / "backups" / "dev" / "latest",
+        )
+    message = str(excinfo.value)
+    assert "backup registry/ledger consistency verification failed" in message
+    assert "canonical global live-owner inventory is invalid" in message
+    assert expected_field in message
+    # The failure must keep the restart fence installed.
+    assert _deployment_fence_path(host_global_root, "dev").is_file()
+
+
+def test_inconsistent_registry_ledger_still_fails_closed(tmp_path) -> None:
+    """#4371 AC3: narrowing the live-owner false positive must not weaken the
+    real backup/ownership consistency check on the production create() path."""
+
+    layout = InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod")
+    runtime = InstanceRegistryRuntime.for_paths(layout, tmp_path / "host-global")
+    root = tmp_path / "vault"
+    root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=root,
+        watcher_vault_path=root,
+    )
+
+    # (a) The authenticated drained inventory claims a live owner binding the
+    # ledger does not hold: fail closed, and name the cause at top level.
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(root),
+            },
+            {
+                "channel_id": "prod",
+                "vault_binding_id": "forged-live-owner",
+                "root": str(tmp_path / "forged-root"),
+            },
+        ],
+    )
+    with pytest.raises(InstanceStatePreflightError) as forged:
+        InstanceStateBackup(layout, runtime.ledger).create(
+            tmp_path / "backup",
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
+        )
+    assert "backup registry/ledger consistency verification failed" in str(forged.value)
+    assert "one live lease per global owner" in str(forged.value)
+    assert not (tmp_path / "backup" / "manifest.json").exists()
+
+    # (b) A binding-less inventory owner whose root IS materialized in the
+    # verifying view but holds no ledger lease: the verifier can adjudicate
+    # it, and a missing lease is indistinguishable from a ledger that lost
+    # one, so the unadopted-candidate skip must not apply. This is the
+    # regression fence for the #4371 narrowing.
+    _clear_test_deployment_authority(
+        layout=layout, host_global_root=runtime.ledger.root
+    )
+    materialized_unadopted = tmp_path / "materialized-unadopted"
+    materialized_unadopted.mkdir()
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(root),
+            },
+            {
+                "channel_id": "prod",
+                "root": str(materialized_unadopted),
+            },
+        ],
+    )
+    with pytest.raises(InstanceStatePreflightError) as unadopted:
+        InstanceStateBackup(layout, runtime.ledger).create(
+            tmp_path / "backup",
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
+        )
+    assert "backup registry/ledger consistency verification failed" in str(unadopted.value)
+    assert "matches no live lease" in str(unadopted.value)
+    assert not (tmp_path / "backup" / "manifest.json").exists()
+
+    # (c) A registry registration without any ledger lease: fail closed.
+    _clear_test_deployment_authority(
+        layout=layout, host_global_root=runtime.ledger.root
+    )
+    runtime.registry.register(
+        VaultRegistration(
+            "binding-unleased",
+            f"path:{tmp_path / 'other-vault'}",
+            str(tmp_path / "other-vault"),
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=runtime.ledger.root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(root),
+            }
+        ],
+    )
+    with pytest.raises(InstanceStatePreflightError) as unleased:
+        InstanceStateBackup(layout, runtime.ledger).create(
+            tmp_path / "backup",
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
+        )
+    assert "backup registry/ledger consistency verification failed" in str(unleased.value)
+    assert "one live lease per registration" in str(unleased.value)
+    assert not (tmp_path / "backup" / "manifest.json").exists()

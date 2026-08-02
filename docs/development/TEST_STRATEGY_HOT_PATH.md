@@ -48,6 +48,16 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   `app/outbox/events.py` producer belongs to both `outbox_worker` and `memory_retrieval`, so its
   selection unions delivery-worker/event, indexer, and event-envelope contract coverage. Other
   `app/objects/**` and `app/outbox/**` paths remain unowned unless explicitly mapped.
+- The push-lane `CI gate: vaultwide panel verifier` step (`.github/workflows/ci-smoke.yaml ::
+  smoke-docker`) exercises the MVR-01B instance-state deployment producer against the composed
+  runtime only after merge. Its protected verification logic has pre-merge signal (#4371): every
+  `vault` subsystem match (`app/instance/**`) runs
+  `tests/ops/test_instance_state_volume_contract.py` as an exact target, including the staged-backup
+  regression tests (`test_staged_backup_verification_succeeds_on_fresh_deployment`,
+  `test_staged_backup_failure_surfaces_underlying_cause`,
+  `test_inconsistent_registry_ledger_still_fails_closed`), so a backup/ownership verification defect
+  fails the changing PR instead of first turning `main`'s post-merge smoke red. The docker-compose
+  integration itself (mounts, launcher sequence, seeded vault) remains post-merge-only coverage.
 - E2E tests under `tests/e2e/` run after merge and in the nightly suite, not on ordinary PRs. Opt-in classes (live LLM, browser, human UAT, eval) remain in their dedicated post-merge or nightly lanes.
 
 ## Check Levels
