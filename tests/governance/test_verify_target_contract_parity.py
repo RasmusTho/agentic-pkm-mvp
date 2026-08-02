@@ -117,6 +117,30 @@ def test_dev_workflow_canonical_example_targets_are_accepted() -> None:
     )
 
 
+JOINED_MULTI_TARGET_LINE = (
+    "doc writeback at `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + "
+    "doc writeback at"
+)
+
+
+def test_joined_multi_target_verify_line_is_rejected() -> None:
+    """Several targets on one AC are one `Verify:` line each (#3857, #3859).
+
+    Joining them on a single marker line leaves the line's backticks unpaired,
+    so the grammar cannot resolve it; the contract must forbid the joined form
+    rather than let authors invent it.
+    """
+    assert not is_resolvable_verify_target(JOINED_MULTI_TARGET_LINE)
+
+
+def test_contract_documents_one_verify_line_per_target() -> None:
+    text = _contract_text()
+    assert "one `Verify:` line each" in text or "one `Verify:` line per target" in text, (
+        "contract docs no longer state that multiple targets for one AC are "
+        "expressed as one Verify: line each"
+    )
+
+
 @pytest.mark.parametrize(
     "target",
     [

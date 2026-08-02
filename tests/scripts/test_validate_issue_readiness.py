@@ -111,6 +111,50 @@ def test_ready_issue_rejects_missing_non_behavioral_verify_file_path() -> None:
     assert "non-test file-based" in report.repair_guidance[0]
 
 
+def test_joined_verify_targets_report_the_actual_cause() -> None:
+    """A joined multi-target `Verify:` line gets a split hint, not just
+    "file not found" for a file that exists (#3857, #3859)."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        "doc writeback at `docs/development/DEV_WORKFLOW.md :: Acceptance verifiability`"
+        " + doc writeback at",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+    assert report.acceptance_criteria.missing_verify_file_paths == [
+        "`docs/development/DEV_WORKFLOW.md"
+    ]
+    assert report.acceptance_criteria.joined_verify_targets == [
+        "doc writeback at `docs/development/DEV_WORKFLOW.md :: Acceptance verifiability`"
+        " + doc writeback at"
+    ]
+    assert any(
+        "one `Verify:` line per target" in item for item in report.repair_guidance
+    )
+
+
+def test_multiple_verify_lines_on_one_ac_stay_one_acceptance_item() -> None:
+    """Several targets split one per `Verify:` line do not raise the AC count."""
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "  - Verify: `tests/governance/test_issue_pr_governance.py"
+        "::test_issue_readiness_workflow_is_strict_for_agent_ready_only`",
+        "  - Verify: `tests/governance/test_issue_pr_governance.py"
+        "::test_issue_readiness_workflow_is_strict_for_agent_ready_only`\n"
+        "  - Verify: doc writeback at `docs/development/DEV_WORKFLOW.md"
+        " :: Acceptance verifiability`",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.count == 2
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
 def test_ready_issue_accepts_existing_verify_file_path() -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
 
