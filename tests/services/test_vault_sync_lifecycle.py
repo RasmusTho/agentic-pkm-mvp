@@ -28,6 +28,13 @@ def test_canonical_note_payload_projects_episode_ref_at_top_level() -> None:
     assert payload["frontmatter"]["episode_ref"] == episode_ids
 
 
+def _assert_binding_scoped(binding_id: object) -> None:
+    """Every file_state statement must carry a real binding id (MVR-05A0, #4543)."""
+    assert isinstance(binding_id, str) and binding_id, (
+        f"file_state statement executed without a vault binding id: {binding_id!r}"
+    )
+
+
 class _FakeCursor:
     def __init__(self, conn: "_FakeConn") -> None:
         self.conn = conn
@@ -46,6 +53,13 @@ class _FakeCursor:
         self.rowcount = 0
         self._fetchone = None
         self._fetchall = []
+        # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
+        # file_state key before any statement. Matched first, because the
+        # preflight's index subquery mentions `pg_attribute` and would otherwise
+        # be swallowed by the generic column-introspection matcher below.
+        if normalized.startswith("select to_regclass('public.file_state') is not null"):
+            self._fetchone = (True, ["vault_binding_id", "path"], [])
+            return
         if normalized.startswith("select to_regclass(%s) as oid"):
             self._fetchone = (params[0],)
             return
@@ -105,10 +119,16 @@ class _FakeCursor:
                 self.conn.canonical_source[key] = source_ref
                 self.rowcount = 1
             return
-        if normalized.startswith(
-            "insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"
-        ):
-            path, uuid_value, fm_hash, body_hash, mtime = params
+        # MVR-05A0 (#4543): every file_state statement now leads with
+        # `vault_binding_id`. This fake models a single binding (these tests are
+        # about lifecycle ordering, not binding isolation — that is proven
+        # against real Postgres in tests/services/test_vault_sync_binding_scope.py),
+        # but it asserts the binding parameter is actually supplied, so an
+        # unscoped statement reintroduced here fails loudly instead of silently
+        # matching a laxer pattern.
+        if normalized.startswith("insert into file_state("):
+            binding_id, path, uuid_value, fm_hash, body_hash, mtime = params
+            _assert_binding_scoped(binding_id)
             self.conn.file_state[path] = {
                 "path": path,
                 "uuid": uuid_value,
@@ -118,8 +138,11 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
-        if normalized.startswith("delete from file_state where uuid = %s and path <> %s"):
-            uuid_value, keep_path = params
+        if normalized.startswith(
+            "delete from file_state where vault_binding_id = %s and uuid = %s and path <> %s"
+        ):
+            binding_id, uuid_value, keep_path = params
+            _assert_binding_scoped(binding_id)
             before = len(self.conn.file_state)
             self.conn.file_state = {
                 path: row
@@ -129,26 +152,36 @@ class _FakeCursor:
             self.rowcount = before - len(self.conn.file_state)
             return
         if normalized.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and path = %s"
         ):
-            (path,) = params
+            binding_id, path = params
+            _assert_binding_scoped(binding_id)
             self._fetchone = self.conn.file_state.get(path)
             return
         if normalized.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and uuid = %s"
         ):
-            (uuid_value,) = params
+            binding_id, uuid_value = params
+            _assert_binding_scoped(binding_id)
             self._fetchone = next(
                 (row for row in self.conn.file_state.values() if row.get("uuid") == uuid_value),
                 None,
             )
             return
-        if normalized.startswith("delete from file_state where path = %s"):
-            (path,) = params
+        if normalized.startswith(
+            "delete from file_state where vault_binding_id = %s and path = %s"
+        ):
+            binding_id, path = params
+            _assert_binding_scoped(binding_id)
             self.rowcount = 1 if self.conn.file_state.pop(path, None) else 0
             return
-        if normalized.startswith("select count(*) from file_state where uuid = %s"):
-            (uuid_value,) = params
+        if normalized.startswith(
+            "select count(*) from file_state where vault_binding_id = %s and uuid = %s"
+        ):
+            binding_id, uuid_value = params
+            _assert_binding_scoped(binding_id)
             count = sum(1 for row in self.conn.file_state.values() if row.get("uuid") == uuid_value)
             self._fetchone = (count,)
             return
@@ -212,6 +245,7 @@ def test_update_path_only_keeps_single_active_file_state_path() -> None:
         fm_hash="fm",
         body_hash="body",
         mtime=datetime.now(timezone.utc),
+        binding_id=vault_sync._binding_id(),
     )
 
     assert conn.objects_path[UUID1] == "/vault/new.md"

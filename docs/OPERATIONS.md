@@ -57,6 +57,35 @@ payloads nor performs archive, retention, or storage lifecycle work.
   `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
 
+### Forward-only migration floor: `file_state` binding key (MVR-05A0, #4543)
+
+Alembic revision `c7f4b1a83d29` takes ownership of the vault-sync `file_state` table (previously
+created at runtime by `app/db/migrations_obsidian.sql`) and changes its primary key from `path` to
+`(vault_binding_id, path)`. Operator consequences:
+
+- **Migration authority is unchanged.** `scripts/run_migrations.sh` (`alembic upgrade head`) applies
+  it. Existing rows are adopted in place and attributed to the `legacy-compatibility-binding`
+  sentinel; nothing is recreated, moved, or dropped.
+- **The revision is forward-only** per `docs/RELEASE_CHANNELS/README.md :: Rollback posture`. Rolling
+  the `stable` ref back to a pre-#4543 image leaves the database on the new key. That image's
+  `file_state` **upserts** then fail loudly — `ON CONFLICT (path)` has no unique index on `path`
+  alone to match, so Postgres raises `InvalidColumnReference`. Its reads and its path/uuid deletes
+  still execute and stay correct while only one binding exists, which is the only state a rolled-back
+  image can be in. Expect vault-sync **ingest to stop loudly**, not to corrupt. Roll forward rather
+  than back.
+- The constraint rebuild takes a brief `ACCESS EXCLUSIVE` lock on `file_state`. Apply it through the
+  normal `migrate` one-shot, which runtime containers already gate on, rather than against a live
+  writer.
+- **`FileStateSchemaMissingError` means the migration has not run.** A vault-sync producer refuses
+  to touch the table when it is absent, still carries the old `path`-only key, or has a stray unique
+  index on `path` alone. It fails *before* any effect, so no partial write is left behind — run
+  `scripts/run_migrations.sh` and restart. The adapter and API paths propagate the error with its
+  `alembic upgrade head` hint intact; the watcher's deletion-reconciliation path
+  (`app/watcher/vault_watcher.py`) catches broad exceptions and reports only
+  `Warning: unable to reconcile deletion for <path>` plus an incremented error count, so on that path
+  check the schema explicitly rather than expecting the hint.
+- Schema truth for the table is `docs/DB_SCHEMA.md :: file_state`.
+
 ## Runtime prerequisites (registry watcher)
 - `DATABASE_URL` or `DB_DSN` is required in runtime; startup must fail fast if missing.
 - DB outbox is canonical in runtime; the worker consumes the DB outbox.

@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06)
+Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/db/migrations_obsidian.sql + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py (2026-08-02)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -44,6 +44,31 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   (INV-EROJ-3; see `docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md`). Operational coordination
   evidence only — entity notes remain canonical identity truth. Target-evolution lineage recovery
   (EROJ-02) and globally unique split complements (EROJ-03) are not delivered by this table.
+- The **vault-sync `file_state`** table is **migration-owned** (MVR-05A0, #4543): Alembic revision
+  `c7f4b1a83d29` creates it, adopts a database where the legacy runtime bootstrap
+  (`app/db/migrations_obsidian.sql`, applied by `app/db/db.py::ensure_schema`) already created it,
+  and rekeys it from `path` to `(vault_binding_id, path)`. The bootstrap SQL no longer contains any
+  `file_state` DDL, so the table has exactly one production owner and — for the first time — is
+  reachable by `alembic upgrade head`. Its adoption, row-survival, rekey, and single-vault-equivalence
+  guards are `pg`-marked and run in **both** lanes that execute `-m "pg"`: `ci-smoke / index_pg` on
+  the PR path, and `integration-nightly / pg-contracts` nightly. Both select files by explicit
+  allow-list and `index_pg` is additionally paths-filtered, so
+  `tests/architecture/test_durable_table_ownership.py::test_file_state_pg_targets_run_in_both_pg_lanes`
+  pins the allow-lists and
+  `::test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards` pins the paths filter — every
+  other lane runs `-m "not pg"`, so an unlisted `pg`-marked test would execute in no CI lane at all.
+  Test fixtures opt
+  in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1` flag KERNEL-04 established
+  (`app/db/db.py::_autocreate_file_state`); its shape parity with the revision, adoption
+  idempotency, existing-row survival, and bootstrap-origin/Alembic-origin convergence are asserted
+  by `tests/migrations/test_file_state_adoption.py`.
+- **`objects.path`** is owned by the same revision, for the same root cause: the column was
+  declared three times in the bootstrap SQL (a pre-create `ALTER ... IF EXISTS`, the `CREATE TABLE`
+  column list, and a post-create `ALTER`) while `objects` itself is created by Alembic revision
+  `202510241200`. The bootstrap SQL no longer declares it. Both single-owner properties are guarded
+  by `tests/architecture/test_durable_table_ownership.py`. The wider `objects` **table** still has
+  split ownership (the bootstrap SQL creates it and rewrites its primary key while Alembic also
+  creates it) — that remains open and belongs to MVR-05A's projection cutover.
 - The active legacy **`decisions`** writer schema is **migration-owned** (#3488): Alembic revision
   `e1d2c3b4a5f6` carries forward the table's creation, compatibility columns, generated UUID default,
   and nullable `object_id` / `ON DELETE SET NULL` FK. The neutral database seam
@@ -241,8 +266,60 @@ that `id`; fresh canonical-only ingest uses its canonical id directly. Canonical
 - `id` (`uuid`, PK)
 - `kind` (`text`)
 - `source_ref` (`text`, optional in some historical migrations)
+- `path` (`text`, nullable) — added by Alembic revision `c7f4b1a83d29` (MVR-05A0, #4543); the
+  filesystem-watcher continuity mirror's locator
 - `payload` (`jsonb`, default `{}`)
 - `created_at` / `updated_at` (`timestamptz`, default `now()`)
+
+### `file_state` (vault-sync bookkeeping, migration-owned since MVR-05A0)
+
+One row per (vault binding, absolute note path). It is what `app/services/vault_sync.py` compares a
+filesystem observation against to decide *skip*, *resync*, *rename*, or *delete*, so a lost or
+mis-keyed row causes vault content to be silently re-synced or silently skipped rather than failing
+loudly. Rebuildable by a full resync, but not disposable.
+
+- `path` (`text`, `NOT NULL`) — the resolved absolute note path
+- `uuid` (`text`, nullable) — the note's frontmatter uuid (`objects.uuid` lineage)
+- `fm_hash` / `body_hash` (`text`, nullable) — last observed frontmatter/body digests
+- `mtime` (`timestamptz`, nullable) — last observed filesystem mtime
+- `last_seen` (`timestamptz`, default `now()`)
+- `vault_binding_id` (`text`, `NOT NULL`, default `'legacy-compatibility-binding'`) — the stable
+  registry binding id (`app/instance/vault_registry.py::VaultRegistration.vault_binding_id`)
+- `PRIMARY KEY (vault_binding_id, path)`
+- Index: `file_state_uuid_idx` on `(uuid)`
+
+Interpretation:
+
+- The key was `path text PRIMARY KEY` before #4543. That made two registered vault bindings holding
+  the same path mutually exclusive — binding B's row silently replaced binding A's — which is the
+  overwrite MVR-05A's AC-1 forbids. No additive column reaches that defect, because the key itself
+  was the defect.
+- Rows written before the rekey are attributed to the explicit sentinel
+  `legacy-compatibility-binding`, not guessed onto a registry binding. A pre-MVR-05 database is
+  single-binding by construction, so this attribution is provable; MVR-05A owns the sentinel →
+  real-binding backfill and its ambiguity/quarantine rules.
+- Adoption backfills only rows whose `vault_binding_id` is NULL. A row that somehow already carries a
+  real binding id is preserved, not overwritten — but `_binding_id()` returns the sentinel until
+  MVR-05A ships the translator, so such a row would not be read and its note would re-sync. Nothing
+  writes that column before this revision, so the state is unreachable today; MVR-05A's backfill AC
+  owns it.
+- Every `file_state` statement in `app/services/vault_sync.py` is binding-scoped, including the two
+  formerly UUID-keyed rename deletes (`delete from file_state where uuid = %s and path <> %s`) and
+  the delete/last-remaining-path count in `delete_note`, which were only safe while `path` was the
+  primary key. `app/services/vault_sync.py::_binding_id` is the single seam that resolves the
+  binding; MVR-05A replaces that function rather than re-auditing the SQL.
+- **Single-vault behaviour is unchanged.** With one binding value in every row,
+  `(vault_binding_id, path)` has exactly the uniqueness, upsert, and delete semantics `(path)` had
+  (`tests/integration/test_single_vault_compatibility.py::test_file_state_rekey_preserves_single_vault_sync`).
+- **Forward-only.** Measured against a migrated database, an older image's `file_state` **upserts**
+  fail loudly (`ON CONFLICT (path)` has no matching unique index, so Postgres raises
+  `InvalidColumnReference`), while its reads and its path/uuid deletes still execute and remain
+  correct for as long as only one binding exists — the only state an older image can be rolled back
+  into, since it cannot create a second binding. A scalar rollback therefore stops vault-sync ingest
+  loudly instead of silently mis-keying rows. Per
+  `docs/RELEASE_CHANNELS/README.md :: Rollback posture` this is permitted with operator
+  acknowledgement that rollback cannot restore DB shape. MVR-05A (#3859) records the corresponding
+  minimum-runtime floor; #4543 deliberately does not.
 
 ### `chunks` (legacy)
 - `id` (`uuid`, PK)

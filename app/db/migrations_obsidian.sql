@@ -1,16 +1,21 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-ALTER TABLE IF EXISTS public.objects ADD COLUMN IF NOT EXISTS path text;
-
-CREATE TABLE IF NOT EXISTS public.file_state (
-  path text PRIMARY KEY,
-  uuid text,
-  fm_hash text,
-  body_hash text,
-  mtime timestamptz,
-  last_seen timestamptz DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS file_state_uuid_idx ON public.file_state(uuid);
+-- NOTE: this file is naively split on the statement separator by
+-- app/db/db.py::ensure_schema and by scripts/run_migration.py, so no comment
+-- here may contain that character.
+--
+-- file_state DDL is intentionally absent. Alembic revision c7f4b1a83d29
+-- (MVR-05A0, #4543) is the sole production owner of the vault-sync file_state
+-- table, its (vault_binding_id, path) primary key, and file_state_uuid_idx.
+-- Its "path text PRIMARY KEY" predecessor lived here, outside the revision
+-- chain, which is why no migration could reach it. Test fixtures keep
+-- create-on-demand through the explicit STORE_SCHEMA_AUTOCREATE opt-in in
+-- app/db/db.py. This bootstrap must never create or mutate it again.
+--
+-- objects.path is owned by the same revision for the same reason. It was
+-- declared here three times (a pre-create ALTER, the CREATE TABLE column list,
+-- and a post-create ALTER) while objects itself is created by Alembic
+-- revision 202510241200.
 
 CREATE TABLE IF NOT EXISTS public.agent_memories(
   id uuid PRIMARY KEY,
@@ -26,7 +31,6 @@ CREATE TABLE IF NOT EXISTS public.objects(
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   uuid uuid,
   kind text NOT NULL,
-  path text,
   source_ref text,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
@@ -34,7 +38,6 @@ CREATE TABLE IF NOT EXISTS public.objects(
 ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS id uuid;
 ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS uuid uuid;
 ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS source_ref text;
-ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS path text;
 
 -- Backfill/migrate legacy schemas that used uuid as the only identifier.
 UPDATE public.objects SET id = uuid WHERE id IS NULL AND uuid IS NOT NULL;

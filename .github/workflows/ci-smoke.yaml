@@ -742,6 +742,20 @@ jobs:
               - 'app/alembic/versions/e7a2b9c4d1f8_eroj01_entity_review_operations.py'
               - 'tests/heimdal/test_entity_review_operation_journal.py'
               - 'tests/migrations/test_entity_review_operation_journal_schema_parity.py'
+              # file_state binding key (MVR-05A0, #4543): the adoption,
+              # row-survival, rekey and single-vault-equivalence guards for a
+              # forward-only migration on a live table are all pg-marked, so
+              # this lane is the PR-path check that catches drift on them
+              # (`Unit tests (not pg)` deselects every one by design, and
+              # `integration-nightly / pg-contracts` only runs on a schedule).
+              - 'app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py'
+              - 'app/db/db.py'
+              - 'app/db/migrations_obsidian.sql'
+              - 'app/services/vault_sync.py'
+              - 'tests/migrations/test_file_state_adoption.py'
+              - 'tests/instance/test_file_state_binding_key.py'
+              - 'tests/services/test_vault_sync_binding_scope.py'
+              - 'tests/integration/test_single_vault_compatibility.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -761,7 +775,7 @@ jobs:
         if: steps.changes.outputs.index_pg == 'true'
         run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
-      - name: Run exact index, YouTube quota, and entity-review journal PG surface
+      - name: Run exact index, YouTube quota, entity-review journal, and file_state PG surface
         if: steps.changes.outputs.index_pg == 'true'
         shell: bash
         run: |
@@ -772,6 +786,10 @@ jobs:
             tests/knowledge_acquisition/test_youtube_api_quota_pg.py \
             tests/heimdal/test_entity_review_operation_journal.py \
             tests/migrations/test_entity_review_operation_journal_schema_parity.py \
+            tests/migrations/test_file_state_adoption.py \
+            tests/instance/test_file_state_binding_key.py \
+            tests/services/test_vault_sync_binding_scope.py \
+            tests/integration/test_single_vault_compatibility.py \
             --tb=short \
             | tee pytest-index-pg.log
 

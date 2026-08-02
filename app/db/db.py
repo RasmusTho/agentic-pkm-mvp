@@ -19,6 +19,169 @@ _MIGRATION_SQL_PATH = Path(__file__).resolve().parent / "migrations_obsidian.sql
 _LOGGER = logging.getLogger(__name__)
 _SCHEMA_INITIALIZED = False
 
+# MVR-05A0 (#4543): the stable binding id every `file_state` row is attributed to
+# until MVR-05A (#3859) ships the compatibility ingress translator that derives
+# the real authorized `vault_binding_id`
+# (``app/instance/vault_registry.py::VaultRegistration.vault_binding_id``).
+#
+# It is deliberately an explicit sentinel and not a registry-shaped
+# ``binding-<uuid4>`` value: a pre-MVR-05 database is single-binding by
+# construction, so attributing its rows to one named legacy binding is provable
+# rather than a guess, and MVR-05A's backfill can tell "not yet attributed"
+# from "attributed to binding X" without inspecting the registry.
+#
+# Kept in sync with the same literal in Alembic revision ``c7f4b1a83d29`` by
+# ``tests/migrations/test_file_state_adoption.py``.
+FILE_STATE_COMPATIBILITY_BINDING_ID = "legacy-compatibility-binding"
+
+# Test-fixture create-on-demand for the migration-owned `file_state` table,
+# mirroring the KERNEL-04 (#2766) / KERNEL-05 (#2850) contract for `store_*` and
+# `outbox`. Production DDL authority is Alembic revision `c7f4b1a83d29`; scratch
+# databases opt in through STORE_SCHEMA_AUTOCREATE=1 (tests/conftest.py). Shape
+# parity with the revision is asserted by
+# tests/migrations/test_file_state_adoption.py.
+_FILE_STATE_AUTOCREATE_SQL = (
+    f"""
+    CREATE TABLE IF NOT EXISTS public.file_state (
+        path text NOT NULL,
+        uuid text,
+        fm_hash text,
+        body_hash text,
+        mtime timestamptz,
+        last_seen timestamptz DEFAULT now(),
+        vault_binding_id text NOT NULL DEFAULT '{FILE_STATE_COMPATIBILITY_BINDING_ID}',
+        CONSTRAINT file_state_pkey PRIMARY KEY (vault_binding_id, path)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS file_state_uuid_idx ON public.file_state(uuid)",
+    # `objects.path` moved to the same revision for the same reason; a scratch
+    # database that never ran Alembic needs it for the watcher continuity mirror.
+    "ALTER TABLE IF EXISTS public.objects ADD COLUMN IF NOT EXISTS path text",
+)
+
+
+def _schema_autocreate_enabled() -> bool:
+    """Whether test fixtures opted into create-on-demand schema (KERNEL-04)."""
+    return (os.getenv("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
+
+
+class FileStateSchemaMissingError(RuntimeError):
+    """Raised when the migration-owned `file_state` schema is absent or stale."""
+
+
+def assert_file_state_schema(conn: psycopg.Connection) -> None:
+    """Fail loudly when the database predates Alembic revision `c7f4b1a83d29`.
+
+    The `Invariant -> producers` rule in `AGENTS.md :: Required rules` pairs a
+    runtime precondition with a fail-loud preflight, matching what KERNEL-04
+    (#2766) and KERNEL-05 (#2850) do for `store_*` and `outbox`. Without it a
+    stale database returns cleanly from `ensure_schema`, `conn_rw` latches
+    `_SCHEMA_INITIALIZED`, and the operator learns about it only when the first
+    vault-sync write raises an opaque invalid-conflict-target error part-way
+    through a watcher tick.
+
+    `ensure_schema` deliberately does not gate on this in production. That
+    function is a shared seam — `app/services/outbox.py::bootstrap` calls it too
+    — and the `file_state` key is no concern of the outbox path; gating there
+    would mask `OutboxSchemaMissingError`. The production caller is the
+    vault-sync seam in `app/services/vault_sync.py`, the sole consumer of the
+    table. (Under `STORE_SCHEMA_AUTOCREATE=1` the test-fixture autocreate calls
+    this too, after creating the table, so a scratch database that already holds
+    the legacy shape gets the same hint instead of an unexplained
+    `UndefinedColumn`. That path is inert in production.)
+
+    Checks the three things the rekey depends on: that the table exists, that its
+    primary key is `(vault_binding_id, path)`, and that no unique index on `path`
+    alone survives to re-impose one-binding-per-path behind that key.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              to_regclass('public.file_state') IS NOT NULL AS table_exists,
+              COALESCE((
+                SELECT array_agg(att.attname ORDER BY key.ordinality)
+                  FROM pg_constraint con
+                  JOIN LATERAL unnest(con.conkey) WITH ORDINALITY key(attnum, ordinality)
+                    ON true
+                  JOIN pg_attribute att
+                    ON att.attrelid = con.conrelid AND att.attnum = key.attnum
+                 WHERE con.conrelid = to_regclass('public.file_state')
+                   AND con.contype = 'p'
+              ), ARRAY[]::text[]) AS primary_key,
+              COALESCE((
+                SELECT array_agg(cls.relname)
+                  FROM pg_index idx
+                  JOIN pg_class cls ON cls.oid = idx.indexrelid
+                 WHERE idx.indrelid = to_regclass('public.file_state')
+                   AND idx.indisunique
+                   -- indnkeyatts, not indnatts: the latter counts INCLUDEd
+                   -- columns, so `UNIQUE(path) INCLUDE (uuid)` would slip past
+                   -- while still re-imposing one-binding-per-path.
+                   AND idx.indnkeyatts = 1
+                   AND (
+                     SELECT att.attname
+                       FROM pg_attribute att
+                      WHERE att.attrelid = idx.indrelid
+                        AND att.attnum = idx.indkey[0]
+                   ) = 'path'
+              ), ARRAY[]::text[]) AS path_only_unique
+            """
+        )
+        row = cur.fetchone()
+    if isinstance(row, dict):
+        table_exists = row["table_exists"]
+        primary_key = row["primary_key"]
+        path_only_unique = row["path_only_unique"]
+    else:
+        table_exists, primary_key, path_only_unique = (
+            (row[0], row[1], row[2]) if row else (False, [], [])
+        )
+
+    if not table_exists:
+        raise FileStateSchemaMissingError(
+            "public.file_state is missing. It is owned by Alembic revision "
+            "c7f4b1a83d29 (MVR-05A0, #4543), not by the runtime bootstrap SQL. "
+            "Run `alembic upgrade head` (scripts/run_migrations.sh) before "
+            "starting a vault-sync producer."
+        )
+    if list(primary_key or []) != ["vault_binding_id", "path"]:
+        raise FileStateSchemaMissingError(
+            "public.file_state has primary key "
+            f"{list(primary_key or [])!r}, expected ['vault_binding_id', 'path']. "
+            "This database predates Alembic revision c7f4b1a83d29 (MVR-05A0, "
+            "#4543); run `alembic upgrade head` (scripts/run_migrations.sh) "
+            "before starting a vault-sync producer."
+        )
+    if path_only_unique:
+        raise FileStateSchemaMissingError(
+            f"public.file_state carries unique index(es) {list(path_only_unique)!r} "
+            "on `path` alone. That re-imposes one-binding-per-path behind the "
+            "(vault_binding_id, path) key, which is exactly the overwrite "
+            "MVR-05A0 (#4543) removed. Drop the index before starting a "
+            "vault-sync producer."
+        )
+
+
+def _autocreate_file_state(conn: psycopg.Connection) -> None:
+    """Create the migration-owned `file_state`/`objects.path` shape for test scratch DBs.
+
+    Inert outside tests: production DDL authority is Alembic revision
+    `c7f4b1a83d29`. The matching fail-loud preflight for a database that never
+    ran it is `assert_file_state_schema`, called from the vault-sync seam.
+    """
+    if not _schema_autocreate_enabled():
+        return
+    for statement in _FILE_STATE_AUTOCREATE_SQL:
+        with conn.cursor() as cur:
+            cur.execute(statement)
+    # `CREATE TABLE IF NOT EXISTS` cannot heal a scratch database that already
+    # holds the pre-#4543 `path text PRIMARY KEY` shape: it silently no-ops and
+    # every vault-sync statement then fails with an unexplained UndefinedColumn.
+    # Reuse the same preflight so the test lane gets the "run migrations" hint
+    # instead.
+    assert_file_state_schema(conn)
+
 
 def _objects_id_primary_key_exists(conn: psycopg.Connection) -> bool:
     """Return whether ``objects`` already has exactly ``id`` as its primary key."""
@@ -76,7 +239,25 @@ def conn_rw(*, connect_timeout: int | None = None):
 
 
 def ensure_schema(conn: psycopg.Connection) -> None:
-    """Apply lightweight migrations stored alongside the db module."""
+    """Apply lightweight migrations stored alongside the db module.
+
+    `file_state` and `objects.path` are no longer created here (MVR-05A0,
+    #4543): Alembic revision `c7f4b1a83d29` owns both, so the revision chain can
+    reach the vault-sync table its own verification lane runs against. Test
+    scratch databases keep create-on-demand through the explicit
+    STORE_SCHEMA_AUTOCREATE opt-in, applied after the bootstrap SQL because
+    `ALTER TABLE IF EXISTS public.objects ADD COLUMN ... path` silently no-ops on
+    a database where the bootstrap has not created `objects` yet. Outside tests
+    that step is inert; the matching fail-loud preflight is
+    `assert_file_state_schema`, called from the vault-sync seam rather than here,
+    because this function is shared with the outbox bootstrap.
+    """
+    _apply_legacy_bootstrap_sql(conn)
+    _autocreate_file_state(conn)
+
+
+def _apply_legacy_bootstrap_sql(conn: psycopg.Connection) -> None:
+    """Execute the remaining legacy compatibility DDL in `migrations_obsidian.sql`."""
     if not _MIGRATION_SQL_PATH.exists():
         return
     statements = [
