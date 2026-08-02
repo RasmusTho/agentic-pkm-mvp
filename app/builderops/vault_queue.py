@@ -364,12 +364,17 @@ def _content_is_local(stat_result: os.stat_result) -> bool:
     metadata local. Opening such a file costs a network round-trip — measured
     at ~1.0-1.2 s per file, which is what made `vault validate` fail to
     terminate on the real shared vault (#4199). ``SF_DATALESS`` is the direct
-    macOS signal; zero allocated blocks against a non-zero logical size is the
-    portable fallback for the same state.
+    macOS signal, and where the platform exposes ``st_flags`` it is
+    authoritative for datalessness. Zero allocated blocks against a non-zero
+    logical size is only a *fallback* signal for platforms that expose no
+    ``st_flags`` at all: APFS transparent compression and some network mounts
+    report zero blocks for content that is entirely local, so this fallback
+    must never override an authoritative ``st_flags`` reading of "not
+    dataless".
     """
 
-    if getattr(stat_result, "st_flags", 0) & _SF_DATALESS:
-        return False
+    if hasattr(stat_result, "st_flags"):
+        return not (stat_result.st_flags & _SF_DATALESS)
     return not (stat_result.st_size > 0 and getattr(stat_result, "st_blocks", 1) == 0)
 
 

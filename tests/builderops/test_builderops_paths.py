@@ -342,6 +342,62 @@ def test_vault_validate_detects_extensionless_sqlite_without_full_scan(
     assert [path for path in opened if path.parent == notes] == []
 
 
+def test_zero_block_local_file_is_not_treated_as_evicted(tmp_path: Path) -> None:
+    """``st_blocks == 0`` alone must not mark a file as content-not-local.
+
+    APFS transparent compression (and some network mounts) report zero
+    allocated blocks for a file whose bytes are already on disk. Where the
+    platform exposes ``st_flags``, it is the authoritative dataless signal
+    (macOS ``SF_DATALESS``) and the ``st_blocks`` fallback must not override
+    it for a file that is not actually dataless.
+    """
+    from app.builderops import vault_queue
+
+    real = tmp_path / "compressed.bin"
+    real.write_bytes(b"SQLite format 3\x00" + b"\x00" * 16)
+    base = real.stat()
+
+    # Simulate a locally-materialized, transparently-compressed file: content
+    # is on this disk (no SF_DATALESS bit) but zero blocks are reported.
+    fake_local_compressed = os.stat_result(
+        (
+            base.st_mode,
+            base.st_ino,
+            base.st_dev,
+            base.st_nlink,
+            base.st_uid,
+            base.st_gid,
+            base.st_size,
+            base.st_atime,
+            base.st_mtime,
+            base.st_ctime,
+        ),
+        {"st_blocks": 0, "st_flags": 0},
+    )
+
+    assert vault_queue._content_is_local(fake_local_compressed) is True
+
+    # A genuinely dataless file (SF_DATALESS set) must still report as not
+    # local, regardless of st_blocks.
+    fake_evicted = os.stat_result(
+        (
+            base.st_mode,
+            base.st_ino,
+            base.st_dev,
+            base.st_nlink,
+            base.st_uid,
+            base.st_gid,
+            base.st_size,
+            base.st_atime,
+            base.st_mtime,
+            base.st_ctime,
+        ),
+        {"st_blocks": 0, "st_flags": vault_queue._SF_DATALESS},
+    )
+
+    assert vault_queue._content_is_local(fake_evicted) is False
+
+
 def test_vault_validate_still_opens_local_files_for_the_header_sniff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
