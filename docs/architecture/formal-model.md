@@ -116,10 +116,11 @@ T-review-decide [human, POST memory/review-queue/{id}/decision]  (app/api/routes
   two-phase: decision durable first, terminal flag only after materialization (blocked ⇒ re-pending)
 
 T-ingest-api [any caller, POST /ingest]  (app/api/routes/ingest.py:22)
-  pre:  well-formed payload — NOTHING ELSE (no WG, no vault check, no auth beyond app-level)
+  pre:  WG assert_writes_allowed("ingest.object_create") before any I/O (PR #4549; no bootstrap
+        escape) ∧ well-formed payload — no vault check, no auth beyond app-level
   post: evt(ingest.object.created) ONLY — despite its name, insert_object_and_outbox
         (app/services/outbox.py:247-264) writes no object row; P.objects materializes
-        asynchronously via T-materialize below            — see Divergence F-D
+        asynchronously via T-materialize below            — WG half delivered, see F-D
 
 T-materialize [worker → INGEST_OBJECT_CREATED]  (app/services/indexer.py:93)
   pre:  event delivered (at-least-once)
