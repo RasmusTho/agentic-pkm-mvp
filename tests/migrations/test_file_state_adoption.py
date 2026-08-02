@@ -495,3 +495,34 @@ def test_migration_and_runtime_agree_on_the_compatibility_binding_id() -> None:
     )
     text = revision.read_text(encoding="utf-8")
     assert f'_COMPATIBILITY_BINDING_ID = "{FILE_STATE_COMPATIBILITY_BINDING_ID}"' in text
+
+
+def test_preflight_rejects_a_leftover_path_only_unique_index(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stray `UNIQUE(path)` index silently re-imposes one-binding-per-path.
+
+    The revision drops the *primary key* by name, so a separate unique index on
+    `path` alone survives adoption and reinstates exactly the overwrite the rekey
+    removes — behind a key that looks correct. No shipped DDL produces one, but
+    the preflight is the only thing that would ever notice, so it checks.
+    """
+    from app.db.db import FileStateSchemaMissingError, assert_file_state_schema
+
+    dsn = scratch_db_factory()
+    _alembic_upgrade(dsn, monkeypatch, FILE_STATE_ADOPTION_HEAD)
+
+    with psycopg.connect(dsn) as conn:
+        assert_file_state_schema(conn)  # clean to start with
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute("CREATE UNIQUE INDEX file_state_legacy_path_key ON public.file_state(path)")
+
+    with psycopg.connect(dsn) as conn:
+        with pytest.raises(FileStateSchemaMissingError, match="file_state_legacy_path_key"):
+            assert_file_state_schema(conn)
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute("DROP INDEX file_state_legacy_path_key")
+    with psycopg.connect(dsn) as conn:
+        assert_file_state_schema(conn)

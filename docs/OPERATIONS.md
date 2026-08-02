@@ -76,10 +76,14 @@ created at runtime by `app/db/migrations_obsidian.sql`) and changes its primary 
 - The constraint rebuild takes a brief `ACCESS EXCLUSIVE` lock on `file_state`. Apply it through the
   normal `migrate` one-shot, which runtime containers already gate on, rather than against a live
   writer.
-- **`FileStateSchemaMissingError` at startup means the migration has not run.** A vault-sync producer
-  (watcher, worker, or API ingest) refuses to touch the table when it is absent or still carries the
-  old `path`-only key, and names `alembic upgrade head` in the error. It fails *before* any effect,
-  so no partial write is left behind — run `scripts/run_migrations.sh` and restart.
+- **`FileStateSchemaMissingError` means the migration has not run.** A vault-sync producer refuses
+  to touch the table when it is absent, still carries the old `path`-only key, or has a stray unique
+  index on `path` alone. It fails *before* any effect, so no partial write is left behind — run
+  `scripts/run_migrations.sh` and restart. The adapter and API paths propagate the error with its
+  `alembic upgrade head` hint intact; the watcher's deletion-reconciliation path
+  (`app/watcher/vault_watcher.py`) catches broad exceptions and reports only
+  `Warning: unable to reconcile deletion for <path>` plus an incremented error count, so on that path
+  check the schema explicitly rather than expecting the hint.
 - Schema truth for the table is `docs/DB_SCHEMA.md :: file_state`.
 
 ## Runtime prerequisites (registry watcher)

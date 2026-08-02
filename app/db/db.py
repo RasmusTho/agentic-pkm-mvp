@@ -80,14 +80,19 @@ def assert_file_state_schema(conn: psycopg.Connection) -> None:
     vault-sync write raises an opaque invalid-conflict-target error part-way
     through a watcher tick.
 
-    This is deliberately **not** called from `ensure_schema`. That function is a
-    shared seam — `app/services/outbox.py::bootstrap` calls it too — and the
-    `file_state` key is no concern of the outbox path. The one caller is the
+    `ensure_schema` deliberately does not gate on this in production. That
+    function is a shared seam — `app/services/outbox.py::bootstrap` calls it too
+    — and the `file_state` key is no concern of the outbox path; gating there
+    would mask `OutboxSchemaMissingError`. The production caller is the
     vault-sync seam in `app/services/vault_sync.py`, the sole consumer of the
-    table.
+    table. (Under `STORE_SCHEMA_AUTOCREATE=1` the test-fixture autocreate calls
+    this too, after creating the table, so a scratch database that already holds
+    the legacy shape gets the same hint instead of an unexplained
+    `UndefinedColumn`. That path is inert in production.)
 
-    Checks the two things the rekey actually depends on: that the table exists,
-    and that its primary key is `(vault_binding_id, path)`.
+    Checks the three things the rekey depends on: that the table exists, that its
+    primary key is `(vault_binding_id, path)`, and that no unique index on `path`
+    alone survives to re-impose one-binding-per-path behind that key.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -103,14 +108,32 @@ def assert_file_state_schema(conn: psycopg.Connection) -> None:
                     ON att.attrelid = con.conrelid AND att.attnum = key.attnum
                  WHERE con.conrelid = to_regclass('public.file_state')
                    AND con.contype = 'p'
-              ), ARRAY[]::text[]) AS primary_key
+              ), ARRAY[]::text[]) AS primary_key,
+              COALESCE((
+                SELECT array_agg(cls.relname)
+                  FROM pg_index idx
+                  JOIN pg_class cls ON cls.oid = idx.indexrelid
+                 WHERE idx.indrelid = to_regclass('public.file_state')
+                   AND idx.indisunique
+                   AND idx.indnatts = 1
+                   AND (
+                     SELECT att.attname
+                       FROM pg_attribute att
+                      WHERE att.attrelid = idx.indrelid
+                        AND att.attnum = idx.indkey[0]
+                   ) = 'path'
+              ), ARRAY[]::text[]) AS path_only_unique
             """
         )
         row = cur.fetchone()
     if isinstance(row, dict):
-        table_exists, primary_key = row["table_exists"], row["primary_key"]
+        table_exists = row["table_exists"]
+        primary_key = row["primary_key"]
+        path_only_unique = row["path_only_unique"]
     else:
-        table_exists, primary_key = (row[0], row[1]) if row else (False, [])
+        table_exists, primary_key, path_only_unique = (
+            (row[0], row[1], row[2]) if row else (False, [], [])
+        )
 
     if not table_exists:
         raise FileStateSchemaMissingError(
@@ -126,6 +149,14 @@ def assert_file_state_schema(conn: psycopg.Connection) -> None:
             "This database predates Alembic revision c7f4b1a83d29 (MVR-05A0, "
             "#4543); run `alembic upgrade head` (scripts/run_migrations.sh) "
             "before starting a vault-sync producer."
+        )
+    if path_only_unique:
+        raise FileStateSchemaMissingError(
+            f"public.file_state carries unique index(es) {list(path_only_unique)!r} "
+            "on `path` alone. That re-imposes one-binding-per-path behind the "
+            "(vault_binding_id, path) key, which is exactly the overwrite "
+            "MVR-05A0 (#4543) removed. Drop the index before starting a "
+            "vault-sync producer."
         )
 
 

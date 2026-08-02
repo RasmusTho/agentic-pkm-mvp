@@ -87,10 +87,14 @@ def test_no_durable_ddl_has_two_owners() -> None:
         r"(?is)\b(?:create\s+table|alter\s+table|drop\s+table|create(?:\s+unique)?\s+index)\b"
         r"[^\"';]*\b(?:public\.)?file_state\b"
     )
+    # `op.create_table`/`add_column`/... take the table first, while
+    # `op.create_index`/`drop_constraint`/... take the *name* first, so the table
+    # name is matched anywhere in the call's arguments rather than only in first
+    # position — otherwise half these alternatives could never fire.
     file_state_op_ddl = re.compile(
         r"""(?is)\bop\.(?:create_table|add_column|drop_column|alter_column|drop_table"""
-        r"""|create_index|drop_index|rename_table|create_primary_key|drop_constraint)\s*\(\s*"""
-        r"""["'](?:public\.)?file_state["']"""
+        r"""|create_index|drop_index|rename_table|create_primary_key|drop_constraint)\s*\("""
+        r"""[^)]*["'](?:public\.)?file_state["']"""
     )
     file_state_owners = sorted(
         name
@@ -163,10 +167,23 @@ def test_file_state_is_reachable_from_the_alembic_revision_chain() -> None:
     )
 
 
-# The PG lane that MVR-05A's AC-5 names. It is an explicit allow-list, not a
-# directory glob, so a test file that is not listed here runs in no CI lane at
-# all — `-m "not pg"` excludes it everywhere else.
-PG_CONTRACTS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "integration-nightly.yaml"
+# The two lanes that actually execute `-m "pg"`. Both select files by explicit
+# allow-list, and every other lane runs `-m "not pg"`, so a pg-marked test that
+# is in neither runs in no CI lane at all.
+#
+# `integration-nightly / pg-contracts` triggers on `schedule` + `workflow_dispatch`
+# only. `ci-smoke / index_pg` is the PR-path lane — the same precedent EROJ-01
+# (#4350) set for its own pg-marked mechanism proofs.
+PG_LANES = (
+    (
+        REPO_ROOT / ".github" / "workflows" / "integration-nightly.yaml",
+        "Bounded PG verification lane",
+    ),
+    (
+        REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml",
+        "file_state PG surface",
+    ),
+)
 FILE_STATE_PG_TARGETS = (
     "tests/migrations/test_file_state_adoption.py",
     "tests/instance/test_file_state_binding_key.py",
@@ -175,24 +192,58 @@ FILE_STATE_PG_TARGETS = (
 )
 
 
-def test_file_state_pg_targets_run_in_the_pg_contracts_lane() -> None:
+def _pytest_invocation_after(workflow: str, step_name_fragment: str) -> str:
+    """The `pytest ...` command of the step whose name contains the fragment.
+
+    Scoped deliberately: a plain substring search over the whole workflow would
+    pass if a path were moved into a YAML comment or into an unrelated job.
+    """
+    marker = workflow.index(step_name_fragment)
+    start = workflow.index("pytest", marker)
+    end = workflow.index("\n\n", start)
+    return workflow[start:end]
+
+
+def test_file_state_pg_targets_run_in_both_pg_lanes() -> None:
     """The adoption and rekey guards must actually execute in CI, not just exist.
 
     Five of #4543's six machine-checkable acceptance criteria are `pg`-marked.
-    Every other lane runs `-m "not pg"`, and `integration-nightly / pg-contracts`
-    selects files by explicit allow-list. If these paths are not listed there, a
+    If these paths are not inside a pg lane's own pytest invocation, a
     forward-only migration on a live table is proven once, by hand, and then
-    never again — and `docs/DB_SCHEMA.md`'s claim that the table is reachable by
-    the PG verification lane becomes false-green coverage evidence.
+    never again — and the CI-coverage sentence in `docs/DB_SCHEMA.md` becomes
+    false-green evidence.
     """
-    workflow = PG_CONTRACTS_WORKFLOW.read_text(encoding="utf-8")
-    assert "pg-contracts:" in workflow, PG_CONTRACTS_WORKFLOW
-
-    missing = [target for target in FILE_STATE_PG_TARGETS if target not in workflow]
-    assert missing == [], (
-        f"{missing} are pg-marked but absent from the pg-contracts lane in "
-        f"{PG_CONTRACTS_WORKFLOW.name}; they would run in no CI lane."
-    )
+    for workflow_path, step_fragment in PG_LANES:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        invocation = _pytest_invocation_after(workflow, step_fragment)
+        missing = [target for target in FILE_STATE_PG_TARGETS if target not in invocation]
+        assert missing == [], (
+            f"{missing} are pg-marked but absent from the {step_fragment!r} pytest "
+            f"invocation in {workflow_path.name}; they would not run in that lane."
+        )
 
     for target in FILE_STATE_PG_TARGETS:
         assert (REPO_ROOT / target).exists(), f"{target} is listed in CI but does not exist"
+
+
+def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
+    """The PR-path lane is paths-filtered, so its filter must name what it guards.
+
+    Listing the tests in the run step is not enough: `ci-smoke / index_pg` only
+    executes when its paths filter matches, so a change to the migration or to
+    `vault_sync.py` that never touches a listed test file would skip the lane
+    entirely and merge unverified.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml").read_text(encoding="utf-8")
+    guarded_sources = (
+        "app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py",
+        "app/db/db.py",
+        "app/db/migrations_obsidian.sql",
+        "app/services/vault_sync.py",
+    )
+    missing = [source for source in guarded_sources + FILE_STATE_PG_TARGETS
+               if f"'{source}'" not in workflow]
+    assert missing == [], (
+        f"{missing} are not in the ci-smoke index_pg paths filter, so editing them "
+        "would skip the PR-path pg lane."
+    )

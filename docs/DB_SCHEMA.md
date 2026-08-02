@@ -294,6 +294,11 @@ Interpretation:
   `legacy-compatibility-binding`, not guessed onto a registry binding. A pre-MVR-05 database is
   single-binding by construction, so this attribution is provable; MVR-05A owns the sentinel →
   real-binding backfill and its ambiguity/quarantine rules.
+- Adoption backfills only rows whose `vault_binding_id` is NULL. A row that somehow already carries a
+  real binding id is preserved, not overwritten — but `_binding_id()` returns the sentinel until
+  MVR-05A ships the translator, so such a row would not be read and its note would re-sync. Nothing
+  writes that column before this revision, so the state is unreachable today; MVR-05A's backfill AC
+  owns it.
 - Every `file_state` statement in `app/services/vault_sync.py` is binding-scoped, including the two
   formerly UUID-keyed rename deletes (`delete from file_state where uuid = %s and path <> %s`) and
   the delete/last-remaining-path count in `delete_note`, which were only safe while `path` was the
