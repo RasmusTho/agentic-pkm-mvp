@@ -421,6 +421,9 @@ class _ModuleResolver:
                 return frozenset({_UNRESOLVED})
             return frozenset(a + b for a in left for b in right)
 
+        if isinstance(node, ast.Call):
+            return self._resolve_composed_sql(node, func, _seen, depth)
+
         if isinstance(node, ast.Name):
             key = (id(func) if func is not None else 0, node.id)
             if key in _seen:
@@ -440,6 +443,84 @@ class _ModuleResolver:
             return frozenset(values)
 
         return frozenset()
+
+    def _resolve_composed_sql(
+        self,
+        node: ast.Call,
+        func: ast.FunctionDef | ast.AsyncFunctionDef | None,
+        _seen: frozenset[tuple[int, str]],
+        depth: int,
+    ) -> frozenset[str]:
+        """Resolve the composable-SQL idiom to its literal template.
+
+        `psycopg.sql.SQL("SELECT ... FROM {table}").format(table=Identifier(t))`
+        and SQLAlchemy's `text("...")` are the two ways this repository builds a
+        statement out of something other than a plain string. Without this, the
+        whole statement resolves to nothing and is dropped from the scan in
+        silence — and "silently dropped" is precisely the outcome this gate
+        must not have. Every such site is a `SELECT` today; the point is that a
+        `DELETE FROM {table}` written this way tomorrow resolves to
+        `DELETE FROM <unresolved>` and raises, instead of disappearing.
+        """
+        called = node.func
+        name = (
+            called.attr
+            if isinstance(called, ast.Attribute)
+            else called.id
+            if isinstance(called, ast.Name)
+            else ""
+        )
+
+        if name in {"SQL", "text"} and node.args:
+            return self.resolve(node.args[0], func, _seen, depth=depth)
+
+        if name == "format" and isinstance(called, ast.Attribute):
+            templates = self.resolve(called.value, func, _seen, depth=depth)
+            if not templates:
+                return frozenset()
+            replacements: dict[str, str] = {}
+            for position, argument in enumerate(node.args):
+                replacements[str(position)] = self._identifier_text(argument, func, _seen, depth)
+            for keyword in node.keywords:
+                if keyword.arg:
+                    replacements[keyword.arg] = self._identifier_text(
+                        keyword.value, func, _seen, depth
+                    )
+            rendered: set[str] = set()
+            for template in templates:
+                rendered.add(
+                    re.sub(
+                        r"\{([A-Za-z_][\w]*|\d*)\}",
+                        lambda match: replacements.get(match.group(1) or "0", _UNRESOLVED),
+                        template,
+                    )
+                )
+            return frozenset(rendered)
+
+        return frozenset()
+
+    def _identifier_text(
+        self,
+        node: ast.expr,
+        func: ast.FunctionDef | ast.AsyncFunctionDef | None,
+        _seen: frozenset[tuple[int, str]],
+        depth: int,
+    ) -> str:
+        """`sql.Identifier(x)` / a literal, rendered as a table name or marker."""
+        target = node
+        if isinstance(node, ast.Call):
+            called = node.func
+            name = (
+                called.attr
+                if isinstance(called, ast.Attribute)
+                else called.id
+                if isinstance(called, ast.Name)
+                else ""
+            )
+            if name in {"Identifier", "SQL", "Literal"} and node.args:
+                target = node.args[0]
+        values = self.resolve(target, func, _seen, depth=depth)
+        return next(iter(values)) if len(values) == 1 else _UNRESOLVED
 
     # -- executed SQL ------------------------------------------------------ #
 
@@ -985,3 +1066,58 @@ def foreign_key_target_candidates() -> frozenset[str]:
     for path in sorted(ALEMBIC_VERSIONS.glob("*.py")):
         targets.update(pattern.findall(path.read_text(encoding="utf-8")))
     return frozenset(targets)
+
+
+@lru_cache(maxsize=None)
+def unresolvable_statement_sites() -> tuple[str, ...]:
+    """Executed SQL calls under ``app/**`` whose statement resolves to nothing.
+
+    The scans above raise when a *matched* durable statement carries an
+    unresolvable table name. This closes the other half: a call whose SQL
+    argument resolves to no literal at all never produces a statement to match,
+    so it would be dropped in silence rather than loudly. Keeping this at zero
+    is what makes "an unattributable durable statement stops the build" true
+    rather than aspirational.
+    """
+    sites: list[str] = []
+    for path in _app_modules():
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        if _in_separate_schema_plane(relative):
+            continue
+        resolver = _resolver(path)
+        source = path.read_text(encoding="utf-8")
+        for node in ast.walk(resolver.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            called = node.func
+            name = (
+                called.attr
+                if isinstance(called, ast.Attribute)
+                else called.id
+                if isinstance(called, ast.Name)
+                else ""
+            )
+            if name not in {"execute", "executemany", "_exec", "execute_values"}:
+                continue
+            func = resolver.enclosing_function(node)
+            resolved = False
+            for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
+                origins: list[tuple[ast.expr, ast.FunctionDef | ast.AsyncFunctionDef | None]]
+                if isinstance(argument, ast.Name) and func is not None:
+                    passed_in = resolver._parameter_bindings(argument.id, func)
+                    origins = list(passed_in) if passed_in else [(argument, func)]
+                else:
+                    origins = [(argument, func)]
+                for expression, origin in origins:
+                    if any(
+                        isinstance(text, str) and len(text) >= 6
+                        for text in resolver.resolve(expression, origin)
+                    ):
+                        resolved = True
+            if not resolved:
+                rendered = ", ".join(
+                    (ast.get_source_segment(source, argument) or "?").strip().replace("\n", " ")[:60]
+                    for argument in node.args
+                ) or "<no arguments>"
+                sites.append(f"{relative}:{node.lineno} {name}({rendered})")
+    return tuple(sites)

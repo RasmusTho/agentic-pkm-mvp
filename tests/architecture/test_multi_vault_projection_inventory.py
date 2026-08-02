@@ -64,6 +64,7 @@ from tests.architecture.durable_table_classification import (
     stale_producer_entries,
     unclassified_mutation_paths,
     unclassified_tables,
+    unresolvable_statement_sites,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -312,6 +313,29 @@ def test_every_durable_mutation_path_resolves_to_a_classified_producer() -> None
         assert unclassified_mutation_paths(reduced, tables), (
             f"dropping {table}'s first producer entry did not fail the producer gate"
         )
+
+
+def test_no_executed_sql_statement_is_invisible_to_the_scan() -> None:
+    """No SQL call under ``app/**`` resolves to nothing at all.
+
+    The scans raise when a *matched* durable statement carries an unresolvable
+    table name. This is the other half, and the quieter one: a call whose SQL
+    argument resolves to no literal produces no statement to match, so it would
+    drop out without any signal. Four such sites existed while this slice was
+    being written — the `psycopg.sql.SQL(...).format(Identifier(t))` idiom in
+    `app/db/__init__.py` and `app/stores/pg.py`, plus SQLAlchemy `text()` in
+    `app/health.py`. All four happen to be `SELECT`s, so nothing durable was
+    being missed; the resolver was widened anyway, because "they are all reads
+    today" is not a property a gate can rely on.
+    """
+    sites = unresolvable_statement_sites()
+    assert sites == (), (
+        "these SQL calls resolve to no literal statement, so the classification "
+        "and DDL scans cannot see them at all:\n  " + "\n  ".join(sites)
+        + "\nWiden the resolver in tests/architecture/durable_table_classification.py "
+        "rather than leaving a statement invisible: an INSERT written this way "
+        "would never reach the producer gate."
+    )
 
 
 def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
