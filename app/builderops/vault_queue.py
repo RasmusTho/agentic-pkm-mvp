@@ -373,8 +373,9 @@ def _content_is_local(stat_result: os.stat_result) -> bool:
     dataless".
     """
 
-    if hasattr(stat_result, "st_flags"):
-        return not (stat_result.st_flags & _SF_DATALESS)
+    flags: int | None = getattr(stat_result, "st_flags", None)
+    if flags is not None:
+        return not (flags & _SF_DATALESS)
     return not (stat_result.st_size > 0 and getattr(stat_result, "st_blocks", 1) == 0)
 
 
