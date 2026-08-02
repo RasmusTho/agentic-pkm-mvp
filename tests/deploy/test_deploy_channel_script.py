@@ -981,8 +981,10 @@ def test_same_target_retry_preserves_rollback_anchor(tmp_path: Path) -> None:
 
 def test_api_service_receives_raw_store_key() -> None:
     """#4422: the deploy wrapper bootstraps the declared api consumer and the
-    api service consumes its materialized secret layer, without changing how
-    heimdal-capture-watch is provisioned."""
+    api service consumes its materialized secret layer. #4362 later made
+    heimdal-capture-watch's own provisioning channel-independent (see
+    ``test_capture_watch_secret_gate_fires_for_every_channel`` below); this
+    test only pins the api-consumer wiring, which #4362 did not change."""
     lib = (REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh").read_text(
         encoding="utf-8"
     )
@@ -1004,9 +1006,9 @@ def test_api_service_receives_raw_store_key() -> None:
     # shared handle would deliver the api consumer's layer to the
     # capture-watch service's env_file chain.
     assert "unset HOST_SECRET_RUNTIME_ENV_FILE;" in lib
-    # The capture-watch provisioning is unchanged.
+    # The capture-watch provisioning helper still exists and is still wired.
     assert "--consumer heimdal-capture-watch" in lib
-    assert "_deploy_channel_needs_dev_capture_secret" in lib
+    assert "_deploy_channel_needs_capture_secret" in lib
 
     syntax = subprocess.run(
         ["bash", "-n", str(REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh")],
@@ -1097,3 +1099,74 @@ def test_api_service_receives_raw_store_key() -> None:
         text=True,
     )
     assert run.stdout == "/tmp/api-layer.env|scrubbed", run.stderr
+
+
+def test_capture_watch_secret_gate_fires_for_every_channel() -> None:
+    """#4362: heimdal-capture-watch's host-secret bootstrap wrap must fire on
+    every channel host_secret_contract.json declares the consumer for
+    (dev/test/prod), not only dev.
+
+    Before this fix, `_deploy_channel_needs_dev_capture_secret` hardcoded
+    `[ "${channel}" = "dev" ] || return 1`, so a `test` or `prod` deploy never
+    wrapped the compose invocation and HEIMDAL_RAW_STORE_KEY never reached
+    the service's env_file chain there no matter what the Keychain held --
+    the operator had to export it ad-hoc at compose time instead (the bug
+    report's prod bring-up symptom).
+    """
+    lib = (REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "_deploy_channel_needs_capture_secret" in lib
+    assert "_deploy_channel_needs_dev_capture_secret" not in lib
+
+    probe = (
+        'source "$1"; shift; '
+        "if _deploy_channel_needs_capture_secret \"$@\"; then echo yes; else echo no; fi"
+    )
+    lib_path = str(REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh")
+
+    def gate(*args: str) -> str:
+        run = subprocess.run(
+            ["bash", "-c", probe, "_", lib_path, *args],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return run.stdout.strip().splitlines()[-1] if run.stdout.strip() else run.stderr
+
+    for channel in ("dev", "test", "prod"):
+        assert gate(channel, "up", "-d", "heimdal-capture-watch") == "yes", channel
+        assert (
+            gate(channel, "up", "-d", "api", "worker", "watcher", "heimdal-capture-watch")
+            == "yes"
+        ), channel
+    assert gate("test", "up", "-d", "api") == "no"
+    assert gate("prod", "logs") == "no"
+
+    syntax = subprocess.run(
+        ["bash", "-n", lib_path],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+
+def test_heimdal_capture_watch_host_secret_layer_lives_in_base_compose() -> None:
+    """#4362: the HOST_SECRET_RUNTIME_ENV_FILE env_file layer for
+    heimdal-capture-watch must live in the base compose file so every
+    channel inherits it deterministically, rather than only in the dev
+    overlay (which left test/prod without a delivery path for
+    HEIMDAL_RAW_STORE_KEY at all)."""
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8"))
+    env_files = compose["services"]["heimdal-capture-watch"]["env_file"]
+    host_secret_layers = [
+        entry
+        for entry in env_files
+        if isinstance(entry, dict)
+        and str(entry.get("path", "")) == "${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"
+    ]
+    assert len(host_secret_layers) == 1
+    assert host_secret_layers[0].get("required") is False

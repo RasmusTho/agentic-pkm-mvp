@@ -27,7 +27,9 @@ exactly the way the real preflight guard does.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
 
 from app.release_channels.channel_isolation_preflight import (
     CHANNEL_SERVICES,
@@ -46,6 +48,19 @@ _SERVICE = "heimdal-capture-watch"
 
 def _service(compose: Path, name: str = _SERVICE) -> dict:
     return _load_compose(compose)["services"][name]
+
+
+def _healthcheck_test_command() -> str:
+    """Extract the shell one-liner Docker actually runs for this healthcheck.
+
+    ``healthcheck.test`` is ``["CMD-SHELL", "<script>"]``; the script is what
+    the container's healthcheck executes on its own interval, independent of
+    the supervised process (#4362).
+    """
+    svc = _service(_BASE_COMPOSE)
+    test = svc["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL"
+    return test[1]
 
 
 def test_base_service_defined() -> None:
@@ -172,3 +187,54 @@ def test_deploy_script_health_gates_the_new_service() -> None:
         if ln.strip().startswith("capture_watch_gate") and "()" not in ln
     ]
     assert invoked, "capture_watch_gate is defined but never invoked in the deploy flow"
+
+
+def test_healthcheck_fails_honestly_on_missing_watch_dir() -> None:
+    """#4362: the healthcheck must fail (nonzero exit) when
+    HEIMDAL_CAPTURE_WATCH_DIR is absent -- the exact config-missing shape
+    that crash-looped pkm-test-heimdal-capture-watch-1 for 72h+. This proves
+    the healthcheck mechanism itself is honest; the CLI-level fix (see
+    tests/heimdal/test_capture_runtime.py ::
+    test_resolve_config_for_supervised_run_retries_instead_of_raising) is
+    what keeps the container resident long enough for Docker's
+    interval/retries window to actually observe this failure instead of
+    racing a crash-loop restart."""
+    env = os.environ.copy()
+    env.pop("HEIMDAL_CAPTURE_WATCH_DIR", None)
+    env.pop("HEIMDAL_RAW_STORE_KEY", None)
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+
+    result = subprocess.run(
+        ["sh", "-c", _healthcheck_test_command()],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "HEIMDAL_CAPTURE_WATCH_DIR" in result.stderr
+
+
+def test_healthcheck_succeeds_when_config_is_present(tmp_path: Path) -> None:
+    """Counterpart to the failure case above: a fully-configured environment
+    must report healthy, so the honest-failure fix above is not just always
+    failing."""
+    watch_dir = tmp_path / "capture-inbox"
+    watch_dir.mkdir()
+    env = os.environ.copy()
+    env["HEIMDAL_CAPTURE_WATCH_DIR"] = str(watch_dir)
+    env["HEIMDAL_RAW_STORE_KEY"] = "a" * 64
+    env["PYTHONPATH"] = str(_REPO_ROOT)
+
+    result = subprocess.run(
+        ["sh", "-c", _healthcheck_test_command()],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

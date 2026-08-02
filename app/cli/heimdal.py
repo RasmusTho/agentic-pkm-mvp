@@ -11,6 +11,7 @@ from app.heimdal.archive_capacity import build_archive_capacity_report
 from app.heimdal.capture_runtime import (
     CaptureRuntimeConfig,
     CaptureRuntimeConfigError,
+    resolve_config_for_supervised_run,
     run_capture_tick,
     run_forever,
 )
@@ -37,17 +38,19 @@ def heimdal_group() -> None:
     help="Optional safety: stop after N ticks (ignored with --once; defaults to run forever).",
 )
 def capture_watch(once: bool, max_ticks: int | None) -> None:
-    try:
-        cfg = CaptureRuntimeConfig.from_env()
-    except CaptureRuntimeConfigError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    click.echo(
-        "heimdal capture-watch: "
-        f"watch_dir={cfg.watch_dir} interval_seconds={cfg.interval_seconds}"
-    )
-
     if once:
+        # A manually-invoked diagnostic command: fail loud and exit
+        # immediately on a config error, matching Heimdal's posture
+        # everywhere else.
+        try:
+            cfg = CaptureRuntimeConfig.from_env()
+        except CaptureRuntimeConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        click.echo(
+            "heimdal capture-watch: "
+            f"watch_dir={cfg.watch_dir} interval_seconds={cfg.interval_seconds}"
+        )
         result = run_capture_tick(cfg)
         if result is None:
             # `None` means the tick itself failed (e.g. the watch dir became
@@ -62,6 +65,16 @@ def capture_watch(once: bool, max_ticks: int | None) -> None:
         summary = {"admitted": len(result.admitted), "refused": len(result.refused)}
         click.echo(json.dumps(summary, ensure_ascii=False))
         return
+
+    # Supervised path (the compose service's default): see
+    # `resolve_config_for_supervised_run`'s docstring for why this must not
+    # exit immediately on a startup config error (#4362).
+    cfg = resolve_config_for_supervised_run()
+
+    click.echo(
+        "heimdal capture-watch: "
+        f"watch_dir={cfg.watch_dir} interval_seconds={cfg.interval_seconds}"
+    )
 
     try:
         ticks = run_forever(cfg, max_ticks=max_ticks)

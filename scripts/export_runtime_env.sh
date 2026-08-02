@@ -67,6 +67,18 @@ ENV
   if [ -n "${SIGNBOARD_ROOT:-}" ]; then
     printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
   fi
+  # heimdal-capture-watch is not gated by no-vault/idle mode (#4362): forward
+  # the operator's watch-dir/allowlist config here too, same rule as the
+  # vault-bound branch below -- only when explicitly set, never defaulted.
+  if [ -n "${HEIMDAL_CAPTURE_WATCH_DIR:-}" ]; then
+    printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=${HEIMDAL_CAPTURE_WATCH_DIR}" >> "$runtime_env_path"
+  fi
+  if [ -n "${HEIMDAL_RAW_READ_ALLOWLIST:-}" ]; then
+    printf "%s\n" "HEIMDAL_RAW_READ_ALLOWLIST=${HEIMDAL_RAW_READ_ALLOWLIST}" >> "$runtime_env_path"
+  fi
+  if [ -n "${HEIMDAL_CAPTURE_INTERVAL_SECONDS:-}" ]; then
+    printf "%s\n" "HEIMDAL_CAPTURE_INTERVAL_SECONDS=${HEIMDAL_CAPTURE_INTERVAL_SECONDS}" >> "$runtime_env_path"
+  fi
   echo "Exported no-vault idle runtime env -> $runtime_env_path"
   exit 0
 fi
@@ -304,6 +316,14 @@ if [ "$_is_test_channel" -eq 1 ]; then
   printf "%s\n" "WATCHER_HEARTBEAT_PATH=/app/tmp-test/watcher_heartbeat.json" >> "$runtime_env_path"
   printf "%s\n" "WORKER_HEARTBEAT_PATH=/app/tmp-test/worker_heartbeat.json" >> "$runtime_env_path"
   printf "%s\n" "WATCHER_STATE_PATH=/app/tmp-test/watcher_state.json" >> "$runtime_env_path"
+  # heimdal-capture-watch has no real capture client on the test channel, and
+  # an absent/empty HEIMDAL_CAPTURE_WATCH_DIR is a fail-loud config error
+  # (app.heimdal.capture_runtime.CaptureRuntimeConfig.from_env) -- exactly
+  # what crash-looped pkm-test-heimdal-capture-watch-1 for 72h+ (#4362).
+  # Hardcode a test-scoped folder under the same tmp-test artifact root the
+  # other test-channel paths above use, unconditionally, so the service
+  # always has somewhere valid to watch (it will simply stay empty).
+  printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=/app/tmp-test/heimdal-capture-inbox" >> "$runtime_env_path"
 else
   if [ -n "${WATCHER_STATE_DIR:-}" ]; then
     printf "%s\n" "WATCHER_STATE_DIR=${WATCHER_STATE_DIR}" >> "$runtime_env_path"
@@ -311,6 +331,26 @@ else
 
   if [ -n "${WATCHER_STOP_FILE:-}" ]; then
     printf "%s\n" "WATCHER_STOP_FILE=${WATCHER_STOP_FILE}" >> "$runtime_env_path"
+  fi
+
+  # heimdal-capture-watch's non-secret operator config (#4362): the watched
+  # folder and read-allowlist differ per device/channel and have no safe
+  # default outside the test channel (an empty/missing watch dir must fail
+  # loud, never fall back to a guessed path) -- forward only when the
+  # operator actually set them, mirroring WATCHER_STATE_DIR/STOP_FILE above,
+  # so the generated runtime env is the one deterministic delivery path for
+  # every non-test channel instead of requiring an ad-hoc shell export at
+  # compose time. HEIMDAL_RAW_STORE_KEY is deliberately NOT handled here --
+  # it is a Keychain-backed secret delivered through the host-secret
+  # bootstrap env_file layer, never through this generated file.
+  if [ -n "${HEIMDAL_CAPTURE_WATCH_DIR:-}" ]; then
+    printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=${HEIMDAL_CAPTURE_WATCH_DIR}" >> "$runtime_env_path"
+  fi
+  if [ -n "${HEIMDAL_RAW_READ_ALLOWLIST:-}" ]; then
+    printf "%s\n" "HEIMDAL_RAW_READ_ALLOWLIST=${HEIMDAL_RAW_READ_ALLOWLIST}" >> "$runtime_env_path"
+  fi
+  if [ -n "${HEIMDAL_CAPTURE_INTERVAL_SECONDS:-}" ]; then
+    printf "%s\n" "HEIMDAL_CAPTURE_INTERVAL_SECONDS=${HEIMDAL_CAPTURE_INTERVAL_SECONDS}" >> "$runtime_env_path"
   fi
 fi
 unset _is_test_channel

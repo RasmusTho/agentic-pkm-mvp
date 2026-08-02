@@ -797,8 +797,15 @@ def _write_executable(path: Path, text: str) -> None:
 
 
 def test_capture_watch_uses_bootstrap_not_tracked_env(tmp_path: Path) -> None:
+    # #4362: the HOST_SECRET_RUNTIME_ENV_FILE env_file layer now lives in the
+    # base compose file so every channel inherits it deterministically, not
+    # only dev (see tests/deploy/test_deploy_channel_script.py ::
+    # test_heimdal_capture_watch_host_secret_layer_lives_in_base_compose).
+    # The dev overlay still guards against a stray HEIMDAL_RAW_STORE_KEY
+    # reaching the service through any other channel.
+    base_compose = (_REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
     dev_overlay = (_REPO_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
-    assert "${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}" in dev_overlay
+    assert "${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}" in base_compose
     assert "HEIMDAL_RAW_STORE_KEY: !reset null" in dev_overlay
 
     bin_dir = tmp_path / "bin"
