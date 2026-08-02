@@ -227,6 +227,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Vault-layout hardcoded-literal fitness guard. Keep this exact
             # file owned without widening vault to all architecture tests.
             "tests/architecture/test_no_hardcoded_vault_layout.py",
+            # The semanticmd vault-note merge driver/resolver (#4505): cross-
+            # device vault-note merging is its real job (uuid: frontmatter
+            # identity, near-duplicate/"prefer concise" heuristics), so it was
+            # previously unowned runtime code that failed CI selection closed.
+            "app/agents/merge_resolver/",
+            "app/cli/merge_driver.py",
+            "docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md",
+            "tests/fixtures/merge/",
         ),
         (
             "tests/instance",
@@ -234,6 +242,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/knowledge",
             "tests/ports",
             "tests/architecture/test_no_hardcoded_vault_layout.py",
+            "tests/agents/test_merge_resolver.py",
+            "tests/agents/test_merge_resolver_repo_docs.py",
+            "tests/cli/test_merge_driver.py",
         ),
     ),
     (
