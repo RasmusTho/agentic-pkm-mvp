@@ -20,6 +20,7 @@ from app.ops.host_secret_bootstrap import (
     HOST_SECRET_RUNTIME_ENV_FILE,
     HostSecretBootstrapError,
     HostSecretBootstrapTerminated,
+    HostSecretSharedDomainDivergenceError,
     KeychainLookup,
     materialize_consumer_environment,
     load_runtime_secret_values,
@@ -53,11 +54,19 @@ def test_consumer_gets_only_allowlisted_values(tmp_path: Path) -> None:
     ) as env_file:
         assert env_file.read_text(encoding="utf-8") == f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
 
+    # heimdal.raw-store-key is shared-domain (#4512): resolving it for one
+    # consumer also looks up the other declared consumer's account on the same
+    # channel to compare digests, so both accounts are requested even though
+    # only the requested consumer's value is materialized.
     assert requested == [
         (
             "yggdrasil.host-secrets",
             "dev:heimdal-capture-watch:heimdal.raw-store-key",
-        )
+        ),
+        (
+            "yggdrasil.host-secrets",
+            "dev:heimdal-api-ingress:heimdal.raw-store-key",
+        ),
     ]
 
 
@@ -1050,3 +1059,148 @@ def test_loader_rejects_a_declaration_without_an_explicit_boolean_optional(
 
     with pytest.raises(ValueError, match=expected):
         host_secret_bootstrap.load_host_secret_contract(path)
+
+
+# --- Shared-domain divergence check (#4512) ---------------------------------
+#
+# `heimdal.raw-store-key` feeds one AES-256-GCM cipher domain from two
+# independently bootstrapped consumers (heimdal-capture-watch,
+# heimdal-api-ingress). Nothing previously required the two Keychain items to
+# hold the same value; these tests prove the production bootstrap entrypoint
+# (`run_with_host_secrets`, and `main` below it) refuses rather than
+# proceeding into a split cipher domain, that matching material bootstraps
+# byte-for-byte unchanged, and that the check never discloses either value.
+
+_SIBLING_RAW_KEY = "b" * 64
+
+
+def _divergent_raw_store_key_lookup(
+    *,
+    primary: str = _RAW_KEY,
+    sibling: str = _SIBLING_RAW_KEY,
+) -> KeychainLookup:
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":heimdal-api-ingress:heimdal.raw-store-key"):
+            return sibling
+        if account.endswith(":heimdal-capture-watch:heimdal.raw-store-key"):
+            return primary
+        pytest.fail(f"unexpected account lookup: {account}")
+
+    return lookup
+
+
+def test_divergent_shared_domain_secret_fails_loud(tmp_path: Path) -> None:
+    launched = False
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    with pytest.raises(HostSecretSharedDomainDivergenceError) as error:
+        run_with_host_secrets(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            command=["never-start"],
+            keychain_lookup=_divergent_raw_store_key_lookup(),
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    assert not launched
+    message = str(error.value)
+    assert "heimdal.raw-store-key" in message
+    assert _RAW_KEY not in message
+    assert _SIBLING_RAW_KEY not in message
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_matching_shared_domain_secret_bootstraps_unchanged(tmp_path: Path) -> None:
+    """Identical material across both consumers bootstraps unchanged (#4489/#4512)."""
+    observed_path: Path | None = None
+
+    def runner(_command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        observed_path = Path(env["HOST_SECRET_RUNTIME_ENV_FILE"])
+        assert observed_path.read_text(encoding="utf-8") == f"HEIMDAL_RAW_STORE_KEY={_RAW_KEY}\n"
+        return 0
+
+    result = run_with_host_secrets(
+        channel="dev",
+        consumer="heimdal-capture-watch",
+        command=["consumer"],
+        keychain_lookup=_divergent_raw_store_key_lookup(sibling=_RAW_KEY),
+        runner=runner,
+        directory=tmp_path,
+    )
+
+    assert result == 0
+    assert observed_path is not None and not observed_path.exists()
+
+
+def test_non_shared_domain_secret_with_two_consumers_skips_sibling_lookup(
+    tmp_path: Path,
+) -> None:
+    """`openai.api-key` is declared by two consumers but is not shared-domain.
+
+    `builderops-model-inquiry` and `builderops-ckm-semantic` both declare
+    `openai.api-key`, proving the sibling-lookup machinery is gated on
+    `shared_key_domain`, not merely on "more than one declared consumer".
+    """
+    requested_accounts: list[str] = []
+
+    def lookup(_service: str, account: str) -> str:
+        requested_accounts.append(account)
+        if account == "dev:builderops-ckm-semantic:openai.api-key":
+            return _OPENAI_KEY
+        pytest.fail(f"unexpected account lookup: {account}")
+
+    result = run_with_host_secrets(
+        channel="dev",
+        consumer="builderops-ckm-semantic",
+        command=["consumer"],
+        keychain_lookup=lookup,
+        runner=lambda _command, _env: 0,
+        directory=tmp_path,
+    )
+
+    assert result == 0
+    assert requested_accounts == ["dev:builderops-ckm-semantic:openai.api-key"]
+
+
+def test_shared_domain_check_never_logs_key_material(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # `main` resolves through the real default `_security_keychain_lookup`,
+    # bound as a parameter default at function-definition time, so patching
+    # the module attribute would not reach it. `raw-store-key` accounts take
+    # the `security` CLI subprocess path (never the framework path), so patch
+    # that call site instead — same technique already used by
+    # `test_capture_watch_uses_bootstrap_not_tracked_env` via a fake `security`
+    # binary, done here via `subprocess.run` directly to stay in-process.
+    lookup = _divergent_raw_store_key_lookup()
+
+    class _FakeCompletedProcess:
+        def __init__(self, stdout: str) -> None:
+            self.returncode = 0
+            self.stdout = stdout
+
+    def fake_run(command: list[str], **_kwargs: object) -> _FakeCompletedProcess:
+        account = command[command.index("-a") + 1]
+        return _FakeCompletedProcess(lookup("yggdrasil.host-secrets", account) + "\n")
+
+    monkeypatch.setattr(host_secret_bootstrap.subprocess, "run", fake_run)
+
+    exit_code = host_secret_bootstrap.main(
+        ["--channel", "dev", "--consumer", "heimdal-capture-watch", "--", "never-start"]
+    )
+
+    assert exit_code == 78
+    captured = capsys.readouterr()
+    for stream in (captured.out, captured.err):
+        assert _RAW_KEY not in stream
+        assert _SIBLING_RAW_KEY not in stream
+        assert "heimdal-capture-watch:heimdal.raw-store-key" not in stream
+        assert "heimdal-api-ingress:heimdal.raw-store-key" not in stream
+    assert "heimdal.raw-store-key" in captured.err
