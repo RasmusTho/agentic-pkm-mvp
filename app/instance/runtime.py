@@ -2603,6 +2603,56 @@ def _finish_instance_state_deployment(
             )
 
 
+def _release_instance_state_deployment_lease(
+    *,
+    channel: str,
+    host_global_root: Path,
+    controller_pid: int,
+    controller_start_token: str,
+) -> dict[str, object]:
+    """Surrender an abandoned deployment's own host-global lease.
+
+    Called by the producer's own failure path between ``deployment-begin``
+    and ``deployment-finish``. This is a self-release: it only ever clears a
+    lease whose recorded channel and controller match the caller's own
+    identity, so it can never disturb a lease still owned by a live or
+    unrelated deployment, and it is a no-op once ``deployment-finish`` has
+    already cleared the lease it was guarding.
+    """
+
+    ownership_root = _assert_mount_root(host_global_root, "host-global")
+    controller = {"pid": controller_pid, "start_token": controller_start_token}
+    with _deployment_admission_locked(ownership_root):
+        lease_path = _deployment_lease_path(ownership_root)
+        if not lease_path.exists():
+            return {"released": False, "reason": "no-active-lease"}
+        try:
+            lease = _read_deployment_lease(ownership_root)
+        except InstanceStatePreflightError:
+            return {"released": False, "reason": "lease-unreadable"}
+        if lease.get("channel_id") != channel or lease.get("controller") != controller:
+            return {"released": False, "reason": "controller-mismatch"}
+        if lease.get("phase") == "cleanup":
+            result = lease.get("result")
+            if not (isinstance(result, dict) and result.get("channel") == channel):
+                return {"released": False, "reason": "cleanup-receipt-invalid"}
+            receipt = _complete_instance_state_deployment_cleanup(ownership_root)
+            return receipt | {"released": True, "reason": "already-in-cleanup"}
+        root_lease_path = _legacy_deployment_lease_path(ownership_root)
+        result: dict[str, object] = {
+            "channel": channel,
+            "restart_fence_cleared": True,
+            "aborted": True,
+        }
+        cleanup_lease = lease | {"phase": "cleanup", "result": result}
+        _replace_private_json(lease_path, cleanup_lease)
+        _replace_private_json(
+            root_lease_path, _compatibility_block_payload(cleanup_lease)
+        )
+        receipt = _complete_instance_state_deployment_cleanup(ownership_root)
+        return receipt | {"released": True, "reason": "abandoned-deployment"}
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
@@ -3358,6 +3408,11 @@ def main(argv: list[str] | None = None) -> int:
     finish.add_argument("--backup-root", type=Path, required=True)
     finish.add_argument("--restore-root", type=Path)
     finish.add_argument("--quiescence-proof-path", type=Path, required=True)
+    release = subparsers.add_parser("deployment-release")
+    release.add_argument("--channel", required=True)
+    release.add_argument("--host-global-root", type=Path, required=True)
+    release.add_argument("--controller-pid", type=int, required=True)
+    release.add_argument("--controller-start-token", required=True)
     prove = subparsers.add_parser("deployment-prove")
     prove.add_argument("--channel", required=True)
     prove.add_argument("--host-global-root", type=Path, required=True)
@@ -3531,6 +3586,19 @@ def main(argv: list[str] | None = None) -> int:
                     backup_root=args.backup_root,
                     restore_root=args.restore_root,
                     quiescence_proof=proof,
+                ),
+                sort_keys=True,
+            )
+        )
+        return 0
+    if args.command == "deployment-release":
+        print(
+            json.dumps(
+                _release_instance_state_deployment_lease(
+                    channel=args.channel,
+                    host_global_root=args.host_global_root,
+                    controller_pid=args.controller_pid,
+                    controller_start_token=args.controller_start_token,
                 ),
                 sort_keys=True,
             )
