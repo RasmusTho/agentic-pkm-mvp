@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py (2026-08-02) + app/stores/pg.py + tests/architecture/durable_table_classification.json (2026-08-02)
+Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-02)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.

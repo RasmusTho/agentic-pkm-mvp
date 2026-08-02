@@ -187,7 +187,21 @@ def _ensure_tables() -> None:
     with _connect() as conn:
         for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
             with conn.cursor() as cur:
-                cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+                # Bound to the *current* schema rather than resolved through the
+                # whole `search_path`. Three pg tests run this fixture under
+                # `options=-csearch_path=pgtest_<hex>,public`
+                # (`tests/integration/test_vault_sync_atomicity.py`,
+                # `tests/services/test_outbox_idempotency_pg.py`,
+                # `tests/indexer/test_outbox_roundtrip_pg.py`) and rely on the
+                # unqualified `CREATE TABLE` landing a private copy in their own
+                # schema. A bare `to_regclass('store_objects')` would find the
+                # migrated `public` table, skip the group, and silently hand
+                # those tests the shared tables instead.
+                cur.execute(
+                    "SELECT to_regclass(format('%I.%I', current_schema(), %s)) "
+                    "IS NOT NULL AS present",
+                    (table,),
+                )
                 row = cur.fetchone()
             present = (row.get("present") if isinstance(row, dict) else row[0]) if row else False
             if present:

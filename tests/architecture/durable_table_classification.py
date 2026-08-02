@@ -68,8 +68,12 @@ BINDING_KEY_STATES = ("keyed", "pending", "not-applicable")
 #: The three checkable conditions that route the downstream table-group
 #: children (`docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md
 #: :: 05A child decomposition`). "Needs a schema-parity proof written from
-#: scratch" is deliberately **not** one of them: nine of the fifteen pending
-#: tables need one, so it would escalate everything and route nothing.
+#: scratch" is deliberately **not** one of them: nine of the fifteen tables the
+#: three table groups own need one — `parity_pins` measures seven pins across
+#: the whole pending worklist — so it would escalate every group and
+#: discriminate between none of them. These three do discriminate: MVR-05A3
+#: trips on all five of its tables, MVR-05A4 on two of four, MVR-05A5 on all
+#: six but for two different reasons.
 ESCALATION_CONDITIONS = (
     # A primary key or unique constraint must be rewritten, rather than an
     # additive binding column plus an additive index being sufficient.
@@ -117,6 +121,11 @@ _UNRESOLVED = "\x00unresolved\x00"
 #: `test_the_separate_schema_planes_hold_no_durable_statement` proves the
 #: exemption is not currently hiding one.
 SEPARATE_SCHEMA_PLANES = ("app/builderops", "app/dispatcher")
+
+#: The one environment variable that turns create-on-demand on. Every
+#: autocreate gate in this repository reads it, and a "gate" that does not
+#: is not one.
+_AUTOCREATE_FLAG = "STORE_SCHEMA_AUTOCREATE"
 
 _TABLE_REFERENCE = r"(?:public\.)?[\"']?([A-Za-z_\x00][\w\x00]*)[\"']?"
 
@@ -313,6 +322,43 @@ class _ModuleResolver:
         """The element expressions of a literal sequence, following names."""
         if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
             return list(node.elts)
+        if isinstance(node, ast.Call):
+            called = node.func
+            name = (
+                called.attr
+                if isinstance(called, ast.Attribute)
+                else called.id
+                if isinstance(called, ast.Name)
+                else ""
+            )
+            # Order- and type-preserving wrappers: `for table in
+            # reversed(CKM_TABLE_NAMES)` iterates exactly the same names.
+            if name in {"reversed", "sorted", "tuple", "list", "set", "frozenset"} and node.args:
+                return self._iterable_elements(node.args[0], func, _seen)
+            # `for table, columns in additions.items()` over a dict literal.
+            if name == "items" and isinstance(called, ast.Attribute):
+                mapping = called.value
+                if isinstance(mapping, ast.Name):
+                    resolved_mapping = None
+                    for bound in [
+                        *(self._function_bindings(mapping.id, func, _seen) if func else []),
+                        *self._module_bindings(mapping.id),
+                    ]:
+                        if isinstance(bound, ast.Dict):
+                            resolved_mapping = bound
+                            break
+                    mapping = resolved_mapping if resolved_mapping is not None else mapping
+                if isinstance(mapping, ast.Dict):
+                    pairs: list[ast.expr] = []
+                    for key, value in zip(mapping.keys, mapping.values):
+                        if key is None:
+                            continue
+                        pair = ast.Tuple(elts=[key, value], ctx=ast.Load())
+                        pair.lineno = key.lineno
+                        pair.col_offset = key.col_offset
+                        pairs.append(pair)
+                    return pairs
+            return None
         if isinstance(node, ast.Name):
             key = (id(func) if func is not None else 0, node.id)
             if key in _seen:
@@ -413,10 +459,12 @@ class _ModuleResolver:
             return frozenset(combined)
 
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left = self.resolve(node.left, func, _seen, depth=depth)
-            right = self.resolve(node.right, func, _seen, depth=depth)
-            if not left or not right:
-                return frozenset()
+            # An unresolvable operand becomes the marker rather than collapsing
+            # the whole expression to nothing: `"CREATE TABLE " + name + " (...)"`
+            # must still be recognised as CREATE TABLE, with an unresolvable
+            # table name that raises, instead of vanishing from discovery.
+            left = self.resolve(node.left, func, _seen, depth=depth) or frozenset({_UNRESOLVED})
+            right = self.resolve(node.right, func, _seen, depth=depth) or frozenset({_UNRESOLVED})
             if len(left) * len(right) > self._MAX_ALTERNATIVES:
                 return frozenset({_UNRESOLVED})
             return frozenset(a + b for a in left for b in right)
@@ -473,6 +521,21 @@ class _ModuleResolver:
 
         if name in {"SQL", "text"} and node.args:
             return self.resolve(node.args[0], func, _seen, depth=depth)
+
+        if name == "replace" and isinstance(called, ast.Attribute) and len(node.args) >= 2:
+            # `"""... __PLACEHOLDER__ ...""".replace("__PLACEHOLDER__", rows())`
+            # is how `7e4f2a1c9d30` renders its reviewed consumer allowlist into a
+            # DO block. Without this the whole revision resolves to nothing.
+            templates = self.resolve(called.value, func, _seen, depth=depth)
+            needles = self.resolve(node.args[0], func, _seen, depth=depth)
+            values = self.resolve(node.args[1], func, _seen, depth=depth) or frozenset(
+                {_UNRESOLVED}
+            )
+            if not templates or len(needles) != 1 or len(values) != 1:
+                return templates
+            needle = next(iter(needles))
+            value = next(iter(values))
+            return frozenset(template.replace(needle, value) for template in templates)
 
         if name == "format" and isinstance(called, ast.Attribute):
             templates = self.resolve(called.value, func, _seen, depth=depth)
@@ -539,6 +602,7 @@ class _ModuleResolver:
         actually issues it is behind ``STORE_SCHEMA_AUTOCREATE``.
         """
         relative = self.path.relative_to(REPO_ROOT).as_posix()
+        literal_lines = self._literal_linenos()
         for node in ast.walk(self.tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -566,12 +630,26 @@ class _ModuleResolver:
                             continue
                         yield SqlStatement(
                             path=relative,
-                            lineno=expression.lineno,
+                            # The literal's own line when the statement reached
+                            # this call through a name — otherwise every seam in
+                            # a `for statement in statements:` loop reports the
+                            # loop line, and a failure message points at the
+                            # loop rather than at the offending DDL.
+                            lineno=literal_lines.get(text, expression.lineno),
                             text=text,
                             function=origin.name if origin is not None else None,
                             autocreate_gated=self.autocreate_gated(expression, origin),
-                            existence_probed=_existence_probed(origin),
+                            existence_probed=self.existence_probed(expression, origin),
                         )
+
+    @lru_cache(maxsize=1)
+    def _literal_linenos(self) -> Mapping[str, int]:
+        """First line of each distinct string literal in this module."""
+        lines: dict[str, int] = {}
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                lines.setdefault(node.value, node.lineno)
+        return lines
 
     def autocreate_gated(
         self, node: ast.AST, func: ast.FunctionDef | ast.AsyncFunctionDef | None
@@ -611,21 +689,123 @@ class _ModuleResolver:
                 if isinstance(called, ast.Attribute)
                 else ""
             )
-            if "autocreate" not in called_name.lower():
+            if not self._reads_the_autocreate_flag(called_name):
                 continue
             in_body = any(self._contains(branch, node) for branch in candidate.body)
             if negated:
-                # The guarded branch must not fall through, or the statements
-                # after it would run in production too.
-                if not any(
-                    isinstance(inner, (ast.Return, ast.Raise))
-                    for statement in candidate.body
-                    for inner in ast.walk(statement)
-                ):
+                # The guarded branch must terminate, not merely contain a
+                # `return` somewhere inside a further conditional — otherwise
+                # it falls through and the statements after it run in
+                # production too.
+                if not isinstance(candidate.body[-1], (ast.Return, ast.Raise)):
                     continue
                 if not in_body and node.lineno > candidate.lineno:
                     return True
             elif in_body:
+                return True
+        return False
+
+    def _reads_the_autocreate_flag(self, called_name: str) -> bool:
+        """True when ``called_name`` is a predicate that reads the fixture flag.
+
+        Matching the *name* alone is not enough: a helper called
+        `_vector_autocreate_probe()` that returns `True` unconditionally would
+        mark production DDL as gated. Every real gate in this repository is the
+        same one-liner over ``STORE_SCHEMA_AUTOCREATE``, so the check is that
+        the named function actually reads it.
+        """
+        if "autocreate" not in called_name.lower():
+            return False
+        for node in ast.walk(self.tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name != called_name:
+                continue
+            if _AUTOCREATE_FLAG in ast.dump(node):
+                return True
+        # Imported from another module in the same package.
+        for node in self.tree.body:
+            if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+                continue
+            if not node.module.startswith("app."):
+                continue
+            if not any((alias.asname or alias.name) == called_name for alias in node.names):
+                continue
+            source = REPO_ROOT / Path(*node.module.split(".")).with_suffix(".py")
+            if source.exists() and _AUTOCREATE_FLAG in source.read_text(encoding="utf-8"):
+                return True
+        return False
+
+    def existence_probed(
+        self, node: ast.AST, func: ast.FunctionDef | ast.AsyncFunctionDef | None
+    ) -> bool:
+        """True when *this statement* is skipped if its table already exists.
+
+        A **per-statement** property, deliberately. Asking only whether the
+        enclosing function mentions ``to_regclass`` somewhere and contains some
+        early return is a different question, and `app/stores/pg.py` answers
+        that one "yes" for free: `if _TABLES_READY: return` supplies the branch
+        and the probe sits in a loop the statement need not be in. Under that
+        weaker check, moving the three `ALTER TABLE store_vector_index`
+        statements back out of the group and issuing them unconditionally — the
+        exact defect this slice closed — left the gate green.
+
+        The real mechanism is a loop that probes ``to_regclass`` per table and
+        ``continue``s past the whole group when it resolves, which is what
+        `app/db/db.py::_run_migration_sql` established. So: the statement must
+        sit inside such a loop.
+        """
+        if func is None:
+            return False
+        for loop in self._enclosing_loops(node, func):
+            if self._loop_skips_existing_tables(loop, node):
+                return True
+        return False
+
+    def _enclosing_loops(
+        self, node: ast.AST, func: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> list[ast.For | ast.AsyncFor]:
+        loops: list[ast.For | ast.AsyncFor] = []
+        current: ast.AST | None = self._parent.get(node)
+        while current is not None and current is not func:
+            if isinstance(current, (ast.For, ast.AsyncFor)):
+                loops.append(current)
+            current = self._parent.get(current)
+        return loops
+
+    def _loop_skips_existing_tables(self, loop: ast.For | ast.AsyncFor, node: ast.AST) -> bool:
+        probes = False
+        for inner in ast.walk(loop):
+            if not isinstance(inner, ast.Call):
+                continue
+            called = inner.func
+            name = (
+                called.attr
+                if isinstance(called, ast.Attribute)
+                else called.id
+                if isinstance(called, ast.Name)
+                else ""
+            )
+            if name not in {"execute", "executemany", "_exec", "execute_values"}:
+                continue
+            enclosing = self.enclosing_function(inner)
+            for argument in inner.args:
+                if any(
+                    isinstance(text, str) and "to_regclass" in text.lower()
+                    for text in self.resolve(argument, enclosing)
+                ):
+                    probes = True
+        if not probes:
+            return False
+        # A skip branch the statement is not itself inside: `if present: continue`.
+        for inner in ast.walk(loop):
+            if not isinstance(inner, ast.If):
+                continue
+            if not any(
+                isinstance(statement, (ast.Continue, ast.Return)) for statement in inner.body
+            ):
+                continue
+            if not self._contains(inner, node):
                 return True
         return False
 
@@ -638,30 +818,6 @@ class _ModuleResolver:
         return False
 
 
-def _existence_probed(func: ast.FunctionDef | ast.AsyncFunctionDef | None) -> bool:
-    """True when ``func`` skips a table's statement group if the table exists.
-
-    The mechanism `app/db/db.py::_run_migration_sql` established and
-    `app/stores/pg.py::_ensure_tables` adopted in MVR-05A2: probe
-    ``to_regclass`` per table and ``continue`` past the whole group when it
-    resolves. `CREATE TABLE IF NOT EXISTS` cannot supply this on its own — it
-    no-ops silently against an older shape while the statements after it still
-    run against that shape, which is how a fixture becomes a second owner able
-    to reshape a migration-owned table.
-    """
-    if func is None:
-        return False
-    source = ast.dump(func)
-    if "to_regclass" not in source:
-        return False
-    return any(
-        isinstance(node, ast.Continue) or isinstance(node, ast.Return)
-        for branch in ast.walk(func)
-        if isinstance(branch, ast.If)
-        for node in ast.walk(branch)
-    )
-
-
 @lru_cache(maxsize=None)
 def _resolver(path: Path) -> _ModuleResolver:
     return _ModuleResolver(path, ast.parse(path.read_text(encoding="utf-8")))
@@ -669,12 +825,13 @@ def _resolver(path: Path) -> _ModuleResolver:
 
 def _statement_matches(
     text: str, patterns: Sequence[tuple[str, str]]
-) -> Iterator[tuple[str, str]]:
+) -> Iterator[tuple[str, str, int]]:
+    """Every (verb, table, offset) the patterns match in ``text``."""
     for verb, prefix in patterns:
         suffix = _VERB_SUFFIXES.get(verb, "")
         pattern = re.compile(rf"(?is)\b{prefix}{_TABLE_REFERENCE}{suffix}")
         for match in pattern.finditer(text):
-            yield verb, match.group(1)
+            yield verb, match.group(1), match.start()
 
 
 # --------------------------------------------------------------------------- #
@@ -745,21 +902,31 @@ def _created_tables(resolver: _ModuleResolver, node: ast.AST, path: Path) -> Ite
     # Raw `CREATE TABLE` through `op.execute(...)` / `cur.execute(...)`.
     if name not in {"execute", "executemany", "_exec", "execute_values"}:
         return
+    if not node.args and not node.keywords:
+        return
+    statement_resolved = False
     for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
         resolved = resolver.resolve(argument, func)
-        if resolved:
-            for text in resolved:
-                for _, table in _statement_matches(text, _DDL_VERB_PATTERNS[:1]):
-                    yield _normalize(table, path, node.lineno)
-            continue
-        # Unresolvable argument: only a problem if it *is* durable DDL, which
-        # is decided on the raw source segment rather than on the value.
-        segment = ast.get_source_segment(path.read_text(encoding="utf-8"), argument) or ""
-        if re.search(r"(?is)\bcreate\s+table\b", segment):
-            raise UnresolvedTableExpression(
-                f"{path.name}:{node.lineno} issues CREATE TABLE against a table name this "
-                "gate cannot resolve statically."
-            )
+        for text in resolved:
+            if not isinstance(text, str) or len(text) < 6:
+                continue
+            statement_resolved = True
+            for _, table, _offset in _statement_matches(text, _DDL_VERB_PATTERNS[:1]):
+                yield _normalize(table, path, node.lineno)
+    if not statement_resolved:
+        # No argument reduced to a statement at all. Inspecting the raw source
+        # segment is not a substitute: for `sql = "CREATE TABLE " + name + ...;
+        # op.execute(sql)` the segment is the single word `sql`, so a
+        # segment-level check would let the revision — and the durable table it
+        # creates — disappear from the population while the gate stayed green.
+        # Every `op.execute` in the chain resolves today; a new one that does
+        # not is a revision this gate cannot read, which is exactly a table
+        # nobody has classified.
+        raise UnresolvedTableExpression(
+            f"{path.name}:{node.lineno} executes a statement this gate cannot resolve to "
+            "literal SQL, so any table it creates would never enter the classified "
+            "population. Bind the statement to a module constant, or widen the resolver."
+        )
 
 
 def _normalize(value: str, path: Path, lineno: int) -> str:
@@ -807,8 +974,8 @@ def _discover_durable_mutation_paths(tables: frozenset[str]) -> frozenset[Mutati
     for path in _app_modules():
         resolver = _resolver(path)
         for statement in resolver.sql_statements():
-            for verb, table in _statement_matches(statement.text, _MUTATION_VERB_PATTERNS):
-                normalized = table.strip().removeprefix("public.")
+            for verb, table, offset in _statement_matches(statement.text, _MUTATION_VERB_PATTERNS):
+                normalized = table.strip()
                 if _UNRESOLVED in normalized:
                     if _in_separate_schema_plane(statement.path):
                         continue
@@ -836,6 +1003,43 @@ class DdlSeam:
     function: str | None
     autocreate_gated: bool
     existence_probed: bool
+    #: The statement is issued from a file that can reach the durable
+    #: PostgreSQL database, rather than from a SQLite-only local store or a
+    #: separately-migrated schema plane.
+    durable_database_source: bool
+    #: The table it targets is created by the Alembic revision chain.
+    owned_by_revision_chain: bool
+
+
+@lru_cache(maxsize=None)
+def _is_sqlite_only(path: Path) -> bool:
+    """True when a module talks to SQLite and never to PostgreSQL.
+
+    Derived from the module's own imports rather than from a path list. Four
+    modules under `app/**` create tables the Alembic chain does not own —
+    `app/panel/confirmation.py`, `app/orientation/leave_point_cursor.py`,
+    `app/agent_memory/review_decision_store.py`, `app/builderops/ckm/metrics.py`
+    — and every one of them is a SQLite-backed local store. That is a fact
+    about their imports, so the gate reads it there; a path allowlist would be
+    the same fact written where nothing checks it.
+    """
+    tree = _resolver(path).tree
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module)
+    uses_postgres = any(name.split(".")[0] == "psycopg" for name in imports)
+    return "sqlite3" in imports and not uses_postgres
+
+
+def _reaches_durable_database(relative_path: str, source: Path | None) -> bool:
+    if _in_separate_schema_plane(relative_path):
+        return False
+    if source is None:
+        return True
+    return not _is_sqlite_only(source)
 
 
 def discover_runtime_ddl_seams(tables: Iterable[str]) -> tuple[DdlSeam, ...]:
@@ -851,44 +1055,50 @@ def discover_runtime_ddl_seams(tables: Iterable[str]) -> tuple[DdlSeam, ...]:
     seams: list[DdlSeam] = []
     for path in _app_modules():
         resolver = _resolver(path)
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        durable_source = _reaches_durable_database(relative, path)
         for statement in resolver.sql_statements():
-            for verb, table in _statement_matches(statement.text, _DDL_VERB_PATTERNS):
-                normalized = table.strip().removeprefix("public.")
+            for verb, table, offset in _statement_matches(statement.text, _DDL_VERB_PATTERNS):
+                normalized = table.strip()
                 if _UNRESOLVED in normalized:
-                    if _in_separate_schema_plane(statement.path):
+                    if not durable_source:
                         continue
                     raise UnresolvedTableExpression(
                         f"{statement.path}:{statement.lineno} issues {verb.upper()} against a "
                         "table name this gate cannot resolve statically."
                     )
-                if normalized in known:
-                    seams.append(
-                        DdlSeam(
-                            table=normalized,
-                            path=statement.path,
-                            lineno=statement.lineno,
-                            verb=verb,
-                            function=statement.function,
-                            autocreate_gated=statement.autocreate_gated,
-                            existence_probed=statement.existence_probed,
-                        )
-                    )
-    for path in sorted(APP_ROOT.rglob("*.sql")):
-        text = path.read_text(encoding="utf-8")
-        for verb, table in _statement_matches(text, _DDL_VERB_PATTERNS):
-            normalized = table.strip().removeprefix("public.")
-            if normalized in known:
                 seams.append(
                     DdlSeam(
                         table=normalized,
-                        path=path.relative_to(REPO_ROOT).as_posix(),
-                        lineno=text[: text.lower().index(verb)].count("\n") + 1,
+                        path=statement.path,
+                        lineno=statement.lineno,
                         verb=verb,
-                        function=None,
-                        autocreate_gated=False,
-                        existence_probed=False,
+                        function=statement.function,
+                        autocreate_gated=statement.autocreate_gated,
+                        existence_probed=statement.existence_probed,
+                        durable_database_source=durable_source,
+                        owned_by_revision_chain=normalized in known,
                     )
                 )
+    for path in sorted(APP_ROOT.rglob("*.sql")):
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        durable_source = _reaches_durable_database(relative, None)
+        for verb, table, offset in _statement_matches(text, _DDL_VERB_PATTERNS):
+            normalized = table.strip()
+            seams.append(
+                DdlSeam(
+                    table=normalized,
+                    path=relative,
+                    lineno=text[: text.lower().index(verb)].count("\n") + 1,
+                    verb=verb,
+                    function=None,
+                    autocreate_gated=False,
+                    existence_probed=False,
+                    durable_database_source=durable_source,
+                    owned_by_revision_chain=normalized in known,
+                )
+            )
     return tuple(seams)
 
 
@@ -1068,8 +1278,24 @@ def foreign_key_target_candidates() -> frozenset[str]:
     return frozenset(targets)
 
 
-@lru_cache(maxsize=None)
 def unresolvable_statement_sites() -> tuple[str, ...]:
+    """Invisible SQL calls in files that can reach the durable database."""
+    return _statement_sites(durable_source=True)
+
+
+def exempted_statement_sites() -> tuple[str, ...]:
+    """Invisible SQL calls the separate-schema-plane exemption hides.
+
+    The exemption's measured cost, reported rather than assumed. A statement
+    listed here is one this gate cannot read at all; the bounding test asserts
+    the set of *files* it covers does not grow silently, and separately that
+    nothing in those subtrees touches an Alembic-owned table.
+    """
+    return _statement_sites(durable_source=False)
+
+
+@lru_cache(maxsize=None)
+def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
     """Executed SQL calls under ``app/**`` whose statement resolves to nothing.
 
     The scans above raise when a *matched* durable statement carries an
@@ -1082,7 +1308,7 @@ def unresolvable_statement_sites() -> tuple[str, ...]:
     sites: list[str] = []
     for path in _app_modules():
         relative = path.relative_to(REPO_ROOT).as_posix()
-        if _in_separate_schema_plane(relative):
+        if _reaches_durable_database(relative, path) is not durable_source:
             continue
         resolver = _resolver(path)
         source = path.read_text(encoding="utf-8")

@@ -2,7 +2,7 @@
   "tables": {
     "acquisition_requests": {
       "classification": "explicitly-global",
-      "reason": "`acquisition_requests`: Queued acquisition requests against those sources. Knowledge-acquisition source state. Its `binding_id` / `account_binding_id` columns name an *external source* binding (a YouTube account, playlist, or quota window), not a vault binding: the row describes an account the instance polls, which exists whether or not any vault is registered. Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above.",
+      "reason": "`acquisition_requests` is queued acquisition requests against those sources, written by `app/knowledge_acquisition/acquisition_requests.py`. A request describes work to fetch from an external account. Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above; nothing here records a vault.",
       "owning_revision": "b5c6d7e8f9a0",
       "declaring_revisions": [
         "b5c6d7e8f9a0"
@@ -23,7 +23,7 @@
     },
     "acquisition_source_registry": {
       "classification": "explicitly-global",
-      "reason": "`acquisition_source_registry`: The registry of pollable acquisition sources. Knowledge-acquisition source state. Its `binding_id` / `account_binding_id` columns name an *external source* binding (a YouTube account, playlist, or quota window), not a vault binding: the row describes an account the instance polls, which exists whether or not any vault is registered. Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above.",
+      "reason": "`acquisition_source_registry` is the registry of pollable acquisition sources, written by `app/knowledge_acquisition/source_registry.py`. Its `binding_id` primary key and `account_binding_id` column name an *external source* binding — a playlist, feed or account the instance polls — not a vault binding, and its uniqueness constraint is over (collection_kind, collection_ref, account). Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above; nothing here records a vault.",
       "owning_revision": "bd79f3044759",
       "declaring_revisions": [
         "bd79f3044759"
@@ -320,7 +320,7 @@
     },
     "heimdal_consent_grant": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_consent_grant`: The consent ledger authorising capture, keyed by grant ref and scope. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_consent_grant` is the consent ledger authorising capture, written by `app/heimdal/consent_ledger.py` and keyed by grant ref and scope. A grant authorises a device and adapter, which is instance-wide. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "c4f7a1b2d9e3",
       "declaring_revisions": [
         "c4f7a1b2d9e3"
@@ -340,7 +340,7 @@
     },
     "heimdal_media_receipt": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_media_receipt`: Append-only receipts for media capture. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_media_receipt` is append-only receipts for media capture, written by `app/heimdal/media_receipts.py` and keyed by capture id. The row attests that a device captured media under a consent grant. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "e3c1a7f5d2b8",
       "declaring_revisions": [
         "e3c1a7f5d2b8"
@@ -360,7 +360,7 @@
     },
     "heimdal_meeting_analysis_revision": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_analysis_revision`: Revisions of a session's analysis projection. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_analysis_revision` is successive revisions of a session's analysis projection, written by `app/heimdal/meeting_projection.py`. Each revision is derived from the session and its segments. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "b8d3f0a5c2e4",
       "declaring_revisions": [
         "b8d3f0a5c2e4"
@@ -381,7 +381,7 @@
     },
     "heimdal_meeting_asr_derivation": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_asr_derivation`: Derived ASR state for a session. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_asr_derivation` is derived ASR state for a session, written by `app/heimdal/meeting_projection.py` by delete-and-replace per session. Derived from the session's audio. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "b8d3f0a5c2e4",
       "declaring_revisions": [
         "b8d3f0a5c2e4"
@@ -402,7 +402,7 @@
     },
     "heimdal_meeting_block": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_block`: Meeting blocks derived from a session. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_block` is meeting blocks derived from a session, written by `app/heimdal/meeting_blocks.py` and keyed by block id. Blocks are a segmentation of the capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "c9e4a1b6d3f5",
       "declaring_revisions": [
         "c9e4a1b6d3f5"
@@ -423,7 +423,7 @@
     },
     "heimdal_meeting_block_refusal": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_block_refusal`: Refusals recorded against a meeting block. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_block_refusal` is refusals recorded against a meeting block, written by `app/heimdal/meeting_blocks.py`. A refusal is a governance fact about the capture, held before anything reaches a vault. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "c9e4a1b6d3f5",
       "declaring_revisions": [
         "c9e4a1b6d3f5"
@@ -442,13 +442,13 @@
       "escalation_conditions": []
     },
     "heimdal_meeting_finalization_receipt": {
-      "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_finalization_receipt`: Finalization receipts for a meeting session. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "classification": "binding-scoped",
+      "reason": "`heimdal_meeting_finalization_receipt` is the exception in the Heimdal set. Its `artifact_refs JSONB` column records the vault artifacts a finalized session was materialized into — `app/heimdal/meeting_finalization.py::resolve_vault_root` reads `HEIMDAL_MEETING_VAULT_ROOT` and the receipt stores the resulting paths — so the row is bound to one vault, not to the device that captured the session. Its PRIMARY KEY (session_id, state_sha256) carries no vault dimension, so the same session finalized into two vaults is not representable. No MVR-05A child currently owns it.",
       "owning_revision": "d0f5b2c7e4a6",
       "declaring_revisions": [
         "d0f5b2c7e4a6"
       ],
-      "binding_key": "not-applicable",
+      "binding_key": "pending",
       "binding_column": null,
       "producers": [
         {
@@ -459,11 +459,13 @@
         }
       ],
       "rebuild_mechanism": "row-scoped",
-      "escalation_conditions": []
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
     },
     "heimdal_meeting_segment": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_segment`: ASR/segment ledger rows for a meeting session. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_segment` is ASR segments for a captured session, written by `app/heimdal/meeting_ledger.py`. Segments are derived from the audio, not from vault content. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "a7c2e9f4b1d3",
       "declaring_revisions": [
         "a7c2e9f4b1d3"
@@ -483,7 +485,7 @@
     },
     "heimdal_meeting_segment_conflict": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_segment_conflict`: Recorded segment conflicts for a session. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_segment_conflict` is recorded conflicts between competing segment submissions for a session, written by `app/heimdal/meeting_ledger.py`. A conflict is a property of the capture stream. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "a7c2e9f4b1d3",
       "declaring_revisions": [
         "a7c2e9f4b1d3"
@@ -503,7 +505,7 @@
     },
     "heimdal_meeting_session": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_session`: Meeting-session ledger rows keyed by session id. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_session` is the meeting-session ledger, written by `app/heimdal/meeting_ledger.py` and keyed by session id. A session is a capture window on a device. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "a7c2e9f4b1d3",
       "declaring_revisions": [
         "a7c2e9f4b1d3"
@@ -524,7 +526,7 @@
     },
     "heimdal_meeting_user_note_revision": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_meeting_user_note_revision`: User note revisions attached to a meeting block. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_meeting_user_note_revision` is user note revisions attached to a meeting block, written by `app/heimdal/meeting_blocks.py`. These are in-session annotations on the block, not vault notes; the vault-note projection is a separate path that writes files. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "c9e4a1b6d3f5",
       "declaring_revisions": [
         "c9e4a1b6d3f5"
@@ -544,7 +546,7 @@
     },
     "heimdal_observation_cursor": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_observation_cursor`: Per-consumer cursors over that log. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_observation_cursor` is per-consumer cursors over that log, written by `app/heimdal/cursor_store.py`. A cursor is a consumer's position in an instance-wide stream. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "8b21e6a1f0c4",
       "declaring_revisions": [
         "8b21e6a1f0c4"
@@ -564,7 +566,7 @@
     },
     "heimdal_observation_log": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_observation_log`: The append-only observation log. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_observation_log` is the append-only observation log, written by `app/heimdal/observation_log.py`, carrying a topic and payload per observation and a database trigger rejecting any UPDATE or DELETE. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "8b21e6a1f0c4",
       "declaring_revisions": [
         "8b21e6a1f0c4"
@@ -584,7 +586,7 @@
     },
     "heimdal_raw_deletion_receipt": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_raw_deletion_receipt`: Append-only receipts for governed raw erasure. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_raw_deletion_receipt` is append-only receipts for governed raw erasure, written by `app/heimdal/retention.py`. Its columns are the deleted record's id, content identity, reason and retention window. The module reads a vault settings note to resolve that window, but the receipt stores no vault reference. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "a3f9d1c6e2b8",
       "declaring_revisions": [
         "a3f9d1c6e2b8"
@@ -604,7 +606,7 @@
     },
     "heimdal_raw_read_receipt": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_raw_read_receipt`: Append-only receipts for reads of the raw layer. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_raw_read_receipt` is append-only receipts for reads of the raw layer, written by `app/heimdal/raw_read_gate.py`. A receipt records who read which raw record under which grant — a property of the raw layer's access control, not of any vault. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "f1c7e2a9b4d6",
       "declaring_revisions": [
         "f1c7e2a9b4d6"
@@ -624,7 +626,7 @@
     },
     "heimdal_raw_record": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_raw_record`: The encrypted raw capture record itself. Vault-independent Heimdal capture. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that raw Heimdal capture/observation remains explicitly global and needs no invented vault binding: a row exists because a device or sensor produced it, before and independently of any vault. Only the Heimdal-to-vault *note* projection is vault-bound, and that writes notes, not this table.",
+      "reason": "`heimdal_raw_record` is the encrypted raw capture record itself, keyed by content identity and written by `app/heimdal/raw_store.py` at ingest. The row exists because a sensor produced bytes, before and independently of any vault; it stores ciphertext, a capture chain and a consent reference, and no vault path. `docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: Acceptance Criteria` states that vault-independent raw Heimdal capture and observation remain explicitly global and need no invented vault binding.",
       "owning_revision": "d5a8e2f1b6c3",
       "declaring_revisions": [
         "d5a8e2f1b6c3"
@@ -928,7 +930,7 @@
     },
     "youtube_account_binding": {
       "classification": "explicitly-global",
-      "reason": "`youtube_account_binding`: OAuth account bindings for the YouTube adapter. Knowledge-acquisition source state. Its `binding_id` / `account_binding_id` columns name an *external source* binding (a YouTube account, playlist, or quota window), not a vault binding: the row describes an account the instance polls, which exists whether or not any vault is registered. Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above.",
+      "reason": "`youtube_account_binding` is OAuth account bindings for the YouTube adapter, written by `app/knowledge_acquisition/youtube_account_binding.py` and unique per channel. It binds the instance to an external account. Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above; nothing here records a vault.",
       "owning_revision": "a2f1c3e4d5b6",
       "declaring_revisions": [
         "a2f1c3e4d5b6"
@@ -950,7 +952,7 @@
     },
     "youtube_api_quota_daily": {
       "classification": "explicitly-global",
-      "reason": "`youtube_api_quota_daily`: Per-day API quota accounting for that adapter. Knowledge-acquisition source state. Its `binding_id` / `account_binding_id` columns name an *external source* binding (a YouTube account, playlist, or quota window), not a vault binding: the row describes an account the instance polls, which exists whether or not any vault is registered. Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above.",
+      "reason": "`youtube_api_quota_daily` is per-day API quota accounting for that adapter, written by `app/knowledge_acquisition/youtube_api_client.py`. Quota is charged against the instance's API credentials. Acquired items become vault-bound only when they are ingested, and that lands in the vault-derived projections above; nothing here records a vault.",
       "owning_revision": "d9e0f1a2b3c4",
       "declaring_revisions": [
         "d9e0f1a2b3c4"

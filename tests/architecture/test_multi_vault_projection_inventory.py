@@ -40,6 +40,7 @@ Source anchors:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -55,6 +56,7 @@ from tests.architecture.durable_table_classification import (
     REPO_ROOT,
     SEPARATE_SCHEMA_PLANES,
     cutover_worklist,
+    exempted_statement_sites,
     discover_durable_mutation_paths,
     discover_durable_tables,
     discover_runtime_ddl_seams,
@@ -104,10 +106,20 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
         "entry, or restore the revision it describes."
     )
 
+    reasons_seen: dict[str, str] = {}
     for table, entry in sorted(manifest.items()):
         assert entry["classification"] in CLASSIFICATIONS, (table, entry["classification"])
         assert entry["binding_key"] in BINDING_KEY_STATES, (table, entry["binding_key"])
         assert entry["rebuild_mechanism"] in REBUILD_MECHANISMS, table
+        assert entry["reason"] not in reasons_seen, (
+            f"{table}'s reason is byte-identical to {reasons_seen[entry['reason']]}'s. A "
+            "reason copied across a family of tables is a template, and a template is "
+            "how one wrong claim rides along with fifteen right ones — which is what "
+            "happened to `heimdal_meeting_finalization_receipt`, whose `artifact_refs` "
+            "column records the vault a session was materialized into while the shared "
+            "paragraph claimed the whole family was vault-independent."
+        )
+        reasons_seen[entry["reason"]] = table
         assert len(entry["reason"].split()) >= 12, (
             f"{table}'s classification reason is {entry['reason']!r}. The reason is the "
             "artifact a later slice reads to decide whether the classification is still "
@@ -158,9 +170,11 @@ def test_the_manifest_carries_no_default_and_no_wildcard_entry() -> None:
     manifest = load_manifest()
 
     for key in manifest:
-        assert key.replace("_", "a").isalnum() and key[0].isalpha() or key.startswith("_"), key
-        assert "*" not in key and "?" not in key, f"{key!r} is a wildcard manifest key"
-        assert key not in {"default", "_default", "__default__", "all", "*"}, key
+        assert re.fullmatch(r"[a-z_][a-z0-9_]*", key), (
+            f"{key!r} is not a literal table identifier. Manifest keys are table names; "
+            "a pattern, glob or catch-all key would classify tables nobody looked at."
+        )
+        assert key not in {"default", "_default", "__default__", "all"}, key
 
     for table in sorted(discovered):
         reduced = {name: entry for name, entry in manifest.items() if name != table}
@@ -339,17 +353,28 @@ def test_no_executed_sql_statement_is_invisible_to_the_scan() -> None:
 
 
 def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
-    """The BuilderOps / dispatcher exemption is not hiding a durable statement.
+    """The BuilderOps / dispatcher exemption is bounded, and its cost is named.
 
-    Those subtrees are exempt from the *unresolvable-expression* failure only,
-    because their `DROP TABLE {table}` loops over their own SQLite table names
-    would otherwise force this gate to grow a statement ignore-list. They are
-    still scanned. This asserts the exemption currently costs nothing: no
-    statement in either subtree resolves to a table the durable revision chain
-    creates.
+    `app/builderops/**` and `app/dispatcher/**` carry their own schema lineage
+    — `app/builderops/control_plane/migrations/**`, asserted to sit outside
+    `app/alembic` by `tests/architecture/test_builderops_migration_boundary.py`
+    — and their SQLite stores build statements in ways this resolver does not
+    read. They are exempt from the unresolvable-expression failure.
+
+    An exemption whose cost is not measured is an ignore-list. Three
+    assertions bound it:
+
+    1. no statement in either subtree resolves to a table the Alembic revision
+       chain creates — the exemption may not hide a durable statement;
+    2. every `.sql` file under them is a *registered* entry of the BuilderOps
+       migration lineage, read from `MIGRATIONS` rather than from a path list
+       here, so a new stray `.sql` file is not silently covered;
+    3. the set of files it makes invisible is enumerated below, so growing it
+       is a visible diff rather than a quiet widening.
     """
     tables = discover_durable_tables()
-    offenders = [
+
+    durable_statements = [
         f"{path.module} {path.verb.upper()} {path.table}"
         for path in sorted(
             discover_durable_mutation_paths(tables),
@@ -359,12 +384,51 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
     ] + [
         f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table}"
         for seam in discover_runtime_ddl_seams(tables)
-        if any(seam.path.startswith(f"{plane}/") for plane in SEPARATE_SCHEMA_PLANES)
+        if seam.owned_by_revision_chain
+        and any(seam.path.startswith(f"{plane}/") for plane in SEPARATE_SCHEMA_PLANES)
     ]
-    assert offenders == [], (
-        f"{offenders} touch a durable table from a subtree this gate exempts from the "
-        "unresolvable-expression failure. Either the statement moves, or the exemption "
-        "is revoked — it must not become an ignore-list for durable statements."
+    assert durable_statements == [], (
+        f"{durable_statements} touch a durable table from a subtree this gate exempts. "
+        "Either the statement moves, or the exemption is revoked — it must not become "
+        "an ignore-list for durable statements."
+    )
+
+    from app.builderops.control_plane.migrations import MIGRATIONS
+
+    registered = {path.resolve() for path in MIGRATIONS}
+    stray = sorted(
+        path.relative_to(REPO_ROOT).as_posix()
+        for plane in SEPARATE_SCHEMA_PLANES
+        for path in (REPO_ROOT / plane).rglob("*.sql")
+        if path.resolve() not in registered
+    )
+    assert stray == [], (
+        f"{stray} are SQL files inside an exempted subtree that the BuilderOps "
+        "migration lineage does not register, so nothing governs their DDL."
+    )
+
+    # The exemption's measured cost: sixteen statements across these files that
+    # this gate cannot read. None of them is durable (assertion 1); this pins
+    # the blind spot so it cannot spread without showing up in a diff.
+    invisible = sorted({site.split(":", 1)[0] for site in exempted_statement_sites()})
+    assert invisible == [
+        "app/builderops/ckm/query_service.py",
+        "app/builderops/ckm/semantic.py",
+        "app/builderops/ckm/store.py",
+        "app/builderops/control_plane/store.py",
+        "app/builderops/design_agent_adapters.py",
+        "app/builderops/design_run_governance.py",
+        "app/builderops/model_inquiry_runner.py",
+        "app/builderops/store.py",
+        "app/dispatcher/store.py",
+        "app/dispatcher/verification_dispatch.py",
+        "app/dispatcher/verification_runtime.py",
+    ], (
+        "the set of files the separate-plane exemption makes invisible changed:\n  "
+        + "\n  ".join(invisible)
+        + "\nIf a file left the list, delete it here. If one joined, either widen the "
+        "resolver so the statement is read, or record here why a new blind spot is "
+        "acceptable."
     )
 
 

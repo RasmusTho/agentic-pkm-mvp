@@ -249,11 +249,33 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
     seams = discover_runtime_ddl_seams(tables)
     assert seams, "the durable DDL seam scan found nothing, so it is proving nothing"
 
+    # A table created under `app/**` that the revision chain does not own is a
+    # second schema authority the classification gate cannot even see, because
+    # its population comes from `app/alembic/versions/**`. Without this,
+    # `cur.execute("CREATE TABLE rogue (...)")` in a production module leaves
+    # both gates green. The four modules that legitimately create their own
+    # tables are SQLite-backed local stores, which the scan reads off their
+    # imports rather than off a path allowlist.
+    unowned = [
+        f"{seam.path}:{seam.lineno} CREATE TABLE {seam.table}"
+        for seam in seams
+        if seam.durable_database_source and not seam.owned_by_revision_chain
+    ]
+    assert unowned == [], (
+        "these statements create a durable table the Alembic revision chain does not "
+        "own, from a file that can reach the durable PostgreSQL database:\n  "
+        + "\n  ".join(unowned)
+        + "\nA table created this way has no migration, no classification, and no "
+        "owner. Add the revision, or move the table to a store that is not the "
+        "durable database."
+    )
+
     ungated = [
         f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
         f"(in {seam.function or '<module level>'})"
         for seam in seams
-        if not seam.autocreate_gated
+        if seam.durable_database_source and seam.owned_by_revision_chain
+        and not seam.autocreate_gated
     ]
     assert ungated == [], (
         "these durable DDL statements run outside the STORE_SCHEMA_AUTOCREATE "
@@ -265,7 +287,10 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
         f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
         f"(in {seam.function or '<module level>'})"
         for seam in seams
-        if seam.verb != "create table" and not seam.existence_probed
+        if seam.durable_database_source
+        and seam.owned_by_revision_chain
+        and seam.verb != "create table"
+        and not seam.existence_probed
     ]
     assert unprobed == [], (
         "these statements reshape a durable table from the runtime without first "
