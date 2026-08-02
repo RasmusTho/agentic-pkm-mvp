@@ -48,16 +48,15 @@ the discarded content was a correction that got reverted back to the
 incorrect prose. See `tests/agents/test_merge_resolver_repo_docs.py` for the
 regression coverage.
 
-## Known follow-up (not fixed by #4505)
+## `%A` file-write contract (fixed by #4496)
 
-`app/cli/merge_driver.py` only prints its computed merge result to stdout; it
-never writes the result into the git-provided `%A` path, which the custom
-merge driver contract in `git help gitattributes` requires for a driver to
-actually land its computed content in the working tree on a successful
-(`resolved`, exit 0) merge. A real `git rebase` repro shows the "resolved"
-path currently leaves whatever content was already at `%A` untouched — a
-correctness gap for the vault-note path as well, tracked separately (not part
-of #4505's bounded scope, which only requires that this driver never claim
-success while silently discarding content — the `conflict`/non-zero path
-above already forces git to stop and surface a real conflict regardless of
-this gap).
+`app/cli/merge_driver.py` now writes its computed merge result into the
+git-provided `%A` (`a_path`) on a `resolved` (exit 0) outcome, per the custom
+merge driver contract in `git help gitattributes`: git reads the merge result
+back from `%A`, not from the driver's stdout. Diagnostics
+(`MERGE_STATUS=`/`MERGE_REASON=`) go to stderr only and never enter the
+merged file content. On a non-`resolved` outcome (`conflict`/`prompted`,
+non-zero exit) the driver leaves `%A` untouched so git's normal conflict
+handling applies. See `tests/cli/test_merge_driver.py` for the file-contract
+regression coverage, including an end-to-end `git merge` through the
+configured `semanticmd` driver.
