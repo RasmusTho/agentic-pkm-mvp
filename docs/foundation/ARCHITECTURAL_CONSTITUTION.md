@@ -408,6 +408,11 @@ Recommendation: (1), with the explicit note that ratification adopts the *princi
 violation inventory (which ages) — anchors and incident lists are evidence, re-verifiable, never
 themselves law.
 
+**Owner decision (2026-08-02, epic #2778 chat decision):** held — do **not** ratify. `State`
+above stays `CANDIDATE`; this document continues to govern nothing and silently changes no owner
+doc's claims, per its own opening line. None of options (1)/(2)/(3) above is selected; ratification
+remains an open, unscheduled owner call for a future pass.
+
 ## Related docs
 
 - `docs/foundation/00-yggdrasil-doctrine.md` (superior; commitments cited by C-1/C-2/C-3)
