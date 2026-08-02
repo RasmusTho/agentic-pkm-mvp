@@ -261,8 +261,9 @@ required `Final-Review-Rounds: 0` line and concrete `## BuilderOps Routing` defa
 `<...>` placeholders. Raise `Final-Review-Rounds` to `1` or `2` only when
 `AGENTS.md :: Proportional delivery` selects the full path. The exact shape both fields must satisfy
 is the canonical `app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds`
-and `::resolve_builderops_routing_status` (kept in proven parity with the `pr-contract` gate's own JS
-by `tests/governance/test_issue_pr_governance.py
+and `::resolve_builderops_routing_status` (proven equivalent to the `pr-contract` gate's own JS across
+every ECMAScript line terminator and the JS/Python whitespace-class edge cases, not merely on an
+LF-only corpus, per #4341) by `tests/governance/test_issue_pr_governance.py
 ::test_final_review_rounds_check_executes_via_canonical_implementation` and
 `::test_builderops_routing_stub_detection_matches_workflow_js`) — do not re-derive the rule from this
 prose. The `none` / reason defaults shown match what `scripts/pr_body_generator.py` emits
@@ -403,8 +404,10 @@ Pre-push PR-body contract gate:
   or `Reason:`).
 - The exact shape both checks above enforce is not restated here — it is the canonical
   `app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds` and
-  `::resolve_builderops_routing_status`, proven identical to the `pr-contract` gate's own JS by
-  `tests/governance/test_issue_pr_governance.py`. CI remains the enforcement point; this is a manual
+  `::resolve_builderops_routing_status`, proven equivalent to the `pr-contract` gate's own JS across
+  every ECMAScript line terminator and the JS/Python whitespace-class edge cases (not merely on an
+  LF-only corpus, per #4341) by `tests/governance/test_issue_pr_governance.py`. CI remains the
+  enforcement point; this is a manual
   pre-push read, not a substitute for it.
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
