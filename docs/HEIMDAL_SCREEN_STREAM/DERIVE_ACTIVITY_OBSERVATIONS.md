@@ -34,18 +34,56 @@ the span boundaries the event motor needs.
    providers without changing the derivation contract. Providers run host-side over the bundle; none
    re-reads the screen.
 3. **Model routing per RUNTIME_MODEL_POSTURE (the binding floor).** Screen derivation is an **always-on
-   loop** → its task kind is `paid_eligible: false` in the provider census; the routing compiler
-   **rejects** any paid assignment (RUNTIME_MODEL_POSTURE §1/§4.2). Derivation therefore resolves to a
-   **local vision model** (Ollama-servable). This is the structural off-switch for the raw-pixel egress
-   seam — cloud vision derivation is not reachable for this task kind without an owner reclassification
-   that contradicts the floor. The declared egress posture (HEIM-12) for this stage names **zero raw
-   egress**.
+   loop** → its task kind (`heimdal.screen_derivation`) is `paid_eligible: false` in the provider census;
+   the routing compiler **rejects** any paid assignment (RUNTIME_MODEL_POSTURE §1/§4.2). Derivation
+   therefore resolves to a **local vision model** (Ollama-servable, census-declared `ollama/llava:7b`).
+   This is the structural off-switch for the raw-pixel egress seam — cloud vision derivation is not
+   reachable for this task kind without an owner reclassification that contradicts the floor.
+
+   **Declared egress posture (HEIM-12), delivered:** this stage declares **zero raw egress** — raw-class
+   evidence (`screen_frame`) never leaves the host trust boundary, and the stage's only model destination
+   is the host-local vision model. The declaration is structured and machine-checkable
+   (`app/heimdal/screen_derivation.py :: DECLARED_EGRESS`), not prose, and it is enforced on **both**
+   halves of the seam:
+
+   - *the provider*: `resolve_derivation_route` refuses to compile a route at all when the census claims
+     this task kind as paid-eligible or when the resolved provider is not `tier: local`, so the refusal
+     lands before a single frame is read;
+   - *the destination*: a census entry proves a provider **name** is local, never that the socket a
+     decrypted frame is about to be written to is on this machine. The endpoint must be loopback, or
+     a hostname the operator explicitly declared host-local in
+     `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS` (the container-network case), or the derivation is
+     refused before the frame is attached to any request. Three escapes off that validated
+     destination are closed explicitly, because each was found reachable in review: an ambient
+     `HTTP_PROXY` (the request runs with `trust_env` disabled), an HTTP **redirect** (refused, never
+     followed — a local model has no reason to redirect `/api/chat` elsewhere), and a **URL-parser
+     differential** (host-locality is asserted on the exact prepared URL the client will dial, using
+     the client's own parser, so a validated destination and a dialled destination cannot diverge).
+
+   Enforced by `tests/invariants/test_heimdal_seam.py::test_declared_egress`, the §8-reserved home
+   HEIM-12's static half now graduates into, plus
+   `tests/heimdal/test_screen_derivation_routing.py::test_raw_frames_refuse_a_destination_that_is_not_host_local`.
 4. **Coalesce into spans (INV-SCREEN-E).** Consecutive frames whose activity is unchanged collapse into
    one span observation with real `observed_at_start`/`observed_at_end` duration. A span boundary is
    created on **any** dimension shift — frontmost app, window/document, scope, or derived-goal change —
    because those are the ERE segmenter's five-dimension shifts (SCREEN-04). **Over-segmentation is
-   preferred** (merge is a cheap downstream re-cut; a lost boundary is unrecoverable). Coalescing
-   sensitivity is `screen_coalesce_*` (provisional constants, SCREEN-06-governed).
+   preferred** (merge is a cheap downstream re-cut; a lost boundary is unrecoverable). Three rules
+   enforce that preference in the delivered stage:
+
+   - a context provider that declares a **segmenter axis of its own** cuts spans on it too, so the
+     built-in four are a floor, not a ceiling; and two providers may not claim one axis (the later
+     write would move a boundary invisibly, so it is refused);
+   - **unknown is not evidence of sameness**: a frame with *no* known dimension at all always starts
+     its own span, so a fully blind client over-segments rather than collapsing a long window into
+     one observation. One unknown axis does not switch coalescing off — that would flood the stream —
+     so a client that loses `app`/`window` but still reports `scope` (the partial-Accessibility case)
+     does still coalesce on what it knows;
+   - a frame **out of capture order** forces a boundary instead of publishing a span that ends before
+     it began.
+
+   Coalescing sensitivity is `screen_coalesce_*` (provisional constants, SCREEN-06-governed); this
+   slice ships no max-gap bound, so two identical frames far apart still merge — SCREEN-05's
+   time-spend rollup should not assume a bounded gap until SCREEN-06 lands.
 5. **Publish markdown-first through the governed path.** The stage assembles the SCREEN-01 payload and
    publishes via the existing `heimdal.publish.publish_full_observation` (schema-validated,
    `content_hash` stamped in the same write, revision-aware idempotency key). The Mimer candidate
@@ -76,21 +114,21 @@ stream floods — the invariant test pins the boundary-preserving direction.
 
 ## Acceptance Criteria
 
-- [ ] AC1: a frame bundle + app metadata derives one activity observation with a textual summary,
+- [x] AC1: a frame bundle + app metadata derives one activity observation with a textual summary,
       entity mentions, and per-axis confidence, published through `publish_full_observation` (governed
       path, not a bespoke insert). Verify: `tests/heimdal/test_screen_derivation.py::test_bundle_derives_and_publishes_observation`
-- [ ] AC2 (enforcement): derivation reads raw only via the gated read path with a receipt, and the
+- [x] AC2 (enforcement): derivation reads raw only via the gated read path with a receipt, and the
       resolved model is local — asserted at the derivation call site: the router is invoked with the
       `heimdal.screen_derivation` task kind and a paid route is rejected. Verify: `tests/heimdal/test_screen_derivation_routing.py::test_screen_derivation_is_paid_ineligible_and_reads_raw_gated` (asserts `paid_eligible=false` rejection at the compiler + `read_raw_record` receipt at the production call site)
-- [ ] AC3: unchanged consecutive frames coalesce into one span with real start/end duration; a
+- [x] AC3: unchanged consecutive frames coalesce into one span with real start/end duration; a
       dimension shift (app/window/scope/goal) always creates a new span boundary — a merge across a
       shift fails the test. Verify: `tests/heimdal/test_screen_coalescing.py::test_span_boundaries_survive_on_dimension_shift`
-- [ ] AC4: provenance (machine + observed-at window + derivation `stage_versions`/`model_ref`) is
+- [x] AC4: provenance (machine + observed-at window + derivation `stage_versions`/`model_ref`) is
       stamped in the same durable write as the observation; a bundle that derives text but cannot stamp
       complete provenance refuses to publish (INV-SCREEN-B). Verify: `tests/heimdal/test_screen_derivation.py::test_unprovenanced_observation_refuses_publish`
-- [ ] AC5: local context providers are pluggable — adding a provider changes the derived summary/mentions
+- [x] AC5: local context providers are pluggable — adding a provider changes the derived summary/mentions
       without changing the observation contract or the derivation entrypoint signature. Verify: `tests/heimdal/test_screen_context_providers.py::test_provider_registry_extensible`
-- [ ] AC6 (non-behavioral): the declared egress posture for the screen-derivation stage names zero raw
+- [x] AC6 (non-behavioral): the declared egress posture for the screen-derivation stage names zero raw
       egress (HEIM-12). Verify: doc writeback at `docs/HEIMDAL_SCREEN_STREAM/DERIVE_ACTIVITY_OBSERVATIONS.md :: What This Task Does` (step 3) + `tests/invariants/test_heimdal_seam.py::test_declared_egress` extended with the screen stage
 
 ## How to Verify (Pre-Merge)
@@ -112,9 +150,17 @@ rejected).
 
 The derivation stage is a stateless tick over durable inputs (the raw store) and durable outputs (the
 observation log): a crash mid-tick loses no published observation (idempotency-keyed publish dedups on
-replay) and no raw frame (frames stay in the buffer until derived or aged out). An **open span**
-(activity still ongoing at crash) is reconstructed on the next tick from the buffered frames — nothing
-user-facing is lost. This is why frame discard is gated on successful publish, not on the tick starting.
+replay) and no raw frame (frames stay in the buffer until derived or aged out). This is why frame
+discard is gated on successful publish, not on the tick starting.
+
+**As delivered, a batch has no open span**: `derive_activity_observations` flushes its final span
+before returning, and `observation_id` is derived from the covered frames' content identities, so a
+re-derive of the *same* grouping dedups exactly. The consequence to know before building the tick
+driver (SCREEN-06): an activity still ongoing at the batch boundary is published as a closed span, and
+a later batch that groups those frames differently mints a different identity over overlapping frames
+rather than extending the earlier span. Carrying an open span across ticks — the reconstruction this
+section originally described — needs durable cross-tick span state and belongs with the tick driver,
+not here. SCREEN-04's segmenter can merge adjacent spans; that is the cheap direction.
 
 ## Related Docs
 
@@ -125,4 +171,4 @@ user-facing is lost. This is why frame discard is gated on successful publish, n
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] derive-activity-observations: local-vision derivation + span coalescing + governed publish`. Blocked until SCREEN-01 merges. Likely **opus-tier** (derivation-model routing, coalescing invariant, privacy seam). See scratchpad draft.
+One issue: #3344 `[Heimdal Screen Stream] derive-activity-observations: local-vision derivation + span coalescing + governed publish` — **delivered**. Its dependency SCREEN-01/#3343 merged first, as planned; every acceptance criterion above is checked against a passing named test. Delivered opus-tier (derivation-model routing, coalescing invariant, privacy seam).

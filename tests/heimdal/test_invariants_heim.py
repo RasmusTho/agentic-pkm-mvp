@@ -540,12 +540,19 @@ def test_heim_11_attribution_resolves_in_register() -> None:
 #   where feasible).
 # Future test path (§8): tests/invariants/test_heimdal_seam.py::test_declared_egress
 #
-# NOTE: today the capture adapter states its no-cloud-fallback posture only
+# NOTE: the capture adapter still states its no-cloud-fallback posture only
 # in prose docstrings (app/heimdal/capture_adapter.py), not as a structured,
-# machine-checkable declaration. §8 calls for `static_test` "at enactment";
-# that structured declaration does not exist yet, so BOTH halves here are
-# honestly reserved rather than claiming a static pass the code does not
-# yet back.
+# machine-checkable declaration -- so the skeleton below stays honestly
+# reserved for that adapter and for the network-boundary probe.
+#
+# PARTIALLY GRADUATED (#3344, SCREEN-02): the screen-derivation stage
+# (app/heimdal/screen_derivation.py :: DECLARED_EGRESS) is the first Heimdal
+# stage carrying the structured declaration §8 asks for, and its static half
+# lives in the reserved §8 home,
+# tests/invariants/test_heimdal_seam.py::test_declared_egress -- see
+# GRADUATED_HEIM_FUTURE_TEST_PATHS below. The two halves are disjoint: nothing
+# here claims a pass the code does not back, and nothing there re-asserts what
+# is still unbuilt.
 
 
 def test_heim_12_declared_egress() -> None:
@@ -710,6 +717,14 @@ DISCHARGED_HEIM_TEST_NAMES = {
     "HEIM-9": "test_heim_9_observed_content_is_not_instruction",
 }
 
+# Invariants whose §8-reserved test path has now been built for real, holding
+# the half of the invariant that IS enforced today. The interim skeleton below
+# keeps only the still-unbuilt half, so the two never overlap and neither can
+# report a false green for the other.
+GRADUATED_HEIM_FUTURE_TEST_PATHS = {
+    "HEIM-12": "tests/invariants/test_heimdal_seam.py::test_declared_egress",
+}
+
 # Invariants with a reserved-but-unbuilt runtime half in THIS module. Each
 # must actually raise (xfail) when its harness fn runs, proving the skeleton
 # does not silently report green ahead of the runtime.
@@ -758,14 +773,33 @@ def test_heim_1_to_14_skeletons_present() -> None:
 
 
 def test_reserved_future_test_paths_do_not_exist_yet() -> None:
-    """§8 reserves tests/invariants/test_heimdal_*.py as future homes; none of
-    those files exist yet. If one appears, its invariant should graduate out
-    of this interim module's xfail set, not be duplicated silently."""
-    for entry in HEIM_REGISTRY.values():
-        rel_path = entry["future_test_path"].split("::", 1)[0]
-        assert not (REPO_ROOT / rel_path).exists(), (
-            f"{rel_path} now exists -- the corresponding HEIM invariant should "
-            "graduate its runtime test out of this interim skeleton module"
+    """§8 reserves tests/invariants/test_heimdal_*.py::<test> as future homes.
+
+    The accounting is per reserved TEST, not per file: several invariants share
+    one reserved file (HEIM-4/5/12 all reserve test_heimdal_seam.py), so one of
+    them graduating must not silently discharge its neighbours. A reserved test
+    that has not been built must still be absent; a graduated one must be
+    declared in GRADUATED_HEIM_FUTURE_TEST_PATHS and actually be defined at its
+    §8-reserved path.
+    """
+    for heim_id, entry in HEIM_REGISTRY.items():
+        rel_path, _, test_name = entry["future_test_path"].partition("::")
+        built = REPO_ROOT / rel_path
+        source = built.read_text(encoding="utf-8") if built.is_file() else ""
+        defined = f"def {test_name}(" in source
+        graduated_path = GRADUATED_HEIM_FUTURE_TEST_PATHS.get(heim_id)
+        if graduated_path is not None:
+            assert graduated_path == entry["future_test_path"], (
+                f"{heim_id} graduated path must be its §8-reserved path"
+            )
+            assert defined, (
+                f"{heim_id} is declared graduated but {rel_path} does not define {test_name}"
+            )
+            continue
+        assert not defined, (
+            f"{rel_path} now defines {test_name} -- the corresponding HEIM invariant should "
+            "graduate its runtime test out of this interim skeleton module "
+            "and be declared in GRADUATED_HEIM_FUTURE_TEST_PATHS"
         )
 
 

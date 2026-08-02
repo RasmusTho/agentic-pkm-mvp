@@ -149,6 +149,25 @@ Current runtime path:
 2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work, preserving bounded retries for transient missing or unstable notes before giving up.
 3. Health, status, and metrics confirm whether that path is healthy.
 
+## Heimdal screen derivation: host-local model precondition
+
+The screen derivation stage (`app/heimdal/screen_derivation.py`, SCREEN-02) refuses to send a raw
+screen frame to any endpoint it cannot prove is inside this host's trust boundary (HEIM-12: zero
+raw-class egress). Two operator-visible consequences:
+
+- **Endpoint.** The stage reads `OLLAMA_BASE_URL` / `OLLAMA_HOST` / `OLLAMA_URL` and accepts only a
+  loopback address, or a hostname listed in `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS`. A
+  container-network service name is not loopback, so the compose stack declares it explicitly
+  (`docker-compose.prod.yml` sets `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS: ollama`). Setting that
+  variable is an operator assertion that the named host really is inside this machine's boundary.
+  Without it the stage refuses loudly rather than degrading — that refusal is the feature.
+- **Model.** The route resolves to the census-declared local vision model `ollama/llava:7b`
+  (`docs/settings/models/providers.yaml`). `scripts/cold_boot.sh` does **not** pull it, so the first
+  derivation run on a fresh host fails loud until `ollama pull llava:7b` has run.
+
+The stage has no tick driver yet (SCREEN-06 owns the control surface), so neither precondition
+affects the current runtime path until a caller exists.
+
 ## Canonical Local Test Bootstrap
 
 The repo-supported local runtime verification path is the local `test` bootstrap golden path.

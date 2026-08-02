@@ -15,6 +15,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
       OLLAMA_BASE_URL: http://ollama:11434
+      # The screen-derivation stage refuses to send a raw frame to any
+      # endpoint it cannot prove is host-local. This compose network's
+      # `ollama` service is inside the host trust boundary, and this line
+      # is the operator declaring exactly that (HEIM-12).
+      HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS: ollama
     depends_on:
       ollama:
         condition: service_healthy
@@ -25,6 +30,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
       OLLAMA_BASE_URL: http://ollama:11434
+      # The screen-derivation stage refuses to send a raw frame to any
+      # endpoint it cannot prove is host-local. This compose network's
+      # `ollama` service is inside the host trust boundary, and this line
+      # is the operator declaring exactly that (HEIM-12).
+      HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS: ollama
     depends_on:
       ollama:
         condition: service_healthy
