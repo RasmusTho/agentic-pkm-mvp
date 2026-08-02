@@ -79,6 +79,11 @@ class _FakeCursor:
         if normalized.startswith("select to_regclass('public.file_state') is not null"):
             self._fetchone = (True, ["vault_binding_id", "path"], [])
             return
+        # MVR-05A1 (#4560): and the migrated `objects` key, for the same
+        # reason -- every `objects` upsert below is binding-scoped.
+        if normalized.startswith("select to_regclass('public.objects') is not null"):
+            self._fetchone = (True, True, ["vault_binding_id", "id"])
+            return
 
         # MVR-05A0 (#4543): file_state statements lead with vault_binding_id.
         if normalized.startswith(

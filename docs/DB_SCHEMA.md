@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/db/migrations_obsidian.sql + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py (2026-08-02)
+Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py (2026-08-02)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -44,31 +44,49 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   (INV-EROJ-3; see `docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md`). Operational coordination
   evidence only — entity notes remain canonical identity truth. Target-evolution lineage recovery
   (EROJ-02) and globally unique split complements (EROJ-03) are not delivered by this table.
+- **No durable DDL executes outside the Alembic revision chain** (MVR-05A1, #4560). Until this
+  slice, `app/db/db.py::ensure_schema` replayed `app/db/migrations_obsidian.sql` on the first
+  `conn_rw()` of **every process**. That file has been deleted, along with its second caller
+  `scripts/run_migration.py`; `scripts/run_migrations.sh` (`alembic upgrade head`) is the single
+  migration authority, and every runtime container already gates on it. `ensure_schema` now issues
+  no statements at all unless the `STORE_SCHEMA_AUTOCREATE=1` test-fixture flag KERNEL-04 (#2766)
+  established is set. Even then it declares a table only when that table is
+  absent — an existence probe, not `IF NOT EXISTS`, because `CREATE TABLE IF NOT
+  EXISTS` no-ops silently on an older shape while the statements after it still
+  run against it — and it issues only `CREATE`, never `ALTER` or `DROP`. Guarded by
+  `tests/architecture/test_durable_table_ownership.py::test_no_durable_ddl_executes_outside_the_revision_chain`,
+  which asserts the behaviour on a recording connection rather than only the file's absence.
 - The **vault-sync `file_state`** table is **migration-owned** (MVR-05A0, #4543): Alembic revision
-  `c7f4b1a83d29` creates it, adopts a database where the legacy runtime bootstrap
-  (`app/db/migrations_obsidian.sql`, applied by `app/db/db.py::ensure_schema`) already created it,
-  and rekeys it from `path` to `(vault_binding_id, path)`. The bootstrap SQL no longer contains any
-  `file_state` DDL, so the table has exactly one production owner and — for the first time — is
-  reachable by `alembic upgrade head`. Its adoption, row-survival, rekey, and single-vault-equivalence
-  guards are `pg`-marked and run in **both** lanes that execute `-m "pg"`: `ci-smoke / index_pg` on
-  the PR path, and `integration-nightly / pg-contracts` nightly. Both select files by explicit
-  allow-list and `index_pg` is additionally paths-filtered, so
-  `tests/architecture/test_durable_table_ownership.py::test_file_state_pg_targets_run_in_both_pg_lanes`
+  `c7f4b1a83d29` creates it, adopts a database where the legacy runtime bootstrap already created
+  it, and rekeys it from `path` to `(vault_binding_id, path)`.
+- Both tables have a **fail-loud preflight** at the vault-sync seam
+  (`app/services/vault_sync.py::_prepare`): `app/db/db.py::assert_file_state_schema` and
+  `::assert_objects_schema`. A database that never ran the owning revision is rejected with a
+  message naming `alembic upgrade head`, before any effect, rather than failing part-way through a
+  watcher tick. The `objects` half is new in #4560 and closes something that slice opened: until the
+  runtime bootstrap was deleted, a stale `objects` was silently reshaped at process boot, so the
+  stale state was survivable; now it is not, so it is refused.
+- The **`objects`** table and **`agent_memories`** are **migration-owned** (MVR-05A1, #4560):
+  Alembic revision `d1e8a0c5f37b` adopts both, takes over the `source_ref` column, the legacy
+  `uuid`→`id` backfill and the two remaining `objects` indexes the bootstrap owned, and rekeys
+  `objects` to `(vault_binding_id, id)` with `objects_uuid_idx` scoped to
+  `UNIQUE (vault_binding_id, uuid)`. `agent_memories` had **zero** references anywhere in the
+  revision chain before this and is adopted verbatim, with no shape change. **`objects.path`** keeps
+  its MVR-05A0 owner. Every adopted table now has exactly one production owner and — for the first
+  time — is reachable by `alembic upgrade head`.
+- The adoption, row-survival, rekey, restart and single-vault-equivalence guards for both revisions
+  are `pg`-marked and run in **both** lanes that execute `-m "pg"`: `ci-smoke / index_pg` on the PR
+  path, and `integration-nightly / pg-contracts` nightly. Both select files by explicit allow-list
+  and `index_pg` is additionally paths-filtered, so
+  `tests/architecture/test_durable_table_ownership.py::test_durable_ownership_pg_targets_run_in_both_pg_lanes`
   pins the allow-lists and
   `::test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards` pins the paths filter — every
   other lane runs `-m "not pg"`, so an unlisted `pg`-marked test would execute in no CI lane at all.
-  Test fixtures opt
-  in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1` flag KERNEL-04 established
-  (`app/db/db.py::_autocreate_file_state`); its shape parity with the revision, adoption
-  idempotency, existing-row survival, and bootstrap-origin/Alembic-origin convergence are asserted
-  by `tests/migrations/test_file_state_adoption.py`.
-- **`objects.path`** is owned by the same revision, for the same root cause: the column was
-  declared three times in the bootstrap SQL (a pre-create `ALTER ... IF EXISTS`, the `CREATE TABLE`
-  column list, and a post-create `ALTER`) while `objects` itself is created by Alembic revision
-  `202510241200`. The bootstrap SQL no longer declares it. Both single-owner properties are guarded
-  by `tests/architecture/test_durable_table_ownership.py`. The wider `objects` **table** still has
-  split ownership (the bootstrap SQL creates it and rewrites its primary key while Alembic also
-  creates it) — that remains open and belongs to MVR-05A's projection cutover.
+  Test fixtures opt in to create-on-demand via `STORE_SCHEMA_AUTOCREATE=1`
+  (`app/db/db.py::_autocreate_migration_owned_schema`); its shape parity with the revisions,
+  adoption idempotency, existing-row survival, and bootstrap-origin/Alembic-origin convergence are
+  asserted by `tests/migrations/test_file_state_adoption.py` and
+  `tests/migrations/test_objects_adoption.py`.
 - The active legacy **`decisions`** writer schema is **migration-owned** (#3488): Alembic revision
   `e1d2c3b4a5f6` carries forward the table's creation, compatibility columns, generated UUID default,
   and nullable `object_id` / `ON DELETE SET NULL` FK. The neutral database seam
@@ -262,14 +280,111 @@ historical row whose `id != uuid` has exactly one canonical parent and decision/
 that `id`; fresh canonical-only ingest uses its canonical id directly. Canonical backfill scans
 `store_objects`, and reset uses ordered deletes so inbound child FKs retain their declared semantics.
 
-### `objects` (legacy)
-- `id` (`uuid`, PK)
-- `kind` (`text`)
-- `source_ref` (`text`, optional in some historical migrations)
+### `objects` (legacy, migration-owned since MVR-05A1)
+
+The filesystem-watcher continuity mirror. Canonical ingest writes `store_objects`; this table is
+maintained alongside it and is actively written by `app/services/vault_sync.py`.
+
+- `id` (`uuid`, `NOT NULL`, no server default) — in practice the note's artifact UUID: the
+  vault-sync producer writes `id = uuid`, and the legacy backfill set `id = uuid` for rows that
+  predate the column
+- `uuid` (`uuid`, nullable) — the note's frontmatter uuid
+- `kind` (`text`, `NOT NULL`)
+- `payload` (`json`, `NOT NULL`, default `'{}'::jsonb`) — declared `sa.JSON()` by the historical
+  root revision, so the deployed column type really is `json`, not `jsonb`
+- `created_at` / `updated_at` (`timestamptz`, nullable, default `now()`)
 - `path` (`text`, nullable) — added by Alembic revision `c7f4b1a83d29` (MVR-05A0, #4543); the
-  filesystem-watcher continuity mirror's locator
-- `payload` (`jsonb`, default `{}`)
-- `created_at` / `updated_at` (`timestamptz`, default `now()`)
+  continuity mirror's locator
+- `source_ref` (`text`, nullable) — adopted by `d1e8a0c5f37b` (MVR-05A1, #4560)
+- `vault_binding_id` (`text`, `NOT NULL`, default `'legacy-compatibility-binding'`) — the same
+  stable binding namespace and sentinel `file_state` uses, not a second scheme
+- `PRIMARY KEY (vault_binding_id, id)`
+- Index: `objects_uuid_idx`, `UNIQUE (vault_binding_id, uuid)`
+- Indexes: `objects_created_at_idx` on `(created_at DESC)`, `objects_source_ref_idx` on
+  `(source_ref)`, `objects_kind_idx` on `(kind)`, `ix_objects_payload` GIN on `(payload::jsonb)`
+
+Interpretation:
+
+- Until #4560 this table had **two** DDL owners. Alembic created it, and the runtime bootstrap SQL
+  re-shaped it on the first `conn_rw()` of every process — including
+  `ALTER TABLE public.objects DROP CONSTRAINT IF EXISTS objects_pkey` followed by
+  `ADD CONSTRAINT objects_pkey PRIMARY KEY (id)`. Any binding-keyed primary key a migration
+  installed was therefore reverted at the next process boot, and on a single-binding instance the
+  re-add **succeeded with no error**. Nothing failed; the constraint was simply gone, and only then
+  did rows begin overwriting. Superseding those statements was not enough while the file still ran,
+  so the file was deleted.
+- The key was `PRIMARY KEY (id)` before #4560. Because the producer writes `id = uuid`, that made
+  two registered bindings holding the same artifact UUID mutually exclusive — the overwrite
+  MVR-05A's AC-1 forbids. No additive column reaches that defect: the key itself was the defect.
+- `objects_uuid_idx` was **globally unique on `(uuid)`** on any database whose `objects` was created
+  by the bootstrap before Alembic ran, and **non-unique** wherever Alembic created the table first
+  (the historical root creates it that way and the bootstrap's `CREATE UNIQUE INDEX IF NOT EXISTS`
+  matched on name and silently no-opped). Both converge on `UNIQUE (vault_binding_id, uuid)`:
+  uniqueness is scoped to the binding, not removed.
+- Rows written before the rekey are attributed to the explicit sentinel
+  `legacy-compatibility-binding`, not guessed onto a registry binding. MVR-05A owns the sentinel →
+  real-binding backfill and its ambiguity/quarantine rules.
+- The migration **refuses** three states rather than damaging data: an inbound foreign key still
+  referencing `objects` (the #3510 cutover moves every reviewed consumer to `store_objects`), and
+  duplicate `(vault_binding_id, uuid)` rows, which are physically possible on a database whose
+  `objects_uuid_idx` was non-unique. `app/objects/identity.py` already refuses to resolve a
+  duplicated `objects.uuid`; the migration raises with a reconcile hint instead of deduplicating by
+  guess.
+- Every `objects` **upsert** in `app/services/vault_sync.py` is binding-scoped, because
+  `ON CONFLICT (id)` and `ON CONFLICT (uuid)` no longer match a unique index. The binding comes from
+  the same `app/services/vault_sync.py::_binding_id` seam `file_state` uses. The table's UUID-keyed
+  `UPDATE`/`SELECT` statements — in `_update_path_only`, `update_path`, `delete_note` and
+  `_object_materialization_state` — are **not** yet binding-scoped. That is safe only because
+  `_binding_id()` returns a constant, so no shipped code path can produce a second binding value and
+  every row carries the same one; it is not safe once MVR-05A (#3859) makes that seam variable, and
+  #3859 owns scoping them in the same change. The warning on `_binding_id` states this at the
+  source, so the next agent cannot read "one seam to replace" and stop there.
+- **Single-vault behaviour is unchanged.** With one binding value in every row,
+  `(vault_binding_id, id)` has exactly the uniqueness and upsert semantics `(id)` had
+  (`tests/integration/test_single_vault_compatibility.py::test_objects_rekey_preserves_single_vault_behaviour`).
+- **A stray single-column unique index on `uuid` *or* `id` is refused too.** The rekey replaces the
+  index literally named `objects_uuid_idx`, so one under any other name would survive and silently
+  re-impose the global uniqueness AC-1 forbids. Both columns matter, and for the same reason: `id`
+  is the second primary-key column — the structural analogue of `file_state`'s `path` — and the
+  producer writes `id = uuid`, so one unique row per `id` is one row per artifact UUID across every
+  binding. `app/db/sql/objects_uuid_unrestrict.sql` created exactly such an index
+  (`objects_uuid_unique_idx`) and had no caller anywhere; #4560 deleted the file, but deleting it
+  cannot remove the index from a database where it was ever run, so the migration checks by shape
+  rather than by name — the same check `assert_file_state_schema` performs for `file_state`.
+- **The read seam has not been cut over.** `app/objects/identity.py` still raises
+  `ambiguous retained vault UUID mapping` when one `objects.uuid` resolves to more than one row, so
+  the two-binding state this rekey *permits* is not yet one the canonical identity resolver
+  tolerates. That cutover is MVR-05A (#3859)'s, together with the producer call sites; #4560
+  delivers the schema precondition only.
+- **Forward-only, with both rollback outcomes measured.** On a **single-binding** database an older
+  image starts and its startup bootstrap silently restores `PRIMARY KEY (id)`; every row survives.
+  On a database that already holds **two bindings for one artifact UUID** the old image cannot start
+  at all: `conn_rw()` raises `UniqueViolation: could not create unique index "objects_pkey"`, and
+  because the bootstrap ran in one transaction the schema is left untouched. In both cases
+  `objects_uuid_idx` stays binding-scoped, because `CREATE UNIQUE INDEX IF NOT EXISTS` matches on
+  name and never restores a `(uuid)`-only unique index — so the older image's third `objects` upsert
+  fallback, `on conflict (uuid)`, raises `InvalidColumnReference`. Its primary `on conflict (id)`
+  path works again once the bootstrap has restored the old key, so ingest continues; only that
+  fallback is dead. A rollback must therefore be followed by re-running `alembic upgrade head`
+  against a post-#4560 image before a second binding is created. Per
+  `docs/RELEASE_CHANNELS/README.md :: Rollback posture` this is permitted with operator
+  acknowledgement that rollback cannot restore DB shape. MVR-05A (#3859) records the corresponding
+  minimum-runtime floor; #4560 deliberately does not.
+
+### `agent_memories` (short-term agent memory, migration-owned since MVR-05A1)
+
+Append-only working memory with timestamp decay, written and read only by `app/memory_kv/store.py`.
+Lossy by design: decay is the contract, and the module falls back to an in-process dict when the
+table is absent. Before #4560 it was created **only** by the runtime bootstrap SQL, with zero
+references anywhere in the Alembic chain — the same condition `file_state` was in before #4543.
+Alembic revision `d1e8a0c5f37b` adopts it verbatim; no column, key, or index changed.
+
+- `id` (`uuid`, PK)
+- `run_id` (`uuid`, nullable)
+- `layer` (`text`, `NOT NULL`)
+- `payload` / `provenance` (`jsonb`, `NOT NULL`, default `'{}'::jsonb`)
+- `created_at` (`timestamptz`, `NOT NULL`, default `now()`)
+- Index: `agent_memories_created_at_idx` on `(created_at DESC)`
 
 ### `file_state` (vault-sync bookkeeping, migration-owned since MVR-05A0)
 
@@ -392,6 +507,13 @@ The legacy baseline retains the **composite** key form:
 - `view_chunks_missing_embeddings`
 - `view_objects_ready_for_projection`
 - `latest_decision(object_id uuid, key text) -> jsonb`
+
+The retired runtime bootstrap SQL used to `DROP VIEW IF EXISTS` the first two on every process boot,
+while Alembic revision `5b8ff54bed0f` creates them — a third instance of the same split-ownership
+pattern. Since MVR-05A1 (#4560) nothing drops them at runtime, so a freshly migrated database keeps
+both. A long-running database that had them dropped does **not** get them back, because the creating
+revision has already run there; that pre-existing divergence is unchanged by #4560 and is not
+covered by the convergence guard, which is scoped to `objects` and `agent_memories`.
 
 ## Canonical Queue (DB Outbox)
 Migration-owned (KERNEL-05, #2850): Alembic revision `f3a1c9d2e4b7` creates the table exactly as the

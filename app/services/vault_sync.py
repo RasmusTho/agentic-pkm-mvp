@@ -14,10 +14,11 @@ import yaml
 # stub in app/db/sqlalchemy.py (introduced for the CI smoke path in #30),
 # which always raises RuntimeError("conn_rw unavailable in smoke sqlalchemy
 # stub") and no-ops ensure_schema. The real DB-backed implementation lives in
-# app.db.db (dict-row connections; applies app/db/migrations_obsidian.sql,
-# which is what actually creates the remaining legacy compatibility schema --
-# public.file_state and public.objects.path became Alembic-owned in MVR-05A0
-# (#4543), revision c7f4b1a83d29) and is
+# app.db.db (dict-row connections; since MVR-05A1 (#4560) it issues no DDL at
+# all outside the STORE_SCHEMA_AUTOCREATE test fixture -- public.file_state and
+# public.objects.path became Alembic-owned in MVR-05A0 (#4543), revision
+# c7f4b1a83d29, and public.objects and public.agent_memories in revision
+# d1e8a0c5f37b) and is
 # what app/services/audit.py, app/services/decisions.py, and
 # app/store/membership_store.py already import directly. vault_sync imported
 # the stub instead, so every pg-marked caller of sync_markdown/handle_rename
@@ -27,6 +28,7 @@ import yaml
 from app.db.db import (
     FILE_STATE_COMPATIBILITY_BINDING_ID,
     assert_file_state_schema,
+    assert_objects_schema,
     conn_rw,
     ensure_schema,
 )
@@ -59,34 +61,68 @@ def _conn():
 
 
 def _prepare(conn: psycopg.Connection) -> None:
-    """Apply the legacy compatibility DDL, then gate on the migrated file_state key.
+    """Gate on the migrated `file_state` key before any vault-sync statement runs.
 
     MVR-05A0 (#4543): `file_state` is owned by Alembic revision `c7f4b1a83d29`,
     so a database that never ran it has no table, or still has the `path`-only
     key. Either way every statement below would fail — but late, opaquely, and
     part-way through a watcher tick. `assert_file_state_schema` turns that into
     one fail-loud error naming `alembic upgrade head`, before any effect.
+
+    `objects` gets the same treatment (MVR-05A1, #4560). Its rekey to
+    `(vault_binding_id, id)` is what makes every upsert below binding-scoped, and
+    a database that never ran revision `d1e8a0c5f37b` has no `vault_binding_id`
+    column at all. Before #4560 such a database still worked, because the runtime
+    bootstrap reshaped `objects` on every process boot; that bootstrap is gone,
+    so without this preflight the failure moved to a bare `UndefinedColumn` in
+    the middle of a tick.
+
+    `ensure_schema` is still called first, but since MVR-05A1 (#4560) it is a
+    no-op outside tests: it issues no DDL unless the `STORE_SCHEMA_AUTOCREATE`
+    fixture flag is set. It used to replay the legacy bootstrap SQL here, which
+    silently reverted the `objects` primary key on every process boot.
     """
     ensure_schema(conn)
     assert_file_state_schema(conn)
+    assert_objects_schema(conn)
     conn.commit()
 
 
 def _binding_id() -> str:
-    """Resolve the vault binding whose ``file_state`` rows this process owns.
+    """Resolve the vault binding whose rows this process owns.
 
-    MVR-05A0 (#4543) rekeyed ``file_state`` to ``(vault_binding_id, path)`` so
-    two bindings can hold the same path without overwriting each other. Every
-    statement in this module is scoped by the value returned here, which is what
-    stops the two UUID-keyed deletes below from reaching another binding's rows.
+    MVR-05A0 (#4543) rekeyed ``file_state`` to ``(vault_binding_id, path)`` and
+    MVR-05A1 (#4560) rekeyed ``objects`` to ``(vault_binding_id, id)``, so two
+    bindings can hold the same path and the same artifact UUID without
+    overwriting each other.
 
     Until MVR-05A (#3859) ships the compatibility ingress translator that
-    derives the request's real authorized binding, that value is the single
-    legacy compatibility binding. With one binding value in every row,
-    ``(vault_binding_id, path)`` has exactly the uniqueness, upsert, and delete
-    semantics the old ``path``-only key had, so single-vault behaviour is
-    unchanged. This function is the one seam MVR-05A replaces; the SQL below
-    does not need re-auditing when it does.
+    derives the request's real authorized binding, this returns the single legacy
+    compatibility binding — **unconditionally**. That constant is what makes the
+    partial scoping below safe today: no shipped code path can produce a second
+    binding value, so every row in both tables carries the same one, and both
+    composite keys have exactly the uniqueness, upsert, and delete semantics
+    their single-column predecessors had.
+
+    .. warning::
+       Replacing this function is **not** sufficient, and this is the one thing
+       MVR-05A must not take on trust. Scoping is currently uneven:
+
+       - every ``file_state`` statement in this module is binding-scoped,
+         including the two formerly UUID-keyed rename deletes and the
+         last-remaining-path count in ``delete_note`` (#4543 audited them all);
+       - only the ``objects`` **upserts** are binding-scoped, because their
+         ``ON CONFLICT`` targets had to name the new key. The UUID-keyed
+         ``objects`` reads and updates in ``_update_path_only``, ``update_path``,
+         ``delete_note`` and ``_object_materialization_state`` still match on
+         ``id``/``uuid`` alone, and ``app/objects/identity.py`` still raises on a
+         duplicated ``objects.uuid``.
+
+       The moment this returns more than one value, those statements can reach
+       another binding's rows and that resolver refuses to run. #4560 left them
+       deliberately — the issue assigns the producer call sites and real binding
+       attribution to #3859 — but they must be scoped in the same change that
+       makes this function variable, not after it.
     """
     return FILE_STATE_COMPATIBILITY_BINDING_ID
 
@@ -610,26 +646,26 @@ def upsert_object_from_note(
             try:
                 cur.execute(
                     """
-                    insert into objects(id, kind, payload, path)
-                    values(%s,%s,%s::jsonb,%s)
-                    on conflict (id) do update set
+                    insert into objects(vault_binding_id, id, kind, payload, path)
+                    values(%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, id) do update set
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (canonical_object_id, "note", payload_json, path_str),
+                    (binding_id, canonical_object_id, "note", payload_json, path_str),
                 )
             except Exception:
                 cur.execute(
                     """
-                    insert into objects(uuid, kind, payload, path)
-                    values(%s,%s,%s::jsonb,%s)
-                    on conflict (uuid) do update set
+                    insert into objects(vault_binding_id, uuid, kind, payload, path)
+                    values(%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, uuid) do update set
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, "note", payload_json, path_str),
+                    (binding_id, uuid_value, "note", payload_json, path_str),
                 )
         merged_payload = _merge_canonical_payload(
             conn,
@@ -846,15 +882,22 @@ def sync_markdown(path: str) -> dict[str, Any]:
             try:
                 cur1.execute(
                     """
-                    insert into objects(id, uuid, kind, payload, path)
-                    values(%s,%s,%s,%s::jsonb,%s)
-                    on conflict (id) do update set
+                    insert into objects(vault_binding_id, id, uuid, kind, payload, path)
+                    values(%s,%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, id) do update set
                       uuid = excluded.uuid,
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (canonical_object_id, uuid_value, "note", payload_json, str(note_path)),
+                    (
+                        binding_id,
+                        canonical_object_id,
+                        uuid_value,
+                        "note",
+                        payload_json,
+                        str(note_path),
+                    ),
                 )
                 wrote = True
             except Exception:
@@ -866,14 +909,14 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 try:
                     cur2.execute(
                         """
-                        insert into objects(id, kind, payload, path)
-                        values(%s,%s,%s::jsonb,%s)
-                        on conflict (id) do update set
+                        insert into objects(vault_binding_id, id, kind, payload, path)
+                        values(%s,%s,%s,%s::jsonb,%s)
+                        on conflict (vault_binding_id, id) do update set
                           kind = excluded.kind,
                           payload = excluded.payload,
                           path = excluded.path
                         """,
-                        (canonical_object_id, "note", payload_json, str(note_path)),
+                        (binding_id, canonical_object_id, "note", payload_json, str(note_path)),
                     )
                     wrote = True
                 except Exception:
@@ -884,14 +927,14 @@ def sync_markdown(path: str) -> dict[str, Any]:
             with conn.cursor() as cur3:
                 cur3.execute(
                     """
-                    insert into objects(uuid, kind, payload, path)
-                    values(%s,%s,%s::jsonb,%s)
-                    on conflict (uuid) do update set
+                    insert into objects(vault_binding_id, uuid, kind, payload, path)
+                    values(%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, uuid) do update set
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, "note", payload_json, str(note_path)),
+                    (binding_id, uuid_value, "note", payload_json, str(note_path)),
                 )
 
         merged_payload = _merge_canonical_payload(

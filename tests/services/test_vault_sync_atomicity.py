@@ -62,6 +62,11 @@ class _RecCursor:
         if norm.startswith("select to_regclass('public.file_state') is not null"):
             self._fetch = (True, ["vault_binding_id", "path"], [])
             return
+        # MVR-05A1 (#4560): and the migrated `objects` key, for the same
+        # reason -- every `objects` upsert below is binding-scoped.
+        if norm.startswith("select to_regclass('public.objects') is not null"):
+            self._fetch = (True, True, ["vault_binding_id", "id"])
+            return
         if norm.startswith("select to_regclass(%s) as oid"):
             self._fetch = (params[0],)
             return

@@ -436,14 +436,22 @@ def test_autocreate_fixture_shape_matches_the_owning_revision(
     The KERNEL-04/KERNEL-05 contract allows a `STORE_SCHEMA_AUTOCREATE=1`
     create-on-demand path for scratch databases; parity with the migration is
     what keeps it from becoming a second source of truth.
+
+    The autocreate runs against a *virgin* database rather than one stamped at
+    an intermediate revision. Since MVR-05A1 (#4560) that path also declares
+    `objects` and `agent_memories` in their adopted shape, so pointing it at a
+    half-migrated `objects` would be an incoherent starting state, not a
+    supported one — `assert_file_state_schema` is what tells an operator to run
+    `alembic upgrade head` in that case.
     """
     from app.db.db import ensure_schema
 
     migrated = scratch_db_factory()
     _alembic_upgrade(migrated, monkeypatch, FILE_STATE_ADOPTION_HEAD)
 
-    autocreated = scratch_db_factory()
-    _alembic_upgrade(autocreated, monkeypatch, PRE_ADOPTION_HEAD)
+    autocreated = scratch_db_factory()  # no alembic, no tables at all
+    monkeypatch.setenv("DATABASE_URL", autocreated)
+    monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
     with psycopg.connect(autocreated) as conn:
         ensure_schema(conn)
