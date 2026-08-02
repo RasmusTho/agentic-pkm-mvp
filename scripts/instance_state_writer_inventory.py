@@ -4,6 +4,37 @@
 The deployment wrapper runs this as one foreground process.  It owns both
 Docker and native enumeration, records no raw argv or host path, and emits a
 proof candidate only when two complete snapshots are identical and empty.
+
+Owner-root arrangements across domains
+--------------------------------------
+
+The legacy owner inventory enumerates vault owner roots across four domains:
+the three release channels (``dev``, ``test``, ``prod``) and ``native`` (the
+macOS app's ``app-local.md``).  It refuses only the arrangements that are
+genuinely ambiguous authority.  The rule follows from the writer set
+``docs/adr/ADR-0055-vault-multiwriter-consistency-model.md`` declares -- the Mac
+runtime, the human via Obsidian, iCloud sync, and the mobile clients -- not from
+any host, vault, or channel seen in the field:
+
+Permitted
+    ``native`` sharing a root with one release channel, whether the roots are
+    equal or one is an ancestor of the other in either direction.  The native
+    Mac runtime and a channel runtime writing one vault is the topology
+    ADR-0055 exists to govern, and it governs it *at write time* (atomic
+    writes, stale-detection, conflict staging).  Root identity is a statement
+    about ownership, not evidence that a writer is active.
+
+Forbidden
+    The same root, or ancestor/descendant overlap in either direction, claimed
+    by two *different release channels*.  ADR-0055 declares one Mac runtime,
+    not one per channel; ``docs/ENVIRONMENTS.md`` keeps channels isolated.  Two
+    channel runtimes on one vault is ambiguous authority no write-time
+    mechanism resolves, so it still aborts the deploy.
+
+This predicate is about ownership only.  The quiescence property -- that no
+writer is running during the deployment's stopped window -- is proved
+separately by :func:`prove_quiescent`, which requires two identical and empty
+process snapshots and is unaffected by which roots the domains own.
 """
 
 from __future__ import annotations
@@ -29,6 +60,9 @@ from typing import Sequence
 INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 DOMAINS = ("dev", "native", "prod", "test")
+# Owner-root overlap is fatal only between two of these; see the module
+# docstring for why a shared native/channel root is permitted instead.
+CHANNEL_DOMAINS = frozenset({"dev", "prod", "test"})
 COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "test"}
 COMPOSE_WRITER_SERVICES = {"api", "heimdal-capture-watch", "watcher", "worker"}
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
@@ -959,6 +993,14 @@ def _normalize_legacy_owners(
             if left.channel_id == right.channel_id:
                 continue
             if (
+                left.channel_id not in CHANNEL_DOMAINS
+                or right.channel_id not in CHANNEL_DOMAINS
+            ):
+                # A native/channel pair. ADR-0055 declares both writers and
+                # resolves their collisions at write time, so a shared root is
+                # the designed topology rather than ambiguous authority.
+                continue
+            if (
                 left_primary == right_primary
                 or left_primary in right_ancestors
                 or right_primary in left_ancestors
@@ -968,8 +1010,10 @@ def _normalize_legacy_owners(
                     if left_primary == right_primary or left_primary in right_ancestors
                     else right_primary
                 )
+                # Both domains are release channels by the carve-out above, so
+                # the message names that narrower rule rather than "domains".
                 raise InventoryError(
-                    "legacy owner roots collide across domains: "
+                    "legacy owner roots collide across release channels: "
                     f"domain_a={left.channel_id} domain_b={right.channel_id} id={shared_id}"
                 )
     ordered = sorted(values, key=lambda item: (item[0].channel_id, item[0].root))

@@ -124,8 +124,10 @@ stores, the native scalar store, and the governed caller binding; two identical 
 required to create the private baseline. Before recreate it then installs the host lease and restart
 fence, stops API, worker, watcher, and Heimdal, probes dev/test/prod/native consumers twice, and
 durably proves quiescence. The owner producer must reproduce its baseline twice after that stop
-before marking it drained. A missing or racing source, or an equal/nested root across owner domains,
-fails closed before partial ledger seeding; a post-stop failure leaves the fence in place. While
+before marking it drained. A missing or racing source, or an equal/nested root across two different
+release channels, fails closed before partial ledger seeding; a root shared between `native` and one
+channel is the topology `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` declares and does
+not fail closed. A post-stop failure leaves the fence in place. While
 stopped the finalizer captures the final legacy scalar payload, imports or preserves it on the
 durable volume, verifies the private production-derived owner inventory, seeds the shared ledger,
 optionally restores a verified backup, and creates the next registry/ledger/key backup. The fence is

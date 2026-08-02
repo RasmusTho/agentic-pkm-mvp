@@ -79,14 +79,17 @@ restart fence, stops API/worker/watcher/Heimdal, probes dev/test/prod/native con
 durably proves quiescence. Two new owner-source snapshots must reproduce the baseline exactly before
 the producer marks the inventory drained and copies it to
 `/app/instance-ownership/legacy-owner-inventory.json`; missing sources, config/store races, and
-equal or nested roots across owner domains abort without seeding a partial set. A failure at any
-stage after the lease/fence claim and before finalization — a live writer, a post-stop owner
-validation failure, or any other producer stage failure — surrenders that same-run producer's own
-host-global lease, public lease copy, and channel restart fence instead of stranding them; the
-release is scoped to the exact controller identity (pid plus start token) that claimed the lease, so
-it cannot disturb a lease still owned by a live or unrelated deployment, and a lease whose recorded
-controller process no longer exists is reclaimable by the next `deployment-begin` instead of fatal.
-The nonce-plus-inventory-digest proof
+equal or nested roots across two different release channels abort without seeding a partial set. A
+root shared between the `native` domain and one channel does not abort: per
+`docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` the Mac runtime and a channel runtime are
+both declared writers of one vault, and their concurrent writes are resolved at write time rather
+than by refusing the deploy. A failure at any stage after the lease/fence claim and before
+finalization — a live writer, a post-stop owner validation failure, or any other producer stage
+failure — surrenders that same-run producer's own host-global lease, public lease copy, and channel
+restart fence instead of stranding them; the release is scoped to the exact controller identity (pid
+plus start token) that claimed the lease, so it cannot disturb a lease still owned by a live or
+unrelated deployment, and a lease whose recorded controller process no longer exists is reclaimable
+by the next `deployment-begin` instead of fatal. The nonce-plus-inventory-digest proof
 is required for restore, final export/preservation, and legacy bootstrap. The finalizer rejects an
 incomplete, non-private, or unvalidated inventory, captures the final legacy fingerprint, imports it
 on first volume or preserves it beside an established dormant registry, calls the host-global

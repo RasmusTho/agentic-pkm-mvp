@@ -535,7 +535,7 @@ def test_collision_error_names_both_domains(tmp_path):
         writer_inventory.LegacyOwnerRecord("prod", str(shared_root), source="config_env"),
     ]
 
-    with pytest.raises(InventoryError, match="collide across domains") as excinfo:
+    with pytest.raises(InventoryError, match="collide across release channels") as excinfo:
         writer_inventory._normalize_legacy_owners(records)
 
     message = str(excinfo.value)
@@ -567,3 +567,206 @@ def test_inventory_errors_never_emit_raw_paths(tmp_path):
         )
 
     assert "not a mapping line" not in str(parse_excinfo.value)
+
+
+# --- Issue #4517: owner-root arrangements across domains --------------------
+
+REPO_ROOT = Path(writer_inventory.__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def owner_sources(monkeypatch):
+    """Drive the production owner inventory from an explicit owner set.
+
+    Only the two *source enumerators* are stubbed. Everything the deploy
+    wrapper actually calls -- the `produce-legacy-owners` entrypoint, the
+    two-snapshot stability check, normalization, the cross-domain predicate,
+    and the private receipt write -- runs for real.
+    """
+
+    state = {"owners": []}
+
+    monkeypatch.setattr(
+        writer_inventory, "_docker_legacy_owner_sources", lambda: ([], ["docker:stub"])
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_config_legacy_owner_sources",
+        lambda repo_root, *, active_channel: (
+            [
+                writer_inventory.LegacyOwnerRecord(domain, str(root), source="config_env")
+                for domain, root in state["owners"]
+            ],
+            ["config:stub"],
+        ),
+    )
+    return state
+
+
+def _vault(tmp_path, *parts):
+    root = tmp_path.joinpath(*parts)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_native_and_channel_may_share_a_vault_root(owner_sources, tmp_path):
+    """ADR-0055 declares the Mac runtime and a channel runtime as peer writers.
+
+    A vault root shared between `native` and one channel -- equal, or nested in
+    either direction -- is the designed topology, so the deploy's owner
+    inventory must produce its receipt instead of refusing.
+    """
+
+    shared = _vault(tmp_path, "vault")
+    nested = _vault(tmp_path, "vault", "project")
+
+    arrangements = {
+        "equal roots": [("native", shared), ("prod", shared)],
+        "channel nested under native": [("native", shared), ("dev", nested)],
+        "native nested under channel": [("test", shared), ("native", nested)],
+    }
+
+    for label, owners in arrangements.items():
+        owner_sources["owners"] = owners
+        output = tmp_path / f"owners-{len(label)}-{label[:4]}.json"
+
+        writer_inventory.produce_legacy_owners(
+            repo_root=REPO_ROOT, active_channel="dev", output=output
+        )
+
+        # Real-path assertion: the production entrypoint wrote its receipt, and
+        # both owners survived normalization rather than one being dropped.
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        assert payload["schema"] == writer_inventory.LEGACY_OWNER_INVENTORY_SCHEMA, label
+        assert payload["inventory_complete"] is True, label
+        assert {owner["channel_id"] for owner in payload["owners"]} == {
+            domain for domain, _ in owners
+        }, label
+
+
+def test_forbidden_cross_domain_arrangements_are_named(owner_sources, tmp_path):
+    """The surviving refusal is two *release channels* on one root, and it is documented."""
+
+    docstring = writer_inventory.__doc__ or ""
+    assert "Permitted" in docstring
+    assert "Forbidden" in docstring
+    assert "release channels" in docstring
+    assert writer_inventory.CHANNEL_DOMAINS == frozenset({"dev", "prod", "test"})
+    assert "native" not in writer_inventory.CHANNEL_DOMAINS
+
+    shared = _vault(tmp_path, "vault")
+    nested = _vault(tmp_path, "vault", "project")
+
+    forbidden = {
+        "two channels on one root": [("dev", shared), ("prod", shared)],
+        "one channel nested under another": [("prod", shared), ("test", nested)],
+        "ancestor direction reversed": [("test", nested), ("dev", shared)],
+    }
+
+    for label, owners in forbidden.items():
+        owner_sources["owners"] = owners
+        output = tmp_path / "forbidden-owners.json"
+
+        with pytest.raises(InventoryError, match="collide across release channels"):
+            writer_inventory.produce_legacy_owners(
+                repo_root=REPO_ROOT, active_channel="dev", output=output
+            )
+
+        assert not output.exists(), label
+
+
+def test_active_writer_during_stopped_window_still_refuses(monkeypatch, tmp_path):
+    """Narrowing the ownership predicate must not touch the quiescence proof."""
+
+    controller_pid = 4242
+    controller_token = "darwin:" + "b" * 64
+
+    monkeypatch.setattr(
+        writer_inventory,
+        "_record_for_pid",
+        lambda pid, *, linux_boot_id=None: writer_inventory.ProcessRecord(
+            pid=controller_pid,
+            ppid=1,
+            pgid=controller_pid,
+            start_token=controller_token,
+            argv=("/bin/bash", "scripts/deploy_channel.sh", "deploy"),
+        ),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_writers",
+        lambda **_kwargs: [],
+    )
+
+    live_writer = {
+        "domain": "dev",
+        "role": "watcher",
+        "pid": 99001,
+        "start_token": "docker:" + "c" * 64,
+    }
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [dict(live_writer)])
+
+    output = tmp_path / "quiescence.json"
+    with pytest.raises(InventoryError, match="live or racing"):
+        writer_inventory.prove_quiescent(
+            controller_pid=controller_pid,
+            controller_start_token=controller_token,
+            output=output,
+        )
+
+    assert not output.exists()
+
+    # Control: with the writer drained the same call proves quiescence, so the
+    # refusal above is the live writer and not an unconditional failure.
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+    writer_inventory.prove_quiescent(
+        controller_pid=controller_pid,
+        controller_start_token=controller_token,
+        output=output,
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["all_consumers_stopped"] is True
+    assert payload["domains"] == {domain: [] for domain in writer_inventory.DOMAINS}
+
+
+def test_deploy_proceeds_past_inventory_with_shared_native_root(owner_sources, tmp_path):
+    """`deploy_channel.sh deploy dev <sha>` must reach migrations and recreate."""
+
+    # The inventory really is the deploy's first gate: the wrapper runs this
+    # subcommand, and deploy_channel.sh runs the wrapper before migrations and
+    # service recreate. That ordering is why a refusal blocks every channel.
+    wrapper = (REPO_ROOT / "scripts" / "lib" / "instance_state_deployment.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "produce-legacy-owners" in wrapper
+
+    # Compare call sites, not the function definitions further up the file.
+    deploy = (REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(encoding="utf-8")
+    inventory_at = deploy.index("prepare_instance_state_deployment compose")
+    migrate_at = deploy.index(
+        'run_postmutation_gate "migration execution failed" apply_changed_migrations'
+    )
+    recreate_at = deploy.index('run_postmutation_gate "service recreate/liveness gate failed"')
+    assert inventory_at < migrate_at
+    assert inventory_at < recreate_at
+
+    # The observed host arrangement: native and a channel on one iCloud vault.
+    shared = _vault(tmp_path, "cloud-sync", "vault")
+    owner_sources["owners"] = [("native", shared), ("prod", shared)]
+    output = tmp_path / "legacy-owner-inventory.json"
+
+    # Exactly the argv scripts/lib/instance_state_deployment.sh builds.
+    exit_code = writer_inventory.main(
+        [
+            "produce-legacy-owners",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--active-channel",
+            "dev",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["inventory_complete"] is True
