@@ -56,10 +56,13 @@ typing or pasting anything beyond the question itself.
 ## Concretely
 
 ```
-# Heimdal capture transcript: "Note to self, find out whether we should fully migrate to BGE-M3."
+# Heimdal capture transcript: "Note to self: should we fully migrate to BGE-M3? Find out before Q3."
 $ python -m app.cli captures classify-question-intent <capture_id> --json
-{"classified": true, "class": "question_registration", "extracted_text": "Should we fully migrate to BGE-M3?"}
-# → capture note gains: - [ ] Registrera stående fråga: "Should we fully migrate to BGE-M3?"
+{"classified": true, "class": "question_registration", "extracted_text": "should we fully migrate to BGE-M3?"}
+# → capture note gains: - [ ] Registrera stående fråga: "should we fully migrate to BGE-M3?"
+# The extraction is a verbatim span of the capture (point 3 below). A capture that only
+# *implies* a question, with no question the human actually uttered, is not registered —
+# the classifier may never compose the question text itself.
 # Human checks the box in Obsidian (or via Companion UI read-mode click) →
 $ python -m app.cli questions create --text "Should we fully migrate to BGE-M3?" --scope work --registered-via capture_intent
 → WriteReceipt(locator=vault://questions/sq-...)
