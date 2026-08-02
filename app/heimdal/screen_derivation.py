@@ -365,7 +365,10 @@ def resolve_local_vision_endpoint() -> str:
             "cannot be proven host-local (HEIM-12). No frame was transmitted."
         )
     if hostname in _LOOPBACK_HOSTNAMES or hostname in _declared_host_local_hostnames():
-        return host
+        # Return the string that was actually validated, never the raw input:
+        # `OLLAMA_HOST=127.0.0.1:11434` (the scheme-less form Ollama's own docs
+        # use) must not validate one value and then transmit to another.
+        return candidate
 
     raise RawEgressRefusedError(
         f"Refusing to derive: vision endpoint host {hostname!r} is not loopback and is not "
@@ -407,11 +410,17 @@ def _iso_utc(value: Any) -> str:
 
 
 def _as_moment(value: str) -> Optional[datetime]:
-    """Parse an observed-at stamp, or None when it is not a parseable instant."""
+    """Parse an observed-at stamp, or None when it is not a parseable instant.
+
+    A naive stamp is read as UTC rather than returned naive: comparing a naive
+    against an aware datetime raises `TypeError`, which would crash a whole
+    tick instead of producing a governed refusal.
+    """
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 
 def _decode_frame_bundle(plaintext: bytes) -> Mapping[str, Any]:
@@ -528,8 +537,8 @@ def _invoke_local_vision(
     return _parse_vision_content(content)
 
 
-def _post_local_vision(endpoint: str, body: Mapping[str, Any]) -> Any:
-    """POST one already-validated host-local vision request.
+def local_vision_session() -> Any:
+    """Build the HTTP session used to reach the host-local vision model.
 
     ``trust_env`` is disabled deliberately: `requests` otherwise honours
     ``HTTP_PROXY``/``HTTPS_PROXY``/``ALL_PROXY`` from the environment, which
@@ -542,6 +551,12 @@ def _post_local_vision(endpoint: str, body: Mapping[str, Any]) -> Any:
 
     session = requests.Session()
     session.trust_env = False
+    return session
+
+
+def _post_local_vision(endpoint: str, body: Mapping[str, Any]) -> Any:
+    """POST one already-validated host-local vision request."""
+    session = local_vision_session()
     try:
         response = session.post(
             endpoint.rstrip("/") + "/api/chat",
@@ -889,16 +904,26 @@ def _span_key(dimensions: Mapping[str, str]) -> Tuple[Tuple[str, str], ...]:
 def _coalesces_into(previous: Mapping[str, str], current: Mapping[str, str]) -> bool:
     """Whether ``current`` continues ``previous``'s activity.
 
-    Unknown is never equal to unknown: if any dimension is empty on either side
-    (a client without Accessibility permission reports no window title; a failed
-    frontmost-app lookup reports no app; a model that names no goal), the frames
-    are NOT merged. Missing metadata degrades to over-segmentation -- a cheap
-    downstream re-cut -- never to one observation claiming a single activity
-    across an arbitrarily long window.
+    Two rules, in order:
+
+    1. every contributed dimension must match -- including axes a provider
+       declared itself, not just the four built-ins;
+    2. at least one dimension must actually be *known*. Unknown is not evidence
+       of sameness: a client without Accessibility permission reports no window
+       title, a failed frontmost-app lookup reports no app, and a model that
+       answers in plain text names no goal. All-unknown frames are never
+       merged, so missing metadata degrades to over-segmentation -- a cheap
+       downstream re-cut -- rather than one observation claiming a single
+       activity across an arbitrarily long window.
+
+    Rule 2 is deliberately "at least one", not "all": requiring every axis
+    would mean a single unknown dimension (a model that omits `goal`) switches
+    coalescing off entirely and floods the stream, which is the failure AC3's
+    merge direction exists to prevent.
     """
     if _span_key(previous) != _span_key(current):
         return False
-    return all(str(value).strip() for value in current.values())
+    return any(str(value).strip() for value in current.values())
 
 
 def _runs_backwards(open_end: str, candidate: str) -> bool:
@@ -931,8 +956,10 @@ def derive_activity_observations(
     batch (over-segmentation is the preferred direction -- SCREEN-04 can merge
     downstream, it cannot invent a boundary that was never recorded).
 
-    ``vision_runner`` is the injection seam for tests and for a host that
-    serves the local model differently; production callers omit it.
+    ``vision_runner`` is a **test injection seam**. An injected runner replaces
+    the whole model call, including :func:`resolve_local_vision_endpoint`, so
+    an injector owns its own egress boundary and this stage's host-local
+    guarantee does not extend to it. Production callers omit it.
     """
     if not isinstance(episode_id, str) or not episode_id.strip():
         raise ValueError(f"episode_id must be a non-empty string, got {episode_id!r}")

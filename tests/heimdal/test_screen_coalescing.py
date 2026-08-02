@@ -162,19 +162,40 @@ def test_span_boundaries_survive_on_dimension_shift(monkeypatch: pytest.MonkeyPa
     assert provider_tick.coalesced == 0, "a provider-declared dimension shift was merged away"
     assert provider_tick.observations_published == 2
 
-    # --- unknown never equals unknown: missing metadata over-segments
+    # --- all-unknown never equals all-unknown: a blind client over-segments
+    # rather than collapsing an arbitrarily long window into one observation.
     reset_screen_derivation_state(monkeypatch)
     blind_tick = derive_activity_observations(
         [
-            land_frame(frame="blind-1", observed_at="2026-07-11T15:00:00Z", window=""),
-            land_frame(frame="blind-2", observed_at="2026-07-11T15:01:00Z", window=""),
+            land_frame(
+                frame="blind-1", observed_at="2026-07-11T15:00:00Z", app="", window="", scope=""
+            ),
+            land_frame(
+                frame="blind-2", observed_at="2026-07-11T15:01:00Z", app="", window="", scope=""
+            ),
         ],
         episode_id="screen-session-blind",
-        vision_runner=_goal_runner(["same goal", "same goal"]),
+        vision_runner=_goal_runner(["", ""]),
         key=RAW_STORE_KEY,
     )
-    assert blind_tick.coalesced == 0, "frames with an unknown dimension were merged as identical"
+    assert blind_tick.coalesced == 0, "frames with no known dimension were merged as identical"
     assert blind_tick.observations_published == 2
+
+    # ...but one unknown axis must NOT switch coalescing off: a model that
+    # answers without naming a goal still coalesces on the known dimensions,
+    # or the stream floods (the failure AC3's merge direction prevents).
+    reset_screen_derivation_state(monkeypatch)
+    partial_tick = derive_activity_observations(
+        [
+            land_frame(frame="partial-1", observed_at="2026-07-11T15:10:00Z"),
+            land_frame(frame="partial-2", observed_at="2026-07-11T15:11:00Z"),
+        ],
+        episode_id="screen-session-partial",
+        vision_runner=_goal_runner(["", ""]),
+        key=RAW_STORE_KEY,
+    )
+    assert partial_tick.coalesced == 1, "a missing goal switched coalescing off entirely"
+    assert partial_tick.observations_published == 1
 
     # --- an out-of-order frame forces a boundary, never an inverted window
     reset_screen_derivation_state(monkeypatch)

@@ -184,8 +184,7 @@ def test_local_vision_request_ignores_ambient_proxy_configuration() -> None:
     carry a loopback-addressed raw frame off the host after the address itself
     was proven host-local. The session must disable `trust_env`.
     """
-    source = Path(screen_derivation.__file__).read_text(encoding="utf-8")
-    assert "session.trust_env = False" in source
+    assert screen_derivation.local_vision_session().trust_env is False
 
 
 def test_derivation_module_has_no_paid_provider_code_path() -> None:

@@ -64,8 +64,21 @@ the span boundaries the event motor needs.
    one span observation with real `observed_at_start`/`observed_at_end` duration. A span boundary is
    created on **any** dimension shift — frontmost app, window/document, scope, or derived-goal change —
    because those are the ERE segmenter's five-dimension shifts (SCREEN-04). **Over-segmentation is
-   preferred** (merge is a cheap downstream re-cut; a lost boundary is unrecoverable). Coalescing
-   sensitivity is `screen_coalesce_*` (provisional constants, SCREEN-06-governed).
+   preferred** (merge is a cheap downstream re-cut; a lost boundary is unrecoverable). Three rules
+   enforce that preference in the delivered stage:
+
+   - a context provider that declares a **segmenter axis of its own** cuts spans on it too, so the
+     built-in four are a floor, not a ceiling; and two providers may not claim one axis (the later
+     write would move a boundary invisibly, so it is refused);
+   - **unknown is not evidence of sameness**: frames with no known dimension at all (a client without
+     Accessibility permission) are never merged. One unknown axis does not switch coalescing off —
+     that would flood the stream — but an all-unknown frame always starts its own span;
+   - a frame **out of capture order** forces a boundary instead of publishing a span that ends before
+     it began.
+
+   Coalescing sensitivity is `screen_coalesce_*` (provisional constants, SCREEN-06-governed); this
+   slice ships no max-gap bound, so two identical frames far apart still merge — SCREEN-05's
+   time-spend rollup should not assume a bounded gap until SCREEN-06 lands.
 5. **Publish markdown-first through the governed path.** The stage assembles the SCREEN-01 payload and
    publishes via the existing `heimdal.publish.publish_full_observation` (schema-validated,
    `content_hash` stamped in the same write, revision-aware idempotency key). The Mimer candidate
