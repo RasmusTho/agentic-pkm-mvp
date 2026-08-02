@@ -272,7 +272,16 @@ stays `capability_not_ready` until MVR-06B.
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | [#3856](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3856) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | [#3857](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3857) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
 | 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | [#3858](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3858) | non-authoritative dimension membership and context resolution | 01A–01C, 03 | Sol/high design; Terra/high execution after contract freeze |
-| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859) | binding-keyed persistence cutover | 03, 04 | Sol/xhigh |
+| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859) | binding-keyed persistence cutover — **stage hub**, not a pickup issue; its children are the rows below | 03, 04 | n/a — hub |
+| 05A0 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4543) | `file_state` adoption and binding rekey | 03, 04 | delivered — PR #4550 |
+| 05A1 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4560) | `objects` / `agent_memories` adoption, runtime-DDL retirement | 05A0 | delivered — PR #4569 |
+| 05A2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4576](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4576) | durable-table classification inventory and the revision-chain-derived architecture gate | 05A1 | Sol/high |
+| 05A3 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4577](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4577) | `store_*` projection group and its `app/stores/pg.py` producers | 05A2 | Terra/high |
+| 05A4 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4578](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4578) | ingest projection group and its `app/db/db.py` producers | 05A3 | Terra/high |
+| 05A5 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4579](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4579) | replay projection group and binding-scoped rebuilds | 05A4 | Terra/high |
+| 05A6 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4580](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4580) | per-binding shared/exclusive effect lease | 05A5 | Sol/xhigh |
+| 05A7 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4581](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4581) | outbox binding column and dual-key compatibility dedup | 05A6 | Sol/xhigh |
+| 05A8 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4582](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4582) | all-process fence, runtime floor, worker gate, owner-doc writebacks, stage closure | 05A7 | Sol/high |
 | 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | request ingress, picker, reads, retrieval, and read-race fence | 05A, #3163 | Sol/high; Terra/high mechanical consumers |
 | 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3861](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3861) | governed write target/token/receipt migration | 05B | Sol/xhigh |
 | 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3862](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3862) | outbox producers, interim worker delivery, aggregate proof, owner docs | 05C | Sol/high; Terra/high mechanical consumers |
@@ -286,8 +295,13 @@ stays `capability_not_ready` until MVR-06B.
 
 Execution is serial through issue 06D: task 04 and the 05/06 families evolve shared registry,
 projection, auth, queue, and lifecycle contracts, and their producer/preflight sets are not disjoint.
-No parallel dispatch is allowed through 06D. Every merge posts a child receipt
-to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
+No parallel dispatch is allowed through 06D. The 05A children are serial on the same terms and for
+the same reason — they share the classification manifest, the migration chain, and the compatibility
+producer set — so 05A2 through 05A8 run in listed order, each `agent:blocked` on its predecessor
+until that predecessor is merged and reconciled on `origin/main`. Every merge posts a child receipt
+to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup. 05A itself is a stage
+hub: it posts the MVR-05A stage receipt once every 05A child has merged, and it is never picked up
+directly.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -395,11 +409,15 @@ Partial delivery remains fail-closed:
   effect if another client moved the compatibility binding. Only truly legacy carrier/precondition-
   free single-binding writes to that exact binding retain the prior journey; 05C replaces this seal
   with governed explicit-target writes;
-- before issue 05A enables the first binding-keyed compatibility producer, every pending legacy
-  outbox key is classified and
-  scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
-  ambiguous/conflicting rows quarantine. Issue 05D retires the compatibility translator only after
-  native producer migration, and issue 06D cannot backfill a duplicate;
+- before issue 05A enables the first binding-keyed compatibility producer, every legacy outbox row —
+  pending and already delivered — is classified under the DB fence and keeps its pre-cutover key in a
+  preserved `legacy_key` column. Keys are never recomputed and the idempotency namespace is never
+  rotated, because neither `source_id` nor `content_fingerprint` is persisted on the row and no
+  migration can therefore derive the upgraded key. A binding-keyed producer derives both keys and
+  suppresses against either, so identical retries preserve one canonical lineage across the cutover
+  and a re-emission cannot duplicate an already-delivered legacy effect; ambiguous or conflicting
+  rows quarantine. Issue 05D retires the compatibility translator only after native producer
+  migration, and issue 06D cannot backfill a duplicate;
 - before issue 05A enables scalar vault-bound dispatch, every enabled GOV-revocation producer uses
   the host-global ownership fence and matching exclusive binding lease. That enabled set is closed by
   inventory and is empty at 05A, so 05A discharges this by sealing the seam and proving the set
