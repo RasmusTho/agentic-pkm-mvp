@@ -71,7 +71,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
-from urllib.parse import urlparse
 
 from app.components.settings.providers_loader import ProviderCensus, load_provider_census
 from app.heimdal.publish import assemble_observation_payload, publish_full_observation
@@ -335,6 +334,47 @@ def _declared_host_local_hostnames() -> frozenset:
     return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
 
 
+def _dialled_host(url: str) -> str:
+    """The host the HTTP client will actually dial, per the client's own parser.
+
+    Deliberately `urllib3`'s parser -- the one `requests` resolves connections
+    with -- and never a second, independent parse. Two parsers over one string
+    is how a validated destination and a dialled destination diverge: they
+    disagree on shapes like a backslash or an `@` in the authority, so one can
+    read `http://127.0.0.1:1\\@elsewhere` as loopback while the other dials
+    `elsewhere`. Whatever the client would dial is what gets checked, so no
+    such differential exists to exploit -- and a future parser change cannot
+    reopen the class, because there is only ever one parser.
+    """
+    from urllib3.util import parse_url  # type: ignore[import-untyped]
+
+    try:
+        host = (parse_url(url).host or "").strip().lower()
+    except Exception:
+        # An endpoint the client itself cannot parse is not provably local.
+        return ""
+    return host.strip("[]")
+
+
+def _assert_host_local_url(url: str) -> None:
+    """Refuse a URL whose dialled host is not provably host-local (HEIM-12)."""
+    host = _dialled_host(url)
+    if not host:
+        raise RawEgressRefusedError(
+            f"Refusing to derive: vision endpoint {url!r} names no host the client can "
+            "resolve, so it cannot be proven host-local (HEIM-12). No frame was transmitted."
+        )
+    if host in _LOOPBACK_HOSTNAMES or host in _declared_host_local_hostnames():
+        return
+    raise RawEgressRefusedError(
+        f"Refusing to derive: vision endpoint host {host!r} is not loopback and is not "
+        f"declared host-local in {HOST_LOCAL_VISION_ALLOWLIST_ENV}. Raw screen frames never "
+        "leave the host trust boundary (HEIM-12, DECLARED_EGRESS raw_class_egress=false). "
+        "No frame was transmitted. Point the stage at a host-local model, or declare the "
+        "endpoint host-local explicitly if it really is inside this machine's boundary."
+    )
+
+
 def resolve_local_vision_endpoint() -> str:
     """Resolve the local vision endpoint, refusing any non-host-local destination.
 
@@ -344,6 +384,13 @@ def resolve_local_vision_endpoint() -> str:
     the operator explicitly declared host-local via
     :data:`HOST_LOCAL_VISION_ALLOWLIST_ENV`. Anything else raises
     :class:`RawEgressRefusedError` before a frame is transmitted.
+
+    This is the early, fail-fast check: it refuses a misconfigured endpoint
+    before a frame is even read. It is deliberately NOT the only check --
+    :func:`_post_local_vision` re-asserts host-locality on the exact prepared
+    URL it is about to send, so validation and transmission cannot diverge.
+    Both read :func:`_dialled_host`, so this module has exactly one notion of
+    "the host".
     """
     host = (
         os.getenv("OLLAMA_BASE_URL", "").strip()
@@ -357,26 +404,11 @@ def resolve_local_vision_endpoint() -> str:
             "buffered until the local vision model is available."
         )
 
+    # `OLLAMA_HOST=127.0.0.1:11434` (the scheme-less form Ollama's own docs use)
+    # is normalized here so the value validated is the value transmitted.
     candidate = host if "://" in host else f"http://{host}"
-    hostname = (urlparse(candidate).hostname or "").strip().lower()
-    if not hostname:
-        raise RawEgressRefusedError(
-            f"Refusing to derive: vision endpoint {host!r} names no resolvable host, so it "
-            "cannot be proven host-local (HEIM-12). No frame was transmitted."
-        )
-    if hostname in _LOOPBACK_HOSTNAMES or hostname in _declared_host_local_hostnames():
-        # Return the string that was actually validated, never the raw input:
-        # `OLLAMA_HOST=127.0.0.1:11434` (the scheme-less form Ollama's own docs
-        # use) must not validate one value and then transmit to another.
-        return candidate
-
-    raise RawEgressRefusedError(
-        f"Refusing to derive: vision endpoint host {hostname!r} is not loopback and is not "
-        f"declared host-local in {HOST_LOCAL_VISION_ALLOWLIST_ENV}. Raw screen frames never "
-        "leave the host trust boundary (HEIM-12, DECLARED_EGRESS raw_class_egress=false). "
-        "No frame was transmitted. Point the stage at a host-local model, or declare the "
-        "endpoint host-local explicitly if it really is inside this machine's boundary."
-    )
+    _assert_host_local_url(candidate)
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -568,11 +600,21 @@ def _post_local_vision(endpoint: str, body: Mapping[str, Any]) -> Any:
     proxy guard closes, one hop later. A local model has no legitimate reason
     to redirect ``/api/chat`` elsewhere, so this is fail-loud, not a downgrade.
     """
+    import requests  # type: ignore[import-untyped]
+
     session = local_vision_session()
     try:
-        response = session.post(
-            endpoint.rstrip("/") + "/api/chat",
-            json=dict(body),
+        prepared = session.prepare_request(
+            requests.Request("POST", endpoint.rstrip("/") + "/api/chat", json=dict(body))
+        )
+        # THE authoritative gate: host-locality is asserted on the exact URL
+        # the client is about to dial, not on an earlier string some other
+        # parser once approved. Nothing can be interposed between this check
+        # and `send`, so a validated destination cannot drift into a dialled
+        # one -- which is the class of defect, not just its one instance.
+        _assert_host_local_url(prepared.url)
+        response = session.send(
+            prepared,
             timeout=float(os.getenv("HEIMDAL_SCREEN_VISION_TIMEOUT", "120")),
             allow_redirects=False,
         )
@@ -650,6 +692,16 @@ def _derive_frame(
     )
     facts, provider_mentions, dimensions = _merge_contributions(contributions)
 
+    # Checked BEFORE the model call, not after: the conflict is fully known
+    # from the providers alone, and refusing afterwards would transmit every
+    # frame in the batch first. Fail at compile, not at 3 a.m.
+    if "goal" in dimensions:
+        raise ContextDimensionConflictError(
+            "A context provider claims the 'goal' dimension, which the derivation stage itself "
+            "contributes from the local model. Rename the provider's axis: the later write would "
+            "silently move a span boundary."
+        )
+
     image = bundle.get("frame")
     request = VisionRequest(
         model=route.model,
@@ -659,16 +711,9 @@ def _derive_frame(
         dimensions=dict(dimensions),
     )
     activity = _normalize_activity(_invoke_local_vision(request, vision_runner=vision_runner))
-    # The derived goal is this stage's own contribution to the segmenter axes.
-    # It is held to the same one-writer-per-dimension rule as the providers:
-    # overwriting a provider's `goal` here would make the stage a silent third
-    # writer and could merge away a boundary the provider drew.
-    if "goal" in dimensions:
-        raise ContextDimensionConflictError(
-            "A context provider claims the 'goal' dimension, which the derivation stage itself "
-            "contributes from the local model. Rename the provider's axis: the later write would "
-            "silently move a span boundary."
-        )
+    # The derived goal is this stage's own contribution to the segmenter axes,
+    # held to the same one-writer-per-dimension rule the providers obey (the
+    # conflict was already refused above).
     dimensions["goal"] = activity.goal
     return activity, dimensions, facts, provider_mentions, gated.receipt.content_identity
 

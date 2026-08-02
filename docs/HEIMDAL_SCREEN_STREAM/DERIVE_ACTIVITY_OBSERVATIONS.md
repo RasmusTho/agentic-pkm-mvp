@@ -50,12 +50,15 @@ the span boundaries the event motor needs.
      this task kind as paid-eligible or when the resolved provider is not `tier: local`, so the refusal
      lands before a single frame is read;
    - *the destination*: a census entry proves a provider **name** is local, never that the socket a
-     decrypted frame is about to be written to is on this machine. `resolve_local_vision_endpoint`
-     closes that half — the endpoint must be loopback, or a hostname the operator explicitly declared
-     host-local in `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS` (the container-network case), or the
-     derivation is refused before the frame is attached to any request. The request also runs with
-     `trust_env` disabled so an ambient `HTTP_PROXY` cannot carry a loopback-addressed frame off the
-     host.
+     decrypted frame is about to be written to is on this machine. The endpoint must be loopback, or
+     a hostname the operator explicitly declared host-local in
+     `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS` (the container-network case), or the derivation is
+     refused before the frame is attached to any request. Three escapes off that validated
+     destination are closed explicitly, because each was found reachable in review: an ambient
+     `HTTP_PROXY` (the request runs with `trust_env` disabled), an HTTP **redirect** (refused, never
+     followed — a local model has no reason to redirect `/api/chat` elsewhere), and a **URL-parser
+     differential** (host-locality is asserted on the exact prepared URL the client will dial, using
+     the client's own parser, so a validated destination and a dialled destination cannot diverge).
 
    Enforced by `tests/invariants/test_heimdal_seam.py::test_declared_egress`, the §8-reserved home
    HEIM-12's static half now graduates into, plus

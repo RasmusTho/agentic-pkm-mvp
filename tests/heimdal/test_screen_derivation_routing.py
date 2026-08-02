@@ -177,6 +177,133 @@ def test_raw_frames_refuse_a_destination_that_is_not_host_local(
     assert screen_derivation.resolve_local_vision_endpoint() == "http://ollama:11434"
 
 
+#: Endpoint shapes that have historically split one URL parser from another,
+#: or that merely look host-local. Which of these a given `urllib.parse` /
+#: `urllib3` version disagrees on is a moving target, so this asserts the
+#: invariant rather than any one parser's quirk.
+ADVERSARIAL_ENDPOINTS = [
+    # Backslash and bracket shapes split `urllib.parse` from `urllib3`. Which
+    # direction they split in is version-dependent -- on urllib3 2.5.0 /
+    # CPython 3.12, `http://evil.example.com\@127.0.0.1` reads as loopback to
+    # `urllib.parse` while `requests` dials `evil.example.com`, which is
+    # exactly the exploitable direction.
+    "http://evil.example.com\\@127.0.0.1",
+    "http://127.0.0.1:11434\\@evil.example.com",
+    "http://127.0.0.1\\evil.example.com",
+    "http://evil.example.com]@127.0.0.1",
+    "http://127.0.0.1:11434[@evil.example.com",
+    "http://127.0.0.1%evil.example.com",
+    "http://127.0.0.1:evil.example.com",
+    "http://127.0.0.1@evil.example.com",
+    "http://localhost#@evil.example.com",
+    "http://evil.example.com#@127.0.0.1",
+    "http://localhost.evil.example.com",
+    "http://127.0.0.1.evil.example.com",
+    "http://2130706433",
+    "http://0177.0.0.1",
+    "http://127.0.0.2",
+    "http://0.0.0.0",
+    "http://[::ffff:127.0.0.1]",
+    "//evil.example.com",
+    "http://evil.example.com/../127.0.0.1",
+]
+
+
+def test_the_validated_host_is_the_host_the_client_actually_dials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation and transmission must read one parser, never two.
+
+    A validator that parses the endpoint with a different library than the HTTP
+    client uses can approve one destination while the frame goes to another --
+    silently, because the other end's response is consumed as the model's
+    answer and published as a governed observation. This asserts the invariant
+    that survives parser-version drift: for every adversarial shape, EITHER the
+    endpoint is refused, OR the host the client would actually dial is
+    host-local. There is no third outcome.
+    """
+    import requests
+    from urllib3.util import parse_url
+
+    for variable in ("OLLAMA_BASE_URL", "OLLAMA_HOST", "OLLAMA_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv(screen_derivation.HOST_LOCAL_VISION_ALLOWLIST_ENV, raising=False)
+
+    session = screen_derivation.local_vision_session()
+    for endpoint in ADVERSARIAL_ENDPOINTS:
+        monkeypatch.setenv("OLLAMA_BASE_URL", endpoint)
+        try:
+            resolved = screen_derivation.resolve_local_vision_endpoint()
+        except (
+            screen_derivation.RawEgressRefusedError,
+            screen_derivation.LocalVisionUnavailableError,
+        ):
+            continue
+        # Not refused -> the host the CLIENT will dial must be host-local.
+        # Deliberately re-derived here with urllib3 (what `requests` actually
+        # resolves with) rather than through the module's own helper: reading
+        # the module's parser would make this test agree with a wrong
+        # validator instead of catching it.
+        prepared = session.prepare_request(
+            requests.Request("POST", resolved.rstrip("/") + "/api/chat", json={})
+        )
+        try:
+            dialled = (parse_url(prepared.url).host or "").strip().lower().strip("[]")
+        except Exception:
+            continue  # the client itself cannot dial this; nothing is transmitted
+        assert dialled in screen_derivation._LOOPBACK_HOSTNAMES, (
+            f"endpoint {endpoint!r} was accepted but the client would dial {dialled!r}"
+        )
+
+
+def test_the_send_itself_refuses_a_destination_that_is_not_host_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate adjacent to the socket is load-bearing on its own.
+
+    `resolve_local_vision_endpoint` is the fail-fast check; this is the one
+    that cannot be bypassed, because it reads the exact prepared URL. Asserted
+    against `_post_local_vision` directly: even handed an endpoint that never
+    passed the early check, it must refuse before sending. That is what makes
+    the two checks defence in depth rather than one check written twice.
+    """
+    sent: List[Any] = []
+    real_session = screen_derivation.local_vision_session()
+
+    class _Session:
+        def prepare_request(self, request: Any) -> Any:
+            return real_session.prepare_request(request)
+
+        def send(self, prepared: Any, **kwargs: Any) -> Any:  # pragma: no cover - must not run
+            sent.append(prepared.url)
+            raise AssertionError("a frame was sent to an unvalidated destination")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(screen_derivation, "local_vision_session", lambda: _Session())
+    monkeypatch.delenv(screen_derivation.HOST_LOCAL_VISION_ALLOWLIST_ENV, raising=False)
+
+    with pytest.raises(screen_derivation.RawEgressRefusedError, match="evil.example.com"):
+        screen_derivation._post_local_vision(
+            "http://evil.example.com", {"model": "llava:7b", "messages": []}
+        )
+    assert sent == []
+
+
+def test_every_endpoint_variable_is_guarded_not_just_the_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All three endpoint variables are validated, not only `OLLAMA_BASE_URL`."""
+    for variable in ("OLLAMA_BASE_URL", "OLLAMA_HOST", "OLLAMA_URL"):
+        for other in ("OLLAMA_BASE_URL", "OLLAMA_HOST", "OLLAMA_URL"):
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.delenv(screen_derivation.HOST_LOCAL_VISION_ALLOWLIST_ENV, raising=False)
+        monkeypatch.setenv(variable, "http://evil.example.com")
+        with pytest.raises(screen_derivation.RawEgressRefusedError):
+            screen_derivation.resolve_local_vision_endpoint()
+
+
 def test_local_vision_refuses_to_follow_a_redirect_off_the_validated_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -201,12 +328,16 @@ def test_local_vision_refuses_to_follow_a_redirect_off_the_validated_endpoint(
             raise AssertionError("redirect must be refused before the body is read")
 
     sent: List[Any] = []
+    real_session = screen_derivation.local_vision_session()
 
     class _Session:
         trust_env = True
 
-        def post(self, url: str, **kwargs: Any) -> Any:
-            sent.append(kwargs)
+        def prepare_request(self, request: Any) -> Any:
+            return real_session.prepare_request(request)
+
+        def send(self, prepared: Any, **kwargs: Any) -> Any:
+            sent.append(prepared.url)
             assert kwargs.get("allow_redirects") is False, "redirects must not be followed"
             return _Redirect()
 
