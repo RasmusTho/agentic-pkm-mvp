@@ -150,9 +150,26 @@ def test_the_primary_key_is_binding_scoped_not_path_scoped(migrated_db: str) -> 
 
 
 def test_a_single_binding_keeps_exactly_the_old_uniqueness(migrated_db: str) -> None:
-    """One binding still cannot hold two rows for one path (the reversible floor)."""
+    """One binding still cannot hold two rows for one path (the reversible floor).
+
+    Asserted with a *bare* second insert, not an upsert: an `ON CONFLICT
+    (vault_binding_id, path) DO UPDATE` that updates in place is true by
+    construction once the key exists and would prove nothing. The uniqueness
+    claim is that the database refuses the duplicate.
+    """
+    from psycopg import errors
+
     with psycopg.connect(migrated_db, autocommit=True) as conn:
         _insert(conn, BINDING_A, SHARED_PATH, "first")
+
+        with pytest.raises(errors.UniqueViolation):
+            conn.execute(
+                "INSERT INTO public.file_state (vault_binding_id, path, uuid) VALUES (%s, %s, %s)",
+                (BINDING_A, SHARED_PATH, str(uuid.UUID(int=8))),
+            )
+
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        # The upsert path still updates in place rather than duplicating.
         _insert(conn, BINDING_A, SHARED_PATH, "second")
         rows = conn.execute(
             "SELECT body_hash FROM public.file_state WHERE vault_binding_id = %s AND path = %s",

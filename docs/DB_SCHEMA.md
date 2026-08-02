@@ -298,10 +298,13 @@ Interpretation:
 - **Single-vault behaviour is unchanged.** With one binding value in every row,
   `(vault_binding_id, path)` has exactly the uniqueness, upsert, and delete semantics `(path)` had
   (`tests/integration/test_single_vault_compatibility.py::test_file_state_rekey_preserves_single_vault_sync`).
-- **Forward-only.** An older image can still `SELECT` from this table, but its writes use
-  `ON CONFLICT (path)`; with no unique index on `path` alone, Postgres rejects that statement. A
-  scalar rollback therefore fails loud on the first vault-sync write instead of silently mis-keying
-  rows. Per `docs/RELEASE_CHANNELS/README.md :: Rollback posture` this is permitted with operator
+- **Forward-only.** Measured against a migrated database, an older image's `file_state` **upserts**
+  fail loudly (`ON CONFLICT (path)` has no matching unique index, so Postgres raises
+  `InvalidColumnReference`), while its reads and its path/uuid deletes still execute and remain
+  correct for as long as only one binding exists — the only state an older image can be rolled back
+  into, since it cannot create a second binding. A scalar rollback therefore stops vault-sync ingest
+  loudly instead of silently mis-keying rows. Per
+  `docs/RELEASE_CHANNELS/README.md :: Rollback posture` this is permitted with operator
   acknowledgement that rollback cannot restore DB shape. MVR-05A (#3859) records the corresponding
   minimum-runtime floor; #4543 deliberately does not.
 

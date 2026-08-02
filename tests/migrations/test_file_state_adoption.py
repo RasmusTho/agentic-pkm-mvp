@@ -227,6 +227,15 @@ def test_adoption_is_idempotent_over_bootstrap_created_table(
     adopted = _schema_snapshot(dsn)
 
     assert [entry[1] for entry in adopted["pk"]] == ["vault_binding_id", "path"], adopted["pk"]
+    # An *adopted* table must also carry no leftover uniqueness on `path` alone;
+    # one would silently re-impose the one-binding-per-path constraint the rekey
+    # exists to remove, on exactly the deployed population this migration serves.
+    leftover_path_uniqueness = [
+        index
+        for index in adopted["indexes"]
+        if "UNIQUE" in index[1].upper() and "(path)" in index[1].lower().replace(" ", "")
+    ]
+    assert leftover_path_uniqueness == [], leftover_path_uniqueness
 
     # Re-running the whole adoption step against the already-adopted database is
     # a no-op: this is what an operator re-running `alembic upgrade head`, or a
@@ -364,6 +373,40 @@ def test_autocreate_fixture_shape_matches_the_owning_revision(
         conn.commit()
 
     assert _schema_snapshot(autocreated) == _schema_snapshot(migrated)
+
+
+def test_autocreate_supplies_objects_path_on_a_virgin_database(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One `ensure_schema` is enough on a database that has no `objects` yet.
+
+    `ALTER TABLE IF EXISTS public.objects ADD COLUMN IF NOT EXISTS path text`
+    silently no-ops when `objects` does not exist. The test-fixture autocreate
+    therefore has to run *after* the legacy bootstrap SQL that creates `objects`,
+    not before it — otherwise a virgin scratch database ends the first
+    `ensure_schema` with an `objects` table that has no `path` column, and only
+    self-heals on some later call.
+    """
+    from app.db.db import ensure_schema
+
+    dsn = scratch_db_factory()  # no alembic, no tables at all
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+
+    with psycopg.connect(dsn) as conn:
+        ensure_schema(conn)
+        conn.commit()
+
+    with psycopg.connect(dsn) as conn:
+        objects_path = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='objects' AND column_name='path'"
+        ).fetchone()
+        file_state = conn.execute("SELECT to_regclass('public.file_state')").fetchone()
+
+    assert objects_path is not None, (
+        "objects.path missing after a single ensure_schema on a virgin database"
+    )
+    assert file_state != (None,)
 
 
 def test_migration_and_runtime_agree_on_the_compatibility_binding_id() -> None:

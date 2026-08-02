@@ -41,11 +41,14 @@ list, and a post-create `ALTER`) while `objects` itself is created by Alembic
 revision `202510241200` — the same split-ownership root cause. After this
 revision the column has exactly one owning mechanism.
 
-Forward-only. An older image that reads this schema can still `SELECT` from
-`file_state`, but its writes use `ON CONFLICT (path)`, and with no unique index
-on `path` alone Postgres rejects that statement outright. Rollback therefore
-fails loud on the first vault-sync write rather than silently corrupting or
-mis-keying rows. Per `docs/RELEASE_CHANNELS/README.md :: Rollback posture` a
+Forward-only. Measured against a migrated database, an older image behaves like
+this: every `file_state` **upsert** fails loudly, because `ON CONFLICT (path)`
+has no unique index on `path` alone to match and Postgres raises
+`InvalidColumnReference`. Its reads and its path/uuid deletes still execute, and
+they remain *correct* while only one binding exists — which is the only state an
+older image can be rolled back into, since it cannot create a second binding.
+So rollback stops vault-sync ingest loudly rather than silently mis-keying or
+losing rows. Per `docs/RELEASE_CHANNELS/README.md :: Rollback posture` a
 forward-only migration is permitted with operator acknowledgement that rollback
 cannot restore DB shape.
 

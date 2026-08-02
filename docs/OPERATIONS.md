@@ -67,10 +67,12 @@ created at runtime by `app/db/migrations_obsidian.sql`) and changes its primary 
   it. Existing rows are adopted in place and attributed to the `legacy-compatibility-binding`
   sentinel; nothing is recreated, moved, or dropped.
 - **The revision is forward-only** per `docs/RELEASE_CHANNELS/README.md :: Rollback posture`. Rolling
-  the `stable` ref back to a pre-#4543 image leaves the database on the new key, and that image's
-  vault-sync writes use `ON CONFLICT (path)` — Postgres rejects the statement because no unique index
-  on `path` alone remains. Reads still work; **writes fail loudly**. Expect vault sync to stop, not
-  to corrupt. Roll forward rather than back.
+  the `stable` ref back to a pre-#4543 image leaves the database on the new key. That image's
+  `file_state` **upserts** then fail loudly — `ON CONFLICT (path)` has no unique index on `path`
+  alone to match, so Postgres raises `InvalidColumnReference`. Its reads and its path/uuid deletes
+  still execute and stay correct while only one binding exists, which is the only state a rolled-back
+  image can be in. Expect vault-sync **ingest to stop loudly**, not to corrupt. Roll forward rather
+  than back.
 - The constraint rebuild takes a brief `ACCESS EXCLUSIVE` lock on `file_state`. Apply it through the
   normal `migrate` one-shot, which runtime containers already gate on, rather than against a live
   writer.

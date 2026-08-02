@@ -136,9 +136,16 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     #4543): Alembic revision `c7f4b1a83d29` owns both, so the revision chain can
     reach the vault-sync table its own verification lane runs against. Test
     scratch databases keep create-on-demand through the explicit
-    STORE_SCHEMA_AUTOCREATE opt-in below.
+    STORE_SCHEMA_AUTOCREATE opt-in, applied after the bootstrap SQL because
+    `ALTER TABLE IF EXISTS public.objects ADD COLUMN ... path` silently no-ops on
+    a database where the bootstrap has not created `objects` yet.
     """
+    _apply_legacy_bootstrap_sql(conn)
     _autocreate_file_state(conn)
+
+
+def _apply_legacy_bootstrap_sql(conn: psycopg.Connection) -> None:
+    """Execute the remaining legacy compatibility DDL in `migrations_obsidian.sql`."""
     if not _MIGRATION_SQL_PATH.exists():
         return
     statements = [
