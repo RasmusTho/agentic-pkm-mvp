@@ -1948,12 +1948,15 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         encoding="utf-8",
     )
     harness.chmod(0o755)
+    ownership_root = tmp_path / "instance-ownership"
+    ownership_root.mkdir()
     result = subprocess.run(
         ["bash", str(harness)],
         env={
             **os.environ,
             "EVENT_LOG": str(event_log),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
         },
         capture_output=True,
         text=True,
@@ -2024,6 +2027,8 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     )
     harness.chmod(0o755)
     selected_root = "/srv/operator/vault"
+    ownership_root = tmp_path / "instance-ownership"
+    ownership_root.mkdir()
     result = subprocess.run(
         ["bash", str(harness)],
         env={
@@ -2032,6 +2037,7 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "MVR01C_ROLLBACK_VAULT_BINDING_ID": "binding-selected",
             "MVR01C_ROLLBACK_VAULT_ROOT": selected_root,
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
         },
         capture_output=True,
         text=True,
