@@ -183,9 +183,31 @@ def _statements_executed_by_ensure_schema(
 # actually executes.
 
 
+class _UnobservedConnection(BaseException):
+    """Raised when the seam opens a connection this harness cannot record.
+
+    Deriving from `BaseException`, not `Exception`, on purpose: the seam under
+    test is allowed to wrap work in `try/except Exception`, and a sentinel that
+    a bare `except Exception: pass` can swallow proves nothing.
+    """
+
+
+#: The five migration-owned store tables (Alembic revision `c2766a04d001`).
+STORE_TABLES = frozenset(
+    {
+        "store_objects",
+        "store_vector_index",
+        "store_relations",
+        "store_relation_memberships",
+        "vector_index_meta",
+    }
+)
+
+
 class _StoreRecordingCursor:
     def __init__(self, conn: "_StoreRecordingConn") -> None:
         self._conn = conn
+        self._last_params: tuple = ()
 
     def __enter__(self) -> "_StoreRecordingCursor":
         return self
@@ -193,13 +215,20 @@ class _StoreRecordingCursor:
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
 
-    def execute(self, statement: str, *args, **kwargs) -> None:
+    def execute(self, statement: str, params: tuple = (), *args, **kwargs) -> None:
         self._conn.executed.append(statement)
+        self._last_params = tuple(params or ())
 
     def fetchone(self):
-        # The `to_regclass` existence probe that decides whether a table group
-        # runs, and `_load_index_identity`'s single-row read.
-        return {"present": self._conn.tables_present, "oid": 1, "identity_json": "{}"}
+        # The `to_regclass` existence probe answers **for the table it was
+        # asked about**. A fake that returned one blanket answer would let a
+        # group probe table A and then reshape table B: the probe would report
+        # B present, the group would be skipped, and the gate would see no
+        # statements — while against a real database the ALTERs run on every
+        # boot. `_every_group_only_touches_its_own_table` closes the same hole
+        # from the other side.
+        probed = self._last_params[0] if self._last_params else None
+        return {"present": probed in self._conn.tables_present, "oid": 1}
 
     def fetchall(self):
         # `assert_store_schema_with_connection`'s identity-column census.
@@ -207,7 +236,7 @@ class _StoreRecordingCursor:
 
 
 class _StoreRecordingConn:
-    def __init__(self, *, tables_present: bool) -> None:
+    def __init__(self, *, tables_present: frozenset[str]) -> None:
         self.executed: list[str] = []
         self.tables_present = tables_present
 
@@ -225,7 +254,7 @@ class _StoreRecordingConn:
 
 
 def _statements_executed_by_ensure_tables(
-    *, autocreate: bool, tables_present: bool
+    *, autocreate: bool, tables_present: frozenset[str]
 ) -> list[str]:
     from app.stores import pg as pg_module
 
@@ -238,21 +267,76 @@ def _statements_executed_by_ensure_tables(
         pg_module._TABLES_READY = False
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch.object(pg_module, "_connect", lambda: conn):
-                pg_module._ensure_tables()
+                # Patching `_connect` alone records only the statements that go
+                # through it. A `psycopg.connect(...)` opened directly inside
+                # `_ensure_tables` would execute against a real database and be
+                # invisible here, so it is made impossible rather than assumed
+                # absent.
+                with mock.patch.object(
+                    pg_module.psycopg,
+                    "connect",
+                    side_effect=_UnobservedConnection(
+                        "_ensure_tables opened a connection outside _connect(); every "
+                        "statement it issues must be observable by this harness"
+                    ),
+                ):
+                    pg_module._ensure_tables()
     finally:
         pg_module._TABLES_READY = previous
     return conn.executed
 
 
+_SQL_COMMENT = re.compile(r"(?s)/\*.*?\*/|--[^\n]*")
+_SCHEMA_VERB = re.compile(
+    r"(?is)\b(?:create|alter|drop)\s+"
+    r"(?:or\s+replace\s+)?"
+    r"(?:unlogged\s+|temporary\s+|temp\s+|unique\s+|materialized\s+)*"
+    r"(?:table|index|view|trigger|function|sequence|extension|rule|type)\b"
+    r"|\bselect\b[^;]*\binto\s+(?!temporary\b|temp\b)"
+)
+
+
 def _schema_statements(statements: list[str]) -> list[str]:
-    """The DDL among ``statements`` — data repairs are not schema changes."""
-    return [
-        " ".join(statement.split())
-        for statement in statements
-        if re.match(
-            r"(?is)^\s*(create|alter|drop)\s+(table|index|unique\s+index)\b", statement
-        )
-    ]
+    """The DDL among ``statements`` — data repairs are not schema changes.
+
+    Comments are stripped and `;`-separated statements split before matching,
+    and the verb is searched for rather than anchored at position 0. Anchoring
+    meant a single leading `-- keep retrieval fast` hid a
+    `DROP INDEX` / `CREATE UNIQUE INDEX` pair from this test entirely; the
+    vocabulary is wider than table DDL because an index, trigger or function
+    dropped and recreated against a migration-owned table is the same
+    drop-and-re-add mechanism MVR-05A1 (#4560) removed from `objects_pkey`.
+    """
+    schema: list[str] = []
+    for statement in statements:
+        for fragment in _SQL_COMMENT.sub(" ", statement).split(";"):
+            normalized = " ".join(fragment.split())
+            if normalized and _SCHEMA_VERB.search(normalized):
+                schema.append(normalized)
+    return schema
+
+
+def test_every_autocreate_group_only_touches_the_table_it_probes() -> None:
+    """A group's statements name the table its existence probe asked about.
+
+    The probe is per table and the skip is per group, so a statement in group
+    A that targets table B runs whenever A is absent — regardless of whether B
+    already exists. Nothing in the loop's shape prevents that, and the
+    behavioural harness cannot see it either: it would observe a skipped group
+    and no statements. This is the pairing the two mechanisms both assume.
+    """
+    from app.stores.pg import _MIGRATION_OWNED_AUTOCREATE_SQL
+
+    assert {table for table, _ in _MIGRATION_OWNED_AUTOCREATE_SQL} == set(STORE_TABLES)
+    for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
+        for statement in statements:
+            targets = set(re.findall(r"(?i)\b(?:table|index|on)\s+(?:if\s+not\s+exists\s+)?"
+                                     r"(?:public\.)?(\w+)", statement)) & set(STORE_TABLES)
+            assert targets <= {table}, (
+                f"the {table!r} autocreate group issues {statement.split()[0:4]} against "
+                f"{sorted(targets - {table})}. A group runs when *its* table is absent, so a "
+                "statement here reshapes a table nobody probed."
+            )
 
 
 def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
@@ -284,7 +368,7 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
     # autocreate enabled in production — still looks clean: the existence probe
     # skips every group, so nothing is issued. On an empty database it creates
     # all five tables, which is the behaviour that distinguishes the two.
-    for tables_present in (True, False):
+    for tables_present in (STORE_TABLES, frozenset()):
         production = _schema_statements(
             _statements_executed_by_ensure_tables(autocreate=False, tables_present=tables_present)
         )
@@ -296,7 +380,7 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
         )
 
     fresh = _schema_statements(
-        _statements_executed_by_ensure_tables(autocreate=True, tables_present=False)
+        _statements_executed_by_ensure_tables(autocreate=True, tables_present=frozenset())
     )
     created = {
         match.group(1)
@@ -304,16 +388,12 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
         for match in [re.match(r"(?i)^CREATE TABLE IF NOT EXISTS (\w+)", statement)]
         if match
     }
-    assert created == {
-        "store_objects",
-        "store_vector_index",
-        "store_relations",
-        "store_relation_memberships",
-        "vector_index_meta",
-    }, f"the fixture path created {sorted(created)} on an empty database"
+    assert created == set(STORE_TABLES), (
+        f"the fixture path created {sorted(created)} on an empty database"
+    )
 
     existing = _schema_statements(
-        _statements_executed_by_ensure_tables(autocreate=True, tables_present=True)
+        _statements_executed_by_ensure_tables(autocreate=True, tables_present=STORE_TABLES)
     )
     assert existing == [], (
         f"_ensure_tables issued {existing!r} against tables that already exist. The "
