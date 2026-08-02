@@ -1,3 +1,5 @@
+State: Current-state contract for the `semanticmd` git merge driver; aligned with shipped behavior (#4505 routing narrowing, #4561 `%A` result write).
+
 # Semantic Markdown merge driver (`semanticmd`)
 
 Owner: Builder System (git tooling) / Product vault-sync (resolver logic).
