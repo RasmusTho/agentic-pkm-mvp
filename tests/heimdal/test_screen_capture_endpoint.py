@@ -3,9 +3,16 @@ from __future__ import annotations
 import secrets
 
 import pytest
+from fastapi import HTTPException
 
 from app.heimdal.capture_adapter import register_sensor
-from app.heimdal.consent_ledger import grant_consent, reset_memory_consent_ledger
+from app.heimdal.consent_ledger import (
+    ConsentRefusedError,
+    MEDIA_CAPTURE_SCOPE,
+    SELF_RECORD_SCOPE,
+    grant_consent,
+    reset_memory_consent_ledger,
+)
 from app.heimdal.observation_log import count_observations, reset_memory_observation_log
 from app.heimdal.raw_store import all_raw_records, reset_memory_raw_store
 from app.heimdal import screen_capture
@@ -87,3 +94,55 @@ def test_both_bundle_shapes_accepted():
     derived["derived_observation"]["modality"] = "speech"
     with pytest.raises(ValueError, match="modality must be screen"):
         ingest_screen_bundle(derived, key=_KEY)
+
+
+def test_client_supplied_scope_cannot_select_another_lanes_grant():
+    """A screen client naming another lane's standing scope must not be admitted under it.
+
+    `reset_memory_consent_ledger` (invoked by the autouse fixture before this
+    test's own reset below) seeds the standing `SELF_RECORD_SCOPE` and
+    `MEDIA_CAPTURE_SCOPE` grants active by default -- the same two scopes the
+    Issue reproduces the defect against. This test drives the production
+    route so it also proves the route does not forward a client-controlled
+    `scope` field.
+    """
+    from app.api.routes.heimdal_screen import capture_screen_bundle
+
+    # Start from a ledger with no screen_always_on grant, but with the two
+    # other lanes' standing grants still seeded and active.
+    reset_memory_consent_ledger()
+    register_sensor("screen-test", "v1")
+
+    for foreign_scope in (SELF_RECORD_SCOPE, MEDIA_CAPTURE_SCOPE):
+        before = len(all_raw_records())
+        payload = bundle()
+        payload["scope"] = foreign_scope
+        with pytest.raises(HTTPException) as excinfo:
+            capture_screen_bundle(payload)
+        assert excinfo.value.status_code == 400
+        assert len(all_raw_records()) == before
+    assert count_observations() == 0
+
+
+def test_screen_bundle_admits_under_the_screen_grant():
+    """With an active screen_always_on grant, a normal bundle admits and is
+    stamped with that grant -- not a foreign one, even if named."""
+    from app.api.routes.heimdal_screen import capture_screen_bundle
+
+    payload = bundle()
+    payload["scope"] = MEDIA_CAPTURE_SCOPE  # a client-named foreign scope must be ignored
+    ack = capture_screen_bundle(payload)
+    assert ack["created"] and ack["record_id"]
+    records = all_raw_records()
+    assert len(records) == 1
+    assert records[0].consent["grant_ref"] == "screen-test-grant"
+
+
+def test_screen_capture_refused_without_a_screen_grant():
+    """With no screen_always_on grant, a default-scope bundle is still refused."""
+    reset_memory_consent_ledger()
+    register_sensor("screen-test", "v1")
+
+    with pytest.raises(ConsentRefusedError):
+        ingest_screen_bundle(bundle(), key=_KEY)
+    assert len(all_raw_records()) == 0
