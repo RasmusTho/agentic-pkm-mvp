@@ -69,15 +69,22 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   it by removing each entry in turn and asserting the failure lands on exactly that table. The same
   gate fails when a mutation, replacement or `TRUNCATE` path under `app/**` resolves to no
   classified producer entry.
-- **The durable-DDL guard's seam population is derived, not named** (MVR-05A2, #4576). It now covers
-  every durable DDL statement anywhere under `app/**` — `app/stores/pg.py`, the Heimdal bootstrap
-  modules, the entity-review journal, the knowledge-acquisition stores and `app/services/outbox.py`
-  as well as `app/db/db.py` — and requires each to be behind the `STORE_SCHEMA_AUTOCREATE`
-  test-fixture opt-in, with any statement that reshapes rather than creates additionally behind the
-  existence probe. That scan found `app/stores/pg.py::_ensure_tables()` issuing three unconditional
+- **`app/stores/pg.py` now has the behavioural proof `app/db/db.py` has had since MVR-05A1**
+  (MVR-05A2, #4576). `test_the_store_seam_never_reshapes_a_table_that_already_exists` runs
+  `_ensure_tables()` against a recording connection and reads the statements back: without the
+  `STORE_SCHEMA_AUTOCREATE` opt-in it issues no schema statement against either an empty or a
+  populated database; with the opt-in it creates the five store tables on an empty one; and against
+  tables that already exist it issues **zero** schema statements. That last case is the guard. It
+  found `_ensure_tables()` running three unconditional
   `ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS` statements in its autocreate branch;
-  it is now grouped by table behind the same `to_regclass` probe `app/db/db.py` uses, so a table
-  that already exists is left completely alone.
+  the branch is now grouped by table behind the same `to_regclass` probe `app/db/db.py` uses.
+- **The durable-DDL guard's seam population is derived, not named** (MVR-05A2, #4576). Alongside the
+  two behavioural proofs, a derived scan covers every durable DDL statement anywhere under `app/**`
+  — the Heimdal bootstrap modules, the entity-review journal, the knowledge-acquisition stores,
+  `app/services/outbox.py` — and requires each to be behind the `STORE_SCHEMA_AUTOCREATE`
+  test-fixture opt-in, and to target a table the revision chain owns. Those seams issue `CREATE`
+  only; a seam that starts issuing `ALTER` or `DROP` should gain the recording-connection harness
+  rather than rely on a structural read of its guard.
 - **`app/db/sql/relations_init.sql` is deleted** (MVR-05A2, #4576). It declared a primary-key-less
   `relations` shape disagreeing with its Alembic owner
   (`202510241200_sot41_amg_core.py`) and had zero readers repo-wide; its absence and the absence of

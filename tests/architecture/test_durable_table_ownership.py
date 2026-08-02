@@ -168,6 +168,162 @@ def _statements_executed_by_ensure_schema(
     return conn.executed
 
 
+# --------------------------------------------------------------------------- #
+# The same behavioural proof, for the store seam (MVR-05A2, #4576)
+# --------------------------------------------------------------------------- #
+#
+# `app/db/db.py` has had the recording-connection proof above since MVR-05A1.
+# `app/stores/pg.py` had none, so a structural read of its source was carrying
+# the whole weight for the store tables — and three review rounds each found a
+# new way to satisfy a structural read while the runtime still reshaped a
+# migration-owned table: a stray `sqlite3.connect` in the same function, a
+# predicate named `*autocreate*` that never reads the flag, a `continue` guarded
+# by a constant that is never true. Every one of those is a statement about the
+# *shape* of the code. None of them survives being asked what the function
+# actually executes.
+
+
+class _StoreRecordingCursor:
+    def __init__(self, conn: "_StoreRecordingConn") -> None:
+        self._conn = conn
+
+    def __enter__(self) -> "_StoreRecordingCursor":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def execute(self, statement: str, *args, **kwargs) -> None:
+        self._conn.executed.append(statement)
+
+    def fetchone(self):
+        # The `to_regclass` existence probe that decides whether a table group
+        # runs, and `_load_index_identity`'s single-row read.
+        return {"present": self._conn.tables_present, "oid": 1, "identity_json": "{}"}
+
+    def fetchall(self):
+        # `assert_store_schema_with_connection`'s identity-column census.
+        return [{"column_name": column} for column in ("dim", "model", "provider", "normalize")]
+
+
+class _StoreRecordingConn:
+    def __init__(self, *, tables_present: bool) -> None:
+        self.executed: list[str] = []
+        self.tables_present = tables_present
+
+    def __enter__(self) -> "_StoreRecordingConn":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def cursor(self) -> _StoreRecordingCursor:
+        return _StoreRecordingCursor(self)
+
+    def close(self) -> None:
+        return None
+
+
+def _statements_executed_by_ensure_tables(
+    *, autocreate: bool, tables_present: bool
+) -> list[str]:
+    from app.stores import pg as pg_module
+
+    env = {key: value for key, value in os.environ.items() if key != "STORE_SCHEMA_AUTOCREATE"}
+    if autocreate:
+        env["STORE_SCHEMA_AUTOCREATE"] = "1"
+    conn = _StoreRecordingConn(tables_present=tables_present)
+    previous = pg_module._TABLES_READY
+    try:
+        pg_module._TABLES_READY = False
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch.object(pg_module, "_connect", lambda: conn):
+                pg_module._ensure_tables()
+    finally:
+        pg_module._TABLES_READY = previous
+    return conn.executed
+
+
+def _schema_statements(statements: list[str]) -> list[str]:
+    """The DDL among ``statements`` — data repairs are not schema changes."""
+    return [
+        " ".join(statement.split())
+        for statement in statements
+        if re.match(
+            r"(?is)^\s*(create|alter|drop)\s+(table|index|unique\s+index)\b", statement
+        )
+    ]
+
+
+def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
+    """`app/stores/pg.py::_ensure_tables`, asked what it executes.
+
+    Three cases, and the third is the one that matters:
+
+    * with no `STORE_SCHEMA_AUTOCREATE` opt-in, production issues **no schema
+      statement at all** — only the read-only assertions;
+    * with the opt-in against an empty database, it creates the five store
+      tables, and may `ALTER` the one it has just created;
+    * with the opt-in against a database that already holds them, it issues
+      **zero** schema statements.
+
+    That third assertion is the whole guard. Before MVR-05A2 the three
+    `ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS` statements ran on
+    every boot of the fixture path, so a scratch database stamped at a
+    pre-EMBEDREL-06 revision had its migration-owned table reshaped from the
+    runtime — the same mechanism, one seam over, that silently reverted the
+    `objects` primary key before #4560.
+
+    Being behavioural is what makes it hold. It does not ask whether the DDL
+    sits in a probed loop, whether the guard's condition looks right, or
+    whether the enclosing function imports `sqlite3`; it runs the function and
+    reads the statement list.
+    """
+    # Both database states, because with only the populated one a gate that
+    # *defaults the opt-in on* — `os.getenv("STORE_SCHEMA_AUTOCREATE", "1") != "0"`,
+    # autocreate enabled in production — still looks clean: the existence probe
+    # skips every group, so nothing is issued. On an empty database it creates
+    # all five tables, which is the behaviour that distinguishes the two.
+    for tables_present in (True, False):
+        production = _schema_statements(
+            _statements_executed_by_ensure_tables(autocreate=False, tables_present=tables_present)
+        )
+        assert production == [], (
+            f"_ensure_tables issued {production!r} without the STORE_SCHEMA_AUTOCREATE "
+            f"test-fixture opt-in (tables_present={tables_present}). Outside tests the "
+            "store schema is migration-owned (KERNEL-04, #2766) and this path is "
+            "assert-only; a fixture flag that defaults to on is not a fixture flag."
+        )
+
+    fresh = _schema_statements(
+        _statements_executed_by_ensure_tables(autocreate=True, tables_present=False)
+    )
+    created = {
+        match.group(1)
+        for statement in fresh
+        for match in [re.match(r"(?i)^CREATE TABLE IF NOT EXISTS (\w+)", statement)]
+        if match
+    }
+    assert created == {
+        "store_objects",
+        "store_vector_index",
+        "store_relations",
+        "store_relation_memberships",
+        "vector_index_meta",
+    }, f"the fixture path created {sorted(created)} on an empty database"
+
+    existing = _schema_statements(
+        _statements_executed_by_ensure_tables(autocreate=True, tables_present=True)
+    )
+    assert existing == [], (
+        f"_ensure_tables issued {existing!r} against tables that already exist. The "
+        "runtime may not reshape a migration-owned table: `CREATE TABLE IF NOT EXISTS` "
+        "no-ops silently against an older shape while the ALTERs after it still run "
+        "against that shape, which is how a fixture becomes a second schema owner. "
+        "Idempotence has to come from the existence probe, not from `IF NOT EXISTS`."
+    )
+
+
 def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
     """`ensure_schema` issues no schema statements outside the test-fixture opt-in.
 
@@ -236,6 +392,19 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
     # ------------------------------------------------------------------ #
     # MVR-05A2 (#4576): the same property, derived rather than named
     # ------------------------------------------------------------------ #
+    #
+    # A structural backstop, not the primary proof. The two seams that carry
+    # a recording-connection harness — `app/db/db.py` above and
+    # `app/stores/pg.py` in
+    # `test_the_store_seam_never_reshapes_a_table_that_already_exists` — are
+    # proved behaviourally, by running them and reading the statement list.
+    # This scan covers the seams that have no such harness (the twelve Heimdal
+    # bootstrap modules, the entity-review journal, the four
+    # knowledge-acquisition stores, the outbox), and the next seam nobody
+    # names. Every one of those issues `CREATE` only, so the weaker
+    # `existence_probed` half is not load-bearing for them; if one ever starts
+    # issuing `ALTER` or `DROP`, give it the harness rather than trusting the
+    # shape of its guard.
     #
     # Everything above is scoped to `app/db/db.py` because that is the seam
     # MVR-05A1 found. The seam inventory below is derived instead: every

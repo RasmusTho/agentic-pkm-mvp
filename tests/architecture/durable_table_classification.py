@@ -14,7 +14,13 @@ things from the repository itself and never from a hand-maintained list:
    discovered durable table (``discover_durable_mutation_paths``).
 3. **Every durable DDL seam outside the revision chain** —
    ``discover_runtime_ddl_seams``, the derived successor to MVR-05A1's
-   hand-named ``app/db/db.py`` check.
+   hand-named ``app/db/db.py`` check. It is a *backstop*: the two seams that
+   matter most are proved behaviourally instead, by running them against a
+   recording connection and reading the statement list
+   (``tests/architecture/test_durable_table_ownership.py``). Three review
+   rounds each found a new way to satisfy a structural read of
+   ``app/stores/pg.py`` while the runtime still reshaped a migration-owned
+   table; none of those survives being asked what the function executes.
 
 Why an AST resolver rather than a plain regex
 ---------------------------------------------
@@ -806,12 +812,25 @@ class _ModuleResolver:
         body = list(loop.body)
         probe_at: int | None = None
         guard_at: int | None = None
+        assigned_after_probe: set[str] = set()
         for index, statement in enumerate(body):
             if probe_at is None and self._executes_existence_probe(statement):
                 probe_at = index
                 continue
-            if probe_at is not None and guard_at is None and self._is_skip_guard(statement):
+            if probe_at is None:
+                continue
+            if guard_at is None and self._is_skip_guard(statement, assigned_after_probe):
                 guard_at = index
+            for assignment in ast.walk(statement):
+                # Not `node`: that is this method's parameter, and rebinding it
+                # here silently changed which statement the containment check
+                # below was asking about.
+                if isinstance(assignment, ast.Assign):
+                    assigned_after_probe.update(
+                        target.id
+                        for target in assignment.targets
+                        if isinstance(target, ast.Name)
+                    )
         if probe_at is None or guard_at is None:
             return False
         return any(
@@ -843,10 +862,19 @@ class _ModuleResolver:
         return False
 
     @staticmethod
-    def _is_skip_guard(statement: ast.stmt) -> bool:
+    def _is_skip_guard(statement: ast.stmt, assigned_after_probe: set[str]) -> bool:
+        """`if <name>: continue`, where ``name`` came from the probe.
+
+        The name has to be one the loop assigned *after* the probe ran.
+        Otherwise `if _NEVER_SKIP: continue` over a module constant that is
+        always false reads as a skip guard while every statement below it runs
+        on every boot.
+        """
         if not isinstance(statement, ast.If):
             return False
-        if not isinstance(statement.test, (ast.Name, ast.Attribute)):
+        if not isinstance(statement.test, ast.Name):
+            return False
+        if statement.test.id not in assigned_after_probe:
             return False
         return bool(statement.body) and isinstance(statement.body[-1], ast.Continue)
 
@@ -1062,12 +1090,17 @@ def _discover_durable_mutation_paths(tables: frozenset[str]) -> frozenset[Mutati
     for path in _app_modules():
         resolver = _resolver(path)
         for statement in resolver.sql_statements():
-            if not statement.reaches_durable_database:
-                continue
             for verb, table, _ in _statement_matches(statement.text, _MUTATION_VERB_PATTERNS):
                 normalized = table.strip()
                 if _UNRESOLVED in normalized:
-                    continue
+                    # Only the *unresolvable* case is exempt outside the durable
+                    # seam. A statement that resolves to a durable table is
+                    # reported wherever it lives — pre-filtering the whole scan
+                    # by reachability made the separate-plane bounding test
+                    # vacuous, because the set it inspects could never contain a
+                    # plane module.
+                    if not statement.reaches_durable_database:
+                        continue
                     raise UnresolvedTableExpression(
                         f"{statement.path}:{statement.lineno} issues {verb.upper()} against a "
                         "table name this gate cannot resolve statically, so the mutation "
