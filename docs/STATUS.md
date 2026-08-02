@@ -500,7 +500,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   The projection remains read-only for coordination fields
   and has no write path for claim, lease, or lock state; dispatcher SQLite remains the authority for
   the legacy dispatcher/signboard claim lane per ADR-0010, while BCP-05 verification coordination
-  is the separately bounded BuilderOps API/PostgreSQL lane described above.
+  is the separately bounded BuilderOps API/PostgreSQL lane described above. `default_signboard_root()`
+  now distinguishes a dangling `lastActiveVaultRef` (`VaultContext.status == "missing"`, a
+  previously-selected vault whose path no longer exists on disk) from a genuinely never-selected
+  vault (`status == "none"`): the dangling case raises `DanglingActiveVaultReferenceError`, names the
+  missing path, and no longer claims "no active vault is selected" — matching the same status split
+  already established for `app/api/routes/companion.py`'s vault-selection-required responses (#4223).
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /
   `close`, `/api/canvas/sessions*`, session-log persistence, and governance-bearing mutation routing
   are shipped; broader Chat cognition and hybrid Panel/Chat mutation remain separate follow-up work.

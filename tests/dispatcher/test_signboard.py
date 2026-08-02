@@ -20,6 +20,7 @@ from app.dispatcher import signboard as signboard_module
 from app.dispatcher.signboard import (
     DEFAULT_SIGNBOARD_SUBPATH,
     STORE_STAMP_FILENAME,
+    DanglingActiveVaultReferenceError,
     NoActiveVaultError,
     SignboardStoreOwnershipError,
     default_signboard_root,
@@ -287,6 +288,53 @@ def test_default_signboard_root_raises_when_no_vault_selected(monkeypatch) -> No
 
     with pytest.raises(NoActiveVaultError):
         default_signboard_root()
+
+
+def test_default_signboard_root_reports_dangling_vault_reference_distinctly(
+    tmp_path, monkeypatch
+) -> None:
+    """A dangling ``lastActiveVaultRef`` (#4223) must not be reported as "no
+    active vault is selected" — that message is false here, and it drops the
+    dangling path an operator needs to diagnose the reference.
+    """
+
+    dead_path = str(tmp_path / "gone-vault")
+    context = VaultContext(status="missing", active_vault_path=dead_path)
+    monkeypatch.setattr(
+        signboard_module, "get_vault_manager", lambda: _StubVaultManager(context)
+    )
+
+    with pytest.raises(DanglingActiveVaultReferenceError) as excinfo:
+        default_signboard_root()
+
+    message = str(excinfo.value)
+    assert "no active vault is selected" not in message
+    assert dead_path in message
+    assert excinfo.value.active_vault_path == dead_path
+    # Subclasses NoActiveVaultError so existing callers that only catch the
+    # base class keep working without new plumbing.
+    assert isinstance(excinfo.value, NoActiveVaultError)
+
+
+def test_default_signboard_root_falls_back_to_missing_from_load_last_active(
+    monkeypatch,
+) -> None:
+    dead_path = "/tmp/does-not-exist-either"
+    loaded = VaultContext(status="missing", active_vault_path=dead_path)
+
+    class _NoneThenMissing(_StubVaultManager):
+        def __init__(self) -> None:
+            super().__init__(VaultContext(status="none"))
+
+        def load_last_active(self) -> VaultContext:
+            return loaded
+
+    monkeypatch.setattr(signboard_module, "get_vault_manager", _NoneThenMissing)
+
+    with pytest.raises(DanglingActiveVaultReferenceError) as excinfo:
+        default_signboard_root()
+
+    assert dead_path in str(excinfo.value)
 
 
 def test_cli_export_signboard_without_path_uses_default_vault(

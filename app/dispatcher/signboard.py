@@ -64,6 +64,31 @@ class NoActiveVaultError(RuntimeError):
     is currently selected via the active-vault-selection mechanism."""
 
 
+class DanglingActiveVaultReferenceError(NoActiveVaultError):
+    """Raised when the active-vault reference names a path that no longer
+    exists on disk (``VaultContext.status == "missing"``).
+
+    Subclasses :class:`NoActiveVaultError` so an existing caller that only
+    catches the base class (the dispatcher CLI's ``export-signboard`` and
+    ``signboard-validate`` commands) keeps working without new plumbing,
+    while a caller that wants to distinguish the two cases can catch this
+    subclass first. #4223: a dangling reference is not the same fact as "no
+    vault was ever selected" — the message must not claim otherwise, and it
+    must name the dangling path so an operator can diagnose it. Mirrors the
+    established precedent in ``app/api/routes/companion.py``
+    (``_vault_selection_required_context``), which already distinguishes
+    ``status == "missing"`` from ``status == "none"``.
+    """
+
+    def __init__(self, active_vault_path: str) -> None:
+        self.active_vault_path = active_vault_path
+        super().__init__(
+            "the active vault reference points to a path that no longer "
+            f"exists: {active_vault_path!r}; open an existing vault or "
+            "select a different one"
+        )
+
+
 class SignboardStoreOwnershipError(RuntimeError):
     """Raised when a destructive board operation cannot prove the board belongs
     to the dispatcher store this process resolved."""
@@ -85,6 +110,8 @@ def default_signboard_root() -> Path:
         context = manager.load_last_active()
     if context.active_vault_path and context.status in {"selected", "uninitialized"}:
         return Path(context.active_vault_path).expanduser().resolve() / DEFAULT_SIGNBOARD_SUBPATH
+    if context.status == "missing" and context.active_vault_path:
+        raise DanglingActiveVaultReferenceError(context.active_vault_path)
     raise NoActiveVaultError(
         "no active vault is selected; pass an explicit path or select a vault first"
     )
