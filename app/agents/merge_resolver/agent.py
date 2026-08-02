@@ -110,6 +110,55 @@ def _postprocess_merge(merged, info, a, b):
 
     return merged, info
 
+def _body(md: str) -> str:
+    md = md or ""
+    if md.startswith("---"):
+        parts = md.split("---", 2)
+        if len(parts) >= 3:
+            return parts[2].strip()
+    return md.strip()
+
+
+def _has_vault_identity(a: str, b: str) -> bool:
+    # A vault note carries a stable `uuid:` frontmatter identity. Repository
+    # documentation (docs/**, README.md, AGENTS.md, .codex/skills/**, ...) never does.
+    # Only vault notes are safe for the near-duplicate / "prefer concise" heuristics.
+    return bool(_extract_uuid(a) or _extract_uuid(b))
+
+
+def _guard_non_vault_content_loss(merged, info, a, b):
+    """Refuse to silently resolve a merge that discards one side's content when
+    neither input carries vault-note identity.
+
+    Issue #4505: applied to code-review-approved repository documentation (no
+    `uuid:` frontmatter), the near-duplicate / "prefer concise" heuristic can pick
+    one side wholesale, report MERGE_STATUS=resolved, and exit 0 -- discarding the
+    other side's committed content with no conflict and no warning. A conservative
+    conflict is always acceptable; discarding a side without signalling is not.
+    """
+    info = dict(info or {})
+    if info.get("status") != "resolved":
+        return merged, info
+    if _has_vault_identity(a, b):
+        return merged, info
+
+    a_body = _body(a)
+    b_body = _body(b)
+    if a_body == b_body:
+        # Bodies are identical; nothing to lose by resolving.
+        return merged, info
+
+    reason = info.get("reason", "")
+    info["status"] = "conflict"
+    info["reason"] = (
+        (reason + "; " if reason else "")
+        + "no vault-note identity (no uuid: frontmatter) and content diverges; "
+        "refusing to silently discard a side, raising a conflict instead"
+    )
+    return merged, info
+
+
 def merge_note_from_blobs(base: str, a: str, b: str):
     merged, info = _orig_merge_note_from_blobs(base, a, b)
-    return _postprocess_merge(merged, info, a, b)
+    merged, info = _postprocess_merge(merged, info, a, b)
+    return _guard_non_vault_content_loss(merged, info, a, b)
