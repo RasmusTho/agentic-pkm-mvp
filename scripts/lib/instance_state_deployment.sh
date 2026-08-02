@@ -32,6 +32,49 @@ _release_abandoned_instance_state_deployment_lease() {
   fi
 }
 
+# Deliver a privately-owned copy of a locally-produced JSON inventory directly
+# onto the host-global directory that is bind-mounted at /app/instance-ownership
+# inside every instance-ownership consumer, instead of round-tripping the
+# content through a `docker compose run ... < file` pipe (#4536). That pipe's
+# stdin is the same command-invocation stdin `deploy_channel_compose` used for
+# its own SIGNBOARD_ROOT override document, so both a caller-supplied pipe and
+# the wrapper's own override document needed sole ownership of it at once and
+# the pipe always lost. Writing straight to the bind-mounted host path removes
+# that shared dependency for these two producer deliveries entirely.
+_instance_state_deployment_deliver_private_inventory() {
+  local source_path="${1:?source path required}"
+  local host_target_path="${2:?host target path required}"
+  local uid="${3:?uid required}"
+  local gid="${4:?gid required}"
+  if [ ! -s "${source_path}" ]; then
+    echo "instance state deployment: refusing to deliver an empty or missing inventory (${source_path})" >&2
+    return 1
+  fi
+  ( umask 077 && cat -- "${source_path}" > "${host_target_path}" ) || return $?
+  chmod 0600 "${host_target_path}" || return $?
+  chown "${uid}:${gid}" "${host_target_path}" || return $?
+  if [ ! -s "${host_target_path}" ]; then
+    echo "instance state deployment: delivered inventory is empty (${host_target_path})" >&2
+    return 1
+  fi
+}
+
+# Map a /app/instance-ownership/... container path to its host-side bind-mount
+# equivalent under INSTANCE_OWNERSHIP_HOST_STATE_DIR. Only container paths
+# under that mount can be delivered directly; anything else is a
+# misconfiguration this producer does not support.
+_instance_state_deployment_host_ownership_path() {
+  local container_path="${1:?container path required}"
+  case "${container_path}" in
+    /app/instance-ownership/*)
+      printf '%s/%s\n' "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}" "${container_path#/app/instance-ownership/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # MVR-01B deploy/start producer. The caller supplies its channel-aware compose
 # function so the same fenced sequence is used by pinned deploys and local
 # full-system starts.
@@ -48,9 +91,31 @@ prepare_instance_state_deployment() {
   local runtime_user="${runtime_uid}:${runtime_gid}"
   local repo_root inventory_helper controller_pid controller_start_token
   local inventory_host_path owner_inventory_host_path inventory_rc
+  local quiescence_inventory_host_target_path owner_inventory_host_target_path
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   inventory_helper="${repo_root}/scripts/instance_state_writer_inventory.py"
   controller_pid="$$"
+
+  # The host-global state dir is resolved and prepared by the caller before
+  # this producer runs (deploy_channel.sh calls prepare_instance_ownership_host_state_dir
+  # ahead of prepare_instance_state_deployment); re-deriving it here would add
+  # a second, unnecessary python3 dependency to this pure-delivery step.
+  if [ -z "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-}" ]; then
+    echo "instance state deployment: INSTANCE_OWNERSHIP_HOST_STATE_DIR must be resolved before prepare_instance_state_deployment runs" >&2
+    return 78
+  fi
+  quiescence_inventory_host_target_path="$(
+    _instance_state_deployment_host_ownership_path "${quiescence_inventory_path}"
+  )" || {
+    echo "instance state deployment: quiescence inventory path must live under /app/instance-ownership" >&2
+    return 78
+  }
+  owner_inventory_host_target_path="$(
+    _instance_state_deployment_host_ownership_path "${inventory_path}"
+  )" || {
+    echo "instance state deployment: legacy-owner inventory path must live under /app/instance-ownership" >&2
+    return 78
+  }
   local -a finish_args=(
     --channel "${channel}"
     --instance-state-root /app/instance-state
@@ -153,8 +218,9 @@ prepare_instance_state_deployment() {
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
-  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
-    sh -c "umask 077; cat > '${quiescence_inventory_path}'" < "${inventory_host_path}"
+  _instance_state_deployment_deliver_private_inventory \
+    "${inventory_host_path}" "${quiescence_inventory_host_target_path}" \
+    "${runtime_uid}" "${runtime_gid}"
   inventory_rc=$?
   rm -f -- "${inventory_host_path}"
   if [ "${inventory_rc}" -ne 0 ]; then
@@ -196,8 +262,9 @@ prepare_instance_state_deployment() {
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
-  "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
-    sh -c "umask 077; cat > '${inventory_path}'" < "${owner_inventory_host_path}"
+  _instance_state_deployment_deliver_private_inventory \
+    "${owner_inventory_host_path}" "${owner_inventory_host_target_path}" \
+    "${runtime_uid}" "${runtime_gid}"
   inventory_rc=$?
   rm -f -- "${owner_inventory_host_path}"
   if [ "${inventory_rc}" -ne 0 ]; then

@@ -122,6 +122,15 @@ sys.stdout.write(container_signboard)
 PY
 }
 
+_deploy_channel_signboard_override_document() {
+  cat <<'YAML'
+services:
+  api:
+    environment:
+      SIGNBOARD_ROOT:
+YAML
+}
+
 _deploy_channel_needs_dev_capture_secret() {
   local channel="${1:?channel required}"
   shift
@@ -309,7 +318,19 @@ deploy_channel_compose() {
     else
       unset SIGNBOARD_ROOT
     fi
-    compose_args+=(-f -)
+    # Deliver the override document through process substitution rather than
+    # `-f -`/heredoc on the command's own stdin (fd 0): a bare `-f -` binds to
+    # whatever the caller supplied on stdin, so any caller piping real data
+    # into this wrapper (#4536, e.g. prepare_instance_state_deployment feeding
+    # a host-produced inventory into the container) had that data silently
+    # replaced by this override document instead of reaching the container.
+    # Process substitution opens the document on its own fd, leaving fd 0
+    # untouched so it still carries whatever the caller attached. The
+    # override document itself carries no value of its own (Compose forwards
+    # SIGNBOARD_ROOT from this governed shell); a temporary file is avoided
+    # only to preserve the existing in-memory-only delivery posture, not
+    # because this specific document could leak anything.
+    compose_args+=(-f <(_deploy_channel_signboard_override_document))
 
     # Compose gives the caller shell precedence over --env-file values. Pin the
     # governed selectors here so a stale parent shell cannot swap the selected
@@ -377,14 +398,9 @@ deploy_channel_compose() {
       )
     fi
 
-    # Keep the override in memory. A temporary env/compose file would persist
-    # operator paths or runtime secrets and would weaken the existing runtime
-    # env ownership boundary.
-    "${compose_command[@]}" <<'YAML'
-services:
-  api:
-    environment:
-      SIGNBOARD_ROOT:
-YAML
+    # fd 0 is left untouched above, so it still carries whatever the caller
+    # attached to this function call (e.g. a host-produced inventory piped
+    # into a `run -T ...` invocation).
+    "${compose_command[@]}"
   )
 }
