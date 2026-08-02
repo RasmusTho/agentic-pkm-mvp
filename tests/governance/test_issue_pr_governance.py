@@ -58,6 +58,31 @@ def test_final_review_rounds_check_executes_via_canonical_implementation() -> No
         assert js_result["declaredCount"] == py_result.declared_count, body
         assert js_result["validCount"] == py_result.valid_count, body
 
+    # Semantic assertion (issue #4342), not only JS-vs-Python agreement: `3`
+    # must actually be rejected by the real gate, not merely agreed-upon
+    # between the twins. Widening `[012]` -> `[0-9]` identically on both
+    # sides would still pass every assertion above.
+    assert resolve_pr_contract_final_review_rounds("Final-Review-Rounds: 3\n").satisfied is False
+
+
+def test_final_review_rounds_workflow_accepts_only_012() -> None:
+    """Semantic pin: the live workflow JS accepts exactly `{0, 1, 2}` (issue #4342).
+
+    Restores the pin PR #4331 deleted (`assert r"Final-Review-Rounds:[ \\t]*
+    [012][ \\t]*$" in workflow`). Asserts against the workflow's own JS text
+    directly via `_js_final_review_rounds`, independent of JS-vs-Python
+    equality, so a value set widened identically on both twins (e.g.
+    `[012]` -> `[0-9]`) still fails this test even though the twins would
+    still agree with each other.
+    """
+    for value in ("0", "1", "2"):
+        result = _js_final_review_rounds(f"Final-Review-Rounds: {value}\n")
+        assert result["satisfied"] is True, value
+
+    for value in ("3", "4", "5", "9", "-1", "01", "10"):
+        result = _js_final_review_rounds(f"Final-Review-Rounds: {value}\n")
+        assert result["satisfied"] is False, value
+
 
 def test_builderops_routing_stub_detection_matches_workflow_js() -> None:
     """Behavioral parity test for the `## BuilderOps Routing` filled-vs-stub check.
