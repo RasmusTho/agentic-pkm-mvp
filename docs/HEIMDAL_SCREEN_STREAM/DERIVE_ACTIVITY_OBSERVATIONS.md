@@ -73,9 +73,11 @@ the span boundaries the event motor needs.
    - a context provider that declares a **segmenter axis of its own** cuts spans on it too, so the
      built-in four are a floor, not a ceiling; and two providers may not claim one axis (the later
      write would move a boundary invisibly, so it is refused);
-   - **unknown is not evidence of sameness**: frames with no known dimension at all (a client without
-     Accessibility permission) are never merged. One unknown axis does not switch coalescing off —
-     that would flood the stream — but an all-unknown frame always starts its own span;
+   - **unknown is not evidence of sameness**: a frame with *no* known dimension at all always starts
+     its own span, so a fully blind client over-segments rather than collapsing a long window into
+     one observation. One unknown axis does not switch coalescing off — that would flood the stream —
+     so a client that loses `app`/`window` but still reports `scope` (the partial-Accessibility case)
+     does still coalesce on what it knows;
    - a frame **out of capture order** forces a boundary instead of publishing a span that ends before
      it began.
 

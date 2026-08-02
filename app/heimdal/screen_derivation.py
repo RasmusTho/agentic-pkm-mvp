@@ -36,11 +36,13 @@ What this module owns (issue Acceptance Criteria):
   unchanged collapse into one span observation with a real
   ``observed_at_start``/``observed_at_end``. A boundary is created on **any**
   dimension shift -- frontmost app, window/document, capture scope, derived
-  goal, or an axis a context provider declares itself. Unknown never equals
-  unknown: an empty dimension forces a boundary rather than merging. Frames out
-  of capture order force a boundary too. Over-segmentation is the preferred
-  direction: a spurious boundary is a cheap downstream re-cut, a lost one is
-  unrecoverable.
+  goal, or an axis a context provider declares itself. Unknown is not evidence
+  of sameness: frames with NO known dimension never merge, so a blind client
+  over-segments instead of collapsing a long window into one observation (one
+  unknown axis does not switch coalescing off -- that would flood the stream).
+  Frames out of capture order force a boundary too. Over-segmentation is the
+  preferred direction: a spurious boundary is a cheap downstream re-cut, a lost
+  one is unrecoverable.
 - **Provenance stamped in the same write, or no write (INV-SCREEN-B).** A span
   that derived text but cannot stamp complete provenance (machine-bearing
   sensor, capture chain, content identity from the read receipt, observed-at
