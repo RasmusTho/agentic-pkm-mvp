@@ -1,2 +1,18 @@
 *.md   merge=semanticmd
 *.mdx  merge=semanticmd
+
+# semanticmd is a vault-note merge agent (uuid: frontmatter identity, near-duplicate /
+# "prefer concise" heuristics). It is not safe for code-review-approved repository
+# documentation, which has no vault-note identity: applied there it can silently pick
+# one side of a divergent edit and exit 0, discarding committed content on a routine
+# rebase (see GitHub issue #4505). Route repo docs back to git's built-in 3-way text
+# merge, which raises an ordinary conflict instead of silently resolving.
+docs/**/*.md           merge=text
+docs/**/*.mdx          merge=text
+/README.md             merge=text
+/AGENTS.md             merge=text
+/CLAUDE.md             merge=text
+/CONTRIBUTING.md       merge=text
+/THIRD_PARTY_NOTICES.md merge=text
+.codex/**/*.md         merge=text
+.codex/**/*.mdx        merge=text
