@@ -106,6 +106,62 @@ GOVERNANCE_TARGETS = (
     "tests/ops/test_review_before_ci_gate.py",
 )
 
+# Every app/ file indexed by a (file, line)-keyed census registry in
+# tests/properties/_machinery.py (REGISTERED_MIRRORS, WRITE_FRONTMATTER_SITE_CLASSIFICATION,
+# WRITE_MISSING_SITE_CLASSIFICATION, WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION,
+# STORE_PAYLOAD_SINK_CLASSIFICATION). An ordinary edit to one of these files can shift a
+# censused call site's line number without touching tests/properties/ at all, so the
+# "properties" subsystem below needs its own app/ trigger set instead of relying only on the
+# tests/properties/ prefix (#4269). This list is exact files, not directory prefixes, so it
+# does not widen "properties" to all of app/ broadly; keep it in sync with the file set the
+# _machinery.py registries actually key on when either side changes.
+PROPERTIES_CENSUSED_APP_SITES = (
+    "app/agent_memory/materialization.py",
+    "app/agent_memory/provisional_write.py",
+    "app/agents/normalizer/agent.py",
+    "app/agents/panel/writeback.py",
+    "app/agents/panel_agent/execution.py",
+    "app/agents/panel_agent/runtime.py",
+    "app/agents/planner/agent.py",
+    "app/agents/planner/graph.py",
+    "app/briefing/compose.py",
+    "app/chat/session_log.py",
+    "app/cli/alpha_human_flows.py",
+    "app/cli/index_rebuild.py",
+    "app/cli/smoke.py",
+    "app/episodes/segmenter.py",
+    "app/episodes/store.py",
+    "app/eval/failure_capture.py",
+    "app/fitness/metrics.py",
+    "app/heimdal/candidate_projection.py",
+    "app/heimdal/capture_note.py",
+    "app/heimdal/entity_register.py",
+    "app/heimdal/settings_notes.py",
+    "app/heimdal/time_spend.py",
+    "app/indexer/consumer.py",
+    "app/ingest/api.py",
+    "app/ingest/external.py",
+    "app/ingest/reflection_consumer.py",
+    "app/ingest/vault_alpha.py",
+    "app/ingest/vault_root.py",
+    "app/instance/vault_registry.py",
+    "app/knowledge_acquisition/raw_record.py",
+    "app/mcp/vault_tools.py",
+    "app/objects/__init__.py",
+    "app/ports/filesystem_vault_adapter.py",
+    "app/promotion/consumer.py",
+    "app/reasoning/multi.py",
+    "app/relevance/materialization.py",
+    "app/search/service.py",
+    "app/services/commitment_persistence.py",
+    "app/services/indexer.py",
+    "app/standing_questions/question_store.py",
+    "app/stores/postgres.py",
+    "app/vault/manager.py",
+    "app/vault/settings_service.py",
+    "app/watcher/vault_watcher.py",
+)
+
 E2E_TARGETS = {
     "companion_ui": (
         "tests/e2e/test_panel_to_promotion_consume.py",
@@ -816,7 +872,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         # A changed test_*.py file already runs directly; this covers the
         # shared machinery those tests import.
         "properties",
-        ("tests/properties/",),
+        ("tests/properties/", *PROPERTIES_CENSUSED_APP_SITES),
         ("tests/properties",),
     ),
 )

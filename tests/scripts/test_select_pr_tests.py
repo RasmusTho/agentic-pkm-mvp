@@ -42,7 +42,7 @@ def test_canvas_chat_change_selects_chat_coverage() -> None:
     selection = select_tests(["app/chat/session_log.py", "tests/chat/test_session_log_writer.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("canvas_chat",)
+    assert selection.subsystems == ("canvas_chat", "properties")
     assert selection.unowned_paths == ()
     assert "tests/chat" in selection.targets
     assert "tests/chat/test_session_log_writer.py" in selection.targets
@@ -52,7 +52,7 @@ def test_briefing_change_selects_briefing_coverage() -> None:
     selection = select_tests(["app/briefing/compose.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("briefing",)
+    assert selection.subsystems == ("briefing", "properties")
     assert selection.unowned_paths == ()
     assert "tests/briefing" in selection.targets
 
@@ -64,7 +64,7 @@ def test_instance_registry_change_selects_vault_coverage() -> None:
     vault_module_selection = select_tests(["app/vault/some_new_file.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("vault",)
+    assert selection.subsystems == ("vault", "properties")
     assert selection.unowned_paths == ()
     assert "tests/instance" in selection.targets
     assert "tests/vault" in selection.targets
@@ -379,7 +379,7 @@ def test_index_rebuild_cli_change_selects_memory_retrieval_coverage() -> None:
     selection = select_tests(["app/cli/index_rebuild.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("memory_retrieval",)
+    assert selection.subsystems == ("memory_retrieval", "properties")
     assert selection.unowned_paths == ()
     assert "tests/indexer" in selection.targets
     assert "tests/index" in selection.targets
@@ -399,7 +399,7 @@ def test_runtime_index_producers_select_memory_retrieval_coverage() -> None:
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("memory_retrieval",)
+    assert selection.subsystems == ("memory_retrieval", "properties")
     assert selection.unowned_paths == ()
     assert "tests/index" in selection.targets
     assert "tests/indexer" in selection.targets
@@ -422,7 +422,7 @@ def test_reasoning_expansion_paths_select_owned_cognition_coverage() -> None:
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("reasoning_expansion",)
+    assert selection.subsystems == ("reasoning_expansion", "properties")
     assert selection.unowned_paths == ()
     assert "tests/reasoning" in selection.targets
     assert "tests/expansion" in selection.targets
@@ -505,7 +505,7 @@ def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
     selection = select_tests(["app/stores/postgres.py", "tests/ingest/test_vault_root_ingest_pg.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("store_ingest",)
+    assert selection.subsystems == ("store_ingest", "properties")
     assert selection.unowned_paths == ()
     assert "tests/stores" in selection.targets
     assert "tests/ingest" in selection.targets
@@ -597,12 +597,24 @@ def test_static_selector_targets_are_collectable() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_app_change_to_censused_file_selects_properties_subsystem() -> None:
+    """A change to an app/ file indexed by a tests/properties/_machinery.py line-keyed
+    census (e.g. STORE_PAYLOAD_SINK_CLASSIFICATION, REGISTERED_MIRRORS) must select the
+    properties subsystem even when tests/properties/ itself is untouched -- otherwise the
+    census silently goes stale for that PR's affected-subsystem CI run (#4269)."""
+    selection = select_tests(["app/watcher/vault_watcher.py"])
+
+    assert selection.full_suite is False
+    assert "properties" in selection.subsystems
+    assert "tests/properties" in selection.targets
+
+
 def test_object_store_module_selects_store_ingest_regressions() -> None:
     """The shared object-store producer belongs to the store/ingest contracts."""
     selection = select_tests(["app/objects/__init__.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("store_ingest",)
+    assert selection.subsystems == ("store_ingest", "properties")
     assert selection.unowned_paths == ()
     assert "tests/stores" in selection.targets
     assert "tests/ingest" in selection.targets
@@ -975,7 +987,7 @@ def test_panel_agent_package_change_selects_promotion_panel_coverage() -> None:
     selection = select_tests(["app/agents/panel_agent/runtime.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("promotion_panel",)
+    assert selection.subsystems == ("promotion_panel", "properties")
     assert "tests/panel" in selection.targets
 
 
