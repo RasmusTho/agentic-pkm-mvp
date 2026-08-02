@@ -4704,6 +4704,8 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
         # The health snapshot could not even be evaluated (e.g. a minimally
         # configured vault). The human-edit path fails open — this courtesy
         # data-safety net must never block the user from editing their own note.
+        # formal-model.md F-C: owner-decided to keep this fail-open (epic #2778
+        # chat decision, 2026-08-02) — not a pending decision, current behavior stands.
         pass
 
     safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
