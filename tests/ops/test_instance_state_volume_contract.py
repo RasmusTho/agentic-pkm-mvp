@@ -3122,6 +3122,11 @@ def test_linux_actual_harmless_process_with_empty_argv_is_enumerated(tmp_path) -
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc contract")
 def test_linux_actual_empty_argv0_shell_launcher_blocks(tmp_path) -> None:
+    """An empty-argv0 launcher must still be detected -- when it is a foreign
+    process (its own process group), not a fork inside the controller's own
+    tree (Issue #4538: same-process-group launcher forks are excluded).
+    """
+
     env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
     token = _controller_token(controller_pid, env=env)
@@ -3132,6 +3137,7 @@ def test_linux_actual_empty_argv0_shell_launcher_blocks(tmp_path) -> None:
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
     assert process.stdout is not None
     assert process.stdout.read(1) == b"R"
