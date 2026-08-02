@@ -58,6 +58,13 @@ promote public internet readiness.
   diverge, forcing a real conflict instead of silently discarding one side's committed content.
   Vault-note merging under `vault/**` is unchanged. See
   `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
+- `semanticmd` merge driver now honours git's merge-driver file contract (#4496):
+  `app/cli/merge_driver.py` writes the resolved merge result to git's `%A` path instead of only
+  printing it to stdout (which git never reads), so a clean auto-merge no longer silently keeps
+  OURS while reporting success. `MERGE_STATUS`/`MERGE_REASON` diagnostics moved to stderr and can no
+  longer land inside merged markdown. Non-resolved outcomes (`conflict`/`prompted`) still leave `%A`
+  untouched for git's normal conflict handling. See
+  `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
 
 ## Health spine
 - HealthContract + WriteGuard + incident logging now form the deterministic spine for startup readiness; this snapshot is the baseline for initial go-live visibility.
