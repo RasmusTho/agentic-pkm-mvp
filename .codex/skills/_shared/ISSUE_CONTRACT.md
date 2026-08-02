@@ -93,6 +93,17 @@ Every Acceptance Criterion declares its verification inline with a `Verify:` mar
 - The `Verify:` marker opens its own (optionally bulleted) line per the body template. An
   inline tail on the AC line (`- [ ] text. Verify: <target>`) also declares a marker when its
   target is grammar-resolvable; any other mid-line mention inside AC prose is not a marker.
+- One AC may declare **several targets, one `Verify:` line each**. Never join targets on a
+  single marker line — no ` + `, `and`, or comma between two targets. A joined line is one
+  target to the grammar,
+  its backticks no longer pair, and validation reports a missing file for a path that exists.
+  The split lines are sub-bullets of the same acceptance item and do not change the AC count:
+
+  ```
+  - [ ] Both current-state docs describe the binding as shipped.
+    - Verify: doc writeback at `docs/DB_SCHEMA.md :: DB Schema (Current Reality)`
+    - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments`
+  ```
 - The machine grammar for these forms is
   `app/builderops/issue_contract_validation.py :: is_resolvable_verify_target`;
   `tests/governance/test_verify_target_contract_parity.py` keeps this section and the grammar

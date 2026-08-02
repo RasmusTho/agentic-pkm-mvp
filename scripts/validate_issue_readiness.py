@@ -107,6 +107,7 @@ class AcceptanceCriteriaReport:
     verify_markers_present: bool
     missing_verify_items: list[str]
     missing_verify_file_paths: list[str]
+    joined_verify_targets: list[str]
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,28 @@ def _verify_targets(item: str) -> list[str]:
     return [target for target in _declared_verify_targets(item) if target]
 
 
+# Authors who need several targets on one AC sometimes join them on a single
+# marker line instead of writing one `Verify:` line each (#3857, #3859). The
+# joined line's backticks no longer pair, so the extracted path is a fragment
+# and the reported "missing file" names a file that exists.
+_JOINED_VERIFY_TARGET = re.compile(r"`\s*(?:\+|and)\s")
+
+
+def _is_joined_verify_target(target: str) -> bool:
+    return (
+        _JOINED_VERIFY_TARGET.search(target) is not None
+        and not is_resolvable_verify_target(target)
+    )
+
+
+def _joined_verify_targets(item: str) -> list[str]:
+    return [
+        target
+        for target in _verify_targets(item)
+        if _is_joined_verify_target(target) and _target_has_missing_file_path(target)
+    ]
+
+
 def _missing_verify_file_paths(item: str) -> list[str]:
     missing_paths: list[str] = []
     for target in _verify_targets(item):
@@ -323,6 +346,9 @@ def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport
     missing_file_paths = [
         path for item in items for path in _missing_verify_file_paths(item)
     ]
+    joined_targets = [
+        target for item in items for target in _joined_verify_targets(item)
+    ]
     return AcceptanceCriteriaReport(
         present=bool(items),
         count=len(items),
@@ -330,6 +356,7 @@ def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport
         verify_markers_present=bool(items) and not missing_verify,
         missing_verify_items=missing_verify,
         missing_verify_file_paths=missing_file_paths,
+        joined_verify_targets=joined_targets,
     )
 
 
@@ -506,12 +533,22 @@ def repair_guidance(
             "Missing Verify marker on: " + missing_items + ".",
         ]
     if classification == "missing_verify_file_paths":
-        return [
+        guidance = [
             "Update every non-test file-based `Verify:` target to name an existing repository file; a behavioral `tests/...py::test_name` target may name a new test file for the builder to add.",
             "Missing Verify file path(s): "
             + ", ".join(ac_report.missing_verify_file_paths)
             + ".",
         ]
+        if ac_report.joined_verify_targets:
+            guidance.append(
+                "Some `Verify:` line(s) join several targets on one line, so the reported path is a "
+                "fragment of a joined line rather than a missing file. Split them into one `Verify:` "
+                "line per target under the same acceptance item (the AC count does not change); see "
+                "`.codex/skills/_shared/ISSUE_CONTRACT.md :: Verify: marker rule`. Joined line(s): "
+                + "; ".join(ac_report.joined_verify_targets)
+                + "."
+            )
+        return guidance
     return ["Unable to determine repair guidance; rewrite using the canonical task template."]
 
 
