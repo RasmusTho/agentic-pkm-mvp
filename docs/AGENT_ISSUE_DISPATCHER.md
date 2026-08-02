@@ -824,8 +824,10 @@ Run `python -m app.dispatcher signboard-validate [path] --json` to lint the gene
 changing either the board or dispatcher store. As with `export-signboard`, the path is optional and
 defaults to the active vault's `BuilderOpsVault/agent-delivery` root. Validation exits nonzero for
 malformed generated cards, duplicate generated cards, column/status drift, cards stale against the
-dispatcher store, unreadable generated-filename candidates, and a board stamped by a different
-dispatcher store; run `export-signboard` to repair valid generated-card drift. Human-authored files are outside this lint's jurisdiction.
+dispatcher store, a same-column generated card whose title, priority, claim, linked PR, or labels no
+longer match its dispatcher task (`content_drift`), unreadable generated-filename candidates, and a
+board stamped by a different dispatcher store; run `export-signboard` to repair valid generated-card
+drift. Human-authored files are outside this lint's jurisdiction.
 
 A plain `export-signboard` only rewrites cards for task IDs that still exist in the dispatcher
 store, so it cannot clear a card whose task ID has disappeared from the store — those accumulate as
