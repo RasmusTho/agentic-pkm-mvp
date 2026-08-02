@@ -72,7 +72,12 @@ The helper:
 - sends P0/P1 defects back to the normal bug-Issue path;
 - derives `KD-<12 uppercase hex>` deterministically from source identity and normalized symptom;
 - accepts `--defect-key <stable-key>` when later source SHAs or evidence wording should deduplicate
-  to the same defect;
+  to the same defect at the time of that intake call — the key itself is not persisted anywhere, so
+  it cannot be used to re-derive the id in a later, separate intake call;
+- accepts `--defect-id <KD-...>` to re-intake an existing entry explicitly: pass the id from the
+  original intake receipt (or a `lookup` call) and the id is used as-is, skipping derivation
+  entirely, so updated symptom/SHA/evidence text on the re-intake still converges on the same entry
+  without reconstructing `--defect-key`;
 - finds or creates and locks the single rolling registry Issue;
 - rejects unlocked or mislabeled registries and parses only exact first-line markers with the
   expected schema shape;

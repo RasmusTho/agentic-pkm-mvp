@@ -271,6 +271,106 @@ def test_explicit_defect_key_keeps_id_stable_across_new_evidence() -> None:
     assert first.defect_id == later.defect_id
 
 
+def test_defect_id_override_rejects_malformed_ids() -> None:
+    with pytest.raises(known_defects.KnownDefectsError, match="defect_id_override"):
+        _defect(defect_id_override="not-a-kd-id")
+
+
+def test_keyed_entry_reintake_converges_on_the_same_defect_id() -> None:
+    """A defect first created with --defect-key can be re-intaken later with
+    changed symptom/SHA/evidence and no operator-supplied key, and converges
+    on the same defect_id and the same single registry entry.
+
+    The operator recovers the stable id from the original intake receipt (or
+    a subsequent `lookup`), not by remembering the original key string.
+    """
+    gateway = FakeGateway()
+    original = _defect(defect_key="receipt-attempt-count")
+
+    created = known_defects.intake_defect(original, gateway)
+    assert created["status"] == "created"
+    remembered_defect_id = created["defect_id"]
+
+    # A later re-intake supplies only the remembered defect_id: no
+    # --defect-key, changed source_sha, symptom, and evidence.
+    reintake = known_defects.KnownDefect.validated(
+        repo="RasmusTho/agentic-pkm-mvp",
+        source_pr=4321,
+        source_sha="c" * 40,
+        review_url=(
+            "https://github.com/RasmusTho/agentic-pkm-mvp/"
+            "pull/4321#discussion_r456"
+        ),
+        symptom="Widened blast radius discovered during a later audit.",
+        evidence="A second reproduction with a different repro path.",
+        severity="P2",
+        impact="Operators may misread repair progress across more surfaces.",
+        workaround="Read the raw attempt events.",
+        trigger="Promote after a third occurrence or when this blocks closure.",
+        defect_key=None,
+        defect_id_override=remembered_defect_id,
+    )
+
+    assert reintake.defect_id == original.defect_id == remembered_defect_id
+
+    reintake_receipt = known_defects.intake_defect(reintake, gateway)
+
+    assert reintake_receipt["status"] == "duplicate"
+    assert reintake_receipt["defect_id"] == remembered_defect_id
+    assert reintake_receipt["registry_issue"] == created["registry_issue"]
+    # No second entry was created; the entry for this defect_id is still one
+    # single comment.
+    entry_comments = [
+        comment
+        for comment in gateway.comments[created["registry_issue"]]
+        if known_defects._entry_id_from_comment(comment.get("body") or "")
+        == remembered_defect_id
+    ]
+    assert len(entry_comments) == 1
+
+
+def test_preexisting_entries_still_resolve_after_key_persistence() -> None:
+    """An entry created before the defect_id_override fix (plain keyless
+    derivation) must keep resolving under lookup unchanged."""
+    gateway = FakeGateway()
+    preexisting = _defect()
+
+    created = known_defects.intake_defect(preexisting, gateway)
+    assert created["status"] == "created"
+
+    looked_up = known_defects.lookup_defect(preexisting.defect_id, gateway)
+
+    assert looked_up["status"] == "deferred"
+    assert looked_up["defect_id"] == preexisting.defect_id
+    assert looked_up["registry_issue"] == created["registry_issue"]
+
+
+def test_marker_roundtrips_through_render_and_parse() -> None:
+    keyless = _defect()
+    keyed = _defect(defect_key="receipt-attempt-count")
+    overridden = known_defects.KnownDefect.validated(
+        repo="RasmusTho/agentic-pkm-mvp",
+        source_pr=4321,
+        source_sha="d" * 40,
+        review_url=(
+            "https://github.com/RasmusTho/agentic-pkm-mvp/"
+            "pull/4321#discussion_r789"
+        ),
+        symptom="Later wording.",
+        evidence="Later evidence.",
+        severity="P2",
+        impact="Later impact.",
+        workaround="Later workaround.",
+        trigger="Later trigger.",
+        defect_id_override=keyed.defect_id,
+    )
+
+    for defect in (keyless, keyed, overridden):
+        rendered = defect.render_entry(phase="final")
+        parsed = known_defects._entry_marker_from_comment(rendered)
+        assert parsed == (defect.defect_id, "final")
+
+
 def test_review_url_host_is_canonicalized_before_schema_rendering() -> None:
     defect = _defect(
         review_url=(
