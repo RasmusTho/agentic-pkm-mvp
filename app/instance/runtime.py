@@ -2635,8 +2635,11 @@ def _release_instance_state_deployment_lease(
         if lease.get("controller") != controller:
             return {"released": False, "reason": "controller-mismatch"}
         if lease.get("phase") == "cleanup":
-            result = lease.get("result")
-            if not (isinstance(result, dict) and result.get("channel") == channel):
+            existing_result = lease.get("result")
+            if not (
+                isinstance(existing_result, dict)
+                and existing_result.get("channel") == channel
+            ):
                 return {"released": False, "reason": "cleanup-receipt-invalid"}
             receipt = _complete_instance_state_deployment_cleanup(ownership_root)
             return receipt | {"released": True, "reason": "already-in-cleanup"}
