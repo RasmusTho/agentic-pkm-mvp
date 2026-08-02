@@ -24,7 +24,12 @@ import yaml
 # either failed unconditionally (conn_rw) or hit UndefinedTable on a fresh DB
 # (ensure_schema no-op) once #2818 stopped silently skipping these tests
 # (#2937). Import the real implementation, matching the established pattern.
-from app.db.db import FILE_STATE_COMPATIBILITY_BINDING_ID, conn_rw, ensure_schema
+from app.db.db import (
+    FILE_STATE_COMPATIBILITY_BINDING_ID,
+    assert_file_state_schema,
+    conn_rw,
+    ensure_schema,
+)
 
 from app.events.models import new_trace_id
 from app.events.types import (
@@ -51,6 +56,20 @@ from app.services.settings import policy
 
 def _conn():
     return conn_rw()
+
+
+def _prepare(conn: psycopg.Connection) -> None:
+    """Apply the legacy compatibility DDL, then gate on the migrated file_state key.
+
+    MVR-05A0 (#4543): `file_state` is owned by Alembic revision `c7f4b1a83d29`,
+    so a database that never ran it has no table, or still has the `path`-only
+    key. Either way every statement below would fail — but late, opaquely, and
+    part-way through a watcher tick. `assert_file_state_schema` turns that into
+    one fail-loud error naming `alembic upgrade head`, before any effect.
+    """
+    ensure_schema(conn)
+    assert_file_state_schema(conn)
+    conn.commit()
 
 
 def _binding_id() -> str:
@@ -416,8 +435,7 @@ def update_path(uuid_value: str, new_path: str) -> None:
     resolved_path = str(Path(new_path).resolve())
     binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
+        _prepare(conn)
         state = _get_state_by_uuid(conn, uuid_value, binding_id=binding_id)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         fm_hash = state["fm_hash"] if state else None
@@ -477,8 +495,7 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
     remaining_for_uuid: int | None = None
     delete_payload: dict[str, Any] | None = None
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
+        _prepare(conn)
         state = _get_state_by_path(conn, resolved_path, binding_id=binding_id)
         effective_uuid = (uuid_value or (state or {}).get("uuid") or "").strip() or None
         with conn.cursor() as cur:
@@ -578,8 +595,7 @@ def upsert_object_from_note(
 
     binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
+        _prepare(conn)
         state = _get_state_by_uuid(conn, uuid_value, binding_id=binding_id)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         with conn.cursor() as cur:
@@ -703,8 +719,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
     binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
+        _prepare(conn)
 
         # Previous state
         state = _get_state_by_path(conn, str(note_path), binding_id=binding_id)
@@ -930,8 +945,7 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     result = {"uuid": frontmatter["uuid"], "updated": False}
     binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
+        _prepare(conn)
         state = _get_state_by_path(conn, str(old), binding_id=binding_id)
         if not state:
             state = _get_state_by_uuid(conn, frontmatter["uuid"], binding_id=binding_id)

@@ -320,16 +320,25 @@ def test_bootstrap_origin_and_alembic_origin_converge(
 def test_runtime_bootstrap_cannot_create_or_mutate_file_state(
     scratch_db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`ensure_schema` has no `file_state`/`objects.path` DDL authority outside tests."""
-    from app.db.db import ensure_schema
+    """`ensure_schema` has no `file_state`/`objects.path` DDL authority outside tests.
+
+    It also fails loudly on a stale database instead of returning cleanly. Without
+    that preflight, `conn_rw` would latch `_SCHEMA_INITIALIZED` and the operator
+    would learn about the un-migrated schema only when the first vault-sync write
+    raised an opaque invalid-conflict-target error inside a watcher tick
+    (`AGENTS.md :: Required rules` -- Invariant -> producers).
+    """
+    from app.db.db import FileStateSchemaMissingError, assert_file_state_schema, ensure_schema
 
     dsn = scratch_db_factory()
     _alembic_upgrade(dsn, monkeypatch, PRE_ADOPTION_HEAD)
 
     monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
     with psycopg.connect(dsn) as conn:
-        ensure_schema(conn)
+        ensure_schema(conn)  # the legacy bootstrap alone must create neither surface
         conn.commit()
+        with pytest.raises(FileStateSchemaMissingError, match="alembic upgrade head"):
+            assert_file_state_schema(conn)
 
     with psycopg.connect(dsn) as conn:
         assert conn.execute("SELECT to_regclass('public.file_state')").fetchone() == (None,), (
@@ -341,14 +350,48 @@ def test_runtime_bootstrap_cannot_create_or_mutate_file_state(
         ).fetchone()
     assert objects_path is None, "the legacy runtime bootstrap created objects.path"
 
-    # After the owning revision runs, both surfaces exist and a further
-    # `ensure_schema` leaves them untouched.
+    # After the owning revision runs, both surfaces exist, the preflight passes,
+    # and a further `ensure_schema` leaves them untouched.
     _alembic_upgrade(dsn, monkeypatch, FILE_STATE_ADOPTION_HEAD)
     before = _schema_snapshot(dsn)
     with psycopg.connect(dsn) as conn:
         ensure_schema(conn)
+        assert_file_state_schema(conn)
         conn.commit()
     assert _schema_snapshot(dsn) == before
+
+
+def test_stale_file_state_key_fails_loud_before_any_vault_sync_write(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A database with the *old* `path`-only key is rejected, not silently accepted.
+
+    The table-missing case above is the easy half. This is the one that actually
+    bites: a database whose bootstrap already created `file_state` but that never
+    ran the adoption revision has the table, so an existence-only check would
+    pass and the failure would surface as an invalid conflict target mid-tick.
+    """
+    from app.db.db import FileStateSchemaMissingError, assert_file_state_schema
+
+    dsn = scratch_db_factory()
+    _alembic_upgrade(dsn, monkeypatch, PRE_ADOPTION_HEAD)
+    _create_legacy_bootstrap_file_state(dsn)
+    _seed_legacy_rows(dsn, count=2)
+
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    with psycopg.connect(dsn) as conn:
+        with pytest.raises(FileStateSchemaMissingError, match=r"\['path'\]"):
+            assert_file_state_schema(conn)
+
+    # The preflight is read-only: it must not repair, drop, or touch the rows it
+    # refuses to run against.
+    with psycopg.connect(dsn) as conn:
+        remaining = conn.execute("SELECT count(*) FROM public.file_state").fetchone()
+    assert remaining == (2,)
+
+    _alembic_upgrade(dsn, monkeypatch, FILE_STATE_ADOPTION_HEAD)
+    with psycopg.connect(dsn) as conn:
+        assert_file_state_schema(conn)
 
 
 def test_autocreate_fixture_shape_matches_the_owning_revision(

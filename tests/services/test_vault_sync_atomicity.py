@@ -81,6 +81,11 @@ class _RecCursor:
             self.conn.log.append("file_state_write")
             self.rowcount = 1
             return
+        # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
+        # file_state key before any statement.
+        if norm.startswith("select to_regclass('public.file_state') is not null"):
+            self._fetch = (True, ["vault_binding_id", "path"])
+            return
         # MVR-05A0 (#4543): file_state statements lead with vault_binding_id, so
         # the path/uuid predicate is now the second bound parameter.
         if norm.startswith("delete from file_state where vault_binding_id = %s and path"):

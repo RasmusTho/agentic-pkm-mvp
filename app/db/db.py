@@ -65,8 +65,77 @@ def _schema_autocreate_enabled() -> bool:
     return (os.getenv("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
 
 
+class FileStateSchemaMissingError(RuntimeError):
+    """Raised when the migration-owned `file_state` schema is absent or stale."""
+
+
+def assert_file_state_schema(conn: psycopg.Connection) -> None:
+    """Fail loudly when the database predates Alembic revision `c7f4b1a83d29`.
+
+    The `Invariant -> producers` rule in `AGENTS.md :: Required rules` pairs a
+    runtime precondition with a fail-loud preflight, matching what KERNEL-04
+    (#2766) and KERNEL-05 (#2850) do for `store_*` and `outbox`. Without it a
+    stale database returns cleanly from `ensure_schema`, `conn_rw` latches
+    `_SCHEMA_INITIALIZED`, and the operator learns about it only when the first
+    vault-sync write raises an opaque invalid-conflict-target error part-way
+    through a watcher tick.
+
+    This is deliberately **not** called from `ensure_schema`. That function is a
+    shared seam — `app/services/outbox.py::bootstrap` calls it too — and the
+    `file_state` key is no concern of the outbox path. The one caller is the
+    vault-sync seam in `app/services/vault_sync.py`, the sole consumer of the
+    table.
+
+    Checks the two things the rekey actually depends on: that the table exists,
+    and that its primary key is `(vault_binding_id, path)`.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              to_regclass('public.file_state') IS NOT NULL AS table_exists,
+              COALESCE((
+                SELECT array_agg(att.attname ORDER BY key.ordinality)
+                  FROM pg_constraint con
+                  JOIN LATERAL unnest(con.conkey) WITH ORDINALITY key(attnum, ordinality)
+                    ON true
+                  JOIN pg_attribute att
+                    ON att.attrelid = con.conrelid AND att.attnum = key.attnum
+                 WHERE con.conrelid = to_regclass('public.file_state')
+                   AND con.contype = 'p'
+              ), ARRAY[]::text[]) AS primary_key
+            """
+        )
+        row = cur.fetchone()
+    if isinstance(row, dict):
+        table_exists, primary_key = row["table_exists"], row["primary_key"]
+    else:
+        table_exists, primary_key = (row[0], row[1]) if row else (False, [])
+
+    if not table_exists:
+        raise FileStateSchemaMissingError(
+            "public.file_state is missing. It is owned by Alembic revision "
+            "c7f4b1a83d29 (MVR-05A0, #4543), not by the runtime bootstrap SQL. "
+            "Run `alembic upgrade head` (scripts/run_migrations.sh) before "
+            "starting a vault-sync producer."
+        )
+    if list(primary_key or []) != ["vault_binding_id", "path"]:
+        raise FileStateSchemaMissingError(
+            "public.file_state has primary key "
+            f"{list(primary_key or [])!r}, expected ['vault_binding_id', 'path']. "
+            "This database predates Alembic revision c7f4b1a83d29 (MVR-05A0, "
+            "#4543); run `alembic upgrade head` (scripts/run_migrations.sh) "
+            "before starting a vault-sync producer."
+        )
+
+
 def _autocreate_file_state(conn: psycopg.Connection) -> None:
-    """Create the migration-owned `file_state`/`objects.path` shape for test scratch DBs."""
+    """Create the migration-owned `file_state`/`objects.path` shape for test scratch DBs.
+
+    Inert outside tests: production DDL authority is Alembic revision
+    `c7f4b1a83d29`. The matching fail-loud preflight for a database that never
+    ran it is `assert_file_state_schema`, called from the vault-sync seam.
+    """
     if not _schema_autocreate_enabled():
         return
     for statement in _FILE_STATE_AUTOCREATE_SQL:
@@ -138,7 +207,10 @@ def ensure_schema(conn: psycopg.Connection) -> None:
     scratch databases keep create-on-demand through the explicit
     STORE_SCHEMA_AUTOCREATE opt-in, applied after the bootstrap SQL because
     `ALTER TABLE IF EXISTS public.objects ADD COLUMN ... path` silently no-ops on
-    a database where the bootstrap has not created `objects` yet.
+    a database where the bootstrap has not created `objects` yet. Outside tests
+    that step is inert; the matching fail-loud preflight is
+    `assert_file_state_schema`, called from the vault-sync seam rather than here,
+    because this function is shared with the outbox bootstrap.
     """
     _apply_legacy_bootstrap_sql(conn)
     _autocreate_file_state(conn)

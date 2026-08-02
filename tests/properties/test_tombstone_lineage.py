@@ -167,6 +167,12 @@ class _FakeCursor:
                 row["source_ref"] = source_ref
                 self.rowcount = 1
             return
+        # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
+        # file_state key before any statement. These fakes stand in for an
+        # already-migrated database.
+        if normalized.startswith("select to_regclass('public.file_state') is not null"):
+            self._fetchone = (True, ["vault_binding_id", "path"])
+            return
         # MVR-05A0 (#4543): file_state statements lead with vault_binding_id.
         if normalized.startswith("insert into file_state("):
             _binding_id, path, uuid_value, fm_hash, body_hash, mtime = params

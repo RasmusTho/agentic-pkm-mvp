@@ -119,6 +119,12 @@ class _FakeCursor:
         # but it asserts the binding parameter is actually supplied, so an
         # unscoped statement reintroduced here fails loudly instead of silently
         # matching a laxer pattern.
+        # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
+        # file_state key before any statement. These fakes stand in for an
+        # already-migrated database.
+        if normalized.startswith("select to_regclass('public.file_state') is not null"):
+            self._fetchone = (True, ["vault_binding_id", "path"])
+            return
         if normalized.startswith("insert into file_state("):
             binding_id, path, uuid_value, fm_hash, body_hash, mtime = params
             _assert_binding_scoped(binding_id)
