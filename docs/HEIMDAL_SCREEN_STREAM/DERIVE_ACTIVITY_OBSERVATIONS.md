@@ -34,12 +34,20 @@ the span boundaries the event motor needs.
    providers without changing the derivation contract. Providers run host-side over the bundle; none
    re-reads the screen.
 3. **Model routing per RUNTIME_MODEL_POSTURE (the binding floor).** Screen derivation is an **always-on
-   loop** → its task kind is `paid_eligible: false` in the provider census; the routing compiler
-   **rejects** any paid assignment (RUNTIME_MODEL_POSTURE §1/§4.2). Derivation therefore resolves to a
-   **local vision model** (Ollama-servable). This is the structural off-switch for the raw-pixel egress
-   seam — cloud vision derivation is not reachable for this task kind without an owner reclassification
-   that contradicts the floor. The declared egress posture (HEIM-12) for this stage names **zero raw
-   egress**.
+   loop** → its task kind (`heimdal.screen_derivation`) is `paid_eligible: false` in the provider census;
+   the routing compiler **rejects** any paid assignment (RUNTIME_MODEL_POSTURE §1/§4.2). Derivation
+   therefore resolves to a **local vision model** (Ollama-servable, census-declared `ollama/llava:7b`).
+   This is the structural off-switch for the raw-pixel egress seam — cloud vision derivation is not
+   reachable for this task kind without an owner reclassification that contradicts the floor.
+
+   **Declared egress posture (HEIM-12), delivered:** this stage declares **zero raw egress** — raw-class
+   evidence (`screen_frame`) never leaves the host trust boundary, and the stage's only model destination
+   is the host-local vision model. The declaration is structured and machine-checkable
+   (`app/heimdal/screen_derivation.py :: DECLARED_EGRESS`), not prose: `resolve_derivation_route` refuses
+   to compile a route at all when the census claims this task kind as paid-eligible or when the resolved
+   provider is not `tier: local`, so the refusal lands before a single frame is read. Enforced by
+   `tests/invariants/test_heimdal_seam.py::test_declared_egress`, the §8-reserved home HEIM-12's static
+   half now graduates into.
 4. **Coalesce into spans (INV-SCREEN-E).** Consecutive frames whose activity is unchanged collapse into
    one span observation with real `observed_at_start`/`observed_at_end` duration. A span boundary is
    created on **any** dimension shift — frontmost app, window/document, scope, or derived-goal change —
