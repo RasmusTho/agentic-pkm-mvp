@@ -401,9 +401,12 @@ Partial delivery remains fail-closed:
   ambiguous/conflicting rows quarantine. Issue 05D retires the compatibility translator only after
   native producer migration, and issue 06D cannot backfill a duplicate;
 - before issue 05A enables scalar vault-bound dispatch, every enabled GOV-revocation producer uses
-  the host-global ownership fence and matching exclusive binding lease. The 05A worker holds the
+  the host-global ownership fence and matching exclusive binding lease. That enabled set is closed by
+  inventory and is empty at 05A, so 05A discharges this by sealing the seam and proving the set
+  empty, not by migrating existing producers. The 05A worker holds the
   shared lease through dispatch/ack/receipt, so revocation cannot cross that effect window; 05B
-  extends the already-live fence to foreground read producers;
+  extends the already-live fence to foreground read producers and lands the first real producer
+  against the already-live seal;
 - after issue 06B, legacy choose/open and default set/clear continue to rebind only `compatibility`
   lifecycle intent with the same mutation-gate/pre-commit scan+buffer/quiesce → commit →
   post-commit old-root scan+buffer drain → resume transaction. Default clear re-runs the canonical
