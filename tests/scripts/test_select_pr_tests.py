@@ -702,13 +702,21 @@ def test_unowned_e2e_file_is_deferred_to_post_merge() -> None:
     [
         pytest.param(
             ["docs/development/TEST_STRATEGY_HOT_PATH.md", "tests/governance/test_new_thing.py"],
-            ("governance",),
+            # tests/governance/ is also builder_system's own scope signal
+            # (builder_system's real targets include tests/builderops and
+            # tests/dispatcher, not just tests/governance) -- #4336 unions
+            # that real subsystem in rather than absorbing it silently into
+            # the governance-only branch.
+            ("governance", "builder_system"),
             "tests/governance/test_new_thing.py",
             id="docs-only+test",
         ),
         pytest.param(
             [".codex/skills/publish-pr/SKILL.md", "tests/scripts/test_new_helper.py"],
-            ("governance",),
+            # tests/scripts/ is also ops_deploy's own scope signal (its real
+            # targets include tests/ops and tests/deploy, not just
+            # tests/scripts) -- #4336 unions it in instead of dropping it.
+            ("governance", "ops_deploy"),
             "tests/scripts/test_new_helper.py",
             id="governance-only+test",
         ),
@@ -807,8 +815,75 @@ def test_skill_contract_file_with_unmapped_test_still_gets_docs_authoring_covera
 def test_governance_target_exact_file_entry_is_tolerated() -> None:
     # GOVERNANCE_TARGETS' one non-directory entry (tests/ops/test_ci_workflow.py)
     # must be matched by _within_target_dirs' exact-equality branch, not just
-    # its directory-prefix branch.
+    # its directory-prefix branch -- it still selects the governance lane's
+    # full target set. tests/ops/test_ci_workflow.py is also ops's own scope
+    # signal (ops's real target is the whole tests/ops directory, wider than
+    # this one exact file), so #4336 unions ops in too instead of silently
+    # narrowing to the two exact tests/ops files GOVERNANCE_TARGETS lists.
     selection = select_tests([".codex/skills/x/SKILL.md", "tests/ops/test_ci_workflow.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance", "ops")
+    assert "tests/architecture" in selection.targets
+    assert "tests/ops" in selection.targets
+
+
+def test_mixed_docs_authoring_and_architecture_test_keeps_builder_targets() -> None:
+    # #4336: tests/architecture/test_builderops_store_boundary.py is
+    # individually carved out as builder_system's own diagnostic signal
+    # (scripts/select_pr_tests.py's builder_system entry), but it also lives
+    # inside GOVERNANCE_TARGETS' tolerated tests/architecture directory. A
+    # mixed PR combining it with a .codex/skills/** change must not collapse
+    # to governance-only and lose builder_system's real targets.
+    selection = select_tests(
+        [".codex/skills/x/SKILL.md", "tests/architecture/test_builderops_store_boundary.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems != ("governance",)
+    assert "tests/builderops" in selection.targets
+    assert "tests/dispatcher" in selection.targets
+    # The pure governance-only fast path's own coverage must not regress.
+    assert "tests/architecture" in selection.targets
+    assert "tests/ops/test_review_before_ci_gate.py" in selection.targets
+
+
+def test_mixed_ops_deploy_and_architecture_test_keeps_ops_targets() -> None:
+    # #4336: scripts/select_pr_tests.py is explicitly tolerated as governance
+    # signal, but it is also ops_deploy's own scripts/-rooted scope signal.
+    # Combined with the builder_system-carved-out architecture test, the diff
+    # must resolve to real ops_deploy/builder_system coverage, not collapse
+    # to governance-only.
+    selection = select_tests(
+        ["scripts/select_pr_tests.py", "tests/architecture/test_builderops_store_boundary.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems != ("governance",)
+    assert "tests/builderops" in selection.targets
+    assert "tests/dispatcher" in selection.targets
+    assert "tests/ops" in selection.targets
+    assert "tests/deploy" in selection.targets
+
+
+def test_mixed_docs_and_review_gate_test_keeps_ops_targets() -> None:
+    # #4336: tests/ops/test_review_before_ci_gate.py is tolerated as both
+    # governance and docs signal, but it also lives under ops's own
+    # tests/ops/ prefix. A docs-only change combined with this file must
+    # still pick up the rest of tests/ops, not collapse to docs-only.
+    selection = select_tests(["docs/STATUS.md", "tests/ops/test_review_before_ci_gate.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems != ("docs",)
+    assert "tests/ops" in selection.targets
+
+
+def test_docs_plus_architecture_still_stays_governance_only_when_no_foreign_owner() -> None:
+    # Sibling assertion to the mixed-PR cases above: an architecture test
+    # with no individual subsystem carve-out (unlike
+    # test_builderops_store_boundary.py / test_no_hardcoded_vault_layout.py)
+    # must still resolve through the plain governance-only fast path.
+    selection = select_tests([".codex/skills/x/SKILL.md", "tests/architecture/test_pr_hot_path_governance.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("governance",)

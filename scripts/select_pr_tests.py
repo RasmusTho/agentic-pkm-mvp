@@ -898,6 +898,33 @@ def _is_governance_only(paths: tuple[str, ...]) -> bool:
     )
 
 
+def _foreign_subsystem_matches(
+    paths: tuple[str, ...], tolerated_targets: tuple[str, ...]
+) -> list[tuple[str, tuple[str, ...]]]:
+    # `_is_docs_only`/`_is_governance_only` treat any tests/** path inside
+    # `tolerated_targets` (DOCS_TARGETS / GOVERNANCE_TARGETS) as scope-neutral
+    # so a *pure* docs-only/governance-only diff keeps resolving to that
+    # lane. But several of those same directories/files are ALSO real
+    # per-subsystem scope signal in SUBSYSTEMS -- e.g.
+    # `tests/architecture/test_builderops_store_boundary.py` is individually
+    # carved out for builder_system, `tests/ops/` for ops, `tests/scripts/`/
+    # `scripts/` for ops_deploy. On a *mixed* PR, silently absorbing that
+    # signal into the governance/docs branch drops the subsystem's real
+    # target tests from the selection (#4336) even though a non-empty,
+    # non-full-suite selection still runs -- nothing signals the coverage
+    # loss. Return every subsystem match whose OWN targets are not already a
+    # subset of `tolerated_targets` (docs_authoring's targets ARE
+    # GOVERNANCE_TARGETS, so it never appears here) so the caller can union
+    # that subsystem's real targets into the selection instead of it being
+    # silently dropped.
+    return [
+        (name, subsystem_targets)
+        for name, prefixes, subsystem_targets in SUBSYSTEMS
+        if any(path.startswith(prefix) for path in paths for prefix in prefixes)
+        and any(target not in tolerated_targets for target in subsystem_targets)
+    ]
+
+
 def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
     # Restricted to .py so a co-changed non-test tests/** artifact (fixture,
     # README, etc.) is never handed to pytest as a positional target — pytest
@@ -969,12 +996,28 @@ def select_tests(changed_files: list[str]) -> Selection:
     changed_tests = _changed_test_targets(paths)
     targets = list(ALWAYS_TARGETS)
 
-    if _is_governance_only(paths):
-        targets.extend(GOVERNANCE_TARGETS)
-        subsystems, reason = ("governance",), "governance-only PR"
-    elif _is_docs_only(paths):
-        targets.extend(DOCS_TARGETS)
-        subsystems, reason = ("docs",), "docs-only PR"
+    governance_only = _is_governance_only(paths)
+    docs_only = _is_docs_only(paths) if not governance_only else False
+
+    if governance_only or docs_only:
+        tolerated_targets = GOVERNANCE_TARGETS if governance_only else DOCS_TARGETS
+        targets.extend(tolerated_targets)
+        subsystems_list = ["governance" if governance_only else "docs"]
+        # A mixed PR can still have a real subsystem owner behind one of the
+        # tolerated GOVERNANCE_TARGETS/DOCS_TARGETS test directories (#4336) --
+        # union that subsystem's own targets in rather than silently dropping
+        # them, instead of collapsing the whole diff to governance/docs-only.
+        for name, subsystem_targets in _foreign_subsystem_matches(paths, tolerated_targets):
+            subsystems_list.append(name)
+            targets.extend(subsystem_targets)
+        subsystems = _dedupe(subsystems_list)
+        reason = (
+            "governance-only PR"
+            if governance_only and len(subsystems) == 1
+            else "docs-only PR"
+            if docs_only and len(subsystems) == 1
+            else "mixed governance/docs PR with a foreign subsystem-owned test path"
+        )
     else:
         matched: list[str] = []
         for name, prefixes, subsystem_targets in SUBSYSTEMS:
