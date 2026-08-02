@@ -197,9 +197,16 @@ def _ensure_tables() -> None:
                 # schema. A bare `to_regclass('store_objects')` would find the
                 # migrated `public` table, skip the group, and silently hand
                 # those tests the shared tables instead.
+                #
+                # `quote_ident`, not `format('%I.%I', ...)`: psycopg's
+                # client-side placeholder parser rejects any `%` sequence that
+                # is not one of its own, so a `%I` in the statement raises
+                # `only '%s', '%b', '%t' are allowed as placeholders` before the
+                # server ever sees it.
                 cur.execute(
-                    "SELECT to_regclass(format('%I.%I', current_schema(), %s)) "
-                    "IS NOT NULL AS present",
+                    "SELECT to_regclass("
+                    "quote_ident(current_schema()) || '.' || quote_ident(%s)"
+                    ") IS NOT NULL AS present",
                     (table,),
                 )
                 row = cur.fetchone()
