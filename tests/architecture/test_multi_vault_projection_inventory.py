@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,21 @@ from tests.architecture.durable_table_classification import (
 )
 
 pytestmark = pytest.mark.not_pg
+
+def _substantial_sentences(reason: str) -> list[str]:
+    """Sentences long enough to carry a classification claim.
+
+    Ten words is the line: shorter than that is a shared citation
+    ("Explicitly global per the MVR-05 acceptance criteria."), which is fine to
+    repeat; longer than that is an argument, and an argument reused verbatim
+    across a family of tables is not per-table evidence.
+    """
+    return [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", reason)
+        if len(sentence.split()) >= 10
+    ]
+
 
 RELATIONS_INIT_SQL = REPO_ROOT / "app" / "db" / "sql" / "relations_init.sql"
 LEGACY_RELATION_INDEX = REPO_ROOT / "app" / "store" / "relation_index.py"
@@ -107,10 +123,23 @@ def test_every_production_projection_schema_and_producer_is_classified() -> None
     )
 
     reasons_seen: dict[str, str] = {}
+    sentences_seen: dict[str, str] = {}
     for table, entry in sorted(manifest.items()):
         assert entry["classification"] in CLASSIFICATIONS, (table, entry["classification"])
         assert entry["binding_key"] in BINDING_KEY_STATES, (table, entry["binding_key"])
         assert entry["rebuild_mechanism"] in REBUILD_MECHANISMS, table
+        for sentence in _substantial_sentences(entry["reason"]):
+            assert sentence not in sentences_seen, (
+                f"{table} shares this sentence with {sentences_seen[sentence]}:\n"
+                f"  {sentence}\n"
+                "A paragraph reused across a family of tables is a template, and a "
+                "template is how one wrong claim rides along with fifteen right ones — "
+                "which is what happened to `heimdal_meeting_finalization_receipt`, whose "
+                "`artifact_refs` column records the vault a session was materialized into "
+                "while the shared paragraph claimed the whole family was vault-"
+                "independent. Write this table's own evidence."
+            )
+            sentences_seen[sentence] = table
         assert entry["reason"] not in reasons_seen, (
             f"{table}'s reason is byte-identical to {reasons_seen[entry['reason']]}'s. A "
             "reason copied across a family of tables is a template, and a template is "
@@ -407,28 +436,33 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
         "migration lineage does not register, so nothing governs their DDL."
     )
 
-    # The exemption's measured cost: sixteen statements across these files that
-    # this gate cannot read. None of them is durable (assertion 1); this pins
-    # the blind spot so it cannot spread without showing up in a diff.
-    invisible = sorted({site.split(":", 1)[0] for site in exempted_statement_sites()})
-    assert invisible == [
-        "app/builderops/ckm/query_service.py",
-        "app/builderops/ckm/semantic.py",
-        "app/builderops/ckm/store.py",
-        "app/builderops/control_plane/store.py",
-        "app/builderops/design_agent_adapters.py",
-        "app/builderops/design_run_governance.py",
-        "app/builderops/model_inquiry_runner.py",
-        "app/builderops/store.py",
-        "app/dispatcher/store.py",
-        "app/dispatcher/verification_dispatch.py",
-        "app/dispatcher/verification_runtime.py",
-    ], (
-        "the set of files the separate-plane exemption makes invisible changed:\n  "
-        + "\n  ".join(invisible)
-        + "\nIf a file left the list, delete it here. If one joined, either widen the "
+    # The exemption's measured cost, pinned per file **and per count**. A file
+    # set alone is not a bound: a new invisible statement inside an
+    # already-listed file changes nothing, and assertion 1 cannot see it
+    # precisely because it is invisible. Counts move with any new blind spot;
+    # line numbers would churn on every unrelated edit.
+    invisible = dict(
+        sorted(Counter(site.split(":", 1)[0] for site in exempted_statement_sites()).items())
+    )
+    assert invisible == {
+        "app/builderops/ckm/query_service.py": 1,
+        "app/builderops/ckm/semantic.py": 1,
+        "app/builderops/ckm/store.py": 5,
+        "app/builderops/control_plane/store.py": 1,
+        "app/builderops/design_agent_adapters.py": 1,
+        "app/builderops/design_run_governance.py": 1,
+        "app/builderops/model_inquiry_runner.py": 1,
+        "app/builderops/store.py": 1,
+        "app/dispatcher/store.py": 2,
+        "app/dispatcher/verification_dispatch.py": 1,
+        "app/dispatcher/verification_runtime.py": 1,
+    }, (
+        "the statements the separate-plane exemption makes invisible changed:\n  "
+        + "\n  ".join(f"{name}: {count}" for name, count in invisible.items())
+        + "\nIf one went away, lower the count here. If one appeared, either widen the "
         "resolver so the statement is read, or record here why a new blind spot is "
-        "acceptable."
+        "acceptable. An `INSERT INTO store_objects` built this way inside an already-"
+        "listed file is exactly what this count exists to surface."
     )
 
 

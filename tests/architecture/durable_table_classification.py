@@ -166,6 +166,7 @@ class SqlStatement:
     function: str | None
     autocreate_gated: bool
     existence_probed: bool
+    reaches_durable_database: bool
 
 
 class _ModuleResolver:
@@ -186,6 +187,7 @@ class _ModuleResolver:
         for parent in ast.walk(tree):
             for child in ast.iter_child_nodes(parent):
                 self._parent[child] = parent
+        self._literal_line_cache: dict[str, int] | None = None
         self._functions: dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]] = {}
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -385,7 +387,7 @@ class _ModuleResolver:
             return collected
         return None
 
-    def _parameter_bindings(
+    def parameter_bindings(
         self, name: str, func: ast.FunctionDef | ast.AsyncFunctionDef
     ) -> list[tuple[ast.expr, ast.FunctionDef | ast.AsyncFunctionDef | None]] | None:
         """Values passed for parameter ``name`` at same-module call sites.
@@ -481,7 +483,7 @@ class _ModuleResolver:
             if func is not None:
                 for bound in self._function_bindings(node.id, func):
                     values |= self.resolve(bound, func, seen, depth=depth)
-                parameter = self._parameter_bindings(node.id, func)
+                parameter = self.parameter_bindings(node.id, func)
                 if parameter is not None:
                     for bound, caller in parameter:
                         values |= self.resolve(bound, caller, seen, depth=depth)
@@ -620,7 +622,7 @@ class _ModuleResolver:
             for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
                 origins: list[tuple[ast.expr, ast.FunctionDef | ast.AsyncFunctionDef | None]]
                 if isinstance(argument, ast.Name) and func is not None:
-                    passed_in = self._parameter_bindings(argument.id, func)
+                    passed_in = self.parameter_bindings(argument.id, func)
                     origins = list(passed_in) if passed_in else [(argument, func)]
                 else:
                     origins = [(argument, func)]
@@ -640,16 +642,20 @@ class _ModuleResolver:
                             function=origin.name if origin is not None else None,
                             autocreate_gated=self.autocreate_gated(expression, origin),
                             existence_probed=self.existence_probed(expression, origin),
+                            reaches_durable_database=_reaches_durable_database(
+                                relative, self, origin
+                            ),
                         )
 
-    @lru_cache(maxsize=1)
     def _literal_linenos(self) -> Mapping[str, int]:
         """First line of each distinct string literal in this module."""
-        lines: dict[str, int] = {}
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                lines.setdefault(node.value, node.lineno)
-        return lines
+        if self._literal_line_cache is None:
+            lines: dict[str, int] = {}
+            for node in ast.walk(self.tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    lines.setdefault(node.value, node.lineno)
+            self._literal_line_cache = lines
+        return self._literal_line_cache
 
     def autocreate_gated(
         self, node: ast.AST, func: ast.FunctionDef | ast.AsyncFunctionDef | None
@@ -708,22 +714,20 @@ class _ModuleResolver:
     def _reads_the_autocreate_flag(self, called_name: str) -> bool:
         """True when ``called_name`` is a predicate that reads the fixture flag.
 
-        Matching the *name* alone is not enough: a helper called
-        `_vector_autocreate_probe()` that returns `True` unconditionally would
-        mark production DDL as gated. Every real gate in this repository is the
-        same one-liner over ``STORE_SCHEMA_AUTOCREATE``, so the check is that
-        the named function actually reads it.
+        Structural in both directions. Matching the callee's *name* lets
+        `_vector_autocreate_probe()` returning `True` mark production DDL as
+        gated; matching the flag as a *substring* of the function's dump or of
+        the defining module's source lets a docstring or a comment do the same.
+        So the flag must appear as an argument of an environment read —
+        ``os.getenv(...)``, ``os.environ.get(...)`` or ``os.environ[...]`` —
+        inside the named function, with its docstring excluded. All twenty
+        production predicates in this repository are exactly that one-liner.
         """
         if "autocreate" not in called_name.lower():
             return False
-        for node in ast.walk(self.tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if node.name != called_name:
-                continue
-            if _AUTOCREATE_FLAG in ast.dump(node):
+        for function in self._functions.get(called_name, []):
+            if _reads_environment_flag(function):
                 return True
-        # Imported from another module in the same package.
         for node in self.tree.body:
             if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
                 continue
@@ -732,8 +736,11 @@ class _ModuleResolver:
             if not any((alias.asname or alias.name) == called_name for alias in node.names):
                 continue
             source = REPO_ROOT / Path(*node.module.split(".")).with_suffix(".py")
-            if source.exists() and _AUTOCREATE_FLAG in source.read_text(encoding="utf-8"):
-                return True
+            if not source.exists():
+                continue
+            for function in _resolver(source)._functions.get(called_name, []):
+                if _reads_environment_flag(function):
+                    return True
         return False
 
     def existence_probed(
@@ -774,8 +781,46 @@ class _ModuleResolver:
         return loops
 
     def _loop_skips_existing_tables(self, loop: ast.For | ast.AsyncFor, node: ast.AST) -> bool:
-        probes = False
-        for inner in ast.walk(loop):
+        """True when ``node`` runs only for a table the loop found absent.
+
+        Positional and causal, because "somewhere in this loop there is a
+        `to_regclass` and somewhere there is a `continue`" is satisfied by
+        arrangements that reshape an existing table on every boot:
+
+        * the statement placed *before* the `if present: continue` guard;
+        * a probe whose result is discarded plus a `continue` on an unrelated
+          condition (`if table == "never_matches": continue`).
+
+        Both were green under the previous check. So all three facts are pinned
+        to the loop's own statement list, in order:
+
+        1. a probe executing `to_regclass` at some index `p`;
+        2. a guard `if <name>: ... continue` at index `g > p`, whose test is a
+           plain name — a comparison asks a different question than "did the
+           probe find it";
+        3. ``node`` under a statement at index `s > g`.
+
+        Both real seams — `app/stores/pg.py::_ensure_tables` and
+        `app/db/db.py::_run_migration_sql` — are exactly this shape.
+        """
+        body = list(loop.body)
+        probe_at: int | None = None
+        guard_at: int | None = None
+        for index, statement in enumerate(body):
+            if probe_at is None and self._executes_existence_probe(statement):
+                probe_at = index
+                continue
+            if probe_at is not None and guard_at is None and self._is_skip_guard(statement):
+                guard_at = index
+        if probe_at is None or guard_at is None:
+            return False
+        return any(
+            index > guard_at and self._contains(statement, node)
+            for index, statement in enumerate(body)
+        )
+
+    def _executes_existence_probe(self, statement: ast.stmt) -> bool:
+        for inner in ast.walk(statement):
             if not isinstance(inner, ast.Call):
                 continue
             called = inner.func
@@ -794,20 +839,16 @@ class _ModuleResolver:
                     isinstance(text, str) and "to_regclass" in text.lower()
                     for text in self.resolve(argument, enclosing)
                 ):
-                    probes = True
-        if not probes:
-            return False
-        # A skip branch the statement is not itself inside: `if present: continue`.
-        for inner in ast.walk(loop):
-            if not isinstance(inner, ast.If):
-                continue
-            if not any(
-                isinstance(statement, (ast.Continue, ast.Return)) for statement in inner.body
-            ):
-                continue
-            if not self._contains(inner, node):
-                return True
+                    return True
         return False
+
+    @staticmethod
+    def _is_skip_guard(statement: ast.stmt) -> bool:
+        if not isinstance(statement, ast.If):
+            return False
+        if not isinstance(statement.test, (ast.Name, ast.Attribute)):
+            return False
+        return bool(statement.body) and isinstance(statement.body[-1], ast.Continue)
 
     def _contains(self, ancestor: ast.AST, node: ast.AST) -> bool:
         current: ast.AST | None = node
@@ -816,6 +857,33 @@ class _ModuleResolver:
                 return True
             current = self._parent.get(current)
         return False
+
+
+def _reads_environment_flag(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True when ``function`` reads ``STORE_SCHEMA_AUTOCREATE`` from the env."""
+    body = list(function.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]  # the docstring is prose, not a read
+    for statement in body:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Call):
+                called = node.func
+                name = called.attr if isinstance(called, ast.Attribute) else ""
+                if name in {"getenv", "get"} and any(
+                    isinstance(argument, ast.Constant) and argument.value == _AUTOCREATE_FLAG
+                    for argument in node.args
+                ):
+                    return True
+            elif isinstance(node, ast.Subscript):
+                index = node.slice
+                if isinstance(index, ast.Constant) and index.value == _AUTOCREATE_FLAG:
+                    return True
+    return False
 
 
 @lru_cache(maxsize=None)
@@ -887,8 +955,28 @@ def _created_tables(resolver: _ModuleResolver, node: ast.AST, path: Path) -> Ite
     func = resolver.enclosing_function(node)
 
     # `op.create_table("standing_questions", ...)` — the Alembic operation API.
-    if name == "create_table" and node.args:
-        resolved = resolver.resolve(node.args[0], func)
+    # The name may also arrive as a keyword: `op.create_table(table_name=...)`
+    # with no positional argument at all would otherwise fall through to the
+    # `execute` branch and return silently.
+    if name == "create_table":
+        candidates = [
+            *node.args[:1],
+            *(keyword.value for keyword in node.keywords if keyword.arg == "table_name"),
+        ]
+        argument = candidates[0] if candidates else None
+        if argument is None:
+            raise UnresolvedTableExpression(
+                f"{path.name}:{node.lineno} calls create_table() with no table name this gate "
+                "can find, so the table it creates would never enter the classified population."
+            )
+        # The keyword wins when the first positional is a column rather than a
+        # name, which is the shape `op.create_table(sa.Column(...), table_name=...)`
+        # takes.
+        resolved: frozenset[str] = frozenset()
+        for candidate in candidates:
+            resolved = resolver.resolve(candidate, func)
+            if resolved:
+                break
         if not resolved:
             raise UnresolvedTableExpression(
                 f"{path.name}:{node.lineno} calls create_table() with a table name this "
@@ -974,11 +1062,12 @@ def _discover_durable_mutation_paths(tables: frozenset[str]) -> frozenset[Mutati
     for path in _app_modules():
         resolver = _resolver(path)
         for statement in resolver.sql_statements():
-            for verb, table, offset in _statement_matches(statement.text, _MUTATION_VERB_PATTERNS):
+            if not statement.reaches_durable_database:
+                continue
+            for verb, table, _ in _statement_matches(statement.text, _MUTATION_VERB_PATTERNS):
                 normalized = table.strip()
                 if _UNRESOLVED in normalized:
-                    if _in_separate_schema_plane(statement.path):
-                        continue
+                    continue
                     raise UnresolvedTableExpression(
                         f"{statement.path}:{statement.lineno} issues {verb.upper()} against a "
                         "table name this gate cannot resolve statically, so the mutation "
@@ -1011,35 +1100,80 @@ class DdlSeam:
     owned_by_revision_chain: bool
 
 
-@lru_cache(maxsize=None)
-def _is_sqlite_only(path: Path) -> bool:
-    """True when a module talks to SQLite and never to PostgreSQL.
+def _executed_on_sqlite(
+    resolver: "_ModuleResolver", func: ast.FunctionDef | ast.AsyncFunctionDef | None
+) -> bool:
+    """True when the enclosing function opens a SQLite connection itself.
 
-    Derived from the module's own imports rather than from a path list. Four
-    modules under `app/**` create tables the Alembic chain does not own —
-    `app/panel/confirmation.py`, `app/orientation/leave_point_cursor.py`,
-    `app/agent_memory/review_decision_store.py`, `app/builderops/ckm/metrics.py`
-    — and every one of them is a SQLite-backed local store. That is a fact
-    about their imports, so the gate reads it there; a path allowlist would be
-    the same fact written where nothing checks it.
+    A **per-statement** question, not a per-module one. A module-level
+    "imports sqlite3 and not psycopg" rule turns the whole gate off for a file
+    with one extra import line — and `app/panel/confirmation.py` really does
+    import both `sqlite3` and `app.services.outbox`, while
+    `app/heimdal/meeting_ledger.py` carries a SQLite store and a PostgreSQL
+    store side by side with byte-identical table names. Reading the connection
+    the statement is actually executed on separates them; reading imports
+    cannot.
     """
-    tree = _resolver(path).tree
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module)
-    uses_postgres = any(name.split(".")[0] == "psycopg" for name in imports)
-    return "sqlite3" in imports and not uses_postgres
+    if func is None:
+        return False
+    if _opens_sqlite(func):
+        return True
+    # One hop, because the connection is usually a helper:
+    # `app/panel/confirmation.py::_initialize` runs its DDL through
+    # `self._connect()`, which is annotated `-> sqlite3.Connection`.
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call):
+            continue
+        called = node.func
+        name = (
+            called.attr
+            if isinstance(called, ast.Attribute)
+            else called.id
+            if isinstance(called, ast.Name)
+            else ""
+        )
+        for candidate in resolver._functions.get(name, []):
+            if _opens_sqlite(candidate) or _returns_sqlite_connection(candidate):
+                return True
+    return False
 
 
-def _reaches_durable_database(relative_path: str, source: Path | None) -> bool:
+def _opens_sqlite(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call):
+            continue
+        called = node.func
+        if (
+            isinstance(called, ast.Attribute)
+            and called.attr == "connect"
+            and isinstance(called.value, ast.Name)
+            and called.value.id == "sqlite3"
+        ):
+            return True
+    return False
+
+
+def _returns_sqlite_connection(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    annotation = func.returns
+    return (
+        isinstance(annotation, ast.Attribute)
+        and annotation.attr == "Connection"
+        and isinstance(annotation.value, ast.Name)
+        and annotation.value.id == "sqlite3"
+    )
+
+
+def _reaches_durable_database(
+    relative_path: str,
+    resolver: "_ModuleResolver | None" = None,
+    func: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
+) -> bool:
+    """Whether a statement can reach the durable PostgreSQL database."""
     if _in_separate_schema_plane(relative_path):
         return False
-    if source is None:
+    if resolver is None:
         return True
-    return not _is_sqlite_only(source)
+    return not _executed_on_sqlite(resolver, func)
 
 
 def discover_runtime_ddl_seams(tables: Iterable[str]) -> tuple[DdlSeam, ...]:
@@ -1056,9 +1190,9 @@ def discover_runtime_ddl_seams(tables: Iterable[str]) -> tuple[DdlSeam, ...]:
     for path in _app_modules():
         resolver = _resolver(path)
         relative = path.relative_to(REPO_ROOT).as_posix()
-        durable_source = _reaches_durable_database(relative, path)
         for statement in resolver.sql_statements():
-            for verb, table, offset in _statement_matches(statement.text, _DDL_VERB_PATTERNS):
+            durable_source = statement.reaches_durable_database
+            for verb, table, _ in _statement_matches(statement.text, _DDL_VERB_PATTERNS):
                 normalized = table.strip()
                 if _UNRESOLVED in normalized:
                     if not durable_source:
@@ -1083,7 +1217,7 @@ def discover_runtime_ddl_seams(tables: Iterable[str]) -> tuple[DdlSeam, ...]:
     for path in sorted(APP_ROOT.rglob("*.sql")):
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(REPO_ROOT).as_posix()
-        durable_source = _reaches_durable_database(relative, None)
+        durable_source = _reaches_durable_database(relative)
         for verb, table, offset in _statement_matches(text, _DDL_VERB_PATTERNS):
             normalized = table.strip()
             seams.append(
@@ -1308,8 +1442,6 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
     sites: list[str] = []
     for path in _app_modules():
         relative = path.relative_to(REPO_ROOT).as_posix()
-        if _reaches_durable_database(relative, path) is not durable_source:
-            continue
         resolver = _resolver(path)
         source = path.read_text(encoding="utf-8")
         for node in ast.walk(resolver.tree):
@@ -1326,11 +1458,13 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
             if name not in {"execute", "executemany", "_exec", "execute_values"}:
                 continue
             func = resolver.enclosing_function(node)
+            if _reaches_durable_database(relative, resolver, func) is not durable_source:
+                continue
             resolved = False
             for argument in [*node.args, *(keyword.value for keyword in node.keywords)]:
                 origins: list[tuple[ast.expr, ast.FunctionDef | ast.AsyncFunctionDef | None]]
                 if isinstance(argument, ast.Name) and func is not None:
-                    passed_in = resolver._parameter_bindings(argument.id, func)
+                    passed_in = resolver.parameter_bindings(argument.id, func)
                     origins = list(passed_in) if passed_in else [(argument, func)]
                 else:
                     origins = [(argument, func)]
