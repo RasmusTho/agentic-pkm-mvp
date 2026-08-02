@@ -1263,3 +1263,57 @@ def test_cli_rejects_an_unowned_path() -> None:
     assert result.returncode == 2
     assert "subsystems=unowned" in result.stdout
     assert "unowned_paths=app/new_surface/example.py" in result.stdout
+
+
+def test_agent_surface_combinations_never_resolve_unowned() -> None:
+    """#4335: the whole {AGENTS.md, CLAUDE.md, .codex/**, docs/**} surface #4330
+    widened `ci-smoke.yaml`'s `code` paths-filter for must never fall through
+    every SUBSYSTEMS prefix into `unowned` (exit 2), no matter how its members
+    are combined on one PR."""
+    import itertools
+
+    universe = (
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".codex/AGENTS.md",
+        ".codex/skills/x/SKILL.md",
+        ".codex/agents/reviewer.toml",
+        ".codex/config.toml",
+        "docs/STATUS.md",
+        "docs/ARCHITECTURE.md",
+        "README.md",
+    )
+
+    for size in (1, 2, 3):
+        for combo in itertools.combinations(universe, size):
+            selection = select_tests(list(combo))
+            assert selection.subsystems != ("unowned",), combo
+            assert selection.unowned_paths == (), combo
+            assert selection.full_suite is False, combo
+
+
+def test_claude_md_is_symmetric_with_agents_md_in_governance_only() -> None:
+    agents_only = select_tests(["AGENTS.md"])
+    agents_and_claude = select_tests(["AGENTS.md", "CLAUDE.md"])
+
+    assert agents_only.subsystems == ("governance",)
+    assert agents_and_claude.subsystems == ("governance",)
+    assert agents_and_claude.reason == "governance-only PR"
+
+
+def test_docs_only_lane_selects_tests_governance() -> None:
+    selection = select_tests(["docs/ARCHITECTURE.md"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("docs",)
+    assert "tests/governance" in selection.targets
+
+
+def test_docs_plus_tests_governance_does_not_narrow_mixed_pr() -> None:
+    selection = select_tests(
+        ["docs/ARCHITECTURE.md", "tests/governance/test_project_pickup_deprecation.py"]
+    )
+
+    assert selection.full_suite is False
+    assert "builder_system" in selection.subsystems
+    assert "tests/governance/test_project_pickup_deprecation.py" in selection.targets
