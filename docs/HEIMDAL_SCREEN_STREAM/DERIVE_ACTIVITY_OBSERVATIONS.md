@@ -43,11 +43,23 @@ the span boundaries the event motor needs.
    **Declared egress posture (HEIM-12), delivered:** this stage declares **zero raw egress** — raw-class
    evidence (`screen_frame`) never leaves the host trust boundary, and the stage's only model destination
    is the host-local vision model. The declaration is structured and machine-checkable
-   (`app/heimdal/screen_derivation.py :: DECLARED_EGRESS`), not prose: `resolve_derivation_route` refuses
-   to compile a route at all when the census claims this task kind as paid-eligible or when the resolved
-   provider is not `tier: local`, so the refusal lands before a single frame is read. Enforced by
-   `tests/invariants/test_heimdal_seam.py::test_declared_egress`, the §8-reserved home HEIM-12's static
-   half now graduates into.
+   (`app/heimdal/screen_derivation.py :: DECLARED_EGRESS`), not prose, and it is enforced on **both**
+   halves of the seam:
+
+   - *the provider*: `resolve_derivation_route` refuses to compile a route at all when the census claims
+     this task kind as paid-eligible or when the resolved provider is not `tier: local`, so the refusal
+     lands before a single frame is read;
+   - *the destination*: a census entry proves a provider **name** is local, never that the socket a
+     decrypted frame is about to be written to is on this machine. `resolve_local_vision_endpoint`
+     closes that half — the endpoint must be loopback, or a hostname the operator explicitly declared
+     host-local in `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS` (the container-network case), or the
+     derivation is refused before the frame is attached to any request. The request also runs with
+     `trust_env` disabled so an ambient `HTTP_PROXY` cannot carry a loopback-addressed frame off the
+     host.
+
+   Enforced by `tests/invariants/test_heimdal_seam.py::test_declared_egress`, the §8-reserved home
+   HEIM-12's static half now graduates into, plus
+   `tests/heimdal/test_screen_derivation_routing.py::test_raw_frames_refuse_a_destination_that_is_not_host_local`.
 4. **Coalesce into spans (INV-SCREEN-E).** Consecutive frames whose activity is unchanged collapse into
    one span observation with real `observed_at_start`/`observed_at_end` duration. A span boundary is
    created on **any** dimension shift — frontmost app, window/document, scope, or derived-goal change —

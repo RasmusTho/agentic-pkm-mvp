@@ -16,6 +16,7 @@ isolation:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, List
 
 import pytest
@@ -125,6 +126,68 @@ def test_screen_derivation_is_paid_ineligible_and_reads_raw_gated(
     assert len(all_raw_read_receipts()) == 1
 
 
+def test_raw_frames_refuse_a_destination_that_is_not_host_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production egress path: the census proves a name, this proves a socket.
+
+    A `tier: local` census entry says nothing about where `OLLAMA_BASE_URL`
+    actually points. Success path: a loopback endpoint (and an explicitly
+    operator-declared host-local one) is accepted. Negative path: a remote
+    endpoint is refused *and no request is issued* -- the frame is never
+    transmitted, so `DECLARED_EGRESS[raw_class_egress] is False` stays true.
+    """
+    posts: List[Any] = []
+
+    def spy_post(endpoint: str, body: Any) -> str:
+        posts.append(endpoint)
+        return '{"summary": "Editing a note", "goal": "write", "confidence": 0.5}'
+
+    monkeypatch.setattr(screen_derivation, "_post_local_vision", spy_post)
+    for variable in ("OLLAMA_HOST", "OLLAMA_URL"):
+        monkeypatch.delenv(variable, raising=False)
+
+    # --- negative path: a remote destination is refused before any transmission
+    monkeypatch.setenv("OLLAMA_BASE_URL", "https://vision.example.com")
+    monkeypatch.delenv(screen_derivation.HOST_LOCAL_VISION_ALLOWLIST_ENV, raising=False)
+    with pytest.raises(screen_derivation.RawEgressRefusedError, match="vision.example.com"):
+        derive_activity_observations(
+            [land_frame(frame="frame-remote", observed_at="2026-07-11T10:10:00Z")],
+            episode_id="screen-session-egress",
+            key=RAW_STORE_KEY,
+        )
+    assert posts == [], "a frame was transmitted to a non-host-local destination"
+    assert count_observations() == 0
+
+    # --- success path: loopback is accepted and reaches the local model
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    tick = derive_activity_observations(
+        [land_frame(frame="frame-loopback", observed_at="2026-07-11T10:11:00Z")],
+        episode_id="screen-session-egress",
+        key=RAW_STORE_KEY,
+    )
+    assert tick.observations_published == 1
+    assert posts == ["http://127.0.0.1:11434"]
+
+    # --- completeness: a container-network host is host-local only when declared
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
+    with pytest.raises(screen_derivation.RawEgressRefusedError):
+        screen_derivation.resolve_local_vision_endpoint()
+    monkeypatch.setenv(screen_derivation.HOST_LOCAL_VISION_ALLOWLIST_ENV, "ollama")
+    assert screen_derivation.resolve_local_vision_endpoint() == "http://ollama:11434"
+
+
+def test_local_vision_request_ignores_ambient_proxy_configuration() -> None:
+    """A validated loopback address must not be re-routed by an ambient proxy.
+
+    `requests` honours HTTP_PROXY/HTTPS_PROXY/ALL_PROXY by default, which would
+    carry a loopback-addressed raw frame off the host after the address itself
+    was proven host-local. The session must disable `trust_env`.
+    """
+    source = Path(screen_derivation.__file__).read_text(encoding="utf-8")
+    assert "session.trust_env = False" in source
+
+
 def test_derivation_module_has_no_paid_provider_code_path() -> None:
     """Completeness: the stage cannot degrade into a cloud route.
 
@@ -132,8 +195,6 @@ def test_derivation_module_has_no_paid_provider_code_path() -> None:
     to silently fall into" posture -- the module names no paid provider and
     reaches no generic, env-routed LLM dispatcher.
     """
-    source = screen_derivation.__file__
-    with open(source, "r", encoding="utf-8") as handle:
-        text = handle.read()
+    text = Path(screen_derivation.__file__).read_text(encoding="utf-8")
     for forbidden in ("openai", "anthropic", "deepseek", "app.llm.adapter", "app.services.llm"):
         assert forbidden not in text, f"screen derivation must not reference {forbidden}"

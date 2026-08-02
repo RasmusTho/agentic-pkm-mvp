@@ -23,12 +23,24 @@ What this module owns (issue Acceptance Criteria):
   path in this module to degrade into -- that is the structural off-switch for
   the raw-pixel egress seam, and it is declared here as
   :data:`DECLARED_EGRESS` (HEIM-12: zero raw-class egress).
+- **The destination is validated, not just the provider name.** A census entry
+  proves a provider *name* is local; it cannot prove that the socket a
+  decrypted frame is about to be written to is on this machine.
+  :func:`resolve_local_vision_endpoint` closes that half: the resolved endpoint
+  must be loopback, or a hostname the operator explicitly declared host-local
+  (:data:`HOST_LOCAL_VISION_ALLOWLIST_ENV`), or the derivation is refused
+  (:class:`RawEgressRefusedError`) before the frame is attached to any request.
+  The request also runs with ``trust_env`` disabled, so an ambient proxy cannot
+  carry a loopback-addressed frame off the host.
 - **Span coalescing (INV-SCREEN-E).** Consecutive frames whose activity is
   unchanged collapse into one span observation with a real
   ``observed_at_start``/``observed_at_end``. A boundary is created on **any**
-  dimension shift -- frontmost app, window/document, capture scope, or derived
-  goal. Over-segmentation is the preferred direction: a spurious boundary is a
-  cheap downstream re-cut, a lost one is unrecoverable.
+  dimension shift -- frontmost app, window/document, capture scope, derived
+  goal, or an axis a context provider declares itself. Unknown never equals
+  unknown: an empty dimension forces a boundary rather than merging. Frames out
+  of capture order force a boundary too. Over-segmentation is the preferred
+  direction: a spurious boundary is a cheap downstream re-cut, a lost one is
+  unrecoverable.
 - **Provenance stamped in the same write, or no write (INV-SCREEN-B).** A span
   that derived text but cannot stamp complete provenance (machine-bearing
   sensor, capture chain, content identity from the read receipt, observed-at
@@ -56,9 +68,10 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 from app.components.settings.providers_loader import ProviderCensus, load_provider_census
 from app.heimdal.publish import assemble_observation_payload, publish_full_observation
@@ -147,6 +160,14 @@ class ScreenFrameUndecodableError(ValueError):
     """Raised when a gated read does not yield a decodable screen frame bundle."""
 
 
+class ContextDimensionConflictError(ValueError):
+    """Raised when two context providers claim the same segmenter dimension.
+
+    Silent last-writer-wins here would move a span boundary invisibly, so the
+    ambiguity is refused instead of resolved by registration order.
+    """
+
+
 @dataclass(frozen=True)
 class DerivationRoute:
     """The compiled model route for one derivation tick."""
@@ -173,6 +194,10 @@ class ScreenFrame:
     capture_chain: Tuple[str, ...]
     consent: Mapping[str, Any]
     scope_hint: Optional[str] = None
+    #: Which clock ``observed_at`` came from. ``inferred`` when the capture
+    #: carried no device clock and ingest time stood in for it -- timing
+    #: uncertainty is stated, never silently faked (HEIM-10).
+    clock_basis: str = "device_metadata"
 
 
 @dataclass(frozen=True)
@@ -222,7 +247,6 @@ class ScreenDerivationTick:
     observations_published: int
     coalesced: int
     spans: Tuple[ActivitySpan, ...]
-    raw_egress: str = "none"
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +305,78 @@ def resolve_derivation_route(*, census: Optional[ProviderCensus] = None) -> Deri
 
 
 # ---------------------------------------------------------------------------
+# Egress destination -- the other half of the local-only guarantee
+# ---------------------------------------------------------------------------
+
+#: Addresses that are host-local by construction.
+_LOOPBACK_HOSTNAMES = frozenset({"127.0.0.1", "::1", "localhost", "localhost.localdomain"})
+
+#: Operator declaration that a named, non-loopback endpoint is still inside the
+#: host trust boundary -- the container-network case (`http://ollama:11434` in
+#: this repo's own compose files). Comma-separated hostnames. Empty/unset means
+#: loopback only; this never widens silently, exactly like
+#: ``HEIMDAL_RAW_READ_ALLOWLIST``.
+HOST_LOCAL_VISION_ALLOWLIST_ENV = "HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS"
+
+
+class RawEgressRefusedError(RuntimeError):
+    """Raised when the resolved vision endpoint is not provably host-local.
+
+    HEIM-12 / :data:`DECLARED_EGRESS`: raw-class evidence never leaves the host
+    trust boundary. The provider census proves a provider *name* is
+    ``tier: local``; it cannot prove that the socket the stage is about to send
+    a decrypted frame to is on this machine. This is that second check, and it
+    fails closed -- refused before the frame is attached to any request.
+    """
+
+
+def _declared_host_local_hostnames() -> frozenset:
+    raw = os.getenv(HOST_LOCAL_VISION_ALLOWLIST_ENV, "")
+    return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+
+
+def resolve_local_vision_endpoint() -> str:
+    """Resolve the local vision endpoint, refusing any non-host-local destination.
+
+    Reads only the Ollama-specific host variables -- deliberately not the
+    generic runtime chat env, which is provider-routable and could resolve to a
+    remote provider. The resolved address must then be loopback, or a hostname
+    the operator explicitly declared host-local via
+    :data:`HOST_LOCAL_VISION_ALLOWLIST_ENV`. Anything else raises
+    :class:`RawEgressRefusedError` before a frame is transmitted.
+    """
+    host = (
+        os.getenv("OLLAMA_BASE_URL", "").strip()
+        or os.getenv("OLLAMA_HOST", "").strip()
+        or os.getenv("OLLAMA_URL", "").strip()
+    )
+    if not host:
+        raise LocalVisionUnavailableError(
+            "No local model host configured (OLLAMA_BASE_URL, OLLAMA_HOST, or OLLAMA_URL). "
+            "Screen derivation is local-only -- there is no remote fallback; the frames stay "
+            "buffered until the local vision model is available."
+        )
+
+    candidate = host if "://" in host else f"http://{host}"
+    hostname = (urlparse(candidate).hostname or "").strip().lower()
+    if not hostname:
+        raise RawEgressRefusedError(
+            f"Refusing to derive: vision endpoint {host!r} names no resolvable host, so it "
+            "cannot be proven host-local (HEIM-12). No frame was transmitted."
+        )
+    if hostname in _LOOPBACK_HOSTNAMES or hostname in _declared_host_local_hostnames():
+        return host
+
+    raise RawEgressRefusedError(
+        f"Refusing to derive: vision endpoint host {hostname!r} is not loopback and is not "
+        f"declared host-local in {HOST_LOCAL_VISION_ALLOWLIST_ENV}. Raw screen frames never "
+        "leave the host trust boundary (HEIM-12, DECLARED_EGRESS raw_class_egress=false). "
+        "No frame was transmitted. Point the stage at a host-local model, or declare the "
+        "endpoint host-local explicitly if it really is inside this machine's boundary."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Frames
 # ---------------------------------------------------------------------------
 
@@ -294,20 +390,28 @@ def screen_frame_from_raw_record(record: Any, *, observed_at: Optional[str] = No
     dependency on the raw layer: the gate. ``observed_at`` defaults to the
     record's ingest time when the capture did not carry a device clock.
     """
-    resolved_observed_at = observed_at or _iso_utc(record.ingested_at)
     return ScreenFrame(
         raw_ref=raw_ref_for(record),
-        observed_at=resolved_observed_at,
+        observed_at=observed_at or _iso_utc(record.ingested_at),
         sensor=dict(record.sensor or {}),
         capture_chain=tuple(record.capture_chain or ()),
         consent=dict(record.consent or {}),
         scope_hint=str((record.payload or {}).get("scope") or "") or None,
+        clock_basis="device_metadata" if observed_at else "inferred",
     )
 
 
 def _iso_utc(value: Any) -> str:
     moment = value.astimezone(timezone.utc)
     return moment.isoformat().replace("+00:00", "Z")
+
+
+def _as_moment(value: str) -> Optional[datetime]:
+    """Parse an observed-at stamp, or None when it is not a parseable instant."""
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _decode_frame_bundle(plaintext: bytes) -> Mapping[str, Any]:
@@ -342,13 +446,29 @@ def _decode_frame_bundle(plaintext: bytes) -> Mapping[str, Any]:
 def _merge_contributions(
     contributions: Sequence[ContextContribution],
 ) -> Tuple[Tuple[str, ...], List[Dict[str, Any]], Dict[str, str]]:
+    """Fold every provider's contribution, refusing a silent dimension overwrite.
+
+    Last-writer-wins on the segmenter dimensions would let a second provider
+    overwrite provider #1's axis and merge a real boundary away (INV-SCREEN-E,
+    the unrecoverable direction), so a collision is a loud error rather than a
+    quiet reassignment.
+    """
     facts: List[str] = []
     mentions: List[Dict[str, Any]] = []
     dimensions: Dict[str, str] = {}
+    claimed_by: Dict[str, str] = {}
     for contribution in contributions:
         facts.extend(contribution.facts)
         mentions.extend(dict(mention) for mention in contribution.mentions)
-        dimensions.update({key: str(value) for key, value in contribution.dimensions.items()})
+        for key, value in contribution.dimensions.items():
+            if key in claimed_by:
+                raise ContextDimensionConflictError(
+                    f"Context provider {contribution.provider!r} sets segmenter dimension "
+                    f"{key!r}, which {claimed_by[key]!r} already set. Two providers cannot own "
+                    "one dimension: the later write would silently move a span boundary."
+                )
+            claimed_by[key] = contribution.provider
+            dimensions[key] = str(value)
     return tuple(facts), mentions, dimensions
 
 
@@ -387,31 +507,18 @@ def _invoke_local_vision(
                 f"Local vision (injected runner) failed for model {request.model!r}: {exc}"
             ) from exc
 
-    host = (
-        os.getenv("OLLAMA_BASE_URL", "").strip()
-        or os.getenv("OLLAMA_HOST", "").strip()
-        or os.getenv("OLLAMA_URL", "").strip()
-    )
-    if not host:
-        raise LocalVisionUnavailableError(
-            "No local model host configured (OLLAMA_BASE_URL, OLLAMA_HOST, or OLLAMA_URL). "
-            "Screen derivation is local-only -- there is no remote fallback; the frames stay "
-            "buffered until the local vision model is available."
-        )
+    # Resolve AND validate the destination before the frame is touched: the
+    # census proves a provider *name* is local, it cannot prove a socket is.
+    endpoint = resolve_local_vision_endpoint()
 
+    message: Dict[str, Any] = {"role": "user", "content": request.prompt}
+    if request.image:
+        message["images"] = [request.image]
     try:
-        import requests  # type: ignore[import-untyped]
-
-        message: Dict[str, Any] = {"role": "user", "content": request.prompt}
-        if request.image:
-            message["images"] = [request.image]
-        response = requests.post(
-            host.rstrip("/") + "/api/chat",
-            json={"model": request.model, "messages": [message], "stream": False},
-            timeout=float(os.getenv("HEIMDAL_SCREEN_VISION_TIMEOUT", "120")),
+        content = _post_local_vision(
+            endpoint,
+            {"model": request.model, "messages": [message], "stream": False},
         )
-        response.raise_for_status()
-        content = response.json()["message"]["content"]
     except Exception as exc:
         raise LocalVisionUnavailableError(
             f"Local vision model {request.model!r} failed on the host: {exc}. Screen derivation "
@@ -419,6 +526,32 @@ def _invoke_local_vision(
         ) from exc
 
     return _parse_vision_content(content)
+
+
+def _post_local_vision(endpoint: str, body: Mapping[str, Any]) -> Any:
+    """POST one already-validated host-local vision request.
+
+    ``trust_env`` is disabled deliberately: `requests` otherwise honours
+    ``HTTP_PROXY``/``HTTPS_PROXY``/``ALL_PROXY`` from the environment, which
+    would let an ambient proxy carry a loopback-addressed raw frame off the
+    host after :func:`resolve_local_vision_endpoint` proved the address itself
+    host-local. Validating the address and then handing the request to an
+    env-configurable proxy would defeat the whole guarantee.
+    """
+    import requests  # type: ignore[import-untyped]
+
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.post(
+            endpoint.rstrip("/") + "/api/chat",
+            json=dict(body),
+            timeout=float(os.getenv("HEIMDAL_SCREEN_VISION_TIMEOUT", "120")),
+        )
+        response.raise_for_status()
+        return response.json()["message"]["content"]
+    finally:
+        session.close()
 
 
 def _parse_vision_content(content: Any) -> Mapping[str, Any]:
@@ -538,17 +671,19 @@ def _render_content(span: ActivitySpan) -> str:
     return "\n".join(lines)
 
 
-def _observation_id(episode_id: str, span: ActivitySpan, content: str) -> str:
+def _observation_id(episode_id: str, span: ActivitySpan) -> str:
+    """Identity of one span, derived from the EVIDENCE it covers.
+
+    Deliberately not derived from the model's text: a local vision model
+    rewording its summary by one token on replay would otherwise mint a new,
+    unlinked identity and append a duplicate observation for the same frames
+    (double-counted time-spend downstream). Keyed on the covered frames'
+    content identities, a replay lands on the same ``observation_id``, so
+    differing model text becomes a genuine revision through the
+    ``stage_versions`` fingerprint instead of a second unrelated row.
+    """
     digest = hashlib.sha256(
-        "|".join(
-            [
-                episode_id,
-                span.observed_at_start,
-                span.observed_at_end,
-                json.dumps(dict(span.dimensions), sort_keys=True),
-                content,
-            ]
-        ).encode("utf-8")
+        "|".join([episode_id, *span.content_identities]).encode("utf-8")
     ).hexdigest()
     return f"screen-obs-{digest[:32]}"
 
@@ -589,13 +724,20 @@ def _assert_complete_provenance(provenance: Mapping[str, Any], span: ActivitySpa
         raise UnprovenancedObservationError(
             "Refusing to publish: the observed-at window is incomplete."
         )
+    start = _as_moment(span.observed_at_start)
+    end = _as_moment(span.observed_at_end)
+    if start is not None and end is not None and end < start:
+        raise UnprovenancedObservationError(
+            f"Refusing to publish: the observed-at window runs backwards "
+            f"({span.observed_at_start} -> {span.observed_at_end}). A span cannot end before "
+            "it began (HEIM-10 bitemporal honesty)."
+        )
 
 
 def _publish_span(
     span: ActivitySpan,
     *,
     episode_id: str,
-    sequence: int,
     route: DerivationRoute,
 ) -> bool:
     content = _render_content(span)
@@ -617,12 +759,18 @@ def _publish_span(
         if isinstance(mention.get("confidence"), (int, float))
     ]
     payload = assemble_observation_payload(
-        observation_id=_observation_id(episode_id, span, content),
+        observation_id=_observation_id(episode_id, span),
         episode_id=episode_id,
         observed_at_start=span.observed_at_start,
         observed_at_end=span.observed_at_end,
-        clock_basis="device_metadata",
-        sequence=sequence,
+        clock_basis=span.frame.clock_basis,
+        # Deliberately unset: the schema documents `sequence` as monotone
+        # WITHIN THE EPISODE, and this stage only ever sees one tick's batch.
+        # A tick-local counter would be a false claim, and because it is folded
+        # into the publish fingerprint it would also make a replayed span at a
+        # different batch index derive a fresh idempotency key and duplicate the
+        # row -- the exact failure the idempotency key exists to prevent.
+        sequence=None,
         attributions=[
             {
                 "mention_id": "operator",
@@ -727,8 +875,43 @@ class _OpenSpan:
         )
 
 
-def _span_key(dimensions: Mapping[str, str]) -> Tuple[str, ...]:
-    return tuple(str(dimensions.get(name, "")) for name in SPAN_DIMENSIONS)
+def _span_key(dimensions: Mapping[str, str]) -> Tuple[Tuple[str, str], ...]:
+    """Key a span on EVERY contributed dimension, not just the four built-ins.
+
+    A provider that declares an axis of its own (the registry explicitly invites
+    this) must be able to cut a span; ignoring its dimension would merge a real
+    boundary away. Extra dimensions can only ever add boundaries, which is the
+    preferred direction.
+    """
+    return tuple(sorted((str(key), str(value)) for key, value in dimensions.items()))
+
+
+def _coalesces_into(previous: Mapping[str, str], current: Mapping[str, str]) -> bool:
+    """Whether ``current`` continues ``previous``'s activity.
+
+    Unknown is never equal to unknown: if any dimension is empty on either side
+    (a client without Accessibility permission reports no window title; a failed
+    frontmost-app lookup reports no app; a model that names no goal), the frames
+    are NOT merged. Missing metadata degrades to over-segmentation -- a cheap
+    downstream re-cut -- never to one observation claiming a single activity
+    across an arbitrarily long window.
+    """
+    if _span_key(previous) != _span_key(current):
+        return False
+    return all(str(value).strip() for value in current.values())
+
+
+def _runs_backwards(open_end: str, candidate: str) -> bool:
+    """Whether extending a span with ``candidate`` would invert its window.
+
+    Frames are expected in capture order; an out-of-order frame forces a
+    boundary instead of publishing a span that ends before it began.
+    """
+    end = _as_moment(open_end)
+    moment = _as_moment(candidate)
+    if end is None or moment is None:
+        return False
+    return moment < end
 
 
 def derive_activity_observations(
@@ -759,7 +942,6 @@ def derive_activity_observations(
     spans: List[ActivitySpan] = []
     published = 0
     coalesced = 0
-    sequence = 0
     open_span: Optional[_OpenSpan] = None
 
     for frame in frames:
@@ -769,15 +951,18 @@ def derive_activity_observations(
             key=key,
             vision_runner=vision_runner,
         )
-        if open_span is not None and _span_key(open_span.dimensions) == _span_key(dimensions):
+        if (
+            open_span is not None
+            and _coalesces_into(open_span.dimensions, dimensions)
+            and not _runs_backwards(open_span.observed_at_end, frame.observed_at)
+        ):
             open_span.extend(frame, content_identity)
             coalesced += 1
             continue
         if open_span is not None:
             span = open_span.close()
             spans.append(span)
-            published += int(_publish_span(span, episode_id=episode_id, sequence=sequence, route=route))
-            sequence += 1
+            published += int(_publish_span(span, episode_id=episode_id, route=route))
         open_span = _OpenSpan(
             frame=frame,
             dimensions=dimensions,
@@ -790,7 +975,7 @@ def derive_activity_observations(
     if open_span is not None:
         span = open_span.close()
         spans.append(span)
-        published += int(_publish_span(span, episode_id=episode_id, sequence=sequence, route=route))
+        published += int(_publish_span(span, episode_id=episode_id, route=route))
 
     return ScreenDerivationTick(
         route=route,
@@ -803,7 +988,11 @@ def derive_activity_observations(
 
 __all__ = [
     "ActivitySpan",
+    "ContextDimensionConflictError",
     "DECLARED_EGRESS",
+    "HOST_LOCAL_VISION_ALLOWLIST_ENV",
+    "RawEgressRefusedError",
+    "resolve_local_vision_endpoint",
     "DerivationRoute",
     "DerivedActivity",
     "ENGINE_VERSION",

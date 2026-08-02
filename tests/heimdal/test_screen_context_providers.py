@@ -24,7 +24,10 @@ from app.heimdal.screen_context_providers import (
     registered_context_providers,
     unregister_context_provider,
 )
-from app.heimdal.screen_derivation import derive_activity_observations
+from app.heimdal.screen_derivation import (
+    ContextDimensionConflictError,
+    derive_activity_observations,
+)
 from tests.heimdal._screen_derivation_fixtures import (
     RAW_STORE_KEY,
     land_frame,
@@ -109,6 +112,29 @@ def test_provider_registry_extensible() -> None:
 
     unregister_context_provider("git_branch")
     assert [name for name, _ in registered_context_providers()] == [FRONTMOST_APP_PROVIDER]
+
+
+def test_two_providers_cannot_claim_one_segmenter_dimension() -> None:
+    """A provider must not silently overwrite another's span dimension.
+
+    Last-writer-wins on `app`/`window`/`scope` would let a second provider move
+    a span boundary invisibly (INV-SCREEN-E, the unrecoverable direction), so
+    the collision is refused at derivation time rather than resolved by
+    registration order.
+    """
+
+    def shadow_provider(context: FrameContext) -> ContextContribution:
+        return ContextContribution(provider="shadow", dimensions={"app": "CONSTANT"})
+
+    register_context_provider("shadow", shadow_provider)
+    frame = land_frame(frame="providers-conflict", observed_at="2026-07-11T13:03:00Z")
+    with pytest.raises(ContextDimensionConflictError, match="app"):
+        derive_activity_observations(
+            [frame],
+            episode_id="screen-session-providers",
+            vision_runner=stub_vision_runner(),
+            key=RAW_STORE_KEY,
+        )
 
 
 def test_frontmost_app_provider_supplies_the_segmenter_dimensions() -> None:

@@ -62,13 +62,27 @@ def test_declared_egress() -> None:
     assert "zero raw egress" in doc
 
 
-def test_declared_egress_matches_the_stage_module_posture() -> None:
-    """Completeness: the declaration is not a decorative constant.
+def test_declared_egress_matches_the_stage_module_posture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Completeness: the declaration is enforced against the actual destination.
 
-    The stage's only model destination is the local route it compiles, and the
-    module carries no second, undeclared destination.
+    `raw_class_egress: False` is only true if the endpoint the stage would
+    write a decrypted frame to is provably on this host. A census entry names a
+    provider; it cannot name a socket. This asserts the second check exists and
+    fails closed, so the constant is backed by enforcement rather than intent.
     """
-    assert screen_derivation.LOCAL_VISION_PROVIDER == "ollama"
     census = load_provider_census()
     assert census.provider(screen_derivation.LOCAL_VISION_PROVIDER).tier == "local"
     assert DECLARED_EGRESS["raw_classes"] == ("screen_frame",)
+
+    for variable in ("OLLAMA_HOST", "OLLAMA_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv(screen_derivation.HOST_LOCAL_VISION_ALLOWLIST_ENV, raising=False)
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    assert screen_derivation.resolve_local_vision_endpoint() == "http://localhost:11434"
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "https://vision.example.com")
+    with pytest.raises(screen_derivation.RawEgressRefusedError):
+        screen_derivation.resolve_local_vision_endpoint()

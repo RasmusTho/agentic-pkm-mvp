@@ -15,6 +15,11 @@ from typing import Any, Dict, List
 import pytest
 
 from app.heimdal.observation_log import read_observations_from
+from app.heimdal.screen_context_providers import (
+    ContextContribution,
+    FrameContext,
+    register_context_provider,
+)
 from app.heimdal.screen_derivation import derive_activity_observations
 from tests.heimdal._screen_derivation_fixtures import (
     RAW_STORE_KEY,
@@ -131,3 +136,57 @@ def test_span_boundaries_survive_on_dimension_shift(monkeypatch: pytest.MonkeyPa
         assert (
             shift_spans[0]["dimensions"][dimension] != shift_spans[1]["dimensions"][dimension]
         ), f"{dimension} was not recorded as the shifted dimension"
+
+    # --- a provider's own declared axis also cuts a span
+    reset_screen_derivation_state(monkeypatch)
+    documents = iter(["doc-a", "doc-b"])
+
+    def document_provider(context: FrameContext) -> ContextContribution:
+        return ContextContribution(
+            provider="document",
+            facts=(),
+            mentions=(),
+            dimensions={"document_id": next(documents)},
+        )
+
+    register_context_provider("document", document_provider)
+    provider_tick = derive_activity_observations(
+        [
+            land_frame(frame="doc-1", observed_at="2026-07-11T14:00:00Z"),
+            land_frame(frame="doc-2", observed_at="2026-07-11T14:01:00Z"),
+        ],
+        episode_id="screen-session-provider-axis",
+        vision_runner=_goal_runner(["same goal", "same goal"]),
+        key=RAW_STORE_KEY,
+    )
+    assert provider_tick.coalesced == 0, "a provider-declared dimension shift was merged away"
+    assert provider_tick.observations_published == 2
+
+    # --- unknown never equals unknown: missing metadata over-segments
+    reset_screen_derivation_state(monkeypatch)
+    blind_tick = derive_activity_observations(
+        [
+            land_frame(frame="blind-1", observed_at="2026-07-11T15:00:00Z", window=""),
+            land_frame(frame="blind-2", observed_at="2026-07-11T15:01:00Z", window=""),
+        ],
+        episode_id="screen-session-blind",
+        vision_runner=_goal_runner(["same goal", "same goal"]),
+        key=RAW_STORE_KEY,
+    )
+    assert blind_tick.coalesced == 0, "frames with an unknown dimension were merged as identical"
+    assert blind_tick.observations_published == 2
+
+    # --- an out-of-order frame forces a boundary, never an inverted window
+    reset_screen_derivation_state(monkeypatch)
+    backwards_tick = derive_activity_observations(
+        [
+            land_frame(frame="back-1", observed_at="2026-07-11T16:05:00Z"),
+            land_frame(frame="back-2", observed_at="2026-07-11T16:00:00Z"),
+        ],
+        episode_id="screen-session-backwards",
+        vision_runner=_goal_runner(["same goal", "same goal"]),
+        key=RAW_STORE_KEY,
+    )
+    assert backwards_tick.coalesced == 0
+    for span in _spans():
+        assert span["start"] <= span["end"], "published a span that ends before it begins"

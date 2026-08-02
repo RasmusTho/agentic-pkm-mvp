@@ -73,7 +73,6 @@ def test_bundle_derives_and_publishes_observation(monkeypatch: pytest.MonkeyPatc
     assert tick.observations_published == 1
     assert tick.route.task_kind == "heimdal.screen_derivation"
     assert tick.route.paid_eligible is False
-    assert tick.raw_egress == "none"
 
     # The one publish went through the governed, schema-validating seam.
     assert len(publishes) == 1
@@ -126,6 +125,21 @@ def test_bundle_derives_and_publishes_observation(monkeypatch: pytest.MonkeyPatc
     )
     assert replay.observations_published == 0
     assert count_observations() == 1
+
+    # And the identity is anchored to the EVIDENCE, not to the model's wording:
+    # a replay whose local model rewords the summary must land on the same
+    # observation_id (a revision of the same frames), never a second unlinked
+    # observation that would double-count this activity downstream.
+    original_id = _payloads()[0]["observation_id"]
+    reworded = derive_activity_observations(
+        [frame],
+        episode_id="screen-session-1",
+        vision_runner=stub_vision_runner(summary="Writing in Obsidian, different wording"),
+        key=RAW_STORE_KEY,
+    )
+    assert reworded.observations_published == 1
+    ids = {payload["observation_id"] for payload in _payloads()}
+    assert ids == {original_id}, "replayed span must keep one evidence-derived identity"
 
 
 def test_unprovenanced_observation_refuses_publish() -> None:
