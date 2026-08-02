@@ -11,6 +11,12 @@ Issue #4434: `ps`'s `command=` column is a display string — argv joined with
 single spaces — not shell syntax. Those tests pin the macOS row parser to that
 reading, so an ordinary quoted command line cannot abort the whole native
 inventory and thereby fail-close a deploy.
+
+Issue #4518: `InventoryError` refusals from the legacy-owner path named neither
+the offending root nor the domain that claimed it, which made a real refusal
+undiagnosable without monkeypatching the module. These tests pin every such
+refusal to carry a domain, a source, and (where a root is involved) a redacted
+identifier for it -- while still never emitting the raw host path.
 """
 
 import json
@@ -466,3 +472,98 @@ def test_prove_quiescent_is_deterministic_across_probes(monkeypatch, tmp_path, _
     second_payload = json.loads(second_output.read_text(encoding="utf-8"))
     assert first_payload["snapshot_digests"] == second_payload["snapshot_digests"]
     assert first_payload["domains"] == second_payload["domains"]
+
+
+# --- Issue #4518: refusals name domain, source, and a redacted root identity -
+
+MALFORMED_APP_LOCAL_FRONTMATTER = b"---\nnot a mapping line\n---\n"
+
+
+def test_inventory_errors_name_domain_and_source():
+    """Every `InventoryError` this module raises must name which domain and
+    which of the four owner sources produced the offending record, so a real
+    refusal is diagnosable from the message alone.
+    """
+
+    with pytest.raises(InventoryError) as excinfo:
+        writer_inventory._parse_app_local_roots(
+            MALFORMED_APP_LOCAL_FRONTMATTER, domain="dev", source="config_app_local"
+        )
+
+    message = str(excinfo.value)
+    assert "domain=dev" in message
+    assert "source=config_app_local" in message
+
+
+def test_missing_and_non_directory_roots_are_distinguishable(tmp_path):
+    """A vanished root and a root that exists but is not a directory must
+    raise distinguishable reasons, not the same bare message.
+    """
+
+    vanished = tmp_path / "does-not-exist"
+    not_a_directory = tmp_path / "a-file"
+    not_a_directory.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(InventoryError) as vanished_excinfo:
+        writer_inventory._owner_identity_material(vanished, domain="dev", source="config_env")
+
+    with pytest.raises(InventoryError) as file_excinfo:
+        writer_inventory._owner_identity_material(
+            not_a_directory, domain="dev", source="config_env"
+        )
+
+    vanished_message = str(vanished_excinfo.value)
+    file_message = str(file_excinfo.value)
+    assert vanished_message != file_message
+    assert "reason=vanished" in vanished_message
+    assert "reason=not-a-directory" in file_message
+    for message in (vanished_message, file_message):
+        assert "domain=dev" in message
+        assert "source=config_env" in message
+
+
+def test_collision_error_names_both_domains(tmp_path):
+    """A cross-domain collision (two channels claiming the same host root, the
+    ADR-0055-adjacent shape this module refuses) must name both domains and a
+    redacted identifier for the shared root.
+    """
+
+    shared_root = tmp_path / "shared-vault"
+    shared_root.mkdir()
+    records = [
+        writer_inventory.LegacyOwnerRecord("dev", str(shared_root), source="config_env"),
+        writer_inventory.LegacyOwnerRecord("prod", str(shared_root), source="config_env"),
+    ]
+
+    with pytest.raises(InventoryError, match="collide across domains") as excinfo:
+        writer_inventory._normalize_legacy_owners(records)
+
+    message = str(excinfo.value)
+    assert "domain_a=dev" in message
+    assert "domain_b=prod" in message
+    assert "id=inode:" in message
+    assert str(shared_root) not in message
+
+
+def test_inventory_errors_never_emit_raw_paths(tmp_path):
+    """No emitted error, log line, or receipt may contain a raw host path,
+    vault name, or operator name. This asserts against the strings the
+    deploy path actually raises, not a redaction helper's return value.
+    """
+
+    vanished = tmp_path / "operator-name" / "does-not-exist"
+
+    with pytest.raises(InventoryError) as excinfo:
+        writer_inventory._owner_identity_material(vanished, domain="dev", source="config_env")
+
+    message = str(excinfo.value)
+    assert str(vanished) not in message
+    assert str(tmp_path) not in message
+    assert "operator-name" not in message
+
+    with pytest.raises(InventoryError) as parse_excinfo:
+        writer_inventory._parse_app_local_roots(
+            MALFORMED_APP_LOCAL_FRONTMATTER, domain="dev", source="native_app_local"
+        )
+
+    assert "not a mapping line" not in str(parse_excinfo.value)

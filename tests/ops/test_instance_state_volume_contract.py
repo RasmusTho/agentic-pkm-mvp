@@ -2404,8 +2404,10 @@ def test_legacy_owner_producer_reads_stopped_compose_config_and_scalar_store(
     owners, fingerprints = writer_inventory._docker_legacy_owner_sources()
 
     assert owners == [
-        writer_inventory.LegacyOwnerRecord("test", str(mounted.resolve())),
-        writer_inventory.LegacyOwnerRecord("test", str(selected.resolve())),
+        writer_inventory.LegacyOwnerRecord("test", str(mounted.resolve()), source="docker_env"),
+        writer_inventory.LegacyOwnerRecord(
+            "test", str(selected.resolve()), source="docker_app_local"
+        ),
     ]
     assert len(fingerprints) == 1
 
@@ -2422,7 +2424,9 @@ def test_legacy_owner_producer_parses_canonical_quoted_app_local_paths() -> None
         "---\n"
     ).encode()
 
-    assert writer_inventory._parse_app_local_roots(raw) == [
+    assert writer_inventory._parse_app_local_roots(
+        raw, domain="test", source="config_app_local"
+    ) == [
         "/Users/operator/Vault #1",
         "/Users/operator/Vault ☃",
     ]
