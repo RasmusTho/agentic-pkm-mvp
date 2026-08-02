@@ -884,13 +884,27 @@ def _is_docs_only(paths: tuple[str, ...]) -> bool:
         # CLAUDE.md is the Claude compatibility entrypoint documented alongside
         # AGENTS.md (#4281); it must resolve here so a CLAUDE.md-only PR routes
         # to tests/architecture instead of falling through to unowned/full-suite.
-        and (path.startswith("docs/") or path in {"README.md", "AGENTS.md", "CLAUDE.md"})
+        # `.codex/` is included so a `.codex/**` path (e.g. `.codex/agents/*.toml`,
+        # `.codex/config.toml`) mixed with a `docs/**` path or `CLAUDE.md` still
+        # resolves here instead of falling through every SUBSYSTEMS prefix into
+        # `unowned` (#4335) -- a pure `.codex/**` diff still resolves via
+        # `_is_governance_only` first, since that branch is checked before this
+        # one in `select_tests`.
+        and (
+            path.startswith("docs/")
+            or path.startswith(".codex/")
+            or path in {"README.md", "AGENTS.md", "CLAUDE.md"}
+        )
         for path in non_test
     )
 
 
 def _is_governance_only(paths: tuple[str, ...]) -> bool:
-    governance_prefixes = (".github/", "docs/development/", "AGENTS.md", ".codex/")
+    # CLAUDE.md is added here symmetrically with AGENTS.md so
+    # `select_tests(["AGENTS.md", "CLAUDE.md"])` resolves the same way as
+    # `select_tests(["AGENTS.md"])` alone (both governance), instead of the
+    # combination silently falling through to the docs branch (#4335).
+    governance_prefixes = (".github/", "docs/development/", "AGENTS.md", "CLAUDE.md", ".codex/")
     non_test = _non_test_signal(paths, GOVERNANCE_TARGETS)
     return bool(non_test) and all(
         path.startswith(governance_prefixes) or path == "scripts/select_pr_tests.py"

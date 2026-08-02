@@ -259,6 +259,15 @@ def test_pr_4275_shaped_diff_now_selects_architecture_and_ci_gate_coverage() -> 
     # tests/architecture and tests/ops/test_review_before_ci_gate.py, so the
     # architecture/CI-gate tests that actually assert on these paths still
     # would not have run.
+    #
+    # #4335 widened `_is_docs_only` to accept `.codex/**` (previously only a
+    # pure `.codex/skills/`+`docs/contracts/` mix routed through the
+    # `docs_authoring` subsystem loop; `docs/DOCS_INDEX.md` in this diff kept
+    # `_is_docs_only` False before that fix). This diff now classifies as
+    # docs-only up front, with `docs_authoring` still unioned in as a foreign
+    # subsystem match (#4336) since its targets are not a subset of
+    # `DOCS_TARGETS` -- a strict superset of the previous coverage, not a
+    # narrowing.
     pr_4275_diff = (
         ".codex/AGENTS.md",
         ".codex/skills/README.md",
@@ -272,9 +281,10 @@ def test_pr_4275_shaped_diff_now_selects_architecture_and_ci_gate_coverage() -> 
 
     assert selection.full_suite is False
     assert selection.unowned_paths == ()
-    assert selection.subsystems == ("docs_authoring",)
+    assert selection.subsystems == ("docs", "docs_authoring")
     assert "tests/governance" in selection.targets
     assert "tests/scripts" in selection.targets
     assert "tests/ops/test_ci_workflow.py" in selection.targets
     assert "tests/architecture" in selection.targets
     assert "tests/ops/test_review_before_ci_gate.py" in selection.targets
+    assert "tests/docs" in selection.targets
