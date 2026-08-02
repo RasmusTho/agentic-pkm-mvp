@@ -219,6 +219,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # BuilderOps store-access inventory fitness. Keep this exact file
             # owned without widening builder_system to all architecture tests.
             "tests/architecture/test_builderops_store_boundary.py",
+            # pr-contract/BuilderOps-routing hot-path governance fitness
+            # (#4343): a pure change to this one test file has no non-test
+            # governance/docs path alongside it, so `_is_governance_only`
+            # (which requires real non-test signal) never fires and the PR
+            # fell through the SUBSYSTEMS loop into `unowned` (exit 2). Own
+            # this exact file the same way test_builderops_store_boundary.py
+            # is owned above, without widening builder_system to all
+            # architecture tests.
+            "tests/architecture/test_pr_hot_path_governance.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
@@ -232,6 +241,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/dispatcher",
             "tests/governance",
             "tests/architecture/test_builderops_store_boundary.py",
+            "tests/architecture/test_pr_hot_path_governance.py",
         ),
     ),
     (
