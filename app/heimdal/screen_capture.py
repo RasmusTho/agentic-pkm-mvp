@@ -60,7 +60,10 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
         device=str(sensor_data.get("machine", "")),
     )
     _assert_sensor_registered(sensor)
-    admitted = admit_raw_evidence(scope=str(bundle.get("scope", SCREEN_CAPTURE_SCOPE)))
+    # The admitting scope is always the screen lane's own scope, never a
+    # value read from the client-supplied bundle: a screen client must not
+    # be able to name another lane's standing grant to admit its capture.
+    admitted = admit_raw_evidence(scope=SCREEN_CAPTURE_SCOPE)
 
     raw_payload = bundle.get("raw")
     if raw_payload is None:
