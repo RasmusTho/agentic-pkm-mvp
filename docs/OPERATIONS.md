@@ -57,6 +57,25 @@ payloads nor performs archive, retention, or storage lifecycle work.
   `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
 
+### Forward-only migration floor: `file_state` binding key (MVR-05A0, #4543)
+
+Alembic revision `c7f4b1a83d29` takes ownership of the vault-sync `file_state` table (previously
+created at runtime by `app/db/migrations_obsidian.sql`) and changes its primary key from `path` to
+`(vault_binding_id, path)`. Operator consequences:
+
+- **Migration authority is unchanged.** `scripts/run_migrations.sh` (`alembic upgrade head`) applies
+  it. Existing rows are adopted in place and attributed to the `legacy-compatibility-binding`
+  sentinel; nothing is recreated, moved, or dropped.
+- **The revision is forward-only** per `docs/RELEASE_CHANNELS/README.md :: Rollback posture`. Rolling
+  the `stable` ref back to a pre-#4543 image leaves the database on the new key, and that image's
+  vault-sync writes use `ON CONFLICT (path)` — Postgres rejects the statement because no unique index
+  on `path` alone remains. Reads still work; **writes fail loudly**. Expect vault sync to stop, not
+  to corrupt. Roll forward rather than back.
+- The constraint rebuild takes a brief `ACCESS EXCLUSIVE` lock on `file_state`. Apply it through the
+  normal `migrate` one-shot, which runtime containers already gate on, rather than against a live
+  writer.
+- Schema truth for the table is `docs/DB_SCHEMA.md :: file_state`.
+
 ## Runtime prerequisites (registry watcher)
 - `DATABASE_URL` or `DB_DSN` is required in runtime; startup must fail fast if missing.
 - DB outbox is canonical in runtime; the worker consumes the DB outbox.
