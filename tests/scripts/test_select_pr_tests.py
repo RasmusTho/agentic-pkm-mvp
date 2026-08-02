@@ -893,9 +893,12 @@ def test_mixed_docs_and_review_gate_test_keeps_ops_targets() -> None:
 def test_docs_plus_architecture_still_stays_governance_only_when_no_foreign_owner() -> None:
     # Sibling assertion to the mixed-PR cases above: an architecture test
     # with no individual subsystem carve-out (unlike
-    # test_builderops_store_boundary.py / test_no_hardcoded_vault_layout.py)
-    # must still resolve through the plain governance-only fast path.
-    selection = select_tests([".codex/skills/x/SKILL.md", "tests/architecture/test_pr_hot_path_governance.py"])
+    # test_builderops_store_boundary.py / test_no_hardcoded_vault_layout.py /
+    # test_pr_hot_path_governance.py, the last of which gained its own
+    # builder_system carve-out under #4343 so a pure change to that one file
+    # no longer fails closed as unowned) must still resolve through the plain
+    # governance-only fast path.
+    selection = select_tests([".codex/skills/x/SKILL.md", "tests/architecture/test_agent_skill_entrypoints.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("governance",)
