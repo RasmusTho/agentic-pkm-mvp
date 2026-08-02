@@ -19,6 +19,60 @@ _MIGRATION_SQL_PATH = Path(__file__).resolve().parent / "migrations_obsidian.sql
 _LOGGER = logging.getLogger(__name__)
 _SCHEMA_INITIALIZED = False
 
+# MVR-05A0 (#4543): the stable binding id every `file_state` row is attributed to
+# until MVR-05A (#3859) ships the compatibility ingress translator that derives
+# the real authorized `vault_binding_id`
+# (``app/instance/vault_registry.py::VaultRegistration.vault_binding_id``).
+#
+# It is deliberately an explicit sentinel and not a registry-shaped
+# ``binding-<uuid4>`` value: a pre-MVR-05 database is single-binding by
+# construction, so attributing its rows to one named legacy binding is provable
+# rather than a guess, and MVR-05A's backfill can tell "not yet attributed"
+# from "attributed to binding X" without inspecting the registry.
+#
+# Kept in sync with the same literal in Alembic revision ``c7f4b1a83d29`` by
+# ``tests/migrations/test_file_state_adoption.py``.
+FILE_STATE_COMPATIBILITY_BINDING_ID = "legacy-compatibility-binding"
+
+# Test-fixture create-on-demand for the migration-owned `file_state` table,
+# mirroring the KERNEL-04 (#2766) / KERNEL-05 (#2850) contract for `store_*` and
+# `outbox`. Production DDL authority is Alembic revision `c7f4b1a83d29`; scratch
+# databases opt in through STORE_SCHEMA_AUTOCREATE=1 (tests/conftest.py). Shape
+# parity with the revision is asserted by
+# tests/migrations/test_file_state_adoption.py.
+_FILE_STATE_AUTOCREATE_SQL = (
+    f"""
+    CREATE TABLE IF NOT EXISTS public.file_state (
+        path text NOT NULL,
+        uuid text,
+        fm_hash text,
+        body_hash text,
+        mtime timestamptz,
+        last_seen timestamptz DEFAULT now(),
+        vault_binding_id text NOT NULL DEFAULT '{FILE_STATE_COMPATIBILITY_BINDING_ID}',
+        CONSTRAINT file_state_pkey PRIMARY KEY (vault_binding_id, path)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS file_state_uuid_idx ON public.file_state(uuid)",
+    # `objects.path` moved to the same revision for the same reason; a scratch
+    # database that never ran Alembic needs it for the watcher continuity mirror.
+    "ALTER TABLE IF EXISTS public.objects ADD COLUMN IF NOT EXISTS path text",
+)
+
+
+def _schema_autocreate_enabled() -> bool:
+    """Whether test fixtures opted into create-on-demand schema (KERNEL-04)."""
+    return (os.getenv("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
+
+
+def _autocreate_file_state(conn: psycopg.Connection) -> None:
+    """Create the migration-owned `file_state`/`objects.path` shape for test scratch DBs."""
+    if not _schema_autocreate_enabled():
+        return
+    for statement in _FILE_STATE_AUTOCREATE_SQL:
+        with conn.cursor() as cur:
+            cur.execute(statement)
+
 
 def _objects_id_primary_key_exists(conn: psycopg.Connection) -> bool:
     """Return whether ``objects`` already has exactly ``id`` as its primary key."""
@@ -76,7 +130,15 @@ def conn_rw(*, connect_timeout: int | None = None):
 
 
 def ensure_schema(conn: psycopg.Connection) -> None:
-    """Apply lightweight migrations stored alongside the db module."""
+    """Apply lightweight migrations stored alongside the db module.
+
+    `file_state` and `objects.path` are no longer created here (MVR-05A0,
+    #4543): Alembic revision `c7f4b1a83d29` owns both, so the revision chain can
+    reach the vault-sync table its own verification lane runs against. Test
+    scratch databases keep create-on-demand through the explicit
+    STORE_SCHEMA_AUTOCREATE opt-in below.
+    """
+    _autocreate_file_state(conn)
     if not _MIGRATION_SQL_PATH.exists():
         return
     statements = [

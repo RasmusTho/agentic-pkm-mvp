@@ -199,3 +199,176 @@ def test_default_adapter_preserves_bootstrap_and_no_vault(tmp_path) -> None:
     restarted = reopen_runtime(runtime, tmp_path).registry.load()
     assert restarted.default_vault_binding_id is None
     assert set(restarted.registrations) == {registration.vault_binding_id}
+
+
+# --------------------------------------------------------------------------- #
+# MVR-05A0 (#4543): the file_state rekey is invisible to a single-binding vault
+# --------------------------------------------------------------------------- #
+#
+# Epic #2143 makes single-vault and no-vault behaviour the reversible floor, so
+# rekeying `file_state` from `path` to `(vault_binding_id, path)` must not
+# change a single-binding database's sync decisions. The risk is specific and
+# silent: rows written by the pre-#4543 path-keyed code are attributed to the
+# legacy compatibility binding by the adoption migration, and the new
+# binding-scoped reads must still find them. If they did not, every already
+# synced note would look unseen and silently re-sync; if the delete scoping were
+# wrong, a note would silently be skipped instead.
+
+
+@pytest.mark.pg
+def test_file_state_rekey_preserves_single_vault_sync(tmp_path, monkeypatch) -> None:
+    """A database populated before the rekey keeps skip/resync/delete outcomes."""
+    import os
+    import uuid as uuid_module
+    from datetime import datetime, timezone
+
+    import psycopg
+
+    from app.db.dsn import resolve_dsn
+
+    admin_dsn = resolve_dsn()
+    if not admin_dsn:
+        pytest.skip("DATABASE_URL/DB_DSN not configured")
+    try:
+        probe = psycopg.connect(admin_dsn, connect_timeout=2)
+    except Exception as exc:  # pragma: no cover - environment guard
+        pytest.skip(f"Postgres unavailable: {exc}")
+    probe.close()
+
+    from alembic import command
+    from alembic.config import Config
+
+    repo_root = Path(__file__).resolve().parents[2]
+    scratch = f"scratch_rekey_compat_{uuid_module.uuid4().hex[:12]}"
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{scratch}"')
+    base, _, _ = admin_dsn.rpartition("/")
+    dsn = f"{base}/{scratch}"
+    try:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+        monkeypatch.setenv("DATABASE_URL", dsn)
+        monkeypatch.delenv("DB_DSN", raising=False)
+        cfg = Config(str(repo_root / "alembic.ini"))
+        cfg.set_main_option("script_location", str(repo_root / "app" / "alembic"))
+
+        # 1. A deployed pre-#4543 database: lineage at the pre-adoption head and
+        #    a bootstrap-created, path-keyed `file_state`.
+        command.upgrade(cfg, "a9f3c2d7b6e1")
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS public.file_state (
+                  path text PRIMARY KEY,
+                  uuid text,
+                  fm_hash text,
+                  body_hash text,
+                  mtime timestamptz,
+                  last_seen timestamptz DEFAULT now()
+                )
+                """
+            )
+            conn.execute("ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS uuid uuid")
+            conn.execute("ALTER TABLE public.objects ADD COLUMN IF NOT EXISTS path text")
+
+        from app.services import vault_sync
+
+        note_uuid = str(uuid_module.UUID(int=515))
+        note = tmp_path / "already-synced.md"
+        note.write_text(
+            f"---\nuuid: {note_uuid}\ntitle: Already synced\n---\n\noriginal body\n",
+            encoding="utf-8",
+        )
+        # Past mtime: `active_edit` would otherwise defer the sync.
+        past = datetime(2026, 7, 1, tzinfo=timezone.utc).timestamp()
+        os.utime(note, (past, past))
+        frontmatter, body = vault_sync._read_note(note)
+        resolved = str(note.resolve())
+
+        # 2. Seed the fully-materialized state the old code would have left.
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute(
+                "INSERT INTO public.file_state (path, uuid, fm_hash, body_hash, mtime, last_seen) "
+                "VALUES (%s, %s, %s, %s, to_timestamp(%s), now())",
+                (
+                    resolved,
+                    note_uuid,
+                    vault_sync._hash_dict(frontmatter),
+                    vault_sync._hash_text(body),
+                    past,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO public.objects (id, uuid, kind, payload, path) "
+                "VALUES (%s, %s, 'note', '{}'::jsonb, %s)",
+                (note_uuid, note_uuid, resolved),
+            )
+            conn.execute(
+                "INSERT INTO store_objects (object_id, kind, source_ref, payload) "
+                "VALUES (%s, 'note', %s, '{}'::jsonb)",
+                (note_uuid, resolved),
+            )
+
+        # 3. Adopt and rekey.
+        command.upgrade(cfg, "head")
+
+        from app.db import db as db_module
+        from app.stores import pg as pg_store
+
+        monkeypatch.setattr(db_module, "_SCHEMA_INITIALIZED", False)
+        monkeypatch.setattr(pg_store, "_TABLES_READY", False)
+
+        def _outbox_topics() -> list[str]:
+            with psycopg.connect(dsn) as conn:
+                return [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT topic FROM public.outbox ORDER BY created_at, id"
+                    ).fetchall()
+                ]
+
+        def _file_state_rows() -> list[tuple]:
+            with psycopg.connect(dsn) as conn:
+                return [
+                    tuple(row)
+                    for row in conn.execute(
+                        "SELECT vault_binding_id, path, body_hash FROM public.file_state "
+                        "ORDER BY path"
+                    ).fetchall()
+                ]
+
+        assert _outbox_topics() == []
+
+        # SKIP: the pre-rekey row is still this binding's row, so an unchanged
+        # note emits nothing. An invisible legacy row would re-sync here.
+        unchanged = vault_sync.sync_markdown(resolved)
+        assert unchanged["status"] == "ok"
+        assert unchanged["reembedded"] is False
+        assert _outbox_topics() == [], (
+            "an already-synced note re-emitted after the rekey: the "
+            "binding-scoped read did not find its pre-existing row"
+        )
+        assert len(_file_state_rows()) == 1, "the rekey duplicated a single-vault row"
+
+        # RESYNC: a real body change still produces exactly one update event.
+        note.write_text(
+            f"---\nuuid: {note_uuid}\ntitle: Already synced\n---\n\nedited body\n",
+            encoding="utf-8",
+        )
+        os.utime(note, (past + 60, past + 60))
+        changed = vault_sync.sync_markdown(resolved)
+        assert changed["reembedded"] is True
+        assert _outbox_topics() == ["ingest.object.updated"]
+        assert len(_file_state_rows()) == 1
+
+        # DELETE: the tombstone still fires and the row is gone.
+        assert vault_sync.delete_note(resolved, uuid_value=note_uuid) is True
+        assert _outbox_topics() == ["ingest.object.updated", "ingest.object.deleted"]
+        assert _file_state_rows() == []
+    finally:
+        try:
+            with psycopg.connect(admin_dsn, autocommit=True) as conn:
+                conn.execute(f'DROP DATABASE IF EXISTS "{scratch}" WITH (FORCE)')
+        except Exception:
+            pass
