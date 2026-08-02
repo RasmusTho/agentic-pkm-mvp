@@ -296,6 +296,55 @@ def _interpolate_env_file_path(
     return resolved
 
 
+def _interpolate_environment_value(
+    expr: str,
+    lookup: Callable[[str], str | None],
+) -> str | None:
+    """Interpolate a compose `environment:` scalar value the way compose does.
+
+    Same substitution grammar as :func:`_interpolate_env_file_path`
+    (``$VAR``, ``${VAR}``, ``${VAR-default}``, ``${VAR:-default}``), but a
+    different unresolvable rule: an env_file *path* expression that resolves
+    to an empty string is meaningless (no file to read), so that function
+    folds "empty" and "unresolvable" together. A Compose `environment:`
+    *value* has no such constraint — an empty string is exactly what
+    ``${VAR:-}`` produces against an unset shell variable, and detecting that
+    blank-override shape is the whole point of Issue #4230's check. Returns
+    ``None`` only for a genuinely unsupported expression form (e.g.
+    ``${VAR:?err}``, nested expressions) or a result that still contains
+    ``$`` — both truly unresolvable, unlike a legitimate empty string.
+    """
+    out: list[str] = []
+    pos = 0
+    for match in _ENV_FILE_VAR_PATTERN.finditer(expr):
+        out.append(expr[pos:match.start()])
+        pos = match.end()
+        if match.group("escaped"):
+            out.append("$")
+            continue
+        named = match.group("named")
+        if named is not None:
+            out.append(lookup(named) or "")
+            continue
+        braced = match.group("braced") or ""
+        if _BRACED_SIMPLE.match(braced):
+            out.append(lookup(braced) or "")
+            continue
+        default_match = _BRACED_DEFAULT.match(braced)
+        if default_match is None or "$" in default_match.group("default"):
+            return None  # unsupported expression form — unresolvable
+        value = lookup(default_match.group("name"))
+        if default_match.group("colon"):
+            out.append(value if value else default_match.group("default"))
+        else:
+            out.append(value if value is not None else default_match.group("default"))
+    out.append(expr[pos:])
+    resolved = "".join(out)
+    if "$" in resolved:
+        return None
+    return resolved
+
+
 def _service_env_file_layers(service_dict: dict[str, Any]) -> list[EnvFileLayer]:
     """Extract the env_file chain declared on one compose service dict."""
     raw = service_dict.get("env_file")
@@ -689,6 +738,111 @@ def _check_db_dsn(
                     ),
                 )
             )
+
+
+# ---------------------------------------------------------------------------
+# environment:-vs-env_file: blank-override clobber detection (Issue #4230)
+# ---------------------------------------------------------------------------
+
+def check_environment_env_file_clobber(
+    compose_path: Path,
+    channel: str,
+    base_compose_path: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    load_dotenv: bool = True,
+) -> PreflightResult:
+    """Detect a blank `environment:` override shadowing a non-empty env_file value.
+
+    Compose's `environment:` block always wins over `env_file:` for the same
+    key. When an overlay declares a key like ``${VAR:-}`` and the invoking
+    shell never populates ``VAR`` — deliberate, since
+    ``scripts/lib/deploy_channel_compose.sh`` never passes the governed
+    runtime env file as a Compose CLI ``--env-file`` (that would expose DSNs
+    to Compose interpolation, #3875) — the interpolated value is an empty
+    string, and it silently shadows whatever value the same key would
+    otherwise receive from the service's ``env_file`` chain. This is the
+    exact shape that crash-looped ``heimdal-capture-watch`` on every
+    dev-channel deploy until commit ``f95a6811`` deleted the offending
+    `environment:` entries (Issue #4230's "already fixed" instance).
+
+    This check is channel-agnostic: it does not validate which channel a
+    binding belongs to (that is ``check_compose_channel_isolation``'s job),
+    only whether an explicit override is blank while the same key's
+    ``env_file`` chain would otherwise supply a real value. It runs over
+    :data:`CHANNEL_SERVICES` (currently including ``heimdal-capture-watch``)
+    the same way the DSN-isolation check does.
+
+    Read-only: never mutates compose, pin, or env_file layers, requires no
+    Docker and no network — pure YAML plus env_file text, mirroring
+    :func:`check_compose_channel_isolation`'s design constraints.
+    """
+    compose_data = _load_compose(compose_path)
+    services = compose_data.get("services") or {}
+    compose_dir = compose_path.resolve().parent
+
+    lookup = _make_var_lookup(
+        os.environ if environ is None else environ,
+        _load_dotenv(compose_dir) if load_dotenv else {},
+    )
+
+    base_compose = base_compose_path or (compose_dir / BASE_COMPOSE_FILENAME)
+    base_services: dict[str, Any] | None = None
+    if base_compose.is_file():
+        base_services = _load_compose(base_compose).get("services") or {}
+
+    result = PreflightResult(channel=channel, compose_path=str(compose_path))
+
+    for svc_name in CHANNEL_SERVICES:
+        svc = services.get(svc_name) or {}
+        env = _service_env(svc)
+        if not env:
+            continue
+
+        overlay_layers = _service_env_file_layers(svc)
+        if base_services is None:
+            chain = [EnvFileLayer(path_expr=str(BASE_ENV_DEFAULTS_REL))]
+        else:
+            chain = _service_env_file_layers(base_services.get(svc_name) or {})
+        chain = chain + overlay_layers
+
+        for key, raw_value in env.items():
+            if raw_value is None or "$" not in raw_value:
+                # No shell-interpolation token: a literal explicit value
+                # (including a deliberate literal `""`, e.g. the test
+                # channel's fail-closed `WATCHER_VAULT_PATH: ""`) is an
+                # intentional authoring choice, not the shell-interpolation
+                # clobber shape this check targets.
+                continue
+            resolved_override = _interpolate_environment_value(raw_value, lookup)
+            if resolved_override != "":
+                # Non-blank, or unresolvable (unsupported expression form):
+                # neither is a proven blank-clobber.
+                continue
+
+            resolution = _resolve_key_through_chain(key, chain, compose_dir, lookup)
+            if resolution.error is not None or not resolution.value:
+                # Unverifiable or genuinely absent from the env_file chain
+                # too: no non-blank value is being shadowed.
+                continue
+
+            result.violations.append(
+                BindingViolation(
+                    service=svc_name,
+                    field=key,
+                    expected=(
+                        f"no blank `environment:` override for {key!r} — "
+                        "the env_file chain supplies a non-empty value that "
+                        "would otherwise apply"
+                    ),
+                    actual=(
+                        f"explicit environment override {raw_value!r} resolves "
+                        f"to an empty value, shadowing {resolution.value!r} "
+                        f"from env_file layer {resolution.source}"
+                    ),
+                )
+            )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

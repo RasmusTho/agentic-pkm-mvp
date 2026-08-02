@@ -586,6 +586,15 @@ alerted state pending the one-time key setup and the prod restore (#4282).
   the underlying processing failure first (this preflight never mutates the queue), then redeploy.
   Rollback is deliberately not gated. Full contract:
   `docs/HEALTH.md :: Outbox and dead-letter signals`.
+- A `dev` or `test` deploy (`scripts/deploy_channel.sh deploy <dev|test> <sha>`) refuses to proceed
+  — before pin or migration mutation — when a `CHANNEL_SERVICES` service's compose `environment:`
+  override resolves blank while its `env_file` chain would otherwise supply a non-empty value for
+  the same key (#4230; the shape that crash-looped `heimdal-capture-watch` before commit
+  `f95a6811`). The deploy log always carries a
+  `dev/test environment clobber preflight: ok|skipped:<reason>|blocked ...` status line; on a
+  block, remove the blank override so the value rides the `env_file` chain instead. This preflight
+  is read-only and is not applied to `prod` or to rollback. Full contract:
+  `docs/RELEASE_CHANNELS/README.md :: Environment:-vs-env_file: blank-override clobber invariant`.
 
 Operator triage order:
 1. Run `make verify-runtime`.
