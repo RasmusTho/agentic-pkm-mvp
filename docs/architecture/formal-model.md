@@ -386,7 +386,7 @@ domains. Flagged to CES as an extend-candidate, not enacted here.
   decision, 2026-08-02). `POST /ingest` now asserts
   `DEFAULT_WRITE_GUARD.assert_writes_allowed("ingest.object_create")` at the seam before any I/O,
   fail-closed like the other named write seams (no bootstrap escape registered for this action) —
-  see PR TBD (opened via publish-pr, links added at merge). Tests:
+  see PR #4549. Tests:
   `tests/api/test_ingest_write_guard.py`.
 - **F-E · Mirror-write class (`emit_outbox=False`, no WG)** — eight call sites (C8) make the event
   log an incomplete journal. **fix-code as a class** via the event-completeness invariant
