@@ -28,6 +28,15 @@ This guard is the durable half of the fix. It fails if any of those surfaces
 regains a second production DDL owner, and if the runtime ever starts issuing
 schema statements again.
 
+MVR-05A2 (#4576) widened it past `app/db/db.py`. The seam population is now
+**derived** — every durable DDL statement under `app/**` targeting a table the
+Alembic revision chain creates — so `app/stores/pg.py`, the Heimdal bootstrap
+modules and the outbox are covered without being named, and so is the next seam
+nobody names. That scan is also what found the `store_vector_index` autocreate
+branch issuing three unconditional `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+statements without the "skip the group if the table already exists" probe
+`app/db/db.py` had.
+
 The test-fixture create-on-demand path in `app/db/db.py`
 (`STORE_SCHEMA_AUTOCREATE=1`) is not a second owner: it mirrors the established
 KERNEL-04 (#2766) / KERNEL-05 (#2850) contract for `store_*` and `outbox`, is
@@ -44,6 +53,11 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+
+from tests.architecture.durable_table_classification import (
+    discover_durable_tables,
+    discover_runtime_ddl_seams,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -218,6 +232,52 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
     assert [
         statement for statement in existing if not statement.strip().upper().startswith("SELECT")
     ] == [], existing
+
+    # ------------------------------------------------------------------ #
+    # MVR-05A2 (#4576): the same property, derived rather than named
+    # ------------------------------------------------------------------ #
+    #
+    # Everything above is scoped to `app/db/db.py` because that is the seam
+    # MVR-05A1 found. The seam inventory below is derived instead: every
+    # durable DDL statement anywhere under `app/**` that targets a table the
+    # Alembic revision chain creates, which today reaches `app/stores/pg.py`,
+    # the twelve Heimdal bootstrap modules, the entity-review journal, the
+    # four knowledge-acquisition stores and `app/services/outbox.py` without
+    # any of them being listed here. A thirteenth Heimdal module, or a seam
+    # nobody thought to name, is covered on the commit that adds it.
+    tables = discover_durable_tables()
+    seams = discover_runtime_ddl_seams(tables)
+    assert seams, "the durable DDL seam scan found nothing, so it is proving nothing"
+
+    ungated = [
+        f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
+        f"(in {seam.function or '<module level>'})"
+        for seam in seams
+        if not seam.autocreate_gated
+    ]
+    assert ungated == [], (
+        "these durable DDL statements run outside the STORE_SCHEMA_AUTOCREATE "
+        "test-fixture opt-in, so production issues schema statements against a "
+        "migration-owned table:\n  " + "\n  ".join(ungated)
+    )
+
+    unprobed = [
+        f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
+        f"(in {seam.function or '<module level>'})"
+        for seam in seams
+        if seam.verb != "create table" and not seam.existence_probed
+    ]
+    assert unprobed == [], (
+        "these statements reshape a durable table from the runtime without first "
+        "skipping the group when the table already exists:\n  "
+        + "\n  ".join(unprobed)
+        + "\nIdempotence must come from the `to_regclass` probe `app/db/db.py` uses, "
+        "not from `IF NOT EXISTS`: `CREATE TABLE IF NOT EXISTS` no-ops silently "
+        "against an older shape while the ALTERs after it still run against it. "
+        "This is the defect MVR-05A2 (#4576) closed in `app/stores/pg.py`, whose "
+        "three `ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS` statements "
+        "previously ran unconditionally in the autocreate branch."
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py (2026-08-02)
+Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py (2026-08-02) + app/stores/pg.py + tests/architecture/durable_table_classification.json (2026-08-02)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -56,6 +56,38 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   run against it — and it issues only `CREATE`, never `ALTER` or `DROP`. Guarded by
   `tests/architecture/test_durable_table_ownership.py::test_no_durable_ddl_executes_outside_the_revision_chain`,
   which asserts the behaviour on a recording connection rather than only the file's absence.
+- **Every durable table carries a binding classification, and an unclassified durable table fails
+  CI** (MVR-05A2, #4576). `tests/architecture/durable_table_classification.json` holds one entry per
+  durable table — classification (`binding-scoped` or `explicitly-global`), a written reason, the
+  owning Alembic revision, whether the row identity already carries a binding column, every
+  `app/**` module that mutates it, and which cutover-escalation conditions it trips. The gate
+  `tests/architecture/test_multi_vault_projection_inventory.py` derives the table population from
+  `app/alembic/versions/**` and fails on the set difference
+  `discovered_durable_tables - classified_tables`, so a table introduced by a revision that does not
+  exist today fails CI until a human classifies it. The manifest has no default classification and
+  no wildcard entry: `explicitly-global` is a written claim, never a fallback, and the gate proves
+  it by removing each entry in turn and asserting the failure lands on exactly that table. The same
+  gate fails when a mutation, replacement or `TRUNCATE` path under `app/**` resolves to no
+  classified producer entry.
+- **The durable-DDL guard's seam population is derived, not named** (MVR-05A2, #4576). It now covers
+  every durable DDL statement anywhere under `app/**` — `app/stores/pg.py`, the Heimdal bootstrap
+  modules, the entity-review journal, the knowledge-acquisition stores and `app/services/outbox.py`
+  as well as `app/db/db.py` — and requires each to be behind the `STORE_SCHEMA_AUTOCREATE`
+  test-fixture opt-in, with any statement that reshapes rather than creates additionally behind the
+  existence probe. That scan found `app/stores/pg.py::_ensure_tables()` issuing three unconditional
+  `ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS` statements in its autocreate branch;
+  it is now grouped by table behind the same `to_regclass` probe `app/db/db.py` uses, so a table
+  that already exists is left completely alone.
+- **`app/db/sql/relations_init.sql` is deleted** (MVR-05A2, #4576). It declared a primary-key-less
+  `relations` shape disagreeing with its Alembic owner
+  (`202510241200_sot41_amg_core.py`) and had zero readers repo-wide; its absence and the absence of
+  any referrer under `app/`, `scripts/` and `.github/` are asserted by
+  `tests/architecture/test_multi_vault_projection_inventory.py::test_orphaned_relation_artifacts_are_removed_or_classified`.
+  `app/store/relation_index.py` is **not** removed: `app/objects/__init__.py` re-exports it, so
+  production reachability could not be disproved. It is classified in the manifest instead, with the
+  fact that its `link()` inserts six columns (`src_uuid`, `dst_uuid`, `relation_type`, `weight`,
+  `provenance`, `created_at`) that do not exist on the Alembic-owned `relations` table
+  (`id`, `src_id`, `dst_id`, `type`, `payload`) recorded as the finding MVR-05A4 (#4578) inherits.
 - The **vault-sync `file_state`** table is **migration-owned** (MVR-05A0, #4543): Alembic revision
   `c7f4b1a83d29` creates it, adopts a database where the legacy runtime bootstrap already created
   it, and rekeys it from `path` to `(vault_binding_id, path)`.

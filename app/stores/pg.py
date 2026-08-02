@@ -68,6 +68,98 @@ def _connect():
     return psycopg.connect(_dsn(), row_factory=dict_row)
 
 
+# Grouped by table so a group can be skipped whole when the table already
+# exists (MVR-05A2, #4576), mirroring `app/db/db.py::_run_migration_sql`.
+# `CREATE TABLE IF NOT EXISTS` alone is not enough: it no-ops silently against
+# an older shape while the `ALTER` statements after it still run, which makes
+# this fixture a second owner able to reshape a migration-owned table — the
+# defect MVR-05A1 (#4560) removed from `app/db/db.py`.
+_MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "store_objects",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS store_objects (
+                object_id UUID PRIMARY KEY,
+                kind TEXT NOT NULL,
+                source_ref TEXT,
+                payload JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+        ),
+    ),
+    (
+        "store_vector_index",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS store_vector_index (
+                object_id UUID PRIMARY KEY,
+                kind TEXT NOT NULL,
+                source_ref TEXT,
+                payload JSONB NOT NULL,
+                embedding DOUBLE PRECISION[] NOT NULL,
+                dim INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            "ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS dim INTEGER",
+            # Phase A (EMBEDREL-06): per-vector full embedding identity columns.
+            # `model` and `dim` already exist; add `provider` and `normalize` so
+            # every row records the complete (provider, model, dim, normalize)
+            # identity tuple. These now run only for a table this fixture just
+            # created; an existing one is the revision chain's to reshape.
+            "ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS provider TEXT",
+            "ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS normalize BOOLEAN",
+        ),
+    ),
+    (
+        "store_relations",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS store_relations (
+                src_id UUID NOT NULL,
+                dst_id UUID NOT NULL,
+                rel TEXT NOT NULL,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (src_id, dst_id, rel)
+            )
+            """,
+        ),
+    ),
+    (
+        "store_relation_memberships",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS store_relation_memberships (
+                src_id UUID NOT NULL,
+                rel TEXT NOT NULL,
+                value TEXT NOT NULL,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (src_id, rel, value)
+            )
+            """,
+        ),
+    ),
+    (
+        "vector_index_meta",
+        (
+            """
+            CREATE TABLE IF NOT EXISTS vector_index_meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                identity_json TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+        ),
+    ),
+)
+
+
 def _ensure_tables() -> None:
     """Assert (or, in tests, create) the migration-owned store schema.
 
@@ -77,6 +169,13 @@ def _ensure_tables() -> None:
     idempotent per-row **data** repairs (`_run_data_repairs`: dim backfill +
     identity backfill) always run — data repair, not DDL. Test fixtures set
     STORE_SCHEMA_AUTOCREATE=1 to keep create-on-demand for scratch databases.
+
+    A table that already exists is left completely alone (MVR-05A2, #4576).
+    Before that, the three ``ALTER TABLE store_vector_index ADD COLUMN IF NOT
+    EXISTS`` statements ran unconditionally in this branch, so a scratch
+    database stamped at a pre-EMBEDREL-06 revision had its migration-owned
+    table reshaped from the runtime. Idempotence comes from the `to_regclass`
+    existence probe, not from `IF NOT EXISTS`.
     """
     global _TABLES_READY
     if _TABLES_READY:
@@ -86,72 +185,17 @@ def _ensure_tables() -> None:
         _TABLES_READY = True
         return
     with _connect() as conn:
+        for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
+            with conn.cursor() as cur:
+                cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+                row = cur.fetchone()
+            present = (row.get("present") if isinstance(row, dict) else row[0]) if row else False
+            if present:
+                continue
+            for statement in statements:
+                with conn.cursor() as cur:
+                    cur.execute(statement)
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS store_objects (
-                    object_id UUID PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    source_ref TEXT,
-                    payload JSONB NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS store_vector_index (
-                    object_id UUID PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    source_ref TEXT,
-                    payload JSONB NOT NULL,
-                    embedding DOUBLE PRECISION[] NOT NULL,
-                    dim INTEGER NOT NULL,
-                    model TEXT NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS store_relations (
-                    src_id UUID NOT NULL,
-                    dst_id UUID NOT NULL,
-                    rel TEXT NOT NULL,
-                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (src_id, dst_id, rel)
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS store_relation_memberships (
-                    src_id UUID NOT NULL,
-                    rel TEXT NOT NULL,
-                    value TEXT NOT NULL,
-                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (src_id, rel, value)
-                )
-                """
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS vector_index_meta (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    identity_json TEXT NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-                """
-            )
-            cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS dim INTEGER")
-            # Phase A (EMBEDREL-06): per-vector full embedding identity columns.
-            # `model` and `dim` already exist; add `provider` and `normalize` so every
-            # row records the complete (provider, model, dim, normalize) identity tuple.
-            cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS provider TEXT")
-            cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS normalize BOOLEAN")
             _run_data_repairs(cur)
     _TABLES_READY = True
 
