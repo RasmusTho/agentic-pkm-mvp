@@ -342,7 +342,7 @@ def test_vault_validate_detects_extensionless_sqlite_without_full_scan(
     assert [path for path in opened if path.parent == notes] == []
 
 
-def test_zero_block_local_file_is_not_treated_as_evicted(tmp_path: Path) -> None:
+def test_zero_block_local_file_is_not_treated_as_evicted() -> None:
     """``st_blocks == 0`` alone must not mark a file as content-not-local.
 
     APFS transparent compression (and some network mounts) report zero
@@ -350,52 +350,50 @@ def test_zero_block_local_file_is_not_treated_as_evicted(tmp_path: Path) -> None
     platform exposes ``st_flags``, it is the authoritative dataless signal
     (macOS ``SF_DATALESS``) and the ``st_blocks`` fallback must not override
     it for a file that is not actually dataless.
+
+    ``st_flags`` is a BSD/macOS-only field of the real C ``stat`` struct: a
+    Linux Python build's ``os.stat_result`` has no such attribute at all, and
+    silently drops it if injected via the extra-fields constructor argument.
+    So this test exercises ``_content_is_local`` (which only ever does
+    attribute access, never an isinstance check) against light duck-typed
+    stand-ins instead of a real ``os.stat_result``, to deterministically cover
+    every branch on every CI platform.
     """
+    from typing import cast
+
     from app.builderops import vault_queue
 
-    real = tmp_path / "compressed.bin"
-    real.write_bytes(b"SQLite format 3\x00" + b"\x00" * 16)
-    base = real.stat()
+    class _FakeStat:
+        def __init__(self, *, st_size: int, st_blocks: int, **extra: int) -> None:
+            self.st_size = st_size
+            self.st_blocks = st_blocks
+            for name, value in extra.items():
+                setattr(self, name, value)
 
-    # Simulate a locally-materialized, transparently-compressed file: content
-    # is on this disk (no SF_DATALESS bit) but zero blocks are reported.
-    fake_local_compressed = os.stat_result(
-        (
-            base.st_mode,
-            base.st_ino,
-            base.st_dev,
-            base.st_nlink,
-            base.st_uid,
-            base.st_gid,
-            base.st_size,
-            base.st_atime,
-            base.st_mtime,
-            base.st_ctime,
-        ),
-        {"st_blocks": 0, "st_flags": 0},
-    )
+    def _as_stat_result(fake: "_FakeStat") -> os.stat_result:
+        # `_content_is_local` only ever does attribute access on its
+        # argument, never an isinstance check, so a duck-typed stand-in
+        # exercises it faithfully; the cast below only satisfies mypy.
+        return cast("os.stat_result", fake)
 
-    assert vault_queue._content_is_local(fake_local_compressed) is True
+    # Locally-materialized, transparently-compressed file: content is on this
+    # disk (no SF_DATALESS bit) but zero blocks are reported. The platform
+    # exposes st_flags, so it is authoritative and must win over st_blocks.
+    fake_local_compressed = _FakeStat(st_size=32, st_blocks=0, st_flags=0)
+    assert vault_queue._content_is_local(_as_stat_result(fake_local_compressed)) is True
 
     # A genuinely dataless file (SF_DATALESS set) must still report as not
     # local, regardless of st_blocks.
-    fake_evicted = os.stat_result(
-        (
-            base.st_mode,
-            base.st_ino,
-            base.st_dev,
-            base.st_nlink,
-            base.st_uid,
-            base.st_gid,
-            base.st_size,
-            base.st_atime,
-            base.st_mtime,
-            base.st_ctime,
-        ),
-        {"st_blocks": 0, "st_flags": vault_queue._SF_DATALESS},
-    )
+    fake_evicted = _FakeStat(st_size=32, st_blocks=0, st_flags=vault_queue._SF_DATALESS)
+    assert vault_queue._content_is_local(_as_stat_result(fake_evicted)) is False
 
-    assert vault_queue._content_is_local(fake_evicted) is False
+    # Platforms that expose no st_flags at all fall back to the st_blocks
+    # heuristic, preserving pre-existing behavior there.
+    fake_no_flags_evicted = _FakeStat(st_size=32, st_blocks=0)
+    assert vault_queue._content_is_local(_as_stat_result(fake_no_flags_evicted)) is False
+
+    fake_no_flags_local = _FakeStat(st_size=32, st_blocks=1)
+    assert vault_queue._content_is_local(_as_stat_result(fake_no_flags_local)) is True
 
 
 def test_vault_validate_still_opens_local_files_for_the_header_sniff(
