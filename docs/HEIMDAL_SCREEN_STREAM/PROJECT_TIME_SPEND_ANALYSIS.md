@@ -40,12 +40,21 @@ projection** into the vault. It works **from observations alone** — no episode
 ## Concretely
 
 ```
-$ python -m app.cli heimdal time-spend --week 2026-W28 --json
-{"by_app": {"Obsidian": "6h12m", "Safari": "3h48m", "Terminal": "2h30m"},
- "by_scope": {"work": "9h40m", "private": "2h50m"}, "by_project": {"ERE spec": "4h05m"}, "rebuilt_from": 1442}
-$ python -m app.cli heimdal time-spend --rebuild --week 2026-W28   # deterministic re-fold from observations
-wrote heimdal/time-spend/2026-W28.md  (derived, requires_review, from 1442 observations)
+$ python -m app.cli heimdal time-spend --week 2026-W28
+{"week": "2026-W28", "span_count": 4, "rebuilt_from": 1442,
+ "by_app": {"Obsidian": "6h12m", "Safari": "3h48m", "Terminal": "2h30m"},
+ "by_project": {"ERE spec": "4h05m"}, "by_scope": {"work": "9h40m", "private": "2h50m"}, ...}
+$ python -m app.cli heimdal time-spend --rebuild --week 2026-W28 --vault-root /path/to/vault
+{"rebuilt_from": 1442, "span_count": 4,
+ "weeks": {"2026-W28": {"status": "written", "artifact_path": "heimdal/time-spend/2026-W28.md", ...}}}
 ```
+
+Shipped as `app/heimdal/time_spend.py` (SCREEN-05, #3345): the rebuild is always a full re-fold from
+event zero — there is no consumer cursor and no incremental state, so a rebuild and an "incremental
+update" are the same deterministic fold and can never drift apart. Spans fold by `observation_id`
+(per-span identity), deliberately not by the candidate projector's `episode_id` fold — known defect
+`KD-FBDBDAD4C052` records that the episode fold collapses distinct spans sharing one episode; reading
+the observation log directly is that defect's documented workaround.
 
 ## Why This Matters
 
@@ -57,14 +66,14 @@ event motor does.
 
 ## Acceptance Criteria
 
-- [ ] AC1: spans roll up by app / project / scope / day / week with correct duration sums (idle gaps
+- [x] AC1: spans roll up by app / project / scope / day / week with correct duration sums (idle gaps
       excluded). Verify: `tests/heimdal/test_time_spend_projection.py::test_rollup_by_all_axes`
-- [ ] AC2: the projection rebuilds deterministically from the observation stream — same observations in,
+- [x] AC2: the projection rebuilds deterministically from the observation stream — same observations in,
       same rollup out; the projection holds no state the observations do not. Verify: `tests/heimdal/test_time_spend_projection.py::test_time_spend_rebuilds_from_observations`
-- [ ] AC3: the markdown projection is written through the governed write path as derived /
+- [x] AC3: the markdown projection is written through the governed write path as derived /
       `requires_review` class, never overwriting a human-authored note. Verify: `tests/heimdal/test_time_spend_projection.py::test_projection_written_governed_derived_class`
-- [ ] AC4 (non-behavioral): the future companion-UI seam and the future episode-rollup enrichment are
-      named as seams, not built, and the task's independence from ERE is stated. Verify: doc writeback at `docs/HEIMDAL_SCREEN_STREAM/PROJECT_TIME_SPEND_ANALYSIS.md :: What This Task Does` (steps 3-4)
+- [x] AC4 (non-behavioral): the future companion-UI seam and the future episode-rollup enrichment are
+      named as seams, not built, and the task's independence from ERE is stated. Verify: `docs/HEIMDAL_SCREEN_STREAM/PROJECT_TIME_SPEND_ANALYSIS.md :: What This Task Does` (doc writeback, steps 3-4)
 
 ## How to Verify (Pre-Merge)
 
@@ -96,4 +105,4 @@ absent from the observations (AC2 enforces it). No in-memory user-facing state t
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] time-spend-projection: rebuildable markdown rollup by app/project/scope/day/week`. Blocked until SCREEN-02 merges (∥ SCREEN-03, SCREEN-06). **Sonnet-tier** (a rebuildable derived projection over an existing stream — bounded, mirrors existing projection patterns). See scratchpad draft.
+One issue: #3345 `[Heimdal Screen Stream] time-spend-projection: rebuildable markdown rollup by app/project/scope/day/week` — **delivered**. Its dependency SCREEN-02/#3344 merged first, as planned; every behavioral acceptance criterion above is checked against a passing named test, and the companion-UI / episode-rollup seams remain named-not-built (steps 3–4 above).

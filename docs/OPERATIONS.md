@@ -45,6 +45,18 @@ records. It requires `_heimdal/settings.md` to declare a valid
 `retention_window_days`; missing policy fails loud. It neither reads raw
 payloads nor performs archive, retention, or storage lifecycle work.
 
+### Heimdal time-spend projection (SCREEN-05)
+
+Use `python -m app.cli heimdal time-spend [--week YYYY-Www]` to print the JSON
+time-spend rollup over screen span observations (by app/project/scope/day/week),
+and `python -m app.cli heimdal time-spend --rebuild --vault-root <vault>
+[--week YYYY-Www]` to deterministically re-fold the observation stream from
+event zero and (re)write the weekly markdown projection note(s) at
+`heimdal/time-spend/YYYY-Www.md`. The note is a derived, rebuildable projection
+(`requires_review`, never authority): rebuilding overwrites only its own prior
+projection and refuses to touch any other note at the path. A missing store
+backend fails loud (`STORE_BACKEND=memory` or a Postgres DSN is required).
+
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
