@@ -82,7 +82,13 @@ class TestBootstrapStartContract:
                 capture_output=True,
                 text=True,
                 timeout=30,
-                env=_startup_env(PATH=f"{td}:{_SUBPROCESS_PATH}"),
+                # #4519 — scope the no-vault idle runtime-env write to the
+                # temp dir; this hermetic env carries no pytest markers, so
+                # the exporter's guard cannot catch an unscoped write here.
+                env=_startup_env(
+                    PATH=f"{td}:{_SUBPROCESS_PATH}",
+                    RUNTIME_ENV_PATH=str(Path(td) / "runtime.env"),
+                ),
             )
 
         combined = result.stdout + result.stderr
@@ -115,6 +121,7 @@ class TestBootstrapStartContract:
             text=True,
             env=_startup_env(
                 PATH=f"{tmp_path}:{_SUBPROCESS_PATH}",
+                RUNTIME_ENV_PATH=str(tmp_path / "runtime.env"),
                 START_FLIGHT_RECORDER="0",
                 VAULT_ROOT=str(missing_vault),
             ),
@@ -142,7 +149,13 @@ class TestBootstrapStartContract:
                 capture_output=True,
                 text=True,
                 timeout=20,
-                env=_startup_env(VAULT_ROOT=str(vault_dir)),
+                # #4519 — with real Docker this run reaches the runtime-env
+                # export; scope it so the real vault-bearing write lands in
+                # tmp_path, never in the repository's own tmp/runtime.env.
+                env=_startup_env(
+                    RUNTIME_ENV_PATH=str(tmp_path / "runtime.env"),
+                    VAULT_ROOT=str(vault_dir),
+                ),
             )
         except subprocess.TimeoutExpired as exc:
             stderr = "".join(part for part in [exc.stdout, exc.stderr] if part)

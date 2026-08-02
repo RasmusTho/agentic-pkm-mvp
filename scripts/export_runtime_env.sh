@@ -32,6 +32,33 @@ if [ -z "$runtime_env_path" ]; then
     *) runtime_env_path="tmp/runtime.env" ;;
   esac
 fi
+
+# #4519 — fail-loud test isolation guard. pytest exports marker variables that
+# launcher subprocesses inherit; such a run must never write this repository's
+# own tmp/runtime.env or tmp-test/runtime.env, because a leaked test value
+# (e.g. VAULT_HOST_ROOT under a deleted pytest tmp_path) survives in operator
+# state and blocks every later channel deploy. Refuse loudly instead of
+# silently redirecting so the test author sees the missing RUNTIME_ENV_PATH.
+# Real operator invocations carry no pytest markers and are unaffected.
+if [ -n "${PYTEST_CURRENT_TEST:-}" ] || [ -n "${PYTEST_VERSION:-}" ]; then
+  _pytest_guard_target="$runtime_env_path"
+  case "$_pytest_guard_target" in
+    ./*) _pytest_guard_target="${_pytest_guard_target#./}" ;;
+  esac
+  case "$_pytest_guard_target" in
+    /*) ;;
+    *) _pytest_guard_target="$ROOT/$_pytest_guard_target" ;;
+  esac
+  case "$_pytest_guard_target" in
+    "$ROOT/tmp/runtime.env"|"$ROOT/tmp-test/runtime.env")
+      echo "export_runtime_env.sh: refusing to write $_pytest_guard_target from a pytest run (#4519)." >&2
+      echo "Set RUNTIME_ENV_PATH to a tmp_path-scoped file before invoking the launcher or this exporter from a test." >&2
+      exit 3
+      ;;
+  esac
+  unset _pytest_guard_target
+fi
+
 runtime_env_dir="$(dirname "$runtime_env_path")"
 mkdir -p "$runtime_env_dir"
 
