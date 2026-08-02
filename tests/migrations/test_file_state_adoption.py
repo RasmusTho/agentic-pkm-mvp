@@ -159,7 +159,33 @@ def _schema_snapshot(dsn: str) -> dict:
             """
         )
         indexes = [tuple(row) for row in cur.fetchall()]
-    return {"columns": columns, "pk": pk, "indexes": indexes}
+        # `objects.path` moved to the same revision, and the autocreate fixture
+        # declares it too, so parity has to cover both halves rather than only
+        # file_state.
+        cur.execute(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'objects' AND column_name = 'path'
+            """
+        )
+        objects_path = [tuple(row) for row in cur.fetchall()]
+    return {
+        "columns": columns,
+        "pk": pk,
+        "indexes": indexes,
+        "objects_path": objects_path,
+    }
+
+
+def _primary_key_oid(dsn: str) -> int | None:
+    """Identity of the `file_state` primary-key constraint, not just its shape."""
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT oid FROM pg_constraint "
+            "WHERE conrelid = to_regclass('public.file_state') AND contype = 'p'"
+        ).fetchone()
+    return row[0] if row else None
 
 
 def _file_state_rows(dsn: str) -> list[tuple]:
@@ -225,6 +251,7 @@ def test_adoption_is_idempotent_over_bootstrap_created_table(
 
     _alembic_upgrade(dsn, monkeypatch, FILE_STATE_ADOPTION_HEAD)
     adopted = _schema_snapshot(dsn)
+    adopted_pk_oid = _primary_key_oid(dsn)
 
     assert [entry[1] for entry in adopted["pk"]] == ["vault_binding_id", "path"], adopted["pk"]
     # An *adopted* table must also carry no leftover uniqueness on `path` alone;
@@ -249,10 +276,17 @@ def test_adoption_is_idempotent_over_bootstrap_created_table(
     command.stamp(cfg, PRE_ADOPTION_HEAD)
     command.upgrade(cfg, FILE_STATE_ADOPTION_HEAD)
 
+    # This proves *convergence*: an unconditional drop-and-re-add of the primary
+    # key would also leave an identical snapshot. The constraint oid below is
+    # what proves the DO block genuinely short-circuited instead.
     assert _schema_snapshot(dsn) == adopted, (
         "re-running the adoption revision changed an already-adopted schema:\n"
         f"first:  {json.dumps(adopted, indent=2, default=str)}\n"
         f"second: {json.dumps(_schema_snapshot(dsn), indent=2, default=str)}"
+    )
+    assert _primary_key_oid(dsn) == adopted_pk_oid, (
+        "the re-run dropped and recreated the primary key instead of "
+        "short-circuiting; the guard on the current key column list is not working"
     )
 
 

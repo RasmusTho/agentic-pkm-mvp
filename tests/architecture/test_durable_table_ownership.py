@@ -77,30 +77,44 @@ def test_no_durable_ddl_has_two_owners() -> None:
 
     sources = _revision_sources()
 
-    # 2. Exactly one Alembic revision issues DDL against file_state. Matching any
-    #    DDL verb — not just the exact `CREATE TABLE IF NOT EXISTS` spelling —
-    #    is what stops a second revision from quietly co-owning the table with a
-    #    bare `CREATE TABLE` or an `ALTER TABLE ... ADD COLUMN`.
-    file_state_ddl = re.compile(
+    # 2. Exactly one Alembic revision issues DDL against file_state. Both
+    #    spellings the repo actually uses are matched: raw SQL through
+    #    `op.execute`, and the Alembic operation API (`op.create_table` etc,
+    #    which `fe9a3607841f_bootstrap.py` already uses). Matching only raw SQL
+    #    would let a second owner written in the repo's other native style walk
+    #    straight past this guard.
+    file_state_raw_ddl = re.compile(
         r"(?is)\b(?:create\s+table|alter\s+table|drop\s+table|create(?:\s+unique)?\s+index)\b"
         r"[^\"';]*\b(?:public\.)?file_state\b"
     )
+    file_state_op_ddl = re.compile(
+        r"""(?is)\bop\.(?:create_table|add_column|drop_column|alter_column|drop_table"""
+        r"""|create_index|drop_index|rename_table|create_primary_key|drop_constraint)\s*\(\s*"""
+        r"""["'](?:public\.)?file_state["']"""
+    )
     file_state_owners = sorted(
-        name for name, text in sources.items() if file_state_ddl.search(text)
+        name
+        for name, text in sources.items()
+        if file_state_raw_ddl.search(text) or file_state_op_ddl.search(text)
     )
     assert len(file_state_owners) == 1, (
         f"expected exactly one Alembic revision to own file_state DDL, got {file_state_owners}"
     )
     assert file_state_owners[0].startswith(FILE_STATE_OWNING_REVISION), file_state_owners
 
-    # 3. Exactly one Alembic revision owns objects.path.
+    # 3. Exactly one Alembic revision owns objects.path, in either spelling.
+    #    `IF NOT EXISTS` is deliberately optional here — a second owner would be
+    #    just as real without it.
+    objects_path_raw_ddl = re.compile(
+        r"(?is)alter\s+table[^\"']*\bobjects\b[^\"']*add\s+column\s+(?:if\s+not\s+exists\s+)?path\b"
+    )
+    objects_path_op_ddl = re.compile(
+        r"""(?is)\bop\.add_column\s*\(\s*["'](?:public\.)?objects["']\s*,[^)]*["']path["']"""
+    )
     objects_path_owners = sorted(
         name
         for name, text in sources.items()
-        if re.search(
-            r"(?is)alter\s+table[^\"']*\bobjects\b[^\"']*add\s+column\s+if\s+not\s+exists\s+path",
-            text,
-        )
+        if objects_path_raw_ddl.search(text) or objects_path_op_ddl.search(text)
     )
     assert len(objects_path_owners) == 1, (
         f"expected exactly one Alembic revision to own objects.path, got {objects_path_owners}"
@@ -147,3 +161,38 @@ def test_file_state_is_reachable_from_the_alembic_revision_chain() -> None:
         f"{FILE_STATE_OWNING_REVISION} is not an ancestor of head {heads[0]}; "
         "`alembic upgrade head` would never reach file_state."
     )
+
+
+# The PG lane that MVR-05A's AC-5 names. It is an explicit allow-list, not a
+# directory glob, so a test file that is not listed here runs in no CI lane at
+# all — `-m "not pg"` excludes it everywhere else.
+PG_CONTRACTS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "integration-nightly.yaml"
+FILE_STATE_PG_TARGETS = (
+    "tests/migrations/test_file_state_adoption.py",
+    "tests/instance/test_file_state_binding_key.py",
+    "tests/services/test_vault_sync_binding_scope.py",
+    "tests/integration/test_single_vault_compatibility.py",
+)
+
+
+def test_file_state_pg_targets_run_in_the_pg_contracts_lane() -> None:
+    """The adoption and rekey guards must actually execute in CI, not just exist.
+
+    Five of #4543's six machine-checkable acceptance criteria are `pg`-marked.
+    Every other lane runs `-m "not pg"`, and `integration-nightly / pg-contracts`
+    selects files by explicit allow-list. If these paths are not listed there, a
+    forward-only migration on a live table is proven once, by hand, and then
+    never again — and `docs/DB_SCHEMA.md`'s claim that the table is reachable by
+    the PG verification lane becomes false-green coverage evidence.
+    """
+    workflow = PG_CONTRACTS_WORKFLOW.read_text(encoding="utf-8")
+    assert "pg-contracts:" in workflow, PG_CONTRACTS_WORKFLOW
+
+    missing = [target for target in FILE_STATE_PG_TARGETS if target not in workflow]
+    assert missing == [], (
+        f"{missing} are pg-marked but absent from the pg-contracts lane in "
+        f"{PG_CONTRACTS_WORKFLOW.name}; they would run in no CI lane."
+    )
+
+    for target in FILE_STATE_PG_TARGETS:
+        assert (REPO_ROOT / target).exists(), f"{target} is listed in CI but does not exist"

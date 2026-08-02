@@ -76,6 +76,10 @@ created at runtime by `app/db/migrations_obsidian.sql`) and changes its primary 
 - The constraint rebuild takes a brief `ACCESS EXCLUSIVE` lock on `file_state`. Apply it through the
   normal `migrate` one-shot, which runtime containers already gate on, rather than against a live
   writer.
+- **`FileStateSchemaMissingError` at startup means the migration has not run.** A vault-sync producer
+  (watcher, worker, or API ingest) refuses to touch the table when it is absent or still carries the
+  old `path`-only key, and names `alembic upgrade head` in the error. It fails *before* any effect,
+  so no partial write is left behind — run `scripts/run_migrations.sh` and restart.
 - Schema truth for the table is `docs/DB_SCHEMA.md :: file_state`.
 
 ## Runtime prerequisites (registry watcher)

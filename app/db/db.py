@@ -141,6 +141,12 @@ def _autocreate_file_state(conn: psycopg.Connection) -> None:
     for statement in _FILE_STATE_AUTOCREATE_SQL:
         with conn.cursor() as cur:
             cur.execute(statement)
+    # `CREATE TABLE IF NOT EXISTS` cannot heal a scratch database that already
+    # holds the pre-#4543 `path text PRIMARY KEY` shape: it silently no-ops and
+    # every vault-sync statement then fails with an unexplained UndefinedColumn.
+    # Reuse the same preflight so the test lane gets the "run migrations" hint
+    # instead.
+    assert_file_state_schema(conn)
 
 
 def _objects_id_primary_key_exists(conn: psycopg.Connection) -> bool:
