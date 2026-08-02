@@ -100,8 +100,20 @@ promote public internet readiness.
   deploy; a Keychain item that resolves to a *malformed* value does fail it, since the bootstrap is
   fail-closed on validation, and #4489 extended that to the optional `github.token` declared for the
   same consumer — tracked as `KD-4489-malformed-declared-secret-aborts-channel-deploy` on #4172) and
-  the `api` Compose service consumes it via its own env-file handle, without changing
-  how `heimdal-capture-watch` is provisioned. An api startup preflight detects a missing
+  the `api` Compose service consumes it via its own env-file handle. **`heimdal-capture-watch`'s
+  own provisioning is now channel-independent too (#4362):** the `HOST_SECRET_RUNTIME_ENV_FILE`
+  env-file layer that delivers `HEIMDAL_RAW_STORE_KEY` to that service lives in the base Compose
+  file (previously only the dev overlay carried it, so `test`/`prod` deploys never received the
+  key through the generated runtime env at all), the deploy wrapper's bootstrap gate now fires
+  for that service on every channel (previously dev-only), and `scripts/export_runtime_env.sh`
+  forwards an operator-set `HEIMDAL_CAPTURE_WATCH_DIR`/`HEIMDAL_RAW_READ_ALLOWLIST` into the
+  generated runtime env instead of requiring an ad-hoc shell export at compose time; the test
+  channel gets a hardcoded test-scoped watch dir the same way the `WATCHER_STATE_DIR`-family
+  paths already are. The supervised CLI entrypoint (no `--once`) also no longer exits on a
+  startup config error — it retries in place so the container stays resident long enough for the
+  independent Compose healthcheck to actually observe and report a config-missing failure as
+  `unhealthy`, instead of racing a `restart: unless-stopped` crash-loop that hid behind a stale
+  `healthy` status. An api startup preflight detects a missing
   `HEIMDAL_RAW_STORE_KEY` before first use, logs it loudly, and reports the media and screen
   ingress lanes `unavailable` on `/api/status` while every other API function keeps serving; the
   request-time named 500 `raw_store_key_unavailable` / `not_acknowledged` contract is unchanged.

@@ -93,6 +93,54 @@ def run_capture_tick(cfg: CaptureRuntimeConfig) -> Optional[WatchCycleResult]:
         return None
 
 
+def resolve_config_for_supervised_run(
+    *,
+    sleep: Optional[Callable[[float], None]] = None,
+    retry_interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
+    max_attempts: Optional[int] = None,
+) -> CaptureRuntimeConfig:
+    """Resolve config for the supervised/looping entrypoint, retrying in place on failure.
+
+    The `--once` CLI path fails loud and exits immediately on a config error
+    -- correct for a manually-invoked diagnostic command. The supervised path
+    (the compose service's default, no `--once`) must not do the same: under
+    `restart: unless-stopped`, an immediate exit respawns the process faster
+    than the container healthcheck's interval/retries window can observe a
+    consistent failure, so `docker ps` keeps reporting the health status from
+    the last successful start instead of transitioning to unhealthy -- a
+    crash-loop hiding behind a healthy-looking healthcheck (#4362). Staying
+    resident and retrying lets the independent compose healthcheck (which
+    re-resolves this same config on its own schedule) accumulate real
+    failures and report unhealthy honestly.
+
+    `max_attempts=None` (the production default) retries forever. Tests pass
+    a small `max_attempts` with an injected `sleep` to run deterministically.
+
+    `sleep` defaults to `None` and resolves to `time.sleep` inside the loop
+    (rather than as a bound default parameter value) so a caller that never
+    passes `sleep` explicitly -- the CLI's supervised path -- still honors a
+    `unittest.mock.patch`/`monkeypatch.setattr` of this module's `time.sleep`
+    at test time; a default parameter value would capture the real
+    `time.sleep` once at import time and ignore any later patch.
+    """
+    attempt = 0
+    while True:
+        try:
+            return CaptureRuntimeConfig.from_env()
+        except CaptureRuntimeConfigError as exc:
+            attempt += 1
+            logger.error(
+                "heimdal capture-watch: config unresolved (attempt %d), retrying "
+                "in %.0fs: %s",
+                attempt,
+                retry_interval_seconds,
+                exc,
+            )
+            if max_attempts is not None and attempt >= max_attempts:
+                raise
+            (sleep or time.sleep)(retry_interval_seconds)
+
+
 def run_forever(
     cfg: CaptureRuntimeConfig,
     *,
@@ -123,5 +171,6 @@ __all__ = [
     "CaptureRuntimeConfig",
     "CaptureRuntimeConfigError",
     "run_capture_tick",
+    "resolve_config_for_supervised_run",
     "run_forever",
 ]

@@ -20,6 +20,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
+from app.heimdal import capture_runtime
 from app.heimdal.consent_ledger import reset_memory_consent_ledger
 from app.heimdal.raw_store import all_raw_records, reset_memory_raw_store
 
@@ -104,3 +105,37 @@ def test_capture_watch_once_fails_loud_on_tick_failure(
         assert '"admitted": 0' not in result.output
     finally:
         watch_dir.chmod(0o755)
+
+
+def test_capture_watch_forever_mode_retries_instead_of_exiting_on_missing_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#4362: without `--once` (the compose service's default), a missing
+    HEIMDAL_CAPTURE_WATCH_DIR at startup must not exit the process -- that
+    defeats the container healthcheck under `restart: unless-stopped`
+    (crash-loop hides behind a stale healthy status instead of the
+    healthcheck ever observing a consistent failure). It must retry in
+    place and only proceed once config resolves."""
+    monkeypatch.delenv("HEIMDAL_CAPTURE_WATCH_DIR", raising=False)
+
+    sleep_calls: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        # Resolve on the second retry so the command can actually finish.
+        if len(sleep_calls) == 2:
+            monkeypatch.setenv("HEIMDAL_CAPTURE_WATCH_DIR", str(tmp_path))
+
+    monkeypatch.setattr(capture_runtime.time, "sleep", fake_sleep)
+
+    runner = CliRunner()
+    # max-ticks=0 with forever mode means run_forever executes zero ticks and
+    # returns immediately once config resolves -- this proves the command
+    # reached the looping path without exiting on the initial config error.
+    result = runner.invoke(
+        cli, ["heimdal", "capture-watch", "--max-ticks", "0"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(sleep_calls) >= 2
+    assert "stopped after 0 ticks" in result.output

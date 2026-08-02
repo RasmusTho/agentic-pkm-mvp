@@ -131,10 +131,14 @@ services:
 YAML
 }
 
-_deploy_channel_needs_dev_capture_secret() {
+# host_secret_contract.json declares the `heimdal-capture-watch` consumer for
+# every channel (dev/test/prod), not only dev (#4362 -- before this fix, this
+# helper was dev-only and test/prod deploys never wrapped the compose
+# invocation, so HEIMDAL_RAW_STORE_KEY never reached the service's env_file
+# chain on those channels no matter what the Keychain held).
+_deploy_channel_needs_capture_secret() {
   local channel="${1:?channel required}"
   shift
-  [ "${channel}" = "dev" ] || return 1
   [ "${1:-}" = "up" ] || return 1
   local arg
   for arg in "$@"; do
@@ -373,7 +377,7 @@ deploy_channel_compose() {
       "$@"
     )
 
-    if _deploy_channel_needs_dev_capture_secret "${channel}" "$@"; then
+    if _deploy_channel_needs_capture_secret "${channel}" "$@"; then
       compose_command=(
         "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
         --channel "${channel}"

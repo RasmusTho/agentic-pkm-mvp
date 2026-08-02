@@ -104,6 +104,11 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: mock
+      # HEIMDAL_CAPTURE_WATCH_DIR is deliberately NOT set here (#4362):
+      # CAPTURE_GOVERNED_KEYS (tests/deploy/test_base_runtime_env_compose.py)
+      # must ride the env_file chain, not `environment:` (which would shadow
+      # it with CLI interpolation, #3885). The test-scoped default lives in
+      # scripts/export_runtime_env.sh's test-channel branch instead.
 
   companion-ui:
     ports: !override

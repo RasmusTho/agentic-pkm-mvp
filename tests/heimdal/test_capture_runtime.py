@@ -25,6 +25,7 @@ from app.heimdal.capture_runtime import (
     DEFAULT_INTERVAL_SECONDS,
     CaptureRuntimeConfig,
     CaptureRuntimeConfigError,
+    resolve_config_for_supervised_run,
     run_forever,
 )
 
@@ -94,3 +95,56 @@ def test_runtime_survives_tick_exception(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     assert ticks == 2
     assert call_count["n"] == 2
+
+
+def test_resolve_config_for_supervised_run_returns_immediately_when_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(capture_runtime.WATCH_DIR_ENV, str(tmp_path))
+
+    sleeps: list[float] = []
+    cfg = resolve_config_for_supervised_run(sleep=sleeps.append)
+
+    assert cfg.watch_dir == tmp_path
+    assert sleeps == []
+
+
+def test_resolve_config_for_supervised_run_retries_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#4362: a missing HEIMDAL_CAPTURE_WATCH_DIR at supervised-loop startup
+    must not raise (which would exit the process and, under `restart:
+    unless-stopped`, crash-loop faster than the container healthcheck's
+    interval/retries window can observe it). It must retry in place instead,
+    so the process stays resident long enough for the independent compose
+    healthcheck to actually run and report unhealthy honestly."""
+    monkeypatch.delenv(capture_runtime.WATCH_DIR_ENV, raising=False)
+
+    sleeps: list[float] = []
+    attempts = {"n": 0}
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        attempts["n"] += 1
+        if attempts["n"] == 2:
+            monkeypatch.setenv(capture_runtime.WATCH_DIR_ENV, str(tmp_path))
+
+    cfg = resolve_config_for_supervised_run(
+        sleep=fake_sleep, retry_interval_seconds=3.0
+    )
+
+    assert cfg.watch_dir == tmp_path
+    assert sleeps == [3.0, 3.0]
+
+
+def test_resolve_config_for_supervised_run_raises_after_max_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounded-attempts mode (used by tests) still surfaces the error once
+    the attempt budget is exhausted, instead of retrying forever."""
+    monkeypatch.delenv(capture_runtime.WATCH_DIR_ENV, raising=False)
+
+    with pytest.raises(CaptureRuntimeConfigError):
+        resolve_config_for_supervised_run(
+            sleep=lambda _seconds: None, max_attempts=2
+        )
