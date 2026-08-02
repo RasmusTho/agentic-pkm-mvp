@@ -2630,7 +2630,9 @@ def _release_instance_state_deployment_lease(
             lease = _read_deployment_lease(ownership_root)
         except InstanceStatePreflightError:
             return {"released": False, "reason": "lease-unreadable"}
-        if lease.get("channel_id") != channel or lease.get("controller") != controller:
+        if lease.get("channel_id") != channel:
+            return {"released": False, "reason": "channel-mismatch"}
+        if lease.get("controller") != controller:
             return {"released": False, "reason": "controller-mismatch"}
         if lease.get("phase") == "cleanup":
             result = lease.get("result")

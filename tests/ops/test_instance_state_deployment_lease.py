@@ -117,6 +117,60 @@ def test_release_after_successful_finish_is_a_noop(tmp_path: Path) -> None:
     assert receipt["reason"] == "no-active-lease"
 
 
+def test_release_ignores_a_lease_owned_by_a_different_controller(tmp_path: Path) -> None:
+    """Release must never clear a lease it did not itself claim, even a live one."""
+
+    channel = "prod"
+    owner_pid = os.getpid()
+    owner_token = _controller_token(owner_pid)
+    _state, ownership, _fence = _begin(
+        tmp_path,
+        channel=channel,
+        controller_pid=owner_pid,
+        controller_start_token=owner_token,
+    )
+
+    receipt = _release_instance_state_deployment_lease(
+        channel=channel,
+        host_global_root=ownership,
+        controller_pid=999_999_998,
+        controller_start_token=f"linux:{'6' * 64}",
+    )
+
+    assert receipt["released"] is False
+    assert receipt["reason"] == "controller-mismatch"
+    assert _deployment_lease_path(ownership).exists()
+    assert _deployment_fence_path(ownership, channel).exists()
+    lease = json.loads(_deployment_lease_path(ownership).read_text(encoding="utf-8"))
+    assert lease["controller"] == {"pid": owner_pid, "start_token": owner_token}
+
+
+def test_release_ignores_a_lease_from_a_different_channel(tmp_path: Path) -> None:
+    """Release must never clear another channel's lease, even with a matching controller."""
+
+    channel = "prod"
+    controller_pid = os.getpid()
+    controller_token = _controller_token(controller_pid)
+    _state, ownership, _fence = _begin(
+        tmp_path,
+        channel=channel,
+        controller_pid=controller_pid,
+        controller_start_token=controller_token,
+    )
+
+    receipt = _release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ownership,
+        controller_pid=controller_pid,
+        controller_start_token=controller_token,
+    )
+
+    assert receipt["released"] is False
+    assert receipt["reason"] == "channel-mismatch"
+    assert _deployment_lease_path(ownership).exists()
+    assert _deployment_fence_path(ownership, channel).exists()
+
+
 def test_dead_controller_lease_is_reclaimable(tmp_path: Path) -> None:
     """AC: a lease whose controller process no longer exists is reclaimable."""
 
