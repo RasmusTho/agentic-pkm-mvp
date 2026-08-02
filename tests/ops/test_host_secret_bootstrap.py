@@ -1138,6 +1138,100 @@ def test_matching_shared_domain_secret_bootstraps_unchanged(tmp_path: Path) -> N
     assert observed_path is not None and not observed_path.exists()
 
 
+def test_shared_domain_agreement_is_hex_case_insensitive(tmp_path: Path) -> None:
+    """Two hex-case spellings of the same raw-store key must not read as diverged.
+
+    `raw-store-key` values are decoded with `bytes.fromhex` before use
+    (`app/heimdal/raw_store.py`), so `"a" * 64` and `"A" * 64` are the same key
+    material. Comparing the raw text would false-positive here and brick both
+    consumers on an otherwise correctly provisioned host.
+    """
+    observed_path: Path | None = None
+
+    def runner(_command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        observed_path = Path(env["HOST_SECRET_RUNTIME_ENV_FILE"])
+        return 0
+
+    result = run_with_host_secrets(
+        channel="dev",
+        consumer="heimdal-capture-watch",
+        command=["consumer"],
+        keychain_lookup=_divergent_raw_store_key_lookup(sibling=_RAW_KEY.upper()),
+        runner=runner,
+        directory=tmp_path,
+    )
+
+    assert result == 0
+    assert observed_path is not None and not observed_path.exists()
+
+
+def test_sibling_lookup_programming_error_still_fails_closed(tmp_path: Path) -> None:
+    """The sibling-skip path only tolerates the typed bootstrap failure.
+
+    An unexpected error from a `keychain_lookup` implementation (a signature
+    mismatch, a decode bug) must not be swallowed as "sibling unresolvable" —
+    that would silently disable the divergence check. Only
+    `HostSecretBootstrapError`, the failure every in-repo `keychain_lookup`
+    raises for a genuinely unresolvable item, is tolerated; anything else
+    reaches the outer handler and fails this consumer closed.
+    """
+    launched = False
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        nonlocal launched
+        launched = True
+        return 0
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":heimdal-api-ingress:heimdal.raw-store-key"):
+            raise TypeError("unexpected programming error, not a bootstrap failure")
+        return _RAW_KEY
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        run_with_host_secrets(
+            channel="dev",
+            consumer="heimdal-capture-watch",
+            command=["never-start"],
+            keychain_lookup=lookup,
+            runner=runner,
+            directory=tmp_path,
+        )
+
+    assert not isinstance(error.value, HostSecretSharedDomainDivergenceError)
+    assert not launched
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_sibling_lookup_bootstrap_failure_is_tolerated_as_skip(tmp_path: Path) -> None:
+    """A sibling's typed, unresolvable-item failure is skipped, not fatal."""
+    observed_path: Path | None = None
+
+    def runner(_command: list[str], env: dict[str, str]) -> int:
+        nonlocal observed_path
+        observed_path = Path(env["HOST_SECRET_RUNTIME_ENV_FILE"])
+        return 0
+
+    def lookup(_service: str, account: str) -> str:
+        if account.endswith(":heimdal-api-ingress:heimdal.raw-store-key"):
+            raise HostSecretBootstrapError(
+                "host secret bootstrap failed for declared consumer"
+            )
+        return _RAW_KEY
+
+    result = run_with_host_secrets(
+        channel="dev",
+        consumer="heimdal-capture-watch",
+        command=["consumer"],
+        keychain_lookup=lookup,
+        runner=runner,
+        directory=tmp_path,
+    )
+
+    assert result == 0
+    assert observed_path is not None and not observed_path.exists()
+
+
 def test_non_shared_domain_secret_with_two_consumers_skips_sibling_lookup(
     tmp_path: Path,
 ) -> None:
