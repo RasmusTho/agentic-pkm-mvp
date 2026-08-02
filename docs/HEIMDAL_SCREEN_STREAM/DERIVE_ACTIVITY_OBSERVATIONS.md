@@ -84,21 +84,21 @@ stream floods — the invariant test pins the boundary-preserving direction.
 
 ## Acceptance Criteria
 
-- [ ] AC1: a frame bundle + app metadata derives one activity observation with a textual summary,
+- [x] AC1: a frame bundle + app metadata derives one activity observation with a textual summary,
       entity mentions, and per-axis confidence, published through `publish_full_observation` (governed
       path, not a bespoke insert). Verify: `tests/heimdal/test_screen_derivation.py::test_bundle_derives_and_publishes_observation`
-- [ ] AC2 (enforcement): derivation reads raw only via the gated read path with a receipt, and the
+- [x] AC2 (enforcement): derivation reads raw only via the gated read path with a receipt, and the
       resolved model is local — asserted at the derivation call site: the router is invoked with the
       `heimdal.screen_derivation` task kind and a paid route is rejected. Verify: `tests/heimdal/test_screen_derivation_routing.py::test_screen_derivation_is_paid_ineligible_and_reads_raw_gated` (asserts `paid_eligible=false` rejection at the compiler + `read_raw_record` receipt at the production call site)
-- [ ] AC3: unchanged consecutive frames coalesce into one span with real start/end duration; a
+- [x] AC3: unchanged consecutive frames coalesce into one span with real start/end duration; a
       dimension shift (app/window/scope/goal) always creates a new span boundary — a merge across a
       shift fails the test. Verify: `tests/heimdal/test_screen_coalescing.py::test_span_boundaries_survive_on_dimension_shift`
-- [ ] AC4: provenance (machine + observed-at window + derivation `stage_versions`/`model_ref`) is
+- [x] AC4: provenance (machine + observed-at window + derivation `stage_versions`/`model_ref`) is
       stamped in the same durable write as the observation; a bundle that derives text but cannot stamp
       complete provenance refuses to publish (INV-SCREEN-B). Verify: `tests/heimdal/test_screen_derivation.py::test_unprovenanced_observation_refuses_publish`
-- [ ] AC5: local context providers are pluggable — adding a provider changes the derived summary/mentions
+- [x] AC5: local context providers are pluggable — adding a provider changes the derived summary/mentions
       without changing the observation contract or the derivation entrypoint signature. Verify: `tests/heimdal/test_screen_context_providers.py::test_provider_registry_extensible`
-- [ ] AC6 (non-behavioral): the declared egress posture for the screen-derivation stage names zero raw
+- [x] AC6 (non-behavioral): the declared egress posture for the screen-derivation stage names zero raw
       egress (HEIM-12). Verify: doc writeback at `docs/HEIMDAL_SCREEN_STREAM/DERIVE_ACTIVITY_OBSERVATIONS.md :: What This Task Does` (step 3) + `tests/invariants/test_heimdal_seam.py::test_declared_egress` extended with the screen stage
 
 ## How to Verify (Pre-Merge)
@@ -133,4 +133,4 @@ user-facing is lost. This is why frame discard is gated on successful publish, n
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] derive-activity-observations: local-vision derivation + span coalescing + governed publish`. Blocked until SCREEN-01 merges. Likely **opus-tier** (derivation-model routing, coalescing invariant, privacy seam). See scratchpad draft.
+One issue: #3344 `[Heimdal Screen Stream] derive-activity-observations: local-vision derivation + span coalescing + governed publish` — **delivered**. Its dependency SCREEN-01/#3343 merged first, as planned; every acceptance criterion above is checked against a passing named test. Delivered opus-tier (derivation-model routing, coalescing invariant, privacy seam).
