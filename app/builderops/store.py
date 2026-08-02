@@ -292,6 +292,7 @@ class SqliteBuilderOpsStore:
         receipt_body: str,
         lifecycle_state: str | None = None,
         promotion_status: str | None = None,
+        successor_refs: list[dict[str, Any]] | None = None,
         receipt_extra: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if lifecycle_state is None and promotion_status is None:
@@ -304,6 +305,8 @@ class SqliteBuilderOpsStore:
         if not lease_id:
             raise BuilderOpsValidationError("lease_id must not be empty")
         validate_source_refs(source_refs)
+        if successor_refs is not None:
+            validate_source_refs(successor_refs, "successor_refs")
         actor_ref = normalize_actor(actor)
         request = {
             "operation": "transition_record_state",
@@ -317,6 +320,7 @@ class SqliteBuilderOpsStore:
             "receipt_body": receipt_body,
             "lifecycle_state": lifecycle_state,
             "promotion_status": promotion_status,
+            "successor_refs": successor_refs,
             "receipt_extra": dict(receipt_extra or {}),
         }
         request_hash = _request_hash(request)
@@ -352,6 +356,12 @@ class SqliteBuilderOpsStore:
                 updated["lifecycle_state"] = lifecycle_state
             if promotion_status is not None:
                 updated["promotion_status"] = promotion_status
+            if successor_refs is not None:
+                merged_successors = list(current.get("successor_refs", []))
+                for ref in successor_refs:
+                    if ref not in merged_successors:
+                        merged_successors.append(dict(ref))
+                updated["successor_refs"] = merged_successors
             new_state = {
                 "lifecycle_state": updated["lifecycle_state"],
                 "promotion_status": updated["promotion_status"],

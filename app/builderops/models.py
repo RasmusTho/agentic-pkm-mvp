@@ -336,8 +336,16 @@ SOURCE_REF_LIST_FIELDS = frozenset({
     "last_verified_against",
     "shipped_refs",
     "source_refs",
+    "successor_refs",
     "target_refs",
 })
+
+# Terminal LearningSignal dispositions must name the artifact that enacted or
+# explicitly declined the divergence (issue #4267): a bare `superseded` or
+# `discarded` status transition with no linked successor artifact reads as
+# "handled" while the underlying defect stays unrepaired.
+TERMINAL_SIGNAL_LIFECYCLE_STATES = frozenset({"discarded", "superseded"})
+SUCCESSOR_REF_TYPES = frozenset({"github_issue", "github_pr", "promotion_intent"})
 
 
 class BuilderOpsValidationError(ValueError):
@@ -444,4 +452,38 @@ def normalize_record(record: Mapping[str, Any]) -> JsonDict:
         if field not in SOURCE_REF_LIST_FIELDS:
             validate_nonempty_list(data[field], field)
     validate_source_refs(data["source_refs"])
+    validate_terminal_signal_successor(data)
     return data
+
+
+def validate_terminal_signal_successor(record: Mapping[str, Any]) -> None:
+    """Require a linked successor artifact on terminal LearningSignal dispositions.
+
+    A `LearningSignal` reaching `superseded` or `discarded` must name, in
+    `successor_refs`, at least one Issue, PR, or PromotionIntent
+    (`ref_type` in ``SUCCESSOR_REF_TYPES``) that actually enacted or explicitly
+    declined the divergence. Enforced per
+    `docs/architecture/SBS_OPERATING_MODEL.md :: Builder Learning, Evaluation,
+    And TCD Governance Loop` (issue #4267).
+    """
+
+    if record.get("object_type") != "LearningSignal":
+        return
+    if record.get("lifecycle_state") not in TERMINAL_SIGNAL_LIFECYCLE_STATES:
+        return
+    successors = record.get("successor_refs")
+    if not isinstance(successors, list) or not successors:
+        raise BuilderOpsValidationError(
+            "LearningSignal terminal disposition "
+            f"'{record.get('lifecycle_state')}' requires successor_refs naming "
+            "the Issue, PR, or PromotionIntent that enacted or explicitly "
+            "declined the divergence"
+        )
+    validate_source_refs(successors, "successor_refs")
+    if not any(ref.get("ref_type") in SUCCESSOR_REF_TYPES for ref in successors):
+        allowed = ", ".join(sorted(SUCCESSOR_REF_TYPES))
+        raise BuilderOpsValidationError(
+            "LearningSignal terminal disposition "
+            f"'{record.get('lifecycle_state')}' requires at least one "
+            f"successor_refs entry with ref_type in: {allowed}"
+        )
