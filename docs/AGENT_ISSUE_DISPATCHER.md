@@ -785,7 +785,11 @@ python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --jso
 ```
 
 If no vault is currently selected and no explicit path is given, the command fails loud with a
-clear error instead of guessing a location.
+clear error instead of guessing a location. A genuinely never-selected reference (`status: none`)
+and a dangling one — a `lastActiveVaultRef` naming a path that no longer exists on disk
+(`status: missing`) — are reported distinctly (#4223): the dangling case names the missing path
+instead of claiming no vault was ever selected, matching the existing precedent in
+`app/api/routes/companion.py` for the same `VaultContext` status split.
 
 The exporter writes one Markdown file per dispatcher task under status columns:
 
