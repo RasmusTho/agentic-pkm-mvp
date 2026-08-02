@@ -115,7 +115,10 @@ def assert_file_state_schema(conn: psycopg.Connection) -> None:
                   JOIN pg_class cls ON cls.oid = idx.indexrelid
                  WHERE idx.indrelid = to_regclass('public.file_state')
                    AND idx.indisunique
-                   AND idx.indnatts = 1
+                   -- indnkeyatts, not indnatts: the latter counts INCLUDEd
+                   -- columns, so `UNIQUE(path) INCLUDE (uuid)` would slip past
+                   -- while still re-imposing one-binding-per-path.
+                   AND idx.indnkeyatts = 1
                    AND (
                      SELECT att.attname
                        FROM pg_attribute att

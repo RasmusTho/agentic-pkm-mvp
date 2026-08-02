@@ -50,10 +50,14 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   and rekeys it from `path` to `(vault_binding_id, path)`. The bootstrap SQL no longer contains any
   `file_state` DDL, so the table has exactly one production owner and — for the first time — is
   reachable by `alembic upgrade head`. Its adoption, row-survival, rekey, and single-vault-equivalence
-  guards run in the `integration-nightly / pg-contracts` lane, whose file allow-list is pinned by
-  `tests/architecture/test_durable_table_ownership.py::test_file_state_pg_targets_run_in_the_pg_contracts_lane`
-  (that lane selects files explicitly, and every other lane runs `-m "not pg"`, so an unlisted
-  `pg`-marked test would execute in no CI lane at all). Test fixtures opt
+  guards are `pg`-marked and run in **both** lanes that execute `-m "pg"`: `ci-smoke / index_pg` on
+  the PR path, and `integration-nightly / pg-contracts` nightly. Both select files by explicit
+  allow-list and `index_pg` is additionally paths-filtered, so
+  `tests/architecture/test_durable_table_ownership.py::test_file_state_pg_targets_run_in_both_pg_lanes`
+  pins the allow-lists and
+  `::test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards` pins the paths filter — every
+  other lane runs `-m "not pg"`, so an unlisted `pg`-marked test would execute in no CI lane at all.
+  Test fixtures opt
   in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1` flag KERNEL-04 established
   (`app/db/db.py::_autocreate_file_state`); its shape parity with the revision, adoption
   idempotency, existing-row survival, and bootstrap-origin/Alembic-origin convergence are asserted

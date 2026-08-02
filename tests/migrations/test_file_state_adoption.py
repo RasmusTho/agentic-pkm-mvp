@@ -526,3 +526,20 @@ def test_preflight_rejects_a_leftover_path_only_unique_index(
         conn.execute("DROP INDEX file_state_legacy_path_key")
     with psycopg.connect(dsn) as conn:
         assert_file_state_schema(conn)
+
+    # `indnatts` would count the INCLUDEd column and let this through, even
+    # though it re-imposes one-binding-per-path just as effectively. The
+    # preflight uses `indnkeyatts`.
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            "CREATE UNIQUE INDEX file_state_covering_path_key "
+            "ON public.file_state(path) INCLUDE (uuid)"
+        )
+    with psycopg.connect(dsn) as conn:
+        with pytest.raises(FileStateSchemaMissingError, match="file_state_covering_path_key"):
+            assert_file_state_schema(conn)
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute("DROP INDEX file_state_covering_path_key")
+    with psycopg.connect(dsn) as conn:
+        assert_file_state_schema(conn)
