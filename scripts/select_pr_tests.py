@@ -747,6 +747,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/promotion",
             "tests/panel",
             *E2E_TARGETS["promotion_panel"],
+            # `app/agents/panel_agent/state.py` defines PanelAgentState. These two
+            # suites are the ONLY gates in the repo asserting the shared
+            # RuntimeStateModel authority/trace spine on it. Without them a
+            # `promotion_panel`-only selection goes green while a state class
+            # that dropped the spine merges -- the same false-green window closed
+            # for `ask` in PR #4495 (#2921; #4501).
+            "tests/architecture/test_agent_state_spine.py",
+            "tests/agents/test_runtime_state_contract.py",
         ),
     ),
     (
