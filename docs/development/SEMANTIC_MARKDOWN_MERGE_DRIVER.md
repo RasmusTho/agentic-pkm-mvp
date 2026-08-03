@@ -1,4 +1,4 @@
-State: Current-state contract for the `semanticmd` git merge driver; aligned with shipped behavior (#4505 routing narrowing, #4561 `%A` result write).
+State: Current-state contract for the `semanticmd` git merge driver; aligned with shipped behavior (#4505 routing narrowing, #4561 `%A` result write, #4603 content-loss guard generalized to vault notes).
 
 # Semantic Markdown merge driver (`semanticmd`)
 
@@ -31,15 +31,35 @@ devices under `vault/**`.
 Path narrowing alone cannot cover every present or future repository doc
 outside the pinned paths above (nested `README.md` files, generated docs,
 etc.), so `merge_note_from_blobs` itself refuses to report `status=resolved`
-when **both** the vault-note identity is absent (no `uuid:` frontmatter on
-either side) **and** the two sides' bodies actually diverge. In that case it
-returns `status=conflict`, which the driver (`app/cli/merge_driver.py`) turns
-into a non-zero exit code — git then raises a normal conflict on that path
-instead of silently discarding one side's committed content.
+when the two sides' bodies actually diverge and no verified-safe resolution
+mechanism accounts for the divergence. In that case it returns
+`status=conflict`, which the driver (`app/cli/merge_driver.py`) turns into a
+non-zero exit code — git then raises a normal conflict on that path instead of
+silently discarding one side's committed content.
 
-This backstop does not change behavior for any input that carries `uuid:`
-frontmatter on either side; the vault-note near-duplicate/"prefer concise"
-path is unchanged.
+This guard applies uniformly to every input, including vault notes (`uuid:`
+frontmatter present). It was originally scoped to non-vault-note input only,
+on the assumption that vault-note merging performs real semantic judgment and
+is therefore safe. It does not: `judge_locus`
+(`app/agents/merge_resolver/llm.py`) is a stub that returns an LLM prompt pack,
+not a resolved decision, so `apply_decisions` always keeps OURS (%A)
+regardless of what THEIRS contains and still reports "resolved". Once #4561
+made the driver actually write that "resolved" result to `%A`, a real vault
+note merge with a genuine two-sided divergence became a clean, silent rebase
+that permanently drops one side's edit. See
+`tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped`
+for the regression coverage.
+
+Two mechanisms are trusted to resolve a divergence without raising a conflict,
+because they provably do not discard real content: an exact body match
+(nothing to lose), the markdown-link-carryover heuristic (THEIRS' missing
+links are appended into the merged text), and a genuine near-duplicate pick
+(token similarity `>= 0.85`, i.e. negligible information difference either
+way). Any other divergence — including ordinary distinct-prose additions on
+both sides — raises a conflict rather than silently picking a side. Real
+per-locus semantic merging (an actual LLM judgment wired into `judge_locus`)
+is not implemented; until it is, vault-note auto-resolve is limited to the
+three mechanisms above.
 
 ## History
 
@@ -49,6 +69,13 @@ routine rebases (exit 0, `MERGE_STATUS=resolved`), including one case where
 the discarded content was a correction that got reverted back to the
 incorrect prose. See `tests/agents/test_merge_resolver_repo_docs.py` for the
 regression coverage.
+
+Filed and fixed under GitHub issue #4603: delivering #4505 surfaced that its
+non-vault-only guard scoping rested on a false premise (vault-note merging
+"working" as real semantic merge). A real git-driver-level repro proved vault
+notes hit the identical silent-drop defect once #4561 made the `%A` write
+land. See the "Resolver-level backstop" section above and
+`tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped`.
 
 ## `%A` file-write contract (fixed by #4496)
 
