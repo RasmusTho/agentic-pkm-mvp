@@ -1,7 +1,18 @@
+import re
 from typing import Any, Dict, List, Tuple
 
 from .graph import diff_conflict_loci, apply_decisions
 from .llm import judge_locus
+
+
+def _token_similarity(x: str, y: str) -> float:
+    t1 = set(re.findall(r"\w+", x.lower()))
+    t2 = set(re.findall(r"\w+", y.lower()))
+    if not t1 or not t2:
+        return 0.0
+    inter = len(t1 & t2)
+    denom = (len(t1) + len(t2)) / 2.0
+    return inter / denom
 
 
 def _extract_uuid(md: str) -> str | None:
@@ -69,16 +80,7 @@ def _postprocess_merge(merged, info, a, b):
     b_body = _body(b)
     merged_body = _body(merged)
 
-    def _sim(x:str,y:str)->float:
-        t1 = set(re.findall(r"\w+", x.lower()))
-        t2 = set(re.findall(r"\w+", y.lower()))
-        if not t1 or not t2:
-            return 0.0
-        inter = len(t1 & t2)
-        denom = (len(t1) + len(t2)) / 2.0
-        return inter / denom
-
-    sim = _sim(a_body, b_body)
+    sim = _token_similarity(a_body, b_body)
 
     # 1) Near-duplicate -> markera 'concise' i reason om olika längd
     r = (info or {}).get("reason","")
@@ -87,9 +89,12 @@ def _postprocess_merge(merged, info, a, b):
         info["reason"] = (r + ("; " if r else "")) + "prefer concise (near-duplicate)"
 
 
-    # 1b) Om merged == A (eller B) och den valda varianten är kortare -> uttryckligen motivera 'prefer concise'
+    # 1b) Om merged == A (eller B) och den valda varianten är kortare -> uttryckligen motivera
+    # 'prefer concise'. Gated on the same genuine near-duplicate threshold as (1): without it,
+    # this fires purely because the (always-default-to-A) chosen side happens to be shorter,
+    # mislabeling arbitrary content loss as an intentional "prefer concise" pick.
     r = (info or {}).get("reason","")
-    if "concise" not in r.lower():
+    if sim >= 0.85 and "concise" not in r.lower():
         if merged_body == a_body and len(a_body) < len(b_body):
             info = dict(info or {})
             info["reason"] = (r + ("; " if r else "")) + "prefer concise"
@@ -119,27 +124,35 @@ def _body(md: str) -> str:
     return md.strip()
 
 
-def _has_vault_identity(a: str, b: str) -> bool:
-    # A vault note carries a stable `uuid:` frontmatter identity. Repository
-    # documentation (docs/**, README.md, AGENTS.md, .codex/skills/**, ...) never does.
-    # Only vault notes are safe for the near-duplicate / "prefer concise" heuristics.
-    return bool(_extract_uuid(a) or _extract_uuid(b))
+def _guard_content_loss(merged, info, a, b):
+    """Refuse to silently resolve a merge that discards one side's real content.
 
+    Issue #4505 added this fail-safe for repository documentation (no `uuid:`
+    frontmatter): the near-duplicate / "prefer concise" heuristic could pick one
+    side wholesale, report MERGE_STATUS=resolved, and exit 0 -- discarding the
+    other side's committed content with no conflict and no warning.
 
-def _guard_non_vault_content_loss(merged, info, a, b):
-    """Refuse to silently resolve a merge that discards one side's content when
-    neither input carries vault-note identity.
+    That guard originally exempted vault notes (`uuid:` frontmatter present) on
+    the assumption that vault-note merging is real semantic merging and therefore
+    safe. It is not: `judge_locus` is a stub that never returns a resolvable
+    per-locus decision, so `apply_decisions` always keeps OURS (%A) regardless of
+    what THEIRS contains, and still reports "resolved". Once the driver's %A-write
+    contract was fixed (#4561), that silent, always-keep-OURS "resolve" started
+    reaching the real working tree on every vault-note merge with a genuine,
+    non-trivial divergence -- see
+    tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped.
 
-    Issue #4505: applied to code-review-approved repository documentation (no
-    `uuid:` frontmatter), the near-duplicate / "prefer concise" heuristic can pick
-    one side wholesale, report MERGE_STATUS=resolved, and exit 0 -- discarding the
-    other side's committed content with no conflict and no warning. A conservative
-    conflict is always acceptable; discarding a side without signalling is not.
+    The only two mechanisms this resolver has that actually preserve the
+    discarded side's real content are: an exact match (nothing to lose), and the
+    markdown-link-carryover heuristic below (which literally appends THEIRS'
+    missing links into the merged text). A genuine near-duplicate pick is also
+    trusted, since by definition there is negligible information to lose. Any
+    other divergence is not provably safe and must raise a conflict instead of
+    silently discarding a side -- the same conservative default #4505 already
+    established, now applied uniformly instead of only to non-vault content.
     """
     info = dict(info or {})
     if info.get("status") != "resolved":
-        return merged, info
-    if _has_vault_identity(a, b):
         return merged, info
 
     a_body = _body(a)
@@ -149,10 +162,17 @@ def _guard_non_vault_content_loss(merged, info, a, b):
         return merged, info
 
     reason = info.get("reason", "")
+    if "carried links" in reason.lower():
+        # The missing-link-carryover heuristic already reconciled the divergence.
+        return merged, info
+    if _token_similarity(a_body, b_body) >= 0.85:
+        # Genuine near-duplicate: negligible content to lose either way.
+        return merged, info
+
     info["status"] = "conflict"
     info["reason"] = (
         (reason + "; " if reason else "")
-        + "no vault-note identity (no uuid: frontmatter) and content diverges; "
+        + "content diverges without a verified-safe resolution; "
         "refusing to silently discard a side, raising a conflict instead"
     )
     return merged, info
@@ -161,4 +181,4 @@ def _guard_non_vault_content_loss(merged, info, a, b):
 def merge_note_from_blobs(base: str, a: str, b: str):
     merged, info = _orig_merge_note_from_blobs(base, a, b)
     merged, info = _postprocess_merge(merged, info, a, b)
-    return _guard_non_vault_content_loss(merged, info, a, b)
+    return _guard_content_loss(merged, info, a, b)

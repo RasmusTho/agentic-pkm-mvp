@@ -49,6 +49,18 @@ promote public internet readiness.
 - Prod promotion model fix (#2656): AC1 and AC3 are done, while AC2 remains operator-gated pending operator receipt and sibling-doc reconciliation.
 - Delivery wave follow-on receipts: GraphQL exhaustion fix #2686, watcher settings receipts #2678, nested-vault boundary enforcement #2689, and deployment environment-separation spec #2692 are merged and reflected in the current shipped baseline.
 
+2026-08-03 fix writeback:
+- `semanticmd` merge driver's content-loss guard now applies to vault notes too (#4603):
+  delivering #4505 surfaced that its non-vault-only scoping assumed vault-note merging performs
+  real semantic judgment; it does not (`judge_locus` is a stub, so `apply_decisions` always keeps
+  OURS). Once #4561 made the driver actually write `resolved` results to `%A`, a genuine two-sided
+  vault-note edit became a clean, silent `git rebase`/`git merge` that permanently dropped one
+  side's content while reporting success. `app/agents/merge_resolver/agent.py::merge_note_from_blobs`
+  now refuses `status=resolved` for any diverging bodies (vault or not) unless an exact match, the
+  markdown-link-carryover heuristic, or a genuine near-duplicate pick (token similarity `>= 0.85`)
+  accounts for the divergence; a length-based "prefer concise" mislabeling that fired regardless of
+  real similarity is also fixed. See `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
+
 2026-08-02 fix writeback:
 - `semanticmd` merge driver no longer routes repository documentation (#4505): `.gitattributes`
   narrows `merge=semanticmd` off `docs/**`, `/README.md`, `/AGENTS.md`, `/CLAUDE.md`,

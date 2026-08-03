@@ -283,3 +283,97 @@ ours body, no link
     assert "https://example.com/incoming" in merged_on_disk
     assert "MERGE_STATUS" not in merged_on_disk
     assert "MERGE_REASON" not in merged_on_disk
+
+
+def test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped(tmp_path: Path):
+    # Same production wiring as the test above (real `git rebase`, not run_merge()
+    # directly), but with a vault note (uuid: frontmatter present) whose two sides
+    # each add distinct plain prose -- no markdown link, no large length skew, no
+    # near-duplicate phrasing. The resolver's per-locus judge (`judge_locus`) is a
+    # stub that never returns a real "decision", so `apply_decisions` silently
+    # keeps OURS and `merge_note_from_blobs` still reports status="resolved".
+    # git's %A-write contract (fixed in #4561) then faithfully commits that
+    # incomplete result: a clean, silent rebase that permanently drops one side's
+    # real edit with no conflict and no warning.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(_REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    for k, v in {
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+    }.items():
+        env[k] = v
+
+    _git(["init", "-q"], repo, env)
+    _git(["config", "commit.gpgsign", "false"], repo, env)
+    _git(["config", "merge.semanticmd.name", "Semantic Markdown merge (test)"], repo, env)
+    _git(
+        ["config", "merge.semanticmd.driver", f"{sys.executable} -m app.cli.merge_driver %O %A %B"],
+        repo, env,
+    )
+    (repo / ".gitattributes").write_text("*.md merge=semanticmd\n", encoding="utf-8")
+
+    note = repo / "n.md"
+    base_body = """---
+uuid: u-rebase-drop
+kind: concept
+review_state: reviewed
+---
+# T
+shared base line
+"""
+    note.write_text(base_body, encoding="utf-8")
+    _git(["add", "."], repo, env)
+    _git(["commit", "-q", "-m", "base"], repo, env)
+    main_branch = _git(["branch", "--show-current"], repo, env).stdout.strip()
+
+    _git(["checkout", "-q", "-b", "theirs"], repo, env)
+    theirs_body = """---
+uuid: u-rebase-drop
+kind: concept
+review_state: reviewed
+---
+# T
+shared base line
+theirs distinct addition about deployment timing
+"""
+    note.write_text(theirs_body, encoding="utf-8")
+    _git(["commit", "-q", "-am", "theirs edit"], repo, env)
+
+    _git(["checkout", "-q", main_branch], repo, env)
+    ours_body = """---
+uuid: u-rebase-drop
+kind: concept
+review_state: reviewed
+---
+# T
+shared base line
+ours distinct addition about retry budget
+"""
+    note.write_text(ours_body, encoding="utf-8")
+    _git(["commit", "-q", "-am", "ours edit"], repo, env)
+
+    rebase = subprocess.run(
+        ["git", "rebase", "theirs"],
+        cwd=repo, env=env, capture_output=True, text=True,
+    )
+
+    if rebase.returncode != 0:
+        # A hard conflict is an acceptable, safe outcome -- it is silent success
+        # (clean rebase + exit 0) that discards a real edit that is the defect.
+        subprocess.run(["git", "rebase", "--abort"], cwd=repo, env=env, capture_output=True)
+        return
+
+    merged_on_disk = note.read_text(encoding="utf-8")
+    log = _git(["log", "--oneline", "--all"], repo, env).stdout
+    assert "ours distinct addition about retry budget" in merged_on_disk, (
+        "clean rebase silently dropped the ours-side edit despite exit 0:\n"
+        f"stdout={rebase.stdout!r} stderr={rebase.stderr!r}\n"
+        f"working tree:\n{merged_on_disk}\nlog:\n{log}"
+    )
+    assert "theirs distinct addition about deployment timing" in merged_on_disk, (
+        "clean rebase silently dropped the theirs-side edit despite exit 0:\n"
+        f"working tree:\n{merged_on_disk}\nlog:\n{log}"
+    )
