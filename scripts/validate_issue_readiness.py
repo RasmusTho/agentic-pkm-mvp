@@ -217,7 +217,11 @@ def _verify_file_path(target: str) -> str | None:
             if canonical.startswith("`") and canonical.endswith("`"):
                 canonical = canonical[1:-1]
             path, separator, _ = canonical.partition(" :: ")
-            return path if separator else None
+            if not separator:
+                return None
+            if _is_joined_verify_target(target):
+                return path
+            return path.strip("`")
     path, separator, spaced_rest = canonical.partition(" :: ")
     if separator and spaced_rest:
         return path
