@@ -111,6 +111,37 @@ def test_ready_issue_rejects_missing_non_behavioral_verify_file_path() -> None:
     assert "non-test file-based" in report.repair_guidance[0]
 
 
+def test_prose_prefixed_backticked_verify_path_resolves() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        (
+            "doc writeback at `docs/development/DEV_WORKFLOW.md :: "
+            "Acceptance verifiability` (step 3)"
+        ),
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "ready_candidate"
+    assert report.acceptance_criteria.missing_verify_file_paths == []
+
+
+def test_backticked_missing_verify_path_still_rejected() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications",
+        "doc writeback at `docs/missing-readiness-guidance.md :: verify-rule` (step 3)",
+    )
+
+    report = classify_issue_body(body, labels=["agent:ready"])
+
+    assert report.readiness_classification == "missing_verify_file_paths"
+    assert report.acceptance_criteria.missing_verify_file_paths == [
+        "docs/missing-readiness-guidance.md"
+    ]
+
+
 def test_joined_verify_targets_report_the_actual_cause() -> None:
     """A joined multi-target `Verify:` line gets a split hint, not just
     "file not found" for a file that exists (#3857, #3859)."""
