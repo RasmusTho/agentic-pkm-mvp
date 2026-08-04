@@ -106,14 +106,15 @@ def _is_locked_error(exc: Exception) -> bool:
 
 
 def _is_engine_owned_question_path(rel_path: Path) -> bool:
-    """True for engine-owned Standing Questions notes; this walk must skip them (#4610).
+    """True for engine-owned Standing Questions notes; this walk must skip them
+    (#4610, ``docs/STANDING_QUESTIONS/README.md :: Cross-Task Invariants``
+    keystone ``questions_outside_generic_ingest`` / INV-SQ-H).
 
     Question notes carry ``question_id`` (never a frontmatter ``uuid``) and
     validate against a closed schema (``schemas/question-note.schema.json``,
     ``additionalProperties: false``) -- healing a ``uuid:`` key in makes the
     note schema-invalid and silently drops the question from matching and its
-    projection. Their query surface is the ``standing_questions`` projection
-    owned by ``docs/STANDING_QUESTIONS/STORE_QUESTION_NOTES_AND_PROJECTION.md``,
+    projection. Their query surface is the ``standing_questions`` projection,
     not the retrieval index, so they are excluded from this ingest fan-out
     entirely rather than indexed under an unstable identity.
     """

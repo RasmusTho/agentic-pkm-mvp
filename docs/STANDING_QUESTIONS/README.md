@@ -109,6 +109,16 @@ invariants hold *across* tasks, each with its partial-failure walk:
   evidence/candidate-answer fields are the SoR; the PG projection (open-question list, evidence
   trail, pending-review lookups) rebuilds row-for-row from the vault. Losing the projection loses
   only query speed, never a question, an evidence link, or an answer.
+- **INV-SQ-H — Question notes are outside the generic vault fan-out (`questions_outside_generic_ingest`).**
+  Engine-owned `questions/sq-*.md` notes carry their identity in `question_id`, validate against a
+  deliberately closed schema (no frontmatter `uuid`), and are queried through the
+  `standing_questions` projection — never through the retrieval index. Every generic vault
+  consumer therefore skips them: the vault-ingest paths (worker `ingest.vault.changed` handler and
+  the alpha ingest walk) neither uuid-heal, companion-track, nor index them; the panel-scan
+  consumer never scans them; and the evidence matcher never accepts one as candidate evidence (a
+  question must not cite itself). Partial failure: a healed `uuid:` key or any other
+  fan-out-authored frontmatter would make the note schema-invalid and silently drop the question
+  from matching and the projection — exactly the outcome this invariant exists to prevent.
 
 ## Provisional thresholds (RQ-SQ1, RQ-SQ2)
 

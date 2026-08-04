@@ -1500,6 +1500,18 @@ def handle_panel_scan_requested(
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
 
+    if _is_engine_owned_question_note(note_path, resolved_root):
+        # #4610: same exclusion as the vault-ingest fan-out. Question notes are
+        # inbox-heal-ineligible and deliberately uuid-less, so letting a scan
+        # through would burn the missing_uuid retry budget and dead-letter on
+        # every matcher evidence append under shipped defaults (vault-wide
+        # panel watcher scope + WATCHER_AUTO_EXEC=1). The panel agent has no
+        # business on an engine-owned Question note either way.
+        logger.debug(
+            "skipping panel scan for engine-owned question note note_path=%s", note_path
+        )
+        return WorkerPanelSummary(emitted=0, deferred=False)
+
     # Capture runtime start timestamp for latency tracking
     runtime_start_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     trace_id = trace_id or str(payload.get("trace_id") or "") or None

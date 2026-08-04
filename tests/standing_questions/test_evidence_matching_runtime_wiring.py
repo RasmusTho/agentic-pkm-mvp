@@ -240,6 +240,19 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
         for entry in surviving["evidence"]
     )
 
+    # The panel-scan fan-out is excluded the same way (#4610 round-4 review):
+    # question notes are deliberately uuid-less, so an admitted scan would burn
+    # the missing_uuid retry budget and dead-letter on every evidence append.
+    panel_summary = outbox_worker.handle_panel_scan_requested(
+        {
+            "vault_path": str(question_note_path),
+            "relative_path": f"questions/{question_id}.md",
+        },
+        vault_root=vault,
+    )
+    assert panel_summary.emitted == 0
+    assert panel_summary.deferred is False
+
 
 def test_vault_alpha_ingest_never_touches_question_notes(tmp_path: Path, monkeypatch) -> None:
     """The second production watcher seam (#4610 round-3 review): the alpha
