@@ -1634,3 +1634,107 @@ def test_real_prod_compose_passes_environment_clobber_preflight() -> None:
         f"docker-compose.prod.yml has a blank environment: override shadowing "
         f"a non-empty env_file value:\n{result.summary()}"
     )
+
+
+#: Base compose declaring a blank-override clobber shape directly on base
+#: services, mirroring the real docker-compose.yaml's `VAULT_*_REL:
+#: ${VAR:-}` entries (#4613): Compose merges these per-service `environment:`
+#: mappings into every dev/test overlay, where they shadow the non-empty
+#: values scripts/export_runtime_env.sh writes into the runtime env layer.
+_BASE_COMPOSE_WITH_BLANK_OVERRIDES = """\
+services:
+  worker:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    environment:
+      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
+  watcher:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    environment:
+      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
+"""
+
+
+def _write_blank_override_base(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yaml").write_text(
+        _BASE_COMPOSE_WITH_BLANK_OVERRIDES, encoding="utf-8"
+    )
+    _write_base_defaults(tmp_path, "")
+    runtime = tmp_path / "tmp" / "runtime.env"
+    runtime.parent.mkdir(parents=True, exist_ok=True)
+    runtime.write_text(
+        "VAULT_SYSTEM_DIR_REL=System\nVAULT_INBOX_DIR_REL=Inbox\n",
+        encoding="utf-8",
+    )
+
+
+def test_env_file_clobber_check_merges_base_environment_entries(
+    tmp_path: Path,
+) -> None:
+    """A blank override inherited from the base compose must be detected
+    (#4613, PR #4599 review r3700034271).
+
+    Compose merges the base file's per-service `environment:` mapping into
+    the overlay's (per-key, overlay wins), so a base entry shaped like
+    `${VAR:-}` rides into the dev/test merged model and shadows the
+    non-empty value the same key would otherwise receive from the service's
+    env_file chain. Inspecting only the overlay's own `environment:` mapping
+    silently passes in both shapes this reproduces: an overlay that
+    redeclares the service without the inherited entry (worker) and an
+    overlay that omits the service entirely (watcher).
+    """
+    _write_blank_override_base(tmp_path)
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          worker:
+            environment:
+              PKM_ENVIRONMENT: dev
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert not result.ok, (
+        "Expected the clobber check to FAIL on blank base-compose "
+        "environment: entries shadowing non-empty env_file values, but it "
+        "passed."
+    )
+    violating = {(v.service, v.field) for v in result.violations}
+    assert ("worker", "VAULT_SYSTEM_DIR_REL") in violating
+    assert ("watcher", "VAULT_INBOX_DIR_REL") in violating
+    assert "'System'" in result.summary()
+    assert "'Inbox'" in result.summary()
+
+
+def test_overlay_environment_override_of_base_entry_wins(tmp_path: Path) -> None:
+    """Merge-direction guard for the base-merge fix: compose merges
+    `environment:` per key with the overlay winning, so an overlay that
+    redeclares the key with a resolvable non-blank value replaces the base's
+    blank shape -- nothing is clobbered and the check must pass."""
+    _write_blank_override_base(tmp_path)
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          worker:
+            environment:
+              VAULT_SYSTEM_DIR_REL: /overlay/value
+          watcher:
+            environment:
+              VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-/overlay/default}
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert result.ok, (
+        f"Expected overlay redeclarations to win over base blank entries, "
+        f"got:\n{result.summary()}"
+    )
