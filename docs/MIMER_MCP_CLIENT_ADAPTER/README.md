@@ -86,7 +86,7 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
       without replacing HTTP or direct-filesystem semantics.
   Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
   and owner-decision receipt on GitHub Issue #3371 linked from
-  `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Owner decision receipt`
+  `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt`
 - [ ] The server exposes exactly ask, governed capture, retrieve/search, note read, and health, with
       governed capture receipts and failure semantics preserved.
   Verify: `tests/mcp/test_mimer_server.py::test_server_exposes_exact_contracted_tool_set`
@@ -102,7 +102,7 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
 
 ## Verification Path
 
-- MIMER-MCP-01 drafts `ADR-0058` in `Proposed` state with alternatives and a recommendation, then
+- MIMER-MCP-01 drafts `ADR-0061` in `Proposed` state with alternatives and a recommendation, then
   waits for the owner-decision receipt before any Accepted/superseding language or contract change.
 - MIMER-MCP-02 uses in-process MCP tool tests with stubbed existing client operations plus the
   existing API contract suites.
@@ -132,10 +132,10 @@ composed runtime receipt exists.
 ## Relationship to GitHub Issues
 
 - Parent validation hub: #3366 (`agent:blocked`).
-- MIMER-MCP-01: #3371 — `agent:needs-human`; drafts ADR-0058 as Proposed and waits for the explicit
+- MIMER-MCP-01: #3371 — `agent:needs-human`; drafts ADR-0061 as Proposed and waits for the explicit
   owner-decision receipt. Spec merge does not make it autonomous.
-- MIMER-MCP-02: #3368 — blocked on an owner-accepted ADR-0058 receipt, not only issue/PR completion.
-- MIMER-MCP-03: #3369 — blocked on the same owner-accepted ADR-0058 receipt; may run parallel with
+- MIMER-MCP-02: #3368 — blocked on an owner-accepted ADR-0061 receipt, not only issue/PR completion.
+- MIMER-MCP-03: #3369 — blocked on the same owner-accepted ADR-0061 receipt; may run parallel with
   #3368 only after that gate is satisfied.
 - MIMER-MCP-04: #3370 — blocked on #3368 and #3369; final acceptance/closure handoff.
 
