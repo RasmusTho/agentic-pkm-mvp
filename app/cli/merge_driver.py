@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Tuple, Dict, Any
 
-from app.agents.merge_resolver.agent import merge_note_from_blobs
+from app.agents.merge_resolver.agent import merge_note_from_blobs, normalize_uuid_scalar
 
 
 def _read_text(p: Path) -> str:
@@ -25,7 +25,10 @@ def _parse_uuid(md: str) -> str | None:
     fm_block = parts[1]
     m = re.search(r"^uuid:\s*(.+)$", fm_block, flags=re.MULTILINE)
     if m:
-        return m.group(1).strip()
+        # Same identity semantics as the resolver (PR #4626 r3712514848):
+        # degenerate scalars are no identity; quoting differences are not an
+        # identity mismatch.
+        return normalize_uuid_scalar(m.group(1))
     return None
 
 

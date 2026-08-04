@@ -5,6 +5,12 @@ from .graph import diff_conflict_loci, apply_decisions
 from .llm import judge_locus
 
 
+# Optional leading "!" so image embeds are recognized too: the carryover
+# heuristic only appends plain links, so an incoming image can never be
+# "carried" verbatim and the lossless check below fails closed to a conflict.
+_MD_LINK_RE = re.compile(r"!?\[[^\]]+\]\([^)]+\)")
+
+
 def _token_similarity(x: str, y: str) -> float:
     t1 = set(re.findall(r"\w+", x.lower()))
     t2 = set(re.findall(r"\w+", y.lower()))
@@ -13,6 +19,72 @@ def _token_similarity(x: str, y: str) -> float:
     inter = len(t1 & t2)
     denom = (len(t1) + len(t2)) / 2.0
     return inter / denom
+
+
+def _normalized_nonlink_text(body: str) -> str:
+    """Whitespace-normalized body text with markdown links removed."""
+    return " ".join(_MD_LINK_RE.sub(" ", body).split())
+
+
+def _carried_links_are_lossless(merged_body: str, b_body: str) -> bool:
+    """True only when THEIRS' (b) entire body survives in the merged body.
+
+    The link-carryover heuristic appends THEIRS' markdown links to the merged
+    text. That reconciles the divergence only when links are the entire
+    difference THEIRS brings: every one of THEIRS' links must be present
+    verbatim in the merged body, and THEIRS' remaining non-link prose must
+    already appear (whitespace-normalized, contiguous, in order) inside the
+    merged body's non-link prose. Anything less means distinct incoming prose
+    is being dropped while the merge still reports "resolved" -- the P1
+    content-loss finding from PR #4604 review r3700682703 (#4616).
+    """
+    if not all(link in merged_body for link in _MD_LINK_RE.findall(b_body)):
+        return False
+    b_nonlink = _normalized_nonlink_text(b_body)
+    if not b_nonlink:
+        # THEIRS' body is links-only and every link was carried: lossless.
+        return True
+    # Space-padded containment keeps the match word-aligned: THEIRS' "enabled"
+    # must not count as preserved because OURS happens to contain "unenabled".
+    merged_nonlink = _normalized_nonlink_text(merged_body)
+    return f" {b_nonlink} " in f" {merged_nonlink} "
+
+
+def normalize_uuid_scalar(raw: str) -> str | None:
+    """Reduce a raw `uuid:` frontmatter value to a real scalar identity.
+
+    Dependency-free YAML-lite (PR #4626 review r3712514848): degenerate values
+    must not count as vault identity, or two notes that merely share the same
+    degenerate `uuid:` field would take identity-gated code paths. Rules:
+
+    - a comment-only value (`# ...`) is no identity;
+    - surrounding matching quotes are stripped, so `"u-x"` and `u-x` name the
+      same logical note (divergent real ids still hard-conflict upstream);
+    - for unquoted plain scalars, a trailing ` #comment` is dropped per YAML;
+    - empty and null-like values (`null`/`Null`/`NULL`/`~`, quoted or not --
+      quoted forms are deliberately treated conservatively) are no identity.
+    """
+    value = raw.strip()
+    if not value or value.startswith("#"):
+        return None
+    if value[0] in ">|*&{}[]!":
+        # YAML indicator characters: block-scalar headers (>, |), aliases and
+        # anchors (*, &), flow collections ({}, []), tags (!!...). Never a
+        # plain-scalar identity -- the real value, if any, lives outside this
+        # line's reach -- so grant no identity rather than a fake shared one.
+        return None
+    if value[0] in "\"'":
+        quote = value[0]
+        end = value.find(quote, 1)
+        # Unterminated quote: fall through with the rest taken verbatim.
+        value = value[1:end] if end != -1 else value[1:]
+        value = value.strip()
+    else:
+        # Plain scalar: a YAML comment starts at the first whitespace + '#'.
+        value = re.split(r"\s#", value, maxsplit=1)[0].strip()
+    if not value or value.lower() in ("null", "~"):
+        return None
+    return value
 
 
 def _extract_uuid(md: str) -> str | None:
@@ -25,7 +97,7 @@ def _extract_uuid(md: str) -> str | None:
         return None
     for line in fm.splitlines():
         if line.strip().lower().startswith("uuid:"):
-            return line.split(":", 1)[1].strip()
+            return normalize_uuid_scalar(line.split(":", 1)[1])
     return None
 
 
@@ -125,7 +197,12 @@ def _body(md: str) -> str:
 
 
 def _guard_content_loss(merged, info, a, b):
-    """Refuse to silently resolve a merge that discards one side's real content.
+    """Refuse to silently resolve a merge that discards one side's real body content.
+
+    Scope note: this guard compares note *bodies*. Frontmatter divergence
+    beyond the uuid hard-conflict invariant (e.g. THEIRS-only tags or a
+    review_state change) is still resolved by `apply_decisions` keeping OURS'
+    frontmatter -- a pre-existing gap outside this guard's contract.
 
     Issue #4505 added this fail-safe for repository documentation (no `uuid:`
     frontmatter): the near-duplicate / "prefer concise" heuristic could pick one
@@ -142,14 +219,27 @@ def _guard_content_loss(merged, info, a, b):
     non-trivial divergence -- see
     tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped.
 
-    The only two mechanisms this resolver has that actually preserve the
-    discarded side's real content are: an exact match (nothing to lose), and the
-    markdown-link-carryover heuristic below (which literally appends THEIRS'
-    missing links into the merged text). A genuine near-duplicate pick is also
-    trusted, since by definition there is negligible information to lose. Any
-    other divergence is not provably safe and must raise a conflict instead of
-    silently discarding a side -- the same conservative default #4505 already
-    established, now applied uniformly instead of only to non-vault content.
+    The only mechanisms trusted to resolve a divergence are the ones that
+    provably preserve the discarded side's real body content (#4616, PR #4604
+    reviews r3700682703 / r3700682705):
+
+    - An exact body match: nothing to lose.
+    - The markdown-link-carryover heuristic below, but only when it is
+      verifiably lossless -- THEIRS' links all landed in the merged text AND
+      THEIRS' remaining non-link prose already appears in the merged body.
+      Carrying the links while dropping distinct incoming prose is exactly the
+      false-clean merge this guard exists to prevent.
+    - A near-duplicate pick (token similarity >= 0.85), scoped to vault notes
+      (uuid identity on both sides). Set-of-tokens similarity ignores order,
+      repetition, and negation ("deployment is enabled" vs "deployment is not
+      enabled" clears the threshold), so it is only accepted for vault notes,
+      where near-duplicate device-sync copies of one identified note are the
+      expected input. Repository documentation never resolves through it.
+
+    Any other divergence is not provably safe and must raise a conflict
+    instead of silently discarding a side -- the same conservative default
+    #4505 already established, now applied uniformly instead of only to
+    non-vault content.
     """
     info = dict(info or {})
     if info.get("status") != "resolved":
@@ -162,11 +252,22 @@ def _guard_content_loss(merged, info, a, b):
         return merged, info
 
     reason = info.get("reason", "")
-    if "carried links" in reason.lower():
-        # The missing-link-carryover heuristic already reconciled the divergence.
+    if "carried links" in reason.lower() and _carried_links_are_lossless(
+        _body(merged), b_body
+    ):
+        # Link carryover reconciled the divergence and provably preserved all
+        # of THEIRS' body content (#4616: lossy carryover no longer resolves).
         return merged, info
-    if _token_similarity(a_body, b_body) >= 0.85:
-        # Genuine near-duplicate: negligible content to lose either way.
+    if (
+        # Truthiness, not `is not None`: a bare `uuid:` key with no value is
+        # not vault identity, matching the hard-conflict check above.
+        _extract_uuid(a)
+        and _extract_uuid(b)
+        and _token_similarity(a_body, b_body) >= 0.85
+    ):
+        # Genuine vault-note near-duplicate: negligible content to lose either
+        # way. Intentionally scoped to vault identity (#4616); repository docs
+        # with high token overlap but distinct bodies conflict instead.
         return merged, info
 
     info["status"] = "conflict"

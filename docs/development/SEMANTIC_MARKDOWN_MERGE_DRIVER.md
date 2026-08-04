@@ -1,4 +1,4 @@
-State: Current-state contract for the `semanticmd` git merge driver; aligned with shipped behavior (#4505 routing narrowing, #4561 `%A` result write, #4603 content-loss guard generalized to vault notes).
+State: Current-state contract for the `semanticmd` git merge driver; aligned with shipped behavior (#4505 routing narrowing, #4561 `%A` result write, #4603 content-loss guard generalized to vault notes, #4616 lossless-only link carryover and vault-scoped near-duplicate bypass).
 
 # Semantic Markdown merge driver (`semanticmd`)
 
@@ -50,15 +50,34 @@ that permanently drops one side's edit. See
 `tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped`
 for the regression coverage.
 
-Two mechanisms are trusted to resolve a divergence without raising a conflict,
-because they provably do not discard real content: an exact body match
-(nothing to lose), the markdown-link-carryover heuristic (THEIRS' missing
-links are appended into the merged text), and a genuine near-duplicate pick
-(token similarity `>= 0.85`, i.e. negligible information difference either
-way). Any other divergence — including ordinary distinct-prose additions on
+Three mechanisms are trusted to resolve a divergence without raising a
+conflict, because they provably do not discard real body content (tightened
+by #4616 after PR #4604 reviews r3700682703 / r3700682705; frontmatter
+divergence beyond the uuid invariant is a pre-existing gap outside this
+guard's contract):
+
+- An exact body match: nothing to lose.
+- The markdown-link-carryover heuristic (THEIRS' missing links are appended
+  into the merged text), but only when the carryover is verifiably lossless:
+  every one of THEIRS' links must land in the merged body and THEIRS'
+  remaining non-link prose must already appear, word-aligned and in order,
+  inside the merged body's non-link prose. If THEIRS carries a link plus
+  distinct prose — or an image embed, which carryover cannot preserve — the
+  merge conflicts instead of resolving; link carryover is not a generic
+  content-loss exemption.
+- A genuine near-duplicate pick (token similarity `>= 0.85`), scoped to vault
+  notes (a real `uuid:` scalar identity on both sides: quoted and unquoted
+  forms name the same identity, while empty, null-like (`null`/`~`), and
+  comment-only values do not count as identity at all). Set-of-tokens
+  similarity ignores order, repetition, and negation ("deployment is enabled"
+  vs "deployment is not enabled" clears the threshold), so repository
+  documentation never resolves through it; a non-vault doc with high token
+  overlap but distinct body content conflicts.
+
+Any other divergence — including ordinary distinct-prose additions on
 both sides — raises a conflict rather than silently picking a side. Real
 per-locus semantic merging (an actual LLM judgment wired into `judge_locus`)
-is not implemented; until it is, vault-note auto-resolve is limited to the
+is not implemented; until it is, auto-resolve is limited to the
 three mechanisms above.
 
 ## History
@@ -76,6 +95,17 @@ non-vault-only guard scoping rested on a false premise (vault-note merging
 notes hit the identical silent-drop defect once #4561 made the `%A` write
 land. See the "Resolver-level backstop" section above and
 `tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped`.
+
+Filed and fixed under GitHub issue #4616: a post-merge review of PR #4604
+(#4603's fix) left two P1 content-loss findings. Link carryover could report
+a clean resolve while dropping THEIRS' distinct non-link prose, and the
+token-similarity near-duplicate bypass let a non-vault repository doc with
+high token overlap (e.g. a flipped negation) resolve to OURS silently. The
+backstop now requires verifiably lossless link carryover and scopes the
+near-duplicate bypass to vault identity, per the "Resolver-level backstop"
+section above. See
+`tests/agents/test_merge_resolver_repo_docs.py::test_link_carryover_does_not_hide_incoming_prose_loss`
+and `::test_repo_doc_token_overlap_still_conflicts_when_bodies_differ`.
 
 ## `%A` file-write contract (fixed by #4496)
 

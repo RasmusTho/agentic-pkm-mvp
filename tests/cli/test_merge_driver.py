@@ -84,9 +84,11 @@ B body
 
 def test_resolved_merge_writes_result_to_ours_path(tmp_path: Path):
     # Git's custom-merge-driver contract requires the result on %A (a_path).
-    # a has no markdown link; b has one that a lacks, so the semantic merge's
-    # link-carryover heuristic appends content that only exists on the incoming
-    # (b) side -- proving a_path ends up with more than a verbatim copy of a.
+    # a has no markdown link; b differs from a only by a markdown link, so the
+    # semantic merge's link-carryover heuristic appends content that only
+    # exists on the incoming (b) side without losing any incoming prose
+    # (#4616: lossy carryover no longer resolves) -- proving a_path ends up
+    # with more than a verbatim copy of a.
     base = """---
 uuid: u-write
 kind: concept
@@ -101,7 +103,7 @@ kind: concept
 review_state: reviewed
 ---
 # T
-ours body, no link
+shared body line
 """
     b = """---
 uuid: u-write
@@ -109,7 +111,7 @@ kind: concept
 review_state: reviewed
 ---
 # T
-theirs body with [a link](https://example.com/incoming)
+shared body line [a link](https://example.com/incoming)
 """
     base_path = _tmpfile(tmp_path, base)
     a_path = _tmpfile(tmp_path, a)
@@ -125,6 +127,44 @@ theirs body with [a link](https://example.com/incoming)
     assert written == expected_merged
     # The incoming (b) side's link must be present in what git reads back.
     assert "https://example.com/incoming" in written
+
+
+def test_merge_driver_conflicts_when_link_carryover_would_drop_incoming_prose(tmp_path: Path):
+    # PR #4604 review r3700682703 (#4616): THEIRS carries a markdown link plus
+    # distinct prose OURS lacks. Appending only the link would discard that
+    # prose, so the driver must fail closed (non-zero exit, a_path untouched)
+    # instead of writing a false-clean "resolved" result to %A.
+    base = """---
+uuid: u-lossy
+kind: concept
+review_state: draft
+---
+# T
+base body
+"""
+    a = """---
+uuid: u-lossy
+kind: concept
+review_state: reviewed
+---
+# T
+ours body, no link
+"""
+    b = """---
+uuid: u-lossy
+kind: concept
+review_state: reviewed
+---
+# T
+theirs distinct prose that must not vanish, with [a link](https://example.com/incoming)
+"""
+    a_path = _tmpfile(tmp_path, a)
+    ec = run_merge(_tmpfile(tmp_path, base), a_path, _tmpfile(tmp_path, b))
+
+    assert ec != 0
+    # On a non-resolved outcome the driver must leave %A exactly as git wrote
+    # it (OURS) so git's normal conflict machinery applies.
+    assert a_path.read_text(encoding="utf-8") == a
 
 
 def test_diagnostic_trailer_never_enters_merged_file(tmp_path: Path):
@@ -213,6 +253,9 @@ def test_end_to_end_git_merge_through_driver_preserves_incoming(tmp_path: Path):
     # Exercise the production .gitattributes + `git config merge.semanticmd.driver`
     # path (the same wiring set up by `make setup-merge-driver`), not run_merge()
     # directly, so a regression in how git invokes/reads the driver is caught too.
+    # THEIRS differs from OURS' body only by an added markdown link (#4616:
+    # carryover with distinct incoming prose now conflicts instead), so the
+    # link carryover is lossless and the merge must stay clean.
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -240,7 +283,7 @@ kind: concept
 review_state: draft
 ---
 # T
-base body, no link
+shared body line, no link
 """
     note.write_text(base_body, encoding="utf-8")
     _git(["add", "."], repo, env)
@@ -251,10 +294,10 @@ base body, no link
     theirs_body = """---
 uuid: u-e2e
 kind: concept
-review_state: reviewed
+review_state: draft
 ---
 # T
-theirs body with [incoming link](https://example.com/incoming)
+shared body line, no link [incoming link](https://example.com/incoming)
 """
     note.write_text(theirs_body, encoding="utf-8")
     _git(["commit", "-q", "-am", "theirs edit"], repo, env)
@@ -266,7 +309,7 @@ kind: concept
 review_state: reviewed
 ---
 # T
-ours body, no link
+shared body line, no link
 """
     note.write_text(ours_body, encoding="utf-8")
     _git(["commit", "-q", "-am", "ours edit"], repo, env)

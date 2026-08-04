@@ -49,6 +49,16 @@ promote public internet readiness.
 - Prod promotion model fix (#2656): AC1 and AC3 are done, while AC2 remains operator-gated pending operator receipt and sibling-doc reconciliation.
 - Delivery wave follow-on receipts: GraphQL exhaustion fix #2686, watcher settings receipts #2678, nested-vault boundary enforcement #2689, and deployment environment-separation spec #2692 are merged and reflected in the current shipped baseline.
 
+2026-08-04 fix writeback:
+- `semanticmd` merge driver's content-loss backstop no longer accepts lossy resolutions (#4616):
+  a post-merge review of PR #4604 found that link carryover could report a clean resolve while
+  dropping THEIRS' distinct non-link prose, and that the token-similarity near-duplicate bypass
+  (order/negation-blind) let a non-vault repository doc resolve to OURS silently. Link carryover
+  now counts only when it is verifiably lossless (all of THEIRS' links land in the merged body and
+  THEIRS' remaining non-link prose already appears, word-aligned, in the merged body), and the
+  near-duplicate pick is scoped to vault notes with a non-empty `uuid:` identity on both sides.
+  Everything else conflicts. See `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
+
 2026-08-03 fix writeback:
 - `semanticmd` merge driver's content-loss guard now applies to vault notes too (#4603):
   delivering #4505 surfaced that its non-vault-only scoping assumed vault-note merging performs
