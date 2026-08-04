@@ -41,6 +41,28 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
    check-run name (ranked by `started_at`, falling back to run id) before green/red classification;
    `epic-run-state lifecycle-plan` reuses that shared latest-record selector for terminal dry-runs.
    A genuinely failed latest record still fails closed.
+8. **A dirty PR schedules no pull_request workflows — absence of a required check is never
+   success.** (#4605, LearningSignal `lrn_20260729154323_f134857a`, seen on PR #4354.) When a PR
+   is `mergeable_state=dirty`, GitHub cannot compute `refs/pull/<n>/merge`, so the repo's
+   `pull_request`-triggered workflows never schedule for that head — yet CodeQL can still attach
+   green check-runs from `refs/pull/<n>/head`. An all-green *short* check-run list is therefore
+   not evidence the required suite ran. In merge-gating mode (no `--sha`),
+   `scripts/await_pr_checks.sh` fails closed on both halves of this defect class:
+   - **Dirty PR (exit 6):** the PR's `mergeable_state` is read via REST before the wait and
+     re-asserted after it; `dirty` refuses immediately with a fix-conflicts-and-re-run message.
+     Transient `unknown` passes through (the presence rule below is the backstop while GitHub
+     recomputes mergeability).
+   - **Required-check presence (exit 7):** before reporting success, the expected required
+     contexts must be *present* on the head (deduped check-run names plus classic status
+     contexts). The expected set resolves in this order: (1) live branch-protection
+     `required_status_checks` contexts for the PR's base branch via REST when readable (the
+     endpoint needs admin; failure falls through), else (2) the documented per-base fallback set
+     from `docs/development/GITHUB_GOVERNANCE_SETUP.md` — base `stable`: `smoke`, `smoke-docker`,
+     `pr-contract`; any other base (the `main` default): `Unit tests (not pg)`. A late-attaching
+     required workflow keeps waiting inside the normal backoff; the absence only becomes terminal
+     at the deadline. Only the required set participates — absence of an arbitrary optional check
+     never fails the wait. `--sha` diagnostic mode skips both gates by design (it inspects a
+     pinned commit and is not a merge gate).
 
 ## Blessed path
 
@@ -64,6 +86,8 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 - `3` — Codex verdict is blocking (only with `--codex`)
 - `4` — Codex verdict unresolved (only with `--codex`) — resolve before merge
 - `5` — the PR head moved during the wait (when SHA is auto-resolved) — verified checks are stale; re-run
+- `6` — the PR is `mergeable_state=dirty`, so pull_request workflows will not schedule (merge-gating mode) — fix conflicts and re-run
+- `7` — expected required check contexts are absent from the head (merge-gating mode) — absence is not success; see Rule 8
 
 **The exit code is the gate — never let a pipeline eat it.** Do not run the script as `await_pr_checks.sh <PR> 2>&1 | tail -2` (or any `| grep`/`| tee` composition) when its exit code gates a merge: a pipeline's status is the *last* command's, so a failed check exits 0 through `tail` and an `&& gh pr merge` chain merges on red (seen: PR #2759). Run the script bare and capture `rc=$?` before any formatting, and key the merge on `$rc`. The same holds in background shells: the gate is the captured rc, never the visible output.
 
@@ -99,7 +123,9 @@ gh api "repos/$REPO/commits/$SHA/status" --jq '.state'
 gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
   --jq '.check_runs[] | select(.conclusion!=null and .conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral") | "\(.name): \(.conclusion)"'
 
-# Mergeability (REST, not GraphQL):
+# Mergeability (REST, not GraphQL). Run this FIRST when polling manually: `dirty` means
+# pull_request workflows never scheduled, so an all-green short check-run list is a false
+# green, not a pass (Rule 8):
 gh api "repos/$REPO/pulls/$PR" --jq '.mergeable, .mergeable_state'
 
 # Codex verdict — primary signal can be an emoji reaction or a review.
