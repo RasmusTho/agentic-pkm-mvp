@@ -311,6 +311,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/agents/test_merge_resolver.py",
             "tests/agents/test_merge_resolver_repo_docs.py",
             "tests/cli/test_merge_driver.py",
+            # Pre-merge signal for the instance-state deployment surface that
+            # the push-lane `CI gate: vaultwide panel verifier` protects
+            # (#4371): a backup/ownership verification defect in
+            # `app/instance/**` must fail the changing PR instead of first
+            # turning `main`'s post-merge smoke red.
+            "tests/ops/test_instance_state_volume_contract.py",
         ),
     ),
     (

@@ -231,6 +231,7 @@ promote public internet readiness.
 
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
+- `CI Smoke`'s push-lane `smoke-docker >> "CI gate: vaultwide panel verifier"` no longer false-positives on `main` (#4371): staged-backup verification (`_verify_staged_backup` -> `_global_live_owners`) validates the drained owner inventory by shape and ledger consistency instead of requiring every owner root to be a live directory in the verifying container, its top-level error names the failing inventory field, and the `vault` PR-test selection runs `tests/ops/test_instance_state_volume_contract.py` so this surface has pre-merge signal.
 - CI no longer treats absent model-provider credentials as a passing live-provider check: the optional
   Panel LLM E2E job and credential-gated Codex docs-guardian path are removed. Reintroducing either
   requires a separately declared credential backend and explicit cost/egress posture; deterministic

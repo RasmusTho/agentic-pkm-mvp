@@ -684,9 +684,14 @@ class InstanceStateBackup:
                     raise ValueError
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise InstanceStatePreflightError("backup verification failed") from exc
+        # Restore is the mutating path: never skip a lease-less inventory
+        # owner here. Restore already requires materialized roots, so the
+        # candidate skip that keeps mount-blind backup creation green (#4371)
+        # would only mask a staged ledger that lost a live lease.
         staged_ledger, global_live_owners = self._verify_staged_backup(
             payloads=payloads,
             owner_payload=owner_payload,
+            skip_unadopted_owners=False,
         )
         manifest_key_id = manifest.get("ownership_key_id")
         manifest_generation = manifest.get("ownership_generation")
@@ -759,6 +764,7 @@ class InstanceStateBackup:
         payloads: Mapping[str, bytes],
         owner_payload: Mapping[str, object],
         require_materialized_owner_roots: bool = True,
+        skip_unadopted_owners: bool = True,
     ) -> tuple[LedgerSnapshot, tuple[LegacyOwner, ...]]:
         try:
             with tempfile.TemporaryDirectory(
@@ -786,6 +792,7 @@ class InstanceStateBackup:
                     require_materialized_owner_roots=(
                         require_materialized_owner_roots
                     ),
+                    skip_unadopted_owners=skip_unadopted_owners,
                 )
                 ledger = self._require_registry_ledger_consistency(
                     registry=registry,
@@ -796,10 +803,21 @@ class InstanceStateBackup:
                     ),
                 )
                 return ledger, global_live_owners
+        except InstanceStatePreflightError as exc:
+            # Surface the underlying cause in the top-level message (#4371):
+            # the chained traceback is not always visible in step output, and
+            # the generic fence text alone sends readers to the wrong
+            # subsystem.
+            raise InstanceStatePreflightError(
+                f"backup registry/ledger consistency verification failed: {exc};"
+                " keep the global fence until fenced re-key and ledger "
+                "reconstruction complete"
+            ) from exc
         except Exception as exc:
             raise InstanceStatePreflightError(
-                "backup registry/ledger consistency verification failed; keep the "
-                "global fence until fenced re-key and ledger reconstruction complete"
+                "backup registry/ledger consistency verification failed "
+                f"({type(exc).__name__}); keep the global fence until fenced "
+                "re-key and ledger reconstruction complete"
             ) from exc
 
     def _require_registry_ledger_consistency(
@@ -844,7 +862,7 @@ class InstanceStateBackup:
             )
         except LedgerError as exc:
             raise InstanceStatePreflightError(
-                "registry/ledger consistency verification failed"
+                f"registry/ledger consistency verification failed: {exc}"
             ) from exc
 
     def _global_live_owners(
@@ -854,37 +872,50 @@ class InstanceStateBackup:
         registry: RegistrySnapshot,
         ledger: OwnershipLedger,
         require_materialized_owner_roots: bool = True,
+        skip_unadopted_owners: bool = True,
     ) -> tuple[LegacyOwner, ...]:
         raw_owners = owner_payload.get("owners")
         if not isinstance(raw_owners, list):
             raise InstanceStatePreflightError(
-                "canonical global live-owner inventory is invalid"
+                "canonical global live-owner inventory is invalid: the drained "
+                "owner receipt carries no owners list"
             )
         owners: list[LegacyOwner] = []
-        for item in raw_owners:
+        for index, item in enumerate(raw_owners):
             if not isinstance(item, dict):
                 raise InstanceStatePreflightError(
-                    "canonical global live-owner inventory is invalid"
+                    "canonical global live-owner inventory is invalid: "
+                    f"owners[{index}] is not an owner entry"
                 )
             channel_id = str(item.get("channel_id") or "").strip()
-            root = Path(str(item.get("root") or "")).expanduser().resolve(
-                strict=False
-            )
+            raw_root = str(item.get("root") or "").strip()
             binding_id = str(item.get("vault_binding_id") or "").strip()
-            if (
-                not channel_id
-                or (
-                    require_materialized_owner_roots
-                    and not root.is_dir()
-                )
-                or (
-                    not require_materialized_owner_roots
-                    and not binding_id
-                )
-            ):
+            if not channel_id:
                 raise InstanceStatePreflightError(
-                    "canonical global live-owner inventory is invalid"
+                    "canonical global live-owner inventory is invalid: "
+                    f"owners[{index}].channel_id is missing"
                 )
+            if not raw_root or not Path(raw_root).expanduser().is_absolute():
+                raise InstanceStatePreflightError(
+                    "canonical global live-owner inventory is invalid: "
+                    f"owners[{index}].root is missing or not absolute"
+                )
+            if not require_materialized_owner_roots and not binding_id:
+                raise InstanceStatePreflightError(
+                    "canonical global live-owner inventory is invalid: "
+                    f"owners[{index}].vault_binding_id is missing"
+                )
+            # Owner-root materialization is not re-checked here (#4371): the
+            # host-side inventory producer proved every root twice and the
+            # receipt is digest-bound to the deployment lease, while this
+            # verification may run in another mount namespace (the
+            # deployment-finish container). A root that is not locally
+            # visible resolves to canonical-path identity, whose fingerprints
+            # cannot match an inode-fingerprinted lease minted where the root
+            # was materialized — such an owner therefore resolves to no lease
+            # and is handled by the unadopted-candidate rule in
+            # resolve_live_owner_bindings below.
+            root = Path(raw_root).expanduser().resolve(strict=False)
             if (
                 require_materialized_owner_roots
                 and channel_id == self.layout.channel_id
@@ -898,10 +929,22 @@ class InstanceStateBackup:
                         break
             owners.append(LegacyOwner(channel_id, binding_id, root))
         try:
-            resolved = ledger.resolve_live_owner_bindings(owners)
+            # Config-derived inventories (materialized-roots mode) may name
+            # candidates the ledger never adopted after legacy bootstrap
+            # completed; when such a root is also invisible to this process,
+            # the verifier cannot adjudicate it and the ledger holds no lease
+            # for it, so it is excluded from lease consistency. A lease-less
+            # owner whose root is locally materialized stays fail-closed, and
+            # lease-only payloads always carry binding ids.
+            resolved = ledger.resolve_live_owner_bindings(
+                owners,
+                skip_unadopted=(
+                    skip_unadopted_owners and require_materialized_owner_roots
+                ),
+            )
         except LedgerError as exc:
             raise InstanceStatePreflightError(
-                "canonical global live-owner binding identity is invalid"
+                f"canonical global live-owner binding identity is invalid: {exc}"
             ) from exc
         if len({owner.vault_binding_id for owner in resolved}) != len(resolved):
             raise InstanceStatePreflightError(
