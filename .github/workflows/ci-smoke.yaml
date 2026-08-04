@@ -200,6 +200,20 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
+      # Full-tree collection health gate (#3942). A module-level import error
+      # in tests/api/ broke collection of the entire `not pg` suite on main
+      # for two days with zero CI signal (#3941): every PR workflow runs
+      # pytest against explicit path slices, so tree-wide ImportError/
+      # SyntaxError/conftest breakage had no PR-time enforcement. This step
+      # collects (never executes) the full `not pg` selection so any PR that
+      # breaks collection anywhere under tests/ fails loud here. Exit code
+      # gates directly — no pipes, no `|| echo`.
+      - name: Pytest full-tree collection health (collect-only)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
+        timeout-minutes: 5
+        run: |
+          python -m pytest -q --collect-only -m "not pg and not alpha_llm" tests/
+
       - name: Pytest smoke baseline (memory, fail-fast)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 12
