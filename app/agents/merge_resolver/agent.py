@@ -5,6 +5,9 @@ from .graph import diff_conflict_loci, apply_decisions
 from .llm import judge_locus
 
 
+_MD_LINK_RE = re.compile(r"\[[^\]]+\]\([^)]+\)")
+
+
 def _token_similarity(x: str, y: str) -> float:
     t1 = set(re.findall(r"\w+", x.lower()))
     t2 = set(re.findall(r"\w+", y.lower()))
@@ -13,6 +16,28 @@ def _token_similarity(x: str, y: str) -> float:
     inter = len(t1 & t2)
     denom = (len(t1) + len(t2)) / 2.0
     return inter / denom
+
+
+def _normalized_nonlink_text(body: str) -> str:
+    """Whitespace-normalized body text with markdown links removed."""
+    return " ".join(_MD_LINK_RE.sub(" ", body).split())
+
+
+def _carried_links_are_lossless(merged_body: str, b_body: str) -> bool:
+    """True only when THEIRS' (b) entire body survives in the merged body.
+
+    The link-carryover heuristic appends THEIRS' markdown links to the merged
+    text. That reconciles the divergence only when links are the entire
+    difference THEIRS brings: every one of THEIRS' links must be present
+    verbatim in the merged body, and THEIRS' remaining non-link prose must
+    already appear (whitespace-normalized, contiguous, in order) inside the
+    merged body's non-link prose. Anything less means distinct incoming prose
+    is being dropped while the merge still reports "resolved" -- the P1
+    content-loss finding from PR #4604 review r3700682703 (#4616).
+    """
+    if not all(link in merged_body for link in _MD_LINK_RE.findall(b_body)):
+        return False
+    return _normalized_nonlink_text(b_body) in _normalized_nonlink_text(merged_body)
 
 
 def _extract_uuid(md: str) -> str | None:
@@ -142,14 +167,27 @@ def _guard_content_loss(merged, info, a, b):
     non-trivial divergence -- see
     tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped.
 
-    The only two mechanisms this resolver has that actually preserve the
-    discarded side's real content are: an exact match (nothing to lose), and the
-    markdown-link-carryover heuristic below (which literally appends THEIRS'
-    missing links into the merged text). A genuine near-duplicate pick is also
-    trusted, since by definition there is negligible information to lose. Any
-    other divergence is not provably safe and must raise a conflict instead of
-    silently discarding a side -- the same conservative default #4505 already
-    established, now applied uniformly instead of only to non-vault content.
+    The only mechanisms trusted to resolve a divergence are the ones that
+    provably preserve the discarded side's real content (#4616, PR #4604
+    reviews r3700682703 / r3700682705):
+
+    - An exact body match: nothing to lose.
+    - The markdown-link-carryover heuristic below, but only when it is
+      verifiably lossless -- THEIRS' links all landed in the merged text AND
+      THEIRS' remaining non-link prose already appears in the merged body.
+      Carrying the links while dropping distinct incoming prose is exactly the
+      false-clean merge this guard exists to prevent.
+    - A near-duplicate pick (token similarity >= 0.85), scoped to vault notes
+      (uuid identity on both sides). Set-of-tokens similarity ignores order,
+      repetition, and negation ("deployment is enabled" vs "deployment is not
+      enabled" clears the threshold), so it is only accepted for vault notes,
+      where near-duplicate device-sync copies of one identified note are the
+      expected input. Repository documentation never resolves through it.
+
+    Any other divergence is not provably safe and must raise a conflict
+    instead of silently discarding a side -- the same conservative default
+    #4505 already established, now applied uniformly instead of only to
+    non-vault content.
     """
     info = dict(info or {})
     if info.get("status") != "resolved":
@@ -162,11 +200,20 @@ def _guard_content_loss(merged, info, a, b):
         return merged, info
 
     reason = info.get("reason", "")
-    if "carried links" in reason.lower():
-        # The missing-link-carryover heuristic already reconciled the divergence.
+    if "carried links" in reason.lower() and _carried_links_are_lossless(
+        _body(merged), b_body
+    ):
+        # Link carryover reconciled the divergence and provably preserved all
+        # of THEIRS' content (#4616: lossy carryover no longer resolves).
         return merged, info
-    if _token_similarity(a_body, b_body) >= 0.85:
-        # Genuine near-duplicate: negligible content to lose either way.
+    if (
+        _extract_uuid(a) is not None
+        and _extract_uuid(b) is not None
+        and _token_similarity(a_body, b_body) >= 0.85
+    ):
+        # Genuine vault-note near-duplicate: negligible content to lose either
+        # way. Intentionally scoped to vault identity (#4616); repository docs
+        # with high token overlap but distinct bodies conflict instead.
         return merged, info
 
     info["status"] = "conflict"

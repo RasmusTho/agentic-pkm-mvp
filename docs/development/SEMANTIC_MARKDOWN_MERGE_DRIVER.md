@@ -1,4 +1,4 @@
-State: Current-state contract for the `semanticmd` git merge driver; aligned with shipped behavior (#4505 routing narrowing, #4561 `%A` result write, #4603 content-loss guard generalized to vault notes).
+State: Current-state contract for the `semanticmd` git merge driver; aligned with shipped behavior (#4505 routing narrowing, #4561 `%A` result write, #4603 content-loss guard generalized to vault notes, #4616 lossless-only link carryover and vault-scoped near-duplicate bypass).
 
 # Semantic Markdown merge driver (`semanticmd`)
 
@@ -50,15 +50,29 @@ that permanently drops one side's edit. See
 `tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped`
 for the regression coverage.
 
-Two mechanisms are trusted to resolve a divergence without raising a conflict,
-because they provably do not discard real content: an exact body match
-(nothing to lose), the markdown-link-carryover heuristic (THEIRS' missing
-links are appended into the merged text), and a genuine near-duplicate pick
-(token similarity `>= 0.85`, i.e. negligible information difference either
-way). Any other divergence — including ordinary distinct-prose additions on
+Three mechanisms are trusted to resolve a divergence without raising a
+conflict, because they provably do not discard real content (tightened by
+#4616 after PR #4604 reviews r3700682703 / r3700682705):
+
+- An exact body match: nothing to lose.
+- The markdown-link-carryover heuristic (THEIRS' missing links are appended
+  into the merged text), but only when the carryover is verifiably lossless:
+  every one of THEIRS' links must land in the merged body and THEIRS'
+  remaining non-link prose must already appear, in order, inside the merged
+  body's non-link prose. If THEIRS carries a link plus distinct prose, the
+  merge conflicts instead of resolving — link carryover is not a generic
+  content-loss exemption.
+- A genuine near-duplicate pick (token similarity `>= 0.85`), scoped to vault
+  notes (`uuid:` identity on both sides). Set-of-tokens similarity ignores
+  order, repetition, and negation ("deployment is enabled" vs "deployment is
+  not enabled" clears the threshold), so repository documentation never
+  resolves through it; a non-vault doc with high token overlap but distinct
+  body content conflicts.
+
+Any other divergence — including ordinary distinct-prose additions on
 both sides — raises a conflict rather than silently picking a side. Real
 per-locus semantic merging (an actual LLM judgment wired into `judge_locus`)
-is not implemented; until it is, vault-note auto-resolve is limited to the
+is not implemented; until it is, auto-resolve is limited to the
 three mechanisms above.
 
 ## History
