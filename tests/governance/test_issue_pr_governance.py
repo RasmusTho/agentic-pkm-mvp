@@ -1156,7 +1156,9 @@ def test_commit_message_closing_keywords_are_forbidden() -> None:
     assert "Start with imperative verb (Add, Update, Rebuild, etc.)" in guidance
     assert "Start with imperative verb (Fix, Add, Update, Rebuild, etc.)" not in guidance
     assert "Never include any issue-closing keyword in the commit subject or body" not in guidance
-    assert ".github/workflows/issue-pr-governance.yml :: pr-contract closing authority" in guidance
+    # The citation targets the workflow's `// authority-classifier:start`
+    # marker so it stays resolvable under the section-citation lint (#4297).
+    assert ".github/workflows/issue-pr-governance.yml :: authority-classifier" in guidance
     assert "const closingKeyword =" in workflow
     assert "closingAttemptSeparator" in workflow
     assert "closingAttemptTarget" in workflow

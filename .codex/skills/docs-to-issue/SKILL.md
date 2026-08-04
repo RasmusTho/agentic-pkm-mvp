@@ -106,7 +106,7 @@ Skill-specific rule: if an AC cannot carry a resolvable `Verify:` target, the AC
 - Preferred format:
   - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
   - `docs/ROADMAP.md :: ORCHV2-TDD`
-  - `docs/STATUS.md :: SETTINGS-PROVENANCE`
+  - `docs/STATUS.md :: CDLM-01`
 - Prefer stable anchor IDs over prose fragments.
 
 ## Pickup label and optional Project projection rules

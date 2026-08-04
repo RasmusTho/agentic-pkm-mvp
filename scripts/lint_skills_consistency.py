@@ -33,6 +33,15 @@ Deterministic, stdlib-only, read-only. Catches the defect classes found by the
     text as their canonical Python twins in
     `app/dispatcher/verification_contract.py` (regression guard for #4272 — the
     canonical implementation must not silently drift from the gate it mirrors).
+11. Every backticked `FILE :: Section` citation in the instruction chain
+    (`.codex/skills/README.md`, each `SKILL.md`, `.codex/skills/_shared/**`,
+    `AGENTS.md`, `CLAUDE.md`, `.codex/AGENTS.md`) resolves: the cited path
+    exists inside the repository and the cited section matches a Markdown
+    heading in that file (whitespace/case-normalized, tolerating enum
+    prefixes and trailing parenthetical qualifiers the heading carries), a
+    stable all-caps anchor ID present in the file, or — for non-Markdown
+    targets — text present in the file (enforcement gate for the
+    read-scope-bearing citation contract of #4189/PR #4275; issue #4297).
 
 Exit 0 with no output when clean; exit 1 with one error per line otherwise.
 
@@ -540,6 +549,167 @@ def check_pr_contract_validator_matches_workflow(repo_root: Path) -> list[str]:
     return errors
 
 
+# --- Check 11: `FILE :: Section` citation resolution (issue #4297) ----------
+#
+# PR #4275 made `FILE :: Section` citations read-scope-bearing
+# (`.codex/skills/_shared/READ_SCOPE.md :: The protocol`). This check keeps
+# them from silently rotting when a cited heading is renamed or removed.
+
+_CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+# Inline code span; DOTALL-free `[^`]` already crosses newlines. Spans with a
+# blank line inside are rejected later (not a real Markdown inline span).
+_INLINE_SPAN_RE = re.compile(r"`([^`]+)`")
+_CITATION_SEPARATOR = " :: "
+# The cited path must look like a repository file path: path charset only and
+# a dotted final component. This is what keeps skill-name citations
+# (`verification-and-closure :: Running the local review gate`) and protocol
+# placeholders (`FILE :: Section`) out of scope for this check — the former
+# are validated as skill references by check 2, the latter are grammar, not
+# citations.
+_CITATION_PATH_RE = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_.\-/]*\.[A-Za-z0-9]+$")
+# Stable anchor IDs (`docs/PANEL_AGENT.md :: PA2-FREEFORM`) resolve by
+# presence anywhere in the cited file — they are anchors, not headings
+# (`.codex/skills/_shared/ISSUE_CONTRACT.md :: Source Anchors`).
+_ANCHOR_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+$")
+_MD_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+_HEADING_ENUM_PREFIX_RE = re.compile(r"^\d+[a-z]?\.\s+")
+_HEADING_TRAILING_PAREN_RE = re.compile(r"\s*\([^()]*\)$")
+# Template/placeholder citations are instruction grammar, not references:
+# angle/brace-bracketed slots and the learning-log date-entry template.
+_CITATION_PLACEHOLDER_MARKERS = ("<", ">", "{", "}", "YYYY-MM-DD")
+
+
+def _blank_code_fences(text: str) -> str:
+    """Replace fenced-code-block lines with blanks, preserving line numbers."""
+    out: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        match = _CODE_FENCE_RE.match(line)
+        if match and fence is None:
+            fence = match.group(1)
+            out.append("")
+        elif match and match.group(1) == fence:
+            fence = None
+            out.append("")
+        else:
+            out.append("" if fence else line)
+    return "\n".join(out)
+
+
+def _normalize_section(text: str) -> str:
+    text = text.replace("`", "").replace("*", "")
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _markdown_heading_index(text: str) -> set[str]:
+    """Normalized headings, plus variants without the decorations citations
+    conventionally omit: a leading enum prefix (`3. `, `4b. `) and a trailing
+    parenthetical qualifier (`Agency default (minimize human time)`)."""
+    index: set[str] = set()
+    for line in _blank_code_fences(text).splitlines():
+        match = _MD_HEADING_RE.match(line)
+        if not match:
+            continue
+        heading = match.group(1)
+        bare = _HEADING_ENUM_PREFIX_RE.sub("", heading)
+        for variant in (
+            heading,
+            bare,
+            _HEADING_TRAILING_PAREN_RE.sub("", heading),
+            _HEADING_TRAILING_PAREN_RE.sub("", bare),
+        ):
+            index.add(_normalize_section(variant))
+    return index
+
+
+def _citation_scan_files(repo_root: Path) -> list[Path]:
+    """The instruction-chain surface named by issue #4297, existing files only
+    (synthetic test trees may seed just a few of them)."""
+    skills_root = repo_root / ".codex" / "skills"
+    candidates: list[Path] = [
+        repo_root / "AGENTS.md",
+        repo_root / "CLAUDE.md",
+        repo_root / ".codex" / "AGENTS.md",
+        skills_root / "README.md",
+    ]
+    candidates += [d / "SKILL.md" for d in _skill_dirs(skills_root)]
+    shared_dir = skills_root / "_shared"
+    if shared_dir.is_dir():
+        candidates += sorted(p for p in shared_dir.rglob("*") if p.is_file())
+    return [p for p in candidates if p.is_file()]
+
+
+def _iter_section_citations(text: str) -> list[tuple[int, str, str]]:
+    """Yield `(lineno, path, section)` for each `FILE :: Section` citation."""
+    citations: list[tuple[int, str, str]] = []
+    scannable = _blank_code_fences(text)
+    for match in _INLINE_SPAN_RE.finditer(scannable):
+        span = match.group(1)
+        if "\n\n" in span or _CITATION_SEPARATOR not in span:
+            continue
+        flat = re.sub(r"\s+", " ", span).strip()
+        if any(marker in flat for marker in _CITATION_PLACEHOLDER_MARKERS):
+            continue
+        cited_path, section = flat.split(_CITATION_SEPARATOR, 1)
+        if not _CITATION_PATH_RE.match(cited_path) or not section.strip():
+            continue
+        lineno = scannable.count("\n", 0, match.start()) + 1
+        citations.append((lineno, cited_path, section.strip()))
+    return citations
+
+
+def check_section_citations(repo_root: Path) -> list[str]:
+    """Check 11: every `FILE :: Section` citation resolves (issue #4297).
+
+    A citation resolves when its path names an existing file inside the
+    repository and its section matches a Markdown heading there (normalized;
+    heading decorations the citation omits are tolerated), is a stable
+    all-caps anchor ID present in the file, or — for a non-Markdown target,
+    where headings do not exist — is text present in the file.
+    """
+    errors: list[str] = []
+    heading_cache: dict[Path, set[str]] = {}
+    for path in _citation_scan_files(repo_root):
+        rel = path.relative_to(repo_root)
+        for lineno, cited_path, section in _iter_section_citations(
+            path.read_text(encoding="utf-8")
+        ):
+            citation = f"`{cited_path} :: {section}`"
+            if cited_path.startswith("/") or ".." in cited_path.split("/"):
+                errors.append(
+                    f"{rel}:{lineno}: section citation {citation} points "
+                    "outside the repository"
+                )
+                continue
+            target = repo_root / cited_path
+            if not target.is_file():
+                errors.append(
+                    f"{rel}:{lineno}: section citation {citation} cites a "
+                    "file that does not exist in the repository"
+                )
+                continue
+            target_text = target.read_text(encoding="utf-8")
+            if target.suffix == ".md":
+                if target not in heading_cache:
+                    heading_cache[target] = _markdown_heading_index(target_text)
+                if _normalize_section(section) in heading_cache[target]:
+                    continue
+                if _ANCHOR_ID_RE.match(section) and section in target_text:
+                    continue
+                errors.append(
+                    f"{rel}:{lineno}: section citation {citation} matches "
+                    f"no Markdown heading or anchor ID in {cited_path} — "
+                    "update the citation or restore the heading"
+                )
+            elif section not in target_text:
+                errors.append(
+                    f"{rel}:{lineno}: section citation {citation} names "
+                    f"text not present in {cited_path} — update the citation "
+                    "or restore the referenced marker"
+                )
+    return errors
+
+
 def run_lint(repo_root: Path) -> list[str]:
     skills_root = repo_root / ".codex" / "skills"
     if not skills_root.is_dir():
@@ -554,6 +724,7 @@ def run_lint(repo_root: Path) -> list[str]:
     errors += check_sbs_impact_fields_consistent(repo_root)
     errors += check_required_sections_consistent(repo_root)
     errors += check_pr_contract_validator_matches_workflow(repo_root)
+    errors += check_section_citations(repo_root)
     return errors
 
 
