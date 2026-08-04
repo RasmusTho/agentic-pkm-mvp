@@ -5,7 +5,10 @@ from .graph import diff_conflict_loci, apply_decisions
 from .llm import judge_locus
 
 
-_MD_LINK_RE = re.compile(r"\[[^\]]+\]\([^)]+\)")
+# Optional leading "!" so image embeds are recognized too: the carryover
+# heuristic only appends plain links, so an incoming image can never be
+# "carried" verbatim and the lossless check below fails closed to a conflict.
+_MD_LINK_RE = re.compile(r"!?\[[^\]]+\]\([^)]+\)")
 
 
 def _token_similarity(x: str, y: str) -> float:
@@ -37,7 +40,11 @@ def _carried_links_are_lossless(merged_body: str, b_body: str) -> bool:
     """
     if not all(link in merged_body for link in _MD_LINK_RE.findall(b_body)):
         return False
-    return _normalized_nonlink_text(b_body) in _normalized_nonlink_text(merged_body)
+    # Space-padded containment keeps the match word-aligned: THEIRS' "enabled"
+    # must not count as preserved because OURS happens to contain "unenabled".
+    b_nonlink = _normalized_nonlink_text(b_body)
+    merged_nonlink = _normalized_nonlink_text(merged_body)
+    return f" {b_nonlink} " in f" {merged_nonlink} "
 
 
 def _extract_uuid(md: str) -> str | None:
@@ -150,7 +157,12 @@ def _body(md: str) -> str:
 
 
 def _guard_content_loss(merged, info, a, b):
-    """Refuse to silently resolve a merge that discards one side's real content.
+    """Refuse to silently resolve a merge that discards one side's real body content.
+
+    Scope note: this guard compares note *bodies*. Frontmatter divergence
+    beyond the uuid hard-conflict invariant (e.g. THEIRS-only tags or a
+    review_state change) is still resolved by `apply_decisions` keeping OURS'
+    frontmatter -- a pre-existing gap outside this guard's contract.
 
     Issue #4505 added this fail-safe for repository documentation (no `uuid:`
     frontmatter): the near-duplicate / "prefer concise" heuristic could pick one
@@ -168,7 +180,7 @@ def _guard_content_loss(merged, info, a, b):
     tests/cli/test_merge_driver.py::test_end_to_end_git_rebase_plain_prose_vault_note_divergence_is_not_silently_dropped.
 
     The only mechanisms trusted to resolve a divergence are the ones that
-    provably preserve the discarded side's real content (#4616, PR #4604
+    provably preserve the discarded side's real body content (#4616, PR #4604
     reviews r3700682703 / r3700682705):
 
     - An exact body match: nothing to lose.
@@ -204,11 +216,13 @@ def _guard_content_loss(merged, info, a, b):
         _body(merged), b_body
     ):
         # Link carryover reconciled the divergence and provably preserved all
-        # of THEIRS' content (#4616: lossy carryover no longer resolves).
+        # of THEIRS' body content (#4616: lossy carryover no longer resolves).
         return merged, info
     if (
-        _extract_uuid(a) is not None
-        and _extract_uuid(b) is not None
+        # Truthiness, not `is not None`: a bare `uuid:` key with no value is
+        # not vault identity, matching the hard-conflict check above.
+        _extract_uuid(a)
+        and _extract_uuid(b)
         and _token_similarity(a_body, b_body) >= 0.85
     ):
         # Genuine vault-note near-duplicate: negligible content to lose either

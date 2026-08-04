@@ -79,6 +79,19 @@ def test_link_carryover_still_resolves_when_links_are_the_only_difference():
     assert "https://example.com/runbook" in merged
 
 
+def test_link_carryover_containment_is_word_aligned():
+    # THEIRS' "enabled in prod" must not count as preserved merely because
+    # OURS happens to contain it as a fragment of "unenabled in prod": the
+    # lossless-carryover containment check is word-aligned, not raw-substring.
+    base = "deployment status\n"
+    a = "unenabled in prod\n"
+    b = "enabled in prod [ref](https://example.com/r)\n"
+
+    merged, info = merge_note_from_blobs(base, a, b)
+
+    assert info["status"] == "conflict"
+
+
 def test_repo_doc_token_overlap_still_conflicts_when_bodies_differ():
     # PR #4604 review r3700682705 (#4616): set-of-tokens similarity ignores
     # order, repetition, and meaning -- "deployment is enabled" versus
@@ -88,6 +101,19 @@ def test_repo_doc_token_overlap_still_conflicts_when_bodies_differ():
     base = "# Runbook\n\ndeployment status pending\n"
     a = "# Runbook\n\ndeployment is enabled\n"
     b = "# Runbook\n\ndeployment is not enabled\n"
+
+    merged, info = merge_note_from_blobs(base, a, b)
+
+    assert info["status"] == "conflict"
+
+
+def test_bare_uuid_key_does_not_grant_vault_near_duplicate_bypass():
+    # A `uuid:` key with no value is not vault identity. The near-duplicate
+    # bypass must not treat it as one, or the token-overlap defect above comes
+    # back for any doc carrying an empty uuid field.
+    base = "---\nuuid:\n---\n# Runbook\n\ndeployment status pending\n"
+    a = "---\nuuid:\n---\n# Runbook\n\ndeployment is enabled\n"
+    b = "---\nuuid:\n---\n# Runbook\n\ndeployment is not enabled\n"
 
     merged, info = merge_note_from_blobs(base, a, b)
 
