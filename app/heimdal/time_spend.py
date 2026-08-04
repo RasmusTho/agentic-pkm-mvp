@@ -42,6 +42,29 @@ Design contract (issue Acceptance Criteria + MACHINE_MIRROR_AND_DB_AUTHORITY_CON
   overwritten ONLY when its frontmatter proves it is this module's own
   derived projection; anything else (a human note, a foreign artifact, an
   unparseable file) blocks the write loudly and leaves the file untouched.
+  Both write paths are race-safe (#4609): replacing an existing owned
+  projection is a compare-and-swap against the exact bytes the ownership
+  check read (``expected_version``, VMW-01), so a human edit landing between
+  check and write stages a conflict artifact and blocks instead of being
+  overwritten; creating an absent target is atomic no-clobber
+  (``create_candidate_note_once``), so a note created in that window
+  likewise blocks the projection, never the human.
+- **Observed labels are quarantined before materialization (HEIM-9).**
+  Screen-derived bucket labels (frontmost app, scope, project entity surface
+  forms) are observed content -- untrusted, potentially instruction-shaped.
+  Before any label is interpolated into vault markdown it passes through
+  A3's sole quarantine path (``app.heimdal.quarantine``): neutralized
+  (homoglyph fold, zero-width strip, fence-breakout defang, sentinel strip)
+  and then markdown-table-escaped (pipes, newlines) so it can neither read
+  as a directive downstream nor corrupt the note's table structure. The raw
+  text survives only as visible, inert evidence.
+- **Stale weekly notes are cleared, not left lying (#4609 P2).** When a
+  rebuild's fold no longer targets a week (its last span was superseded or
+  revised into another week), an existing note at that week's path that
+  provably IS this module's own projection is rewritten to the empty
+  projection through the same guarded CAS path -- it must not keep reporting
+  retracted time. Anything not provably ours (human notes, foreign
+  artifacts, week-named or not) is never touched by the cleanup.
 
 Attribution choices (deterministic, documented rather than configurable):
 
@@ -65,7 +88,8 @@ observations alone and does not depend on ERE.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -73,7 +97,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import yaml
 
 from app.heimdal.observation_log import ObservationRow, read_observations_from
-from app.knowledge.write_ops import write_note_relative
+from app.heimdal.quarantine import quarantine_observed_content
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import (
+    create_candidate_note_once,
+    read_note_text_with_version,
+    write_note_relative,
+)
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -131,7 +161,8 @@ class TimeSpendRollup:
 
 @dataclass(frozen=True)
 class TimeSpendWriteResult:
-    status: str  # "written" | "rebuilt" | "unchanged" | "blocked" | "no_observations"
+    # "written" | "rebuilt" | "unchanged" | "blocked" | "no_observations" | "cleared"
+    status: str
     week: str
     artifact_path: Optional[str]
     reason: Optional[str] = None
@@ -317,10 +348,33 @@ def _sorted_buckets(totals: Mapping[str, float]) -> List[Tuple[str, float]]:
     return sorted(totals.items(), key=lambda item: (-item[1], item[0]))
 
 
+def _quarantined_table_label(label: str) -> str:
+    """Neutralize an observation-derived label and escape markdown table syntax.
+
+    Bucket labels on the app/project/scope axes are screen-derived observed
+    content -- untrusted by HEIM-9. Routing them through A3's sole quarantine
+    path (``quarantine_observed_content``; the ``neutralized_text`` form is
+    the one for structured renderers that supply their own framing) makes
+    instruction-shaped text, fence breakouts, zero-width smuggling, and forged
+    quarantine sentinels inert while keeping the text visible as evidence.
+    On top of neutralization this escapes the *table* structure the renderer
+    itself supplies: newlines/whitespace runs collapse to one space (a label
+    can never start a new markdown block or row) and ``\\``/``|`` are escaped
+    (a label can never terminate its cell). Pure function -- determinism of
+    the rendered note (AC2) is preserved. Two distinct raw labels may collapse
+    to one visible form; they still render as separate rows in deterministic
+    order. A label that neutralizes to nothing renders as ``(unknown)``.
+    """
+    neutralized = quarantine_observed_content(label).neutralized_text
+    collapsed = " ".join(neutralized.split())
+    escaped = collapsed.replace("\\", "\\\\").replace("|", "\\|")
+    return escaped or UNKNOWN_BUCKET
+
+
 def _axis_table(title: str, totals: Mapping[str, float]) -> List[str]:
     lines = [f"## {title}", "", "| Bucket | Time |", "| --- | --- |"]
     for name, seconds in _sorted_buckets(totals):
-        lines.append(f"| {name} | {format_duration(seconds)} |")
+        lines.append(f"| {_quarantined_table_label(name)} | {format_duration(seconds)} |")
     lines.append("")
     return lines
 
@@ -409,17 +463,16 @@ def _vault_root(context: VaultContext) -> Path:
     return root
 
 
-def _is_own_projection(path: Path) -> bool:
-    """Whether the existing file is this module's own derived projection.
+def _is_own_projection(text: str) -> bool:
+    """Whether the existing note text is this module's own derived projection.
 
     Anything that does not positively prove the derived posture -- a human
     note, a foreign artifact class, a note claiming authority, an
-    unparseable file -- is NOT ours and must never be overwritten.
+    unparseable file -- is NOT ours and must never be overwritten. Takes the
+    already-read text (not a path) so the caller can prove ownership, compare
+    for changes, and compare-and-swap against ONE consistent byte snapshot --
+    a re-read here would reopen the check/write race this closes (#4609).
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return False
     if not text.startswith("---\n"):
         return False
     end = text.find("\n---", 4)
@@ -452,10 +505,19 @@ def write_time_spend_note(
 ) -> TimeSpendWriteResult:
     """The governed vault-write call site for one week's projection note.
 
-    ``WriteGuard``-gated immediately before the write; a blocked write is a
-    loud, item-scoped result, never a silent drop. Overwrites ONLY its own
-    prior projection (rebuild = re-fold + rewrite, the note is disposable);
-    any other occupant of the path blocks the write and is left untouched.
+    ``WriteGuard``-gated at the write seam; a blocked write is a loud,
+    item-scoped result, never a silent drop. Overwrites ONLY its own prior
+    projection (rebuild = re-fold + rewrite, the note is disposable); any
+    other occupant of the path blocks the write and is left untouched.
+
+    Race-safe by construction (#4609): the ownership proof, the unchanged
+    comparison, and the write expectation all come from ONE byte snapshot,
+    and the replacement is a compare-and-swap against exactly those bytes
+    (``expected_version``) -- a human edit landing after the snapshot makes
+    the write refuse (the racing bytes stay canonical; the projection's
+    proposal is staged as a conflict artifact by the VMW-01 port). An absent
+    target is created atomically no-clobber, so a note created in the
+    check/write window equally blocks the projection, never the human.
     """
     vault_root = _vault_root(vault_context)
     artifact_path = time_spend_note_path(week, time_spend_dir=time_spend_dir)
@@ -464,7 +526,20 @@ def write_time_spend_note(
     content = render_time_spend_note(week, rollup)
 
     if note_path.exists() or note_path.is_symlink():
-        if not _is_own_projection(note_path):
+        try:
+            existing_text, expected_version = read_note_text_with_version(note_path)
+        except (OSError, UnicodeDecodeError):
+            # An occupant we cannot even read is not provably ours: hands off.
+            return TimeSpendWriteResult(
+                status="blocked",
+                week=week,
+                artifact_path=None,
+                reason=(
+                    f"path is occupied by an unreadable file; refusing to "
+                    f"overwrite: {artifact_path}"
+                ),
+            )
+        if not _is_own_projection(existing_text):
             return TimeSpendWriteResult(
                 status="blocked",
                 week=week,
@@ -474,32 +549,131 @@ def write_time_spend_note(
                     f"projection; refusing to overwrite: {artifact_path}"
                 ),
             )
+        if existing_text == content:
+            return TimeSpendWriteResult(
+                status="unchanged", week=week, artifact_path=artifact_path
+            )
         try:
-            if note_path.read_text(encoding="utf-8") == content:
-                return TimeSpendWriteResult(
-                    status="unchanged", week=week, artifact_path=artifact_path
-                )
-        except OSError:
-            pass
-        status = "rebuilt"
-    else:
-        status = "written"
+            write_note_relative(
+                artifact_path,
+                content,
+                vault_root=vault_root,
+                action=TIME_SPEND_WRITE_ACTION,
+                write_guard=write_guard,
+                expected_version=expected_version,
+                writer_identity=PROJECTION_CONSUMER,
+            )
+        except WritesBlockedError as exc:
+            return TimeSpendWriteResult(
+                status="blocked", week=week, artifact_path=None, reason=str(exc)
+            )
+        except KnowledgeWriteConflict as exc:
+            return TimeSpendWriteResult(
+                status="blocked",
+                week=week,
+                artifact_path=None,
+                reason=(
+                    f"target changed concurrently; refusing to overwrite: "
+                    f"{artifact_path} ({exc})"
+                ),
+            )
+        return TimeSpendWriteResult(status="rebuilt", week=week, artifact_path=artifact_path)
 
     try:
-        write_guard.assert_writes_allowed(TIME_SPEND_WRITE_ACTION)
+        outcome = create_candidate_note_once(
+            artifact_path,
+            content,
+            vault_root=vault_root,
+            action=TIME_SPEND_WRITE_ACTION,
+            write_guard=write_guard,
+        )
     except WritesBlockedError as exc:
         return TimeSpendWriteResult(
             status="blocked", week=week, artifact_path=None, reason=str(exc)
         )
+    if outcome == "already_exists":
+        return TimeSpendWriteResult(
+            status="blocked",
+            week=week,
+            artifact_path=None,
+            reason=(
+                f"target was created concurrently; refusing to clobber: "
+                f"{artifact_path}"
+            ),
+        )
+    return TimeSpendWriteResult(status="written", week=week, artifact_path=artifact_path)
 
-    write_note_relative(
-        artifact_path,
-        content,
-        vault_root=vault_root,
-        action=TIME_SPEND_WRITE_ACTION,
+
+#: Filename stem shape of a weekly projection note (ISO week label). Only
+#: files with this stem are ever *candidates* for stale-week cleanup; the
+#: ownership proof in :func:`_clear_stale_week_note` remains the actual gate.
+_WEEK_STEM_RE = re.compile(r"^\d{4}-W\d{2}$")
+
+
+def _clear_stale_week_note(
+    week: str,
+    rollup: TimeSpendRollup,
+    *,
+    vault_context: VaultContext,
+    write_guard: WriteGuard,
+    time_spend_dir: str,
+) -> Optional[TimeSpendWriteResult]:
+    """Clear one owned weekly note the current fold no longer targets (#4609 P2).
+
+    Returns ``None`` when there is nothing owned to clear -- the target is
+    absent, unreadable, or not provably this module's own projection (a human
+    note is NEVER touched, deleted, or reported on by cleanup). Otherwise the
+    note is rewritten to the week's empty projection (span_count 0, all
+    tables empty) through :func:`write_time_spend_note`, i.e. through the
+    same ownership re-proof + compare-and-swap guards as any other rewrite.
+    An "emptied" note stays a legible, regenerable projection artifact; this
+    module deliberately has no delete primitive.
+    """
+    vault_root = _vault_root(vault_context)
+    note_path = vault_root / time_spend_note_path(week, time_spend_dir=time_spend_dir)
+    if not (note_path.exists() or note_path.is_symlink()):
+        return None
+    try:
+        existing_text, _version = read_note_text_with_version(note_path)
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not _is_own_projection(existing_text):
+        return None
+    result = write_time_spend_note(
+        week,
+        rollup,
+        vault_context=vault_context,
         write_guard=write_guard,
+        time_spend_dir=time_spend_dir,
     )
-    return TimeSpendWriteResult(status=status, week=week, artifact_path=artifact_path)
+    if result.status == "rebuilt":
+        return replace(result, status="cleared")
+    return result
+
+
+def _stale_week_candidates(
+    vault_root: Path,
+    *,
+    time_spend_dir: str,
+    active_weeks: set[str],
+) -> Tuple[str, ...]:
+    """Week labels with an existing note file that the current fold skips.
+
+    Purely a filename scan (deterministic, sorted): every ``<dir>/<week>.md``
+    whose stem is week-shaped and not in ``active_weeks``. Ownership is NOT
+    decided here -- :func:`_clear_stale_week_note` proves it per file, so a
+    human note named like a week is listed as a candidate but never touched.
+    """
+    safe_dir = PurePosixPath(time_spend_dir.strip().strip("/"))
+    dir_path = vault_root / safe_dir
+    if not dir_path.is_dir():
+        return ()
+    stems = []
+    for entry in sorted(dir_path.glob("*.md")):
+        stem = entry.name[: -len(".md")]
+        if _WEEK_STEM_RE.match(stem) and stem not in active_weeks:
+            stems.append(stem)
+    return tuple(stems)
 
 
 # ---------------------------------------------------------------------------
@@ -529,15 +703,30 @@ def rebuild_time_spend(
     Writes one note per ISO week present in the folded spans, or only
     ``week`` when given. Returns a receipt mapping each targeted week to its
     write status; a week with no observations reports ``no_observations``
-    and writes nothing.
+    and writes nothing NEW -- but a week that still has an existing note
+    provably owned by this module is *cleared* to the empty projection
+    (status ``cleared``; #4609 P2), so a note whose spans were revised into
+    another week cannot keep reporting retracted time. A full rebuild
+    (``week=None``) additionally scans the projection directory for owned
+    week notes the fold no longer targets and clears those the same way.
+    Cleanup never touches, deletes, or reports on notes that are not
+    provably this module's own projection.
     """
     rollup = build_time_spend_rollup()
-    targets = [week] if week is not None else list(rollup.weeks())
+    active_weeks = set(rollup.weeks())
+    targets = [week] if week is not None else sorted(active_weeks)
 
     results: Dict[str, TimeSpendWriteResult] = {}
     for target in targets:
         if not rollup.spans_for_week(target):
-            results[target] = TimeSpendWriteResult(
+            cleared = _clear_stale_week_note(
+                target,
+                rollup,
+                vault_context=vault_context,
+                write_guard=write_guard,
+                time_spend_dir=time_spend_dir,
+            )
+            results[target] = cleared or TimeSpendWriteResult(
                 status="no_observations", week=target, artifact_path=None
             )
             continue
@@ -548,6 +737,24 @@ def rebuild_time_spend(
             write_guard=write_guard,
             time_spend_dir=time_spend_dir,
         )
+
+    if week is None:
+        for stale in _stale_week_candidates(
+            _vault_root(vault_context),
+            time_spend_dir=time_spend_dir,
+            active_weeks=active_weeks,
+        ):
+            if stale in results:
+                continue
+            cleared = _clear_stale_week_note(
+                stale,
+                rollup,
+                vault_context=vault_context,
+                write_guard=write_guard,
+                time_spend_dir=time_spend_dir,
+            )
+            if cleared is not None:
+                results[stale] = cleared
 
     return {
         "rebuilt_from": rollup.source_row_count,
