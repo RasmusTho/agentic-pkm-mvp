@@ -39,6 +39,11 @@ def test_boots_idle_without_vault_root(tmp_path: Path) -> None:
     env = {
         "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "HOME": str(Path.home()),
+        # #4519 — the no-vault idle bring-up exports a minimal runtime env;
+        # scope that write to tmp_path so it cannot clobber the repository's
+        # real tmp/runtime.env (this hermetic env carries no pytest markers,
+        # so the exporter's guard cannot catch an unscoped write here).
+        "RUNTIME_ENV_PATH": str(tmp_path / "runtime.env"),
         # VAULT_ROOT intentionally absent -> no-vault idle posture.
     }
     result = subprocess.run(
