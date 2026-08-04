@@ -179,6 +179,45 @@ remove_ready_label() {
     "repos/$REPO/issues/$ISSUE_NUMBER/labels/agent%3Aready" >/dev/null
 }
 
+# Distinguish a genuinely failed claim from a task row that is absent only
+# because the last dispatcher pull was truncated by the GitHub rate-limit kill
+# switch (#4606). Reads local dispatcher state only; spends no GitHub API calls.
+classify_claim_failure() {
+  local status_json
+  status_json="$("$PYTHON_BIN" -m app.dispatcher status --json 2>/dev/null || true)"
+  DISPATCHER_CLAIM_JSON="$1" \
+  DISPATCHER_STATUS_JSON="$status_json" \
+  "$JSON_PYTHON_BIN" - <<'PY'
+import json
+import os
+
+
+def _load(name):
+    try:
+        payload = json.loads(os.environ.get(name) or "")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+claim = _load("DISPATCHER_CLAIM_JSON")
+status = _load("DISPATCHER_STATUS_JSON")
+error = claim.get("error")
+missing_task = isinstance(error, str) and "not found" in error
+last_sync = status.get("last_sync")
+if not isinstance(last_sync, dict):
+    last_sync = {}
+if (
+    missing_task
+    and last_sync.get("sync_result") == "partial"
+    and last_sync.get("kill_switch_active") is True
+):
+    print("kill-switch-partial-sync")
+else:
+    print("claim-failed")
+PY
+}
+
 release_dispatcher_claim() {
   local release_json
   if ! release_json="$(
@@ -211,6 +250,17 @@ PY
 if [[ "$RECEIPT_COORDINATION_MODE" == "dispatcher-backed" ]]; then
   claim_json=""
   if ! claim_json="$("$PYTHON_BIN" -m app.dispatcher claim "$TASK_ID" --agent "$AGENT_ID" --ttl-minutes "$TTL_MINUTES" --json)"; then
+    claim_failure_mode="$(classify_claim_failure "$claim_json" || echo claim-failed)"
+    if [[ "$claim_failure_mode" == "kill-switch-partial-sync" ]]; then
+      {
+        echo "claim-missing-task issue=$ISSUE_NUMBER task_id=$TASK_ID cause=kill-switch-partial-sync sync_result=partial kill_switch_active=true evidence=dispatcher-status-last-sync"
+        echo "the GitHub rate-limit kill switch truncated the last dispatcher pull; the local queue is honestly partial and the task row for issue $ISSUE_NUMBER may be legitimately absent."
+        echo "route to explicit GitHub-label-only fallback instead of re-syncing:"
+        echo "  scripts/issue_pickup_claim.sh --issue $ISSUE_NUMBER --repo $REPO --agent $AGENT_ID --session $SESSION_ID --coordination-mode github-label-only-fallback --fallback-reason kill-switch-partial-sync"
+        echo "agent:ready was not removed"
+      } >&2
+      exit 1
+    fi
     echo "dispatcher claim failed for expected task $TASK_ID; agent:ready was not removed" >&2
     exit 1
   fi

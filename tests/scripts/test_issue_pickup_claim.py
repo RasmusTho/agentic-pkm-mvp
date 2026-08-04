@@ -443,3 +443,92 @@ def test_label_delete_and_release_failure_reports_cleanup_failed_evidence(
     assert "holder=codex-3301" in result.stderr
     assert "cleanup=released" not in result.stderr
     assert "pickup-claim-complete" not in result.stdout
+
+
+def test_kill_switch_partial_sync_routes_to_label_only_fallback(tmp_path: Path) -> None:
+    """When the expected task row is absent and the last dispatcher sync was a
+    kill-switch partial, the wrapper must route to explicit GitHub-label-only
+    fallback guidance instead of an opaque missing-task failure (#4606,
+    lrn_20260730235456_f70f8ccc)."""
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+                "last_sync": {
+                    "last_pull_at": "2026-07-30T23:54:56+00:00",
+                    "sync_result": "partial",
+                    "sync_note": (
+                        "kill switch active: non-essential open-issues scan skipped"
+                    ),
+                    "kill_switch_active": True,
+                },
+            }
+        ),
+        claim_json=json.dumps(
+            {
+                "ok": False,
+                "error": "Task github-RasmusTho--agentic-pkm-mvp-issue-3301 not found",
+            }
+        ),
+        claim_rc=1,
+    )
+
+    result = _run(worktree, env)
+
+    assert result.returncode != 0
+    assert "pickup-claim-complete" not in result.stdout
+    # The failure names the real cause, machine-readably.
+    assert "cause=kill-switch-partial-sync" in result.stderr
+    assert "sync_result=partial" in result.stderr
+    assert "kill_switch_active=true" in result.stderr
+    # Explicit label-only fallback routing guidance with the exact rerun.
+    assert "--coordination-mode github-label-only-fallback" in result.stderr
+    assert "--fallback-reason kill-switch-partial-sync" in result.stderr
+    assert "--issue 3301" in result.stderr
+    # No label mutation happened on this path.
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "gh api --method DELETE" not in commands
+
+
+def test_missing_task_without_partial_sync_keeps_opaque_claim_failure(
+    tmp_path: Path,
+) -> None:
+    """A missing task after a complete (ok) sync is a genuine claim failure and
+    must not be routed to label-only fallback guidance (#4606)."""
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+                "last_sync": {
+                    "last_pull_at": "2026-07-30T23:54:56+00:00",
+                    "sync_result": "ok",
+                    "sync_note": None,
+                    "kill_switch_active": False,
+                },
+            }
+        ),
+        claim_json=json.dumps(
+            {
+                "ok": False,
+                "error": "Task github-RasmusTho--agentic-pkm-mvp-issue-3301 not found",
+            }
+        ),
+        claim_rc=1,
+    )
+
+    result = _run(worktree, env)
+
+    assert result.returncode != 0
+    assert "pickup-claim-complete" not in result.stdout
+    assert "cause=kill-switch-partial-sync" not in result.stderr
+    assert "dispatcher claim failed for expected task" in result.stderr
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "gh api --method DELETE" not in commands

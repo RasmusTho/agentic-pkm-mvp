@@ -776,6 +776,60 @@ def test_pull_command_reports_sync_source_failure(tmp_env):
 
 
 # ---------------------------------------------------------------------------
+# AC (#4606): _cmd_pull preserves successful upserts from the essential ready
+#     read while making a kill-switch partial sync visible and non-ambiguous.
+# Verify: test_pull_json_surfaces_kill_switch_partial_sync
+# ---------------------------------------------------------------------------
+
+def test_pull_json_surfaces_kill_switch_partial_sync(tmp_env):
+    """pull --json must expose a kill-switch-truncated sync as partial, not a
+    plain ok-complete receipt (#4606, lrn_20260730235456_f70f8ccc)."""
+    from unittest.mock import MagicMock, patch
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    _run(["init", "--json"])
+
+    mock_source = MagicMock(spec=GitHubIssueSource)
+    mock_source.list_issues.return_value = [
+        {
+            "number": 101,
+            "title": "Test issue 1",
+            "state": "open",
+            "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
+            "createdAt": "2026-04-20T10:00:00Z",
+            "updatedAt": "2026-04-21T12:00:00Z",
+            "body": VALID_READY_BODY,
+        }
+    ]
+    # Remaining below the kill-switch threshold suppresses the open-issue scan.
+    mock_source.get_rate_limit.return_value = {"remaining": 10, "reset": None}
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=mock_source):
+        code, data = _run(["pull", "--repo", "test/repo", "--json"])
+
+    # Not a hard failure: the essential ready read succeeded.
+    assert code == 0, data
+    mock_source.list_open_issues.assert_not_called()
+    assert data["ok"] is True
+    assert data["upserted"] == 1
+    # Machine-readable non-complete outcome.
+    assert data["sync_result"] == "partial"
+    assert data["kill_switch_active"] is True
+    repo_entry = data["repos"]["test/repo"]
+    assert repo_entry["sync_result"] == "partial"
+    assert repo_entry["upserted"] == 1
+    assert repo_entry["kill_switch_active"] is True
+
+    # The wrapper's dispatcher-pull consumption path reads status --json, so
+    # the real status surface must expose the same partial outcome.
+    code, status_data = _run(["status", "--json"])
+    assert code == 0
+    last_sync = status_data["last_sync"]
+    assert last_sync["sync_result"] == "partial"
+    assert last_sync["kill_switch_active"] is True
+
+
+# ---------------------------------------------------------------------------
 # AC: dispatcher next --json on a missing DB exits 1 with
 #     {"ok": false, "error": "...dispatcher not initialised..."}
 # Verify: test_guard_missing_db

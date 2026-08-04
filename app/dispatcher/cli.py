@@ -34,6 +34,7 @@ from app.dispatcher.sync_github import (
     GhCliIssueSource,
     PullSyncAdapter,
     get_sync_meta,
+    get_sync_meta_readonly,
 )
 
 REQUIRED_COMMANDS = frozenset([
@@ -323,6 +324,7 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     status = singleton_status(paths)
     control_plane: dict[str, Any]
     fallback_reason: str | None = None
+    last_sync: dict[str, Any] | None = None
     if status["db_exists"]:
         from app.dispatcher.control_plane import readonly_state
         try:
@@ -334,12 +336,25 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
                 "error": str(exc),
             }
             fallback_reason = "dispatcher_db_uninitialized"
+        # Additive last-sync summary so pickup tooling can distinguish a
+        # complete sync from a kill-switch partial one without spending
+        # GitHub API calls (#4606). Read-only: status is an observation
+        # command and must not initialize or migrate the database.
+        sync_meta = get_sync_meta_readonly(paths.db_path, PROVIDER_IDENTITY)
+        if sync_meta:
+            last_sync = {
+                "last_pull_at": sync_meta.get("last_pull_at"),
+                "sync_result": sync_meta.get("sync_result"),
+                "sync_note": sync_meta.get("sync_note"),
+                "kill_switch_active": bool(sync_meta.get("kill_switch_active")),
+            }
     else:
         control_plane = {"mode": "unavailable", "revision": None}
     _emit({
         "ok": True,
         **status,
         "control_plane": control_plane,
+        "last_sync": last_sync,
         **_coordination_payload(
             bool(status["db_exists"]) and fallback_reason is None,
             fallback_reason=fallback_reason,
@@ -492,6 +507,8 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
     total_reconciled = 0
     per_repo: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
+    partials: list[str] = []
+    kill_switch_partial = False
     last_sync_result: str | None = None
     last_sync_note: str | None = None
     try:
@@ -515,6 +532,17 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
                 repo_entry["sync_note"] = note or "dispatcher pull source failed"
                 failures.append(f"{repo}: {repo_entry['sync_note']}")
             else:
+                # Partial is not a hard source failure (#4606): the essential
+                # ready read succeeded, so its upserts count — but the
+                # truncation must stay visible per repo and top-level.
+                if result == "partial":
+                    repo_entry["sync_note"] = note or "dispatcher pull partial sync"
+                    repo_entry["kill_switch_active"] = bool(
+                        sync_meta.get("kill_switch_active")
+                    )
+                    if repo_entry["kill_switch_active"]:
+                        kill_switch_partial = True
+                    partials.append(f"{repo}: {repo_entry['sync_note']}")
                 total_upserted += len(upserted)
                 total_reconciled += reconciled
             per_repo[repo] = repo_entry
@@ -539,7 +567,7 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
         }, args.json)
         return 1
 
-    _emit({
+    payload: dict[str, Any] = {
         "ok": True,
         "upserted": total_upserted,
         "reconciled": total_reconciled,
@@ -548,7 +576,14 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
         "sync_result": last_sync_result,
         "sync_note": last_sync_note,
         "repos": per_repo,
-    }, args.json)
+    }
+    if partials:
+        # In a mixed multi-repo pull the last-processed repo can be a complete
+        # one; the aggregate outcome must still read as partial (#4606).
+        payload["sync_result"] = "partial"
+        payload["sync_note"] = "; ".join(partials)
+        payload["kill_switch_active"] = kill_switch_partial
+    _emit(payload, args.json)
     return 0
 
 

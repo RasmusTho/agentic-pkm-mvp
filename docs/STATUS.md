@@ -675,6 +675,14 @@ Platform-side governance applied:
 - local Agent Issue Dispatcher hot-path coordination is now active: agents use dispatcher
   `status` / `next` / `claim` / `heartbeat` / `complete` for operational pickup while GitHub
   Issues, labels, and PR state remain the durable lifecycle truth
+- dispatcher pull sync is honest under the GitHub rate-limit kill switch (#4606,
+  LearningSignal `lrn_20260730235456_f70f8ccc`): a kill-switch-truncated pull records
+  `sync_result=partial` with `kill_switch_active=true` instead of a false-green `ok`,
+  `dispatcher pull --json` and the additive read-only `last_sync` block in
+  `dispatcher status --json` surface the partial outcome, and
+  `scripts/issue_pickup_claim.sh` routes a missing-task claim failure after such a sync to
+  explicit GitHub-label-only fallback guidance (see
+  `docs/AGENT_ISSUE_DISPATCHER.md :: Kill-Switch Partial Sync (#4606)`)
 - the verification-dispatch integration line now fails closed on exact-head, authoritative
   `github-actions` required-check evidence, preserves review/repair budgets across restart, and
   rejects ambiguous legacy active-plus-terminal authority chains. Host rollout remains disabled
