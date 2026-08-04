@@ -22,6 +22,17 @@ service in `CHANNEL_SERVICES` (`api`, `worker`, `watcher`,
 `heimdal-capture-watch`). Read-only: no Docker, no network, never mutates
 compose, pin, or env_file files.
 
+Interpolation sources mirror the real deploy invocation exactly (#4613,
+PR #4599 review r3700034269): `scripts/lib/deploy_channel_compose.sh` runs
+`docker compose --env-file "config/deploy/<channel>.env"`, so the channel
+deploy env file is a genuine interpolation source layered UNDER the invoking
+shell (shell wins), and passing `--env-file` replaces the default repo-root
+`.env` entirely. Resolving against `os.environ` plus the repo `.env` instead
+(the reviewed behavior) let a variable defined only in the repo `.env`
+resolve nonblank here while the real invocation resolved it blank -- masking
+the exact clobber this gate exists to stop. Mirrors
+`scripts/prod_deploy_retry_preflight.py::_interpolation_environ`.
+
 Exit codes:
   0  no blank-override clobber found (including "channel has no overlay" --
      an unsupported/unknown channel argument is a caller error, not this
@@ -36,6 +47,7 @@ Prints one JSON receipt object to stdout.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -56,7 +68,45 @@ def _repo_root() -> Path:
     return root
 
 
-def main(argv: list[str]) -> int:
+def _deploy_env_file_interpolation_environ(
+    root: Path, channel: str
+) -> dict[str, str]:
+    """The interpolation sources the real Compose invocation resolves against.
+
+    ``scripts/lib/deploy_channel_compose.sh`` invokes ``docker compose
+    --env-file "config/deploy/<channel>.env"``: the channel deploy env file
+    is a genuine Compose interpolation source, layered UNDER the invoking
+    shell (Compose gives the shell precedence over ``--env-file`` values), so
+    its values are merged first and ``os.environ`` is applied last, on top —
+    the same layering ``scripts/prod_deploy_retry_preflight.py::
+    _interpolation_environ`` models for the prod channel. A missing or empty
+    deploy env file contributes nothing rather than failing: a channel's
+    first deploy runs this preflight before ``write_pin`` ever creates the
+    file. Bare ``KEY`` lines (no ``=``) contribute nothing either — the host
+    value they would pass through is already present via ``os.environ``.
+    """
+    # Imported lazily like main()'s checker import: sys.path gains the repo
+    # root only once _repo_root() has run.
+    from app.release_channels.channel_isolation_preflight import (
+        _parse_env_file_text,
+    )
+
+    merged: dict[str, str] = {}
+    env_file = root / "config" / "deploy" / f"{channel}.env"
+    try:
+        text = env_file.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    if text:
+        parsed = _parse_env_file_text(text)
+        merged.update(
+            {key: value for key, value in parsed.items() if value is not None}
+        )
+    merged.update(os.environ)
+    return merged
+
+
+def main(argv: list[str], root: Path | None = None) -> int:
     if len(argv) != 1 or argv[0] not in _CHANNEL_OVERLAYS:
         print(
             f"usage: {Path(__file__).name} <{'|'.join(_CHANNEL_OVERLAYS)}>",
@@ -65,7 +115,9 @@ def main(argv: list[str]) -> int:
         return 2
 
     channel = argv[0]
-    root = _repo_root()
+    repo_root = _repo_root()
+    if root is None:
+        root = repo_root
 
     compose_path = root / _CHANNEL_OVERLAYS[channel]
     if not compose_path.is_file():
@@ -85,7 +137,16 @@ def main(argv: list[str]) -> int:
         check_environment_env_file_clobber,
     )
 
-    result = check_environment_env_file_clobber(compose_path, channel)
+    # Resolve interpolation exactly as the real deploy invocation does: the
+    # selected `--env-file config/deploy/<channel>.env` under the invoking
+    # shell, and no repo-root `.env` contribution at all (a `--env-file`
+    # replaces it) — see the module docstring (#4613).
+    result = check_environment_env_file_clobber(
+        compose_path,
+        channel,
+        environ=_deploy_env_file_interpolation_environ(root, channel),
+        load_dotenv=False,
+    )
 
     if result.ok:
         payload = {"status": "ok", "channel": channel, "violation_count": 0}

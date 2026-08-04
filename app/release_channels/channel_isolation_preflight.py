@@ -772,6 +772,16 @@ def check_environment_env_file_clobber(
     :data:`CHANNEL_SERVICES` (currently including ``heimdal-capture-watch``)
     the same way the DSN-isolation check does.
 
+    The inspected ``environment:`` mapping is the *merged* base-plus-overlay
+    model (#4613, PR #4599 review r3700034271): Compose merges the base
+    file's per-service ``environment:`` mapping into the overlay's per key,
+    with the overlay winning, so a blank override inherited from the base
+    compose (e.g. the base ``VAULT_*_REL: ${VAR:-}`` entries) clobbers a
+    non-empty env_file value exactly like one declared in the overlay
+    itself. Inspecting only the overlay's own mapping silently passed both
+    when the overlay redeclared the service without the entry and when the
+    overlay omitted the service entirely.
+
     Read-only: never mutates compose, pin, or env_file layers, requires no
     Docker and no network — pure YAML plus env_file text, mirroring
     :func:`check_compose_channel_isolation`'s design constraints.
@@ -794,16 +804,26 @@ def check_environment_env_file_clobber(
 
     for svc_name in CHANNEL_SERVICES:
         svc = services.get(svc_name) or {}
-        env = _service_env(svc)
-        if not env:
-            continue
+        overlay_env = _service_env(svc)
 
         overlay_layers = _service_env_file_layers(svc)
         if base_services is None:
+            base_env: dict[str, str | None] = {}
             chain = [EnvFileLayer(path_expr=str(BASE_ENV_DEFAULTS_REL))]
         else:
-            chain = _service_env_file_layers(base_services.get(svc_name) or {})
+            base_svc = base_services.get(svc_name) or {}
+            base_env = _service_env(base_svc)
+            chain = _service_env_file_layers(base_svc)
         chain = chain + overlay_layers
+
+        # Compose merges the base file's per-service `environment:` mapping
+        # into the overlay's (per-key, overlay wins), so a blank override
+        # inherited from the base compose clobbers exactly like one declared
+        # in the overlay itself (#4613, PR #4599 review r3700034271).
+        # Inspect the merged mapping, not only the overlay's.
+        env: dict[str, str | None] = {**base_env, **overlay_env}
+        if not env:
+            continue
 
         for key, raw_value in env.items():
             if raw_value is None or "$" not in raw_value:
