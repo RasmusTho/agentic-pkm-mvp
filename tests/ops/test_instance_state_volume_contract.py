@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 import scripts.instance_state_writer_inventory as writer_inventory
+import app.instance.instance_state as instance_state_module
+import app.instance.ownership_ledger as ownership_ledger_module
 import app.instance.runtime as runtime_module
 
 from app.instance.instance_state import (
@@ -27,6 +29,7 @@ from app.instance.instance_state import (
     validate_registry_disjoint_from_content,
 )
 from app.instance.ownership_ledger import LedgerCollisionError, LedgerError
+from app.instance.filesystem_identity import FilesystemRootIdentity
 from app.instance.runtime import (
     InstanceRegistryRuntime,
     _begin_instance_state_deployment,
@@ -4764,6 +4767,153 @@ def test_staged_backup_verification_succeeds_on_fresh_deployment(tmp_path) -> No
     ).ledger.load()
     assert ledger_snapshot.legacy_bootstrap_complete is True
     assert ledger_snapshot.leases == {}
+
+
+def test_staged_backup_preserves_adopted_active_lease_across_mount_namespace(
+    tmp_path, monkeypatch
+) -> None:
+    """#4622 AC1: a mounted spelling resolves the adopted active owner."""
+
+    host_global_root = tmp_path / "host-global"
+    runtime_root = tmp_path / "runtime-vault"
+    inventory_root = tmp_path / "host-vault"
+    prod_root = tmp_path / "prod-vault"
+    for root in (host_global_root, runtime_root, inventory_root, prod_root):
+        root.mkdir()
+
+    original_identity = ownership_ledger_module.resolve_filesystem_root_identity
+    aliases = {runtime_root.resolve(), inventory_root.resolve()}
+
+    def mounted_identity(value: str | Path) -> FilesystemRootIdentity:
+        identity = original_identity(value)
+        if Path(identity.canonical_path) in aliases:
+            return FilesystemRootIdentity(identity.canonical_path, 4622, 1)
+        return identity
+
+    monkeypatch.setattr(
+        ownership_ledger_module, "resolve_filesystem_root_identity", mounted_identity
+    )
+    monkeypatch.setattr(
+        instance_state_module, "resolve_filesystem_root_identity", mounted_identity
+    )
+
+    dev = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "dev-state", "dev"),
+        host_global_root,
+    )
+    prod = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"),
+        host_global_root,
+    )
+    dev_registration = dev.bootstrap_env_binding(
+        vault_root=runtime_root,
+        watcher_vault_path=runtime_root,
+    )
+    prod_registration = prod.bootstrap_env_binding(
+        vault_root=prod_root,
+        watcher_vault_path=prod_root,
+    )
+
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=prod.layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {"channel_id": "dev", "root": str(inventory_root)},
+            {
+                "channel_id": "prod",
+                "vault_binding_id": prod_registration.vault_binding_id,
+                "root": str(prod_root),
+            },
+        ],
+    )
+
+    receipt = InstanceStateBackup(prod.layout, prod.ledger).create(
+        tmp_path / "backup",
+        quiescence_proof=proof,
+        owner_receipt_path=owner_receipt,
+    )
+
+    assert receipt.manifest_path.is_file()
+    assert dev_registration.vault_binding_id in prod.ledger.load().leases
+
+
+def test_staged_backup_rejects_ambiguous_adopted_lease_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """#4622 AC2: active lease identity remains unique and fail-closed."""
+
+    host_global_root = tmp_path / "host-global"
+    runtime_root = tmp_path / "runtime-vault"
+    inventory_root = tmp_path / "host-vault"
+    prod_root = tmp_path / "prod-vault"
+    for root in (host_global_root, runtime_root, inventory_root, prod_root):
+        root.mkdir()
+
+    original_identity = ownership_ledger_module.resolve_filesystem_root_identity
+    aliases = {runtime_root.resolve(), inventory_root.resolve()}
+
+    def mounted_identity(value: str | Path) -> FilesystemRootIdentity:
+        identity = original_identity(value)
+        if Path(identity.canonical_path) in aliases:
+            return FilesystemRootIdentity(identity.canonical_path, 4622, 2)
+        return identity
+
+    monkeypatch.setattr(
+        ownership_ledger_module, "resolve_filesystem_root_identity", mounted_identity
+    )
+    monkeypatch.setattr(
+        instance_state_module, "resolve_filesystem_root_identity", mounted_identity
+    )
+
+    dev = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "dev-state", "dev"),
+        host_global_root,
+    )
+    prod = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"),
+        host_global_root,
+    )
+    dev_registration = dev.bootstrap_env_binding(
+        vault_root=runtime_root,
+        watcher_vault_path=runtime_root,
+    )
+    prod_registration = prod.bootstrap_env_binding(
+        vault_root=prod_root,
+        watcher_vault_path=prod_root,
+    )
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=prod.layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {"channel_id": "dev", "root": str(inventory_root)},
+            {
+                "channel_id": "prod",
+                "vault_binding_id": prod_registration.vault_binding_id,
+                "root": str(prod_root),
+            }
+        ],
+    )
+
+    ledger_path = prod.ledger.path
+    ledger_payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+    duplicate_binding_id = "duplicate-active-owner"
+    ledger_payload["leases"][duplicate_binding_id] = {
+        **ledger_payload["leases"][dev_registration.vault_binding_id],
+        "vault_binding_id": duplicate_binding_id,
+    }
+    ledger_path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+    os.chmod(ledger_path, 0o600)
+
+    with pytest.raises(
+        InstanceStatePreflightError, match="not unambiguous"
+    ):
+        InstanceStateBackup(prod.layout, prod.ledger).create(
+            tmp_path / "backup",
+            quiescence_proof=proof,
+            owner_receipt_path=owner_receipt,
+        )
 
 
 @pytest.mark.parametrize(
