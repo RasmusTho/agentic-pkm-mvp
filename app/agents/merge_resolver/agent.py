@@ -67,6 +67,12 @@ def normalize_uuid_scalar(raw: str) -> str | None:
     value = raw.strip()
     if not value or value.startswith("#"):
         return None
+    if value[0] in ">|*&{}[]!":
+        # YAML indicator characters: block-scalar headers (>, |), aliases and
+        # anchors (*, &), flow collections ({}, []), tags (!!...). Never a
+        # plain-scalar identity -- the real value, if any, lives outside this
+        # line's reach -- so grant no identity rather than a fake shared one.
+        return None
     if value[0] in "\"'":
         quote = value[0]
         end = value.find(quote, 1)

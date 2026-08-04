@@ -150,8 +150,26 @@ def test_bare_uuid_key_does_not_grant_vault_near_duplicate_bypass():
 
 @pytest.mark.parametrize(
     "uuid_line",
-    ['uuid: ""', "uuid: null", "uuid: ~", "uuid: NULL", "uuid: # missing"],
-    ids=["quoted-empty", "null", "tilde", "upper-null", "comment-only"],
+    [
+        'uuid: ""',
+        "uuid: null",
+        "uuid: ~",
+        "uuid: NULL",
+        "uuid: # missing",
+        "uuid: >",
+        "uuid: *alias",
+        "uuid: !!null",
+    ],
+    ids=[
+        "quoted-empty",
+        "null",
+        "tilde",
+        "upper-null",
+        "comment-only",
+        "block-scalar",
+        "alias",
+        "tagged-null",
+    ],
 )
 def test_degenerate_uuid_scalars_do_not_grant_vault_near_duplicate_bypass(uuid_line):
     # PR #4626 Codex review r3712514848 (P1): `_extract_uuid` used to return
