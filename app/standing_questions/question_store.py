@@ -1,14 +1,16 @@
 """Guarded, vault-canonical storage for human-terminal Question notes."""
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import re
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 from jsonschema import Draft202012Validator, FormatChecker
 
@@ -220,6 +222,12 @@ class HumanOwnedFieldMutationError(ValueError):
     """Raised before a write when an engine attempts to change human-owned content."""
 
 
+class QuestionNotOpenError(RuntimeError):
+    """Raised at the guarded write seam when an evidence append targets a
+    question that is no longer ``open`` (INV-SQ-F: answered/closed/rejected are
+    terminal for the engine)."""
+
+
 def mint_question_id() -> str:
     return f"sq-{uuid.uuid4()}"
 
@@ -227,6 +235,31 @@ def mint_question_id() -> str:
 def question_note_path(question_id: str) -> str:
     _validate_question_id(question_id)
     return f"{QUESTION_DIRECTORY}/{question_id}.md"
+
+
+def question_note_lock_path(vault_root: Path | str, question_id: str) -> Path:
+    """The per-note lock file :meth:`QuestionStore.append_evidence` serializes on.
+
+    Exposed (rather than kept private) so the atomicity contract is testable
+    against the exact file the seam locks. A ``.md.lock`` sibling follows the
+    ``app.agent_memory.provisional_write`` ledger-lock idiom and is invisible to
+    the projection walker (which only reads ``*.md``).
+    """
+    return (
+        Path(vault_root).expanduser().resolve()
+        / f"{question_note_path(question_id)}.lock"
+    )
+
+
+@contextmanager
+def _question_note_lock(lock_path: Path) -> Iterator[None]:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _validate_question_id(question_id: str) -> None:
@@ -333,6 +366,66 @@ class QuestionStore:
         receipt = self._write(updated)
         return updated, receipt
 
+    def append_evidence(
+        self,
+        question_id: str,
+        entries: Sequence[Mapping[str, Any]],
+        *,
+        matched_at: str | None = None,
+    ) -> tuple[dict[str, Any], WriteReceipt | None, list[dict[str, Any]]]:
+        """Atomically append evidence entries to an ``open`` question (#4610 P2).
+
+        The open-status predicate and the append are one operation at this
+        guarded seam: the note is re-read *inside* an exclusive per-note flock
+        (:func:`question_note_lock_path`), the status predicate runs against
+        that same fresh read, and the write derives from it -- so concurrent
+        engine writers serialize, and a close that lands before this writer's
+        turn raises :class:`QuestionNotOpenError` instead of appending to (or
+        overwriting the terminal status of) a non-open question. Checking
+        status in the caller and writing through a separate read-modify-write
+        (the pre-#4610 shape) left a window where a mid-flight human close
+        received new evidence or was resurrected by a stale ``open`` payload.
+
+        Idempotency is preserved under the same fresh read: an entry whose
+        ``(artifact_ref, quoted_span)`` basis already exists on the note (for
+        example appended by a concurrent tick that won the lock first) is
+        dropped, never duplicated. When every entry is dropped, nothing is
+        written and the receipt is ``None``.
+
+        Returns ``(note, receipt, appended_entries)`` -- ``appended_entries``
+        is the subset of ``entries`` actually written, so a caller's outcome
+        counters can distinguish attached from duplicate-dropped.
+        """
+        entry_list = [dict(entry) for entry in entries]
+        if not entry_list:
+            raise ValueError("append_evidence requires at least one evidence entry")
+        path = self._path(question_id)
+        with _question_note_lock(question_note_lock_path(self.vault_root, question_id)):
+            current = parse_question_note(path.read_text(encoding="utf-8"))
+            if current["status"] != "open":
+                raise QuestionNotOpenError(
+                    f"question {question_id} is {current['status']!r}; evidence appends "
+                    "only ever target open questions (INV-SQ-F)"
+                )
+            existing_bases = {
+                (entry.get("artifact_ref"), entry.get("quoted_span"))
+                for entry in current["evidence"]
+            }
+            fresh_entries = [
+                entry
+                for entry in entry_list
+                if (entry.get("artifact_ref"), entry.get("quoted_span")) not in existing_bases
+            ]
+            if not fresh_entries:
+                return current, None, []
+            updated = {
+                **current,
+                "evidence": [*current["evidence"], *fresh_entries],
+                "last_matched_at": matched_at if matched_at is not None else _utc_now(),
+            }
+            receipt = self._write(updated)
+            return updated, receipt, fresh_entries
+
     def _path(self, question_id: str) -> Path:
         return self.vault_root / question_note_path(question_id)
 
@@ -357,12 +450,14 @@ __all__ = [
     "ANNOUNCED_LEAP_SECOND_UTC_DATES",
     "HumanOwnedFieldMutationError",
     "QUESTION_DIRECTORY",
+    "QuestionNotOpenError",
     "QuestionStore",
     "Rfc3339DateTime",
     "WRITE_ACTION",
     "mint_question_id",
     "parse_question_note",
     "parse_rfc3339_datetime",
+    "question_note_lock_path",
     "question_note_path",
     "serialize_question_note",
     "validate_question_note",

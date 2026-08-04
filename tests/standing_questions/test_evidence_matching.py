@@ -404,6 +404,118 @@ def test_question_closed_mid_tick_is_never_resurrected(tmp_path: Path) -> None:
     assert store.read_question(note["question_id"])["evidence"] == []
 
 
+def test_append_rechecks_open_status_atomically(tmp_path: Path) -> None:
+    """#4610 P2: the open-status predicate and the evidence append are one atomic
+    operation at the guarded write seam -- the seam serializes on an exclusive
+    per-note lock and re-checks status on a fresh read taken AFTER acquiring it,
+    so a close that lands before the engine's turn fails the append closed
+    instead of appending to (or resurrecting) a non-open question."""
+    import fcntl
+    import threading
+
+    from app.standing_questions.question_store import (
+        QuestionNotOpenError,
+        question_note_lock_path,
+    )
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    question_id = note["question_id"]
+    note_path = vault / "questions" / f"{question_id}.md"
+
+    entry = {
+        "artifact_ref": "vault://notes/outbox-measurements.md",
+        "source_stream": "ingest.vault.changed",
+        "matched_at": "2026-08-04T00:00:00Z",
+        "confidence_class": "high",
+        "provenance_ref": "outbox://ingest.vault.changed/vault://notes/outbox-measurements.md",
+        "quoted_span": RELEVANT_SPAN,
+    }
+
+    outcome: dict[str, Any] = {}
+
+    def engine_append() -> None:
+        try:
+            store.append_evidence(question_id, [entry])
+            outcome["result"] = "appended"
+        except QuestionNotOpenError:
+            outcome["result"] = "refused"
+
+    lock_path = question_note_lock_path(vault, question_id)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as human_lock:
+        fcntl.flock(human_lock.fileno(), fcntl.LOCK_EX)
+        engine = threading.Thread(target=engine_append)
+        engine.start()
+        # The engine's append must serialize on the seam's exclusive lock: while
+        # the "human" holds it, the append cannot have completed.
+        engine.join(timeout=0.5)
+        assert engine.is_alive(), "append must block on the seam's exclusive per-note lock"
+        # The human closes the question while still holding the lock -- strictly
+        # before the engine's critical section begins.
+        current = parse_question_note(note_path.read_text(encoding="utf-8"))
+        note_path.write_text(
+            serialize_question_note({**current, "status": "closed"}), encoding="utf-8"
+        )
+        fcntl.flock(human_lock.fileno(), fcntl.LOCK_UN)
+    engine.join(timeout=10)
+    assert not engine.is_alive()
+
+    # Fail closed: the post-lock fresh read saw `closed`, so no evidence was
+    # appended and the terminal status was never overwritten by a stale payload.
+    assert outcome["result"] == "refused"
+    final = parse_question_note(note_path.read_text(encoding="utf-8"))
+    assert final["status"] == "closed"
+    assert final["evidence"] == []
+
+    # Direct seam call on an already-closed question fails closed too, mutating nothing.
+    before = note_path.read_bytes()
+    with pytest.raises(QuestionNotOpenError):
+        store.append_evidence(question_id, [entry])
+    assert note_path.read_bytes() == before
+
+
+def test_disappearing_vault_artifact_does_not_abort_tick(tmp_path: Path, monkeypatch) -> None:
+    """#4610 P2: a vault artifact deleted between the existence check and the read --
+    a normal race for asynchronously consumed ingest events -- is unresolved for
+    THAT candidate only; the tick continues for the other candidates."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+
+    vanishing_ref = _write_artifact(vault, "notes/vanishing.md", RELEVANT_BODY)
+    surviving_ref = _write_artifact(vault, "notes/outbox-measurements.md", RELEVANT_BODY)
+
+    real_read_text = Path.read_text
+
+    def deleting_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.name == "vanishing.md":
+            # Simulate the race: the note disappears after `is_file()` said it
+            # existed but before the read reaches the filesystem.
+            self.unlink()
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deleting_read_text)
+    association = _Association({"single-writer ceiling": _attached()})
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(vanishing_ref), _candidate(surviving_ref)],
+        store=store,
+        complete=association,
+    )
+
+    # The vanished artifact is a no-link unresolved result, never a fabricated
+    # entry -- and never an aborted tick for the surviving candidate.
+    assert summary.unresolved_artifact == 1
+    assert summary.attached == 1
+    evidence = store.read_question(note["question_id"])["evidence"]
+    assert [entry["artifact_ref"] for entry in evidence] == [surviving_ref]
+
+
 def test_missing_questions_directory_is_a_no_op_tick(tmp_path: Path) -> None:
     """A vault that never registered a question yields an empty tick, not a crash --
     matching is a read-only consumer, so the projection's fail-loud posture (which

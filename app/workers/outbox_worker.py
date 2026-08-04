@@ -448,6 +448,13 @@ def _dispatch_topic(
     _validate_dispatch_payload(topic, payload, message=message)
     if topic == INGEST_OBJECT_CREATED:
         handle_ingest_object_created(_indexer_payload(payload))
+        # SQ-03 wiring (#4610): every ingested artifact is offered to the
+        # standing-question matcher. Never-crash inside the helper -- matching
+        # is downstream of an ingest that already succeeded. Wired here at the
+        # dispatch table (not inside handle_ingest_object_created) because the
+        # vault-changed handler below funnels into the same indexer function
+        # and must not match its note twice.
+        _match_standing_question_evidence_for_object_created(payload, trace_id=trace_id)
     elif topic == INGEST_VAULT_CHANGED:
         handle_ingest_vault_changed(payload, trace_id=trace_id)
     elif topic == INGEST_OBJECT_DELETED:
@@ -487,6 +494,23 @@ def _dispatch_topic(
 
 def _indexer_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     return dict(payload)
+
+
+def _match_standing_question_evidence_for_object_created(
+    payload: Mapping[str, Any], *, trace_id: str | None
+) -> None:
+    """Offer one ``ingest.object.created`` artifact to the SQ matcher (#4610).
+
+    Imported lazily (mirrors the promotion-consumer branch above) and skipped
+    without a selected vault: matching reads Question notes from the vault, so
+    a vault-less worker has nothing to match against.
+    """
+    vault_root = _resolve_optional_vault_root(None)
+    if vault_root is None:
+        return
+    from app.standing_questions.ingest_consumers import match_ingest_object_created
+
+    match_ingest_object_created(payload, vault_root=vault_root, trace_id=trace_id)
 
 
 def _trace_id_from_envelope(envelope: object) -> str | None:
@@ -639,7 +663,10 @@ def _emit_ka_consumer_signal(
 
 
 def handle_knowledge_acquisition_stage_completed(
-    payload: Mapping[str, Any], *, trace_id: str | None = None
+    payload: Mapping[str, Any],
+    *,
+    trace_id: str | None = None,
+    vault_root: Path | None = None,
 ) -> None:
     """Consume ``knowledge_acquisition.stage.completed`` (KA-06 → KA-07, #3107).
 
@@ -698,6 +725,19 @@ def handle_knowledge_acquisition_stage_completed(
         content_identity,
         trace_id,
     )
+
+    # SQ-03 wiring (#4610): a candidate-stage completion means a candidate note
+    # now exists -- offer it to the standing-question matcher. Never-crash in
+    # the helper (same posture as the best-effort consumer signal above);
+    # skipped without a selected vault because matching reads Question notes
+    # from the vault.
+    resolved_vault_root = _resolve_optional_vault_root(vault_root)
+    if resolved_vault_root is not None:
+        from app.standing_questions.ingest_consumers import match_ka_candidate_completion
+
+        match_ka_candidate_completion(
+            payload, vault_root=resolved_vault_root, trace_id=trace_id
+        )
 
 
 def handle_knowledge_acquisition_stage_dead_lettered(
@@ -1681,6 +1721,25 @@ def handle_ingest_vault_changed(
     }
 
     handle_ingest_object_created(ingest_obj)
+
+    # SQ-03 wiring (#4610): the freshly ingested note is a candidate artifact
+    # for standing-question evidence matching. The helper is never-crash, so a
+    # matching failure cannot fail (or retry-loop) an ingest that already
+    # succeeded; the note itself stays read-only on the matcher side.
+    try:
+        note_relative_path = note_path.relative_to(resolved_root).as_posix()
+    except ValueError:
+        note_relative_path = None
+    if note_relative_path is not None:
+        from app.standing_questions.ingest_consumers import match_vault_note_ingest
+
+        match_vault_note_ingest(
+            vault_root=resolved_root,
+            relative_path=note_relative_path,
+            frontmatter=frontmatter if isinstance(frontmatter, dict) else None,
+            content=content,
+            trace_id=trace_id or (str(payload.get("trace_id") or "") or None),
+        )
     return WorkerIngestSummary(ingested=1)
 
 

@@ -52,7 +52,7 @@ from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
     iter_question_notes,
 )
-from app.standing_questions.question_store import QuestionStore
+from app.standing_questions.question_store import QuestionNotOpenError, QuestionStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -247,7 +247,19 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | No
             candidate.artifact_ref,
         )
         return None
-    return path.read_text(encoding="utf-8")
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        # #4610 P2: a note deleted (or otherwise made unreadable) between the
+        # `is_file()` check above and this read is a normal race for
+        # asynchronously consumed ingest events. It is an unresolved no-link
+        # result for THIS candidate only -- never an aborted tick for the rest.
+        _LOGGER.warning(
+            "Standing Questions matching skipped artifact that disappeared before read: %s (%s)",
+            candidate.artifact_ref,
+            exc,
+        )
+        return None
 
 
 def _build_user_prompt(question_text: str, artifact_text: str) -> str:
@@ -391,21 +403,25 @@ def match_evidence_to_open_questions(
 
         if not new_entries:
             continue
-        # Re-read immediately before the guarded append: a human may have closed the
-        # question mid-tick, and a closed question must never be resurrected by a
-        # race (INV-SQ-F partial failure).
-        current = question_store.read_question(question_id)
-        if current["status"] != "open":
+        # Atomic guarded append (#4610 P2): the open-status predicate and the
+        # evidence write are one operation inside the store's exclusive per-note
+        # lock, so a human close that lands mid-tick fails the append closed --
+        # a closed question is never resurrected and never receives evidence
+        # through this race (INV-SQ-F partial failure).
+        try:
+            _updated, _receipt, appended_entries = question_store.append_evidence(
+                question_id, new_entries
+            )
+        except QuestionNotOpenError:
             counters.bump("excluded_non_open")
             continue
-        question_store.update_system_fields(
-            question_id,
-            {
-                "evidence": [*current["evidence"], *new_entries],
-                "last_matched_at": _utc_now(),
-            },
-        )
-        counters.bump("attached", len(new_entries))
+        dropped = len(new_entries) - len(appended_entries)
+        if dropped:
+            # Basis already present on the fresh in-lock read: a concurrent tick
+            # won the lock first. Idempotency, not attachment.
+            counters.bump("duplicate_basis", dropped)
+        if appended_entries:
+            counters.bump("attached", len(appended_entries))
 
     return counters.summary()
 
