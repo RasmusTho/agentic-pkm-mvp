@@ -1,0 +1,21 @@
+{
+  "total_count": 2,
+  "check_runs": [
+    {
+      "id": 91000000001,
+      "name": "CodeQL",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-07-29T15:40:03Z",
+      "completed_at": "2026-07-29T15:41:12Z"
+    },
+    {
+      "id": 91000000002,
+      "name": "Analyze (python)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-07-29T15:40:05Z",
+      "completed_at": "2026-07-29T15:43:27Z"
+    }
+  ]
+}
