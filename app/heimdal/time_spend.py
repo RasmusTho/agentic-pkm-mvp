@@ -502,6 +502,7 @@ def write_time_spend_note(
     vault_context: VaultContext,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     time_spend_dir: str = DEFAULT_TIME_SPEND_DIR,
+    replace_only: bool = False,
 ) -> TimeSpendWriteResult:
     """The governed vault-write call site for one week's projection note.
 
@@ -518,6 +519,11 @@ def write_time_spend_note(
     proposal is staged as a conflict artifact by the VMW-01 port). An absent
     target is created atomically no-clobber, so a note created in the
     check/write window equally blocks the projection, never the human.
+
+    ``replace_only=True`` (the stale-week cleanup caller) additionally
+    refuses to CREATE: an absent target returns ``no_observations`` instead
+    of materializing a note -- cleanup may only rewrite something that
+    already exists, never conjure a file a human just deleted.
     """
     vault_root = _vault_root(vault_context)
     artifact_path = time_spend_note_path(week, time_spend_dir=time_spend_dir)
@@ -579,6 +585,11 @@ def write_time_spend_note(
             )
         return TimeSpendWriteResult(status="rebuilt", week=week, artifact_path=artifact_path)
 
+    if replace_only:
+        return TimeSpendWriteResult(
+            status="no_observations", week=week, artifact_path=None
+        )
+
     try:
         outcome = create_candidate_note_once(
             artifact_path,
@@ -590,6 +601,20 @@ def write_time_spend_note(
     except WritesBlockedError as exc:
         return TimeSpendWriteResult(
             status="blocked", week=week, artifact_path=None, reason=str(exc)
+        )
+    except (OSError, ValueError) as exc:
+        # E.g. a non-regular file (directory, symlink, FIFO) won the create
+        # race, or the target name failed the primitive's path validation.
+        # Same posture as the rewrite branch: a loud, item-scoped 'blocked'
+        # result, never an exception that destroys the sibling weeks' receipt.
+        return TimeSpendWriteResult(
+            status="blocked",
+            week=week,
+            artifact_path=None,
+            reason=(
+                f"could not create projection note atomically; refusing: "
+                f"{artifact_path} ({exc})"
+            ),
         )
     if outcome == "already_exists":
         return TimeSpendWriteResult(
@@ -624,10 +649,13 @@ def _clear_stale_week_note(
     absent, unreadable, or not provably this module's own projection (a human
     note is NEVER touched, deleted, or reported on by cleanup). Otherwise the
     note is rewritten to the week's empty projection (span_count 0, all
-    tables empty) through :func:`write_time_spend_note`, i.e. through the
-    same ownership re-proof + compare-and-swap guards as any other rewrite.
-    An "emptied" note stays a legible, regenerable projection artifact; this
-    module deliberately has no delete primitive.
+    tables empty) through :func:`write_time_spend_note` in ``replace_only``
+    mode, i.e. through the same ownership re-proof + compare-and-swap guards
+    as any other rewrite, and with creation refused -- a note a human deletes
+    between this check and the rewrite stays deleted (``None``), it is not
+    conjured back as an empty projection. An "emptied" note stays a legible,
+    regenerable projection artifact; this module deliberately has no delete
+    primitive.
     """
     vault_root = _vault_root(vault_context)
     note_path = vault_root / time_spend_note_path(week, time_spend_dir=time_spend_dir)
@@ -645,7 +673,12 @@ def _clear_stale_week_note(
         vault_context=vault_context,
         write_guard=write_guard,
         time_spend_dir=time_spend_dir,
+        replace_only=True,
     )
+    if result.status == "no_observations":
+        # The owned note vanished between the ownership proof and the
+        # rewrite: there is nothing left to clear, and cleanup never creates.
+        return None
     if result.status == "rebuilt":
         return replace(result, status="cleared")
     return result

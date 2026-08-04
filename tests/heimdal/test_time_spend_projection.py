@@ -607,6 +607,66 @@ def test_projection_write_refuses_concurrent_human_edit(tmp_path):
     assert note_b.read_text(encoding="utf-8") == human_created
 
 
+def test_create_race_with_non_regular_occupant_blocks_item_scoped(tmp_path):
+    """A non-regular file winning the create race blocks ONLY its own week.
+
+    If a directory (or symlink/FIFO) appears at the target path between the
+    absent-check and the atomic create, that week's write must surface as a
+    loud, item-scoped ``blocked`` receipt entry -- not as an exception that
+    aborts the rebuild and destroys the sibling weeks' receipt.
+    """
+    _publish(
+        _span_payload(
+            observation_id="screen-obs-w28",
+            start="2026-07-06T09:00:00+00:00",
+            end="2026-07-06T09:30:00+00:00",
+            content_identity="sha256:" + "a" * 64,
+        )
+    )
+    _publish(
+        _span_payload(
+            observation_id="screen-obs-w29",
+            start="2026-07-13T09:00:00+00:00",
+            end="2026-07-13T09:30:00+00:00",
+            content_identity="sha256:" + "b" * 64,
+        )
+    )
+    vault = _vault(tmp_path / "vault")
+    vault_root = Path(vault.active_vault_path or "")
+    w28_path = vault_root / time_spend_note_path("2026-W28")
+    w29_path = vault_root / time_spend_note_path("2026-W29")
+
+    def _racing_directory_snapshot() -> dict:
+        # A directory lands at W28's target inside the check/create window.
+        if not w28_path.exists():
+            w28_path.mkdir(parents=True)
+        return {"state": "healthy"}
+
+    receipt = rebuild_time_spend(
+        vault_context=vault, write_guard=WriteGuard(_racing_directory_snapshot)
+    )
+    assert receipt["weeks"]["2026-W28"]["status"] == "blocked"
+    assert receipt["weeks"]["2026-W28"]["reason"]
+    assert receipt["weeks"]["2026-W29"]["status"] == "written"
+    assert w28_path.is_dir()
+    assert w29_path.is_file()
+
+    # And the cleanup-only write mode never creates: an absent target stays
+    # absent (a note a human deleted is not conjured back).
+    from app.heimdal.time_spend import build_time_spend_rollup as _rollup_fn
+    from app.heimdal.time_spend import write_time_spend_note
+
+    absent = write_time_spend_note(
+        "2026-W30",
+        _rollup_fn(),
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        replace_only=True,
+    )
+    assert absent.status == "no_observations"
+    assert not (vault_root / time_spend_note_path("2026-W30")).exists()
+
+
 # --- #4609 P2: owned weekly notes whose spans disappear are cleared -----------
 
 
