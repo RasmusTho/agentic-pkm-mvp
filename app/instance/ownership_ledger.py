@@ -287,6 +287,21 @@ class OwnershipLedger:
                         and lease.state == "active"
                         and self._matches_complete_root_identity(lease, owner.root, key)
                     ]
+                    if not matches:
+                        # The inventory can retain the host spelling while an
+                        # adopted lease was minted through a bind-mounted
+                        # runtime spelling.  Complete path identity is not
+                        # portable across those mount namespaces, but a
+                        # materialized root fingerprint is.  Keep the
+                        # fallback unique so it only adopts an authenticated
+                        # physical owner, never a path-like candidate.
+                        matches = [
+                            binding_id
+                            for binding_id, lease in current.leases.items()
+                            if lease.channel_id == owner.channel_id
+                            and lease.state == "active"
+                            and self._matches_materialized_root(lease, owner.root, key)
+                        ]
                     unmaterialized = not resolve_filesystem_root_identity(
                         owner.root
                     ).materialized
