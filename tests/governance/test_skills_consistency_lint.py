@@ -7,6 +7,7 @@ seeded into a synthetic tree.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from scripts.lint_skills_consistency import run_lint
@@ -374,6 +375,74 @@ def test_lint_fails_when_pr_contract_validator_flags_diverge_from_workflow(
     assert any(
         "TIER1_LANE_PATTERN" in e and "flags" in e for e in errors
     ), errors
+
+
+def test_bug_to_issue_duplicate_search_requires_stable_ci_identity() -> None:
+    """CI/test duplicate search must key on stable failure identity, not prose.
+
+    Regression guard for issue #4607 (LearningSignal
+    lrn_20260731204320_6025370c): #4463 was filed as distinct from #4371
+    because the prose symptoms differed, although both described the same
+    failing workflow/job/step. The `bug-to-issue` workflow must require
+    comparing stable CI failure identity (workflow name, job name, step name,
+    script/test target, exception/error class when available) before relying
+    on prose title/symptom or attributed subsystem. The assertions below are
+    semantic markers: they fail if the instruction regresses to
+    title/symptom-only matching, but tolerate rewording and reformatting.
+    """
+    skill = REPO_ROOT / ".codex" / "skills" / "bug-to-issue" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    match = re.search(
+        r"^## Normal bounded bug-Issue workflow$(.*?)(?=^## |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, (
+        f"{skill}: section '## Normal bounded bug-Issue workflow' not found"
+    )
+    section = match.group(1)
+    lowered = section.lower()
+
+    # Every stable CI identity key must be named in the duplicate-search step.
+    for identity_key in ("workflow name", "job name", "step name"):
+        assert identity_key in lowered, (
+            f"duplicate-search guidance no longer names the stable CI identity "
+            f"key '{identity_key}'"
+        )
+    assert "test target" in lowered or "script" in lowered, (
+        "duplicate-search guidance no longer names the failing script/test target"
+    )
+    assert "error class" in lowered or "exception" in lowered, (
+        "duplicate-search guidance no longer names the raised exception/error class"
+    )
+
+    # Identity must be the primary key: stated as compared before prose evidence.
+    assert re.search(r"stable\s+(failure\s+)?identity", lowered), (
+        "duplicate-search guidance no longer keys on stable failure identity"
+    )
+    assert re.search(r"before\s+(?:\S+\s+){0,8}(?:prose|title|symptom)", lowered), (
+        "duplicate-search guidance no longer orders stable-identity comparison "
+        "before prose title/symptom matching"
+    )
+
+    # The pre-existing same-symptom/title search stays as the secondary key.
+    assert "symptom" in lowered and "title" in lowered, (
+        "the existing same-symptom/title search must remain as secondary evidence"
+    )
+
+    # Distinct failures sharing a workflow must not be collapsed.
+    assert re.search(r"(differ|distinct|not\s+collapse|do\s+not\s+collapse)", lowered), (
+        "guidance must keep failures that share a workflow but differ by "
+        "job/step/script/error class as distinct issues"
+    )
+
+    # The motivating duplicate class is named, without reopening either issue.
+    assert "#4371" in section and "#4463" in section, (
+        "guidance must name #4371/#4463 as the motivating duplicate class"
+    )
+    assert re.search(r"(do\s+not\s+reopen|not\s+reopen|without\s+reopening)", lowered), (
+        "guidance must state the motivating issues are precedent, not reopened"
+    )
 
 
 def test_planned_marker_allows_unknown_reference(tmp_path: Path) -> None:
