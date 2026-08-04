@@ -56,6 +56,17 @@ update" are the same deterministic fold and can never drift apart. Spans fold by
 `KD-FBDBDAD4C052` records that the episode fold collapses distinct spans sharing one episode; reading
 the observation log directly is that defect's documented workaround.
 
+Write-path hardening (#4609, repairing PR #4586 review residuals): screen-derived bucket labels
+(frontmost app, scope, project surface forms) are routed through the HEIM-9 quarantine path plus
+markdown-table escaping before materialization — instruction-inert, table-structure-safe, and
+quarantine-frame-safe, while staying visible as evidence. Replacing an existing owned note is an
+expected-version compare-and-swap and creating an absent target is atomic no-clobber, so a human
+edit or creation racing the projection always wins (the projection's proposal blocks, item-scoped,
+with the losing bytes staged as a VMW-01 conflict artifact on the CAS path). A rebuild also clears
+owned weekly notes the fold no longer targets (`status: cleared`, an empty projection rewrite —
+never a delete, and never touching notes that are not provably the module's own projection), so a
+week whose spans were revised away cannot keep reporting retracted time.
+
 ## Why This Matters
 
 This is the most legible immediate payoff of the whole capability — the owner sees where their time
