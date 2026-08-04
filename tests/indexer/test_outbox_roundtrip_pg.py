@@ -27,7 +27,7 @@ def _pg_available() -> bool:
 
 
 def _pg_base_dsn() -> str:
-    return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    return resolve_dsn()
 
 
 def _dsn_with_search_path(dsn: str, schema: str) -> str:

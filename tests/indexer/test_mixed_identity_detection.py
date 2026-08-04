@@ -10,7 +10,6 @@ Requires a live Postgres backend; skipped when unavailable.
 from __future__ import annotations
 
 import json
-import os
 from uuid import uuid4
 
 import psycopg
@@ -26,7 +25,7 @@ pytestmark = pytest.mark.pg
 
 
 def _dsn() -> str:
-    return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    return resolve_dsn()
 
 
 def _pg_available() -> bool:

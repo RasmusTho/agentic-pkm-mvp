@@ -42,10 +42,10 @@ from app.services.audit import audit_event
 def test_audit_row_written_on_action() -> None:
     """An audit_event call against a live pg writes at least one audit row.
 
-    Requires a running Postgres on the default local DSN
-    (postgresql://app:app@127.0.0.1:15432/app) — skip or xfail if the DB is
-    unreachable.  The default_pg_dsn_for_pg_tests fixture in conftest.py sets
-    DATABASE_URL automatically for pg-marked tests.
+    Requires DATABASE_URL/DB_DSN to name a reachable non-production Postgres —
+    skip or xfail if the DB is unreachable. The pg lane has no default target
+    (#4573): tests/conftest.py skips pg-marked tests when nothing is configured
+    and aborts the run when the configured DSN looks like production.
     """
     import os  # noqa: PLC0415
     import uuid  # noqa: PLC0415

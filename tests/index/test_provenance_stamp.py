@@ -37,7 +37,7 @@ def _pg_available() -> bool:
 
     from app.db.dsn import resolve_dsn
 
-    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = resolve_dsn()
     try:
         conn = psycopg.connect(url, connect_timeout=1)
         conn.close()

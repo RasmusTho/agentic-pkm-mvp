@@ -15,7 +15,6 @@ These tests require a live Postgres backend; they are skipped under `not pg`.
 
 from __future__ import annotations
 
-import os
 from uuid import uuid4
 
 import psycopg
@@ -33,7 +32,7 @@ FALLBACK = EmbeddingIdentity(provider="gemini", model="gemini-embedding-001", di
 
 
 def _dsn() -> str:
-    return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    return resolve_dsn()
 
 
 def _pg_available() -> bool:

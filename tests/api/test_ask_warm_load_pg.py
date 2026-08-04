@@ -23,7 +23,7 @@ def test_ask_warm_loads_pg_store(monkeypatch) -> None:
     if not pg_available():
         pytest.skip("Postgres backend not available")
 
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or "postgresql://app:app@127.0.0.1:15432/app")
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBED_DIM", "8")

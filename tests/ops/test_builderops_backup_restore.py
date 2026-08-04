@@ -133,7 +133,15 @@ def _schema_dsn(dsn: str, schema: str) -> str:
 
 @pytest.fixture
 def recovery_store() -> Iterator[PostgresBuilderOpsStore]:
-    base_dsn = os.getenv("BUILDEROPS_DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    # Explicit-or-nothing: this used to fall back to the production DSN (#4573).
+    from app.db.dsn import resolve_dsn
+
+    base_dsn = os.getenv("BUILDEROPS_DATABASE_URL", "").strip() or resolve_dsn()
+    if not base_dsn:
+        pytest.skip(
+            "no control-plane database configured: set BUILDEROPS_DATABASE_URL "
+            "(or DATABASE_URL) to an explicit non-production Postgres"
+        )
     try:
         with psycopg.connect(base_dsn, connect_timeout=2, autocommit=True) as conn:
             schema = f"builderops_recovery_{uuid4().hex}"

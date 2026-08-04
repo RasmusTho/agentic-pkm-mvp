@@ -9,7 +9,6 @@ emulate.
 
 from __future__ import annotations
 
-import os
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -25,7 +24,7 @@ from app.services.outbox import bootstrap, derive_idempotency_key, write_outbox_
 
 
 def _pg_base_dsn() -> str:
-    return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    return resolve_dsn()
 
 
 def _pg_available() -> bool:

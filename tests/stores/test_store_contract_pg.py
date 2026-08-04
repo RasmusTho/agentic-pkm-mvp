@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from uuid import uuid4
 
 import psycopg
@@ -19,7 +18,7 @@ BACKENDS = [
 
 
 def _pg_available() -> bool:
-    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = resolve_dsn()
     try:
         conn = psycopg.connect(url, connect_timeout=1)
         conn.close()
@@ -40,7 +39,7 @@ def test_object_store_roundtrip(monkeypatch, backend):
     if backend == "pg" and not _pg_available():
         pytest.skip("Postgres backend not available")
     if backend == "pg":
-        monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+        monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", backend)
     store = get_object_store()
     oid = uuid4()
@@ -56,7 +55,7 @@ def test_vector_index_search_order(monkeypatch, backend):
     if backend == "pg" and not _pg_available():
         pytest.skip("Postgres backend not available")
     if backend == "pg":
-        monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+        monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", backend)
     monkeypatch.setenv("EMBED_DIM", "4")
 
@@ -73,7 +72,7 @@ def test_relation_neighbors_unique_order(monkeypatch, backend):
     if backend == "pg" and not _pg_available():
         pytest.skip("Postgres backend not available")
     if backend == "pg":
-        monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+        monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", backend)
     rel = get_relation_index()
     src = uuid4()
@@ -90,7 +89,7 @@ def test_relation_memberships_roundtrip_multi_value(monkeypatch, backend):
     if backend == "pg" and not _pg_available():
         pytest.skip("Postgres backend not available")
     if backend == "pg":
-        monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+        monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", backend)
     rel = get_relation_index()
     src = uuid4()
@@ -111,7 +110,7 @@ def test_relation_memberships_are_optional_and_empty_by_default(monkeypatch, bac
     if backend == "pg" and not _pg_available():
         pytest.skip("Postgres backend not available")
     if backend == "pg":
-        monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+        monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", backend)
     rel = get_relation_index()
 
@@ -122,7 +121,7 @@ def test_relation_memberships_are_optional_and_empty_by_default(monkeypatch, bac
 def test_pg_vector_index_query_dim_mismatch(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("EMBED_DIM", "4")
     idx = get_vector_index()
@@ -137,7 +136,7 @@ def test_pg_vector_index_query_dim_mismatch(monkeypatch):
 def test_pg_vector_index_detects_mixed_dims(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("EMBED_DIM", "4")
     idx = get_vector_index()
@@ -145,7 +144,7 @@ def test_pg_vector_index_detects_mixed_dims(monkeypatch):
     secondary = uuid4()
     idx.upsert(object_id=primary, kind="note", source_ref="unit-test", payload={"text": "alpha"}, embedding=[1, 0, 0, 0], model=TEST_PG_IDENTITY.model, identity=TEST_PG_IDENTITY)
     idx.upsert(object_id=secondary, kind="note", source_ref="unit-test", payload={"text": "beta"}, embedding=[0.5, 0.5, 0, 0], model=TEST_PG_IDENTITY.model, identity=TEST_PG_IDENTITY)
-    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = resolve_dsn()
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE store_vector_index SET dim = %s WHERE object_id = %s", (8, secondary))
@@ -157,7 +156,7 @@ def test_pg_vector_index_detects_mixed_dims(monkeypatch):
 def test_pg_vector_index_identity_mismatch(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", "pg")
     idx = get_vector_index()
     primary = uuid4()

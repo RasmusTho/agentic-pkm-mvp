@@ -13,7 +13,22 @@ from app.builderops.control_plane import AuthorityEnvelope, PostgresBuilderOpsSt
 
 
 def _base_dsn() -> str:
-    return os.getenv("BUILDEROPS_DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    """The control-plane database, named explicitly or not at all (#4573).
+
+    This used to fall back to the production DSN, so an unset environment
+    pointed schema creation at prod. The pg lane's guard in tests/conftest.py
+    refuses a prod-looking value for either variable.
+    """
+
+    from app.db.dsn import resolve_dsn
+
+    dsn = os.getenv("BUILDEROPS_DATABASE_URL", "").strip() or resolve_dsn()
+    if not dsn:
+        pytest.skip(
+            "no control-plane database configured: set BUILDEROPS_DATABASE_URL "
+            "(or DATABASE_URL) to an explicit non-production Postgres"
+        )
+    return dsn
 
 
 def _schema_dsn(dsn: str, schema: str) -> str:
