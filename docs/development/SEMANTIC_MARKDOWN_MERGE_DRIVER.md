@@ -66,7 +66,9 @@ guard's contract):
   merge conflicts instead of resolving; link carryover is not a generic
   content-loss exemption.
 - A genuine near-duplicate pick (token similarity `>= 0.85`), scoped to vault
-  notes (a non-empty `uuid:` identity on both sides). Set-of-tokens
+  notes (a real `uuid:` scalar identity on both sides: quoted and unquoted
+  forms name the same identity, while empty, null-like (`null`/`~`), and
+  comment-only values do not count as identity at all). Set-of-tokens
   similarity ignores order, repetition, and negation ("deployment is enabled"
   vs "deployment is not enabled" clears the threshold), so repository
   documentation never resolves through it; a non-vault doc with high token

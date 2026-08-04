@@ -50,6 +50,37 @@ def _carried_links_are_lossless(merged_body: str, b_body: str) -> bool:
     return f" {b_nonlink} " in f" {merged_nonlink} "
 
 
+def normalize_uuid_scalar(raw: str) -> str | None:
+    """Reduce a raw `uuid:` frontmatter value to a real scalar identity.
+
+    Dependency-free YAML-lite (PR #4626 review r3712514848): degenerate values
+    must not count as vault identity, or two notes that merely share the same
+    degenerate `uuid:` field would take identity-gated code paths. Rules:
+
+    - a comment-only value (`# ...`) is no identity;
+    - surrounding matching quotes are stripped, so `"u-x"` and `u-x` name the
+      same logical note (divergent real ids still hard-conflict upstream);
+    - for unquoted plain scalars, a trailing ` #comment` is dropped per YAML;
+    - empty and null-like values (`null`/`Null`/`NULL`/`~`, quoted or not --
+      quoted forms are deliberately treated conservatively) are no identity.
+    """
+    value = raw.strip()
+    if not value or value.startswith("#"):
+        return None
+    if value[0] in "\"'":
+        quote = value[0]
+        end = value.find(quote, 1)
+        # Unterminated quote: fall through with the rest taken verbatim.
+        value = value[1:end] if end != -1 else value[1:]
+        value = value.strip()
+    else:
+        # Plain scalar: a YAML comment starts at the first whitespace + '#'.
+        value = re.split(r"\s#", value, maxsplit=1)[0].strip()
+    if not value or value.lower() in ("null", "~"):
+        return None
+    return value
+
+
 def _extract_uuid(md: str) -> str | None:
     # Read the leading frontmatter block and grab the first uuid field if present.
     if not md.startswith("---"):
@@ -60,7 +91,7 @@ def _extract_uuid(md: str) -> str | None:
         return None
     for line in fm.splitlines():
         if line.strip().lower().startswith("uuid:"):
-            return line.split(":", 1)[1].strip()
+            return normalize_uuid_scalar(line.split(":", 1)[1])
     return None
 
 

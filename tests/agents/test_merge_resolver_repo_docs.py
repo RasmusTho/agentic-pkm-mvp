@@ -13,6 +13,8 @@ lossy set-of-tokens comparison.
 """
 import pathlib
 
+import pytest
+
 from app.agents.merge_resolver.agent import merge_note_from_blobs
 
 
@@ -144,6 +146,44 @@ def test_bare_uuid_key_does_not_grant_vault_near_duplicate_bypass():
     merged, info = merge_note_from_blobs(base, a, b)
 
     assert info["status"] == "conflict"
+
+
+@pytest.mark.parametrize(
+    "uuid_line",
+    ['uuid: ""', "uuid: null", "uuid: ~", "uuid: NULL", "uuid: # missing"],
+    ids=["quoted-empty", "null", "tilde", "upper-null", "comment-only"],
+)
+def test_degenerate_uuid_scalars_do_not_grant_vault_near_duplicate_bypass(uuid_line):
+    # PR #4626 Codex review r3712514848 (P1): `_extract_uuid` used to return
+    # the raw text after `uuid:`, so degenerate YAML scalars produced truthy
+    # strings ('""', 'null', '# missing') and both-sides-degenerate documents
+    # took the vault-only near-duplicate bypass, silently discarding THEIRS'
+    # high-overlap-but-distinct body. A degenerate scalar is no identity.
+    base = f"---\n{uuid_line}\n---\n# Runbook\n\ndeployment status pending\n"
+    a = f"---\n{uuid_line}\n---\n# Runbook\n\ndeployment is enabled\n"
+    b = f"---\n{uuid_line}\n---\n# Runbook\n\ndeployment is not enabled\n"
+
+    merged, info = merge_note_from_blobs(base, a, b)
+
+    assert info["status"] == "conflict"
+
+
+def test_quoted_and_unquoted_uuid_are_the_same_identity():
+    # Quote normalization: `uuid: "u-q"` and `uuid: u-q` name the same logical
+    # note, so a genuine near-duplicate still resolves (no spurious hard
+    # conflict from the quoting difference), and the bypass stays limited to
+    # equal logical ids because divergent ids still hard-conflict upstream.
+    base = '---\nuuid: "u-q"\n---\n# Note\nBaseline text.\n'
+    a = '---\nuuid: "u-q"\n---\n# Note\nConcise phrasing of the idea.\n'
+    b = (
+        "---\nuuid: u-q\n---\n# Note\n"
+        "Concise phrasing of the idea, the idea, the idea, restated again.\n"
+    )
+
+    merged, info = merge_note_from_blobs(base, a, b)
+
+    assert info["status"] == "resolved"
+    assert "concise" in info["reason"].lower()
 
 
 def test_vault_note_merge_behavior_is_unchanged():
