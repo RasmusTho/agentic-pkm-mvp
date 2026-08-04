@@ -14,6 +14,7 @@ from app.builderops.models import (
     BuilderOpsConflictError,
     BuilderOpsLeaseError,
     BuilderOpsValidationError,
+    canonicalize_promotion_target_surface,
     normalize_actor,
     normalize_record,
     utc_now,
@@ -119,6 +120,15 @@ class SqliteBuilderOpsStore:
                     return dict(existing)
 
             payload = normalize_record(record)
+            if payload["object_type"] == "PromotionIntent":
+                # Creation-time gate (#4171): reject target surfaces outside
+                # the canonical promotion registry before persistence, so no
+                # record can be created that the promotion gateway would later
+                # refuse to transition. Legacy records are unaffected because
+                # state transitions do not re-enter create_record.
+                canonicalize_promotion_target_surface(
+                    payload["target_authority_surface"]
+                )
             try:
                 self._insert_record_payload(conn, payload)
             except sqlite3.IntegrityError as exc:
