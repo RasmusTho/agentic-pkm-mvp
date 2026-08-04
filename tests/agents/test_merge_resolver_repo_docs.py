@@ -79,6 +79,32 @@ def test_link_carryover_still_resolves_when_links_are_the_only_difference():
     assert "https://example.com/runbook" in merged
 
 
+def test_incoming_image_embed_is_not_treated_as_a_carried_link():
+    # Carryover appends plain markdown links only, so an incoming image embed
+    # can never be preserved verbatim in the merged body; the merge must
+    # conflict instead of resolving with the image demoted to a bare link.
+    base = "# T\n\nDeploy now! Done.\n"
+    a = "# T\n\nDeploy now! Done.\n"
+    b = "# T\n\nDeploy now![shot](https://example.com/s.png) Done.\n"
+
+    merged, info = merge_note_from_blobs(base, a, b)
+
+    assert info["status"] == "conflict"
+
+
+def test_links_only_incoming_body_still_resolves_via_carryover():
+    # THEIRS' body is nothing but a link; carrying it preserves everything
+    # THEIRS brings, so this remains a lossless resolve.
+    base = "shared base text\n"
+    a = "ours prose kept intact\n"
+    b = "[x](https://example.com/x)\n"
+
+    merged, info = merge_note_from_blobs(base, a, b)
+
+    assert info["status"] == "resolved"
+    assert "https://example.com/x" in merged
+
+
 def test_link_carryover_containment_is_word_aligned():
     # THEIRS' "enabled in prod" must not count as preserved merely because
     # OURS happens to contain it as a fragment of "unenabled in prod": the

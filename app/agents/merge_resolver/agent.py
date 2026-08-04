@@ -40,9 +40,12 @@ def _carried_links_are_lossless(merged_body: str, b_body: str) -> bool:
     """
     if not all(link in merged_body for link in _MD_LINK_RE.findall(b_body)):
         return False
+    b_nonlink = _normalized_nonlink_text(b_body)
+    if not b_nonlink:
+        # THEIRS' body is links-only and every link was carried: lossless.
+        return True
     # Space-padded containment keeps the match word-aligned: THEIRS' "enabled"
     # must not count as preserved because OURS happens to contain "unenabled".
-    b_nonlink = _normalized_nonlink_text(b_body)
     merged_nonlink = _normalized_nonlink_text(merged_body)
     return f" {b_nonlink} " in f" {merged_nonlink} "
 
