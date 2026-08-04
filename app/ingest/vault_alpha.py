@@ -35,6 +35,7 @@ from app.services.companion_note import (
     write_companion,
 )
 from app.services.note_uuid import ensure_note_uuid
+from app.standing_questions.question_store import QUESTION_DIRECTORY
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
@@ -102,6 +103,21 @@ _UNINDEXED_SYSTEM_SUBFOLDERS: tuple[str, ...] = ("companions", "drafts")
 
 def _is_locked_error(exc: Exception) -> bool:
     return isinstance(exc, OSError) and getattr(exc, "errno", None) == 35
+
+
+def _is_engine_owned_question_path(rel_path: Path) -> bool:
+    """True for engine-owned Standing Questions notes; this walk must skip them (#4610).
+
+    Question notes carry ``question_id`` (never a frontmatter ``uuid``) and
+    validate against a closed schema (``schemas/question-note.schema.json``,
+    ``additionalProperties: false``) -- healing a ``uuid:`` key in makes the
+    note schema-invalid and silently drops the question from matching and its
+    projection. Their query surface is the ``standing_questions`` projection
+    owned by ``docs/STANDING_QUESTIONS/STORE_QUESTION_NOTES_AND_PROJECTION.md``,
+    not the retrieval index, so they are excluded from this ingest fan-out
+    entirely rather than indexed under an unstable identity.
+    """
+    return rel_path.parts[:1] == (QUESTION_DIRECTORY,)
 
 
 def _is_unindexed_system_path(rel_path: Path, *, system_root: Path) -> bool:
@@ -408,6 +424,8 @@ def _select_candidates(
                 continue
             system_root = Path(get_vault_system_dir_rel(vault_root))
             if _is_unindexed_system_path(rel_path, system_root=system_root):
+                continue
+            if _is_engine_owned_question_path(rel_path):
                 continue
             if not path.is_file():
                 continue
@@ -772,6 +790,8 @@ def _ingest_candidates(
             rel_display = str(rel_path)
             system_root = Path(get_vault_system_dir_rel(vault_root))
             if _is_unindexed_system_path(rel_path, system_root=system_root):
+                continue
+            if _is_engine_owned_question_path(rel_path):
                 continue
             if rel_display in processed:
                 continue

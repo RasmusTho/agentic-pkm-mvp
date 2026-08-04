@@ -214,18 +214,15 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
     ):
         assert marker in raw
 
-    # --- Regression: the watcher loop must not destroy or self-cite questions ----
+    # --- Regression: the watcher loop must not destroy or index questions --------
     # Matcher appends re-enter ingest through the watcher (the vault-wide scan
-    # includes questions/). Two invariants, both asserted through the REAL
-    # schema validator on the note the handler just processed:
-    # 1. The handler's uuid-heal must not touch engine-owned Question notes --
-    #    healing a `uuid:` key in made the note schema-invalid
-    #    (additionalProperties: false) and silently dropped the question from
-    #    matching and the projection.
-    # 2. A question is never offered as its own candidate evidence. The note's
-    #    frontmatter contains every attached quoted span, so without the
-    #    builders' questions/ exclusion the fake judge would attach it.
-    outbox_worker.handle_ingest_vault_changed(
+    # includes questions/). Engine-owned Question notes are excluded from the
+    # generic ingest fan-out entirely: uuid-healing one made it schema-invalid
+    # (additionalProperties: false -- silently dropping the question from
+    # matching and its projection), and ingesting it without a uuid minted a
+    # fresh random index identity per event. Asserted through the REAL schema
+    # validator on the note the handler just processed.
+    ingest_summary = outbox_worker.handle_ingest_vault_changed(
         {
             "vault_path": str(question_note_path),
             "relative_path": f"questions/{question_id}.md",
@@ -234,6 +231,7 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
         },
         vault_root=vault,
     )
+    assert ingest_summary.ingested == 0
     surviving = store.read_question(question_id)  # parses via the real validator
     assert "uuid" not in surviving
     assert len(surviving["evidence"]) == 4
@@ -241,3 +239,30 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
         entry["artifact_ref"].startswith("vault://questions/")
         for entry in surviving["evidence"]
     )
+
+
+def test_vault_alpha_ingest_never_touches_question_notes(tmp_path: Path, monkeypatch) -> None:
+    """The second production watcher seam (#4610 round-3 review): the alpha
+    ingest walk (`run_watcher_tick` -> `run_vault_alpha_ingest_paths`) must skip
+    engine-owned Question notes -- it uuid-healed them exactly like the worker
+    seam did, breaking the closed schema on the watcher's first pass."""
+    from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+
+    reset_memory_stores()
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "index-outbox.jsonl"))
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = QuestionStore(vault, write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}))
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    question_id = note["question_id"]
+    note_path = vault / "questions" / f"{question_id}.md"
+    before = note_path.read_bytes()
+
+    summary = run_vault_alpha_ingest_paths(vault, [note_path])
+
+    assert summary.ingested == 0
+    assert note_path.read_bytes() == before  # no healed uuid, no rewrite at all
+    surviving = store.read_question(question_id)  # still parses via the real validator
+    assert "uuid" not in surviving

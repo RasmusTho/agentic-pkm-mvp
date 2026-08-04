@@ -959,18 +959,23 @@ def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
 
 
 def _is_engine_owned_question_note(note_path: Path, vault_root: Path) -> bool:
-    """True when the note is an engine-owned Standing Questions note.
+    """True when the note is an engine-owned Standing Questions note (#4610).
 
     Question notes carry their identity in ``question_id`` and validate against
-    a closed schema; the vault-wide uuid heal must not mutate them (#4610).
+    a closed schema; the generic vault-ingest fan-out (uuid heal, companion,
+    indexer) must skip them entirely. Both arguments arrive already resolved
+    (``_resolve_vault_root`` / ``_note_path_from_payload``); a path outside the
+    root is not a question note (and fails the ingest read path on its own
+    terms). OS-level resolution errors propagate to the worker's normal
+    retry/fail-loud machinery rather than silently choosing a branch.
     """
     from app.standing_questions.question_store import QUESTION_DIRECTORY
 
     try:
         rel = note_path.resolve().relative_to(vault_root.resolve())
-    except (ValueError, OSError):
+    except ValueError:
         return False
-    return bool(rel.parts) and rel.parts[0] == QUESTION_DIRECTORY
+    return rel.parts[:1] == (QUESTION_DIRECTORY,)
 
 
 def _ensure_uuid_with_backoff(note_path: Path, *, vault_root: Path) -> str:
@@ -1646,6 +1651,23 @@ def handle_ingest_vault_changed(
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
 
+    if _is_engine_owned_question_note(note_path, resolved_root):
+        # #4610: engine-owned Question notes (`questions/sq-*.md`) are excluded
+        # from this generic ingest fan-out entirely. Their schema is closed
+        # (`schemas/question-note.schema.json`, additionalProperties: false, per
+        # docs/STANDING_QUESTIONS/STORE_QUESTION_NOTES_AND_PROJECTION.md), so
+        # uuid-healing one makes it schema-invalid and silently drops the
+        # question from matching and its projection; and without a healed uuid
+        # the indexer path would mint a fresh random object identity per event
+        # (one orphan indexed object per matcher append, forever). Question
+        # notes carry `question_id`, are queried through the standing_questions
+        # projection, and are never their own candidate evidence -- nothing on
+        # this path applies to them.
+        logger.debug(
+            "skipping engine-owned question note in vault ingest note_path=%s", note_path
+        )
+        return WorkerIngestSummary(ingested=0)
+
     healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
 
     raw_text = _stabilized_note_text(note_path)
@@ -1682,17 +1704,7 @@ def handle_ingest_vault_changed(
     note_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
     if not note_uuid and healed_uuid:
         note_uuid = healed_uuid
-    if not note_uuid and not _is_engine_owned_question_note(note_path, resolved_root):
-        # #4610: engine-owned Question notes (`questions/sq-*.md`) are NEVER
-        # uuid-healed. Their schema is deliberately closed
-        # (`schemas/question-note.schema.json`, additionalProperties: false,
-        # field set owned by docs/STANDING_QUESTIONS/
-        # STORE_QUESTION_NOTES_AND_PROJECTION.md), and the SQ-01 ownership
-        # split routes every engine-side mutation through the guarded
-        # QuestionStore seam -- healing a `uuid:` key into one via the
-        # absolute-path port made the note schema-invalid, silently dropping
-        # the question from matching and the projection on the watcher's very
-        # first pass over it.
+    if not note_uuid:
         note_uuid = _ensure_uuid_with_backoff(note_path, vault_root=resolved_root)
         if note_uuid:
             raw_text = _stabilized_note_text(note_path) or raw_text

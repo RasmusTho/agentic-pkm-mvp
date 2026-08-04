@@ -610,6 +610,48 @@ def test_disappearing_vault_artifact_does_not_abort_tick(tmp_path: Path, monkeyp
     assert [entry["artifact_ref"] for entry in evidence] == [surviving_ref]
 
 
+def test_question_note_refs_are_never_resolvable_candidates(tmp_path: Path) -> None:
+    """#4610 round-3 review: defense in depth against question self-citation at
+    the matcher's own content resolution -- a `vault://questions/...` ref (plain
+    or via `..` traversal) is refused content-free, so a question's frontmatter
+    (which contains every attached quoted span verbatim) can never feed the
+    judge and re-attach to itself."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    question_id = note["question_id"]
+
+    # Attach one real evidence entry so the note's frontmatter carries a span
+    # the judge would accept if the note were ever read as an artifact.
+    relevant_ref = _write_artifact(vault, "notes/outbox-measurements.md", RELEVANT_BODY)
+    association = _Association({"single-writer ceiling": _attached()})
+    first = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(relevant_ref)],
+        store=store,
+        complete=association,
+    )
+    assert first.attached == 1
+
+    self_association = _Association({RELEVANT_SPAN: _attached()})
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[
+            _candidate(f"vault://questions/{question_id}.md"),
+            _candidate(f"vault://notes/../questions/{question_id}.md"),
+        ],
+        store=store,
+        complete=self_association,
+    )
+
+    assert summary.unresolved_artifact == 2
+    assert summary.attached == 0
+    # Content-free refusal: the question note's text never reached the judge.
+    assert self_association.prompts == []
+    assert len(store.read_question(question_id)["evidence"]) == 1
+
+
 def test_missing_questions_directory_is_a_no_op_tick(tmp_path: Path) -> None:
     """A vault that never registered a question yields an empty tick, not a crash --
     matching is a read-only consumer, so the projection's fail-loud posture (which

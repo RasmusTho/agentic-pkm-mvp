@@ -39,7 +39,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from app.components.llm.constrained import (
@@ -256,20 +256,24 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | No
         )
         return None
     relative = candidate.artifact_ref[len(VAULT_REF_PREFIX) :]
-    # Defense in depth against question self-citation (#4610 review): the
-    # production candidate builders already exclude engine-owned Question
-    # notes, but any future caller constructing a CandidateArtifact directly
-    # must not be able to route a question back into its own evidence trail.
-    if PurePosixPath(relative).parts[:1] == (QUESTION_DIRECTORY,):
-        _LOGGER.warning(
-            "Standing Questions matching refused engine-owned question note as candidate: %s",
-            candidate.artifact_ref,
-        )
-        return None
     path = (vault_root / relative).resolve()
     if not path.is_relative_to(vault_root) or not path.is_file():
         _LOGGER.warning(
             "Standing Questions matching skipped unresolvable artifact: %s",
+            candidate.artifact_ref,
+        )
+        return None
+    # Defense in depth against question self-citation (#4610 review): the
+    # production candidate builders already exclude engine-owned Question
+    # notes, but any caller constructing a CandidateArtifact directly must not
+    # be able to route a question back into its own evidence trail. Checked on
+    # the RESOLVED path so a traversal ref (`vault://x/../questions/...`)
+    # cannot bypass it. Only refs resolved here traverse this guard -- a
+    # candidate with inline content short-circuited above, which is why the
+    # builders' own exclusion still matters.
+    if path.relative_to(vault_root).parts[:1] == (QUESTION_DIRECTORY,):
+        _LOGGER.warning(
+            "Standing Questions matching refused engine-owned question note as candidate: %s",
             candidate.artifact_ref,
         )
         return None

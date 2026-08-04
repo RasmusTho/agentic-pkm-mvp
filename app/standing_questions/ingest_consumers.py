@@ -399,9 +399,11 @@ def run_heimdal_evidence_matching_tick(
         raise FileNotFoundError(
             f"standing-question evidence tick requires an existing vault root: {resolved_root}"
         )
-    # Decided BEFORE the match and reused for the advance decision: a
-    # questions/ directory created mid-tick must not consume a batch the match
-    # step enumerated zero questions for.
+    # Sampled BEFORE the read and re-verified AFTER the match: a questions/
+    # directory created mid-tick must not consume a batch the match step
+    # enumerated zero questions for, and one removed mid-tick must not either.
+    # (A removal landing inside the match itself remains a narrow residual
+    # window; the cursor then stays put on the next tick's pre-sample.)
     questions_exist = (resolved_root / QUESTION_DIRECTORY).is_dir()
     rows = read_observations_for_consumer(HEIMDAL_EVIDENCE_CONSUMER_ID, limit=limit)
     candidates = [
@@ -417,7 +419,7 @@ def run_heimdal_evidence_matching_tick(
         )
     else:
         summary = MatchTickSummary()
-    if questions_exist:
+    if questions_exist and (resolved_root / QUESTION_DIRECTORY).is_dir():
         advance_cursor_for_consumer(HEIMDAL_EVIDENCE_CONSUMER_ID, rows)
     elif rows:
         _LOGGER.warning(
