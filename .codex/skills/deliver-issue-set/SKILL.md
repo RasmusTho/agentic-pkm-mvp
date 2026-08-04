@@ -100,7 +100,7 @@ Delivery rules:
   duplicated local state is a runner bug to repair before dispatching more work.
 - Learning/evaluation candidates in run-state must carry source refs, an upstream artifact hint,
   evidence kind, and an `outcome` once processed. Terminal outcomes use
-  `docs/development/DELIVERY_FEEDBACK_LOOP.md :: Terminal outcome vocabulary`; missing `outcome`
+  `docs/development/DELIVERY_FEEDBACK_LOOP.md :: Retrospective closure rule`; missing `outcome`
   means unresolved and must be surfaced before parent or epic closure.
 - Dispatcher status in run-state is snapshot-only. Recording `{"db_exists": false}` or similar does
   not start, stop, claim, heartbeat, release, or complete dispatcher work. Keep dispatcher behavior

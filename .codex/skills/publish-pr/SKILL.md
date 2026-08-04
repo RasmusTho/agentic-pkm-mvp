@@ -163,7 +163,7 @@ Commit message must:
 - Start with imperative verb (Add, Update, Rebuild, etc.)
 - Summarize the bounded outcome, not the mechanical changes
 - Be truthful about scope
-- Never use `Fix`, `Fixes`, `Fixed`, `Close`, `Closes`, `Closed`, `Resolve`, `Resolves`, or `Resolved` as an issue-closing reference in the commit subject or body. Ordinary non-target prose such as `Fix runtime env` is allowed. The workflow owns the supported separator, target, case, and malformed-reference recognition; see `.github/workflows/issue-pr-governance.yml :: pr-contract closing authority`. Use evidence-only `Refs #<id>` when an Issue reference is useful; authenticated closing keywords belong only in the PR body.
+- Never use `Fix`, `Fixes`, `Fixed`, `Close`, `Closes`, `Closed`, `Resolve`, `Resolves`, or `Resolved` as an issue-closing reference in the commit subject or body. Ordinary non-target prose such as `Fix runtime env` is allowed. The workflow owns the supported separator, target, case, and malformed-reference recognition; see `.github/workflows/issue-pr-governance.yml :: authority-classifier`. Use evidence-only `Refs #<id>` when an Issue reference is useful; authenticated closing keywords belong only in the PR body.
 - Replace `<agent identity> <agent noreply address>` in the `Co-Authored-By` trailer with the actual agent identity and its own noreply address producing the commit (e.g. Claude's `noreply@anthropic.com`, Codex/ChatGPT's own noreply domain); do not copy a hardcoded model name or a different agent's domain from this template
 
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
@@ -183,7 +183,7 @@ not replace required GitHub checks, branch protection, or final review triage.
 Use `--review-gate-complete` only after the checks returned by the script have run. For a high-risk
 implementation, governance, or direct repair this means a mechanism convergence packet plus a fresh independent high-capability
 review of the local publishable SHA before the selected expensive validation; see
-`AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. If an emergency direct
+`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. If an emergency direct
 repair with no declared high-risk surface must bypass this local gate, use `--bypass-reason` and name
 the bypass in the PR/issue receipt. A declared high-risk surface is never bypassable.
 

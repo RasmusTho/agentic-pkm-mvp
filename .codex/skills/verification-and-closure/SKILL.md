@@ -219,7 +219,7 @@ Resolve the verdict:
   delivery receipt so the gate is auditable after merge.
 - Do not block indefinitely on a stalled or failed review run: if the reviewer subagent cannot complete
   (tool failure, timeout, repeated crash), classify the stop under
-  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, use bounded backoff or a
+  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, use bounded backoff or a
   `blocked_technical` receipt, and preserve the merge block. A technical outage never creates a
   CI/review/merge waiver. Route through `owner-decision-brief` only when the classifier finds an
   explicit authority category; that decision does not relax the gate.
@@ -259,7 +259,8 @@ The imported `pr-integration` skill's legacy `cheap fix` shorthand is not an ind
 severity or an exception to this routing. Per its required `PR_HOT_PATH.md` classification, read
 `cheap fix`, `review-feedback repair`, and `fixing commit` as P0/P1 blocking-repair concepts only.
 They do not apply to P2/P3. If a secondary workflow's shorthand cannot represent all four
-severities, this section and `PR_HOT_PATH.md :: Review feedback triage` govern.
+severities, this section and `docs/development/PR_HOT_PATH.md :: CI Status Handling` (its
+review-feedback-triage rules) govern.
 
 ##### Dispatcher receipt compatibility
 
@@ -318,7 +319,7 @@ finding and does not re-trigger review.
   repaired, stop point-fixing and do not start another expensive validation or publish another
   head. P2/P3 observations do not count. Build the mechanism convergence packet and run the
   independent pre-expensive-gate review defined in
-  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
+  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
   sequence only after that review is clean. Preserve the existing mechanism/domain binding and
   attempt count; this replan does not reset budget and requires the second final clean round only
   for that triggered mechanism/domain key.
@@ -341,7 +342,7 @@ finding and does not re-trigger review.
   for every escalated round.
 - After one key's budget of 2 standard plus 2 escalated fix attempts is exhausted, or when the
   strongest available capability cannot run or repeatedly fails, classify the stop under
-  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Continue with bounded
+  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Continue with bounded
   technical recovery, backoff, or a blocked-technical receipt when safe; route through
   `owner-decision-brief` only if that classifier identifies an explicit authority/scope category.
   Do not reset an existing finding's binding, and do not ask the owner merely because the
@@ -377,7 +378,7 @@ Rules:
 - A 👍/`+1` reaction is a sufficient Codex pass even when there is no formal review or comment.
 - Do not block indefinitely on a missing verdict: if Codex has posted no reaction, review, or comment
   and recent sibling PRs show the same silence (a repo-wide Codex stall), classify the outage under
-  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, use bounded backoff or a
+  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, use bounded backoff or a
   `blocked_technical` receipt, and preserve the merge block. A technical outage never creates a
   CI/review/merge waiver. Route through `owner-decision-brief` only when the classifier finds an
   explicit authority category; that decision does not relax the gate.
