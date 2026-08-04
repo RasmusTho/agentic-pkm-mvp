@@ -39,7 +39,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.components.llm.constrained import (
@@ -56,6 +56,7 @@ from jsonschema import ValidationError
 
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.standing_questions.question_store import (
+    QUESTION_DIRECTORY,
     QuestionNoteRoundTripError,
     QuestionNotOpenError,
     QuestionStore,
@@ -192,10 +193,13 @@ class MatchTickSummary:
     excluded_cross_scope: int = 0
     excluded_non_open: int = 0
     unresolved_artifact: int = 0
-    #: Appends the guarded seam refused or failed AFTER a qualifying match:
-    #: a human-edit write conflict (CAS), a round-trip refusal, or a question
-    #: note that disappeared/corrupted mid-tick. Never silent, never fatal to
-    #: the tick; the pair stays re-evaluable by a later pass.
+    #: Pairs whose guarded append was refused or failed AFTER a qualifying
+    #: match: a human-edit write conflict (CAS), a round-trip refusal, or a
+    #: question note that disappeared/corrupted mid-tick. Never silent, never
+    #: fatal to the tick. Re-offerable sources (vault notes, KA candidates)
+    #: retry naturally on their next event; the Heimdal cursor path does NOT
+    #: re-deliver once its cursor advances past the batch, so a refused
+    #: Heimdal-sourced pair is a logged, counted loss.
     append_refused: int = 0
 
 
@@ -252,6 +256,16 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | No
         )
         return None
     relative = candidate.artifact_ref[len(VAULT_REF_PREFIX) :]
+    # Defense in depth against question self-citation (#4610 review): the
+    # production candidate builders already exclude engine-owned Question
+    # notes, but any future caller constructing a CandidateArtifact directly
+    # must not be able to route a question back into its own evidence trail.
+    if PurePosixPath(relative).parts[:1] == (QUESTION_DIRECTORY,):
+        _LOGGER.warning(
+            "Standing Questions matching refused engine-owned question note as candidate: %s",
+            candidate.artifact_ref,
+        )
+        return None
     path = (vault_root / relative).resolve()
     if not path.is_relative_to(vault_root) or not path.is_file():
         _LOGGER.warning(
@@ -437,12 +451,17 @@ def match_evidence_to_open_questions(
             # The seam refused or lost the write: a concurrent human edit (CAS
             # conflict -- the canonical note is untouched, a stale `open`
             # payload never overwrites a close), a round-trip refusal, or a
-            # question note deleted mid-tick. Per-question, never fatal to the
-            # tick; the pair stays re-evaluable by any later pass.
+            # question note deleted mid-tick. Never fatal to the tick; counted
+            # per PAIR so every evaluated pair still lands in exactly one
+            # bucket. Re-offerable sources retry on their next event; a
+            # Heimdal-cursor pair is a logged loss once the cursor advances.
             _LOGGER.warning(
-                "Standing Questions evidence append refused for %s: %s", question_id, exc
+                "Standing Questions evidence append refused for %s (%d entries): %s",
+                question_id,
+                len(new_entries),
+                exc,
             )
-            counters.bump("append_refused", 1)
+            counters.bump("append_refused", len(new_entries))
             continue
         dropped = len(new_entries) - len(appended_entries)
         if dropped:

@@ -366,6 +366,15 @@ class QuestionStore:
     def update_system_fields(
         self, question_id: str, updates: Mapping[str, Any]
     ) -> tuple[dict[str, Any], WriteReceipt]:
+        """Bounded system-field update -- NOT concurrency-hardened (#4610).
+
+        This is an unlocked, versionless read-modify-write: it takes neither
+        the per-note flock nor the CAS `expected_version`, so it can clobber a
+        concurrent :meth:`append_evidence`. Evidence writes must use
+        :meth:`append_evidence`; a future engine writer landing here (e.g.
+        SQ-04 answer refs) must first extend this method with the same lock +
+        CAS discipline. No production caller exists today.
+        """
         current = self.read_question(question_id)
         changes = dict(updates)
         forbidden = set(changes) & (_HUMAN_OWNED_FIELDS | _IMMUTABLE_FIELDS)

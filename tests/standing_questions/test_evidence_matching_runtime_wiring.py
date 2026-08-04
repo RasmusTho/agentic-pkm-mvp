@@ -214,12 +214,17 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
     ):
         assert marker in raw
 
-    # --- Regression: the engine's own Question notes are never candidates --------
-    # Matcher appends re-enter ingest through the watcher; a question must not
-    # cite itself as evidence. (Runs last: the ingest handler's unrelated
-    # uuid-healing also touches the note, so assertions here are raw-text
-    # based.)
-    spans_before = question_note_path.read_text(encoding="utf-8").count("quoted_span:")
+    # --- Regression: the watcher loop must not destroy or self-cite questions ----
+    # Matcher appends re-enter ingest through the watcher (the vault-wide scan
+    # includes questions/). Two invariants, both asserted through the REAL
+    # schema validator on the note the handler just processed:
+    # 1. The handler's uuid-heal must not touch engine-owned Question notes --
+    #    healing a `uuid:` key in made the note schema-invalid
+    #    (additionalProperties: false) and silently dropped the question from
+    #    matching and the projection.
+    # 2. A question is never offered as its own candidate evidence. The note's
+    #    frontmatter contains every attached quoted span, so without the
+    #    builders' questions/ exclusion the fake judge would attach it.
     outbox_worker.handle_ingest_vault_changed(
         {
             "vault_path": str(question_note_path),
@@ -229,6 +234,10 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
         },
         vault_root=vault,
     )
-    assert (
-        question_note_path.read_text(encoding="utf-8").count("quoted_span:") == spans_before
+    surviving = store.read_question(question_id)  # parses via the real validator
+    assert "uuid" not in surviving
+    assert len(surviving["evidence"]) == 4
+    assert not any(
+        entry["artifact_ref"].startswith("vault://questions/")
+        for entry in surviving["evidence"]
     )
