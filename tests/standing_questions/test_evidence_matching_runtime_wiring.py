@@ -150,7 +150,31 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
     )
     assert len(evidence()) == 2
 
-    # --- Path 3: the Heimdal observation-log cursor tick -------------------------
+    # --- Path 3: the worker's real `ingest.object.created` dispatch branch -------
+    # Wired at the dispatch table (not inside the indexer handler) so the
+    # vault-changed path above cannot double-match; exercised through the same
+    # `_dispatch_topic` entry the daemon loop and `run_once` both use.
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    api_object_uuid = str(uuid.uuid4())
+    outbox_worker._dispatch_topic(
+        outbox_worker.INGEST_OBJECT_CREATED,
+        {
+            "uuid": api_object_uuid,
+            "title": "api ingested artifact",
+            "review_state": "draft",
+            # POST /ingest carries no separate frontmatter field; scope rides
+            # inside the content itself and must still resolve.
+            "content": f"---\nscope: work\n---\n\n{RELEVANT_BODY}",
+        },
+        trace_id="trace-object-created",
+        message={},
+    )
+    object_entries = evidence()
+    assert len(object_entries) == 3
+    assert object_entries[2]["source_stream"] == "ingest.object.created"
+    assert object_entries[2]["artifact_ref"] == f"object://{api_object_uuid}"
+
+    # --- Path 4: the Heimdal observation-log cursor tick -------------------------
     observation_id = "obs-" + str(uuid.uuid4())
     published = publish_observation(
         topic="heimdal.observation.published.v1",
@@ -166,24 +190,45 @@ def test_ingest_consumers_invoke_question_matching(tmp_path: Path, monkeypatch) 
     tick = run_heimdal_evidence_matching_tick(vault_root=vault)
     assert tick.attached == 1
     heimdal_entries = evidence()
-    assert len(heimdal_entries) == 3
-    assert heimdal_entries[2]["source_stream"] == "heimdal.observations"
-    assert heimdal_entries[2]["artifact_ref"] == f"heimdal://observations/{observation_id}"
-    assert heimdal_entries[2]["provenance_ref"] == f"heimdal.observations:{observation_id}"
+    assert len(heimdal_entries) == 4
+    assert heimdal_entries[3]["source_stream"] == "heimdal.observations"
+    assert heimdal_entries[3]["artifact_ref"] == f"heimdal://observations/{observation_id}"
+    assert heimdal_entries[3]["provenance_ref"] == f"heimdal.observations:{observation_id}"
 
     # The tick owns a durable per-consumer cursor: a re-tick reads nothing new
     # and appends nothing (consumer-id contract, mirrors the ERE read path).
     assert HEIMDAL_EVIDENCE_CONSUMER_ID.startswith("mimer.standing_questions")
     retick = run_heimdal_evidence_matching_tick(vault_root=vault)
     assert retick.evaluated_pairs == 0
-    assert len(evidence()) == 3
+    assert len(evidence()) == 4
 
     # Cross-check the durable note on disk, not just the store API: the real
-    # guarded seam wrote all three consumer paths' entries into the vault note.
-    raw = (vault / "questions" / f"{question_id}.md").read_text(encoding="utf-8")
+    # guarded seam wrote every consumer path's entry into the vault note.
+    question_note_path = vault / "questions" / f"{question_id}.md"
+    raw = question_note_path.read_text(encoding="utf-8")
     for marker in (
         "ingest.vault.changed",
         "knowledge_acquisition.stage.completed",
+        "ingest.object.created",
         "heimdal.observations",
     ):
         assert marker in raw
+
+    # --- Regression: the engine's own Question notes are never candidates --------
+    # Matcher appends re-enter ingest through the watcher; a question must not
+    # cite itself as evidence. (Runs last: the ingest handler's unrelated
+    # uuid-healing also touches the note, so assertions here are raw-text
+    # based.)
+    spans_before = question_note_path.read_text(encoding="utf-8").count("quoted_span:")
+    outbox_worker.handle_ingest_vault_changed(
+        {
+            "vault_path": str(question_note_path),
+            "relative_path": f"questions/{question_id}.md",
+            "hash": "q-hash",
+            "mtime": 124.0,
+        },
+        vault_root=vault,
+    )
+    assert (
+        question_note_path.read_text(encoding="utf-8").count("quoted_span:") == spans_before
+    )

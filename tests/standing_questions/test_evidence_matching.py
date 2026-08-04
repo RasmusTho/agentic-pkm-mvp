@@ -477,6 +477,100 @@ def test_append_rechecks_open_status_atomically(tmp_path: Path) -> None:
     assert note_path.read_bytes() == before
 
 
+def test_append_fails_closed_when_human_edit_races_the_write(tmp_path: Path) -> None:
+    """#4610 review finding: humans edit the note directly and do not honor the
+    engine lock, so the seam's write carries the in-lock read's exact content
+    version through the knowledge-port CAS -- a human close landing between the
+    fresh read and the write leaves the canonical note untouched instead of
+    being overwritten by the stale `open` payload."""
+    from app.knowledge.errors import KnowledgeWriteConflict
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    question_id = note["question_id"]
+    note_path = vault / "questions" / f"{question_id}.md"
+
+    entry = {
+        "artifact_ref": "vault://notes/outbox-measurements.md",
+        "source_stream": "ingest.vault.changed",
+        "matched_at": "2026-08-04T00:00:00Z",
+        "confidence_class": "high",
+        "provenance_ref": "outbox://ingest.vault.changed/vault://notes/outbox-measurements.md",
+        "quoted_span": RELEVANT_SPAN,
+    }
+
+    original_write = store._write
+
+    def racing_write(payload: dict[str, Any], **kwargs: Any) -> Any:
+        # The human closes AFTER the seam's in-lock fresh read but BEFORE the
+        # port write -- inside the critical section, past the status predicate.
+        current = parse_question_note(note_path.read_text(encoding="utf-8"))
+        note_path.write_text(
+            serialize_question_note({**current, "status": "closed"}), encoding="utf-8"
+        )
+        return original_write(payload, **kwargs)
+
+    store._write = racing_write  # type: ignore[method-assign]
+
+    with pytest.raises(KnowledgeWriteConflict):
+        store.append_evidence(question_id, [entry])
+
+    final = parse_question_note(note_path.read_text(encoding="utf-8"))
+    assert final["status"] == "closed"
+    assert final["evidence"] == []
+
+
+def test_append_refuses_entries_that_break_frontmatter_round_trip(tmp_path: Path) -> None:
+    """#4610 review finding: the shared frontmatter reader splits on the literal
+    `---` substring, so an evidence span quoting a markdown thematic break would
+    silently truncate the stored span or destroy the note. The seam refuses the
+    write outright, and the matcher degrades per-question instead of corrupting
+    or aborting."""
+    from app.standing_questions.question_store import QuestionNoteRoundTripError
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text=QUESTION_TEXT, scope="work", registered_via="explicit")
+    question_id = note["question_id"]
+    note_path = vault / "questions" / f"{question_id}.md"
+    before = note_path.read_bytes()
+
+    fence_span = "the ceiling --- measured at 1.2k events per second"
+    entry = {
+        "artifact_ref": "vault://notes/fenced.md",
+        "source_stream": "ingest.vault.changed",
+        "matched_at": "2026-08-04T00:00:00Z",
+        "confidence_class": "high",
+        "provenance_ref": "outbox://ingest.vault.changed/vault://notes/fenced.md",
+        "quoted_span": fence_span,
+    }
+
+    with pytest.raises(QuestionNoteRoundTripError):
+        store.append_evidence(question_id, [entry])
+    assert note_path.read_bytes() == before
+
+    # Matcher level: a verbatim span containing `---` reaches the seam, is
+    # refused, and lands in `append_refused` -- the note stays intact and
+    # parseable, and no corrupted quote enters the evidence trail.
+    fenced_body = f"Fence notes\n\nWe found {fence_span} in the run.\n"
+    fenced_ref = _write_artifact(vault, "notes/fenced.md", fenced_body)
+    association = _Association({"Fence notes": _attached(span=fence_span)})
+
+    summary = match_evidence_to_open_questions(
+        vault_root=vault,
+        candidates=[_candidate(fenced_ref)],
+        store=store,
+        complete=association,
+    )
+
+    assert summary.append_refused == 1
+    assert summary.attached == 0
+    assert store.read_question(question_id)["evidence"] == []
+
+
 def test_disappearing_vault_artifact_does_not_abort_tick(tmp_path: Path, monkeypatch) -> None:
     """#4610 P2: a vault artifact deleted between the existence check and the read --
     a normal race for asynchronously consumed ingest events -- is unresolved for

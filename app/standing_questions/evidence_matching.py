@@ -52,7 +52,14 @@ from app.standing_questions.projection import (
     QuestionsDirectoryMissingError,
     iter_question_notes,
 )
-from app.standing_questions.question_store import QuestionNotOpenError, QuestionStore
+from jsonschema import ValidationError
+
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.standing_questions.question_store import (
+    QuestionNoteRoundTripError,
+    QuestionNotOpenError,
+    QuestionStore,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -185,6 +192,11 @@ class MatchTickSummary:
     excluded_cross_scope: int = 0
     excluded_non_open: int = 0
     unresolved_artifact: int = 0
+    #: Appends the guarded seam refused or failed AFTER a qualifying match:
+    #: a human-edit write conflict (CAS), a round-trip refusal, or a question
+    #: note that disappeared/corrupted mid-tick. Never silent, never fatal to
+    #: the tick; the pair stays re-evaluable by a later pass.
+    append_refused: int = 0
 
 
 @dataclass
@@ -249,7 +261,7 @@ def _resolve_content(vault_root: Path, candidate: CandidateArtifact) -> str | No
         return None
     try:
         return path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         # #4610 P2: a note deleted (or otherwise made unreadable) between the
         # `is_file()` check above and this read is a normal race for
         # asynchronously consumed ingest events. It is an unresolved no-link
@@ -414,6 +426,23 @@ def match_evidence_to_open_questions(
             )
         except QuestionNotOpenError:
             counters.bump("excluded_non_open")
+            continue
+        except (
+            KnowledgeWriteConflict,
+            QuestionNoteRoundTripError,
+            OSError,
+            ValueError,
+            ValidationError,
+        ) as exc:
+            # The seam refused or lost the write: a concurrent human edit (CAS
+            # conflict -- the canonical note is untouched, a stale `open`
+            # payload never overwrites a close), a round-trip refusal, or a
+            # question note deleted mid-tick. Per-question, never fatal to the
+            # tick; the pair stays re-evaluable by any later pass.
+            _LOGGER.warning(
+                "Standing Questions evidence append refused for %s: %s", question_id, exc
+            )
+            counters.bump("append_refused", 1)
             continue
         dropped = len(new_entries) - len(appended_entries)
         if dropped:

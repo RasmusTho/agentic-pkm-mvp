@@ -4,6 +4,7 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import os
 import re
 import uuid
 from contextlib import contextmanager
@@ -15,11 +16,15 @@ from typing import Any, Iterator, Mapping, Sequence
 from jsonschema import Draft202012Validator, FormatChecker
 
 from app.knowledge.contracts import WriteReceipt
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 WRITE_ACTION = "standing_questions.write_note"
+#: The spec-named action for engine evidence appends
+#: (``docs/STANDING_QUESTIONS/MATCH_EVIDENCE_TO_OPEN_QUESTIONS.md`` item 5), so
+#: append receipts and guard denials are distinguishable from note creation.
+APPEND_EVIDENCE_ACTION = "standing_questions.append_evidence"
 QUESTION_DIRECTORY = "questions"
 _HUMAN_OWNED_FIELDS = frozenset({"text", "status"})
 _SYSTEM_OWNED_FIELDS = frozenset(
@@ -228,6 +233,19 @@ class QuestionNotOpenError(RuntimeError):
     terminal for the engine)."""
 
 
+class QuestionNoteRoundTripError(ValueError):
+    """Raised before a write when the serialized note would not parse back to the
+    exact payload being written.
+
+    The repo's frontmatter reader (``scripts/yaml_roundtrip.load_frontmatter``)
+    splits on the literal ``---`` substring, so a value containing ``---`` (for
+    example a quoted evidence span copied verbatim from a markdown artifact with
+    a thematic break) would silently truncate the stored span or destroy the
+    note's parseability. This seam refuses such a write outright -- a corrupted
+    or silently altered quote in a human-legible evidence trail is worse than a
+    missed link, which a later tick can still recover."""
+
+
 def mint_question_id() -> str:
     return f"sq-{uuid.uuid4()}"
 
@@ -255,6 +273,9 @@ def question_note_lock_path(vault_root: Path | str, question_id: str) -> Path:
 def _question_note_lock(lock_path: Path) -> Iterator[None]:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as handle:
+        # Mirror the provisional-write ledger-lock idiom: the lock file must
+        # never be group/world readable in a user's (possibly synced) vault.
+        os.chmod(lock_path, 0o600)
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -376,15 +397,27 @@ class QuestionStore:
         """Atomically append evidence entries to an ``open`` question (#4610 P2).
 
         The open-status predicate and the append are one operation at this
-        guarded seam: the note is re-read *inside* an exclusive per-note flock
-        (:func:`question_note_lock_path`), the status predicate runs against
-        that same fresh read, and the write derives from it -- so concurrent
-        engine writers serialize, and a close that lands before this writer's
-        turn raises :class:`QuestionNotOpenError` instead of appending to (or
-        overwriting the terminal status of) a non-open question. Checking
-        status in the caller and writing through a separate read-modify-write
-        (the pre-#4610 shape) left a window where a mid-flight human close
-        received new evidence or was resurrected by a stale ``open`` payload.
+        guarded seam, enforced by two independent mechanisms:
+
+        - **Engine serialization**: the note is re-read *inside* an exclusive
+          per-note flock (:func:`question_note_lock_path`), the status
+          predicate runs against that same fresh read, and the write derives
+          from it -- concurrent engine writers serialize, and a close that
+          lands before this writer's turn raises :class:`QuestionNotOpenError`.
+        - **Human-edit compare-and-swap**: humans edit the note directly and do
+          not honor the engine lock, so the write itself carries the fresh
+          read's exact content version (``expected_version``) through the
+          hardened knowledge-port CAS. A human edit -- including a close --
+          landing between the in-lock read and the write leaves the canonical
+          note untouched and raises
+          :class:`app.knowledge.errors.KnowledgeWriteConflict`; the stale
+          ``open`` payload can never overwrite a terminal status.
+
+        Checking status in the caller and writing through a separate unlocked,
+        versionless read-modify-write (the pre-#4610 shape) violated both.
+
+        WriteGuard is asserted before the lock file is created, so a blocked
+        runtime mutates nothing in the vault, not even a lock file.
 
         Idempotency is preserved under the same fresh read: an entry whose
         ``(artifact_ref, quoted_span)`` basis already exists on the note (for
@@ -399,9 +432,14 @@ class QuestionStore:
         entry_list = [dict(entry) for entry in entries]
         if not entry_list:
             raise ValueError("append_evidence requires at least one evidence entry")
+        # Guard before any filesystem effect (including lock-file creation):
+        # a blocked runtime must leave the vault byte-identical. `_write`
+        # re-asserts at the port as defense in depth.
+        self.write_guard.assert_writes_allowed(APPEND_EVIDENCE_ACTION)
         path = self._path(question_id)
         with _question_note_lock(question_note_lock_path(self.vault_root, question_id)):
-            current = parse_question_note(path.read_text(encoding="utf-8"))
+            text, content_version = read_note_text_with_version(path)
+            current = parse_question_note(text)
             if current["status"] != "open":
                 raise QuestionNotOpenError(
                     f"question {question_id} is {current['status']!r}; evidence appends "
@@ -423,34 +461,66 @@ class QuestionStore:
                 "evidence": [*current["evidence"], *fresh_entries],
                 "last_matched_at": matched_at if matched_at is not None else _utc_now(),
             }
-            receipt = self._write(updated)
+            receipt = self._write(
+                updated,
+                action=APPEND_EVIDENCE_ACTION,
+                expected_version=content_version,
+            )
             return updated, receipt, fresh_entries
 
     def _path(self, question_id: str) -> Path:
         return self.vault_root / question_note_path(question_id)
 
-    def _write(self, note: Mapping[str, Any]) -> WriteReceipt:
+    def _write(
+        self,
+        note: Mapping[str, Any],
+        *,
+        action: str = WRITE_ACTION,
+        expected_version: str | None = None,
+    ) -> WriteReceipt:
         payload = validate_question_note(note)
-        # This is the production seam assertion. It runs before serialisation,
-        # path creation, or any filesystem mutation; write_note_relative repeats
-        # the guard at the shared port as defense in depth.
-        self.write_guard.assert_writes_allowed(WRITE_ACTION)
+        serialized = serialize_question_note(payload)
+        # Round-trip guard (#4610 review): the shared frontmatter reader splits
+        # on the literal `---` substring, so a payload value containing it (an
+        # evidence span quoting a markdown thematic break, a ref with `---` in
+        # its name) would silently truncate or destroy the note. Refuse to
+        # write anything that does not parse back to the exact payload.
+        try:
+            reparsed = parse_question_note(serialized)
+        except Exception as exc:
+            raise QuestionNoteRoundTripError(
+                f"refusing question-note write that does not survive serialization "
+                f"round-trip for {payload['question_id']}: {exc}"
+            ) from exc
+        if reparsed != payload:
+            raise QuestionNoteRoundTripError(
+                f"refusing question-note write whose serialized form parses back "
+                f"differently for {payload['question_id']} (frontmatter fence "
+                "collision or lossy value)"
+            )
+        # This is the production seam assertion. It runs before path creation
+        # or any filesystem mutation; write_note_relative repeats the guard at
+        # the shared port as defense in depth.
+        self.write_guard.assert_writes_allowed(action)
         receipt = write_note_relative(
             question_note_path(payload["question_id"]),
-            serialize_question_note(payload),
+            serialized,
             vault_root=self.vault_root,
-            action=WRITE_ACTION,
+            action=action,
             write_guard=self.write_guard,
+            expected_version=expected_version,
         )
-        return replace(receipt, operation=WRITE_ACTION)
+        return replace(receipt, operation=action)
 
 
 __all__ = [
     "ANNOUNCED_LEAP_SECOND_TABLE_REVIEWED",
     "ANNOUNCED_LEAP_SECOND_UTC_DATES",
+    "APPEND_EVIDENCE_ACTION",
     "HumanOwnedFieldMutationError",
     "QUESTION_DIRECTORY",
     "QuestionNotOpenError",
+    "QuestionNoteRoundTripError",
     "QuestionStore",
     "Rfc3339DateTime",
     "WRITE_ACTION",

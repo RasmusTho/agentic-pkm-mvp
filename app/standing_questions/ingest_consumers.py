@@ -28,6 +28,7 @@ Failure posture is per-path:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any, Mapping
@@ -44,7 +45,9 @@ from app.standing_questions.evidence_matching import (
     MatchTickSummary,
     match_evidence_to_open_questions,
 )
+from app.standing_questions.question_store import QUESTION_DIRECTORY
 from app.watcher.vault_watcher import extract_context_dimensions_for_note
+from app.write_guard import WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +73,20 @@ DEFAULT_ARTIFACT_SCOPE = "default"
 # (mirrors `_KA_CANDIDATE_STAGE` in the worker's own KA consumer): only this
 # terminal stage offers an artifact to match.
 _KA_CANDIDATE_STAGE = "candidate"
+
+
+def _is_question_note_path(relative_path: str) -> bool:
+    """True when the path is an engine-owned Question note (#4610 review).
+
+    Question notes live in the watched vault, so every matcher append re-enters
+    ingest as a new `ingest.vault.changed` event. Offering the question's own
+    note back to the matcher as candidate evidence would let questions cite
+    themselves, grow their own artifact text on every append, and burn one LLM
+    judgment per open question per cycle. The engine's own output is never its
+    own evidence.
+    """
+    parts = Path(relative_path).parts
+    return bool(parts) and parts[0] == QUESTION_DIRECTORY
 
 
 def _resolve_note_scope(
@@ -102,8 +119,15 @@ def vault_note_candidate(
     source_stream: str,
     frontmatter: Mapping[str, Any] | None = None,
     content: str | None = None,
-) -> CandidateArtifact:
-    """Build the candidate for one new/edited vault note."""
+) -> CandidateArtifact | None:
+    """Build the candidate for one new/edited vault note.
+
+    Returns ``None`` for engine-owned Question notes: the matcher's own writes
+    re-enter ingest through the watcher, and a question must never become its
+    own evidence.
+    """
+    if _is_question_note_path(relative_path):
+        return None
     artifact_ref = f"vault://{Path(relative_path).as_posix()}"
     return CandidateArtifact(
         artifact_ref=artifact_ref,
@@ -147,17 +171,35 @@ def candidate_from_ingest_object_created(
                 source_stream=INGEST_OBJECT_CREATED,
             )
     content = payload.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return None
     object_id = payload.get("uuid") or payload.get("object_id")
-    if isinstance(content, str) and content.strip() and object_id:
-        artifact_ref = f"object://{object_id}"
-        return CandidateArtifact(
-            artifact_ref=artifact_ref,
-            source_stream=INGEST_OBJECT_CREATED,
-            scope=DEFAULT_ARTIFACT_SCOPE,
-            provenance_ref=f"outbox://{INGEST_OBJECT_CREATED}/{artifact_ref}",
-            content=content,
-        )
-    return None
+    if not object_id:
+        # A path-less, id-less producer still offers matchable content; a
+        # content-hash ref keeps the idempotency fold key stable across
+        # redelivery of the same payload.
+        object_id = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+    # POST /ingest carries no separate frontmatter field, but its content may
+    # itself be a frontmattered note -- resolve scope from it so API-ingested
+    # artifacts are not silently unmatchable against scoped questions.
+    scope = DEFAULT_ARTIFACT_SCOPE
+    try:
+        content_frontmatter, _body = load_frontmatter(content)
+    except Exception:
+        content_frontmatter = None
+    if isinstance(content_frontmatter, Mapping) and content_frontmatter:
+        dims = extract_context_dimensions_for_note(dict(content_frontmatter))
+        resolved = dims.get("scope")
+        if isinstance(resolved, str) and resolved.strip():
+            scope = resolved
+    artifact_ref = f"object://{object_id}"
+    return CandidateArtifact(
+        artifact_ref=artifact_ref,
+        source_stream=INGEST_OBJECT_CREATED,
+        scope=scope,
+        provenance_ref=f"outbox://{INGEST_OBJECT_CREATED}/{artifact_ref}",
+        content=content,
+    )
 
 
 def candidate_from_ka_stage_completed(
@@ -179,6 +221,8 @@ def candidate_from_ka_stage_completed(
         return None
     content_identity = str(payload.get("content_identity") or "")
     relative_path = artifact_path.strip()
+    if _is_question_note_path(relative_path):
+        return None
     return CandidateArtifact(
         artifact_ref=f"vault://{Path(relative_path).as_posix()}",
         source_stream=KNOWLEDGE_ACQUISITION_STAGE_COMPLETED,
@@ -234,6 +278,18 @@ def _never_crash_match(
             candidates=[candidate],
             trace_id=trace_id,
         )
+    except WritesBlockedError as exc:
+        # A blocked runtime is a systemic condition, not a one-off matching
+        # failure -- name it distinctly so operators can tell them apart. The
+        # ingest dispatch itself still proceeds (matcher writes are the only
+        # thing refused, and re-ticking is idempotent).
+        _LOGGER.warning(
+            "standing-question evidence matching blocked by WriteGuard for %s artifact %s: %s",
+            source,
+            candidate.artifact_ref,
+            exc,
+        )
+        return None
     except Exception:
         # Loud, never silent -- but a matching failure must not fail (or
         # retry-loop) the ingest dispatch that already succeeded upstream.
@@ -330,7 +386,19 @@ def run_heimdal_evidence_matching_tick(
     past the batch -- "durably process, then advance" per the publish-seam
     contract, so a crashed tick re-reads the same observations (at-least-once;
     the matcher's per-pair idempotency absorbs the redelivery).
+
+    Two guards keep the cursor honest (#4610 review): a missing vault root
+    fails loud (never a silently synthesized CWD-relative vault -- the same
+    phantom-root hazard #2384 removed from the worker), and a vault whose
+    ``questions/`` directory does not exist yet leaves the cursor untouched --
+    observations are only consumed once a vault where matching can actually
+    evaluate them exists.
     """
+    resolved_root = Path(vault_root).expanduser().resolve()
+    if not resolved_root.is_dir():
+        raise FileNotFoundError(
+            f"standing-question evidence tick requires an existing vault root: {resolved_root}"
+        )
     rows = read_observations_for_consumer(HEIMDAL_EVIDENCE_CONSUMER_ID, limit=limit)
     candidates = [
         candidate
@@ -339,13 +407,21 @@ def run_heimdal_evidence_matching_tick(
     ]
     if candidates:
         summary = match_evidence_to_open_questions(
-            vault_root=vault_root,
+            vault_root=resolved_root,
             candidates=candidates,
             trace_id=trace_id,
         )
     else:
         summary = MatchTickSummary()
-    advance_cursor_for_consumer(HEIMDAL_EVIDENCE_CONSUMER_ID, rows)
+    if (resolved_root / QUESTION_DIRECTORY).is_dir():
+        advance_cursor_for_consumer(HEIMDAL_EVIDENCE_CONSUMER_ID, rows)
+    elif rows:
+        _LOGGER.warning(
+            "standing-question evidence tick left the cursor untouched: no %s/ directory "
+            "under %s (observations remain unconsumed until questions exist)",
+            QUESTION_DIRECTORY,
+            resolved_root,
+        )
     return summary
 
 
