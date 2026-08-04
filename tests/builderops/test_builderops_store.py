@@ -181,6 +181,54 @@ def test_create_read_list_core_builderops_records(store: SqliteBuilderOpsStore) 
     ]
 
 
+def test_create_promotion_intent_rejects_unsupported_target_surface(
+    store: SqliteBuilderOpsStore,
+) -> None:
+    """Creation fails before persistence with the canonical allowed-value error.
+
+    Regression for issue #4171: the store accepted
+    `target_authority_surface=github_issue_set` at creation while the promotion
+    gateway rejected it at transition time, leaving the record permanently
+    stuck outside every terminal state.
+    """
+    with pytest.raises(
+        BuilderOpsValidationError,
+        match=(
+            r"unsupported promotion target_authority_surface: github_issue_set; "
+            r"allowed: adr_doc_proposal, discard_receipt, generated_projection, "
+            r"github_issue, owner_doc_writeback_proposal, pr_branch_proposal"
+        ),
+    ):
+        store.create_promotion_intent(
+            id="prom_unsupported_001",
+            summary="Promotion with unsupported target",
+            target_authority_surface="github_issue_set",
+            target_action="create",
+            target_ref="pending",
+            target_authority_class="operational",
+            intended_output="Should never persist.",
+            source_refs=_source_ref(),
+            created_by=_actor(),
+        )
+
+    assert store.get_record("prom_unsupported_001") is None
+    assert store.list_records("PromotionIntent") == []
+
+    # The same registry accepts supported aliases unchanged.
+    aliased = store.create_promotion_intent(
+        id="prom_alias_001",
+        summary="Promotion via supported alias",
+        target_authority_surface="github",
+        target_action="create",
+        target_ref="pending",
+        target_authority_class="operational",
+        intended_output="Alias creation stays supported.",
+        source_refs=_source_ref(),
+        created_by=_actor(),
+    )
+    assert aliased["target_authority_surface"] == "github"
+
+
 def test_store_supports_retro_cluster_member_ids(
     store: SqliteBuilderOpsStore,
 ) -> None:

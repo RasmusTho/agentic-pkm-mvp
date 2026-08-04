@@ -666,6 +666,14 @@ receipt.
 **Lifecycle states:** `draft`, `review_pending`, `accepted`, `promoted`, `discarded`,
 `superseded`.
 
+**Target surface registry:** `target_authority_surface` must resolve (directly or through a
+supported alias) to the canonical promotion target registry shared by store creation and the
+promotion gateway (`app/builderops/models.py::PROMOTION_TARGET_SURFACES`): `github_issue`,
+`pr_branch_proposal`, `adr_doc_proposal`, `owner_doc_writeback_proposal`, `generated_projection`,
+`discard_receipt`. Creation fails before persistence for any other value. A legacy record persisted
+with an unsupported target can only reach `rejected` or `discarded` through a receipt-bearing
+terminal recovery transition; it is never promotable.
+
 **Source/reference fields:** Must include the BuilderOps source objects that would cross the
 boundary. Must include any target issue/doc/ADR/skill refs if known.
 

@@ -484,6 +484,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
   predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
   reconcile next.)
+- BuilderOps `PromotionIntent` creation validates `target_authority_surface` against the canonical
+  promotion target registry shared with the promotion gateway
+  (`app/builderops/models.py::PROMOTION_TARGET_SURFACES`): unsupported targets fail before
+  persistence at every boundary (store, CLI, MCP boundary, API), and legacy records persisted with
+  unsupported targets can only reach `rejected`/`discarded` through a receipt-bearing terminal
+  recovery transition that performs no promotion effect (#4171).
 - The BCP-05 verification lane now has a repo-side BuilderOps API/PostgreSQL/outbox implementation
   under PR #4416. That code presence is not a delivery claim: issue #3603 and its installed-main
   Demerzel pilot receipt remain the authority for whether BCP-05 acceptance is complete. The
