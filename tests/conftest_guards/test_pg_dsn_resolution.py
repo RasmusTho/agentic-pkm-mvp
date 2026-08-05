@@ -332,6 +332,48 @@ def test_redaction_covers_libpq_keyword_conninfo() -> None:
         _redact_dsn(malformed)
 
 
+def test_effective_libpq_query_parameters_are_classified_as_production() -> None:
+    from app.db.dsn import looks_like_prod_dsn
+
+    assert looks_like_prod_dsn("postgresql:///app_test?host=127.0.0.1&port=15432")
+    assert looks_like_prod_dsn("postgresql:///safe?dbname=app")
+
+
+def test_runtime_guard_reads_libpq_query_host() -> None:
+    from tests.conftest import _points_at_a_reachable_prod_server
+
+    assert _points_at_a_reachable_prod_server("postgresql:///safe?host=127.0.0.1&port=15432")
+
+
+def test_keyword_conninfo_redaction_handles_whitespace_around_equals() -> None:
+    from tests.conftest import _redact_dsn
+
+    redacted = _redact_dsn("host = 127.0.0.1 port = 15432 dbname = app password = hunter2")
+    assert "hunter2" not in redacted
+    assert "password=***" in redacted
+
+
+def test_builderops_dsn_counts_as_configured_for_pg_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tests.conftest as test_config
+
+    class Item:
+        def __init__(self) -> None:
+            self.markers: list[object] = []
+
+        def get_closest_marker(self, name: str) -> object | None:
+            return object() if name == "pg" else None
+
+        def add_marker(self, marker: object) -> None:
+            self.markers.append(marker)
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setenv("BUILDEROPS_DATABASE_URL", "postgresql://app:app@db:5432/builderops")
+    item = Item()
+    test_config.pytest_collection_modifyitems(None, [item])
+    assert item.markers == []
+
+
 # The "no prod DSN survives in default position under tests/" census lives in
 # tests/architecture/test_no_prod_dsn_defaults.py, which inspects string
 # constants via AST rather than raw text — the right tool for that question.

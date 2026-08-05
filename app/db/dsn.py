@@ -34,13 +34,20 @@ def _keyword_conninfo_parts(conninfo: str) -> t.Optional[dict[str, str]]:
         return {}
 
     parts: dict[str, str] = {}
-    for field in fields:
-        if "=" not in field:
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        if "=" in field:
+            key, value = field.split("=", 1)
+        elif index + 2 < len(fields) and fields[index + 1] == "=":
+            key, value = field, fields[index + 2]
+            index += 2
+        else:
             return {}
-        key, value = field.split("=", 1)
         if not key:
             return {}
         parts[key.lower()] = value
+        index += 1
     return parts
 
 
@@ -78,17 +85,22 @@ def looks_like_prod_dsn(conninfo: t.Optional[str] = None) -> bool:
         return True
 
     try:
-        from urllib.parse import urlsplit  # noqa: PLC0415
+        from urllib.parse import parse_qs, urlsplit  # noqa: PLC0415
 
         parts = urlsplit(url)
     except Exception:
         return False
 
     db_name = (parts.path or "").lstrip("/").split("?", 1)[0]
-    if db_name == "app":
+    query = parse_qs(parts.query, keep_blank_values=True)
+    effective_db_name = (query.get("dbname", [db_name])[-1] or db_name).strip()
+    if effective_db_name == "app":
         return True
 
     try:
+        effective_port = query.get("port", [None])[-1]
+        if effective_port is not None:
+            return int(effective_port) == 15432
         if parts.port == 15432:
             return True
     except ValueError:

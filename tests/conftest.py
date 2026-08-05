@@ -329,9 +329,20 @@ def _redact_dsn(dsn: str) -> str:
         except ValueError:
             return "<unparseable conninfo redacted>"
         parts = []
-        for field in fields:
-            key, sep, _ = field.partition("=")
-            parts.append(f"{key}=***" if sep and key.lower() == "password" else field)
+        index = 0
+        while index < len(fields):
+            field = fields[index]
+            if "=" in field:
+                key, value = field.split("=", 1)
+            elif index + 2 < len(fields) and fields[index + 1] == "=":
+                key, value = field, fields[index + 2]
+                index += 2
+            else:
+                parts.append(field)
+                index += 1
+                continue
+            parts.append(f"{key}=***" if key.lower() == "password" else f"{key}={value}")
+            index += 1
         return " ".join(parts)
 
     scheme, sep, rest = dsn.partition("://")
@@ -389,7 +400,7 @@ def _points_at_a_reachable_prod_server(dsn: str) -> bool:
     abort ordinary runs. A loopback prod address is the real hazard.
     """
 
-    from urllib.parse import urlsplit
+    from urllib.parse import parse_qs, urlsplit
 
     from app.db.dsn import looks_like_prod_dsn, resolve_dsn
 
@@ -397,7 +408,9 @@ def _points_at_a_reachable_prod_server(dsn: str) -> bool:
         return False
     try:
         parts = urlsplit(resolve_dsn(dsn))
-        return parts.hostname in _REACHABLE_PROD_HOSTS
+        query = parse_qs(parts.query, keep_blank_values=True)
+        host = parts.hostname or query.get("host", [None])[-1]
+        return host in _REACHABLE_PROD_HOSTS
     except ValueError:
         return True
 
@@ -476,9 +489,15 @@ def _ambient_libpq_target() -> str:
 def pytest_collection_modifyitems(config, items) -> None:
     """Skip pg-marked tests when no database was named, with a stated reason."""
 
+    from app.config.database import explicit_runtime_database_url
     from app.db.dsn import resolve_dsn
 
-    if resolve_dsn():
+    if (
+        resolve_dsn()
+        or os.getenv("BUILDEROPS_DATABASE_URL", "").strip()
+        or explicit_runtime_database_url(os.environ)
+        or _ambient_libpq_target()
+    ):
         return
 
     skip_pg = pytest.mark.skip(reason=_PG_DSN_UNSET_REASON)
