@@ -43,6 +43,13 @@ services:
       HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
 """
 
+_TEST_CLOBBER_OVERLAY = """\
+services:
+  heimdal-capture-watch:
+    environment:
+      HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
+"""
+
 
 def _write_fixture_repo(tmp_path: Path) -> None:
     (tmp_path / "docker-compose.yaml").write_text(_BASE_COMPOSE, encoding="utf-8")
@@ -52,6 +59,17 @@ def _write_fixture_repo(tmp_path: Path) -> None:
     (tmp_path / "tmp").mkdir()
     (tmp_path / "tmp" / "runtime.env").write_text(
         "HEIMDAL_CAPTURE_WATCH_DIR=/real/capture/dir\n", encoding="utf-8"
+    )
+
+
+def _write_test_runtime_env_fixture(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.test.yml").write_text(
+        _TEST_CLOBBER_OVERLAY, encoding="utf-8"
+    )
+    (tmp_path / "tmp-test").mkdir()
+    (tmp_path / "tmp-test" / "runtime.env").write_text(
+        "HEIMDAL_CAPTURE_WATCH_DIR=/real/test/capture/dir\n",
+        encoding="utf-8",
     )
 
 
@@ -139,6 +157,49 @@ def test_preflight_missing_deploy_env_file_contributes_nothing(
     assert not (tmp_path / "config" / "deploy" / "dev.env").exists()
 
     rc, receipt = _run("dev", tmp_path, capsys)
+
+    assert rc == 1
+    assert receipt["status"] == "blocked"
+    violating = {(v["service"], v["field"]) for v in receipt["violations"]}
+    assert ("heimdal-capture-watch", "HEIMDAL_CAPTURE_WATCH_DIR") in violating
+
+
+def test_preflight_uses_deploy_wrapper_runtime_env_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test preflight mirrors the wrapper's ``tmp-test`` runtime-env default."""
+    monkeypatch.delenv("HEIMDAL_CAPTURE_WATCH_DIR", raising=False)
+    monkeypatch.delenv("WATCHER_RUNTIME_ENV_FILE", raising=False)
+    _write_fixture_repo(tmp_path)
+    _write_test_runtime_env_fixture(tmp_path)
+
+    rc, receipt = _run("test", tmp_path, capsys)
+
+    assert rc == 1
+    assert receipt["status"] == "blocked"
+    violation = receipt["violations"][0]
+    assert (violation["service"], violation["field"]) == (
+        "heimdal-capture-watch",
+        "HEIMDAL_CAPTURE_WATCH_DIR",
+    )
+    assert "/real/test/capture/dir" in violation["actual"]
+    assert "/tmp-test/runtime.env" in violation["actual"]
+
+
+def test_blank_override_against_derived_runtime_env_file_fails_closed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blank test override cannot mask a value only in ``tmp-test``."""
+    monkeypatch.delenv("HEIMDAL_CAPTURE_WATCH_DIR", raising=False)
+    monkeypatch.delenv("WATCHER_RUNTIME_ENV_FILE", raising=False)
+    _write_fixture_repo(tmp_path)
+    _write_test_runtime_env_fixture(tmp_path)
+
+    rc, receipt = _run("test", tmp_path, capsys)
 
     assert rc == 1
     assert receipt["status"] == "blocked"

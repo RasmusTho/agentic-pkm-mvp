@@ -56,6 +56,11 @@ _CHANNEL_OVERLAYS = {
     "test": "docker-compose.test.yml",
 }
 
+_RUNTIME_ENV_DEFAULTS = {
+    "dev": "./tmp/runtime.env",
+    "test": "./tmp-test/runtime.env",
+}
+
 
 def _repo_root() -> Path:
     # This script is invoked by path (sys.path[0] is scripts/, not the repo
@@ -103,6 +108,13 @@ def _deploy_env_file_interpolation_environ(
             {key: value for key, value in parsed.items() if value is not None}
         )
     merged.update(os.environ)
+
+    # ``deploy_channel_compose`` resolves this selector before calling
+    # Compose, then exports the selected value. The channel deploy env file
+    # may override it, but when it does not the test channel must still use
+    # its wrapper-derived ``tmp-test`` default rather than the base-compose
+    # expression's dev-shaped fallback.
+    merged.setdefault("WATCHER_RUNTIME_ENV_FILE", _RUNTIME_ENV_DEFAULTS[channel])
     return merged
 
 
