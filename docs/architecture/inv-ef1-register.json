@@ -1360,6 +1360,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/adr/ADR-0061-mimer-mcp-client-adapter.md",
+      "category": "ii",
+      "why_load_bearing": "The proposed MCP client-adapter decision record preserves an operator-bound ownership reference while its owner decision remains pending.",
+      "disposition": "stay",
+      "issue": "#4320"
+    },
+    {
       "artifact": "docs/adr/ADR-0060-capture-posture-b-full-voice-identity.md",
       "category": "ii",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",

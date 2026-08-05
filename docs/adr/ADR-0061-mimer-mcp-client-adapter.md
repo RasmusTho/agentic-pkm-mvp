@@ -1,4 +1,4 @@
-State: Proposed (owner decision pending, 2026-07-11). Prepares — but does not make — the decision to admit MCP (Model Context Protocol) as an additional protocol-tier client adapter over Mimer's existing client contract, exposing exactly the already-shipped ask, governed-capture, retrieve/search, note-read, and health operations. Enumerates topology, wire-transport, and authentication alternatives with consequences and a recommendation. It changes no current authority: `docs/contracts/MIMER_CLIENT_CONTRACT.md`, ADR-0047, and ADR-0056 remain authoritative and MCP is NOT an admitted Mimer client transport until an owner-decision receipt on #3371 accepts one option. Only then may this ADR become Accepted and record supersession precisely. Numbering note: the specification directory and issues #3366–#3371 name this decision "ADR-0058", but ADR-0058 is already taken (event-horizon closure decay); this record is **ADR-0061** and supersedes those stale "ADR-0058" references.
+State: Proposed (owner decision pending, 2026-07-11). Prepares — but does not make — the decision to admit MCP (Model Context Protocol) as an additional protocol-tier client adapter over Mimer's existing client contract, exposing exactly the already-shipped ask, governed-capture, retrieve/search, note-read, and health operations. Enumerates topology, wire-transport, and authentication alternatives with consequences and a recommendation. It changes no current authority: `docs/contracts/MIMER_CLIENT_CONTRACT.md`, ADR-0047, and ADR-0056 remain authoritative and MCP is NOT an admitted Mimer client transport until an owner-decision receipt on #3371 accepts one option. Only then may this ADR become Accepted and record supersession precisely. Numbering note: issues #3366–#3371 (and, before the #4320 correction, the specification directory) name this decision "ADR-0058", but ADR-0058 is already taken (event-horizon closure decay); this record is **ADR-0061** and supersedes those stale "ADR-0058" references.
 Doc role: Decision record (ADR)
 Authority: Not authoritative while Proposed — advisory decision-preparation only. If accepted by an owner receipt on #3371, it becomes authoritative for (a) admitting MCP as an additional protocol-tier client adapter over the Mimer client contract, (b) the topology/wire-transport/auth posture of that adapter, and (c) the fixed operation boundary of the external MCP surface. It never becomes an independent authority path: the adapter delegates to the operations and authority envelope of `docs/contracts/MIMER_CLIENT_CONTRACT.md` and creates no second knowledge API or vault-write path.
 Owner: Architecture (Rasmus)
@@ -244,10 +244,11 @@ under ADR-0047 Rule 4.
   wins.
 - **If declined:** MCP stays deferred; ADR-0056's HTTP + direct-FS transport set and ADR-0047's
   deferral both stand unchanged; #3368–#3370 remain blocked and #3366 stays a blocked validation hub.
-- **Numbering debris cleared:** issues #3366–#3371 and the `MIMER_MCP_CLIENT_ADAPTER/` spec docs
-  reference "ADR-0058" for this decision; that number belongs to event-horizon closure decay. This
-  record is ADR-0061 and supersedes those references; the spec's `ADR-0058-...` filename anchors
-  should be read as pointing here until they are corrected in a follow-up docs pass.
+- **Numbering debris cleared:** issues #3366–#3371 reference "ADR-0058" for this decision; that
+  number belongs to event-horizon closure decay. This record is ADR-0061 and supersedes those
+  stale issue-text references, which should be read as pointing here. The
+  `MIMER_MCP_CLIENT_ADAPTER/` spec docs' filename and decision-number anchors were corrected to
+  ADR-0061 by the #4320 docs pass.
 
 ## Owner decision receipt
 
