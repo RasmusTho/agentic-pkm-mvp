@@ -233,3 +233,5 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The governance-lane plan treated `tests/governance/test_autonomous_escalation_contract.py` as a directly related governance test, but the live `pr-contract` allowlist rejected that path.
 **Upstream artifact:** `docs/development/DEV_WORKFLOW.md :: Governance lane` — keep the documented governance-test surface aligned with the enforced `pr-contract` allowlist or make the path mismatch explicit before publication.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: implicit host-stable store selection was refused because the required same-user/same-host cutover acknowledgement or explicit BuilderOps state path is absent.
+
+--- retro 2026-08-03: processed 3/3 compatibility fallback entries ---
