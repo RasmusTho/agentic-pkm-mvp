@@ -3,7 +3,7 @@ name: Connect CKM Initiation and Delivery Receipts
 description: Let CKM draft and display delivery initiation and receipts through a separate governed boundary.
 task_id: DDO-06
 github_issue: 4169
-source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Architecture reconciliation after DDO-03
+source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Architecture reconciliation for autonomous scheduled bug delivery
 parent_capability: Deterministic Delivery Orchestration
 prerequisites: [DDO-02, DDO-05]
 depends_on: [DEFINE_CARRIER_NEUTRAL_DELIVERY_CONTRACTS.md, BIND_DELIVERY_EFFECTS_TO_BUILDEROPS_RECONCILIATION.md]
@@ -31,6 +31,9 @@ HTML a delivery control plane.
   polling or mutating static cockpit.
 - Projects terminal `DeliveryReceipt.v2` evidence back into CKM with source links, freshness, and
   explicit derived/non-authoritative framing.
+- Projects additive attempt-terminal evidence, observed outcome quality, failure mechanism,
+  coordinator/worker model and reasoning, human intervention, retries, lead time, and limitations
+  into an explainable TCD capability recommendation for later approved deliveries.
 - Fires a reevaluation signal when terminal delivery evidence contradicts or advances a CKM
   capability claim, retains the last-good generated artifact on render failure, and provides manual
   regeneration fallback.
@@ -65,7 +68,8 @@ authorization, execution, and evidence remain separate.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_acceptance_profile_reference_is_exact_across_handoff`.
 - [ ] The operator surface derives **AI can continue**, **Needs your decision**, and **Blocked by
   evidence/system** only from explicit typed authority/gate state; missing, conflicting, or
-  ambiguous authority fails closed to **Needs your decision**.
+  ambiguous technical authority fails closed to **Blocked by evidence/system**. **Needs your
+  decision** requires one explicit canonical Human Exception authority category.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_owner_action_language_is_rule_derived_and_fail_closed`.
 - [ ] Specs, code, tests, acceptance evidence, gaps, and freshness are exposed as distinct
   capability proof groups rather than inferred from one aggregate score.
@@ -76,6 +80,14 @@ authorization, execution, and evidence remain separate.
 - [ ] Receipt projection preserves exact source refs, freshness, limitations, and non-authority
   framing.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_delivery_receipt_projection_is_explainable_and_non_authoritative`.
+- [ ] Capability routing consumes immutable terminal delivery evidence and can recommend
+  Luna/low, Terra/medium, or a justified escalation with TCD reasons. CKM has no lease, selection,
+  transition, retry, worker, merge, closure, or release mutation channel.
+  - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_capability_route_uses_terminal_delivery_evidence_without_lifecycle_authority`.
+- [ ] `retriable_technical`, `blocked_technical`, `claim_collision`, and `needs_owner` render as
+  distinct outcomes; technical ambiguity never renders as `needs_owner` without the canonical
+  authority classification.
+  - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_technical_ambiguity_does_not_render_as_needs_owner`.
 - [ ] Terminal evidence creates a CKM reevaluation signal; failed regeneration retains the last-good
   snapshot with failure evidence and manual regeneration remains available.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_terminal_evidence_refreshes_or_preserves_last_good`.
@@ -94,6 +106,8 @@ authorization, execution, and evidence remain separate.
 
 - Turning Direction B HTML into an interactive control plane.
 - Automatic prioritization from CKM scores.
+- Selecting Issues, interpreting observed delivery success as lifecycle authority, or using
+  LearningSignals/retrospectives as live coordination state.
 - Product/Runtime UI or memory changes.
 - Choosing the durable intent carrier in this slice unless the preceding semantic gate has resolved
   it.
@@ -106,6 +120,7 @@ authorization, execution, and evidence remain separate.
 - `docs/adr/ADR-0057-capability-knowledge-model-kvasir.md`
 - `.codex/skills/yggdrasil-design-handoff/SKILL.md`
 - `docs/audits/BUILDER_DELIVERY_AGENT_OS_2026-07-28.md`
+- `docs/audits/AUTONOMOUS_BUG_DELIVERY_ARCHITECTURE_2026-08-05.md`
 
 ## Related GitHub Issues
 

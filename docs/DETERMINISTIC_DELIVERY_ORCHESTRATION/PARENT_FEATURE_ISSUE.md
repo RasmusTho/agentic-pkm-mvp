@@ -1,4 +1,4 @@
-State: Active blocked validation hub #4163. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is delivered by PR #4252; its deferred autonomous CI retry loop is #4466.
+State: Active blocked validation hub #4163. DDO-01 through DDO-04 are delivered; DDO-05 through DDO-07 and the deferred autonomous CI retry #4466 remain blocked. The 2026-08-05 architecture reconciliation makes scheduled bug delivery a strict-serial DDO profile rather than a separate state machine.
 Doc role: Parent validation-hub contract
 Authority: The capability README owns stable decomposition. The live GitHub parent owns backlog and validation state after filing.
 
@@ -19,6 +19,8 @@ reconciliation, and receipts.
 - Reuse #3229 and BuilderOps control-plane/outbox work rather than reopening or duplicating it.
 - Integrate the separately governed review-severity and known-defect contracts.
 - Promote owner docs only after the final acceptance task.
+- Reconcile the seven observed scheduled bug runs into DDO-05 through DDO-07 and the existing
+  #3603/#3604/#3793/#4217/#4466 dependencies without creating a duplicate bug-runner task.
 
 ## Source Anchors
 
@@ -49,8 +51,8 @@ reconciliation, and receipts.
 ## Constraints
 
 - Parent is a validation hub and never receives `agent:ready`.
-- After the 2026-07-28 reconciliation, only DDO-04 may become ready; later children remain serially
-  dependency-blocked.
+- DDO-05 through DDO-07 remain serially dependency-blocked until their live prerequisite and
+  readiness reconciliation succeeds.
 - GitHub, dispatcher leases, PR heads, CI, review, merge, and closure evidence remain authoritative.
 - Do not create a new journal/outbox when the #3792 substrate satisfies the required conformance.
 - Do not mutate the static CKM Direction B cockpit.
@@ -66,6 +68,10 @@ reconciliation, and receipts.
   - Verify: DDO-07 acceptance report and linked `DeliveryReceipt.v2` artifacts.
 - [ ] CKM initiation and receipt projection preserve the non-authority boundary.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py`.
+- [ ] One 4–8 Issue scheduled `type:bug` pilot is strictly serial, resumes before selection,
+  survives concurrent ticks and detached-worktree bootstrap, and releases only after the complete
+  terminal/owner-doc receipt chain.
+  - Verify: `autonomous_bug_delivery_pilot.v1` linked here.
 - [ ] Owner-doc truth is promoted only after capability acceptance.
   - Verify: final owner-doc PR and post-merge receipts linked here.
 
@@ -75,6 +81,8 @@ reconciliation, and receipts.
 - A second BuilderOps control plane or outbox.
 - A new hosted dashboard.
 - Automatic issue prioritization from CKM maturity or gap scores.
+- A prompt-local bug lifecycle state machine or universal serial gate over unrelated direct manual
+  pickup.
 - Weakening review, merge, or closure policy.
 
 ## Suggested Validation
@@ -89,6 +97,7 @@ reconciliation, and receipts.
 - `docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md`
 - `docs/architecture/SBS_OPERATING_MODEL.md`
 - `docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md`
+- `docs/audits/AUTONOMOUS_BUG_DELIVERY_ARCHITECTURE_2026-08-05.md`
 
 ## Applies learning (optional)
 
@@ -98,15 +107,15 @@ reconciliation, and receipts.
 
 ## Implementation Tasks
 
-| Task | Issue | Live lifecycle on 2026-07-28 | Dependency |
+| Task | Issue | Live lifecycle on 2026-08-05 | Dependency |
 | --- | --- | --- | --- |
 | DDO-01 — independent-Issue fast lane | #4164 | delivered/closed | #4161 |
 | DDO-02 — carrier-neutral delivery contracts | #4165 | delivered/closed by PR #4176 | none |
 | DDO-03 — immutable plan compiler | #4166 | delivered/closed by PR #4226 | #4165 |
 | DDO-04 — deterministic reducer | #4167 | delivered by PR #4252; autonomous CI retry deferred to #4466 | delivered #4164 and #4166 |
-| DDO-05 — BuilderOps reconciliation binding | #4168 | next serial slice; also unblocks #4466 | #4167; reconcile timing with #3793 |
+| DDO-05 — BuilderOps reconciliation binding | #4168 | blocked; also unblocks #4466 | #3603/#3604 readiness and #3793 timing must be reconciled; reuses #3792 |
 | DDO-06 — CKM initiation/receipt bridge | #4169 | blocked | #4165 and #4168 |
-| DDO-07 — TCD/recovery acceptance | #4170 | blocked | #4164 through #4169 |
+| DDO-07 — TCD/recovery acceptance | #4170 | blocked | #4164 through #4169 plus #3604 terminal integration, #4217 substantive evidence, and cutover proof |
 
 Live lifecycle and receipt state is maintained on parent
 [#4163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4163).

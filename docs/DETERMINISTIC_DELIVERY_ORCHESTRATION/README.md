@@ -1,11 +1,11 @@
-State: Active target-state specification. Parent #4163 owns live validation state. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is delivered by PR #4252, which defers the autonomous CI-failure retry loop to #4466; #4168–#4170 and #4466 remain dependency-blocked.
+State: Active target-state specification. Parent #4163 owns live validation state. DDO-01 #4164, DDO-02 #4165, and DDO-03 #4166 are delivered; DDO-04 #4167 is delivered by PR #4252, which defers the autonomous CI-failure retry loop to #4466; #4168–#4170 and #4466 remain dependency-blocked. The 2026-08-05 autonomous-bug-delivery reconciliation extends DDO-05 through DDO-07 without creating a separate bug-runner state machine.
 Doc role: Builder System capability specification
 Authority: Owns the bounded target, decomposition, cross-task invariants, verification path, and acceptance path for deterministic issue-set delivery. GitHub Issues own executable task state after filing.
 Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: this directory for the capability contract; live GitHub, dispatcher, CI, PR, review, merge, and closure evidence for delivery truth
-Last reviewed: 2026-07-28
+Last reviewed: 2026-08-05
 
 # Deterministic Delivery Orchestration
 
@@ -38,6 +38,12 @@ Product/Runtime behavior, user memory, Human Knowledge Artifact authority, or Pr
   control-plane parent [#3788](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3788) delivered
   the PostgreSQL transaction/outbox kernel. This capability adds a delivery reducer and adapters
   over that substrate; it does not build a second journal/outbox.
+- Open [#3604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3604) already owns idempotent
+  orphaned post-merge closure and the owner-doc receipt gate. DDO binds its attempt to that terminal
+  result; it does not define a second closure policy.
+- Closed [#4248](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4248) is the transitional fresh
+  Codex-session launcher. DDO-05 absorbs its useful carrier seam and replaces its explicitly
+  out-of-scope worktree/resume behavior with the shared prepared-invocation contract.
 - [PR #4159](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4159) owns review-severity routing.
 - [PR #4161](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4161) owns deterministic known-defect
   intake. This capability consumes those contracts and does not redefine their registry.
@@ -77,6 +83,8 @@ coordination:
 - typed pause, resume, cancel, and supersede commands plus a separate active-run projection;
 - additive `DeliveryReceipt.v2` with immutable acceptance-profile, supersession, TCD, exception,
   review, known-defect, and provenance evidence; and
+- additive `DeliveryAttemptTerminalReceipt.v1` joining the delivery receipt to lane, closure,
+  owner-doc, and no-delivery release evidence without reinterpreting v1/v2 bytes; and
 - separate CKM drafting/approval/receipt projection without cockpit mutation.
 
 ## Architecture modules
@@ -88,7 +96,7 @@ coordination:
 | Plan compiler | Pure scope resolution, readiness checks, dependency waves, exclusions, and typed rejection | Claims, launches, GitHub writes | Planning rules |
 | Delivery reducer | Allowed state transitions and next-effect decisions | Provider execution or authority mutation | State-machine policy |
 | Effect adapters | Claim, worker correlation, CI/review wait, merge/closure calls | Deciding whether an effect is allowed | External integration |
-| BuilderOps journal/outbox binding | Fencing, idempotency, effect durability, unknown-state reconciliation | GitHub delivery authority | Crash safety and concurrency |
+| BuilderOps journal/outbox binding | Fencing, idempotency, repo-scoped delivery-lane lease, attempt/effect durability, unknown-state reconciliation | GitHub delivery authority or a second delivery state machine | Crash safety and concurrency |
 | CKM bridge | Draft, preview, authenticated initiation handoff, and receipt projection | Delivery execution or static cockpit mutation | Operator overview and initiation |
 | TCD/acceptance harness | Baseline, pilot metrics, fault tests, and capability acceptance | Runtime scheduling | Evidence and rollout |
 
@@ -111,10 +119,10 @@ The owner-facing language is deliberately narrower than the internal state machi
 
 - **AI can continue** means an explicit authority rule and every deterministic gate authorize the
   next bounded effect;
-- **Needs your decision** means a named rule reserves the decision for the owner, or authority rules
-  are missing, conflicting, or ambiguous; and
-- **Blocked by evidence/system** means neither a model nor the owner can legitimately skip the
-  missing proof or unavailable dependency.
+- **Needs your decision** means a named rule reserves the decision for the owner, or contradictory
+  source authority requires owner resolution; and
+- **Blocked by evidence/system** means neither a model nor the owner can legitimately skip missing
+  proof, unavailable dependencies, technical ambiguity, or a fail-closed recovery gap.
 
 The renderer does not infer which label applies.
 
@@ -193,6 +201,32 @@ The renderer does not infer which label applies.
   binding through run-version fencing, and `DeliveryReceipt.v2` repeats it. Reducer terminality
   follows that profile, while lower-level Issue, PR, CI, review, merge, and closure facts remain
   explicit and unchanged.
+- **INV-DDO-18 — lane seriality is fenced and subordinate.** A repository-scoped generic
+  `delivery-lane:type:bug` lease binds at most one current participating scheduled DDO bug-delivery
+  attempt. Its holder/fence is required for that profile's progress but cannot authorize a task,
+  dispatcher, GitHub, worker, merge, or closure effect by itself and does not govern unrelated
+  direct/manual pickup.
+- **INV-DDO-19 — reconcile precedes selection.** Every scheduled tick resumes the current attempt
+  or observes and waits on a foreign live bug claim, worker, PR, or incomplete closure before
+  compiling a new selection. Foreign work is never adopted or taken over. An absent cron process
+  or stale local memory never implies an empty lane.
+- **INV-DDO-20 — worker preparation precedes claim; activation follows it.** A versioned prepared
+  receipt binds one dormant Codex invocation/thread, project worktree, unique branch, base SHA, and
+  one `prepared` generation in the existing worktree lifecycle registry without Issue, edit, turn,
+  or active-worker authority. Dispatcher claim must read back successfully before that same
+  generation is promoted `active` and the same invocation receives implementation authority.
+- **INV-DDO-21 — terminal closure precedes lane release.** A PR-bearing attempt is not terminal
+  until its exact merge/closure identity, dispatcher and label state, worktree lifecycle, required
+  spec writeback, PR-specific owner-doc receipt, and one additive
+  `DeliveryAttemptTerminalReceipt.v1` referencing the immutable `DeliveryReceipt.v2` are read back.
+  A no-delivery terminal proves zero unresolved effects, claims, workers, and undisposed prepared
+  worktrees. Existing `DeliveryReceipt.v1`/`v2` bytes retain their original meaning.
+- **INV-DDO-22 — evaluation is not lifecycle.** CKM capability/TCD recommendations,
+  `DeliveryRunView`, LearningSignals, retrospectives, automation memory, and provider prose are
+  derived evidence only. None can select, claim, transition, retry, release, merge, or close.
+- **INV-DDO-23 — selection requires prior authority.** The scheduler selects only inside an exact
+  approved request, plan, and profile. The cron trigger and CKM cannot authorize a backlog-wide
+  search. The durable carrier for that approval remains the governed DDO-06 initiation boundary.
 
 ### Partial-failure paths
 
@@ -219,6 +253,13 @@ The renderer does not infer which label applies.
   unknown/committed effect, then stop before the next unauthorized effect.
 - A child merges while the parent remains incomplete: record a child receipt and keep the parent
   open; no full-capability owner-doc promotion occurs.
+- Two scheduled bug ticks overlap: one generic lane fence wins; the loser records a no-dispatch
+  trigger receipt and exits without selection, claim, or worker preparation.
+- A prepared Codex project worktree is detached or an earlier branch/worktree exists: bind a unique
+  branch and prepared receipt only when the checkout is clean and unowned. Preserve a foreign,
+  dirty, locked, claimed, or PR-bound checkout and report `claim_collision`; never overwrite it.
+- A PR merges before the owner-doc receipt is written: keep the same attempt and lane active, route
+  the missing suffix through #3604, and release only after exact receipt readback.
 
 ## Implementation tasks and execution order
 
@@ -270,6 +311,43 @@ resolves the seam between the delivered contracts/compiler and the remaining run
 remain readable history. DDO-04 may add compatible versioned contracts, including
 `DeliveryReceipt.v2`, but it must not silently reinterpret existing v1 bytes.
 
+## Architecture reconciliation for autonomous scheduled bug delivery
+
+The evidence-backed audit
+[`AUTONOMOUS_BUG_DELIVERY_ARCHITECTURE_2026-08-05.md`](../audits/AUTONOMOUS_BUG_DELIVERY_ARCHITECTURE_2026-08-05.md)
+makes the scheduled Luna/low bug coordinator a thin DDO trigger:
+
+1. BuilderOps generic lease resource `delivery-lane:type:bug` provides repo-scoped serial admission;
+   the lane fence is an additional gate and never substitutes for task/dispatcher/outbox/GitHub
+   authority.
+2. Every trigger first reads the lane plus dispatcher, GitHub, worker, Git/worktree, outbox, and
+   closure truth. It resumes only the same attempt and otherwise waits on foreign work before a new
+   Issue can be selected.
+3. The attempt carries one append-only identity graph from lane fence and DDO run through Issue contract,
+   dispatcher lease, worker invocation/Codex thread, prepared worktree/branch/base, post-claim
+   lifecycle generation, PR/head/checks, merge, closure, owner-doc receipt, and terminal receipt.
+   A new PR head appends new proof and invalidates old head-bound CI/review evidence.
+4. Normal detached Codex project-worktree bootstrap uses a versioned `preparing` reducer phase, one
+   dormant invocation, one prepared receipt, and one `prepared` generation in the existing
+   worktree registry before claim. Preparation may establish a clean unique branch but grants no
+   claim, edit, turn, or active-worker authority. Successful dispatcher claim promotes the same
+   generation `active` and activates the same invocation.
+5. Existing #3604 owns merged-but-incomplete closure recovery. DDO-05 binds the attempt to that
+   result; missing PR-specific owner-doc receipt keeps the attempt and lane non-terminal.
+6. `retriable_technical`, `blocked_technical`, `claim_collision`, and `needs_owner` are distinct.
+   Only the last uses Human Exception, and only for the canonical explicit authority categories.
+7. CKM consumes terminal receipts for capability/TCD routing and reevaluation but never becomes
+   lifecycle authority. BuilderOps Vault learning remains retrospective.
+8. Selection occurs only within an exact approved delivery request/plan/profile. The scheduled
+   trigger does not turn an unfenced prompt or CKM score into authority; DDO-06 still owns the
+   durable initiation-carrier decision.
+
+This profile creates no eighth DDO task. DDO-05 owns mechanism, DDO-06 owns CKM evidence routing,
+and DDO-07 owns the strict-serial pilot. #3603/#3793 still own control-plane completion/cutover,
+#3604 owns closure recovery, and #4466 owns durable CI repair identity. #3690 owns BCP-specific
+control-plane owner-doc enactment; DDO-07/#4163 retain DDO acceptance, SBS reconciliation, and DDO
+owner-doc promotion.
+
 ### Per-child TCD capability routing
 
 These are non-binding pickup hints. `issue-to-code` re-derives the route from live risk and artifact
@@ -297,6 +375,10 @@ scope.
 - stronger capability reserved for contract/state-machine design and risk review; isolated
   mechanical slices use the balanced default capability.
 
+The scheduled `type:bug` profile is stricter than the generic fast-lane pilot: it permits exactly
+one active bug-delivery attempt per repository. DDO-07 evaluates that strict-serial 4–8 Issue run
+separately; it does not reinterpret the generic independent-set max-parallel-two profile.
+
 ## TCD measurement
 
 Every pilot receipt records:
@@ -308,6 +390,9 @@ Every pilot receipt records:
 - CI wait cycles and wall time;
 - review/repair rounds;
 - duplicate claim, worker, PR, merge, or closure attempts;
+- lane contention, same-attempt resume/foreign-wait outcomes, prepared-versus-active worker
+  transitions, and
+  post-merge closure suffix latency;
 - known P2 dispositions;
 - escaped P0/P1 defects or false-green evidence; and
 - total lead time from approved plan to terminal receipt.
@@ -338,6 +423,10 @@ follow-up decision; it does not justify weakening quality gates.
 - [ ] Crash injection before effect, after external effect, and before receipt converges without
   duplicate workers, merges, or closures.
   Verify: `tests/builderops/test_delivery_orchestration_recovery.py`.
+- [ ] A 4–8 Issue scheduled bug profile runs strictly serially, resumes before selection, survives
+  detached worktree bootstrap and concurrent ticks, and releases each lane only after the exact
+  terminal closure chain.
+  Verify: `autonomous_bug_delivery_pilot.v1` receipt linked from the parent.
 - [ ] CKM can draft and preview initiation, an authenticated boundary can start the same immutable
   payload, and a receipt projects back without giving CKM delivery authority.
   Verify: `tests/builderops/ckm/test_delivery_bridge.py`.
@@ -356,14 +445,14 @@ bounded residual work, and triggers owner-doc promotion only when the capability
 
 ## Relationship to GitHub Issues
 
-| Role | Issue | Live lifecycle on 2026-07-28 |
+| Role | Issue | Live lifecycle on 2026-08-05 |
 | --- | --- | --- |
 | Parent validation hub | [#4163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4163) | `agent:blocked`; never a pickup Issue |
 | DDO-01 independent-Issue fast lane | [#4164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4164) | delivered and closed |
 | DDO-02 carrier-neutral contracts | [#4165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4165) | delivered by [PR #4176](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4176) and closed |
 | DDO-03 plan compiler | [#4166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4166) | delivered by [PR #4226](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4226) |
 | DDO-04 reducer | [#4167](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4167) | delivered by [PR #4252](https://github.com/RasmusTho/agentic-pkm-mvp/pull/4252); autonomous CI retry deferred to [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) |
-| DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | next serial slice; timing reconciles with #3793; unblocks [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) |
+| DDO-05 BuilderOps binding | [#4168](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4168) | blocked pending prerequisite/readiness reconciliation with #3603/#3604/#3793; unblocks [#4466](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4466) |
 | DDO-06 CKM bridge | [#4169](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4169) | blocked on #4168 |
 | DDO-07 acceptance | [#4170](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4170) | blocked on #4167–#4169 |
 
@@ -385,3 +474,4 @@ specification publication.
 - `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
 - `docs/CKM_COCKPIT_DIRECTION_B/README.md`
 - `docs/audits/BUILDER_DELIVERY_AGENT_OS_2026-07-28.md`
+- `docs/audits/AUTONOMOUS_BUG_DELIVERY_ARCHITECTURE_2026-08-05.md`

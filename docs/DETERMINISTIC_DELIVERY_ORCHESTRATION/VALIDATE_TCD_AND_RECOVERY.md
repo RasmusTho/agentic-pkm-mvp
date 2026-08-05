@@ -22,6 +22,11 @@ Accept the capability on measured delivery outcomes rather than architecture cla
 
 - Captures a comparable baseline from recent issue-set delivery evidence.
 - Runs one 4–8 Issue fast-lane pilot and one full-kernel pilot when suitable ready work exists.
+- Uses the seven observed scheduled bug selections (#4614, #4562, #4195, #4612, #4618, #4622,
+  and #4611) as the explicit pre-change baseline, including stale contract, worker-start timeout,
+  detached checkout collision, incomplete owner-doc closure, and complete terminal-chain outcomes.
+- Runs a separate 4–8 Issue strict-serial scheduled `type:bug` pilot with Luna/low coordination and
+  normal Terra/medium implementation, escalating capability only from recorded TCD risk evidence.
 - Runs the full crash/reconciliation matrix in a non-production environment.
 - Runs the worker-runtime conformance matrix against the native carrier and any optional candidate
   carrier.
@@ -55,6 +60,24 @@ cost or risk elsewhere.
   - Verify: acceptance report linked on the parent Issue.
 - [ ] Crash injection and recovery tests produce zero duplicate logical effects.
   - Verify: `tests/builderops/test_delivery_orchestration_recovery.py`.
+- [ ] An `autonomous_bug_delivery_pilot.v1` receipt compares all seven baseline selections with the
+  strict-serial pilot and binds every scheduler tick, lane/run/attempt, Issue, dispatcher claim,
+  worker/thread, worktree generation, branch, PR/head/CI, merge, closure, owner-doc, and terminal
+  receipt identity.
+  - Verify: receipt linked on the parent Issue with source refs for each baseline and pilot run.
+- [ ] Concurrent scheduler ticks and restart at lane claim, attempt genesis, preparation, claim,
+  activation, PR, merge, owner-doc, and terminal receipt converge to one active attempt and zero
+  duplicate workers, claims, PRs, merges, or closures.
+  - Verify: `tests/builderops/test_delivery_orchestration_recovery.py::test_scheduled_bug_lane_restart_matrix_converges`.
+- [ ] Detached project-worktree bootstrap and a pre-existing branch/worktree collision prove
+  `prepared`→claim→same-generation `active` behavior; foreign work is observed/waited on and never
+  adopted or overwritten.
+  - Verify: `tests/builderops/test_delivery_worker_runtime.py::test_scheduled_bug_pilot_detached_and_collision_fixtures`.
+- [ ] A merged PR with a missing owner-doc receipt keeps the same attempt/lane occupied, and exact
+  receipt insertion lets #3604 closure recovery produce one terminal release.
+  - Verify: `tests/dispatcher/test_closure_consumer.py::test_active_delivery_attempt_waits_for_owner_doc_receipt_before_lane_release` using
+    `tests/dispatcher/fixtures/closure/merged_missing_owner_doc_4612.json` and
+    `tests/dispatcher/fixtures/closure/merged_missing_owner_doc_4618.json`, plus the pilot receipt.
 - [ ] Request → preview → exact approval is proven without preapproval mutation or stale-authority
   reuse.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_request_preview_approval_chain_is_exact_and_fresh`.
@@ -86,6 +109,8 @@ cost or risk elsewhere.
 ## Out of Scope
 
 - Expanding pilot concurrency above two.
+- Treating the generic max-parallel-two fast-lane profile as permission for more than one scheduled
+  bug attempt, or enforcing the scheduled lane on unrelated direct manual pickup.
 - Production deployment or stable promotion.
 - Hiding missed targets by changing metric definitions after the run.
 - Keeping the parent open for indefinite observation after repo-verifiable acceptance.
@@ -111,6 +136,7 @@ delaying the native path.
 - `docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md`
 - `AGENTS.md :: Total Cost of Development`
 - `docs/development/DELIVERY_FEEDBACK_LOOP.md`
+- `docs/audits/AUTONOMOUS_BUG_DELIVERY_ARCHITECTURE_2026-08-05.md`
 
 ## Related GitHub Issues
 
