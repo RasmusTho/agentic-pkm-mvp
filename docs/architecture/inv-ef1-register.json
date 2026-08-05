@@ -1808,6 +1808,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "tests/architecture/test_sbs_operating_model_bifrost_tracking.py",
+      "category": "iv",
+      "why_load_bearing": "The guard test mirrors ADR-0050's hub-tracking condition, which names the Bifrost client repo; repo-coordination lineage, not an operator-bound host detail.",
+      "disposition": "stay",
+      "issue": "#4327"
+    },
+    {
       "artifact": "tests/builderops/test_epic_run_state.py",
       "category": "iii",
       "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
