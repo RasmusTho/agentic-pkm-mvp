@@ -149,6 +149,23 @@ def test_scan_injects_uuid_and_upserts(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert "uuid:" in note.read_text(encoding="utf-8")
 
 
+def test_scan_skips_engine_owned_question_notes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    questions = vault / "questions"
+    questions.mkdir(parents=True)
+    note = questions / "sq-1.md"
+    note.write_text("---\nquestion_id: sq-1\nstatus: open\n---\n\nQuestion", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda _: False)
+    port = RecordingVaultPort()
+    watcher.scan_once(port)
+
+    assert not port.upserts
+    assert "uuid:" not in note.read_text(encoding="utf-8")
+    assert str(note) not in watcher.STATE
+
+
 def test_rename_only_updates_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()

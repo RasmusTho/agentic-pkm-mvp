@@ -96,6 +96,8 @@ def scan_once(port: VaultPort | None = None) -> None:
     for note_path in VAULT.rglob("*.md"):
         if any(part.startswith(".obsidian") for part in note_path.parts):
             continue
+        if "questions" in note_path.relative_to(VAULT).parts:
+            continue
         current_paths.add(str(note_path))
         if _ensure_uuid(note_path, resolved_port):
             continue
