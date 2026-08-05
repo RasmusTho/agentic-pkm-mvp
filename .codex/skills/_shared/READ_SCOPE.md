@@ -32,15 +32,16 @@ depends on the diff class:
   ("Skills consistency lint"), "Doc integrity", and `tests/architecture/test_pr_hot_path_governance.py`
   ("Hot path governance architecture test").
 - Only when the diff touches code paths matched by the `code` filter in `ci-smoke.yaml`: CI's
-  `Unit tests (not pg)` job (`pr-unit-tests-not-pg`); an instruction-file-only diff
-  (`.codex/**`, `AGENTS.md`, `CLAUDE.md`, `docs/**`) does not trip this filter, so this job's real
-  steps do not run against such a diff.
+  `Unit tests (not pg)` job (`pr-unit-tests-not-pg`). Its filter includes instruction and docs
+  surfaces — `AGENTS.md`, `CLAUDE.md`, `.codex/**`, and `docs/**` — so those diffs run the job's
+  focused test selection as well.
 - Only when the diff touches the release/promotion harness surface named in
   `harness-selfverify.yml`'s `paths:` trigger (for example `tests/uat/**`, `app/ops/**`,
   `.codex/skills/promote-to-test/**`) or via its cron/manual dispatch: the `harness-selfverify`
   workflow.
-- Only via manual `workflow_dispatch` (`architecture-ci.yaml` has no `pull_request` trigger):
-  `scripts/docs_guard.py`.
+- Only on governance/docs-only pull requests (`governance_docs == true` and `heavy_smoke != true`):
+  the `smoke` job runs `scripts/docs_guard.py`. The same guard also remains available through manual
+  `workflow_dispatch` in `architecture-ci.yaml`.
 - The branch-truth gate and the verification step in `verification-and-closure` apply per their own
   governing procedures.
 

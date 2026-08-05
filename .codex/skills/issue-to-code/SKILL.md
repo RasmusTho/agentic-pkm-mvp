@@ -30,6 +30,10 @@ This skill inlines the rules a normal slice needs from
 either parent document. Read the parent section only when the inlined rule is genuinely
 insufficient for the case in front of you.
 
+For accepted constituent repository work, also read
+`docs/architecture/SBS_OPERATING_MODEL.md :: Cross-repo constituent-surface scope` to classify the
+constituent surface and its governing route correctly.
+
 ## Pre-implementation classification check
 
 Before claiming an Issue or producing any implementation, answer the following. Stop as indicated if the answer is unresolvable.
