@@ -838,6 +838,45 @@ def test_first_upgrade_seeds_all_legacy_channel_owners_before_claim(tmp_path) ->
         )
 
 
+@pytest.mark.parametrize("native_first", [True, False])
+def test_first_upgrade_allows_native_and_release_channel_shared_root(tmp_path, native_first) -> None:
+    host_global = tmp_path / "host-global"
+    root = tmp_path / "shared"
+    root.mkdir()
+    owners = [
+        LegacyOwner("native", "legacy-native", root),
+        LegacyOwner("prod", "legacy-prod", root),
+    ]
+    if not native_first:
+        owners.reverse()
+
+    snapshot = OwnershipLedger(host_global).bootstrap_legacy_owners(
+        owners,
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    assert {
+        lease.channel_id for lease in snapshot.leases.values()
+    } == {"native", "prod"}
+
+
+def test_first_upgrade_still_rejects_release_channel_shared_root(tmp_path) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    with pytest.raises(LedgerCollisionError, match="overlap"):
+        OwnershipLedger(tmp_path / "host-global").bootstrap_legacy_owners(
+            [
+                LegacyOwner("dev", "legacy-dev", root),
+                LegacyOwner("prod", "legacy-prod", root),
+            ],
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+
 def test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed(tmp_path) -> None:
     runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
     root = tmp_path / "vault"

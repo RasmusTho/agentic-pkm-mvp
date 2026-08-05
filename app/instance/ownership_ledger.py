@@ -28,6 +28,7 @@ from app.instance.filesystem_identity import (
 LEDGER_SCHEMA = "agentic-pkm.host-ownership-ledger.v1"
 KEY_SCHEMA = "agentic-pkm.host-ownership-key.v1"
 ROTATION_SCHEMA = "agentic-pkm.host-ownership-key-rotation.v1"
+_RELEASE_CHANNELS = frozenset({"dev", "prod", "test"})
 
 
 class LedgerError(RuntimeError):
@@ -1035,6 +1036,14 @@ class OwnershipLedger:
                 allow_same_channel_nested
                 and not exact
                 and lease.channel_id == candidate.channel_id
+            ):
+                continue
+            if (
+                lease.channel_id == "native"
+                and candidate.channel_id in _RELEASE_CHANNELS
+            ) or (
+                candidate.channel_id == "native"
+                and lease.channel_id in _RELEASE_CHANNELS
             ):
                 continue
             raise LedgerCollisionError("canonical content roots overlap across ownership domains")
