@@ -414,8 +414,9 @@ decision 2026-08-02 on epic #2778): this table's strict v6.1-follows-seams readi
 the owner-decided parallel-tracks sequencing — v6.1 chat-mutation/capability-consumption surfaces
 and substrate closeout (kernel closeout, property layer, backup) run on parallel tracks, not
 substrate-first-then-v6.1, with the substrate track keeping its own internal ordering. This table
-row is not rewritten to preserve its historical seam-baseline record; the evolution graph is the
-sequencing authority going forward.
+row is retained as historical seam-baseline context, not current sequencing authority. The
+parallel-tracks decision recorded here is this roadmap's current sequencing rule; the evolution
+graph remains advisory decision evidence.
 
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`
