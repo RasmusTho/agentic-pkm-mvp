@@ -1093,7 +1093,7 @@ def test_steering_log_active_state_dominates_clean_interleaving(
         real_witness_write = write_ops_module._write_host_witness_state
 
         def crash_before_active_app_write(*args: object) -> None:
-            payload = args[2]
+            payload = args[3]
             if isinstance(payload, dict) and payload.get("state") == "active":
                 os._exit(95)
             real_app_write(*args)  # type: ignore[arg-type]
@@ -1143,6 +1143,279 @@ def test_steering_log_active_state_dominates_clean_interleaving(
         json.loads(path.read_text())["state"] == "clean"
         for path in _host_witness_paths(vault_root)
     )
+
+
+@pytest.mark.parametrize(
+    "substitution",
+    ["unlink", "valid", "malformed", "hard-link"],
+)
+def test_steering_log_app_state_substitution_before_clean_never_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    substitution: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"app-record-substitution-{substitution}-seed",
+        write_guard=guard,
+    )
+    real_complete = write_ops_module._complete_host_atomic_append_intent
+
+    def substitute_app_record_before_clean(*args: object) -> None:
+        state_path = next(
+            _host_fence_root().glob(".heimdal-atomic-append-*.state")
+        )
+        original = state_path.read_bytes()
+        if substitution == "unlink":
+            state_path.unlink()
+        elif substitution == "valid":
+            payload = json.loads(original)
+            payload["transaction"] = "foreign-clean-transaction"
+            state_path.write_text(
+                json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        elif substitution == "malformed":
+            state_path.write_text("{malformed", encoding="utf-8")
+        else:
+            parked = tmp_path / "parked-app-record.state"
+            linked = tmp_path / "linked-app-record.state"
+            state_path.replace(parked)
+            linked.write_bytes(original)
+            os.link(linked, state_path)
+        real_complete(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        substitute_app_record_before_clean,
+    )
+    with pytest.raises((KnowledgeWriteConflict, KnowledgeCapabilityError)):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "substituted-app-record",
+            source="item",
+            operation_id=f"app-record-substitution-{substitution}-proposal",
+            write_guard=guard,
+        )
+
+    durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert durable.count(
+        f'"operation_id":"app-record-substitution-{substitution}-proposal"'
+    ) == 1
+    assert all(
+        json.loads(path.read_text())["state"] in {"active", "indeterminate"}
+        for path in _host_witness_paths(vault_root)
+    )
+
+
+@pytest.mark.parametrize("mismatch", ["transaction", "payload"])
+def test_steering_log_paired_clean_state_mismatch_blocks_before_active(
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"paired-clean-mismatch-{mismatch}-seed",
+        write_guard=guard,
+    )
+    state_path = next(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    if mismatch == "transaction":
+        payload["transaction"] = "foreign-clean-transaction"
+    else:
+        payload["target_digest"] = "0" * 64
+    state_path.write_text(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="paired host state"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "paired-clean-mismatch",
+            source="item",
+            operation_id=f"paired-clean-mismatch-{mismatch}-proposal",
+            write_guard=guard,
+        )
+
+    durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert f'"operation_id":"paired-clean-mismatch-{mismatch}-proposal"' not in durable
+
+
+def test_steering_log_app_state_substitution_at_active_transition_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="active-transition-substitution-seed",
+        write_guard=guard,
+    )
+    real_prepare = write_ops_module._prepare_host_atomic_append_intent
+
+    def substitute_immediately_before_active(*args: object, **kwargs: object) -> None:
+        state_path = next(
+            _host_fence_root().glob(".heimdal-atomic-append-*.state")
+        )
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        payload["transaction"] = "foreign-before-active"
+        state_path.write_text(
+            json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        real_prepare(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_prepare_host_atomic_append_intent",
+        substitute_immediately_before_active,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="paired host state"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "active-transition-substitution",
+            source="item",
+            operation_id="active-transition-substitution-proposal",
+            write_guard=guard,
+        )
+
+    durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert '"operation_id":"active-transition-substitution-proposal"' not in durable
+
+
+def test_steering_log_app_state_exchange_proves_displaced_record(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="state-exchange-proof-seed",
+        write_guard=guard,
+    )
+    real_exchange = write_ops_module._atomic_host_state_exchange_at
+    substituted = False
+
+    def substitute_after_snapshot_then_exchange(*args: object) -> None:
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            state_path = next(
+                _host_fence_root().glob(".heimdal-atomic-append-*.state")
+            )
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            payload["transaction"] = "foreign-after-snapshot"
+            state_path.write_text(
+                json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        real_exchange(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_host_state_exchange_at",
+        substitute_after_snapshot_then_exchange,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="state changed during transition"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "state-exchange-proof",
+            source="item",
+            operation_id="state-exchange-proof-proposal",
+            write_guard=guard,
+        )
+
+    assert substituted
+    durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert '"operation_id":"state-exchange-proof-proposal"' not in durable
+
+
+@pytest.mark.parametrize("replacement", ["lock-file", "lock-root"])
+def test_steering_log_live_lock_authority_replacement_never_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"live-{replacement}-seed",
+        write_guard=guard,
+    )
+    witness_paths = _host_witness_paths(vault_root)
+    lock_root = witness_paths[0].parent
+    parked_lock_root = tmp_path / "parked-live-lock-root"
+    parked_witness = tmp_path / "parked-live-lock-file"
+    real_complete = write_ops_module._complete_host_atomic_append_intent
+
+    def replace_lock_authority_before_clean(*args: object) -> None:
+        if replacement == "lock-root":
+            lock_root.replace(parked_lock_root)
+            lock_root.mkdir()
+        else:
+            witness_paths[0].replace(parked_witness)
+            witness_paths[0].touch(mode=0o600)
+        real_complete(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        replace_lock_authority_before_clean,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="host witness authority changed"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "live-lock-replacement",
+            source="item",
+            operation_id=f"live-{replacement}-proposal",
+            write_guard=guard,
+        )
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        real_complete,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="host witness is missing"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "live-lock-replacement",
+            source="item",
+            operation_id=f"live-{replacement}-proposal",
+            write_guard=guard,
+        )
+    durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert durable.count(f'"operation_id":"live-{replacement}-proposal"') == 1
 
 
 @pytest.mark.parametrize("fail_write", [1, 2, 3, 4])

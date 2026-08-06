@@ -555,6 +555,7 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
                     bound_authority.assert_live()
                     bound_authority.assert_host_state_live()
                     bound_authority.assert_host_witness_live()
+                    _require_no_host_indeterminate_fence(bound_authority)
                 except KnowledgeWriteConflict:
                     try:
                         _mark_host_atomic_append_indeterminate(
