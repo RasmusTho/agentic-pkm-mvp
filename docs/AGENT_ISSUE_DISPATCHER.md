@@ -681,10 +681,10 @@ suppresses the non-essential open-issues scan, the pull is truncated, not failed
 - `python -m app.dispatcher status --json` exposes an additive read-only `last_sync` summary
   (`last_pull_at`, `sync_result`, `sync_note`, `kill_switch_active`) so pickup tooling can
   distinguish a complete sync from a truncated one without spending GitHub API calls.
-- `scripts/issue_pickup_claim.sh` routes a missing-task claim failure that follows a kill-switch
-  partial sync to explicit GitHub-label-only fallback guidance
-  (`--coordination-mode github-label-only-fallback --fallback-reason kill-switch-partial-sync`)
-  instead of an opaque missing-task failure; `agent:ready` is left untouched on that path.
+- Provider-wide partial-sync metadata is not task-specific absence evidence: the essential
+  `agent:ready` scan still ran. `scripts/issue_pickup_claim.sh` therefore keeps a missing-task claim
+  failure opaque and leaves `agent:ready` untouched instead of advertising a lease-bypassing
+  label-only rerun from the partial row alone.
 
 ## Optional Future Projections
 
@@ -768,8 +768,9 @@ The bootstrap is idempotent and operational-only:
   standalone wrapper around the BuilderOps CLI;
 - it attempts dispatcher GitHub pull-sync only when `gh` is installed, authenticated, and the core
   REST rate limit is above the startup safety threshold;
-- if GitHub access is unavailable, unauthenticated, rate-limited, or sync fails, startup continues
-  and records a degraded BuilderOps bootstrap reason instead of failing the runtime stack.
+- if GitHub access is unavailable, unauthenticated, rate-limited, sync fails, or dispatcher pull
+  reports `sync_result=partial`, startup continues and records a degraded BuilderOps bootstrap
+  reason instead of failing the runtime stack.
 
 The structured receipt is written to `tmp/builderops_startup_status.json` and merged under
 `builderops_bootstrap` in `tmp/startup_status.json`. The receipt is operational coordination state:

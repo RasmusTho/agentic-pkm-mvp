@@ -445,11 +445,16 @@ def test_label_delete_and_release_failure_reports_cleanup_failed_evidence(
     assert "pickup-claim-complete" not in result.stdout
 
 
-def test_kill_switch_partial_sync_routes_to_label_only_fallback(tmp_path: Path) -> None:
-    """When the expected task row is absent and the last dispatcher sync was a
-    kill-switch partial, the wrapper must route to explicit GitHub-label-only
-    fallback guidance instead of an opaque missing-task failure (#4606,
-    lrn_20260730235456_f70f8ccc)."""
+def test_partial_sync_fallback_requires_requested_task_evidence(
+    tmp_path: Path,
+) -> None:
+    """Provider-wide partial sync is not evidence about one requested task.
+
+    The kill switch skips only the non-essential open-issue reconciliation
+    scan; the essential ``agent:ready`` scan still runs. A missing task must
+    therefore remain an opaque claim failure unless task-specific evidence is
+    available, rather than offering a lease-bypassing label-only rerun.
+    """
     worktree, env = _make_harness(
         tmp_path,
         status_json=json.dumps(
@@ -481,20 +486,14 @@ def test_kill_switch_partial_sync_routes_to_label_only_fallback(tmp_path: Path) 
 
     assert result.returncode != 0
     assert "pickup-claim-complete" not in result.stdout
-    # The failure names the real cause, machine-readably.
-    assert "cause=kill-switch-partial-sync" in result.stderr
-    assert "sync_result=partial" in result.stderr
-    assert "kill_switch_active=true" in result.stderr
-    # Explicit label-only fallback routing guidance with the exact rerun.
-    assert "--coordination-mode github-label-only-fallback" in result.stderr
-    assert "--fallback-reason kill-switch-partial-sync" in result.stderr
-    assert "--issue 3301" in result.stderr
-    # No label mutation happened on this path.
+    assert "cause=kill-switch-partial-sync" not in result.stderr
+    assert "--coordination-mode github-label-only-fallback" not in result.stderr
+    assert "dispatcher claim failed for expected task" in result.stderr
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
     assert "gh api --method DELETE" not in commands
 
 
-def test_missing_task_without_partial_sync_keeps_opaque_claim_failure(
+def test_complete_sync_missing_task_keeps_opaque_claim_failure(
     tmp_path: Path,
 ) -> None:
     """A missing task after a complete (ok) sync is a genuine claim failure and
