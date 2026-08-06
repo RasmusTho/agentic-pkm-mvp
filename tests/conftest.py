@@ -274,6 +274,7 @@ def pytest_configure(config) -> None:
 
     # Must run here, before the first test module is imported (#4573).
     _refuse_prod_dsn_before_any_import()
+    _install_pg_connection_guard()
 
 
 # --------------------------------------------------------------------------
@@ -402,6 +403,52 @@ def _refuse_prod_dsn_before_any_import() -> None:
     ambient = _ambient_libpq_target()
     if ambient and _looks_like_prod_test_dsn(ambient):
         raise pytest.UsageError(_prod_dsn_abort_message(variable="PGHOST/PGPORT/PGDATABASE"))
+
+
+def _guard_pg_connection_target(conninfo: object = "") -> None:
+    """Refuse production again at the connection side-effect boundary.
+
+    The pre-import check protects inherited configuration, but a test can
+    mutate environment variables or assemble conninfo after pytest_configure.
+    Re-evaluating every writer immediately before psycopg connects makes those
+    late and dynamic values safe without pretending a static AST census can
+    model arbitrary Python control flow.
+    """
+
+    _refuse_prod_dsn_before_any_import()
+    target = str(conninfo or "").strip()
+    if target and _looks_like_prod_test_dsn(target):
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="psycopg connection target"))
+
+
+def _install_pg_connection_guard() -> None:
+    """Guard all three distinct psycopg connection entry points once."""
+
+    import psycopg
+
+    if getattr(psycopg, "_pkm_test_connection_guard_installed", False):
+        return
+
+    module_connect = psycopg.connect
+    sync_connect = psycopg.Connection.connect.__func__
+    async_connect = psycopg.AsyncConnection.connect.__func__
+
+    def guarded_module_connect(conninfo: str = "", *args, **kwargs):
+        _guard_pg_connection_target(conninfo)
+        return module_connect(conninfo, *args, **kwargs)
+
+    def guarded_sync_connect(owner, conninfo: str = "", *args, **kwargs):
+        _guard_pg_connection_target(conninfo)
+        return sync_connect(owner, conninfo, *args, **kwargs)
+
+    def guarded_async_connect(owner, conninfo: str = "", *args, **kwargs):
+        _guard_pg_connection_target(conninfo)
+        return async_connect(owner, conninfo, *args, **kwargs)
+
+    psycopg.connect = guarded_module_connect
+    psycopg.Connection.connect = classmethod(guarded_sync_connect)
+    psycopg.AsyncConnection.connect = classmethod(guarded_async_connect)
+    psycopg._pkm_test_connection_guard_installed = True
 
 
 def _ambient_libpq_target() -> str:

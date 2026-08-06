@@ -87,6 +87,11 @@ refuses to guess:
   before the first test module is imported**, so nothing opens a connection. That classifier flags a
   DSN whose database name is exactly `app` or whose port is the prod-published `15432`.
 
+The same classification runs again at all three psycopg connection entry points during pytest. That
+side-effect-boundary guard covers values a test mutates or assembles after `pytest_configure`, including
+runtime defaults, local-socket libpq targets, and service indirection. The AST census under
+`tests/architecture/` deliberately checks only hard-coded defaults; it is not a Python dataflow analyzer.
+
 The gate checks **four** ways this repo can name a database, not just the obvious one:
 
 | Writer | Reached through | Checked |

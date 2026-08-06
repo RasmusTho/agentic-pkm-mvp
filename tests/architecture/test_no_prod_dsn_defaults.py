@@ -1,15 +1,14 @@
 """No test default may resolve to a production DSN (#4573).
 
-`app.db.dsn.looks_like_prod_dsn` is the repo's definition of "this address is
-production": database name exactly `app`, or the prod-published port 15432. A
-test harness that hard-codes such a DSN *as a fallback* hands the pg lane —
-destructive DDL, TRUNCATE, CREATE/DROP DATABASE — a production target whenever
-the environment forgets to name one.
+`tests/conftest.py` enforces the dynamic guarantee twice: before imports for
+inherited configuration, and again at every psycopg connection entry point for
+late or dynamically assembled values. This AST census has one deliberately
+smaller job: prevent a production-looking literal from returning as a default.
 
-The census is deliberately about **default position**, not about the string
-appearing at all: plenty of tests legitimately quote a prod-shaped DSN as
-assertion data or as input to a guard they are proving. What must not exist is a
-literal that *takes effect* when nothing else is configured:
+The census is about **default position**, not about the string appearing at
+all. Tests legitimately quote prod-shaped DSNs as assertion data and guard
+inputs. What must not exist is a literal that takes effect when configuration
+is absent:
 
     os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
     resolve_dsn() or "postgresql://app:app@127.0.0.1:15432/app"
@@ -33,12 +32,6 @@ TESTS_ROOT = REPO_ROOT / "tests"
 _ENV_LOOKUPS = {"getenv", "get"}
 
 
-def _is_prod_dsn_constant(node: ast.AST) -> bool:
-    if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-        return False
-    return _parsed_conninfo(node.value) is not None and _looks_like_prod_test_dsn(node.value)
-
-
 def _parsed_conninfo(value: str) -> dict[str, str] | None:
     """Return valid libpq conninfo, including keyword and URI forms."""
 
@@ -46,6 +39,12 @@ def _parsed_conninfo(value: str) -> dict[str, str] | None:
         return conninfo_to_dict(resolve_dsn(value))
     except Exception:
         return None
+
+
+def _is_prod_dsn_constant(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+        return False
+    return _parsed_conninfo(node.value) is not None and _looks_like_prod_test_dsn(node.value)
 
 
 def _default_position_offenders(tree: ast.AST) -> list[tuple[int, str]]:
@@ -71,7 +70,10 @@ def _default_position_offenders(tree: ast.AST) -> list[tuple[int, str]]:
         # def f(dsn="<dsn>") / lambda dsn="<dsn>"
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             args = node.args
-            for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
+            for default in [
+                *args.defaults,
+                *(item for item in args.kw_defaults if item is not None),
+            ]:
                 if _is_prod_dsn_constant(default):
                     hits.append((node.lineno, "parameter default"))
 
@@ -79,7 +81,7 @@ def _default_position_offenders(tree: ast.AST) -> list[tuple[int, str]]:
 
 
 def _python_sources() -> list[Path]:
-    return sorted(p for p in TESTS_ROOT.rglob("*.py") if p.is_file())
+    return sorted(path for path in TESTS_ROOT.rglob("*.py") if path.is_file())
 
 
 def test_no_test_default_resolves_to_a_prod_dsn() -> None:
@@ -97,328 +99,13 @@ def test_no_test_default_resolves_to_a_prod_dsn() -> None:
     )
 
 
-_DSN_ENV_VARS = {"DATABASE_URL", "DB_DSN", "BUILDEROPS_DATABASE_URL"}
-# The runtime gate in tests/conftest.py checks four writer families; the census
-# must not be narrower, or `injected-prod` stays open through the ones it omits.
-_RUNTIME_WRITER_VARS = {
-    "PKM_DB_HOST",
-    "PKM_DB_PORT",
-    "PKM_DB_NAME_DEV",
-    "PKM_DB_NAME_TEST",
-    "PKM_DB_NAME_PROD",
-    "POSTGRES_USER",
-    "POSTGRES_PASSWORD",
-}
-_RUNTIME_SELECTOR_VARS = {"PKM_ENVIRONMENT", "PKM_SETTINGS_PROFILE"}
-_AMBIENT_WRITER_VARS = {
-    "PGHOST",
-    "PGHOSTADDR",
-    "PGPORT",
-    "PGDATABASE",
-    "PGUSER",
-}
-_DSN_SERVICE_VARS = {"PGSERVICE", "PGSERVICEFILE"}
-
-# Loopback plus the prod-published port: the address a production container on
-# the developer's own machine actually answers on. Unreachable prod-*shaped*
-# sentinels (`db:5432` compose-internal, `configured.example`, `127.0.0.1:1`)
-# are deliberately allowed — they exist to prove code paths without a server.
-_REACHABLE_PROD_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
-_PROD_PUBLISHED_PORT = 15432
-_DEFAULT_POSTGRES_PORT = 5432
-
-
-def _is_reachable_prod_dsn(value: str) -> bool:
-    """Prod-classified AND at an address this host could actually answer on.
-
-    Loopback is the discriminator. Both of `looks_like_prod_dsn`'s criteria
-    count once the host is loopback: port 15432 is what the prod container
-    publishes, and database `app` on the default 5432 is a locally installed
-    production database. Non-loopback prod-shaped DSNs (`db:5432` compose
-    internal, `configured.example`, TEST-NET) stay legal — they exist to drive
-    code paths without a server.
-    """
-
-    parsed = _parsed_conninfo(value)
-    if parsed is None or not _looks_like_prod_test_dsn(value):
-        return False
-
-    # A service file can name any host/port/database after pytest_configure,
-    # where the runtime pre-import guard can no longer inspect it.
-    if str(parsed.get("service", "") or "").strip():
-        return True
-
-    hosts = [
-        part.strip()
-        for key in ("host", "hostaddr")
-        for part in str(parsed.get(key, "") or "").split(",")
-        if part.strip()
-    ]
-    # No host means libpq's local Unix socket, which can still reach a locally
-    # installed production database.
-    if hosts and not any(host in _REACHABLE_PROD_HOSTS for host in hosts):
-        return False
-
-    ports = [
-        part.strip() for part in str(parsed.get("port", "") or "").split(",") if part.strip()
-    ] or [str(_DEFAULT_POSTGRES_PORT)]
-    database = str(parsed.get("dbname", "") or "").strip()
-    if str(_PROD_PUBLISHED_PORT) in ports:
-        return True
-    # Database `app` on the default port is a locally installed production
-    # database. Any other port (1, 15433, 15434, …) is a deliberately-dead
-    # sentinel or a non-prod channel.
-    return str(_DEFAULT_POSTGRES_PORT) in ports and database == "app"
-
-
-def _is_os_environ(node: ast.AST) -> bool:
-    """`os.environ` / `environ`, so an unrelated dict subscript is not flagged."""
-
-    if isinstance(node, ast.Attribute):
-        return node.attr == "environ"
-    return isinstance(node, ast.Name) and node.id == "environ"
-
-
-def _record_writer_env(
-    lineno: int,
-    key: str | None,
-    value: str | None,
-    seen: dict[str, str],
-    hits: list[tuple[int, str]],
-) -> None:
-    """Classify one late environment mutation through its writer family."""
-
-    if key is None or value is None:
-        return
-    if key in _DSN_SERVICE_VARS:
-        seen[key] = value
-        if value:
-            hits.append((lineno, f"{key}=<configured service indirection>"))
-        return
-    if key not in _RUNTIME_WRITER_VARS | _RUNTIME_SELECTOR_VARS | _AMBIENT_WRITER_VARS:
-        return
-    seen[key] = value
-
-    runtime_named = any(seen.get(name) for name in _RUNTIME_WRITER_VARS)
-    runtime_host = seen.get("PKM_DB_HOST", "db")
-    if runtime_named and runtime_host in _REACHABLE_PROD_HOSTS:
-        environment = seen.get("PKM_ENVIRONMENT", "").strip().lower()
-        profile = seen.get("PKM_SETTINGS_PROFILE", "").strip().lower()
-        if environment == "test":
-            runtime_db = seen.get("PKM_DB_NAME_TEST", "app_test")
-        elif environment == "dev" or (not environment and profile == "lab"):
-            runtime_db = seen.get("PKM_DB_NAME_DEV", "app_dev")
-        else:
-            runtime_db = seen.get("PKM_DB_NAME_PROD", "app")
-        runtime_port = seen.get("PKM_DB_PORT", str(_DEFAULT_POSTGRES_PORT))
-        if runtime_port == str(_PROD_PUBLISHED_PORT) or (
-            runtime_port == str(_DEFAULT_POSTGRES_PORT) and runtime_db == "app"
-        ):
-            hits.append((lineno, f"{runtime_host}:{runtime_port}/{runtime_db}"))
-
-    ambient_named = any(seen.get(name) for name in _AMBIENT_WRITER_VARS)
-    if not ambient_named:
-        return
-    ambient_hosts = [
-        part.strip()
-        for name in ("PGHOST", "PGHOSTADDR")
-        for part in seen.get(name, "").split(",")
-        if part.strip()
-    ]
-    # No host means libpq's local socket. A named non-loopback host remains a
-    # legal unreachable sentinel for tests that exercise error paths.
-    if ambient_hosts and not any(host in _REACHABLE_PROD_HOSTS for host in ambient_hosts):
-        return
-    ambient_ports = [
-        part.strip() for part in seen.get("PGPORT", "").split(",") if part.strip()
-    ] or [str(_DEFAULT_POSTGRES_PORT)]
-    ambient_db = seen.get("PGDATABASE", "") or seen.get("PGUSER", "")
-    if str(_PROD_PUBLISHED_PORT) in ambient_ports or (
-        str(_DEFAULT_POSTGRES_PORT) in ambient_ports and ambient_db == "app"
-    ):
-        host_label = ",".join(ambient_hosts) or "<local socket>"
-        hits.append((lineno, f"{host_label}:{','.join(ambient_ports)}/{ambient_db or '?'}"))
-
-
-def _flag_writer_dict(
-    lineno: int,
-    pairs: list[tuple[ast.AST, ast.AST]],
-    bound: dict[str, str],
-    seen: dict[str, str],
-    hits: list[tuple[int, str]],
-) -> None:
-    """Classify a dict literal of late environment overrides."""
-
-    for key_node, value_node in pairs:
-        _record_writer_env(
-            lineno,
-            _resolve_str(key_node, bound),
-            _resolve_str(value_node, bound),
-            seen,
-            hits,
-        )
-
-
-def _module_string_constants(tree: ast.AST) -> dict[str, str]:
-    """Module-level `NAME = "..."` bindings, so a named constant is not a hole."""
-
-    bound: dict[str, str] = {}
-    for node in getattr(tree, "body", []):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-            if isinstance(node.value.value, str):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        bound[target.id] = node.value.value
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Constant):
-            if isinstance(node.value.value, str) and isinstance(node.target, ast.Name):
-                bound[node.target.id] = node.value.value
-    return bound
-
-
-def _resolve_str(node: ast.AST, bound: dict[str, str]) -> str | None:
-    """A string value knowable statically: literal, named constant, or concat."""
-
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.Name):
-        return bound.get(node.id)
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left = _resolve_str(node.left, bound)
-        right = _resolve_str(node.right, bound)
-        return None if left is None or right is None else left + right
-    if isinstance(node, ast.JoinedStr):  # f-string with only literal parts
-        out = []
-        for value in node.values:
-            resolved = _resolve_str(value, bound)
-            if resolved is None:
-                return None
-            out.append(resolved)
-        return "".join(out)
-    if isinstance(node, ast.FormattedValue):
-        return _resolve_str(node.value, bound)
-    return None
-
-
-def _injected_reachable_prod_dsns(tree: ast.AST) -> list[tuple[int, str]]:
-    """Statements that put a live production address into a DSN env var.
-
-    Covers `monkeypatch.setenv(...)`, `os.environ[...] = ...`, and
-    `os.environ.update({...})`, with values given as a literal, a module-level
-    constant, a concatenation, or a literal f-string.
-
-    This is a safety net, not a proof: a value assembled at runtime, read from a
-    file, or passed through a helper this census cannot follow will not be seen.
-    The runtime gate in tests/conftest.py is the guarantee; this exists to catch
-    the shape that already bit once (#4573).
-    """
-
-    bound = _module_string_constants(tree)
-    hits: list[tuple[int, str]] = []
-    writer_env: dict[str, str] = {}
-
-    def flag(lineno: int, key_node: ast.AST, value_node: ast.AST) -> None:
-        key = _resolve_str(key_node, bound)
-        if key not in _DSN_ENV_VARS:
-            return
-        value = _resolve_str(value_node, bound)
-        if value and _is_reachable_prod_dsn(value):
-            hits.append((lineno, value))
-
-    def flag_pair(lineno: int, key_node: ast.AST, value_node: ast.AST) -> None:
-        """Feed every named writer through one family-aware classifier."""
-
-        _record_writer_env(
-            lineno,
-            _resolve_str(key_node, bound),
-            _resolve_str(value_node, bound),
-            writer_env,
-            hits,
-        )
-
-    for node in ast.walk(tree):
-        # monkeypatch.setenv("DATABASE_URL", "...")
-        if isinstance(node, ast.Call) and node.args:
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name == "setenv" and len(node.args) >= 2:
-                flag(node.lineno, node.args[0], node.args[1])
-                flag_pair(node.lineno, node.args[0], node.args[1])
-            # `dict.update` takes ONE positional argument; gating this on two
-            # made the branch unreachable.
-            elif name == "update" and isinstance(node.args[0], ast.Dict):
-                pairs = [
-                    (k, v) for k, v in zip(node.args[0].keys, node.args[0].values) if k is not None
-                ]
-                for k, v in pairs:
-                    flag(node.lineno, k, v)
-                _flag_writer_dict(node.lineno, pairs, bound, writer_env, hits)
-
-        # os.environ["DATABASE_URL"] = "..."
-        if isinstance(node, ast.Assign) and isinstance(
-            node.value, (ast.Constant, ast.Name, ast.BinOp, ast.JoinedStr)
-        ):
-            for target in node.targets:
-                if isinstance(target, ast.Subscript) and _is_os_environ(target.value):
-                    flag(node.lineno, target.slice, node.value)
-                    flag_pair(node.lineno, target.slice, node.value)
-
-    return sorted(set(hits))
-
-
-def test_no_test_injects_a_reachable_prod_dsn_into_the_environment() -> None:
-    """A prod DSN installed at runtime is not inert, even in a non-pg test.
-
-    `pytest_configure` cannot see this one: the value arrives via `monkeypatch`
-    after the session is configured. It bit for real — `tests/stores/
-    test_backend_auto_detection.py` set the live prod DSN, and that module's
-    autouse teardown runs `reset_store_backends()` -> `truncate_pg_tables()`
-    *before* monkeypatch restores the environment, issuing DELETE against
-    production on any host publishing it on 15432 (#4573).
-    """
-
-    offenders: dict[str, list[tuple[int, str]]] = {}
-    for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        hits = _injected_reachable_prod_dsns(tree)
-        if hits:
-            offenders[str(path.relative_to(REPO_ROOT))] = hits
-
-    assert not offenders, (
-        "tests inject a reachable production DSN into the environment: "
-        f"{offenders}. Use an unreachable sentinel or the test-channel address "
-        "(127.0.0.1:15434/app_test) — a live prod address in os.environ is one "
-        "stray teardown away from writing to production (#4573)."
-    )
-
-
-def test_reachable_prod_classifier_is_neither_too_wide_nor_too_narrow() -> None:
-    assert _is_reachable_prod_dsn("postgresql://app:app@127.0.0.1:15432/app")
-    assert _is_reachable_prod_dsn("postgresql+psycopg://app:app@localhost:15432/scratch")
-
-    # Unreachable sentinels stay legal.
-    assert not _is_reachable_prod_dsn("postgresql://app:app@db:5432/app")
-    assert not _is_reachable_prod_dsn("postgresql://configured.example/app")
-    assert not _is_reachable_prod_dsn("postgresql://app:app@127.0.0.1:1/app")
-    # Locally installed production on the default port is still production.
-    assert _is_reachable_prod_dsn("postgresql://app:app@localhost:5432/app")
-    assert _is_reachable_prod_dsn("host=127.0.0.1 port=15432 dbname=app")
-    assert not _is_reachable_prod_dsn("postgresql://app:app@localhost:5432/app_test")
-    assert not _is_reachable_prod_dsn("host=127.0.0.1 port=15434 dbname=app_test")
-    # Non-prod channels stay legal.
-    assert not _is_reachable_prod_dsn("postgresql://app:app@127.0.0.1:15434/app_test")
-
-
 def test_conftest_carries_no_prod_dsn_at_all() -> None:
-    """The shared harness is stricter than the census: no prod DSN, anywhere.
-
-    `tests/conftest.py` applies to every test in the repo, so a prod DSN there
-    is never inert regardless of the syntactic position it sits in.
-    """
+    """The shared harness is stricter than the census: no prod DSN, anywhere."""
 
     source = (TESTS_ROOT / "conftest.py").read_text(encoding="utf-8")
     assert "default_pg_dsn_for_pg_tests" not in source
 
-    # String constants only: the prose comment explaining *why* the default was
+    # String constants only: the prose comment explaining why the default was
     # removed is documentation, not a target.
     tree = ast.parse(source, filename="tests/conftest.py")
     prod_constants = [node.value for node in ast.walk(tree) if _is_prod_dsn_constant(node)]
@@ -426,7 +113,7 @@ def test_conftest_carries_no_prod_dsn_at_all() -> None:
 
 
 def test_census_recognises_each_default_position() -> None:
-    """Guard the guard: every shape the census claims to catch must actually trip it."""
+    """Guard the guard: every claimed default shape must actually trip it."""
 
     prod = "postgresql://app:app@127.0.0.1:15432/app"
     scratch = "postgresql://app:app@127.0.0.1:15434/app_test"
@@ -451,67 +138,3 @@ def test_census_recognises_each_default_position() -> None:
         ast.parse(f'import os\nos.getenv("DATABASE_URL", "{keyword_prod}")\n')
     )
     assert [reason for _, reason in keyword_hits] == ["env-lookup default"]
-
-
-def test_census_recognises_injected_keyword_conninfo() -> None:
-    prod = "host=127.0.0.1 port=15432 dbname=app"
-    scratch = "host=127.0.0.1 port=15434 dbname=app_test"
-
-    prod_tree = ast.parse(
-        f'def test_it(monkeypatch):\n    monkeypatch.setenv("DATABASE_URL", "{prod}")\n'
-    )
-    assert _injected_reachable_prod_dsns(prod_tree) == [(2, prod)]
-
-    scratch_tree = ast.parse(
-        f'def test_it(monkeypatch):\n    monkeypatch.setenv("DATABASE_URL", "{scratch}")\n'
-    )
-    assert not _injected_reachable_prod_dsns(scratch_tree)
-
-
-def test_census_recognises_late_ambient_writer_shapes() -> None:
-    monkeypatch_hostaddr = ast.parse(
-        "def test_it(monkeypatch):\n"
-        '    monkeypatch.setenv("PGHOSTADDR", "127.0.0.1")\n'
-        '    monkeypatch.setenv("PGPORT", "15432")\n'
-    )
-    assert _injected_reachable_prod_dsns(monkeypatch_hostaddr)
-
-    raw_environ = ast.parse(
-        "import os\n" 'os.environ["PGHOST"] = "127.0.0.1"\n' 'os.environ["PGPORT"] = "15432"\n'
-    )
-    assert _injected_reachable_prod_dsns(raw_environ)
-
-    service_file = ast.parse(
-        "import os\n" 'os.environ["PGSERVICEFILE"] = "/tmp/hidden-service.conf"\n'
-    )
-    assert _injected_reachable_prod_dsns(service_file)
-
-    scratch = ast.parse(
-        "def test_it(monkeypatch):\n"
-        '    monkeypatch.setenv("PGHOSTADDR", "127.0.0.1")\n'
-        '    monkeypatch.setenv("PGPORT", "15434")\n'
-        '    monkeypatch.setenv("PGDATABASE", "app_test")\n'
-    )
-    assert not _injected_reachable_prod_dsns(scratch)
-
-
-def test_census_resolves_late_writer_defaults_by_family() -> None:
-    runtime_prod_default = ast.parse(
-        "def test_it(monkeypatch):\n" '    monkeypatch.setenv("PKM_DB_HOST", "127.0.0.1")\n'
-    )
-    assert _injected_reachable_prod_dsns(runtime_prod_default)
-
-    runtime_test_default = ast.parse(
-        "def test_it(monkeypatch):\n"
-        '    monkeypatch.setenv("PKM_ENVIRONMENT", "test")\n'
-        '    monkeypatch.setenv("PKM_DB_HOST", "127.0.0.1")\n'
-    )
-    assert not _injected_reachable_prod_dsns(runtime_test_default)
-
-    local_socket_database = ast.parse(
-        "def test_it(monkeypatch):\n" '    monkeypatch.setenv("PGDATABASE", "app")\n'
-    )
-    assert _injected_reachable_prod_dsns(local_socket_database)
-
-    local_socket_user_default = ast.parse("import os\n" 'os.environ["PGUSER"] = "app"\n')
-    assert _injected_reachable_prod_dsns(local_socket_user_default)

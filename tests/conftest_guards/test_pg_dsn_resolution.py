@@ -44,6 +44,13 @@ BUILDEROPS_RECOVERY_TARGET = (
     "::test_recovered_epoch_fences_leases_and_executor_until_reconciliation"
 )
 
+LATE_CONNECTION_PROBES = [
+    "tests/conftest_guards/late_connection_probe.py::test_dynamic_explicit_conninfo_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_late_runtime_default_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_late_ambient_socket_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_late_service_file_is_blocked",
+]
+
 # The DSN the removed autouse fixture used to install. Port 15432 and database
 # `app` are both prod markers per app/db/dsn.py :: looks_like_prod_dsn.
 PROD_DSN = "postgresql://app:app@127.0.0.1:15432/app"
@@ -316,6 +323,22 @@ def test_connect_spy_cannot_hide_an_attempt(tmp_path: Path) -> None:
     recorded = [line for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert recorded.count("postgresql://u:p@127.0.0.1:1/closed") == 3, recorded
     assert AMBIENT in recorded, recorded
+
+
+@pytest.mark.parametrize("target", LATE_CONNECTION_PROBES)
+def test_connection_guard_blocks_late_and_dynamic_targets(spy_log: Path, target: str) -> None:
+    result, attempts = _run_pytest(
+        [target],
+        dsn="postgresql://app:app@127.0.0.1:15434/app_test",
+        spy_log=spy_log,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, output
+    assert "Refusing to run pg-marked tests" in output, output
+    # If the connection-time wrapper regresses, the child plugin records and
+    # blocks the attempt before a socket opens; a non-empty list is a failure.
+    assert attempts == [], attempts
 
 
 def test_refusal_message_never_echoes_conninfo() -> None:
