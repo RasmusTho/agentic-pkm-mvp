@@ -93,7 +93,8 @@ The gate checks **four** ways this repo can name a database, not just the obviou
 |---|---|---|
 | `DATABASE_URL` / `DB_DSN` | `app/db/dsn.py :: resolve_dsn` | always |
 | `PKM_DB_HOST` / `PKM_DB_PORT` / `PKM_DB_NAME_*` / `POSTGRES_*` | `app/config/database.py :: resolve_runtime_database_url` → `app/db/db.py :: conn_rw` | always when explicitly configured |
-| `PGHOST` / `PGPORT` / `PGDATABASE` | libpq's own defaults, whenever an empty conninfo is passed | always when a TCP host is configured |
+| `PGHOST` / `PGHOSTADDR` / `PGPORT` / `PGDATABASE` / `PGUSER` | libpq's own defaults, whenever an empty conninfo is passed | always when any target field is explicitly configured |
+| `PGSERVICE` / `PGSERVICEFILE` | libpq service indirection | fail closed whenever either is configured because its effective target cannot be inspected safely before imports |
 | `BUILDEROPS_DATABASE_URL` | the control plane's own `CREATE SCHEMA` path | always |
 
 The second and third are the reason `DATABASE_URL` alone is not sufficient: a run with
@@ -103,8 +104,9 @@ a safe primary DSN cannot hide a production runtime or ambient libpq target. The
 compose-internal fallback is ignored only when no runtime writer was explicitly configured.
 
 Collection authorization stays consumer-specific. `DATABASE_URL` / `DB_DSN` authorizes the ordinary
-`pg` lane; `BUILDEROPS_DATABASE_URL` authorizes only control-plane tests that consume it. Runtime and
-ambient libpq variables never globally unskip destructive tests that consume the documented pair.
+`pg` lane; `BUILDEROPS_DATABASE_URL` authorizes only the control-plane tests and BuilderOps recovery
+test that consume it. Runtime and ambient libpq variables never globally unskip destructive tests
+that consume the documented pair.
 
 The refusal is deliberately placed before imports rather than after collection: several test modules
 probe Postgres at import time (`tests/stores/test_capabilities_matrix.py` evaluates `pg_available()`

@@ -12,9 +12,9 @@ Two deliberate choices make the proofs load-bearing rather than decorative:
   string. The failure-string form passes whether or not a server answered,
   which is exactly backwards for a guard whose worst case is a *successful*
   connection to production.
-* The child collects the whole `tests/` tree, not one file, so import-time
-  probes elsewhere in the suite (a `skipif` that calls `pg_available()`) are
-  inside the blast radius of the assertion.
+* The child collects both a real scratch-factory module and the suite's known
+  import-time Postgres probe, so destructive fixture setup and collection-time
+  connection behavior are both inside the blast radius of the assertion.
 """
 
 from __future__ import annotations
@@ -38,6 +38,11 @@ SCRATCH_FACTORY_TARGET = "tests/migrations/test_store_schema_parity.py"
 # pg_available(). Collection imports it, so it is the reason the guard cannot
 # live in a collection hook.
 IMPORT_TIME_PROBE_TARGET = "tests/stores/test_capabilities_matrix.py"
+
+BUILDEROPS_RECOVERY_TARGET = (
+    "tests/ops/test_builderops_backup_restore.py"
+    "::test_recovered_epoch_fences_leases_and_executor_until_reconciliation"
+)
 
 # The DSN the removed autouse fixture used to install. Port 15432 and database
 # `app` are both prod markers per app/db/dsn.py :: looks_like_prod_dsn.
@@ -293,18 +298,18 @@ def test_connect_spy_cannot_hide_an_attempt(tmp_path: Path) -> None:
         "import tests.conftest_guards.connect_spy as spy\n"
         "assert psycopg.connect is not psycopg.Connection.connect\n"
         "D = 'postgresql://u:p@127.0.0.1:1/closed'\n"
+        "errors = []\n"
         "for fn in (psycopg.connect, psycopg.Connection.connect):\n"
         "    try: fn(D, connect_timeout=1)\n"
-        "    except Exception: pass\n"
+        "    except Exception as exc: errors.append(str(exc))\n"
         "try: asyncio.run(psycopg.AsyncConnection.connect(D, connect_timeout=1))\n"
-        "except Exception: pass\n"
+        "except Exception as exc: errors.append(str(exc))\n"
         "try: psycopg.connect('', connect_timeout=1)\n"
-        "except Exception: pass\n"
+        "except Exception as exc: errors.append(str(exc))\n"
+        "assert errors == ['connection blocked by pg safety probe'] * 4, errors\n"
     )
     env = dict(os.environ, PG_CONNECT_SPY_LOG=str(log))
-    subprocess.run(
-        [sys.executable, "-c", script], cwd=REPO_ROOT, env=env, check=True, timeout=120
-    )
+    subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT, env=env, check=True, timeout=120)
 
     from tests.conftest_guards.connect_spy import AMBIENT
 
@@ -356,9 +361,7 @@ def test_effective_libpq_query_parameters_are_classified_as_production() -> None
 def test_test_guard_reads_effective_libpq_query_port() -> None:
     from tests.conftest import _looks_like_prod_test_dsn
 
-    assert _looks_like_prod_test_dsn(
-        "postgresql:///safe?host=nonloopback.example&port=15432"
-    )
+    assert _looks_like_prod_test_dsn("postgresql:///safe?host=nonloopback.example&port=15432")
 
 
 def test_keyword_conninfo_classifier_handles_whitespace_around_equals() -> None:
@@ -369,12 +372,15 @@ def test_keyword_conninfo_classifier_handles_whitespace_around_equals() -> None:
     )
 
 
-def test_builderops_dsn_counts_as_configured_for_pg_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_builderops_dsn_counts_as_configured_for_pg_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import tests.conftest as test_config
 
     class Item:
-        def __init__(self, path: Path) -> None:
+        def __init__(self, path: Path, *, fixturenames: tuple[str, ...] = ()) -> None:
             self.path = path
+            self.fixturenames = fixturenames
             self.markers: list[object] = []
 
         def get_closest_marker(self, name: str) -> object | None:
@@ -390,9 +396,73 @@ def test_builderops_dsn_counts_as_configured_for_pg_collection(monkeypatch: pyte
     test_config.pytest_collection_modifyitems(None, [item])
     assert item.markers == []
 
+    recovery = Item(
+        REPO_ROOT / "tests/ops/test_builderops_backup_restore.py",
+        fixturenames=("recovery_store",),
+    )
+    test_config.pytest_collection_modifyitems(None, [recovery])
+    assert recovery.markers == []
+
     unrelated = Item(REPO_ROOT / SCRATCH_FACTORY_TARGET)
     test_config.pytest_collection_modifyitems(None, [unrelated])
     assert len(unrelated.markers) == 1
+
+    same_module_nonconsumer = Item(REPO_ROOT / "tests/ops/test_builderops_backup_restore.py")
+    test_config.pytest_collection_modifyitems(None, [same_module_nonconsumer])
+    assert len(same_module_nonconsumer.markers) == 1
+
+
+def test_builderops_dsn_authorizes_the_real_recovery_consumer(spy_log: Path) -> None:
+    builderops_dsn = "postgresql://app:app@127.0.0.1:15434/builderops_test"
+    result, attempts = _run_pytest(
+        [BUILDEROPS_RECOVERY_TARGET],
+        dsn=None,
+        spy_log=spy_log,
+        env_overrides={"BUILDEROPS_DATABASE_URL": builderops_dsn},
+    )
+    output = result.stdout + result.stderr
+
+    assert "no database configured for the pg lane" not in output, output
+    assert "connection blocked by pg safety probe" in output, output
+    assert attempts == [builderops_dsn], attempts
+
+
+@pytest.mark.parametrize(
+    "env_overrides,expected_variable",
+    [
+        (
+            {
+                "PGHOSTADDR": "127.0.0.1",
+                "PGPORT": "15432",
+                "PGDATABASE": "safe",
+            },
+            "PGHOST/PGPORT/PGDATABASE",
+        ),
+        ({"PGUSER": "app"}, "PGHOST/PGPORT/PGDATABASE"),
+        (
+            {"PGSERVICE": "production", "PGSERVICEFILE": "/nonexistent/pg_service.conf"},
+            "PGSERVICE/PGSERVICEFILE configures libpq service indirection",
+        ),
+        (
+            {"PGSERVICEFILE": "/nonexistent/pg_service.conf"},
+            "PGSERVICE/PGSERVICEFILE configures libpq service indirection",
+        ),
+    ],
+)
+def test_ambient_libpq_escape_hatches_fail_before_connect(
+    spy_log: Path, env_overrides: dict[str, str], expected_variable: str
+) -> None:
+    result, attempts = _run_pytest(
+        [SCRATCH_FACTORY_TARGET],
+        dsn="postgresql://app:app@127.0.0.1:15434/app_test",
+        spy_log=spy_log,
+        env_overrides=env_overrides,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == PYTEST_USAGE_ERROR, output
+    assert expected_variable in output, output
+    assert attempts == [], attempts
 
 
 @pytest.mark.parametrize(

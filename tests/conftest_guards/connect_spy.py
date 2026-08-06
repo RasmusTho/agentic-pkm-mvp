@@ -1,11 +1,13 @@
-"""A pytest plugin that records every `psycopg.connect` attempt (#4573).
+"""A pytest plugin that records and blocks every `psycopg.connect` attempt (#4573).
 
 Loaded with `-p` into the child pytest processes driven by
 `test_pg_dsn_resolution.py`, so those tests can assert on what the guarded run
 *actually did* rather than on the absence of a connection-failure string. An
 assertion built from failure messages is vacuous against a connection that
 succeeds — which is precisely the case that matters when the DSN points at a
-live production server.
+live production server. After recording, the plugin raises without calling the
+real connector, so a regression proof can never become the production client
+it is meant to detect.
 
 The spy is installed at plugin import, which pytest performs before any test
 module is imported, so it also sees import-time probes such as a `skipif` that
@@ -44,24 +46,19 @@ def _record(conninfo: str) -> None:
 
 
 def _spy_module_function(module, name: str) -> None:
-    original = getattr(module, name)
-
     def _spying(conninfo: str = "", *args, **kwargs):
         _record(conninfo)
-        return original(conninfo, *args, **kwargs)
+        raise psycopg.OperationalError("connection blocked by pg safety probe")
 
     setattr(module, name, _spying)
 
 
 def _spy_classmethod(cls, name: str) -> None:
-    # `cls.connect` is an already-bound classmethod, so wrapping the bound
-    # object and re-decorating would pass `cls` twice and land the class object
-    # where the conninfo belongs. Take the underlying function instead.
-    original = getattr(cls, name).__func__
-
+    # Preserve classmethod binding so both sync and async class entry points
+    # receive conninfo in the same position as psycopg's real implementation.
     def _spying(owner, conninfo: str = "", *args, **kwargs):
         _record(conninfo)
-        return original(owner, conninfo, *args, **kwargs)
+        raise psycopg.OperationalError("connection blocked by pg safety probe")
 
     setattr(cls, name, classmethod(_spying))
 

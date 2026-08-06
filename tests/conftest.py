@@ -160,7 +160,9 @@ def force_memory_store_for_non_pg(request: pytest.FixtureRequest, monkeypatch: p
 
 
 @pytest.fixture(autouse=True)
-def store_schema_autocreate_for_pg_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+def store_schema_autocreate_for_pg_tests(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
     """Explicit create-on-demand opt-in for pg-marked tests (KERNEL-04, #2766).
 
     Production store schema is migration-owned; ``_ensure_tables()`` is
@@ -261,9 +263,7 @@ def pytest_configure(config) -> None:
     # build, not quietly disarm the watchdog.
     requested = getattr(config.option, "timeout", None)
     plugins = config.pluginmanager
-    has_real_timeout = plugins.hasplugin("timeout") or plugins.hasplugin(
-        "pytest_timeout"
-    )
+    has_real_timeout = plugins.hasplugin("timeout") or plugins.hasplugin("pytest_timeout")
     if requested and not has_real_timeout:
         raise pytest.UsageError(
             f"--timeout={requested} was requested but the pytest-timeout plugin "
@@ -300,9 +300,7 @@ def pytest_configure(config) -> None:
 # this single gate also stops CREATE/DROP DATABASE against a prod server.
 # --------------------------------------------------------------------------
 
-_PG_LANE_SCRATCH_HINT = (
-    "DATABASE_URL=postgresql://app:app@127.0.0.1:15434/app_test"
-)
+_PG_LANE_SCRATCH_HINT = "DATABASE_URL=postgresql://app:app@127.0.0.1:15434/app_test"
 
 _PG_DSN_UNSET_REASON = (
     "no database configured for the pg lane: set DATABASE_URL or DB_DSN to an "
@@ -368,32 +366,35 @@ def _refuse_prod_dsn_before_any_import() -> None:
 
     control_plane = os.getenv("BUILDEROPS_DATABASE_URL", "").strip()
     if control_plane and _looks_like_prod_test_dsn(control_plane):
-        raise pytest.UsageError(
-            _prod_dsn_abort_message(variable="BUILDEROPS_DATABASE_URL")
-        )
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="BUILDEROPS_DATABASE_URL"))
 
     dsn = resolve_dsn()
     if dsn and _looks_like_prod_test_dsn(dsn):
         raise pytest.UsageError(_prod_dsn_abort_message())
 
     runtime_env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {"DATABASE_URL", "DB_DSN"}
+        key: value for key, value in os.environ.items() if key not in {"DATABASE_URL", "DB_DSN"}
     }
     runtime_dsn = explicit_runtime_database_url(runtime_env)
     if runtime_dsn and _looks_like_prod_test_dsn(runtime_dsn):
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="PKM_DB_* / POSTGRES_*"))
+
+    if os.getenv("PGSERVICE", "").strip() or os.getenv("PGSERVICEFILE", "").strip():
         raise pytest.UsageError(
-            _prod_dsn_abort_message(variable="PKM_DB_* / POSTGRES_*")
+            "Refusing to run pg-marked tests: PGSERVICE/PGSERVICEFILE configures "
+            "libpq service indirection whose effective target cannot be inspected "
+            "safely before test imports. The service name and file are not echoed "
+            "because they may lead to credential material. Unset both variables "
+            "and name an explicit "
+            f"non-production DATABASE_URL instead, e.g. {_PG_LANE_SCRATCH_HINT} "
+            "(#4573)."
         )
 
     # A safe primary/runtime DSN does not neutralise callers that pass an empty
     # conninfo and therefore consume libpq's ambient variables.
     ambient = _ambient_libpq_target()
     if ambient and _looks_like_prod_test_dsn(ambient):
-        raise pytest.UsageError(
-            _prod_dsn_abort_message(variable="PGHOST/PGPORT/PGDATABASE")
-        )
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="PGHOST/PGPORT/PGDATABASE"))
 
 
 def _ambient_libpq_target() -> str:
@@ -404,31 +405,53 @@ def _ambient_libpq_target() -> str:
     values reaches production through any caller that hands an empty conninfo
     down, without `DATABASE_URL` ever being set.
 
-    Deliberately narrow. With `PGHOST` unset libpq uses a **Unix domain
-    socket**, which cannot reach the TCP-published prod container at all, so
-    synthesising a `127.0.0.1` host there would invent a risk that does not
-    exist and abort every run of a developer who merely has `PGDATABASE`
-    exported for unrelated work. Returns "" unless `PGHOST` actually names a
-    TCP host.
+    `PGHOSTADDR` is independent of `PGHOST`, and an unset host still permits a
+    Unix-socket connection. Therefore every explicitly named ambient target
+    field participates: host, hostaddr, port, database, or user (whose value is
+    also libpq's default database name). An entirely absent ambient target is
+    the only case that returns "".
     """
 
     host = os.getenv("PGHOST", "").strip()
-    if not host or host.startswith("/"):  # unset, or an explicit socket directory
+    hostaddr = os.getenv("PGHOSTADDR", "").strip()
+    port = os.getenv("PGPORT", "").strip()
+    dbname = os.getenv("PGDATABASE", "").strip()
+    user = os.getenv("PGUSER", "").strip()
+    if not any((host, hostaddr, port, dbname, user)):
         return ""
-    port = os.getenv("PGPORT", "").strip() or "5432"
-    user = os.getenv("PGUSER", "").strip() or "postgres"
-    dbname = os.getenv("PGDATABASE", "").strip() or user
-    return f"host={host} port={port} user={user} dbname={dbname}"
+    try:
+        from psycopg.conninfo import make_conninfo
+
+        fields = {
+            key: value
+            for key, value in {
+                "host": host,
+                "hostaddr": hostaddr,
+                "port": port,
+                "user": user,
+                "dbname": dbname or user,
+            }.items()
+            if value
+        }
+        return make_conninfo(**fields)
+    except Exception:
+        # Malformed configured ambient state is indeterminate, never safe for
+        # a destructive lane. A schemeless value fails closed in the classifier.
+        return "configured ambient libpq target could not be parsed"
 
 
-def _is_builderops_control_plane_item(item: object) -> bool:
+def _is_builderops_dsn_consumer(item: object) -> bool:
     path = getattr(item, "path", None)
     if path is None:
         return False
+    resolved = Path(path).resolve()
     try:
-        Path(path).resolve().relative_to(ROOT / "tests" / "builderops" / "control_plane")
+        resolved.relative_to(ROOT / "tests" / "builderops" / "control_plane")
     except ValueError:
-        return False
+        return (
+            resolved == ROOT / "tests" / "ops" / "test_builderops_backup_restore.py"
+            and "recovery_store" in getattr(item, "fixturenames", ())
+        )
     return True
 
 
@@ -445,7 +468,7 @@ def pytest_collection_modifyitems(config, items) -> None:
             continue
         if primary_configured:
             continue
-        if builderops_configured and _is_builderops_control_plane_item(item):
+        if builderops_configured and _is_builderops_dsn_consumer(item):
             continue
         else:
             item.add_marker(skip_pg)
