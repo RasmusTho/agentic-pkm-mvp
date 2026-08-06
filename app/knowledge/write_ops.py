@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import errno
+import ctypes
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import stat
-from typing import TYPE_CHECKING, Literal
+import sys
+from typing import TYPE_CHECKING, Callable, Literal
 import uuid
 
 from app.knowledge.adapters import _atomic_rename_noreplace_at
@@ -45,6 +47,95 @@ _CANDIDATE_STAGE_OPEN_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
 )
 CandidateCreateResult = Literal["written", "already_exists"]
+AtomicAppendTransform = Callable[[bytes | None, bytes], tuple[bytes, bytes]]
+
+
+def _split_frontmatter_body_bytes(raw: bytes) -> tuple[bytes, bytes]:
+    """Split a Markdown note without normalizing any body byte."""
+
+    if not (raw.startswith(b"---\n") or raw.startswith(b"---\r\n")):
+        raise ValueError("atomic append target is missing YAML frontmatter")
+    offset = 0
+    for index, line in enumerate(raw.splitlines(keepends=True)):
+        content = line.rstrip(b"\r\n")
+        if index > 0 and content == b"---":
+            closing_end = offset + len(content)
+            return raw[:closing_end], raw[closing_end:]
+        offset += len(line)
+    raise ValueError("atomic append target has unterminated YAML frontmatter")
+
+
+def _read_all(fd: int) -> bytes:
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(fd, 1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _write_all(fd: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.EIO, "atomic append stage write made no progress")
+        view = view[written:]
+
+
+def _copy_access_metadata(source_fd: int, staged_fd: int) -> None:
+    """Clone access-control metadata before an atomic note replacement."""
+
+    source = os.fstat(source_fd)
+    if source.st_nlink != 1:
+        raise KnowledgeCapabilityError(
+            "atomic append refuses a multiply-linked target"
+        )
+
+    if sys.platform == "darwin":
+        # COPYFILE_METADATA = ACL | STAT | XATTR. Data is deliberately omitted
+        # because the staged transaction writes its own complete payload.
+        fcopyfile = ctypes.CDLL(None, use_errno=True).fcopyfile
+        fcopyfile.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        fcopyfile.restype = ctypes.c_int
+        if fcopyfile(source_fd, staged_fd, None, 0x00000007) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+    else:
+        os.fchmod(staged_fd, stat.S_IMODE(source.st_mode))
+        staged = os.fstat(staged_fd)
+        if (staged.st_uid, staged.st_gid) != (source.st_uid, source.st_gid):
+            os.fchown(staged_fd, source.st_uid, source.st_gid)
+        required_xattr_apis = ("listxattr", "getxattr", "setxattr")
+        if not all(hasattr(os, name) for name in required_xattr_apis):
+            raise KnowledgeCapabilityError(
+                "platform cannot prove atomic append ACL/xattr preservation"
+            )
+        for attribute in os.listxattr(source_fd):
+            os.setxattr(staged_fd, attribute, os.getxattr(source_fd, attribute))
+
+    staged = os.fstat(staged_fd)
+    if (
+        stat.S_IMODE(staged.st_mode) != stat.S_IMODE(source.st_mode)
+        or staged.st_uid != source.st_uid
+        or staged.st_gid != source.st_gid
+    ):
+        raise KnowledgeCapabilityError(
+            "atomic append access metadata could not be preserved exactly"
+        )
+
+    if all(hasattr(os, name) for name in ("listxattr", "getxattr")):
+        source_xattrs = {
+            name: os.getxattr(source_fd, name) for name in os.listxattr(source_fd)
+        }
+        staged_xattrs = {
+            name: os.getxattr(staged_fd, name) for name in os.listxattr(staged_fd)
+        }
+        if staged_xattrs != source_xattrs:
+            raise KnowledgeCapabilityError(
+                "atomic append extended attributes could not be preserved exactly"
+            )
 
 
 def _candidate_relative_parts(note_rel_path: str) -> tuple[str, ...]:
@@ -400,8 +491,7 @@ def append_note_relative(
     vault_root: Path | str,
     action: str = KNOWLEDGE_WRITE_ACTION,
     write_guard: "WriteGuard | None" = None,
-    _anchored_parent_fd: int | None = None,
-    _expected_target_identity: tuple[int, int] | None = None,
+    _atomic_transform: AtomicAppendTransform | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#3129): append-only writes share the same production
     # boundary as relative overwrites. Assert before resolving the port so an
@@ -414,44 +504,13 @@ def append_note_relative(
     guard.assert_writes_allowed(action)
     resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)
-    if _anchored_parent_fd is not None:
-        if _expected_target_identity is None:
-            raise ValueError("anchored append requires an expected target identity")
-        target_name = PurePosixPath(note_rel_path).name
-        try:
-            target_fd = os.open(
-                target_name,
-                os.O_WRONLY
-                | os.O_APPEND
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_CLOEXEC", 0),
-                dir_fd=_anchored_parent_fd,
-            )
-        except OSError as exc:
-            raise KnowledgeCapabilityError(
-                f"anchored append could not open regular target {note_rel_path}"
-            ) from exc
-        with os.fdopen(target_fd, "ab") as handle:
-            opened = os.fstat(handle.fileno())
-            if not stat.S_ISREG(opened.st_mode) or (
-                opened.st_dev,
-                opened.st_ino,
-            ) != _expected_target_identity:
-                raise KnowledgeWriteConflict(
-                    f"anchored append target changed for {note_rel_path}"
-                )
-            handle.write(content.encode("utf-8"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        current = os.stat(
-            target_name,
-            dir_fd=_anchored_parent_fd,
-            follow_symlinks=False,
+    if _atomic_transform is not None:
+        _atomic_append_note_relative(
+            note_rel_path,
+            content.encode("utf-8"),
+            vault_root=resolved_root,
+            transform=_atomic_transform,
         )
-        if (current.st_dev, current.st_ino) != _expected_target_identity:
-            raise KnowledgeWriteConflict(
-                f"anchored append target changed during write for {note_rel_path}"
-            )
         return WriteReceipt(
             operation="append_note",
             locator=locator,
@@ -460,6 +519,233 @@ def append_note_relative(
         )
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
     return port.append_note(locator, content)
+
+
+def _atomic_append_note_relative(
+    note_rel_path: str,
+    proposed_append: bytes,
+    *,
+    vault_root: Path,
+    transform: AtomicAppendTransform,
+) -> None:
+    """Publish one append plus derived-note bookkeeping as one transaction.
+
+    The append seam resolves and opens its own root/locator path, so callers
+    cannot smuggle an unrelated directory descriptor into the write authority.
+    The transform may either append the exact proposed bytes or append nothing
+    for an idempotent retry; every pre-existing body byte must remain identical.
+    """
+
+    parts = _candidate_relative_parts(note_rel_path)
+    current_dir_fd: int | None = None
+    source_fd: int | None = None
+    stage_fd: int | None = None
+    stage_name: str | None = None
+    stage_owned = False
+    target_existed = False
+    current_raw: bytes | None = None
+    current_identity: tuple[int, int] | None = None
+    cleanup_error: BaseException | None = None
+
+    def record_cleanup_error(exc: BaseException) -> None:
+        nonlocal cleanup_error
+        if cleanup_error is None:
+            cleanup_error = exc
+
+    def live_parent_identity() -> tuple[int, int]:
+        probe_fd: int | None = None
+        try:
+            probe_fd = os.open(vault_root, _DIRECTORY_OPEN_FLAGS)
+            for component in parts[:-1]:
+                child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=probe_fd)
+                superseded_fd = probe_fd
+                probe_fd = child_fd
+                os.close(superseded_fd)
+            observed = os.fstat(probe_fd)
+            return observed.st_dev, observed.st_ino
+        except OSError as exc:
+            raise KnowledgeCapabilityError(
+                f"atomic append parent mapping changed for {note_rel_path}"
+            ) from exc
+        finally:
+            if probe_fd is not None:
+                os.close(probe_fd)
+
+    try:
+        current_dir_fd = os.open(vault_root, _DIRECTORY_OPEN_FLAGS)
+        for component in parts[:-1]:
+            try:
+                child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=current_dir_fd)
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o777, dir_fd=current_dir_fd)
+                # Fence the new directory entry before any child mutation. A
+                # prior failed fsync is also repaired by the unconditional
+                # fence on every retry below.
+                os.fsync(current_dir_fd)
+                child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=current_dir_fd)
+            except OSError as exc:
+                raise KnowledgeCapabilityError(
+                    f"atomic append parent for {note_rel_path} must be an in-vault non-symlink directory"
+                ) from exc
+            try:
+                os.fsync(current_dir_fd)
+            except BaseException:
+                os.close(child_fd)
+                raise
+            superseded_fd = current_dir_fd
+            current_dir_fd = child_fd
+            os.close(superseded_fd)
+
+        # Fence any prior uncertain rename before observing the target.
+        os.fsync(current_dir_fd)
+        target_name = parts[-1]
+        try:
+            source_fd = os.open(
+                target_name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current_dir_fd,
+            )
+        except FileNotFoundError:
+            current_raw = None
+        except OSError as exc:
+            raise KnowledgeCapabilityError(
+                f"atomic append target {note_rel_path} must be a regular non-symlink file"
+            ) from exc
+        else:
+            source = os.fstat(source_fd)
+            if not stat.S_ISREG(source.st_mode):
+                raise KnowledgeCapabilityError(
+                    f"atomic append target {note_rel_path} must be a regular file"
+                )
+            if source.st_nlink != 1:
+                raise KnowledgeCapabilityError(
+                    f"atomic append target {note_rel_path} must not have hard-link aliases"
+                )
+            target_existed = True
+            current_identity = (source.st_dev, source.st_ino)
+            current_raw = _read_all(source_fd)
+
+        replacement, actual_append = transform(current_raw, proposed_append)
+        if not isinstance(replacement, bytes) or not isinstance(actual_append, bytes):
+            raise TypeError("atomic append transform must return bytes payloads")
+        if actual_append not in {b"", proposed_append}:
+            raise ValueError("atomic append transform changed the proposed append bytes")
+
+        _replacement_frontmatter, replacement_body = _split_frontmatter_body_bytes(replacement)
+        if current_raw is None:
+            if actual_append != proposed_append or not replacement_body.endswith(proposed_append):
+                raise ValueError("new atomic append transaction did not publish the proposed append")
+        else:
+            _current_frontmatter, current_body = _split_frontmatter_body_bytes(current_raw)
+            if replacement_body != current_body + actual_append:
+                raise ValueError("atomic append transform changed prior body bytes")
+            if replacement == current_raw:
+                return
+
+        stage_name = f".atomic-append-{uuid.uuid4().hex}.tmp"
+        stage_fd = os.open(
+            stage_name,
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=current_dir_fd,
+        )
+        stage_owned = True
+        if source_fd is not None:
+            _copy_access_metadata(source_fd, stage_fd)
+        os.lseek(stage_fd, 0, os.SEEK_SET)
+        os.ftruncate(stage_fd, 0)
+        _write_all(stage_fd, replacement)
+        os.fsync(stage_fd)
+
+        anchored_parent = os.fstat(current_dir_fd)
+        if live_parent_identity() != (anchored_parent.st_dev, anchored_parent.st_ino):
+            raise KnowledgeCapabilityError(
+                f"atomic append parent mapping changed for {note_rel_path}"
+            )
+
+        if target_existed:
+            verification_fd = os.open(
+                target_name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current_dir_fd,
+            )
+            try:
+                observed = os.fstat(verification_fd)
+                if (
+                    not stat.S_ISREG(observed.st_mode)
+                    or (observed.st_dev, observed.st_ino) != current_identity
+                    or _read_all(verification_fd) != current_raw
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"atomic append target changed before publication for {note_rel_path}"
+                    )
+            finally:
+                os.close(verification_fd)
+            os.replace(
+                stage_name,
+                target_name,
+                src_dir_fd=current_dir_fd,
+                dst_dir_fd=current_dir_fd,
+            )
+        else:
+            try:
+                _atomic_rename_noreplace_at(
+                    current_dir_fd,
+                    stage_name,
+                    current_dir_fd,
+                    target_name,
+                )
+            except OSError as exc:
+                if exc.errno == errno.EEXIST:
+                    raise KnowledgeWriteConflict(
+                        f"atomic append target appeared during publication for {note_rel_path}"
+                    ) from exc
+                raise
+        stage_owned = False
+        os.fsync(current_dir_fd)
+        if live_parent_identity() != (anchored_parent.st_dev, anchored_parent.st_ino):
+            raise KnowledgeCapabilityError(
+                f"atomic append parent mapping changed after publication for {note_rel_path}"
+            )
+    finally:
+        if stage_fd is not None:
+            owned_stage_fd = stage_fd
+            stage_fd = None
+            try:
+                os.close(owned_stage_fd)
+            except BaseException as exc:  # noqa: BLE001 - fail-closed ownership cleanup
+                record_cleanup_error(exc)
+        if stage_owned and stage_name is not None and current_dir_fd is not None:
+            try:
+                os.unlink(stage_name, dir_fd=current_dir_fd)
+                stage_owned = False
+                os.fsync(current_dir_fd)
+            except BaseException as exc:  # noqa: BLE001 - cleanup durability is required
+                record_cleanup_error(exc)
+        if source_fd is not None:
+            owned_source_fd = source_fd
+            source_fd = None
+            try:
+                os.close(owned_source_fd)
+            except BaseException as exc:  # noqa: BLE001 - preserve the first cleanup failure
+                record_cleanup_error(exc)
+        if current_dir_fd is not None:
+            owned_dir_fd = current_dir_fd
+            current_dir_fd = None
+            try:
+                os.close(owned_dir_fd)
+            except BaseException as exc:  # noqa: BLE001 - preserve the first cleanup failure
+                record_cleanup_error(exc)
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def advanced_uri_from_vault_path(path: Path | str, *, vault_root: Path | str) -> str:

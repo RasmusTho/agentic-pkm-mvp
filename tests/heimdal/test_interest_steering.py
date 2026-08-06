@@ -35,6 +35,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import queue
+import re
 import stat
 import subprocess
 import sys
@@ -63,6 +64,7 @@ from app.heimdal.settings_notes import (
     read_settings_note,
 )
 from app.knowledge.errors import KnowledgeCapabilityError
+from app.knowledge import write_ops as write_ops_module
 from app.write_guard import WriteGuard, WritesBlockedError
 
 pytestmark = pytest.mark.not_pg
@@ -437,17 +439,16 @@ def test_steering_log_retry_recovers_interrupted_states(
 ) -> None:
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
-    real_append = steering_module.append_note_relative
-    real_replace = steering_module.os.replace
     rel_path = note_rel_path(STEERING_LOG)
     log_path = vault_root / rel_path
 
+    real_rename_noreplace = write_ops_module._atomic_rename_noreplace_at
     monkeypatch.setattr(
-        steering_module.os,
-        "replace",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("seed replace")),
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("initial publish")),
     )
-    with pytest.raises(RuntimeError, match="seed replace"):
+    with pytest.raises(RuntimeError, match="initial publish"):
         append_steering_log(
             vault_root,
             "wrong",
@@ -457,52 +458,42 @@ def test_steering_log_retry_recovers_interrupted_states(
             write_guard=guard,
         )
     assert not log_path.exists()
-    assert not list(log_path.parent.glob(f".{log_path.name}.*.tmp"))
-    monkeypatch.setattr(steering_module.os, "replace", real_replace)
-
+    assert not list(log_path.parent.glob(".atomic-append-*.tmp"))
     monkeypatch.setattr(
-        steering_module,
-        "append_note_relative",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("before append")),
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        real_rename_noreplace,
     )
-    with pytest.raises(RuntimeError, match="before append"):
-        append_steering_log(
-            vault_root,
-            "wrong",
-            "seed-only",
-            source="chat",
-            operation_id="recover-seed",
-            write_guard=guard,
-        )
-    monkeypatch.setattr(steering_module, "append_note_relative", real_append)
 
     seed_recovered = append_steering_log(
         vault_root,
         "wrong",
-        "seed-only",
+        "atomic-seed",
         source="chat",
-        operation_id="recover-seed",
+        operation_id="recover-atomic-seed",
         write_guard=guard,
     )
     assert read_steering_log_body(vault_root).count(seed_recovered) == 1
 
-    real_patch = steering_module._patch_steering_log_frontmatter
-    monkeypatch.setattr(
-        steering_module,
-        "_patch_steering_log_frontmatter",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("after append")),
+    # Simulate the legacy split transaction: the durable operation exists in
+    # the body while frontmatter bookkeeping still reflects the prior state.
+    bookkeeping_line = append_steering_log(
+        vault_root,
+        "mute",
+        "bookkeeping-pending",
+        source="item",
+        operation_id="recover-bookkeeping",
+        write_guard=guard,
     )
-    with pytest.raises(RuntimeError, match="after append"):
-        append_steering_log(
-            vault_root,
-            "mute",
-            "bookkeeping-pending",
-            source="item",
-            operation_id="recover-bookkeeping",
-            write_guard=guard,
-        )
-    monkeypatch.setattr(steering_module, "_patch_steering_log_frontmatter", real_patch)
-
+    stale = log_path.read_bytes()
+    stale = stale.replace(b"entry_count: 2", b"entry_count: 1", 1)
+    stale = re.sub(
+        rb"last_appended: ['\"]?[^\r\n'\"]+['\"]?",
+        b"last_appended: null",
+        stale,
+        count=1,
+    )
+    log_path.write_bytes(stale)
     bookkeeping_recovered = append_steering_log(
         vault_root,
         "mute",
@@ -511,12 +502,19 @@ def test_steering_log_retry_recovers_interrupted_states(
         operation_id="recover-bookkeeping",
         write_guard=guard,
     )
+    assert bookkeeping_recovered == bookkeeping_line
+    assert read_steering_log_body(vault_root).count(bookkeeping_line) == 1
 
-    real_write_all = steering_module._write_all
+    real_write_all = write_ops_module._write_all
+
+    def write_partial_then_fail(fd: int, content: bytes) -> None:
+        os.write(fd, content[: max(1, len(content) // 2)])
+        raise RuntimeError("stage write")
+
     monkeypatch.setattr(
-        steering_module,
+        write_ops_module,
         "_write_all",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stage write")),
+        write_partial_then_fail,
     )
     with pytest.raises(RuntimeError, match="stage write"):
         append_steering_log(
@@ -527,7 +525,8 @@ def test_steering_log_retry_recovers_interrupted_states(
             operation_id="recover-stage-write",
             write_guard=guard,
         )
-    monkeypatch.setattr(steering_module, "_write_all", real_write_all)
+    assert '"operation_id":"recover-stage-write"' not in read_steering_log_body(vault_root)
+    monkeypatch.setattr(write_ops_module, "_write_all", real_write_all)
     stage_write_recovered = append_steering_log(
         vault_root,
         "wrong",
@@ -537,12 +536,17 @@ def test_steering_log_retry_recovers_interrupted_states(
         write_guard=guard,
     )
 
-    real_fsync = steering_module.os.fsync
-    monkeypatch.setattr(
-        steering_module.os,
-        "fsync",
-        lambda _fd: (_ for _ in ()).throw(RuntimeError("stage fsync")),
-    )
+    real_fsync = write_ops_module.os.fsync
+    fail_next_file_fsync = True
+
+    def fail_stage_fsync(fd: int) -> None:
+        nonlocal fail_next_file_fsync
+        if fail_next_file_fsync and stat.S_ISREG(os.fstat(fd).st_mode):
+            fail_next_file_fsync = False
+            raise RuntimeError("stage fsync")
+        real_fsync(fd)
+
+    monkeypatch.setattr(write_ops_module.os, "fsync", fail_stage_fsync)
     with pytest.raises(RuntimeError, match="stage fsync"):
         append_steering_log(
             vault_root,
@@ -552,7 +556,7 @@ def test_steering_log_retry_recovers_interrupted_states(
             operation_id="recover-stage-fsync",
             write_guard=guard,
         )
-    monkeypatch.setattr(steering_module.os, "fsync", real_fsync)
+    monkeypatch.setattr(write_ops_module.os, "fsync", real_fsync)
     stage_fsync_recovered = append_steering_log(
         vault_root,
         "wrong",
@@ -562,12 +566,13 @@ def test_steering_log_retry_recovers_interrupted_states(
         write_guard=guard,
     )
 
+    real_replace = write_ops_module.os.replace
     monkeypatch.setattr(
-        steering_module.os,
+        write_ops_module.os,
         "replace",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bookkeeping replace")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("transaction replace")),
     )
-    with pytest.raises(RuntimeError, match="bookkeeping replace"):
+    with pytest.raises(RuntimeError, match="transaction replace"):
         append_steering_log(
             vault_root,
             "wrong",
@@ -576,7 +581,7 @@ def test_steering_log_retry_recovers_interrupted_states(
             operation_id="recover-replace",
             write_guard=guard,
         )
-    monkeypatch.setattr(steering_module.os, "replace", real_replace)
+    monkeypatch.setattr(write_ops_module.os, "replace", real_replace)
     replace_recovered = append_steering_log(
         vault_root,
         "wrong",
@@ -586,16 +591,21 @@ def test_steering_log_retry_recovers_interrupted_states(
         write_guard=guard,
     )
 
-    fsync_calls = 0
+    published = False
+
+    def publish_then_mark(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal published
+        result = real_replace(*args, **kwargs)
+        published = True
+        return result
 
     def fail_directory_fsync(fd: int) -> None:
-        nonlocal fsync_calls
-        fsync_calls += 1
         real_fsync(fd)
-        if fsync_calls == 2:
+        if published and stat.S_ISDIR(os.fstat(fd).st_mode):
             raise RuntimeError("directory fsync")
 
-    monkeypatch.setattr(steering_module.os, "fsync", fail_directory_fsync)
+    monkeypatch.setattr(write_ops_module.os, "replace", publish_then_mark)
+    monkeypatch.setattr(write_ops_module.os, "fsync", fail_directory_fsync)
     with pytest.raises(RuntimeError, match="directory fsync"):
         append_steering_log(
             vault_root,
@@ -605,7 +615,8 @@ def test_steering_log_retry_recovers_interrupted_states(
             operation_id="recover-directory-fsync",
             write_guard=guard,
         )
-    monkeypatch.setattr(steering_module.os, "fsync", real_fsync)
+    monkeypatch.setattr(write_ops_module.os, "replace", real_replace)
+    monkeypatch.setattr(write_ops_module.os, "fsync", real_fsync)
     directory_fsync_recovered = append_steering_log(
         vault_root,
         "wrong",
@@ -884,7 +895,7 @@ def test_steering_log_racing_aliases_fail_closed(
             parked.replace(path)
 
     monkeypatch.setattr(steering_module, "append_note_relative", swap_final_component)
-    with pytest.raises(KnowledgeCapabilityError, match="anchored append"):
+    with pytest.raises(KnowledgeCapabilityError, match="non-symlink"):
         append_steering_log(
             vault_root,
             "mute",
@@ -900,20 +911,20 @@ def test_steering_log_racing_aliases_fail_closed(
     fresh_vault.mkdir()
     outside = tmp_path / "race-outside"
     outside.mkdir()
-    real_atomic = steering_module._atomic_replace_bytes
     parked_parent = fresh_vault / "_heimdal-parked"
     swapped = False
+    real_write_all = write_ops_module._write_all
 
-    def swap_parent(parent_fd, content, **kwargs):  # type: ignore[no-untyped-def]
+    def swap_parent(stage_fd: int, content: bytes) -> None:
         nonlocal swapped
+        real_write_all(stage_fd, content)
         if not swapped:
             swapped = True
             (fresh_vault / "_heimdal").replace(parked_parent)
             (fresh_vault / "_heimdal").symlink_to(outside, target_is_directory=True)
-        return real_atomic(parent_fd, content, **kwargs)
 
-    monkeypatch.setattr(steering_module, "_atomic_replace_bytes", swap_parent)
-    with pytest.raises(KnowledgeCapabilityError, match="parent changed"):
+    monkeypatch.setattr(write_ops_module, "_write_all", swap_parent)
+    with pytest.raises(KnowledgeCapabilityError, match="parent mapping changed"):
         append_steering_log(
             fresh_vault,
             "wrong",
@@ -923,6 +934,7 @@ def test_steering_log_racing_aliases_fail_closed(
             write_guard=guard,
         )
     assert list(outside.iterdir()) == []
+    assert not list(parked_parent.glob(".atomic-append-*.tmp"))
 
 
 def test_steering_log_metadata_clone_failure_fails_closed(
@@ -941,8 +953,8 @@ def test_steering_log_metadata_clone_failure_fails_closed(
     path = vault_root / note_rel_path(STEERING_LOG)
     before = path.read_bytes()
     monkeypatch.setattr(
-        steering_module,
-        "_copy_required_metadata",
+        write_ops_module,
+        "_copy_access_metadata",
         lambda *_args: (_ for _ in ()).throw(RuntimeError("metadata clone failed")),
     )
 
@@ -955,11 +967,11 @@ def test_steering_log_metadata_clone_failure_fails_closed(
             operation_id="clone-second",
             write_guard=_allowing_guard(),
         )
-    assert path.read_bytes().count(b'"operation_id":"clone-second"') == 1
+    assert path.read_bytes().count(b'"operation_id":"clone-second"') == 0
     note = read_settings_note(vault_root, STEERING_LOG)
     assert note is not None
     assert note.values["entry_count"] == 1
-    assert before != path.read_bytes()
+    assert before == path.read_bytes()
 
 
 def test_steering_log_new_parent_is_durably_linked(
@@ -969,7 +981,7 @@ def test_steering_log_new_parent_is_durably_linked(
     vault_root = _vault(tmp_path)
     root_identity = (vault_root.stat().st_dev, vault_root.stat().st_ino)
     synced_directories: list[tuple[int, int]] = []
-    real_fsync = steering_module.os.fsync
+    real_fsync = write_ops_module.os.fsync
 
     def record_fsync(fd: int) -> None:
         current = os.fstat(fd)
@@ -977,7 +989,7 @@ def test_steering_log_new_parent_is_durably_linked(
             synced_directories.append((current.st_dev, current.st_ino))
         real_fsync(fd)
 
-    monkeypatch.setattr(steering_module.os, "fsync", record_fsync)
+    monkeypatch.setattr(write_ops_module.os, "fsync", record_fsync)
     append_steering_log(
         vault_root,
         "wrong",
@@ -987,6 +999,76 @@ def test_steering_log_new_parent_is_durably_linked(
         write_guard=_allowing_guard(),
     )
     assert root_identity in synced_directories
+
+
+def test_steering_log_retries_only_after_fencing_uncertain_parent_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    root_identity = (vault_root.stat().st_dev, vault_root.stat().st_ino)
+    real_fsync = write_ops_module.os.fsync
+    failed = False
+
+    def fail_first_root_fsync(fd: int) -> None:
+        nonlocal failed
+        current = os.fstat(fd)
+        if not failed and (current.st_dev, current.st_ino) == root_identity:
+            failed = True
+            raise RuntimeError("root directory fsync")
+        real_fsync(fd)
+
+    monkeypatch.setattr(write_ops_module.os, "fsync", fail_first_root_fsync)
+    with pytest.raises(RuntimeError, match="root directory fsync"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "uncertain-parent",
+            source="chat",
+            operation_id="uncertain-parent",
+            write_guard=_allowing_guard(),
+        )
+    path = vault_root / note_rel_path(STEERING_LOG)
+    assert not path.exists()
+
+    monkeypatch.setattr(write_ops_module.os, "fsync", real_fsync)
+    recovered = append_steering_log(
+        vault_root,
+        "wrong",
+        "uncertain-parent",
+        source="chat",
+        operation_id="uncertain-parent",
+        write_guard=_allowing_guard(),
+    )
+    assert read_steering_log_body(vault_root).count(recovered) == 1
+
+
+def test_steering_log_rejects_hard_link_alias_before_replacement(tmp_path: Path) -> None:
+    vault_root = _vault(tmp_path)
+    path = vault_root / note_rel_path(STEERING_LOG)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="hard-link-seed",
+        write_guard=_allowing_guard(),
+    )
+    alias = path.with_name("steering-hard-link.md")
+    os.link(path, alias)
+    before = path.read_bytes()
+
+    with pytest.raises(KnowledgeCapabilityError, match="hard-link aliases"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "must-not-split",
+            source="item",
+            operation_id="hard-link-rejected",
+            write_guard=_allowing_guard(),
+        )
+    assert path.read_bytes() == before
+    assert alias.read_bytes() == before
 
 
 def test_steering_log_operation_id_collision_fails_loud(tmp_path: Path) -> None:

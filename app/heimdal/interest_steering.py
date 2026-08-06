@@ -42,14 +42,13 @@ Four capabilities, four distinct write shapes:
    Reuses the new A18 `STEERING_LOG` `SettingsNoteSpec` (append-only-log
    authority class) for path resolution. The entries themselves are body
    lines written exactly once per caller-stable operation identity through
-   `append_note_relative` and are **never** rewritten once appended (mirrors
-   HEIM-1's append-only discipline, applied to a vault note instead of the
-   DB-backed observation log). A per-log host lock serializes cooperating
-   writers, and retries reconcile any already-appended operation plus the
-   derived bookkeeping instead of duplicating it. The note's
-   agent-authored frontmatter bookkeeping (`entry_count`/`last_appended`) is
-   reconciled through `_patch_frontmatter_preserving_body`, a body-preserving
-   frontmatter patch -- deliberately **not**
+   `append_note_relative`; their durable body bytes are **never changed** once
+   appended (mirrors HEIM-1's append-only discipline, applied to a vault note
+   instead of the DB-backed observation log). A per-log host lock serializes
+   cooperating writers, while the governed seam publishes seed, append, and
+   derived bookkeeping as one atomic file transaction. Retries therefore
+   observe either the prior complete note or the next complete note and never
+   duplicate an already-published operation. This is deliberately **not**
    `app.heimdal.settings_notes.write_settings_note`/`render_note`, which
    regenerate the note's full content (frontmatter + static descriptive
    body) from scratch and would silently discard every previously appended
@@ -62,15 +61,14 @@ Four capabilities, four distinct write shapes:
    spec verbatim (:func:`update_source_filters`); this module adds no new
    schema for it, only a steering-shaped convenience wrapper.
 
-Every durable intent entry in this module reaches the vault through the
-same governed append seam every other Heimdal control note uses
+Every durable intent entry in this module reaches the vault through the same
+governed append seam every other Heimdal control note uses
 (`app.knowledge.write_ops.append_note_relative` + the caller-selected
-`app.write_guard.WriteGuard`). The steering-log seed and derived
-frontmatter use guarded atomic replacements because they must preserve
-crash recovery and the existing body bytes. This module asserts the
-capability action before every append, then passes the same guard and
-action through so `append_note_relative` reasserts the caller-authorized
-policy at its own seam.
+`app.write_guard.WriteGuard`). For the steering log, that seam atomically
+publishes the complete append transaction while preserving every prior body
+byte and access-control metadata. This module asserts the capability action
+before every append, then passes the same guard and action through so
+`append_note_relative` reasserts the caller-authorized policy at its own seam.
 
 Out of scope (per the governing Issue): watch-as-selection cognition
 (Mimer's, §9-k(b)), native-app editor rendering, automatic source
@@ -80,7 +78,6 @@ onboarding beyond writing the `sources/*.md` filter notes.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import ctypes
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
@@ -89,14 +86,11 @@ import json
 import os
 from pathlib import Path
 import re
-import stat
-import sys
 import tempfile
 import threading
 import unicodedata
 from typing import Any, Literal, Optional
 from collections.abc import Iterator
-from uuid import uuid4
 
 from app.heimdal.settings_notes import (
     INTERESTS,
@@ -111,7 +105,6 @@ from app.heimdal.settings_notes import (
     render_note,
     write_settings_note,
 )
-from app.knowledge.errors import KnowledgeCapabilityError
 from app.knowledge.write_ops import append_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
@@ -370,203 +363,12 @@ def read_inflow_body(vault_root: Path, kind: InflowKind) -> str:
 # verb; this is documentation of the expected vocabulary, not an enforced
 # enum, so a future verb does not require a schema change to add.
 POSTHOC_STEERING_VERBS = ("less_of_this", "mute", "wrong")
-
-
-_DIRECTORY_OPEN_FLAGS = (
+_LOCK_ROOT_OPEN_FLAGS = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
     | getattr(os, "O_NOFOLLOW", 0)
     | getattr(os, "O_CLOEXEC", 0)
 )
-_FILE_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-_STEERING_PARENT, _STEERING_FILENAME = Path(note_rel_path(STEERING_LOG)).parts
-
-
-@contextmanager
-def _open_steering_parent(vault_root: Path) -> Iterator[int]:
-    """Open/create the fixed parent through anchored, no-follow descriptors."""
-    root = vault_root.expanduser().resolve()
-    root_fd = os.open(root, _DIRECTORY_OPEN_FLAGS)
-    parent_fd: int | None = None
-    try:
-        try:
-            parent_fd = os.open(_STEERING_PARENT, _DIRECTORY_OPEN_FLAGS, dir_fd=root_fd)
-        except FileNotFoundError:
-            os.mkdir(_STEERING_PARENT, mode=0o755, dir_fd=root_fd)
-            os.fsync(root_fd)
-            parent_fd = os.open(_STEERING_PARENT, _DIRECTORY_OPEN_FLAGS, dir_fd=root_fd)
-        except OSError as exc:
-            raise KnowledgeCapabilityError(
-                "steering log parent must be an in-vault non-symlink directory"
-            ) from exc
-        opened_parent = os.fstat(parent_fd)
-        yield parent_fd
-        current_parent = os.stat(
-            _STEERING_PARENT,
-            dir_fd=root_fd,
-            follow_symlinks=False,
-        )
-        if (
-            not stat.S_ISDIR(current_parent.st_mode)
-            or (current_parent.st_dev, current_parent.st_ino)
-            != (opened_parent.st_dev, opened_parent.st_ino)
-        ):
-            raise KnowledgeCapabilityError(
-                "steering log parent changed during transaction"
-            )
-    finally:
-        if parent_fd is not None:
-            os.close(parent_fd)
-        os.close(root_fd)
-
-
-def _target_stat(parent_fd: int) -> os.stat_result:
-    try:
-        target = os.stat(_STEERING_FILENAME, dir_fd=parent_fd, follow_symlinks=False)
-    except OSError as exc:
-        raise KnowledgeCapabilityError(
-            "steering log target must be a regular non-symlink file"
-        ) from exc
-    if not stat.S_ISREG(target.st_mode):
-        raise KnowledgeCapabilityError(
-            "steering log target must be a regular non-symlink file"
-        )
-    return target
-
-
-def _read_steering_target(parent_fd: int) -> tuple[bytes, tuple[int, int]]:
-    try:
-        target_fd = os.open(
-            _STEERING_FILENAME,
-            os.O_RDONLY | _FILE_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
-    except OSError as exc:
-        raise KnowledgeCapabilityError(
-            "steering log target must be a regular non-symlink file"
-        ) from exc
-    with os.fdopen(target_fd, "rb") as handle:
-        opened = os.fstat(handle.fileno())
-        if not stat.S_ISREG(opened.st_mode):
-            raise KnowledgeCapabilityError("steering log target must be a regular file")
-        return handle.read(), (opened.st_dev, opened.st_ino)
-
-
-def _ensure_steering_log_seed(parent_fd: int, *, write_guard: WriteGuard) -> tuple[int, int]:
-    """Create `steering.log.md` with its initial frontmatter+body if it does
-    not exist yet.
-
-    The complete seed is rendered through the normal settings-note renderer,
-    then installed by atomic replacement so an interrupted first write cannot
-    leave a partial YAML document for a retry to mistake for a durable seed.
-    """
-    try:
-        existing = _target_stat(parent_fd)
-    except KnowledgeCapabilityError as exc:
-        try:
-            os.stat(_STEERING_FILENAME, dir_fd=parent_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            pass
-        else:
-            raise exc
-    else:
-        return existing.st_dev, existing.st_ino
-    write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
-    note = SettingsNote(spec=STEERING_LOG, values={"entry_count": 0, "last_appended": None})
-    _atomic_replace_bytes(parent_fd, render_note(note).encode("utf-8"))
-    created = _target_stat(parent_fd)
-    return created.st_dev, created.st_ino
-
-
-def _copy_required_metadata(source_fd: int, staged_fd: int) -> None:
-    """Copy access-control metadata, failing closed if it cannot be proven."""
-    source = os.fstat(source_fd)
-    if sys.platform == "darwin":
-        fcopyfile = ctypes.CDLL(None, use_errno=True).fcopyfile
-        fcopyfile.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-        fcopyfile.restype = ctypes.c_int
-        if fcopyfile(source_fd, staged_fd, None, 0b111) != 0:
-            error = ctypes.get_errno()
-            raise OSError(error, os.strerror(error))
-    else:
-        os.fchmod(staged_fd, stat.S_IMODE(source.st_mode))
-        staged = os.fstat(staged_fd)
-        if (staged.st_uid, staged.st_gid) != (source.st_uid, source.st_gid):
-            os.fchown(staged_fd, source.st_uid, source.st_gid)
-        required_xattr_apis = ("listxattr", "getxattr", "setxattr")
-        if not all(hasattr(os, name) for name in required_xattr_apis):
-            raise KnowledgeCapabilityError(
-                "platform cannot prove steering log ACL/xattr preservation"
-            )
-        for attribute in os.listxattr(source_fd):
-            os.setxattr(staged_fd, attribute, os.getxattr(source_fd, attribute))
-
-    staged = os.fstat(staged_fd)
-    if (
-        stat.S_IMODE(staged.st_mode) != stat.S_IMODE(source.st_mode)
-        or staged.st_uid != source.st_uid
-        or staged.st_gid != source.st_gid
-    ):
-        raise KnowledgeCapabilityError(
-            "steering log metadata could not be preserved exactly"
-        )
-
-
-def _write_all(fd: int, content: bytes) -> None:
-    view = memoryview(content)
-    while view:
-        written = os.write(fd, view)
-        if written <= 0:
-            raise OSError("staged steering write made no progress")
-        view = view[written:]
-
-
-def _atomic_replace_bytes(
-    parent_fd: int,
-    content: bytes,
-    *,
-    preserve_metadata_fd: int | None = None,
-    expected_target_identity: tuple[int, int] | None = None,
-) -> None:
-    """Durably install bytes through one anchored parent descriptor."""
-    staged_name = f".{_STEERING_FILENAME}.{uuid4().hex}.tmp"
-    staged_owned = False
-    try:
-        staged_fd = os.open(
-            staged_name,
-            os.O_RDWR | os.O_CREAT | os.O_EXCL | _FILE_NOFOLLOW,
-            0o600,
-            dir_fd=parent_fd,
-        )
-        staged_owned = True
-        with os.fdopen(staged_fd, "r+b") as handle:
-            if preserve_metadata_fd is not None:
-                _copy_required_metadata(preserve_metadata_fd, handle.fileno())
-            handle.seek(0)
-            handle.truncate()
-            _write_all(handle.fileno(), content)
-            os.fsync(handle.fileno())
-        if expected_target_identity is not None:
-            current = _target_stat(parent_fd)
-            if (current.st_dev, current.st_ino) != expected_target_identity:
-                raise KnowledgeCapabilityError(
-                    "steering log target changed before bookkeeping replacement"
-                )
-        os.replace(
-            staged_name,
-            _STEERING_FILENAME,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-        )
-        staged_owned = False
-        os.fsync(parent_fd)
-    finally:
-        if staged_owned:
-            try:
-                os.unlink(staged_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
-            except FileNotFoundError:
-                pass
 
 
 def _split_steering_log_bytes(raw: bytes) -> tuple[dict[str, Any], bytes]:
@@ -590,57 +392,69 @@ def _split_steering_log_bytes(raw: bytes) -> tuple[dict[str, Any], bytes]:
     return frontmatter, raw[closing_end:]
 
 
-def _patch_steering_log_frontmatter(
-    parent_fd: int,
-    patch: dict[str, Any],
+def _build_steering_log_transaction(
+    raw: bytes | None,
+    proposed_append: bytes,
     *,
-    write_guard: WriteGuard,
-    expected_target_identity: tuple[int, int],
-) -> None:
-    """Rewrite only `steering.log.md`'s YAML frontmatter, preserving the
-    body byte-for-byte through an atomic same-directory replacement.
+    payload: dict[str, Any],
+    timestamp: str,
+) -> tuple[bytes, bytes, str]:
+    """Build one complete seed/append/bookkeeping publication.
 
-    Deliberately bypasses `write_settings_note`/`render_note` (which
-    regenerate the full note, including a fresh static descriptive body)
-    -- those would silently discard every previously appended steering
-    line. This is the one `_heimdal/**` note where the body is the durable
-    record rather than a rendering of frontmatter, so its frontmatter
-    reconciliation must preserve the body explicitly instead of trusting
-    the generic renderer to do so.
+    Existing body bytes are carried forward verbatim. A matching operation
+    id contributes no new append bytes, while a mismatched reuse fails before
+    the governed append seam publishes anything.
     """
-    write_guard.assert_writes_allowed(POSTHOC_STEERING_WRITE_ACTION)
-    source_fd = os.open(
-        _STEERING_FILENAME,
-        os.O_RDONLY | _FILE_NOFOLLOW,
-        dir_fd=parent_fd,
-    )
-    try:
-        source = os.fstat(source_fd)
-        if not stat.S_ISREG(source.st_mode):
-            raise KnowledgeCapabilityError("steering log target must be a regular file")
-        if (source.st_dev, source.st_ino) != expected_target_identity:
-            raise KnowledgeCapabilityError(
-                "steering log target changed before bookkeeping read"
-            )
-        with os.fdopen(os.dup(source_fd), "rb") as handle:
-            raw = handle.read()
-        fm, body_bytes = _split_steering_log_bytes(raw)
-        fm.update(patch)
-        rendered_frontmatter = dump_frontmatter(fm, "").removesuffix("\n").encode("utf-8")
-        _atomic_replace_bytes(
-            parent_fd,
-            rendered_frontmatter + body_bytes,
-            preserve_metadata_fd=source_fd,
-            expected_target_identity=(source.st_dev, source.st_ino),
+
+    if raw is None:
+        seed = SettingsNote(
+            spec=STEERING_LOG,
+            values={"entry_count": 0, "last_appended": None},
         )
-    finally:
-        os.close(source_fd)
+        raw = render_note(seed).encode("utf-8")
+
+    frontmatter, body_bytes = _split_steering_log_bytes(raw)
+    entries = _steering_log_entries(raw)
+    operation_id = payload["operation_id"]
+    matches = [
+        entry
+        for entry in entries
+        if entry.payload and entry.payload["operation_id"] == operation_id
+    ]
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"operation_id collision: duplicate durable entries for {operation_id}"
+        )
+    if matches:
+        if matches[0].payload != payload:
+            raise ValueError(f"operation_id collision for {operation_id}")
+        actual_append = b""
+        durable_line = matches[0].line
+        final_entries = entries
+    else:
+        actual_append = proposed_append
+        durable_line = proposed_append.decode("utf-8")
+        final_entries = [
+            *entries,
+            _SteeringLogEntry(line=durable_line, timestamp=timestamp, payload=payload),
+        ]
+
+    frontmatter.update(
+        {
+            "entry_count": len(final_entries),
+            "last_appended": final_entries[-1].timestamp if final_entries else None,
+        }
+    )
+    rendered_frontmatter = (
+        dump_frontmatter(frontmatter, "").removesuffix("\n").encode("utf-8")
+    )
+    return rendered_frontmatter + body_bytes + actual_append, actual_append, durable_line
 
 
 @contextmanager
 def _locked_steering_log(vault_root: Path) -> Iterator[None]:
     """Serialize one filesystem resource across equivalent path spellings."""
-    root_fd = os.open(vault_root.expanduser().resolve(), _DIRECTORY_OPEN_FLAGS)
+    root_fd = os.open(vault_root.expanduser().resolve(), _LOCK_ROOT_OPEN_FLAGS)
     try:
         root = os.fstat(root_fd)
     finally:
@@ -693,29 +507,6 @@ def _steering_log_entries(raw: bytes) -> list[_SteeringLogEntry]:
     return entries
 
 
-def _reconcile_steering_log_bookkeeping(
-    parent_fd: int,
-    *,
-    write_guard: WriteGuard,
-    expected_target_identity: tuple[int, int],
-) -> None:
-    raw, identity = _read_steering_target(parent_fd)
-    if identity != expected_target_identity:
-        raise KnowledgeCapabilityError(
-            "steering log target changed before bookkeeping reconciliation"
-        )
-    entries = _steering_log_entries(raw)
-    _patch_steering_log_frontmatter(
-        parent_fd,
-        {
-            "entry_count": len(entries),
-            "last_appended": entries[-1].timestamp if entries else None,
-        },
-        write_guard=write_guard,
-        expected_target_identity=identity,
-    )
-
-
 def append_steering_log(
     vault_root: Path,
     verb: str,
@@ -735,16 +526,13 @@ def append_steering_log(
     loud. Cooperating processes serialize only this resolved steering log.
 
     "Less of this" / "mute" / "wrong" (or any other post-hoc verb) each
-    become one line appended to the log's body via
-    `app.knowledge.write_ops.append_note_relative` -- never rewritten,
-    never removed, no code path in this module reads the body back to
-    mutate a prior line (the append-only invariant this AC checks). After
-    the body append, the note's agent-authored frontmatter bookkeeping
-    (`entry_count`/`last_appended`) is reconciled via
-    `_patch_steering_log_frontmatter`, which preserves the body (every
-    prior appended line) verbatim -- `apply_agent_update`/
-    `write_settings_note` are not used here because they would regenerate
-    the note's full content and discard the append-only history.
+    become one line appended to the log's body through
+    `app.knowledge.write_ops.append_note_relative`. The seam publishes the
+    body append and agent-authored frontmatter bookkeeping
+    (`entry_count`/`last_appended`) together as one atomic transaction. Its
+    transform is constrained to carry every prior body byte forward verbatim;
+    `apply_agent_update`/`write_settings_note` are not used because they would
+    regenerate the note's body and discard the append-only history.
     """
     if not _STEERING_OPERATION_ID_RE.fullmatch(operation_id):
         raise ValueError(
@@ -767,53 +555,32 @@ def append_steering_log(
     )
     line = f"- [{timestamp}] {encoded_payload}\n"
 
+    durable_line = line
+
+    def build_transaction(
+        current: bytes | None,
+        proposed: bytes,
+    ) -> tuple[bytes, bytes]:
+        nonlocal durable_line
+        replacement, actual_append, durable_line = _build_steering_log_transaction(
+            current,
+            proposed,
+            payload=payload,
+            timestamp=timestamp,
+        )
+        return replacement, actual_append
+
     _assert_append_allowed(write_guard, POSTHOC_STEERING_WRITE_ACTION)
     with _locked_steering_log(vault_root):
-        with _open_steering_parent(vault_root) as parent_fd:
-            target_identity = _ensure_steering_log_seed(
-                parent_fd,
-                write_guard=write_guard,
-            )
-            raw, observed_identity = _read_steering_target(parent_fd)
-            if observed_identity != target_identity:
-                raise KnowledgeCapabilityError(
-                    "steering log target changed after seed observation"
-                )
-            entries = _steering_log_entries(raw)
-            matches = [
-                entry
-                for entry in entries
-                if entry.payload and entry.payload["operation_id"] == operation_id
-            ]
-            if len(matches) > 1:
-                raise RuntimeError(
-                    f"operation_id collision: duplicate durable entries for {operation_id}"
-                )
-            if matches:
-                if matches[0].payload != payload:
-                    raise ValueError(f"operation_id collision for {operation_id}")
-                _reconcile_steering_log_bookkeeping(
-                    parent_fd,
-                    write_guard=write_guard,
-                    expected_target_identity=observed_identity,
-                )
-                return matches[0].line
-
-            append_note_relative(
-                note_rel_path(STEERING_LOG),
-                line,
-                vault_root=vault_root,
-                write_guard=write_guard,
-                action=POSTHOC_STEERING_WRITE_ACTION,
-                _anchored_parent_fd=parent_fd,
-                _expected_target_identity=target_identity,
-            )
-            _reconcile_steering_log_bookkeeping(
-                parent_fd,
-                write_guard=write_guard,
-                expected_target_identity=target_identity,
-            )
-            return line
+        append_note_relative(
+            note_rel_path(STEERING_LOG),
+            line,
+            vault_root=vault_root,
+            write_guard=write_guard,
+            action=POSTHOC_STEERING_WRITE_ACTION,
+            _atomic_transform=build_transaction,
+        )
+    return durable_line
 
 
 def read_steering_log_body(vault_root: Path) -> str:
