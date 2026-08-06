@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -313,106 +312,43 @@ _PG_DSN_UNSET_REASON = (
 )
 
 
-def _redact_dsn(dsn: str) -> str:
-    """Drop any password from a DSN so guard messages stay printable.
+def _looks_like_prod_test_dsn(dsn: str) -> bool:
+    """Classify the effective libpq target without changing the shared guard.
 
-    Covers every shape `app.db.dsn.looks_like_prod_dsn` accepts: libpq keyword
-    form (``host=... password=...``, tokenised with `shlex` exactly as that
-    module does, so a quoted password is not half-echoed), URL userinfo
-    (``postgresql://user:pw@host/db``), and a password passed as a URL query
-    parameter (``...?password=...``), which the userinfo branch alone missed.
+    Issue #4573 requires the existing ``looks_like_prod_dsn`` guard to remain
+    unchanged. Psycopg's parser closes the test-only gap for URI query options,
+    percent encoding, and whitespace around keyword assignments.
     """
 
-    if "://" not in dsn and "=" in dsn:
-        try:
-            fields = shlex.split(dsn)
-        except ValueError:
-            return "<unparseable conninfo redacted>"
-        parts = []
-        index = 0
-        while index < len(fields):
-            field = fields[index]
-            if "=" in field:
-                key, value = field.split("=", 1)
-            elif index + 2 < len(fields) and fields[index + 1] == "=":
-                key, value = field, fields[index + 2]
-                index += 2
-            else:
-                parts.append(field)
-                index += 1
-                continue
-            parts.append(f"{key}=***" if key.lower() == "password" else f"{key}={value}")
-            index += 1
-        return " ".join(parts)
+    from app.db.dsn import looks_like_prod_dsn, resolve_dsn
 
-    scheme, sep, rest = dsn.partition("://")
-    if not sep:
-        # Schemeless and keyword-less. `looks_like_prod_dsn` classifies this as
-        # prod (app/db/dsn.py: `if "://" not in url: return True`), so it can
-        # reach the abort message; a `user:pw@host` shape must not survive.
-        if "@" in dsn:
-            userinfo, _, hostpart = dsn.rpartition("@")
-            user, has_password, _ = userinfo.partition(":")
-            if has_password:
-                return f"{user}:***@{hostpart}"
-        return dsn
+    if looks_like_prod_dsn(dsn):
+        return True
+    try:
+        from psycopg.conninfo import conninfo_to_dict
 
-    rest, query_sep, query = rest.partition("?")
-    if query:
-        redacted_query = "&".join(
-            f"{p.split('=', 1)[0]}=***"
-            if p.split("=", 1)[0].lower() in {"password", "passfile"} and "=" in p
-            else p
-            for p in query.split("&")
-        )
-        query = redacted_query
+        effective = conninfo_to_dict(resolve_dsn(dsn))
+    except Exception:
+        # A configured target the guard cannot understand is not safe enough
+        # for a destructive test lane.
+        return True
 
-    if "@" in rest:
-        userinfo, _, hostpart = rest.rpartition("@")
-        user, has_password, _ = userinfo.partition(":")
-        if has_password:
-            rest = f"{user}:***@{hostpart}"
-
-    return f"{scheme}://{rest}{query_sep}{query}"
+    dbname = str(effective.get("dbname", "") or "").strip()
+    ports = str(effective.get("port", "") or "").split(",")
+    return dbname == "app" or any(port.strip() == "15432" for port in ports)
 
 
-def _prod_dsn_abort_message(dsn: str, *, variable: str = "DATABASE_URL/DB_DSN") -> str:
+def _prod_dsn_abort_message(*, variable: str = "DATABASE_URL/DB_DSN") -> str:
     return (
         f"Refusing to run pg-marked tests: {variable} resolves to a "
-        f"production-looking database ({_redact_dsn(dsn)}). "
+        "production-looking database. The configured connection value is "
+        "not echoed because it may contain credentials. "
         "app.db.dsn.looks_like_prod_dsn flags a DSN whose database name is "
         "exactly 'app' or whose port is the prod-published 15432. The pg lane "
         "runs destructive DDL, TRUNCATE, and CREATE/DROP DATABASE against the "
         f"resolved server. Point it at a scratch database, e.g. "
         f"{_PG_LANE_SCRATCH_HINT} (#4573)."
     )
-
-
-_REACHABLE_PROD_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
-
-
-def _points_at_a_reachable_prod_server(dsn: str) -> bool:
-    """Prod-classified *and* at an address this host can actually answer on.
-
-    Used only for the second resolver below, where the built-in fallback is the
-    compose-internal `…@db:5432/app`. That address is prod-shaped but reachable
-    only from inside the compose network, so treating it as a refusal would
-    abort ordinary runs. A loopback prod address is the real hazard.
-    """
-
-    from urllib.parse import parse_qs, urlsplit
-
-    from app.db.dsn import looks_like_prod_dsn, resolve_dsn
-
-    if not looks_like_prod_dsn(dsn):
-        return False
-    try:
-        parts = urlsplit(resolve_dsn(dsn))
-        query = parse_qs(parts.query, keep_blank_values=True)
-        host = parts.hostname or query.get("host", [None])[-1]
-        return host in _REACHABLE_PROD_HOSTS
-    except ValueError:
-        return True
 
 
 def _refuse_prod_dsn_before_any_import() -> None:
@@ -428,32 +364,36 @@ def _refuse_prod_dsn_before_any_import() -> None:
     """
 
     from app.config.database import explicit_runtime_database_url
-    from app.db.dsn import looks_like_prod_dsn, resolve_dsn
+    from app.db.dsn import resolve_dsn
 
     control_plane = os.getenv("BUILDEROPS_DATABASE_URL", "").strip()
-    if control_plane and looks_like_prod_dsn(control_plane):
+    if control_plane and _looks_like_prod_test_dsn(control_plane):
         raise pytest.UsageError(
-            _prod_dsn_abort_message(control_plane, variable="BUILDEROPS_DATABASE_URL")
+            _prod_dsn_abort_message(variable="BUILDEROPS_DATABASE_URL")
         )
 
     dsn = resolve_dsn()
-    if dsn and looks_like_prod_dsn(dsn):
-        raise pytest.UsageError(_prod_dsn_abort_message(dsn))
+    if dsn and _looks_like_prod_test_dsn(dsn):
+        raise pytest.UsageError(_prod_dsn_abort_message())
 
-    runtime_dsn = explicit_runtime_database_url(os.environ)
-    if runtime_dsn and _points_at_a_reachable_prod_server(runtime_dsn):
+    runtime_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DATABASE_URL", "DB_DSN"}
+    }
+    runtime_dsn = explicit_runtime_database_url(runtime_env)
+    if runtime_dsn and _looks_like_prod_test_dsn(runtime_dsn):
         raise pytest.UsageError(
-            _prod_dsn_abort_message(runtime_dsn, variable="PKM_DB_* / POSTGRES_*")
+            _prod_dsn_abort_message(variable="PKM_DB_* / POSTGRES_*")
         )
 
-    # Only when nothing else named a target: that is the only situation in which
-    # an empty conninfo can still be handed to libpq and take effect.
-    if not dsn and not runtime_dsn:
-        ambient = _ambient_libpq_target()
-        if ambient and _points_at_a_reachable_prod_server(ambient):
-            raise pytest.UsageError(
-                _prod_dsn_abort_message(ambient, variable="PGHOST/PGPORT/PGDATABASE")
-            )
+    # A safe primary/runtime DSN does not neutralise callers that pass an empty
+    # conninfo and therefore consume libpq's ambient variables.
+    ambient = _ambient_libpq_target()
+    if ambient and _looks_like_prod_test_dsn(ambient):
+        raise pytest.UsageError(
+            _prod_dsn_abort_message(variable="PGHOST/PGPORT/PGDATABASE")
+        )
 
 
 def _ambient_libpq_target() -> str:
@@ -478,31 +418,36 @@ def _ambient_libpq_target() -> str:
     port = os.getenv("PGPORT", "").strip() or "5432"
     user = os.getenv("PGUSER", "").strip() or "postgres"
     dbname = os.getenv("PGDATABASE", "").strip() or user
-    # Only the first host of a multi-host list is modelled; the loopback check
-    # below is what decides, and a list naming loopback first is the risky case.
-    host = host.split(",", 1)[0].strip()
-    if ":" in host and not host.startswith("["):  # bare IPv6 literal
-        host = f"[{host}]"
-    return f"postgresql://{user}@{host}:{port}/{dbname}"
+    return f"host={host} port={port} user={user} dbname={dbname}"
+
+
+def _is_builderops_control_plane_item(item: object) -> bool:
+    path = getattr(item, "path", None)
+    if path is None:
+        return False
+    try:
+        Path(path).resolve().relative_to(ROOT / "tests" / "builderops" / "control_plane")
+    except ValueError:
+        return False
+    return True
 
 
 def pytest_collection_modifyitems(config, items) -> None:
     """Skip pg-marked tests when no database was named, with a stated reason."""
 
-    from app.config.database import explicit_runtime_database_url
     from app.db.dsn import resolve_dsn
 
-    if (
-        resolve_dsn()
-        or os.getenv("BUILDEROPS_DATABASE_URL", "").strip()
-        or explicit_runtime_database_url(os.environ)
-        or _ambient_libpq_target()
-    ):
-        return
-
+    primary_configured = bool(resolve_dsn())
+    builderops_configured = bool(os.getenv("BUILDEROPS_DATABASE_URL", "").strip())
     skip_pg = pytest.mark.skip(reason=_PG_DSN_UNSET_REASON)
     for item in items:
-        if item.get_closest_marker("pg") is not None:
+        if item.get_closest_marker("pg") is None:
+            continue
+        if primary_configured:
+            continue
+        if builderops_configured and _is_builderops_control_plane_item(item):
+            continue
+        else:
             item.add_marker(skip_pg)
 
 

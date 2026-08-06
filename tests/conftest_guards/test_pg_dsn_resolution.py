@@ -63,7 +63,26 @@ def _run_pytest(
     # command sets PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, and an inherited copy would
     # leave the child without xdist, turning `-n 2` into an unknown option
     # rather than the configuration under test.
-    dropped = {"DATABASE_URL", "DB_DSN", "PYTEST_DISABLE_PLUGIN_AUTOLOAD"}
+    dropped = {
+        "DATABASE_URL",
+        "DB_DSN",
+        "BUILDEROPS_DATABASE_URL",
+        "PKM_DB_HOST",
+        "PKM_DB_PORT",
+        "PKM_DB_NAME_DEV",
+        "PKM_DB_NAME_TEST",
+        "PKM_DB_NAME_PROD",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "PGHOST",
+        "PGPORT",
+        "PGDATABASE",
+        "PGUSER",
+        "PGSERVICE",
+        "PGSERVICEFILE",
+        "PGHOSTADDR",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+    }
     env = {k: v for k, v in os.environ.items() if k not in dropped}
     if dsn is not None:
         env["DATABASE_URL"] = dsn
@@ -130,8 +149,8 @@ def test_prod_looking_dsn_aborts_the_run(spy_log: Path) -> None:
     assert "Refusing to run pg-marked tests" in output, output
     assert "production-looking database" in output, output
     # The password must not be echoed back into CI logs.
-    assert "app:***@127.0.0.1:15432/app" in output, output
     assert "app:app@127.0.0.1:15432/app" not in output, output
+    assert "not echoed because it may contain credentials" in output, output
 
     # The whole point: the abort precedes every connection, including the
     # import-time probe in IMPORT_TIME_PROBE_TARGET.
@@ -251,18 +270,13 @@ def test_runtime_resolver_env_is_guarded_too(spy_log: Path) -> None:
     assert attempts == [], attempts
 
 
-def test_compose_internal_default_is_not_treated_as_reachable_prod(spy_log: Path) -> None:
-    """The `@db:5432/app` fallback is prod-shaped but only reachable in compose.
+def test_unconfigured_runtime_fallback_is_not_treated_as_explicit() -> None:
+    """The compose-shaped fallback is ignored only when no writer named it."""
 
-    Refusing it would abort ordinary runs, so the second resolver's check is
-    scoped to loopback addresses. This pins that scoping so it cannot silently
-    widen into a false positive.
-    """
+    from app.config.database import explicit_runtime_database_url
 
-    from tests.conftest import _points_at_a_reachable_prod_server
-
-    assert not _points_at_a_reachable_prod_server("postgresql+psycopg://app:app@db:5432/app")
-    assert _points_at_a_reachable_prod_server("postgresql+psycopg://app:app@127.0.0.1:15432/app")
+    assert explicit_runtime_database_url({}) is None
+    assert explicit_runtime_database_url({"PKM_DB_HOST": "db"}) is not None
 
 
 def test_connect_spy_cannot_hide_an_attempt(tmp_path: Path) -> None:
@@ -299,65 +313,68 @@ def test_connect_spy_cannot_hide_an_attempt(tmp_path: Path) -> None:
     assert AMBIENT in recorded, recorded
 
 
-def test_redaction_covers_libpq_keyword_conninfo() -> None:
-    """looks_like_prod_dsn accepts keyword conninfo, so redaction must too."""
+def test_refusal_message_never_echoes_conninfo() -> None:
+    """The safest credential redaction is to never echo arbitrary conninfo."""
 
-    from tests.conftest import _prod_dsn_abort_message, _redact_dsn
-
-    from app.db.dsn import looks_like_prod_dsn
+    from tests.conftest import _looks_like_prod_test_dsn, _prod_dsn_abort_message
 
     leaky = [
-        # keyword conninfo, plain and quoted
+        # keyword conninfo, plain, quoted, and whitespace-separated
         "host=127.0.0.1 port=5432 dbname=app user=app password=hunter2",
         "dbname=app user=app password='hunter 2'",
+        "host = 127.0.0.1 port = 15432 dbname = app password = hunter2",
         # URL userinfo, and password as a query parameter
         "postgresql://app:hunter2@127.0.0.1:15432/app",
         "postgresql://app@127.0.0.1:15432/db?password=hunter2",
+        "postgresql://app@127.0.0.1:15432/db?pass%77ord=hunter2",
+        "postgresql://app@127.0.0.1:15432/db?%70assword=hunter2",
         # schemeless: looks_like_prod_dsn classifies this as prod too
         "app:hunter2@127.0.0.1:15432/app",
     ]
     for dsn in leaky:
-        assert looks_like_prod_dsn(dsn), f"probe is not classified prod: {dsn}"
-        assert "hunter2" not in _redact_dsn(dsn), dsn
-        assert "hunter2" not in _prod_dsn_abort_message(dsn), dsn
-
-    # Redaction must not mangle the parts an operator needs to recognise.
-    assert "dbname=app" in _redact_dsn(leaky[0])
-    assert "127.0.0.1:15432" in _redact_dsn(leaky[2])
-    # A DSN with no password is returned intact.
-    assert _redact_dsn("postgresql://app@127.0.0.1:15432/app").endswith("/app")
-
-    # No shape may raise: the abort message is the last thing the operator sees.
-    for malformed in ("postgresql://", "host=", "=", "postgresql://a:b@[::1]:notaport/app"):
-        _redact_dsn(malformed)
+        assert _looks_like_prod_test_dsn(dsn), f"probe is not classified prod: {dsn}"
+        message = _prod_dsn_abort_message()
+        assert "hunter" not in message
+        assert dsn not in message
+        assert "not echoed because it may contain credentials" in message
 
 
 def test_effective_libpq_query_parameters_are_classified_as_production() -> None:
+    from tests.conftest import _looks_like_prod_test_dsn
+
     from app.db.dsn import looks_like_prod_dsn
 
-    assert looks_like_prod_dsn("postgresql:///app_test?host=127.0.0.1&port=15432")
-    assert looks_like_prod_dsn("postgresql:///safe?dbname=app")
+    port_query = "postgresql:///app_test?host=127.0.0.1&port=15432"
+    db_query = "postgresql:///safe?dbname=app"
+    # The shared restore classifier is explicitly out of scope for #4573.
+    assert not looks_like_prod_dsn(port_query)
+    assert not looks_like_prod_dsn(db_query)
+    assert _looks_like_prod_test_dsn(port_query)
+    assert _looks_like_prod_test_dsn(db_query)
 
 
-def test_runtime_guard_reads_libpq_query_host() -> None:
-    from tests.conftest import _points_at_a_reachable_prod_server
+def test_test_guard_reads_effective_libpq_query_port() -> None:
+    from tests.conftest import _looks_like_prod_test_dsn
 
-    assert _points_at_a_reachable_prod_server("postgresql:///safe?host=127.0.0.1&port=15432")
+    assert _looks_like_prod_test_dsn(
+        "postgresql:///safe?host=nonloopback.example&port=15432"
+    )
 
 
-def test_keyword_conninfo_redaction_handles_whitespace_around_equals() -> None:
-    from tests.conftest import _redact_dsn
+def test_keyword_conninfo_classifier_handles_whitespace_around_equals() -> None:
+    from tests.conftest import _looks_like_prod_test_dsn
 
-    redacted = _redact_dsn("host = 127.0.0.1 port = 15432 dbname = app password = hunter2")
-    assert "hunter2" not in redacted
-    assert "password=***" in redacted
+    assert _looks_like_prod_test_dsn(
+        "host = nonloopback.example port = 15432 dbname = safe password = hunter2"
+    )
 
 
 def test_builderops_dsn_counts_as_configured_for_pg_collection(monkeypatch: pytest.MonkeyPatch) -> None:
     import tests.conftest as test_config
 
     class Item:
-        def __init__(self) -> None:
+        def __init__(self, path: Path) -> None:
+            self.path = path
             self.markers: list[object] = []
 
         def get_closest_marker(self, name: str) -> object | None:
@@ -369,9 +386,64 @@ def test_builderops_dsn_counts_as_configured_for_pg_collection(monkeypatch: pyte
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.setenv("BUILDEROPS_DATABASE_URL", "postgresql://app:app@db:5432/builderops")
-    item = Item()
+    item = Item(REPO_ROOT / "tests/builderops/control_plane/test_contract.py")
     test_config.pytest_collection_modifyitems(None, [item])
     assert item.markers == []
+
+    unrelated = Item(REPO_ROOT / SCRATCH_FACTORY_TARGET)
+    test_config.pytest_collection_modifyitems(None, [unrelated])
+    assert len(unrelated.markers) == 1
+
+
+@pytest.mark.parametrize(
+    "env_overrides,expected_variable",
+    [
+        (
+            {"PKM_DB_HOST": "nonloopback.example", "PKM_DB_PORT": "15432"},
+            "PKM_DB_* / POSTGRES_*",
+        ),
+        (
+            {
+                "PGHOST": "nonloopback.example",
+                "PGPORT": "15434,15432",
+                "PGDATABASE": "safe",
+            },
+            "PGHOST/PGPORT/PGDATABASE",
+        ),
+    ],
+)
+def test_each_writer_is_guarded_independently_of_a_safe_primary_dsn(
+    spy_log: Path, env_overrides: dict[str, str], expected_variable: str
+) -> None:
+    result, attempts = _run_pytest(
+        [SCRATCH_FACTORY_TARGET],
+        dsn="postgresql://app:app@127.0.0.1:15434/app_test",
+        spy_log=spy_log,
+        env_overrides=env_overrides,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == PYTEST_USAGE_ERROR, output
+    assert expected_variable in output, output
+    assert attempts == [], attempts
+
+
+def test_runtime_writer_does_not_authorize_primary_dsn_consumers(spy_log: Path) -> None:
+    result, attempts = _run_pytest(
+        [SCRATCH_FACTORY_TARGET],
+        dsn=None,
+        spy_log=spy_log,
+        env_overrides={
+            "PKM_ENVIRONMENT": "test",
+            "PKM_DB_HOST": "127.0.0.1",
+            "PKM_DB_PORT": "15434",
+            "PKM_DB_NAME_TEST": "app_test",
+        },
+    )
+    output = result.stdout + result.stderr
+
+    assert "pg lane skipped" in output, output
+    assert attempts == [], attempts
 
 
 # The "no prod DSN survives in default position under tests/" census lives in

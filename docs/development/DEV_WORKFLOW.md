@@ -92,15 +92,19 @@ The gate checks **four** ways this repo can name a database, not just the obviou
 | Writer | Reached through | Checked |
 |---|---|---|
 | `DATABASE_URL` / `DB_DSN` | `app/db/dsn.py :: resolve_dsn` | always |
-| `PKM_DB_HOST` / `PKM_DB_PORT` / `PKM_DB_NAME_*` / `POSTGRES_*` | `app/config/database.py :: resolve_runtime_database_url` → `app/db/db.py :: conn_rw` | when loopback + production |
-| `PGHOST` / `PGPORT` / `PGDATABASE` | libpq's own defaults, whenever an empty conninfo is passed | when loopback + production |
+| `PKM_DB_HOST` / `PKM_DB_PORT` / `PKM_DB_NAME_*` / `POSTGRES_*` | `app/config/database.py :: resolve_runtime_database_url` → `app/db/db.py :: conn_rw` | always when explicitly configured |
+| `PGHOST` / `PGPORT` / `PGDATABASE` | libpq's own defaults, whenever an empty conninfo is passed | always when a TCP host is configured |
 | `BUILDEROPS_DATABASE_URL` | the control plane's own `CREATE SCHEMA` path | always |
 
 The second and third are the reason `DATABASE_URL` alone is not sufficient: a run with
 `PKM_DB_HOST=127.0.0.1 PKM_DB_PORT=15432` and no `DATABASE_URL` reaches production through
-`conn_rw()` while the documented pair still looks unconfigured. Those two are scoped to loopback
-addresses so the compose-internal `@db:5432/app` fallback — prod-shaped but reachable only from
-inside the compose network — does not abort ordinary runs.
+`conn_rw()` while the documented pair still looks unconfigured. Each writer is checked independently:
+a safe primary DSN cannot hide a production runtime or ambient libpq target. The unconditional
+compose-internal fallback is ignored only when no runtime writer was explicitly configured.
+
+Collection authorization stays consumer-specific. `DATABASE_URL` / `DB_DSN` authorizes the ordinary
+`pg` lane; `BUILDEROPS_DATABASE_URL` authorizes only control-plane tests that consume it. Runtime and
+ambient libpq variables never globally unskip destructive tests that consume the documented pair.
 
 The refusal is deliberately placed before imports rather than after collection: several test modules
 probe Postgres at import time (`tests/stores/test_capabilities_matrix.py` evaluates `pg_available()`
