@@ -72,13 +72,18 @@ This slice promotes the existing seed without changing content-vault authority.
   normalize to one authority only when map/internal ID, channel, HMAC identity, ancestor chain, and
   authenticated canonical root agree (their randomized sealed-root ciphertext may differ). Transfer
   source and destination bindings stay distinct and both count, including while the recoverable
-  reservation is pending. The v1 tombstone map preserves one immutable removal epoch per binding;
+  reservation is pending. Cross-release retained authority must form one authenticated directed,
+  acyclic transfer path with at most one live terminal binding; a pending reservation may extend
+  only that terminal, and missing, disconnected, branched, merged, cyclic, or interior-attached
+  history fails closed. The v1 tombstone map preserves one immutable removal epoch per binding;
   after same-binding reactivation a second removal fails closed rather than overwriting that epoch,
   until MVR-06B owns a versioned repeated-removal journal. A completed legacy bootstrap is reconcilable only
   inside a freshly proved stopped deployment: newly materialized owners are added
   atomically, while binding reassignment, retired/transferring binding reuse, and forbidden
   release-channel overlap fail without changing the ledger. Reconciliation, backup consistency,
-  and key rotation revalidate persisted component cardinality even when no binding changes.
+  and key rotation revalidate persisted component cardinality even when no binding changes. Ledger,
+  key, and rotation-journal generation/key/bootstrap authority fields require exact JSON types
+  before object construction or recovery; no truthy or numeric/string coercion is accepted.
   One channel/instance may register an initialized parent vault and initialized nested child as
   distinct bindings only when the existing nested-vault boundary contract is active: parent traversal
   prunes the child, each effect targets one explicit binding/lease, and neither registration aliases

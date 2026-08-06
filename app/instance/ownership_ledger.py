@@ -1208,10 +1208,17 @@ class OwnershipLedger:
         current: LedgerSnapshot,
         key: _KeyMaterial,
     ) -> None:
-        if current.schema != LEDGER_SCHEMA:
+        if (
+            current.schema != LEDGER_SCHEMA
+            or type(current.generation) is not int
+            or type(current.key_id) is not str
+            or not current.key_id.strip()
+            or type(current.legacy_bootstrap_complete) is not bool
+        ):
             raise LedgerError("ownership ledger schema is invalid")
         leases = self._validated_component_leases(current, key)
         self._assert_native_release_component_cardinality(leases)
+        self._assert_release_transfer_topology(current, leases)
 
     def _validated_component_leases(
         self,
@@ -1457,6 +1464,173 @@ class OwnershipLedger:
                     "overlap component"
                 )
 
+    def _assert_release_transfer_topology(
+        self,
+        current: LedgerSnapshot,
+        leases: Sequence[OwnershipLease],
+    ) -> None:
+        """Reject release overlap unless it is one authenticated transfer path."""
+
+        overlap_graph: dict[int, set[int]] = {
+            index: set() for index in range(len(leases))
+        }
+        for index, left in enumerate(leases):
+            for right_index, right in enumerate(
+                leases[index + 1 :],
+                start=index + 1,
+            ):
+                if (
+                    left.root_fingerprint != right.root_fingerprint
+                    and left.root_fingerprint not in right.ancestor_fingerprints
+                    and right.root_fingerprint not in left.ancestor_fingerprints
+                ):
+                    continue
+                overlap_graph[index].add(right_index)
+                overlap_graph[right_index].add(index)
+
+        unseen = set(overlap_graph)
+        while unseen:
+            seed = unseen.pop()
+            component = {seed}
+            pending = [seed]
+            while pending:
+                index = pending.pop()
+                adjacent = overlap_graph[index] & unseen
+                unseen.difference_update(adjacent)
+                component.update(adjacent)
+                pending.extend(adjacent)
+
+            release_leases = [
+                leases[index]
+                for index in component
+                if leases[index].channel_id in _RELEASE_CHANNELS
+            ]
+            exact_roots: dict[tuple[str, str], str] = {}
+            for lease in release_leases:
+                exact_key = (lease.channel_id, lease.root_fingerprint)
+                existing_binding = exact_roots.get(exact_key)
+                if (
+                    existing_binding is not None
+                    and existing_binding != lease.vault_binding_id
+                ):
+                    raise LedgerCollisionError(
+                        "canonical content roots contain duplicate release bindings"
+                    )
+                exact_roots[exact_key] = lease.vault_binding_id
+
+            release_channels = {lease.channel_id for lease in release_leases}
+            if len(release_channels) <= 1:
+                continue
+
+            binding_ids = {lease.vault_binding_id for lease in release_leases}
+            edges: list[tuple[str, str]] = []
+            for item in current.transfer_lineage:
+                endpoints = {
+                    item.source_binding_id,
+                    item.destination_binding_id,
+                }
+                if not endpoints & binding_ids:
+                    continue
+                if not endpoints <= binding_ids:
+                    raise LedgerCollisionError(
+                        "release ownership transfer lineage crosses overlap components"
+                    )
+                edges.append(
+                    (item.source_binding_id, item.destination_binding_id)
+                )
+
+            current_edge: tuple[str, str] | None = None
+            if current.transfer is not None:
+                endpoints = {
+                    current.transfer.source_binding_id,
+                    current.transfer.destination_binding_id,
+                }
+                if endpoints & binding_ids:
+                    if not endpoints <= binding_ids:
+                        raise LedgerCollisionError(
+                            "release ownership transfer crosses overlap components"
+                        )
+                    current_edge = (
+                        current.transfer.source_binding_id,
+                        current.transfer.destination_binding_id,
+                    )
+                    edges.append(current_edge)
+
+            edge_nodes = {binding_id for edge in edges for binding_id in edge}
+            if edge_nodes != binding_ids or len(edges) != len(binding_ids) - 1:
+                raise LedgerCollisionError(
+                    "overlapping release bindings require one authenticated transfer path"
+                )
+
+            outgoing: dict[str, str] = {}
+            incoming: dict[str, str] = {}
+            for source_binding_id, destination_binding_id in edges:
+                if (
+                    source_binding_id == destination_binding_id
+                    or source_binding_id in outgoing
+                    or destination_binding_id in incoming
+                ):
+                    raise LedgerCollisionError(
+                        "release ownership transfer history is not a simple path"
+                    )
+                outgoing[source_binding_id] = destination_binding_id
+                incoming[destination_binding_id] = source_binding_id
+
+            starts = binding_ids - set(incoming)
+            terminals = binding_ids - set(outgoing)
+            if len(starts) != 1 or len(terminals) != 1:
+                raise LedgerCollisionError(
+                    "release ownership transfer history is cyclic or disconnected"
+                )
+            terminal = next(iter(terminals))
+            visited: set[str] = set()
+            cursor = next(iter(starts))
+            while cursor not in visited:
+                visited.add(cursor)
+                destination = outgoing.get(cursor)
+                if destination is None:
+                    break
+                cursor = destination
+            if visited != binding_ids or cursor != terminal:
+                raise LedgerCollisionError(
+                    "release ownership transfer history is cyclic or disconnected"
+                )
+
+            live_bindings = binding_ids & set(current.leases)
+            retired_bindings = binding_ids & set(current.tombstones)
+            if len(live_bindings) > 1:
+                raise LedgerCollisionError(
+                    "overlapping release transfer history has multiple live owners"
+                )
+            if current_edge is not None:
+                source_binding_id, destination_binding_id = current_edge
+                if (
+                    destination_binding_id != terminal
+                    or outgoing.get(source_binding_id) != destination_binding_id
+                    or live_bindings
+                    or not (
+                        binding_ids - {source_binding_id, destination_binding_id}
+                    )
+                    <= retired_bindings
+                ):
+                    raise LedgerCollisionError(
+                        "pending release transfer does not extend the terminal history"
+                    )
+                continue
+
+            if live_bindings:
+                if live_bindings != {terminal}:
+                    raise LedgerCollisionError(
+                        "release ownership transfer live owner is not terminal"
+                    )
+                required_retired = binding_ids - {terminal}
+            else:
+                required_retired = binding_ids
+            if not required_retired <= retired_bindings:
+                raise LedgerCollisionError(
+                    "release ownership transfer history is missing retained lineage"
+                )
+
     def _matches_root(self, lease: OwnershipLease, root: Path, key: _KeyMaterial) -> bool:
         return lease.root_fingerprint == self._lease_for_root(
             channel_id=lease.channel_id,
@@ -1628,10 +1802,21 @@ class OwnershipLedger:
         _assert_private_file(self.key_path)
         try:
             value = json.loads(self.key_path.read_text(encoding="utf-8"))
-            if value.get("schema") != KEY_SCHEMA:
+            if not isinstance(value, dict) or value.get("schema") != KEY_SCHEMA:
                 raise ValueError
-            secret = base64.b64decode(value["secret"], validate=True)
-            key = _KeyMaterial(str(value["key_id"]), int(value["generation"]), secret)
+            key_id = value.get("key_id")
+            generation = value.get("generation")
+            secret_value = value.get("secret")
+            if (
+                type(key_id) is not str
+                or not key_id.strip()
+                or type(generation) is not int
+                or generation < 1
+                or type(secret_value) is not str
+            ):
+                raise ValueError
+            secret = base64.b64decode(secret_value, validate=True)
+            key = _KeyMaterial(key_id, generation, secret)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise LedgerKeyError("protected ownership key is invalid") from exc
         if len(key.secret) != 32 or key.generation < 1:
@@ -1684,13 +1869,19 @@ class OwnershipLedger:
             transfer_lineage_raw = value.get("transfer_lineage", [])
             generation = value.get("generation")
             key_id = value.get("key_id")
+            legacy_bootstrap_complete = value.get(
+                "legacy_bootstrap_complete",
+                False,
+            )
             if (
                 not isinstance(leases_raw, dict)
                 or not isinstance(tombstones_raw, dict)
                 or not isinstance(transfer_lineage_raw, list)
                 or (transfer_raw is not None and not isinstance(transfer_raw, dict))
-                or not isinstance(generation, int)
-                or not isinstance(key_id, str)
+                or type(generation) is not int
+                or type(key_id) is not str
+                or not key_id.strip()
+                or type(legacy_bootstrap_complete) is not bool
                 or not all(
                     isinstance(binding, str) and isinstance(raw, dict)
                     for binding, raw in leases_raw.items()
@@ -1741,7 +1932,7 @@ class OwnershipLedger:
                 tombstones=tombstones,
                 transfer=transfer,
                 transfer_lineage=transfer_lineage,
-                legacy_bootstrap_complete=bool(value.get("legacy_bootstrap_complete", False)),
+                legacy_bootstrap_complete=legacy_bootstrap_complete,
             )
         except (AttributeError, ValueError, KeyError, TypeError) as exc:
             raise LedgerError("ownership ledger is invalid") from exc
@@ -1782,18 +1973,31 @@ class OwnershipLedger:
             ledger_value = journal["ledger"]
             if not isinstance(key_value, dict) or not isinstance(ledger_value, dict):
                 raise ValueError
-            secret = base64.b64decode(key_value["secret"], validate=True)
+            key_id = key_value.get("key_id")
+            key_generation = key_value.get("generation")
+            ledger_key_id = ledger_value.get("key_id")
+            ledger_generation = ledger_value.get("generation")
+            secret_value = key_value.get("secret")
             if (
                 key_value.get("schema") != KEY_SCHEMA
                 or ledger_value.get("schema") != LEDGER_SCHEMA
-                or key_value.get("key_id") != ledger_value.get("key_id")
-                or key_value.get("generation") != ledger_value.get("generation")
-                or len(secret) != 32
+                or type(key_id) is not str
+                or not key_id.strip()
+                or type(ledger_key_id) is not str
+                or type(key_generation) is not int
+                or key_generation < 1
+                or type(ledger_generation) is not int
+                or key_id != ledger_key_id
+                or key_generation != ledger_generation
+                or type(secret_value) is not str
             ):
                 raise ValueError
+            secret = base64.b64decode(secret_value, validate=True)
+            if len(secret) != 32:
+                raise ValueError
             recovered_key = _KeyMaterial(
-                str(key_value["key_id"]),
-                int(key_value["generation"]),
+                key_id,
+                key_generation,
                 secret,
             )
             self._snapshot_from_value(ledger_value, recovered_key)

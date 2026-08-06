@@ -15,6 +15,7 @@ from app.instance.filesystem_identity import (
     same_filesystem_root,
 )
 from app.instance.ownership_ledger import (
+    LedgerCollisionError,
     LedgerError,
     LedgerSnapshot,
     LegacyOwner,
@@ -585,6 +586,10 @@ class InstanceStateBackup:
             payloads = self.ledger.capture_backup_artifacts(
                 capture_registry_artifacts=registry_store.capture_backup_artifacts,
             )
+        except LedgerCollisionError as exc:
+            raise InstanceStatePreflightError(
+                "backup registry/ledger ownership is not unambiguous"
+            ) from exc
         except (LedgerError, OSError, RegistryError) as exc:
             raise InstanceStatePreflightError(
                 "backup registry/ledger capture failed"

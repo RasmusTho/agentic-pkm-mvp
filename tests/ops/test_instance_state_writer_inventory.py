@@ -21,11 +21,17 @@ identifier for it -- while still never emitting the raw host path.
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
 import scripts.instance_state_writer_inventory as writer_inventory
 from scripts.instance_state_writer_inventory import InventoryError
+from tests.deploy.test_deploy_channel import (
+    _deploy_events,
+    _deploy_harness,
+    _run_deploy,
+)
 
 CONTAINER_ID = "a" * 64
 
@@ -749,44 +755,41 @@ def test_active_writer_during_stopped_window_still_refuses(monkeypatch, tmp_path
     assert payload["domains"] == {domain: [] for domain in writer_inventory.DOMAINS}
 
 
-def test_deploy_proceeds_past_inventory_with_shared_native_root(owner_sources, tmp_path):
+def test_deploy_proceeds_past_inventory_with_shared_native_root(tmp_path):
     """`deploy_channel.sh deploy dev <sha>` must reach migrations and recreate."""
 
-    # The inventory really is the deploy's first gate: the wrapper runs this
-    # subcommand, and deploy_channel.sh runs the wrapper before migrations and
-    # service recreate. That ordering is why a refusal blocks every channel.
-    wrapper = (REPO_ROOT / "scripts" / "lib" / "instance_state_deployment.sh").read_text(
-        encoding="utf-8"
+    root, env, sha = _deploy_harness(tmp_path)
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "instance_state_writer_inventory.py",
+        root / "scripts" / "instance_state_writer_inventory.py",
     )
-    assert "produce-legacy-owners" in wrapper
-
-    # Compare call sites, not the function definitions further up the file.
-    deploy = (REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(encoding="utf-8")
-    inventory_at = deploy.index("prepare_instance_state_deployment compose")
-    migrate_at = deploy.index(
-        'run_postmutation_gate "migration execution failed" apply_changed_migrations'
-    )
-    recreate_at = deploy.index('run_postmutation_gate "service recreate/liveness gate failed"')
-    assert inventory_at < migrate_at
-    assert inventory_at < recreate_at
-
-    # The observed host arrangement: native and a channel on one iCloud vault.
     shared = _vault(tmp_path, "cloud-sync", "vault")
-    owner_sources["owners"] = [("native", shared), ("prod", shared)]
-    output = tmp_path / "legacy-owner-inventory.json"
-
-    # Exactly the argv scripts/lib/instance_state_deployment.sh builds.
-    exit_code = writer_inventory.main(
-        [
-            "produce-legacy-owners",
-            "--repo-root",
-            str(REPO_ROOT),
-            "--active-channel",
-            "dev",
-            "--output",
-            str(output),
-        ]
+    app_local = tmp_path / "app-local.md"
+    app_local.write_text(
+        "---\nknownVaults:\n  shared:\n" f"    path: {shared}\n---\n",
+        encoding="utf-8",
     )
+    env["DESIGN_HANDOFF_APP_LOCAL_SETTINGS"] = str(app_local)
+    env["VAULT_ROOT_PROD"] = str(shared)
 
-    assert exit_code == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["inventory_complete"] is True
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    inventory_path = (
+        Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+        / "legacy-owner-inventory.json"
+    )
+    payload = json.loads(inventory_path.read_text(encoding="utf-8"))
+    assert {
+        (owner["channel_id"], owner["root"])
+        for owner in payload["owners"]
+    } >= {("native", str(shared)), ("prod", str(shared))}
+
+    events = _deploy_events(env)
+    assert any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher "
+            "heimdal-capture-watch companion-ui"
+        )
+        for event in events
+    )

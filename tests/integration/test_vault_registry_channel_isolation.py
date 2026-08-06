@@ -1241,6 +1241,97 @@ def test_transfer_activation_revalidates_persisted_endpoints_without_mutation(
 
 @pytest.mark.parametrize(
     "corruption",
+    ["missing", "branch", "merge", "cycle", "interior_pending"],
+)
+def test_cross_release_history_requires_authenticated_transfer_lineage(
+    tmp_path,
+    corruption,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("dev", "binding-dev", root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.begin_transfer(
+        source_binding_id="binding-dev",
+        destination_channel_id="test",
+        destination_binding_id="binding-test",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.begin_transfer(
+        source_binding_id="binding-test",
+        destination_channel_id="prod",
+        destination_binding_id="binding-prod",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY)
+    assert ledger.load().leases["binding-prod"].state == "active"
+
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    first, second = payload["transfer_lineage"]
+    if corruption == "missing":
+        payload["transfer_lineage"] = [second]
+    elif corruption == "branch":
+        second["source_channel_id"] = "dev"
+        second["source_binding_id"] = "binding-dev"
+    elif corruption == "merge":
+        first["destination_channel_id"] = "prod"
+        first["destination_binding_id"] = "binding-prod"
+    elif corruption == "cycle":
+        terminal = payload["leases"].pop("binding-prod")
+        terminal["state"] = "retired"
+        payload["tombstones"]["binding-prod"] = terminal
+        cycle = dict(second)
+        cycle.update(
+            {
+                "transfer_id": "transfer-cycle",
+                "source_channel_id": "prod",
+                "source_binding_id": "binding-prod",
+                "destination_channel_id": "dev",
+                "destination_binding_id": "binding-dev",
+            }
+        )
+        payload["transfer_lineage"].append(cycle)
+    else:
+        payload["tombstones"].pop("binding-test")
+        pending = dict(first)
+        pending.update(
+            {
+                "transfer_id": "transfer-interior",
+                "source_channel_id": "test",
+                "source_binding_id": "binding-test",
+                "destination_channel_id": "dev",
+                "destination_binding_id": "binding-next",
+            }
+        )
+        payload["transfer"] = pending
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    corrupted = _ownership_artifact_bytes(ledger)
+
+    consumers = (
+        ledger.load,
+        ledger.require_existing,
+        lambda: ledger.capture_backup_artifacts(
+            capture_registry_artifacts=lambda: {},
+        ),
+        lambda: ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        ),
+    )
+    for consume in consumers:
+        with pytest.raises(LedgerError):
+            consume()
+        assert _ownership_artifact_bytes(ledger) == corrupted
+
+
+@pytest.mark.parametrize(
+    "corruption",
     [
         "channel",
         "root_fingerprint",
@@ -1319,6 +1410,95 @@ def test_malformed_same_binding_authority_fails_every_consumer_without_mutation(
             tombstones={"binding-dev": root},
             transfer_lineage=(),
             global_live_owners=[LegacyOwner("dev", "binding-dev", root)],
+        ),
+        lambda: ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        ),
+    )
+    for consume in consumers:
+        with pytest.raises(LedgerError):
+            consume()
+        assert _ownership_artifact_bytes(ledger) == corrupted
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "ledger_bootstrap_string",
+        "ledger_bootstrap_number",
+        "ledger_generation_bool",
+        "ledger_generation_string",
+        "key_generation_bool",
+        "key_generation_string",
+        "key_id_number",
+        "journal_generation_bool",
+        "journal_generation_string",
+        "journal_key_id_number",
+    ],
+)
+def test_malformed_authority_scalars_fail_every_consumer_without_mutation(
+    tmp_path,
+    corruption,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("dev", "binding-dev", root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    if corruption.startswith("journal_"):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            ledger.rotate_key(
+                precondition=lambda _snapshot, _roots: None,
+                crash_after="key_commit",
+                _capability=STORAGE_MUTATION_CAPABILITY,
+            )
+        journal = json.loads(ledger.rotation_path.read_text(encoding="utf-8"))
+        if corruption == "journal_generation_bool":
+            journal["key"]["generation"] = True
+            journal["ledger"]["generation"] = True
+        elif corruption == "journal_generation_string":
+            journal["key"]["generation"] = "2"
+            journal["ledger"]["generation"] = "2"
+        else:
+            journal["key"]["key_id"] = 7
+            journal["ledger"]["key_id"] = 7
+        ledger.rotation_path.write_text(json.dumps(journal), encoding="utf-8")
+    elif corruption.startswith("key_"):
+        key_payload = json.loads(ledger.key_path.read_text(encoding="utf-8"))
+        if corruption == "key_generation_bool":
+            key_payload["generation"] = True
+        elif corruption == "key_generation_string":
+            key_payload["generation"] = "1"
+        else:
+            key_payload["key_id"] = 7
+            ledger_payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+            ledger_payload["key_id"] = "7"
+            ledger.path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+        ledger.key_path.write_text(json.dumps(key_payload), encoding="utf-8")
+    else:
+        ledger_payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+        if corruption == "ledger_bootstrap_string":
+            ledger_payload["legacy_bootstrap_complete"] = "false"
+        elif corruption == "ledger_bootstrap_number":
+            ledger_payload["legacy_bootstrap_complete"] = 0
+        elif corruption == "ledger_generation_bool":
+            ledger_payload["generation"] = True
+        else:
+            ledger_payload["generation"] = "1"
+        ledger.path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+    corrupted = _ownership_artifact_bytes(ledger)
+
+    consumers = (
+        ledger.load,
+        ledger.require_existing,
+        lambda: ledger.capture_backup_artifacts(
+            capture_registry_artifacts=lambda: {},
         ),
         lambda: ledger.rotate_key(
             precondition=lambda _snapshot, _roots: None,
@@ -1429,10 +1609,16 @@ def test_persisted_ambiguous_overlap_fails_every_authority_gate(
     ]
     ledger = OwnershipLedger(tmp_path / "host-global")
     component_guard = ledger._assert_native_release_component_cardinality
+    transfer_guard = ledger._assert_release_transfer_topology
     monkeypatch.setattr(
         ledger,
         "_assert_native_release_component_cardinality",
         lambda _leases: None,
+    )
+    monkeypatch.setattr(
+        ledger,
+        "_assert_release_transfer_topology",
+        lambda _current, _leases: None,
     )
     ledger.bootstrap_legacy_owners(
         owners,
@@ -1444,6 +1630,11 @@ def test_persisted_ambiguous_overlap_fails_every_authority_gate(
         ledger,
         "_assert_native_release_component_cardinality",
         component_guard,
+    )
+    monkeypatch.setattr(
+        ledger,
+        "_assert_release_transfer_topology",
+        transfer_guard,
     )
 
     with pytest.raises(LedgerCollisionError, match="ambiguous native/channel"):
@@ -1466,6 +1657,53 @@ def test_persisted_ambiguous_overlap_fails_every_authority_gate(
             precondition=lambda _snapshot, _roots: None,
             _capability=STORAGE_MUTATION_CAPABILITY,
         )
+
+
+def test_persisted_release_channel_overlap_fails_every_authority_gate(
+    tmp_path,
+) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("dev", "binding-dev", root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    prod = dict(payload["leases"]["binding-dev"])
+    prod["channel_id"] = "prod"
+    prod["vault_binding_id"] = "binding-prod"
+    payload["leases"]["binding-prod"] = prod
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    corrupted = _ownership_artifact_bytes(ledger)
+
+    consumers = (
+        ledger.load,
+        ledger.require_existing,
+        lambda: ledger.capture_backup_artifacts(
+            capture_registry_artifacts=lambda: {},
+        ),
+        lambda: ledger.require_registry_consistency(
+            channel_id="dev",
+            registrations={"binding-dev": root},
+            tombstones={},
+            transfer_lineage=(),
+            global_live_owners=[
+                LegacyOwner("dev", "binding-dev", root),
+                LegacyOwner("prod", "binding-prod", root),
+            ],
+        ),
+        lambda: ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        ),
+    )
+    for consume in consumers:
+        with pytest.raises(LedgerCollisionError, match="overlap"):
+            consume()
+        assert _ownership_artifact_bytes(ledger) == corrupted
 
 
 def test_first_upgrade_still_rejects_release_channel_shared_root(tmp_path) -> None:

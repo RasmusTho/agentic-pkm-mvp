@@ -68,7 +68,11 @@ bindings. The complete overlap-connected component must contain exactly those tw
 native cannot bridge multiple release owners, a release owner cannot bridge multiple native roots,
 and retained tombstone/transfer ownership counts in that component. Lifecycle rows for one stable
 binding normalize once only after their authenticated channel/root identity agrees; independently
-sealed active and retired rows may therefore coexist. Transfer endpoints remain distinct. The v1
+sealed active and retired rows may therefore coexist. Transfer endpoints remain distinct.
+Cross-release retained authority is valid only as one authenticated directed, acyclic transfer
+path: every historical node precedes at most one successor, at most one live binding is the
+terminal node, and a pending reservation may only extend that terminal. Disconnected, branched,
+merged, cyclic, or interior-attached histories fail closed. The v1
 tombstone slot is immutable, so a second removal after reactivation fails closed pending the MVR-06B
 versioned lifecycle journal. One channel/instance may
 register initialized parent and child vaults only under the existing nested-vault boundary contract:
@@ -79,6 +83,8 @@ and key ID are host-bootstrap truth. Missing, ephemeral, channel-specific, misma
 key state blocks claims and lifecycle start. Key rotation holds the global fence, drains all owners,
 re-fingerprints every canonical root, and atomically advances ledger plus key generation before any
 owner resumes; interrupted rotation recovers one complete generation and never compares mixed keys.
+Ledger, key, and rotation-journal authority fields require their exact JSON boolean, integer, and
+string types before construction or recovery; truthy and numeric/string coercions are never authority.
 Registration uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
 active in two release-channel ownership domains simultaneously; the sanctioned native/channel pair
