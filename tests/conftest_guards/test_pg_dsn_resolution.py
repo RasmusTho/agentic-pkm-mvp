@@ -54,6 +54,10 @@ LATE_CONNECTION_PROBES = [
     "tests/conftest_guards/late_connection_probe.py::test_async_service_kwarg_is_blocked",
     "tests/conftest_guards/late_connection_probe.py::test_implicit_local_defaults_are_blocked",
     "tests/conftest_guards/late_connection_probe.py::test_explicit_local_socket_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_leading_empty_host_member_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_trailing_empty_host_member_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_empty_hostaddr_member_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_paired_empty_host_member_is_blocked",
 ]
 
 # The DSN the removed autouse fixture used to install. Port 15432 and database

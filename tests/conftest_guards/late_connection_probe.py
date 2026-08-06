@@ -62,3 +62,33 @@ def test_implicit_local_defaults_are_blocked() -> None:
 @pytest.mark.pg
 def test_explicit_local_socket_is_blocked() -> None:
     psycopg.connect(host="/var/run/postgresql", dbname="app_test")
+
+
+@pytest.mark.pg
+def test_leading_empty_host_member_is_blocked() -> None:
+    psycopg.connect(host=",127.0.0.1", port=15434, dbname="app_test")
+
+
+@pytest.mark.pg
+def test_trailing_empty_host_member_is_blocked() -> None:
+    target = "host=127.0.0.1, port=15434 dbname=app_test"
+    psycopg.Connection.connect(target)
+
+
+@pytest.mark.pg
+def test_empty_hostaddr_member_is_blocked() -> None:
+    asyncio.run(
+        psycopg.AsyncConnection.connect(
+            hostaddr=",127.0.0.1", port=15434, dbname="app_test"
+        )
+    )
+
+
+@pytest.mark.pg
+def test_paired_empty_host_member_is_blocked() -> None:
+    psycopg.connect(
+        host=",127.0.0.1",
+        hostaddr=",127.0.0.1",
+        port=15434,
+        dbname="app_test",
+    )

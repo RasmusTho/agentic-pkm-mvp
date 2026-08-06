@@ -444,12 +444,24 @@ def _guard_pg_connection_target(
 
     host = str(effective.get("host", "") or "").strip()
     hostaddr = str(effective.get("hostaddr", "") or "").strip()
-    hosts = [part.strip() for part in host.split(",") if part.strip()]
-    implicit_or_socket_target = (
-        not host and not hostaddr
-    ) or any(part.startswith("/") or part.startswith("@") for part in hosts)
+    hosts = host.split(",") if host else []
+    hostaddrs = hostaddr.split(",") if hostaddr else []
 
-    if implicit_or_socket_target or _looks_like_prod_test_dsn(target):
+    # Empty members are significant in libpq multi-host lists: a position with
+    # neither host nor hostaddr selects the platform default (a Unix socket on
+    # Unix). Keep list positions aligned instead of filtering empty strings.
+    mismatched_lists = bool(hosts and hostaddrs and len(hosts) != len(hostaddrs))
+    implicit_or_socket_target = not hosts and not hostaddrs
+    for index in range(max(len(hosts), len(hostaddrs))):
+        candidate_host = hosts[index].strip() if index < len(hosts) else ""
+        candidate_hostaddr = hostaddrs[index].strip() if index < len(hostaddrs) else ""
+        if candidate_host.startswith(("/", "@")) or (
+            not candidate_host and not candidate_hostaddr
+        ):
+            implicit_or_socket_target = True
+            break
+
+    if mismatched_lists or implicit_or_socket_target or _looks_like_prod_test_dsn(target):
         raise pytest.UsageError(_prod_dsn_abort_message(variable="psycopg connection target"))
 
 
