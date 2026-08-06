@@ -206,8 +206,22 @@ def _github_sync(
             "repos": payload.get("repos", {}),
             "detail": payload.get("error") or _snippet(pull.stderr or pull.stdout),
         }
+    if payload.get("sync_result") == "partial":
+        _append_reason(result, "dispatcher_pull_partial")
+        return {
+            "status": "degraded",
+            "reason": "dispatcher_pull_partial",
+            "sync_result": "partial",
+            "kill_switch_active": bool(payload.get("kill_switch_active")),
+            "remaining": remaining,
+            "upserted": payload.get("upserted", 0),
+            "reconciled": payload.get("reconciled", 0),
+            "repos": payload.get("repos", {}),
+            "detail": payload.get("sync_note") or "dispatcher pull partial sync",
+        }
     return {
         "status": "ok",
+        "sync_result": payload.get("sync_result"),
         "remaining": remaining,
         "upserted": payload.get("upserted", 0),
         "reconciled": payload.get("reconciled", 0),
