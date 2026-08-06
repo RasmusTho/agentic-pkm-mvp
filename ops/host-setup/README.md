@@ -46,6 +46,68 @@ to the gaming PC whenever it's free.
 | `gaming-pc/` | burst inference | Ollama (`gpt-oss:20b`), `gpu-warden` (Scheduled Task) |
 | `macbook-air/` | thin client | nothing — Tailscale + Screen Sharing / Moonlight |
 
+### Mac mini scheduled host jobs
+
+The Mac mini also has an operator-owned weekly Docker cleanup LaunchAgent at
+`~/Library/LaunchAgents/local.docker-weekly-prune.plist`. It runs
+`~/bin/docker-weekly-prune.sh` on Sundays at 02:00. These two files are host-local:
+the repository does not install, mirror, or otherwise own their contents. This
+runbook records the safety contract across that boundary.
+
+The weekly cleanup must never prune Docker volumes. Named channel volumes can be
+unused after `docker compose down`, so `docker volume prune`, `docker system prune
+--volumes`, and equivalent volume-deleting commands are forbidden in this job.
+The existing image, builder-cache, and VM trim steps may continue; reclaiming
+dangling volumes requires a separate bounded operator procedure.
+
+After changing the host script:
+
+1. Preserve a timestamped, mode-preserving copy of the pre-change script as
+   audit evidence and mark it unsafe/non-restorable when it contains a forbidden
+   prune path.
+2. Build a same-directory candidate, run `sh -n`, confirm it contains no
+   volume-pruning path, and record its SHA-256 and executable mode. Preserve a
+   recovery copy of that exact candidate. Also prepare a checksum-recorded
+   refusal artifact containing no Docker command; it only reports the failed
+   safety proof and exits nonzero.
+3. Validate the unchanged plist with `plutil -lint`, and confirm its program
+   target and Sunday 02:00 schedule are unchanged.
+4. Authenticate and atomically install the refusal artifact at the LaunchAgent's
+   stable script path before executing the candidate from its separate,
+   authenticated path. Retain a second pre-authenticated refusal candidate for
+   the post-promotion readback fallback. A crash or failed pre-promotion check
+   must therefore leave the scheduled job in the no-Docker refusal state.
+5. Start a disposable isolated Docker daemon that cannot see the host daemon's
+   channel volumes, and prove its daemon identity differs from the host's. Create
+   one uniquely named, unused throwaway volume there. Point the candidate at the
+   isolated daemon explicitly and capture its complete exit without
+   short-circuiting the separate exact-volume check. Never run an unproved
+   candidate against the host daemon.
+6. Require the isolated volume to survive, remove only that exact throwaway,
+   independently confirm its absence, and remove the disposable daemon. Any
+   missing volume, later script failure, cleanup failure, or authentication
+   failure before promotion leaves refusal installed and blocks.
+7. After volume survival, script exit 0, and exact isolated cleanup, authenticate
+   the same proved candidate again and only then promote it atomically to the
+   stable path. Recheck its installed identity; on mismatch, atomically restore
+   and authenticate the pre-built refusal fallback before blocking. Record the
+   daemon isolation proof, throwaway name, create/survive/remove results,
+   script exit, and promotion result. Never use or stop a real channel for this
+   check.
+
+Recovery must never restore an unsafe pre-change copy: that would reinstate the
+forbidden deletion path. Recovery uses the same refusal-first sequence:
+authenticate and install refusal at the stable path, prove the separately
+authenticated safe artifact against a disposable isolated Docker daemon, and
+promote that exact artifact only after the complete proof and cleanup pass. A
+failed check or interrupted proof leaves refusal installed. A failed
+post-promotion identity readback restores the pre-authenticated refusal
+fallback; a crash after the atomic promotion leaves the exact proved safe
+artifact installed. Use explicit failure branches with cleanup and nonzero exit
+status rather than bare shell assertions.
+Keep both the non-restorable audit copy and the authenticated safe recovery copy
+until the change receipt is accepted.
+
 ## How the routing works
 
 - Yggdrasil talks to **one** endpoint: the `llm-gateway` on the mini
