@@ -1119,6 +1119,7 @@ class OwnershipLedger:
                 transfer_lineage=tuple(transfer_lineage),
                 legacy_bootstrap_complete=current.legacy_bootstrap_complete,
             )
+            self._validate_snapshot(rotated, new_key)
             _atomic_private_json(
                 self.rotation_path,
                 {
@@ -1356,8 +1357,7 @@ class OwnershipLedger:
                 )
             ):
                 raise LedgerError("ownership ledger contains invalid transfer reservation")
-            normalized[transfer.source_binding_id] = transfer_lease
-            normalized[transfer.destination_binding_id] = OwnershipLease(
+            destination_lease = OwnershipLease(
                 channel_id=transfer.destination_channel_id,
                 vault_binding_id=transfer.destination_binding_id,
                 root_fingerprint=transfer.root_fingerprint,
@@ -1365,6 +1365,9 @@ class OwnershipLedger:
                 sealed_root=transfer.sealed_root,
                 state="transferring",
             )
+            self._authenticated_canonical_root(destination_lease, key)
+            normalized[transfer.source_binding_id] = transfer_lease
+            normalized[transfer.destination_binding_id] = destination_lease
         return list(normalized.values())
 
     def _authenticated_canonical_root(

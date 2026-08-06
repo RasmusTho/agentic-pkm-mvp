@@ -1199,8 +1199,10 @@ def test_transfer_rejects_prospective_mixed_component_before_first_write(tmp_pat
     assert _ownership_artifact_bytes(ledger) == before
 
 
+@pytest.mark.parametrize("destination_channel", ["dev", "bogus"])
 def test_transfer_activation_revalidates_persisted_endpoints_without_mutation(
     tmp_path,
+    destination_channel,
 ) -> None:
     root = tmp_path / "root"
     root.mkdir()
@@ -1218,14 +1220,23 @@ def test_transfer_activation_revalidates_persisted_endpoints_without_mutation(
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     payload = json.loads(ledger.path.read_text(encoding="utf-8"))
-    payload["transfer"]["destination_channel_id"] = "dev"
+    payload["transfer"]["destination_channel_id"] = destination_channel
     ledger.path.write_text(json.dumps(payload), encoding="utf-8")
     corrupted = _ownership_artifact_bytes(ledger)
 
-    with pytest.raises(LedgerError, match="invalid transfer reservation"):
-        ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY)
-
-    assert _ownership_artifact_bytes(ledger) == corrupted
+    consumers = (
+        ledger.load,
+        ledger.require_existing,
+        lambda: ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY),
+        lambda: ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        ),
+    )
+    for consume in consumers:
+        with pytest.raises(LedgerError):
+            consume()
+        assert _ownership_artifact_bytes(ledger) == corrupted
 
 
 @pytest.mark.parametrize(
@@ -1355,6 +1366,51 @@ def test_rotation_recovery_authenticates_journal_before_replacing_state(tmp_path
         ledger.load()
 
     assert _ownership_artifact_bytes(ledger) == corrupted
+
+
+def test_rotation_validates_candidate_before_writing_journal_or_key(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("dev", "binding-dev", root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.release_to_tombstone(
+        "binding-dev",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.reactivate(
+        "binding-dev",
+        channel_id="dev",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    snapshot = ledger.load()
+    protected = _ownership_artifact_bytes(ledger)
+    original_lease_for_root = ledger._lease_for_root
+
+    def divergent_rotated_tombstone(**kwargs):
+        lease = original_lease_for_root(**kwargs)
+        if lease.state == "retired" and lease.vault_binding_id == "binding-dev":
+            return replace(lease, channel_id="test")
+        return lease
+
+    monkeypatch.setattr(ledger, "_lease_for_root", divergent_rotated_tombstone)
+
+    with pytest.raises(LedgerError, match="divergent same-binding authority"):
+        ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    assert _ownership_artifact_bytes(ledger) == protected
+    assert ledger.load() == snapshot
 
 
 def test_persisted_ambiguous_overlap_fails_every_authority_gate(
