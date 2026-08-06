@@ -405,7 +405,18 @@ def _refuse_prod_dsn_before_any_import() -> None:
         raise pytest.UsageError(_prod_dsn_abort_message(variable="PGHOST/PGPORT/PGDATABASE"))
 
 
-def _guard_pg_connection_target(conninfo: object = "") -> None:
+_PSYCOPG_CLIENT_ONLY_KWARGS = {
+    "autocommit",
+    "prepare_threshold",
+    "context",
+    "row_factory",
+    "cursor_factory",
+}
+
+
+def _guard_pg_connection_target(
+    conninfo: object = "", connection_kwargs: dict[str, object] | None = None
+) -> None:
     """Refuse production again at the connection side-effect boundary.
 
     The pre-import check protects inherited configuration, but a test can
@@ -416,8 +427,29 @@ def _guard_pg_connection_target(conninfo: object = "") -> None:
     """
 
     _refuse_prod_dsn_before_any_import()
-    target = str(conninfo or "").strip()
-    if target and _looks_like_prod_test_dsn(target):
+
+    # Psycopg accepts every libpq connection parameter as a keyword argument;
+    # those parameters augment or override the positional conninfo. Classify
+    # the same effective target psycopg will use, not only the first argument.
+    try:
+        from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+        target = make_conninfo(str(conninfo or ""), **(connection_kwargs or {}))
+        effective = conninfo_to_dict(target)
+    except Exception:
+        # An indeterminate target is never safe for a destructive test lane.
+        raise pytest.UsageError(
+            _prod_dsn_abort_message(variable="psycopg connection target")
+        ) from None
+
+    host = str(effective.get("host", "") or "").strip()
+    hostaddr = str(effective.get("hostaddr", "") or "").strip()
+    hosts = [part.strip() for part in host.split(",") if part.strip()]
+    implicit_or_socket_target = (
+        not host and not hostaddr
+    ) or any(part.startswith("/") or part.startswith("@") for part in hosts)
+
+    if implicit_or_socket_target or _looks_like_prod_test_dsn(target):
         raise pytest.UsageError(_prod_dsn_abort_message(variable="psycopg connection target"))
 
 
@@ -433,16 +465,23 @@ def _install_pg_connection_guard() -> None:
     sync_connect = psycopg.Connection.connect.__func__
     async_connect = psycopg.AsyncConnection.connect.__func__
 
+    def connection_kwargs(kwargs: dict[str, object]) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key not in _PSYCOPG_CLIENT_ONLY_KWARGS
+        }
+
     def guarded_module_connect(conninfo: str = "", *args, **kwargs):
-        _guard_pg_connection_target(conninfo)
+        _guard_pg_connection_target(conninfo, connection_kwargs(kwargs))
         return module_connect(conninfo, *args, **kwargs)
 
     def guarded_sync_connect(owner, conninfo: str = "", *args, **kwargs):
-        _guard_pg_connection_target(conninfo)
+        _guard_pg_connection_target(conninfo, connection_kwargs(kwargs))
         return sync_connect(owner, conninfo, *args, **kwargs)
 
     def guarded_async_connect(owner, conninfo: str = "", *args, **kwargs):
-        _guard_pg_connection_target(conninfo)
+        _guard_pg_connection_target(conninfo, connection_kwargs(kwargs))
         return async_connect(owner, conninfo, *args, **kwargs)
 
     psycopg.connect = guarded_module_connect

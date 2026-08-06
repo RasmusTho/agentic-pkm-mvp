@@ -7,6 +7,8 @@ so a broken safety wrapper is measured without ever opening a real socket.
 
 from __future__ import annotations
 
+import asyncio
+
 import psycopg
 import pytest
 
@@ -34,3 +36,29 @@ def test_late_ambient_socket_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None
 def test_late_service_file_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PGSERVICEFILE", "/tmp/hidden-service.conf")
     psycopg.connect("")
+
+
+@pytest.mark.pg
+def test_module_kwargs_only_prod_target_is_blocked() -> None:
+    psycopg.connect(host="127.0.0.1", port=15432, dbname="safe")
+
+
+@pytest.mark.pg
+def test_sync_kwargs_override_safe_conninfo_is_blocked() -> None:
+    safe = "postgresql://app:app@127.0.0.1:15434/app_test"
+    psycopg.Connection.connect(safe, port=15432)
+
+
+@pytest.mark.pg
+def test_async_service_kwarg_is_blocked() -> None:
+    asyncio.run(psycopg.AsyncConnection.connect(service="hidden"))
+
+
+@pytest.mark.pg
+def test_implicit_local_defaults_are_blocked() -> None:
+    psycopg.connect("")
+
+
+@pytest.mark.pg
+def test_explicit_local_socket_is_blocked() -> None:
+    psycopg.connect(host="/var/run/postgresql", dbname="app_test")

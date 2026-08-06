@@ -49,6 +49,11 @@ LATE_CONNECTION_PROBES = [
     "tests/conftest_guards/late_connection_probe.py::test_late_runtime_default_is_blocked",
     "tests/conftest_guards/late_connection_probe.py::test_late_ambient_socket_is_blocked",
     "tests/conftest_guards/late_connection_probe.py::test_late_service_file_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_module_kwargs_only_prod_target_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_sync_kwargs_override_safe_conninfo_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_async_service_kwarg_is_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_implicit_local_defaults_are_blocked",
+    "tests/conftest_guards/late_connection_probe.py::test_explicit_local_socket_is_blocked",
 ]
 
 # The DSN the removed autouse fixture used to install. Port 15432 and database

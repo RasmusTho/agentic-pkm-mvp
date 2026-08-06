@@ -88,8 +88,9 @@ refuses to guess:
   DSN whose database name is exactly `app` or whose port is the prod-published `15432`.
 
 The same classification runs again at all three psycopg connection entry points during pytest. That
-side-effect-boundary guard covers values a test mutates or assembles after `pytest_configure`, including
-runtime defaults, local-socket libpq targets, and service indirection. The AST census under
+side-effect-boundary guard classifies positional conninfo together with libpq keyword parameters, so
+late overrides cannot hide a production target. It also refuses implicit or explicit local-socket
+targets and service indirection, whose server cannot be proven safe. The AST census under
 `tests/architecture/` deliberately checks only hard-coded defaults; it is not a Python dataflow analyzer.
 
 The gate checks **four** ways this repo can name a database, not just the obvious one:
