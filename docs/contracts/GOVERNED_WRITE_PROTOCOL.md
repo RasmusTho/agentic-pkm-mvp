@@ -5,7 +5,7 @@ Owner subsystem: GOV - Governance, Policy, Authority & Receipts
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-21
+Last reviewed: 2026-08-07
 
 # GovernedWriteProtocol
 
@@ -85,6 +85,13 @@ admissible before it occurs and accountable after its outcome is known.
 - Replays are idempotent by a stable operation/effect identity. Retrying an uncertain outcome must
   reconcile the state-owner mutation receipt or EXE effect receipt and AuthorityReceipt before
   repeating the mutation/effect.
+- Vault-bound append/reconcile cleanup must carry descriptor ownership through the cleanup state
+  transition. A pathname check followed by pathname deletion is not ownership proof: the active
+  stage entry must move atomically and without clobbering into scanner-inert recovery storage while
+  the operation-owned descriptor remains open, and the moved inode must then match that descriptor.
+  If the name disappeared, moved a foreign inode, or cannot be restored without clobbering, the
+  implementation retains both the untrusted entry and operation-owned bytes as needed and fails
+  loud. Retirement from the active stage namespace is not a claim of physical deletion.
 
 ### Partial-failure states
 
@@ -103,6 +110,49 @@ may be collapsed into a generic success or silently retried:
 
 These are logical contract states, not a prescribed module, database table, package layout, or claim
 that the transitional runtime already enforces the whole chain.
+
+## Vault-bound atomic append/reconcile
+
+`app.knowledge.atomic_append_reconcile.atomic_append_reconcile_relative` is the filesystem-seam
+primitive for one caller-authorized, vault-relative append record. It is deliberately an opt-in
+primitive, not a replacement for ordinary `KnowledgePort.append_note`, and a caller retains its
+own `WriteGuard` action and authority decision.
+
+- The caller supplies a stable portable operation identity, the exact SHA-256 payload fingerprint,
+  payload, and a pure reconciliation callback. The primitive rejects a fingerprint that does not
+  bind the supplied payload before opening the vault, and asserts the caller's `WriteGuard` before
+  any filesystem mutation.
+- A durable record is a versioned framed payload with a matching identity/fingerprint commit
+  marker. Only a complete frame with a valid length and digest is committed. A torn, malformed, or
+  duplicate-identity frame is an explicit recovery error: reconciliation is not called and retry
+  must not append ambiguously.
+- The same identity and fingerprint returns `reconciled_replay` after reconciliation; the same
+  identity with another fingerprint is an identity collision before publication. A new identity
+  returns `appended`. These structured results, rather than a mutable path read, are the caller's
+  outcome authority.
+- Vault root, each parent component, and target are opened descriptor-relatively with no symlink
+  following. The primitive rejects aliases, non-regular targets, or root/parent/target identity
+  changes. Cooperating writers serialize on a separate descriptor-bound per-target lock whose inode
+  survives target exchange; a replacement race is retained for recovery and fails without a success
+  result.
+- New and already-present parent links, staged data, atomic exchange, recovery retirement, and every
+  directory whose durable link is relied on are fsynced. Replacement copies and verifies mode,
+  owner, descriptor ACLs, ACL-bearing extended metadata, and required xattrs before publication and
+  rechecks that metadata immediately before exchange. Missing metadata primitives or any failed
+  clone/verification is fail-closed.
+- The operation keeps its stage or displaced-target descriptor open until cleanup retirement. It
+  atomically renames the active stage entry without replacement into a hidden recovery directory,
+  then compares the moved inode with that descriptor. Matching evidence is retired from the active
+  scanner namespace. Foreign or missing evidence is restored or retained without clobbering, the
+  operation-owned descriptor is durably snapshotted when its link was lost, and the call fails loud.
+  Retained entries are scanner-inert evidence; this primitive does not physically reclaim them.
+
+The reconciliation callback receives only verified complete records and must retain their exact
+set. It may repair derived bookkeeping in the replacement bytes, but it must not acknowledge,
+delete, rewrite, or synthesize a committed operation frame. A target-scoped interrupted active
+stage is classified and retired on retry; the complete target frame remains the sole replay
+authority. This primitive does **not** migrate the Heimdal steering-log consumer or any other
+consumer.
 
 ## Allowed Producers
 
