@@ -86,6 +86,21 @@ def _host_fence_root() -> Path:
     return Path(os.environ["DESIGN_HANDOFF_APP_LOCAL_SETTINGS"]).parent
 
 
+def _host_witness_paths(vault_root: Path) -> tuple[Path, ...]:
+    lock_root = Path(steering_module.tempfile.gettempdir()) / (
+        "agentic-pkm-heimdal-locks"
+    )
+    with write_ops_module._open_atomic_append_authority(
+        vault_root,
+        note_rel_path(STEERING_LOG),
+    ) as authority:
+        return tuple(
+            lock_root
+            / f"{steering_module.hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
+            for key in authority.path_lock_keys
+        )
+
+
 def _vault(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir(parents=True, exist_ok=True)
@@ -907,6 +922,227 @@ def test_steering_log_retry_reconciles_crash_precommitted_exchange_intent(
 
     assert read_steering_log_body(vault_root).count(durable_line) == 1
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+
+
+@pytest.mark.parametrize("replace_vault_root", [False, True])
+def test_steering_log_crash_with_app_local_namespace_loss_remains_blocked(
+    tmp_path: Path,
+    replace_vault_root: bool,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"app-loss-{replace_vault_root}-seed",
+        write_guard=guard,
+    )
+    host_root = _host_fence_root()
+    parked_host_root = tmp_path / f"parked-app-state-{replace_vault_root}"
+    parked_vault_root = tmp_path / "parked-vault-after-crash"
+    witness_paths = _host_witness_paths(vault_root)
+    context = multiprocessing.get_context("fork")
+
+    def crash_after_exchange_and_replace_app_state() -> None:
+        def replace_namespaces_before_clean(*_args: object) -> None:
+            host_root.replace(parked_host_root)
+            host_root.mkdir()
+            if replace_vault_root:
+                vault_root.replace(parked_vault_root)
+                vault_root.mkdir()
+            os._exit(93)
+
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            replace_namespaces_before_clean
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "crash-after-app-state-loss",
+            source="item",
+            operation_id=f"app-loss-{replace_vault_root}-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_after_exchange_and_replace_app_state)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 93
+
+    parked_states = list(
+        parked_host_root.glob(".heimdal-atomic-append-*.state")
+    )
+    assert parked_states
+    assert all(
+        json.loads(path.read_text())["state"] == "active" for path in parked_states
+    )
+    assert all(
+        json.loads(path.read_text())["state"] == "active"
+        for path in witness_paths
+    )
+    assert not list(host_root.glob(".heimdal-atomic-append-*.state"))
+
+    with pytest.raises(KnowledgeWriteConflict, match="app-local state is missing"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "crash-after-app-state-loss",
+            source="item",
+            operation_id=f"app-loss-{replace_vault_root}-proposal",
+            write_guard=guard,
+        )
+
+    durable_root = parked_vault_root if replace_vault_root else vault_root
+    durable = (durable_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert durable.count(f'"operation_id":"app-loss-{replace_vault_root}-proposal"') == 1
+    if replace_vault_root:
+        assert not (vault_root / note_rel_path(STEERING_LOG)).exists()
+    assert not list(host_root.glob(".heimdal-atomic-append-*.state"))
+
+
+def test_steering_log_crash_with_host_witness_loss_remains_blocked(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="witness-loss-seed",
+        write_guard=guard,
+    )
+    witness_paths = _host_witness_paths(vault_root)
+    parked_witnesses = tuple(
+        tmp_path / f"parked-host-witness-{index}.lock"
+        for index, _path in enumerate(witness_paths)
+    )
+    context = multiprocessing.get_context("fork")
+
+    def crash_after_exchange_and_replace_witnesses() -> None:
+        def replace_witnesses_before_clean(*_args: object) -> None:
+            for witness, parked in zip(
+                witness_paths,
+                parked_witnesses,
+                strict=True,
+            ):
+                witness.replace(parked)
+            os._exit(94)
+
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            replace_witnesses_before_clean
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "crash-after-witness-loss",
+            source="item",
+            operation_id="witness-loss-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_after_exchange_and_replace_witnesses)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 94
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(json.loads(path.read_text())["state"] == "active" for path in states)
+    assert all(
+        json.loads(path.read_text())["state"] == "active"
+        for path in parked_witnesses
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="host witness is missing"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "crash-after-witness-loss",
+            source="item",
+            operation_id="witness-loss-proposal",
+            write_guard=guard,
+        )
+
+    durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert durable.count('"operation_id":"witness-loss-proposal"') == 1
+    assert all(path.exists() and path.stat().st_size == 0 for path in witness_paths)
+
+
+@pytest.mark.parametrize("crash_point", ["active-app", "clean-witness"])
+def test_steering_log_active_state_dominates_clean_interleaving(
+    tmp_path: Path,
+    crash_point: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"state-dominance-{crash_point}-seed",
+        write_guard=guard,
+    )
+    context = multiprocessing.get_context("fork")
+
+    def crash_between_inventory_writes() -> None:
+        real_app_write = write_ops_module._write_host_append_state
+        real_witness_write = write_ops_module._write_host_witness_state
+
+        def crash_before_active_app_write(*args: object) -> None:
+            payload = args[2]
+            if isinstance(payload, dict) and payload.get("state") == "active":
+                os._exit(95)
+            real_app_write(*args)  # type: ignore[arg-type]
+
+        def crash_before_clean_witness_write(*args: object) -> None:
+            payload = args[1]
+            if isinstance(payload, dict) and payload.get("state") == "clean":
+                os._exit(96)
+            real_witness_write(*args)  # type: ignore[arg-type]
+
+        if crash_point == "active-app":
+            write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+                crash_before_active_app_write
+            )
+        else:
+            write_ops_module._write_host_witness_state = (  # type: ignore[method-assign]
+                crash_before_clean_witness_write
+            )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "inventory-write-interleaving",
+            source="item",
+            operation_id=f"state-dominance-{crash_point}-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_between_inventory_writes)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == (95 if crash_point == "active-app" else 96)
+
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "inventory-write-interleaving",
+        source="item",
+        operation_id=f"state-dominance-{crash_point}-proposal",
+        write_guard=guard,
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+    assert all(
+        json.loads(path.read_text())["state"] == "clean"
+        for path in _host_witness_paths(vault_root)
+    )
 
 
 @pytest.mark.parametrize("fail_write", [1, 2, 3, 4])

@@ -82,6 +82,10 @@ class _AtomicAppendAuthority:
     path_lock_keys: tuple[str, ...]
     host_state_fd: int | None = None
     host_state_stat: os.stat_result | None = None
+    host_witness_root_path: Path | None = None
+    host_witness_root_fd: int | None = None
+    host_witness_root_stat: os.stat_result | None = None
+    host_witness_fds: tuple[tuple[str, int], ...] = ()
 
     def assert_live(self) -> None:
         try:
@@ -123,6 +127,53 @@ class _AtomicAppendAuthority:
             raise KnowledgeWriteConflict(
                 f"atomic append host state authority changed for {self.note_rel_path}"
             )
+
+    def assert_host_witness_live(self) -> None:
+        if (
+            self.host_witness_root_path is None
+            or self.host_witness_root_fd is None
+            or self.host_witness_root_stat is None
+            or not self.host_witness_fds
+        ):
+            raise AssertionError("atomic append host witness authority is not bound")
+        try:
+            current_root = os.stat(
+                self.host_witness_root_path,
+                follow_symlinks=False,
+            )
+            opened_root = os.fstat(self.host_witness_root_fd)
+            if (
+                not stat.S_ISDIR(current_root.st_mode)
+                or not _same_file_identity(current_root, self.host_witness_root_stat)
+                or not _same_file_identity(opened_root, self.host_witness_root_stat)
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append host witness authority changed for "
+                    f"{self.note_rel_path}"
+                )
+            for path_lock_key, witness_fd in self.host_witness_fds:
+                name = f"{hashlib.sha256(path_lock_key.encode('utf-8')).hexdigest()}.lock"
+                named = os.stat(
+                    name,
+                    dir_fd=self.host_witness_root_fd,
+                    follow_symlinks=False,
+                )
+                opened = os.fstat(witness_fd)
+                if (
+                    not stat.S_ISREG(named.st_mode)
+                    or named.st_nlink != 1
+                    or not _same_file_identity(named, opened)
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"atomic append host witness authority changed for "
+                        f"{self.note_rel_path}"
+                    )
+        except KnowledgeWriteConflict:
+            raise
+        except OSError as exc:
+            raise KnowledgeWriteConflict(
+                f"atomic append host witness authority changed for {self.note_rel_path}"
+            ) from exc
 
 
 @contextmanager
@@ -825,6 +876,32 @@ def _open_durable_host_fence_root(authority: _AtomicAppendAuthority) -> int:
         raise
 
 
+def _decode_host_append_state(
+    raw: bytes,
+    authority: _AtomicAppendAuthority,
+    path_lock_key: str,
+) -> dict[str, object]:
+    try:
+        state = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise KnowledgeWriteConflict(
+            f"atomic append host state is malformed for {authority.note_rel_path}; "
+            "reconciliation is required before retry"
+        ) from exc
+    if (
+        not isinstance(state, dict)
+        or state.get("schema") != _HOST_APPEND_STATE_SCHEMA
+        or state.get("path_lock_key") != path_lock_key
+        or state.get("locator") != authority.note_rel_path
+        or state.get("state") not in {"active", "clean", "indeterminate"}
+    ):
+        raise KnowledgeWriteConflict(
+            f"atomic append host state is invalid for {authority.note_rel_path}; "
+            "reconciliation is required before retry"
+        )
+    return state
+
+
 def _read_host_append_state(
     fence_fd: int,
     authority: _AtomicAppendAuthority,
@@ -854,25 +931,35 @@ def _read_host_append_state(
         raw = _read_all(state_fd)
     finally:
         os.close(state_fd)
+    return _decode_host_append_state(raw, authority, path_lock_key)
+
+
+def _read_host_witness_state(
+    witness_fd: int,
+    authority: _AtomicAppendAuthority,
+    path_lock_key: str,
+) -> dict[str, object] | None:
+    duplicate = os.dup(witness_fd)
     try:
-        state = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise KnowledgeWriteConflict(
-            f"atomic append host state is malformed for {authority.note_rel_path}; "
-            "reconciliation is required before retry"
-        ) from exc
-    if (
-        not isinstance(state, dict)
-        or state.get("schema") != _HOST_APPEND_STATE_SCHEMA
-        or state.get("path_lock_key") != path_lock_key
-        or state.get("locator") != authority.note_rel_path
-        or state.get("state") not in {"active", "clean", "indeterminate"}
-    ):
-        raise KnowledgeWriteConflict(
-            f"atomic append host state is invalid for {authority.note_rel_path}; "
-            "reconciliation is required before retry"
-        )
-    return state
+        raw = _read_all(duplicate)
+    finally:
+        os.close(duplicate)
+    if not raw:
+        return None
+    return _decode_host_append_state(raw, authority, path_lock_key)
+
+
+def _write_host_witness_state(
+    witness_fd: int,
+    payload: dict[str, object],
+) -> None:
+    raw = (json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    os.ftruncate(witness_fd, 0)
+    os.lseek(witness_fd, 0, os.SEEK_SET)
+    _write_all(witness_fd, raw)
+    os.fsync(witness_fd)
 
 
 def _write_host_append_state(
@@ -917,6 +1004,7 @@ def _write_host_append_states(
 ) -> None:
     fence_fd = _open_durable_host_fence_root(authority)
     try:
+        authority.assert_host_witness_live()
         path_lock_keys = list(authority.path_lock_keys)
         if payload.get("state") == "clean":
             # Keep the canonical/referent key active until every lexical alias
@@ -927,16 +1015,82 @@ def _write_host_append_states(
                 for key in path_lock_keys
                 if key != authority.canonical_path_lock_key
             ] + [authority.canonical_path_lock_key]
-        for path_lock_key in path_lock_keys:
-            keyed_payload = {
+        witness_fds = dict(authority.host_witness_fds)
+        if any(key not in witness_fds for key in path_lock_keys):
+            raise AssertionError("atomic append host witness authority is not bound")
+
+        keyed_payloads = {
+            path_lock_key: {
                 **payload,
                 "schema": _HOST_APPEND_STATE_SCHEMA,
                 "path_lock_key": path_lock_key,
                 "locator": authority.note_rel_path,
             }
-            _write_host_append_state(fence_fd, path_lock_key, keyed_payload)
+            for path_lock_key in path_lock_keys
+        }
+
+        if payload.get("state") != "clean":
+            # The already-required host-lock files are the independent restart
+            # witness. They become active/indeterminate before app-local state,
+            # so replacement of either namespace cannot erase publication intent.
+            for path_lock_key in path_lock_keys:
+                authority.assert_host_witness_live()
+                _write_host_witness_state(
+                    witness_fds[path_lock_key],
+                    keyed_payloads[path_lock_key],
+                )
+        for path_lock_key in path_lock_keys:
+            _write_host_append_state(
+                fence_fd,
+                path_lock_key,
+                keyed_payloads[path_lock_key],
+            )
+        if payload.get("state") == "clean":
+            # Clean reaches the independent witness last. A crash during the
+            # app-local clean writes therefore leaves an active witness.
+            for path_lock_key in path_lock_keys:
+                authority.assert_host_witness_live()
+                _write_host_witness_state(
+                    witness_fds[path_lock_key],
+                    keyed_payloads[path_lock_key],
+                )
+        authority.assert_host_witness_live()
     finally:
         os.close(fence_fd)
+
+
+def _read_all_host_append_states(
+    fence_fd: int,
+    authority: _AtomicAppendAuthority,
+) -> list[dict[str, object]]:
+    authority.assert_host_witness_live()
+    witness_fds = dict(authority.host_witness_fds)
+    states: list[dict[str, object]] = []
+    for path_lock_key in authority.path_lock_keys:
+        witness_fd = witness_fds.get(path_lock_key)
+        if witness_fd is None:
+            raise AssertionError("atomic append host witness authority is not bound")
+        app_state = _read_host_append_state(fence_fd, authority, path_lock_key)
+        witness_state = _read_host_witness_state(
+            witness_fd,
+            authority,
+            path_lock_key,
+        )
+        if app_state is not None:
+            states.append(app_state)
+        if app_state is not None and witness_state is None:
+            raise KnowledgeWriteConflict(
+                f"atomic append host witness is missing for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        if witness_state is not None and app_state is None:
+            raise KnowledgeWriteConflict(
+                f"atomic append app-local state is missing for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        if witness_state is not None:
+            states.append(witness_state)
+    return states
 
 
 def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> None:
@@ -944,10 +1098,7 @@ def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> N
 
     fence_fd = _open_durable_host_fence_root(authority)
     try:
-        for path_lock_key in authority.path_lock_keys:
-            state = _read_host_append_state(fence_fd, authority, path_lock_key)
-            if state is None:
-                continue
+        for state in _read_all_host_append_states(fence_fd, authority):
             if state["state"] == "indeterminate" or (
                 state.get("root_dev") != authority.root_stat.st_dev
                 or state.get("root_ino") != authority.root_stat.st_ino
@@ -963,10 +1114,7 @@ def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> N
 def _host_append_state_exists(authority: _AtomicAppendAuthority) -> bool:
     fence_fd = _open_durable_host_fence_root(authority)
     try:
-        return any(
-            _read_host_append_state(fence_fd, authority, path_lock_key) is not None
-            for path_lock_key in authority.path_lock_keys
-        )
+        return bool(_read_all_host_append_states(fence_fd, authority))
     finally:
         os.close(fence_fd)
 
@@ -1059,10 +1207,7 @@ def _reconcile_host_atomic_append_states(
     transaction = "reconciled"
     reason: str | None = None
     try:
-        for path_lock_key in authority.path_lock_keys:
-            state = _read_host_append_state(fence_fd, authority, path_lock_key)
-            if state is None:
-                continue
+        for state in _read_all_host_append_states(fence_fd, authority):
             transaction = str(state.get("transaction", transaction))
             if state["state"] == "indeterminate":
                 reason = "prior host state is indeterminate"
@@ -2018,6 +2163,7 @@ def _atomic_append_note_relative(
 
         def require_final_receipt_state() -> None:
             authority.assert_host_state_live()
+            authority.assert_host_witness_live()
             live_target = os.stat(
                 target_name,
                 dir_fd=receipt_parent_fd,

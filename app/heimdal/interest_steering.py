@@ -86,6 +86,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 import threading
 from typing import Any, Literal, Optional
@@ -475,31 +476,85 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
             ]
 
         lock_root = Path(tempfile.gettempdir()) / "agentic-pkm-heimdal-locks"
-        lock_root.mkdir(parents=True, exist_ok=True)
-        lock_names = [hashlib.sha256(key.encode("utf-8")).hexdigest() for key in lock_keys]
         with ExitStack() as stack:
             for process_lock in process_locks:
                 stack.enter_context(process_lock)
-            lock_handles = [
-                stack.enter_context((lock_root / f"{name}.lock").open("a+b"))
-                for name in lock_names
-            ]
-            for lock_handle in lock_handles:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            directory_flags = (
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            lock_parent_fd = os.open(lock_root.parent, directory_flags)
+            stack.callback(os.close, lock_parent_fd)
+            try:
+                os.mkdir(lock_root.name, mode=0o700, dir_fd=lock_parent_fd)
+            except FileExistsError:
+                pass
+            os.fsync(lock_parent_fd)
+            lock_root_fd = os.open(
+                lock_root.name,
+                directory_flags,
+                dir_fd=lock_parent_fd,
+            )
+            stack.callback(os.close, lock_root_fd)
+            os.fsync(lock_root_fd)
+            lock_fds: list[int] = []
+            for key in lock_keys:
+                name = f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
+                file_flags = (
+                    os.O_RDWR
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0)
+                )
+                try:
+                    lock_fd = os.open(
+                        name,
+                        file_flags | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=lock_root_fd,
+                    )
+                except FileExistsError:
+                    lock_fd = os.open(
+                        name,
+                        file_flags,
+                        dir_fd=lock_root_fd,
+                    )
+                stack.callback(os.close, lock_fd)
+                observed = os.fstat(lock_fd)
+                if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
+                    raise KnowledgeWriteConflict(
+                        "steering log host lock must be one regular file"
+                    )
+                lock_fds.append(lock_fd)
+            os.fsync(lock_root_fd)
+            for lock_fd in lock_fds:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
             host_state_fd = _open_durable_host_fence_root(authority)
+            lock_fd_by_key = {
+                key: lock_fd for key, lock_fd in zip(lock_keys, lock_fds, strict=True)
+            }
             bound_authority = replace(
                 authority,
                 host_state_fd=host_state_fd,
                 host_state_stat=os.fstat(host_state_fd),
+                host_witness_root_path=lock_root,
+                host_witness_root_fd=lock_root_fd,
+                host_witness_root_stat=os.fstat(lock_root_fd),
+                host_witness_fds=tuple(
+                    (key, lock_fd_by_key[key]) for key in authority.path_lock_keys
+                ),
             )
             try:
                 bound_authority.assert_live()
                 bound_authority.assert_host_state_live()
+                bound_authority.assert_host_witness_live()
                 _require_no_host_indeterminate_fence(bound_authority)
                 yield bound_authority
                 try:
                     bound_authority.assert_live()
                     bound_authority.assert_host_state_live()
+                    bound_authority.assert_host_witness_live()
                 except KnowledgeWriteConflict:
                     try:
                         _mark_host_atomic_append_indeterminate(
@@ -512,8 +567,8 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
                     raise
             finally:
                 os.close(host_state_fd)
-                for lock_handle in reversed(lock_handles):
-                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                for lock_fd in reversed(lock_fds):
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
