@@ -402,8 +402,20 @@ def _write_proposals_to_panel(
         return markdown
 
     if panel_end is None or panel_start is None:
-        # No clear panel structure found; append at end (fallback).
-        lines.extend(proposal_lines)
+        # Never append a loose authority-bearing checkbox. Establish the
+        # smallest fenced Panel that the parser recognises instead.
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(
+            [
+                "%% AI:Start %%%%",
+                "## AI-instruktion",
+                "",
+                "## AI-åtgärder",
+                *proposal_lines,
+                "%% AI:End %%%%",
+            ]
+        )
         return "\n".join(lines)
 
     # Find the AI-åtgärder / AI-actions heading within the panel.

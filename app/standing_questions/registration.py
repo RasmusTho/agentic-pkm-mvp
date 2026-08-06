@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agents.panel.parser import is_ai_fence
-from app.agents.panel.writeback import parse_action_line
+from app.agents.panel.writeback import parse_action_line, stable_action_id
 from app.agents.panel_agent.runtime import _write_proposals_to_panel
 from app.components.llm.constrained import CompletionFn
 from app.components.llm.question_intent_classifier import (
@@ -73,6 +73,7 @@ REGISTRATION_LABEL_PREFIX = "Registrera stående fråga: "
 #: Fixed forever: changing it would let an already-registered capture register a
 #: second time.
 _REGISTRATION_NAMESPACE = uuid.UUID("6f9a1c2e-4d3b-4a55-9c7e-2b8f1d0a7e34")
+_PANEL_PROPOSAL_MARKER = "979"
 
 
 @dataclass(frozen=True)
@@ -275,9 +276,28 @@ def confirm_question_registrations(
     already_registered = 0
     refused_non_verbatim = 0
 
+    inside_panel = False
     for line in capture_text.splitlines():
+        if is_ai_fence(line):
+            inside_panel = not inside_panel
+            continue
+        # A checked line only represents a registration decision when it is a
+        # system-authored action in a fenced Panel.  Human checklist prose
+        # never grants the runtime authority to mint a Question note.
+        if not inside_panel:
+            continue
         parsed = parse_action_line(line.strip())
         if parsed is None or not parsed.label.startswith(REGISTRATION_LABEL_PREFIX):
+            continue
+        if (
+            parsed.proposal_marker != _PANEL_PROPOSAL_MARKER
+            or not parsed.option_id
+            or not parsed.action_id
+        ):
+            continue
+        if parsed.action_id != stable_action_id(parsed.label):
+            if parsed.checked:
+                refused_non_verbatim += 1
             continue
         if not parsed.checked:
             unchecked += 1
@@ -292,6 +312,10 @@ def confirm_question_registrations(
                 "verbatim in its capture: %s",
                 capture_path,
             )
+            refused_non_verbatim += 1
+            continue
+        proposal_id = proposal_id_for(capture_id, extracted)
+        if f"(förslag {proposal_id[:12]})" not in parsed.label:
             refused_non_verbatim += 1
             continue
         try:
