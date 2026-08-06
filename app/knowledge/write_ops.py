@@ -2,15 +2,25 @@ from __future__ import annotations
 
 import errno
 import ctypes
+from contextlib import contextmanager
+from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import sys
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Callable, Iterator, Literal
+import unicodedata
 import uuid
 
-from app.knowledge.adapters import _atomic_rename_noreplace_at
+from app.knowledge.adapters import (
+    _atomic_exchange_at,
+    _atomic_rename_noreplace_at,
+    _open_conflict_directory,
+    _read_stable_descriptor,
+    _same_file_identity,
+)
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
@@ -48,6 +58,86 @@ _CANDIDATE_STAGE_OPEN_FLAGS = (
 )
 CandidateCreateResult = Literal["written", "already_exists"]
 AtomicAppendTransform = Callable[[bytes | None, bytes], tuple[bytes, bytes]]
+_ATOMIC_APPEND_STAGE_RE = re.compile(
+    r"^\.atomic-append-(?P<transaction>[0-9a-f]{32})-"
+    r"(?P<digest>[0-9a-f]{64})-(?P<source>absent|[0-9]+-[0-9]+)\.stage$"
+)
+_ATOMIC_APPEND_RECOVERY_TEMP_RE = re.compile(
+    r"^\.atomic-append-recovery-[0-9a-f]{32}-[a-z]+-[0-9a-f]{32}\.tmp$"
+)
+
+
+@dataclass(frozen=True)
+class _AtomicAppendAuthority:
+    """One internally opened root/locator authority shared by lock and write."""
+
+    root_fd: int
+    root_path: Path
+    root_stat: os.stat_result
+    note_rel_path: str
+    lock_key: str
+
+    def assert_live(self) -> None:
+        try:
+            current = os.stat(self.root_path, follow_symlinks=False)
+            opened = os.fstat(self.root_fd)
+        except OSError as exc:
+            raise KnowledgeWriteConflict(
+                f"atomic append authority mapping changed for {self.note_rel_path}"
+            ) from exc
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or not _same_file_identity(current, self.root_stat)
+            or not _same_file_identity(opened, self.root_stat)
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append authority mapping changed for {self.note_rel_path}"
+            )
+
+
+@contextmanager
+def _open_atomic_append_authority(
+    vault_root: Path | str,
+    note_rel_path: str,
+) -> Iterator[_AtomicAppendAuthority]:
+    """Open the exact root whose identity selects the per-resource lock."""
+
+    _candidate_relative_parts(note_rel_path)
+    root_path = Path(vault_root).expanduser().resolve()
+    root_fd = os.open(root_path, _DIRECTORY_OPEN_FLAGS)
+    try:
+        root_stat = os.fstat(root_fd)
+        normalized_relative = unicodedata.normalize("NFC", note_rel_path).casefold()
+        authority = _AtomicAppendAuthority(
+            root_fd=root_fd,
+            root_path=root_path,
+            root_stat=root_stat,
+            note_rel_path=note_rel_path,
+            lock_key=(
+                f"{root_stat.st_dev}:{root_stat.st_ino}:{normalized_relative}"
+            ),
+        )
+        authority.assert_live()
+        yield authority
+    finally:
+        os.close(root_fd)
+
+
+@dataclass(frozen=True)
+class _AccessMetadata:
+    mode: int
+    uid: int
+    gid: int
+    xattrs: tuple[tuple[str, bytes], ...]
+    acl: bytes | None
+
+
+@dataclass(frozen=True)
+class _RecoveryEntry:
+    name: str
+    identity: os.stat_result
+    digest: str
+    metadata: _AccessMetadata
 
 
 def _split_frontmatter_body_bytes(raw: bytes) -> tuple[bytes, bytes]:
@@ -84,8 +174,114 @@ def _write_all(fd: int, content: bytes) -> None:
         view = view[written:]
 
 
+def _darwin_acl_text(fd: int) -> bytes | None:
+    if sys.platform != "darwin":
+        return None
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    acl_get_fd = libc.acl_get_fd_np
+    acl_get_fd.argtypes = [ctypes.c_int, ctypes.c_int]
+    acl_get_fd.restype = ctypes.c_void_p
+    acl_to_text = libc.acl_to_text
+    acl_to_text.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ssize_t)]
+    acl_to_text.restype = ctypes.c_void_p
+    acl_free = libc.acl_free
+    acl_free.argtypes = [ctypes.c_void_p]
+    acl_free.restype = ctypes.c_int
+
+    ctypes.set_errno(0)
+    acl = acl_get_fd(fd, 0x00000100)  # ACL_TYPE_EXTENDED
+    if not acl:
+        error = ctypes.get_errno()
+        if error == errno.ENOENT:
+            return None
+        raise OSError(error, os.strerror(error))
+    rendered: int | None = None
+    try:
+        length = ctypes.c_ssize_t()
+        rendered = acl_to_text(acl, ctypes.byref(length))
+        if not rendered:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        return ctypes.string_at(rendered, length.value)
+    finally:
+        if rendered:
+            acl_free(rendered)
+        acl_free(acl)
+
+
+def _fd_xattrs(fd: int) -> tuple[tuple[str, bytes], ...]:
+    if hasattr(os, "listxattr") and hasattr(os, "getxattr"):
+        listxattr = getattr(os, "listxattr")
+        getxattr = getattr(os, "getxattr")
+        return tuple(
+            sorted(
+                (name, getxattr(fd, name))
+                for name in listxattr(fd)
+            )
+        )
+    if sys.platform != "darwin":
+        raise KnowledgeCapabilityError(
+            "platform cannot prove atomic append ACL/xattr preservation"
+        )
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    flistxattr = libc.flistxattr
+    flistxattr.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    flistxattr.restype = ctypes.c_ssize_t
+    fgetxattr = libc.fgetxattr
+    fgetxattr.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint32,
+        ctypes.c_int,
+    ]
+    fgetxattr.restype = ctypes.c_ssize_t
+
+    size = flistxattr(fd, None, 0, 0)
+    if size < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    if size == 0:
+        return ()
+    names_buffer = ctypes.create_string_buffer(size)
+    actual = flistxattr(fd, names_buffer, size, 0)
+    if actual < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    names = [name for name in names_buffer.raw[:actual].split(b"\0") if name]
+    result: list[tuple[str, bytes]] = []
+    for raw_name in names:
+        value_size = fgetxattr(fd, raw_name, None, 0, 0, 0)
+        if value_size < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        value_buffer = ctypes.create_string_buffer(value_size)
+        value_actual = fgetxattr(fd, raw_name, value_buffer, value_size, 0, 0)
+        if value_actual < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        result.append(
+            (raw_name.decode("utf-8", errors="surrogateescape"), value_buffer.raw[:value_actual])
+        )
+    return tuple(sorted(result))
+
+
+def _access_metadata(fd: int) -> _AccessMetadata:
+    observed = os.fstat(fd)
+    return _AccessMetadata(
+        mode=stat.S_IMODE(observed.st_mode),
+        uid=observed.st_uid,
+        gid=observed.st_gid,
+        xattrs=_fd_xattrs(fd),
+        acl=_darwin_acl_text(fd),
+    )
+
+
 def _copy_access_metadata(source_fd: int, staged_fd: int) -> None:
-    """Clone access-control metadata before an atomic note replacement."""
+    """Clone and prove access metadata after staged payload I/O is complete."""
 
     source = os.fstat(source_fd)
     if source.st_nlink != 1:
@@ -103,7 +299,6 @@ def _copy_access_metadata(source_fd: int, staged_fd: int) -> None:
             error = ctypes.get_errno()
             raise OSError(error, os.strerror(error))
     else:
-        os.fchmod(staged_fd, stat.S_IMODE(source.st_mode))
         staged = os.fstat(staged_fd)
         if (staged.st_uid, staged.st_gid) != (source.st_uid, source.st_gid):
             os.fchown(staged_fd, source.st_uid, source.st_gid)
@@ -114,28 +309,14 @@ def _copy_access_metadata(source_fd: int, staged_fd: int) -> None:
             )
         for attribute in os.listxattr(source_fd):
             os.setxattr(staged_fd, attribute, os.getxattr(source_fd, attribute))
+        # chown and payload writes can clear setuid/setgid bits. Mode is the
+        # final metadata mutation on non-macOS platforms for that reason.
+        os.fchmod(staged_fd, stat.S_IMODE(source.st_mode))
 
-    staged = os.fstat(staged_fd)
-    if (
-        stat.S_IMODE(staged.st_mode) != stat.S_IMODE(source.st_mode)
-        or staged.st_uid != source.st_uid
-        or staged.st_gid != source.st_gid
-    ):
+    if _access_metadata(staged_fd) != _access_metadata(source_fd):
         raise KnowledgeCapabilityError(
             "atomic append access metadata could not be preserved exactly"
         )
-
-    if all(hasattr(os, name) for name in ("listxattr", "getxattr")):
-        source_xattrs = {
-            name: os.getxattr(source_fd, name) for name in os.listxattr(source_fd)
-        }
-        staged_xattrs = {
-            name: os.getxattr(staged_fd, name) for name in os.listxattr(staged_fd)
-        }
-        if staged_xattrs != source_xattrs:
-            raise KnowledgeCapabilityError(
-                "atomic append extended attributes could not be preserved exactly"
-            )
 
 
 def _candidate_relative_parts(note_rel_path: str) -> tuple[str, ...]:
@@ -484,6 +665,367 @@ def write_note_relative(
     )
 
 
+def _read_bound_file(
+    fd: int,
+    expected: os.stat_result,
+    *,
+    context: str,
+) -> tuple[bytes, _AccessMetadata]:
+    metadata_before = _access_metadata(fd)
+    payload, observed = _read_stable_descriptor(fd)
+    metadata_after = _access_metadata(fd)
+    if (
+        not _same_file_identity(observed, expected)
+        or metadata_before != metadata_after
+    ):
+        raise KnowledgeWriteConflict(f"{context} changed during descriptor read")
+    return payload, metadata_after
+
+
+def _open_atomic_append_recovery(root_fd: int) -> int:
+    """Open the established scanner-inert root recovery convention."""
+
+    return _open_conflict_directory(root_fd)
+
+
+def _atomic_append_locator_token(note_rel_path: str) -> str:
+    return hashlib.sha256(note_rel_path.encode("utf-8")).hexdigest()[:24]
+
+
+def _indeterminate_marker_prefix(note_rel_path: str) -> str:
+    return f".steering-append-indeterminate-{_atomic_append_locator_token(note_rel_path)}-"
+
+
+def _require_no_indeterminate_marker(recovery_fd: int, note_rel_path: str) -> None:
+    prefix = _indeterminate_marker_prefix(note_rel_path)
+    if any(name.startswith(prefix) for name in os.listdir(recovery_fd)):
+        raise KnowledgeWriteConflict(
+            f"atomic append authority mapping is indeterminate for {note_rel_path}; "
+            "reconciliation is required before retry"
+        )
+
+
+def _mark_atomic_append_indeterminate(
+    recovery_fd: int,
+    note_rel_path: str,
+    transaction_id: str,
+    reason: str,
+) -> None:
+    name = (
+        f"{_indeterminate_marker_prefix(note_rel_path)}"
+        f"{transaction_id}.md.conflict"
+    )
+    try:
+        marker_fd = os.open(
+            name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=recovery_fd,
+        )
+    except FileExistsError:
+        return
+    try:
+        payload = (
+            f"transaction={transaction_id}\nlocator={note_rel_path}\nreason={reason}\n"
+        ).encode("utf-8")
+        _write_all(marker_fd, payload)
+        os.fsync(marker_fd)
+    finally:
+        os.close(marker_fd)
+    os.fsync(recovery_fd)
+
+
+def _recovery_name(
+    *,
+    transaction_id: str,
+    role: str,
+    digest: str,
+    identity: os.stat_result,
+) -> str:
+    return (
+        f".steering-append-{transaction_id}-{role}-{digest}-"
+        f"{identity.st_dev}-{identity.st_ino}.md.conflict"
+    )
+
+
+def _publish_recovery_snapshot(
+    source_fd: int,
+    expected: os.stat_result,
+    recovery_fd: int,
+    *,
+    transaction_id: str,
+    role: str,
+) -> _RecoveryEntry:
+    """Durably publish one exact descriptor snapshot under the root."""
+
+    payload, metadata = _read_bound_file(
+        source_fd,
+        expected,
+        context=f"atomic append {role} recovery source",
+    )
+    digest = hashlib.sha256(payload).hexdigest()
+    final_name = _recovery_name(
+        transaction_id=transaction_id,
+        role=role,
+        digest=digest,
+        identity=expected,
+    )
+    temp_name = (
+        f".atomic-append-recovery-{transaction_id}-{role}-{uuid.uuid4().hex}.tmp"
+    )
+    snapshot_fd = os.open(
+        temp_name,
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+        dir_fd=recovery_fd,
+    )
+    try:
+        _write_all(snapshot_fd, payload)
+        _copy_access_metadata(source_fd, snapshot_fd)
+        os.fsync(snapshot_fd)
+        snapshot_stat = os.fstat(snapshot_fd)
+        snapshot_payload, snapshot_metadata = _read_bound_file(
+            snapshot_fd,
+            snapshot_stat,
+            context=f"atomic append {role} recovery snapshot",
+        )
+        if snapshot_payload != payload or snapshot_metadata != metadata:
+            raise KnowledgeWriteConflict(
+                f"atomic append {role} recovery snapshot changed before publication"
+            )
+        _atomic_rename_noreplace_at(
+            recovery_fd,
+            temp_name,
+            recovery_fd,
+            final_name,
+        )
+        os.fsync(recovery_fd)
+        published = os.stat(final_name, dir_fd=recovery_fd, follow_symlinks=False)
+        if not _same_file_identity(published, snapshot_stat):
+            raise KnowledgeWriteConflict(
+                f"atomic append {role} recovery identity changed during publication"
+            )
+        return _RecoveryEntry(
+            name=final_name,
+            identity=snapshot_stat,
+            digest=digest,
+            metadata=metadata,
+        )
+    finally:
+        os.close(snapshot_fd)
+
+
+def _move_entry_to_recovery(
+    source_fd: int,
+    source_name: str,
+    expected: os.stat_result,
+    recovery_fd: int,
+    destination_name: str,
+) -> os.stat_result:
+    """Atomically retain a named entry under the anchored root recovery dir."""
+
+    _atomic_rename_noreplace_at(
+        source_fd,
+        source_name,
+        recovery_fd,
+        destination_name,
+    )
+    os.fsync(source_fd)
+    os.fsync(recovery_fd)
+    retained = os.stat(
+        destination_name,
+        dir_fd=recovery_fd,
+        follow_symlinks=False,
+    )
+    if not _same_file_identity(retained, expected):
+        raise KnowledgeWriteConflict(
+            "atomic append recovery entry changed during retention"
+        )
+    return retained
+
+
+def _quarantine_recovery_temp(recovery_fd: int, name: str) -> None:
+    observed = os.stat(name, dir_fd=recovery_fd, follow_symlinks=False)
+    destination = f".steering-append-unknown-{uuid.uuid4().hex}.md.conflict"
+    _move_entry_to_recovery(
+        recovery_fd,
+        name,
+        observed,
+        recovery_fd,
+        destination,
+    )
+
+
+def _sweep_atomic_append_recovery_temps(recovery_fd: int) -> None:
+    for name in sorted(os.listdir(recovery_fd)):
+        if _ATOMIC_APPEND_RECOVERY_TEMP_RE.fullmatch(name):
+            _quarantine_recovery_temp(recovery_fd, name)
+
+
+def _sweep_atomic_append_stages(parent_fd: int, recovery_fd: int) -> None:
+    """Move every prior crash-stage out of the canonical parent without deletion."""
+
+    for name in sorted(os.listdir(parent_fd)):
+        if not name.startswith(".atomic-append-") or not (
+            name.endswith(".stage") or name.endswith(".tmp")
+        ):
+            continue
+        observed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        match = _ATOMIC_APPEND_STAGE_RE.fullmatch(name)
+        disposition = "unknown"
+        if match and stat.S_ISREG(observed.st_mode):
+            stage_fd = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=parent_fd,
+            )
+            try:
+                payload, _metadata = _read_bound_file(
+                    stage_fd,
+                    observed,
+                    context="atomic append crash stage",
+                )
+            finally:
+                os.close(stage_fd)
+            if hashlib.sha256(payload).hexdigest() == match.group("digest"):
+                disposition = "owned"
+        destination = (
+            f".steering-append-{disposition}-stage-{uuid.uuid4().hex}.md.conflict"
+        )
+        _move_entry_to_recovery(
+            parent_fd,
+            name,
+            observed,
+            recovery_fd,
+            destination,
+        )
+
+
+def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
+    """Durably retire a redundant clean-success snapshot after exact proof."""
+
+    current_fd = os.open(
+        entry.name,
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        dir_fd=recovery_fd,
+    )
+    try:
+        current = os.fstat(current_fd)
+        payload, metadata = _read_bound_file(
+            current_fd,
+            current,
+            context="atomic append recovery retirement",
+        )
+    finally:
+        os.close(current_fd)
+    if (
+        not _same_file_identity(current, entry.identity)
+        or hashlib.sha256(payload).hexdigest() != entry.digest
+        or metadata != entry.metadata
+    ):
+        raise KnowledgeWriteConflict(
+            "atomic append recovery snapshot changed before retirement"
+        )
+    retirement_name = f".atomic-append-retire-{uuid.uuid4().hex}.tmp"
+    _move_entry_to_recovery(
+        recovery_fd,
+        entry.name,
+        entry.identity,
+        recovery_fd,
+        retirement_name,
+    )
+    retired = os.stat(
+        retirement_name,
+        dir_fd=recovery_fd,
+        follow_symlinks=False,
+    )
+    if not _same_file_identity(retired, entry.identity):
+        raise KnowledgeWriteConflict(
+            "atomic append recovery snapshot changed during retirement"
+        )
+    os.unlink(retirement_name, dir_fd=recovery_fd)
+    os.fsync(recovery_fd)
+
+
+def _retain_stage_after_failure(
+    parent_fd: int,
+    stage_name: str,
+    expected: os.stat_result,
+    recovery_fd: int,
+    *,
+    transaction_id: str,
+) -> None:
+    try:
+        current = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    role = "owned-stage" if _same_file_identity(current, expected) else "raced-stage"
+    destination = (
+        f".steering-append-{transaction_id}-{role}-{uuid.uuid4().hex}.md.conflict"
+    )
+    _move_entry_to_recovery(
+        parent_fd,
+        stage_name,
+        current,
+        recovery_fd,
+        destination,
+    )
+    if role != "owned-stage":
+        raise KnowledgeWriteConflict(
+            "atomic append stage changed before recovery; canonical outcome is indeterminate"
+        )
+
+
+def _require_atomic_append_mapping(
+    authority: _AtomicAppendAuthority,
+    relative_parent: PurePosixPath,
+    parent_fd: int,
+    recovery_fd: int,
+) -> None:
+    authority.assert_live()
+    probe_fd = os.dup(authority.root_fd)
+    try:
+        for component in relative_parent.parts:
+            if component in {"", "."}:
+                continue
+            child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=probe_fd)
+            os.close(probe_fd)
+            probe_fd = child_fd
+        current_parent = os.fstat(probe_fd)
+        anchored_parent = os.fstat(parent_fd)
+        current_recovery = os.stat(
+            "_conflicts",
+            dir_fd=authority.root_fd,
+            follow_symlinks=False,
+        )
+        anchored_recovery = os.fstat(recovery_fd)
+        if (
+            not _same_file_identity(current_parent, anchored_parent)
+            or not _same_file_identity(current_recovery, anchored_recovery)
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append authority mapping changed for {authority.note_rel_path}"
+            )
+    except OSError as exc:
+        raise KnowledgeWriteConflict(
+            f"atomic append authority mapping changed for {authority.note_rel_path}"
+        ) from exc
+    finally:
+        os.close(probe_fd)
+
+
 def append_note_relative(
     note_rel_path: str,
     content: str,
@@ -492,6 +1034,7 @@ def append_note_relative(
     action: str = KNOWLEDGE_WRITE_ACTION,
     write_guard: "WriteGuard | None" = None,
     _atomic_transform: AtomicAppendTransform | None = None,
+    _atomic_authority: _AtomicAppendAuthority | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#3129): append-only writes share the same production
     # boundary as relative overwrites. Assert before resolving the port so an
@@ -502,21 +1045,35 @@ def append_note_relative(
 
     guard = write_guard or DEFAULT_WRITE_GUARD
     guard.assert_writes_allowed(action)
-    resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)
     if _atomic_transform is not None:
-        _atomic_append_note_relative(
-            note_rel_path,
-            content.encode("utf-8"),
-            vault_root=resolved_root,
-            transform=_atomic_transform,
-        )
+        if _atomic_authority is not None:
+            if _atomic_authority.note_rel_path != note_rel_path:
+                raise KnowledgeCapabilityError(
+                    "atomic append authority does not match the requested locator"
+                )
+            _atomic_authority.assert_live()
+            _atomic_append_note_relative(
+                note_rel_path,
+                content.encode("utf-8"),
+                authority=_atomic_authority,
+                transform=_atomic_transform,
+            )
+        else:
+            with _open_atomic_append_authority(vault_root, note_rel_path) as authority:
+                _atomic_append_note_relative(
+                    note_rel_path,
+                    content.encode("utf-8"),
+                    authority=authority,
+                    transform=_atomic_transform,
+                )
         return WriteReceipt(
             operation="append_note",
             locator=locator,
             adapter="fs_vault",
             writer_identity="mimer.runtime",
         )
+    resolved_root = Path(vault_root).expanduser().resolve()
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
     return port.append_note(locator, content)
 
@@ -525,26 +1082,32 @@ def _atomic_append_note_relative(
     note_rel_path: str,
     proposed_append: bytes,
     *,
-    vault_root: Path,
+    authority: _AtomicAppendAuthority,
     transform: AtomicAppendTransform,
 ) -> None:
-    """Publish one append plus derived-note bookkeeping as one transaction.
-
-    The append seam resolves and opens its own root/locator path, so callers
-    cannot smuggle an unrelated directory descriptor into the write authority.
-    The transform may either append the exact proposed bytes or append nothing
-    for an idempotent retry; every pre-existing body byte must remain identical.
-    """
+    """Publish one root-bound append/bookkeeping transaction or retain recovery."""
 
     parts = _candidate_relative_parts(note_rel_path)
+    if note_rel_path != authority.note_rel_path:
+        raise KnowledgeCapabilityError(
+            "atomic append authority does not match the requested locator"
+        )
+    relative_parent = PurePosixPath(*parts[:-1])
+    transaction_id = uuid.uuid4().hex
     current_dir_fd: int | None = None
+    recovery_fd: int | None = None
     source_fd: int | None = None
     stage_fd: int | None = None
     stage_name: str | None = None
-    stage_owned = False
+    stage_stat: os.stat_result | None = None
+    stage_named = False
+    exchange_completed = False
     target_existed = False
     current_raw: bytes | None = None
-    current_identity: tuple[int, int] | None = None
+    source_stat: os.stat_result | None = None
+    source_metadata: _AccessMetadata | None = None
+    proposal_snapshot: _RecoveryEntry | None = None
+    original_snapshot: _RecoveryEntry | None = None
     cleanup_error: BaseException | None = None
 
     def record_cleanup_error(exc: BaseException) -> None:
@@ -552,27 +1115,9 @@ def _atomic_append_note_relative(
         if cleanup_error is None:
             cleanup_error = exc
 
-    def live_parent_identity() -> tuple[int, int]:
-        probe_fd: int | None = None
-        try:
-            probe_fd = os.open(vault_root, _DIRECTORY_OPEN_FLAGS)
-            for component in parts[:-1]:
-                child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=probe_fd)
-                superseded_fd = probe_fd
-                probe_fd = child_fd
-                os.close(superseded_fd)
-            observed = os.fstat(probe_fd)
-            return observed.st_dev, observed.st_ino
-        except OSError as exc:
-            raise KnowledgeCapabilityError(
-                f"atomic append parent mapping changed for {note_rel_path}"
-            ) from exc
-        finally:
-            if probe_fd is not None:
-                os.close(probe_fd)
-
     try:
-        current_dir_fd = os.open(vault_root, _DIRECTORY_OPEN_FLAGS)
+        authority.assert_live()
+        current_dir_fd = os.dup(authority.root_fd)
         for component in parts[:-1]:
             try:
                 child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=current_dir_fd)
@@ -596,8 +1141,21 @@ def _atomic_append_note_relative(
             current_dir_fd = child_fd
             os.close(superseded_fd)
 
-        # Fence any prior uncertain rename before observing the target.
+        recovery_fd = _open_atomic_append_recovery(authority.root_fd)
+        _require_atomic_append_mapping(
+            authority,
+            relative_parent,
+            current_dir_fd,
+            recovery_fd,
+        )
+        _sweep_atomic_append_recovery_temps(recovery_fd)
+        _sweep_atomic_append_stages(current_dir_fd, recovery_fd)
+        _require_no_indeterminate_marker(recovery_fd, note_rel_path)
+
+        # Fence prior uncertain parent creation, stage recovery, or publication
+        # before observing the canonical target.
         os.fsync(current_dir_fd)
+        os.fsync(recovery_fd)
         target_name = parts[-1]
         try:
             source_fd = os.open(
@@ -614,18 +1172,21 @@ def _atomic_append_note_relative(
                 f"atomic append target {note_rel_path} must be a regular non-symlink file"
             ) from exc
         else:
-            source = os.fstat(source_fd)
-            if not stat.S_ISREG(source.st_mode):
+            source_stat = os.fstat(source_fd)
+            if not stat.S_ISREG(source_stat.st_mode):
                 raise KnowledgeCapabilityError(
                     f"atomic append target {note_rel_path} must be a regular file"
                 )
-            if source.st_nlink != 1:
+            if source_stat.st_nlink != 1:
                 raise KnowledgeCapabilityError(
                     f"atomic append target {note_rel_path} must not have hard-link aliases"
                 )
             target_existed = True
-            current_identity = (source.st_dev, source.st_ino)
-            current_raw = _read_all(source_fd)
+            current_raw, source_metadata = _read_bound_file(
+                source_fd,
+                source_stat,
+                context=f"atomic append target {note_rel_path}",
+            )
 
         replacement, actual_append = transform(current_raw, proposed_append)
         if not isinstance(replacement, bytes) or not isinstance(actual_append, bytes):
@@ -642,9 +1203,43 @@ def _atomic_append_note_relative(
             if replacement_body != current_body + actual_append:
                 raise ValueError("atomic append transform changed prior body bytes")
             if replacement == current_raw:
+                if source_fd is None or source_stat is None:
+                    raise AssertionError("existing retry target lost its source authority")
+                _require_atomic_append_mapping(
+                    authority,
+                    relative_parent,
+                    current_dir_fd,
+                    recovery_fd,
+                )
+                live = os.stat(
+                    target_name,
+                    dir_fd=current_dir_fd,
+                    follow_symlinks=False,
+                )
+                final_raw, final_metadata = _read_bound_file(
+                    source_fd,
+                    source_stat,
+                    context=f"atomic append retry target {note_rel_path}",
+                )
+                if (
+                    not _same_file_identity(live, source_stat)
+                    or final_raw != current_raw
+                    or final_metadata != source_metadata
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"atomic append retry target changed before acknowledgement for {note_rel_path}"
+                    )
                 return
 
-        stage_name = f".atomic-append-{uuid.uuid4().hex}.tmp"
+        replacement_digest = hashlib.sha256(replacement).hexdigest()
+        source_token = (
+            f"{source_stat.st_dev}-{source_stat.st_ino}"
+            if source_stat is not None
+            else "absent"
+        )
+        stage_name = (
+            f".atomic-append-{transaction_id}-{replacement_digest}-{source_token}.stage"
+        )
         stage_fd = os.open(
             stage_name,
             os.O_RDWR
@@ -655,46 +1250,118 @@ def _atomic_append_note_relative(
             0o600,
             dir_fd=current_dir_fd,
         )
-        stage_owned = True
-        if source_fd is not None:
-            _copy_access_metadata(source_fd, stage_fd)
-        os.lseek(stage_fd, 0, os.SEEK_SET)
-        os.ftruncate(stage_fd, 0)
+        stage_named = True
+        stage_stat = os.fstat(stage_fd)
         _write_all(stage_fd, replacement)
+        if source_fd is not None:
+            # Payload I/O precedes metadata cloning because writes can clear
+            # special mode bits on macOS and chown can clear them elsewhere.
+            _copy_access_metadata(source_fd, stage_fd)
         os.fsync(stage_fd)
-
-        anchored_parent = os.fstat(current_dir_fd)
-        if live_parent_identity() != (anchored_parent.st_dev, anchored_parent.st_ino):
-            raise KnowledgeCapabilityError(
-                f"atomic append parent mapping changed for {note_rel_path}"
+        staged_raw, staged_metadata = _read_bound_file(
+            stage_fd,
+            stage_stat,
+            context=f"atomic append proposal {note_rel_path}",
+        )
+        if staged_raw != replacement:
+            raise KnowledgeWriteConflict(
+                f"atomic append proposal changed before publication for {note_rel_path}"
             )
+        if source_metadata is not None and staged_metadata != source_metadata:
+            raise KnowledgeCapabilityError(
+                "atomic append proposal access metadata was not preserved exactly"
+            )
+
+        proposal_snapshot = _publish_recovery_snapshot(
+            stage_fd,
+            stage_stat,
+            recovery_fd,
+            transaction_id=transaction_id,
+            role="proposal",
+        )
+        if source_fd is not None and source_stat is not None:
+            original_snapshot = _publish_recovery_snapshot(
+                source_fd,
+                source_stat,
+                recovery_fd,
+                transaction_id=transaction_id,
+                role="original",
+            )
+
+        _require_atomic_append_mapping(
+            authority,
+            relative_parent,
+            current_dir_fd,
+            recovery_fd,
+        )
 
         if target_existed:
-            verification_fd = os.open(
+            if source_fd is None or source_stat is None or source_metadata is None:
+                raise AssertionError("existing atomic append target lost its source authority")
+            live = os.stat(
                 target_name,
-                os.O_RDONLY
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=current_dir_fd,
+                follow_symlinks=False,
             )
-            try:
-                observed = os.fstat(verification_fd)
-                if (
-                    not stat.S_ISREG(observed.st_mode)
-                    or (observed.st_dev, observed.st_ino) != current_identity
-                    or _read_all(verification_fd) != current_raw
-                ):
-                    raise KnowledgeWriteConflict(
-                        f"atomic append target changed before publication for {note_rel_path}"
-                    )
-            finally:
-                os.close(verification_fd)
-            os.replace(
-                stage_name,
+            latest_raw, latest_metadata = _read_bound_file(
+                source_fd,
+                source_stat,
+                context=f"atomic append target {note_rel_path}",
+            )
+            if (
+                not _same_file_identity(live, source_stat)
+                or latest_raw != current_raw
+                or latest_metadata != source_metadata
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append target changed before publication for {note_rel_path}"
+                )
+            _atomic_exchange_at(
+                current_dir_fd,
                 target_name,
-                src_dir_fd=current_dir_fd,
-                dst_dir_fd=current_dir_fd,
+                current_dir_fd,
+                stage_name,
             )
+            exchange_completed = True
+            os.fsync(current_dir_fd)
+
+            published = os.stat(
+                target_name,
+                dir_fd=current_dir_fd,
+                follow_symlinks=False,
+            )
+            displaced = os.stat(
+                stage_name,
+                dir_fd=current_dir_fd,
+                follow_symlinks=False,
+            )
+            published_raw, published_metadata = _read_bound_file(
+                stage_fd,
+                stage_stat,
+                context=f"atomic append published proposal {note_rel_path}",
+            )
+            displaced_raw, displaced_metadata = _read_bound_file(
+                source_fd,
+                source_stat,
+                context=f"atomic append displaced target {note_rel_path}",
+            )
+            if (
+                not _same_file_identity(published, stage_stat)
+                or not _same_file_identity(displaced, source_stat)
+                or published_raw != replacement
+                or published_metadata != staged_metadata
+                or displaced_raw != current_raw
+                or displaced_metadata != source_metadata
+            ):
+                _mark_atomic_append_indeterminate(
+                    recovery_fd,
+                    note_rel_path,
+                    transaction_id,
+                    "atomic exchange did not bind the checked proposal and original",
+                )
+                raise KnowledgeWriteConflict(
+                    f"atomic append exchange raced for {note_rel_path}; canonical outcome is indeterminate"
+                )
         else:
             try:
                 _atomic_rename_noreplace_at(
@@ -709,12 +1376,136 @@ def _atomic_append_note_relative(
                         f"atomic append target appeared during publication for {note_rel_path}"
                     ) from exc
                 raise
-        stage_owned = False
-        os.fsync(current_dir_fd)
-        if live_parent_identity() != (anchored_parent.st_dev, anchored_parent.st_ino):
-            raise KnowledgeCapabilityError(
-                f"atomic append parent mapping changed after publication for {note_rel_path}"
+            exchange_completed = True
+            stage_named = False
+            os.fsync(current_dir_fd)
+            published = os.stat(
+                target_name,
+                dir_fd=current_dir_fd,
+                follow_symlinks=False,
             )
+            published_raw, published_metadata = _read_bound_file(
+                stage_fd,
+                stage_stat,
+                context=f"atomic append published proposal {note_rel_path}",
+            )
+            if (
+                not _same_file_identity(published, stage_stat)
+                or published_raw != replacement
+                or published_metadata != staged_metadata
+            ):
+                _mark_atomic_append_indeterminate(
+                    recovery_fd,
+                    note_rel_path,
+                    transaction_id,
+                    "initial publication identity or content changed",
+                )
+                raise KnowledgeWriteConflict(
+                    f"atomic append initial publication changed for {note_rel_path}; canonical outcome is indeterminate"
+                )
+
+        os.fsync(current_dir_fd)
+        try:
+            _require_atomic_append_mapping(
+                authority,
+                relative_parent,
+                current_dir_fd,
+                recovery_fd,
+            )
+        except KnowledgeWriteConflict as exc:
+            _mark_atomic_append_indeterminate(
+                recovery_fd,
+                note_rel_path,
+                transaction_id,
+                "root or parent authority mapping changed after publication",
+            )
+            raise KnowledgeWriteConflict(
+                f"atomic append authority mapping indeterminate for {note_rel_path}; recovery retained"
+            ) from exc
+
+        if target_existed:
+            if source_stat is None or source_metadata is None or current_raw is None:
+                raise AssertionError("existing target lost displaced-version authority")
+            displaced_name = (
+                f".steering-append-{transaction_id}-displaced-{uuid.uuid4().hex}.md.conflict"
+            )
+            _move_entry_to_recovery(
+                current_dir_fd,
+                stage_name,
+                source_stat,
+                recovery_fd,
+                displaced_name,
+            )
+            stage_named = False
+            displaced_fd = os.open(
+                displaced_name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=recovery_fd,
+            )
+            try:
+                retained_stat = os.fstat(displaced_fd)
+                retained_raw, retained_metadata = _read_bound_file(
+                    displaced_fd,
+                    retained_stat,
+                    context=f"atomic append displaced retirement {note_rel_path}",
+                )
+            finally:
+                os.close(displaced_fd)
+            if (
+                not _same_file_identity(retained_stat, source_stat)
+                or retained_raw != current_raw
+                or retained_metadata != source_metadata
+            ):
+                _mark_atomic_append_indeterminate(
+                    recovery_fd,
+                    note_rel_path,
+                    transaction_id,
+                    "displaced target changed before clean-success retirement",
+                )
+                raise KnowledgeWriteConflict(
+                    f"atomic append displaced target changed before retirement for {note_rel_path}"
+                )
+            os.unlink(displaced_name, dir_fd=recovery_fd)
+            os.fsync(recovery_fd)
+
+        live_target = os.stat(
+            target_name,
+            dir_fd=current_dir_fd,
+            follow_symlinks=False,
+        )
+        final_raw, final_metadata = _read_bound_file(
+            stage_fd,
+            stage_stat,
+            context=f"atomic append receipt target {note_rel_path}",
+        )
+        if (
+            not _same_file_identity(live_target, stage_stat)
+            or final_raw != replacement
+            or final_metadata != staged_metadata
+        ):
+            _mark_atomic_append_indeterminate(
+                recovery_fd,
+                note_rel_path,
+                transaction_id,
+                "canonical target changed before acknowledgement",
+            )
+            raise KnowledgeWriteConflict(
+                f"atomic append target changed before acknowledgement for {note_rel_path}"
+            )
+        _require_atomic_append_mapping(
+            authority,
+            relative_parent,
+            current_dir_fd,
+            recovery_fd,
+        )
+        os.fsync(current_dir_fd)
+        _retire_recovery_entry(recovery_fd, proposal_snapshot)
+        proposal_snapshot = None
+        if original_snapshot is not None:
+            _retire_recovery_entry(recovery_fd, original_snapshot)
+            original_snapshot = None
     finally:
         if stage_fd is not None:
             owned_stage_fd = stage_fd
@@ -723,11 +1514,22 @@ def _atomic_append_note_relative(
                 os.close(owned_stage_fd)
             except BaseException as exc:  # noqa: BLE001 - fail-closed ownership cleanup
                 record_cleanup_error(exc)
-        if stage_owned and stage_name is not None and current_dir_fd is not None:
+        if (
+            stage_named
+            and stage_name is not None
+            and stage_stat is not None
+            and current_dir_fd is not None
+            and recovery_fd is not None
+        ):
             try:
-                os.unlink(stage_name, dir_fd=current_dir_fd)
-                stage_owned = False
-                os.fsync(current_dir_fd)
+                _retain_stage_after_failure(
+                    current_dir_fd,
+                    stage_name,
+                    stage_stat if not exchange_completed else source_stat or stage_stat,
+                    recovery_fd,
+                    transaction_id=transaction_id,
+                )
+                stage_named = False
             except BaseException as exc:  # noqa: BLE001 - cleanup durability is required
                 record_cleanup_error(exc)
         if source_fd is not None:
@@ -735,6 +1537,13 @@ def _atomic_append_note_relative(
             source_fd = None
             try:
                 os.close(owned_source_fd)
+            except BaseException as exc:  # noqa: BLE001 - preserve the first cleanup failure
+                record_cleanup_error(exc)
+        if recovery_fd is not None:
+            owned_recovery_fd = recovery_fd
+            recovery_fd = None
+            try:
+                os.close(owned_recovery_fd)
             except BaseException as exc:  # noqa: BLE001 - preserve the first cleanup failure
                 record_cleanup_error(exc)
         if current_dir_fd is not None:

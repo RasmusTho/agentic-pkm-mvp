@@ -83,14 +83,13 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import tempfile
 import threading
-import unicodedata
 from typing import Any, Literal, Optional
 from collections.abc import Iterator
+import yaml
 
 from app.heimdal.settings_notes import (
     INTERESTS,
@@ -105,9 +104,13 @@ from app.heimdal.settings_notes import (
     render_note,
     write_settings_note,
 )
-from app.knowledge.write_ops import append_note_relative
+from app.knowledge.write_ops import (
+    _AtomicAppendAuthority,
+    _open_atomic_append_authority,
+    append_note_relative,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -363,14 +366,6 @@ def read_inflow_body(vault_root: Path, kind: InflowKind) -> str:
 # verb; this is documentation of the expected vocabulary, not an enforced
 # enum, so a future verb does not require a schema change to add.
 POSTHOC_STEERING_VERBS = ("less_of_this", "mute", "wrong")
-_LOCK_ROOT_OPEN_FLAGS = (
-    os.O_RDONLY
-    | getattr(os, "O_DIRECTORY", 0)
-    | getattr(os, "O_NOFOLLOW", 0)
-    | getattr(os, "O_CLOEXEC", 0)
-)
-
-
 def _split_steering_log_bytes(raw: bytes) -> tuple[dict[str, Any], bytes]:
     """Parse frontmatter while returning every byte after its closer intact."""
     if not (raw.startswith(b"---\r\n") or raw.startswith(b"---\n")):
@@ -378,17 +373,28 @@ def _split_steering_log_bytes(raw: bytes) -> tuple[dict[str, Any], bytes]:
 
     offset = 0
     closing_end = -1
+    frontmatter_lines: list[bytes] = []
     for index, line in enumerate(raw.splitlines(keepends=True)):
         content = line.rstrip(b"\r\n")
         if index > 0 and content == b"---":
             closing_end = offset + len(content)
             break
+        if index > 0:
+            frontmatter_lines.append(line)
         offset += len(line)
     if closing_end < 0:
         raise ValueError("steering log has unterminated YAML frontmatter")
 
-    frontmatter_only = raw[:closing_end].decode("utf-8") + "\n"
-    frontmatter, _body = load_frontmatter(frontmatter_only)
+    try:
+        parsed = yaml.safe_load(b"".join(frontmatter_lines).decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ValueError("steering log has malformed YAML frontmatter") from exc
+    if parsed is None:
+        frontmatter: dict[str, Any] = {}
+    elif isinstance(parsed, dict):
+        frontmatter = parsed
+    else:
+        raise ValueError("steering log YAML frontmatter must be a mapping")
     return frontmatter, raw[closing_end:]
 
 
@@ -452,30 +458,27 @@ def _build_steering_log_transaction(
 
 
 @contextmanager
-def _locked_steering_log(vault_root: Path) -> Iterator[None]:
+def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
     """Serialize one filesystem resource across equivalent path spellings."""
-    root_fd = os.open(vault_root.expanduser().resolve(), _LOCK_ROOT_OPEN_FLAGS)
-    try:
-        root = os.fstat(root_fd)
-    finally:
-        os.close(root_fd)
-    normalized_relative = unicodedata.normalize(
-        "NFC",
-        note_rel_path(STEERING_LOG),
-    ).casefold()
-    lock_key = f"{root.st_dev}:{root.st_ino}:{normalized_relative}"
-    with _STEERING_LOCKS_GUARD:
-        process_lock = _STEERING_LOCKS.setdefault(lock_key, threading.RLock())
+    relative = note_rel_path(STEERING_LOG)
+    with _open_atomic_append_authority(vault_root, relative) as authority:
+        with _STEERING_LOCKS_GUARD:
+            process_lock = _STEERING_LOCKS.setdefault(
+                authority.lock_key,
+                threading.RLock(),
+            )
 
-    lock_root = Path(tempfile.gettempdir()) / "agentic-pkm-heimdal-locks"
-    lock_root.mkdir(parents=True, exist_ok=True)
-    lock_name = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()
-    with process_lock, (lock_root / f"{lock_name}.lock").open("a+b") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_root = Path(tempfile.gettempdir()) / "agentic-pkm-heimdal-locks"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        lock_name = hashlib.sha256(authority.lock_key.encode("utf-8")).hexdigest()
+        with process_lock, (lock_root / f"{lock_name}.lock").open("a+b") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                authority.assert_live()
+                yield authority
+                authority.assert_live()
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -489,7 +492,8 @@ def _steering_log_entries(raw: bytes) -> list[_SteeringLogEntry]:
     """Return structured entries plus countable legacy steering lines."""
     _frontmatter, body_bytes = _split_steering_log_bytes(raw)
     entries: list[_SteeringLogEntry] = []
-    for line in body_bytes.decode("utf-8").splitlines(keepends=True):
+    for line_bytes in body_bytes.splitlines(keepends=True):
+        line = line_bytes.decode("utf-8")
         content = line.rstrip("\r\n")
         if not content.startswith("- [") or "] " not in content:
             continue
@@ -549,7 +553,7 @@ def append_steering_log(
     }
     encoded_payload = json.dumps(
         payload,
-        ensure_ascii=False,
+        ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     )
@@ -571,7 +575,7 @@ def append_steering_log(
         return replacement, actual_append
 
     _assert_append_allowed(write_guard, POSTHOC_STEERING_WRITE_ACTION)
-    with _locked_steering_log(vault_root):
+    with _locked_steering_log(vault_root) as authority:
         append_note_relative(
             note_rel_path(STEERING_LOG),
             line,
@@ -579,6 +583,7 @@ def append_steering_log(
             write_guard=write_guard,
             action=POSTHOC_STEERING_WRITE_ACTION,
             _atomic_transform=build_transaction,
+            _atomic_authority=authority,
         )
     return durable_line
 
