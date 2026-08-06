@@ -31,6 +31,7 @@ network, no real Postgres, no real vault.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import multiprocessing
 import os
 from pathlib import Path
@@ -75,9 +76,13 @@ def _isolated_atomic_append_host_fence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv(
-        "HEIMDAL_ATOMIC_APPEND_FENCE_ROOT",
-        str(tmp_path / "host-atomic-append-fences"),
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(tmp_path / "app-local.md"))
+
+
+def _host_fence_root() -> Path:
+    return (
+        Path(os.environ["DESIGN_HANDOFF_APP_LOCAL_SETTINGS"]).parent
+        / "heimdal-atomic-append-fences"
     )
 
 
@@ -470,6 +475,37 @@ def test_steering_log_rejects_unterminated_countable_record_without_mutation(
     assert b"unterminated-rejected" not in malformed
 
 
+def test_steering_log_rejects_unterminated_human_body_tail_without_mutation(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="unterminated-human-seed",
+        write_guard=guard,
+    )
+    path = vault_root / note_rel_path(STEERING_LOG)
+    malformed = path.read_bytes() + b"Human-authored tail without newline"
+    path.write_bytes(malformed)
+
+    with pytest.raises(RuntimeError, match="unterminated steering log"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "must-not-concatenate",
+            source="item",
+            operation_id="unterminated-human-rejected",
+            write_guard=guard,
+        )
+
+    assert path.read_bytes() == malformed
+    assert b"unterminated-human-rejected" not in malformed
+
+
 def test_posthoc_steering_honors_write_guard_block(tmp_path: Path) -> None:
     vault_root = _vault(tmp_path)
     with pytest.raises(WritesBlockedError):
@@ -790,6 +826,87 @@ def test_steering_log_retry_sweeps_process_crash_stage_to_root_recovery(
     assert any("owned-stage" in path.name for path in recovery.iterdir())
 
 
+def test_steering_log_first_host_state_namespace_fsyncs_its_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    parent_identity = tmp_path.stat()
+    real_fsync = write_ops_module.os.fsync
+    parent_fsynced = False
+
+    def record_fsync(fd: int) -> None:
+        nonlocal parent_fsynced
+        observed = os.fstat(fd)
+        if (
+            observed.st_dev == parent_identity.st_dev
+            and observed.st_ino == parent_identity.st_ino
+        ):
+            parent_fsynced = True
+        real_fsync(fd)
+
+    monkeypatch.setattr(write_ops_module.os, "fsync", record_fsync)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "durable-host-namespace",
+        source="chat",
+        operation_id="durable-host-namespace",
+        write_guard=_allowing_guard(),
+    )
+
+    assert parent_fsynced
+
+
+def test_steering_log_retry_reconciles_crash_precommitted_exchange_intent(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="intent-crash-seed",
+        write_guard=guard,
+    )
+    context = multiprocessing.get_context("fork")
+
+    def crash_after_intent_before_exchange() -> None:
+        write_ops_module._atomic_exchange_at = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(92)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "intent-crash",
+            source="item",
+            operation_id="intent-crash-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_after_intent_before_exchange)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 92
+    states = list(_host_fence_root().glob("*.state"))
+    assert states
+    assert any(json.loads(path.read_text())["state"] == "active" for path in states)
+
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "intent-crash",
+        source="item",
+        operation_id="intent-crash-proposal",
+        write_guard=guard,
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+
+
 def test_steering_log_exchange_race_retains_every_version_and_blocks_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1062,8 +1179,10 @@ def test_steering_log_post_exchange_authority_replacement_keeps_external_fence(
             write_guard=guard,
         )
 
-    fence_root = Path(os.environ["HEIMDAL_ATOMIC_APPEND_FENCE_ROOT"])
-    assert len(list(fence_root.glob("*.fence"))) == 1
+    fence_root = _host_fence_root()
+    states = list(fence_root.glob("*.state"))
+    assert states
+    assert any(json.loads(path.read_text())["state"] == "indeterminate" for path in states)
     monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", real_exchange)
     with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
         append_steering_log(
@@ -1078,6 +1197,58 @@ def test_steering_log_post_exchange_authority_replacement_keeps_external_fence(
     durable_root = parked_root if remap == "root" else vault_root
     durable = (durable_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
     assert durable.count(f'"operation_id":"{remap}-remap-proposal"') == 1
+
+
+def test_steering_log_symlinked_root_retarget_cannot_escape_lexical_fence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root_a = tmp_path / "vault-a"
+    root_b = tmp_path / "vault-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    lexical_root = tmp_path / "vault-alias"
+    lexical_root.symlink_to(root_a, target_is_directory=True)
+    guard = _allowing_guard()
+    append_steering_log(
+        lexical_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="symlink-root-seed",
+        write_guard=guard,
+    )
+    real_exchange = write_ops_module._atomic_exchange_at
+
+    def exchange_then_retarget(*args: object) -> None:
+        real_exchange(*args)  # type: ignore[arg-type]
+        lexical_root.unlink()
+        lexical_root.symlink_to(root_b, target_is_directory=True)
+
+    monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", exchange_then_retarget)
+    with pytest.raises(KnowledgeWriteConflict, match="mapping indeterminate"):
+        append_steering_log(
+            lexical_root,
+            "mute",
+            "retargeted-root",
+            source="item",
+            operation_id="symlink-root-proposal",
+            write_guard=guard,
+        )
+
+    monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", real_exchange)
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            lexical_root,
+            "mute",
+            "retargeted-root",
+            source="item",
+            operation_id="symlink-root-proposal",
+            write_guard=guard,
+        )
+    assert not (root_b / "_heimdal").exists()
+    durable = (root_a / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert durable.count('"operation_id":"symlink-root-proposal"') == 1
 
 
 @pytest.mark.parametrize("retirement_role", ["displaced", "retired"])
@@ -1158,6 +1329,127 @@ def test_steering_log_retirement_never_deletes_substituted_name(
 
     assert substituted_name is not None
     assert (vault_root / "_conflicts" / substituted_name).read_bytes() == sentinel
+
+
+@pytest.mark.parametrize("remap", ["target", "parent", "root", "recovery"])
+def test_steering_log_retirement_window_remap_fails_with_durable_host_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    remap: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"retirement-remap-{remap}-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    parent = target.parent
+    recovery = vault_root / "_conflicts"
+    parked_root = tmp_path / "retirement-parked-root"
+    real_retire = write_ops_module._retire_recovery_entry
+    remapped = False
+
+    def retire_then_remap(*args: object) -> None:
+        nonlocal remapped
+        real_retire(*args)  # type: ignore[arg-type]
+        if remapped:
+            return
+        remapped = True
+        if remap == "target":
+            target.replace(parent / ".retirement-target-parked")
+            target.write_bytes(b"sentinel replacement\n")
+        elif remap == "parent":
+            parent.replace(vault_root / "_heimdal-parked")
+            parent.mkdir()
+        elif remap == "root":
+            vault_root.replace(parked_root)
+            vault_root.mkdir()
+        else:
+            recovery.replace(vault_root / "_conflicts-parked")
+            recovery.mkdir()
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_retire_recovery_entry",
+        retire_then_remap,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="receipt became indeterminate"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "retirement-remap",
+            source="item",
+            operation_id=f"retirement-remap-{remap}-proposal",
+            write_guard=guard,
+        )
+
+    states = list(_host_fence_root().glob("*.state"))
+    assert states
+    assert all(json.loads(path.read_text())["state"] == "indeterminate" for path in states)
+    if remap == "target":
+        assert target.read_bytes() == b"sentinel replacement\n"
+
+    monkeypatch.setattr(write_ops_module, "_retire_recovery_entry", real_retire)
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "retirement-remap",
+            source="item",
+            operation_id=f"retirement-remap-{remap}-proposal",
+            write_guard=guard,
+        )
+
+
+def test_steering_log_final_mapping_remap_after_clean_state_is_refenced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="final-mapping-remap-seed",
+        write_guard=guard,
+    )
+    parked_root = tmp_path / "final-mapping-parked-root"
+    real_mapping = write_ops_module._require_atomic_append_mapping
+    mapping_calls = 0
+
+    def remap_at_second_receipt_proof(*args: object) -> None:
+        nonlocal mapping_calls
+        mapping_calls += 1
+        if mapping_calls == 5:
+            vault_root.replace(parked_root)
+            vault_root.mkdir()
+        real_mapping(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_require_atomic_append_mapping",
+        remap_at_second_receipt_proof,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="receipt became indeterminate"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "final-mapping-remap",
+            source="item",
+            operation_id="final-mapping-remap-proposal",
+            write_guard=guard,
+        )
+
+    states = list(_host_fence_root().glob("*.state"))
+    assert states
+    assert all(json.loads(path.read_text())["state"] == "indeterminate" for path in states)
 
 
 def test_steering_log_bookkeeping_preserves_existing_body_bytes(tmp_path: Path) -> None:

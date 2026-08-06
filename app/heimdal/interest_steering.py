@@ -104,8 +104,10 @@ from app.heimdal.settings_notes import (
     render_note,
     write_settings_note,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import (
     _AtomicAppendAuthority,
+    _mark_host_atomic_append_indeterminate,
     _open_atomic_append_authority,
     _require_no_host_indeterminate_fence,
     append_note_relative,
@@ -463,7 +465,7 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
     """Serialize one inode and lexical resource across remaps and aliases."""
     relative = note_rel_path(STEERING_LOG)
     with _open_atomic_append_authority(vault_root, relative) as authority:
-        lock_keys = sorted({authority.lock_key, authority.path_lock_key})
+        lock_keys = sorted({authority.lock_key, *authority.path_lock_keys})
         with _STEERING_LOCKS_GUARD:
             process_locks = [
                 _STEERING_LOCKS.setdefault(key, threading.RLock())
@@ -486,7 +488,15 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
                 authority.assert_live()
                 _require_no_host_indeterminate_fence(authority)
                 yield authority
-                authority.assert_live()
+                try:
+                    authority.assert_live()
+                except KnowledgeWriteConflict:
+                    _mark_host_atomic_append_indeterminate(
+                        authority,
+                        "post-transaction-authority-check",
+                        "root authority changed before lock release",
+                    )
+                    raise
             finally:
                 for lock_handle in reversed(lock_handles):
                     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
@@ -502,6 +512,8 @@ class _SteeringLogEntry:
 def _steering_log_entries(raw: bytes) -> list[_SteeringLogEntry]:
     """Return structured entries plus countable legacy steering lines."""
     _frontmatter, body_bytes = _split_steering_log_bytes(raw)
+    if body_bytes and not body_bytes.endswith(b"\n"):
+        raise RuntimeError("unterminated steering log entry or body tail")
     entries: list[_SteeringLogEntry] = []
     for line_bytes in body_bytes.splitlines(keepends=True):
         line = line_bytes.decode("utf-8")

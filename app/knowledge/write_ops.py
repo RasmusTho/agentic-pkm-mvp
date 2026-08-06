@@ -5,6 +5,7 @@ import ctypes
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -73,14 +74,17 @@ class _AtomicAppendAuthority:
 
     root_fd: int
     root_path: Path
+    lexical_root_path: Path
     root_stat: os.stat_result
     note_rel_path: str
     lock_key: str
-    path_lock_key: str
+    canonical_path_lock_key: str
+    path_lock_keys: tuple[str, ...]
 
     def assert_live(self) -> None:
         try:
             current = os.stat(self.root_path, follow_symlinks=False)
+            lexical_current = os.stat(self.lexical_root_path)
             opened = os.fstat(self.root_fd)
         except OSError as exc:
             raise KnowledgeWriteConflict(
@@ -89,6 +93,7 @@ class _AtomicAppendAuthority:
         if (
             not stat.S_ISDIR(current.st_mode)
             or not _same_file_identity(current, self.root_stat)
+            or not _same_file_identity(lexical_current, self.root_stat)
             or not _same_file_identity(opened, self.root_stat)
         ):
             raise KnowledgeWriteConflict(
@@ -104,21 +109,34 @@ def _open_atomic_append_authority(
     """Open the exact root whose identity selects the per-resource lock."""
 
     _candidate_relative_parts(note_rel_path)
-    root_path = Path(vault_root).expanduser().resolve()
+    lexical_root_path = Path(
+        os.path.abspath(os.path.expanduser(os.fspath(vault_root)))
+    )
+    root_path = lexical_root_path.resolve()
     root_fd = os.open(root_path, _DIRECTORY_OPEN_FLAGS)
     try:
         root_stat = os.fstat(root_fd)
         normalized_relative = unicodedata.normalize("NFC", note_rel_path).casefold()
         normalized_root = unicodedata.normalize("NFC", os.fspath(root_path)).casefold()
+        normalized_lexical_root = unicodedata.normalize(
+            "NFC", os.fspath(lexical_root_path)
+        ).casefold()
+        canonical_path_lock_key = f"{normalized_root}:{normalized_relative}"
+        lexical_path_lock_key = f"{normalized_lexical_root}:{normalized_relative}"
+        path_lock_keys = tuple(
+            dict.fromkeys((canonical_path_lock_key, lexical_path_lock_key))
+        )
         authority = _AtomicAppendAuthority(
             root_fd=root_fd,
             root_path=root_path,
+            lexical_root_path=lexical_root_path,
             root_stat=root_stat,
             note_rel_path=note_rel_path,
             lock_key=(
                 f"{root_stat.st_dev}:{root_stat.st_ino}:{normalized_relative}"
             ),
-            path_lock_key=f"{normalized_root}:{normalized_relative}",
+            canonical_path_lock_key=canonical_path_lock_key,
+            path_lock_keys=path_lock_keys,
         )
         authority.assert_live()
         yield authority
@@ -686,10 +704,17 @@ def _read_bound_file(
     return payload, metadata_after
 
 
-def _open_atomic_append_recovery(root_fd: int) -> int:
+def _open_atomic_append_recovery(root_fd: int, *, create: bool = True) -> int:
     """Open the established scanner-inert root recovery convention."""
 
-    return _open_conflict_directory(root_fd)
+    if create:
+        return _open_conflict_directory(root_fd)
+    try:
+        return os.open("_conflicts", _DIRECTORY_OPEN_FLAGS, dir_fd=root_fd)
+    except OSError as exc:
+        raise KnowledgeWriteConflict(
+            "atomic append recovery authority changed; reconciliation is required"
+        ) from exc
 
 
 def _atomic_append_locator_token(note_rel_path: str) -> str:
@@ -710,19 +735,15 @@ def _require_no_indeterminate_marker(recovery_fd: int, note_rel_path: str) -> No
 
 
 def _atomic_append_host_fence_root(authority: _AtomicAppendAuthority) -> Path:
-    override = os.getenv("HEIMDAL_ATOMIC_APPEND_FENCE_ROOT", "").strip()
-    if override:
-        fence_root = Path(override).expanduser().resolve(strict=False)
-    else:
-        # Lazy import avoids widening write_ops' existing settings/compiler
-        # import cycle. This is host-local application state, deliberately
-        # outside the mutable vault authority it fences.
-        from app.instance.vault_registry import default_app_local_settings_path
+    # Lazy import avoids widening write_ops' existing settings/compiler import
+    # cycle. This uses the established app-local state root rather than adding
+    # another configuration surface.
+    from app.instance.vault_registry import default_app_local_settings_path
 
-        fence_root = (
-            default_app_local_settings_path().expanduser().resolve(strict=False).parent
-            / "heimdal-atomic-append-fences"
-        )
+    fence_root = (
+        default_app_local_settings_path().expanduser().resolve(strict=False).parent
+        / "heimdal-atomic-append-fences"
+    )
     try:
         fence_root.relative_to(authority.root_path)
     except ValueError:
@@ -732,37 +753,194 @@ def _atomic_append_host_fence_root(authority: _AtomicAppendAuthority) -> Path:
     )
 
 
-def _host_indeterminate_marker_name(authority: _AtomicAppendAuthority) -> str:
-    token = hashlib.sha256(authority.path_lock_key.encode("utf-8")).hexdigest()
-    return f"{token}.fence"
+_HOST_APPEND_STATE_SCHEMA = "agentic-pkm.heimdal-atomic-append-state.v1"
+
+
+def _host_append_state_name(path_lock_key: str) -> str:
+    token = hashlib.sha256(path_lock_key.encode("utf-8")).hexdigest()
+    return f"{token}.state"
+
+
+def _open_durable_host_fence_root(authority: _AtomicAppendAuthority) -> int:
+    """Create every missing namespace component with a parent fsync."""
+
+    fence_root = _atomic_append_host_fence_root(authority)
+    missing: list[str] = []
+    cursor = fence_root
+    while True:
+        try:
+            current_fd = os.open(cursor, _DIRECTORY_OPEN_FLAGS)
+            break
+        except FileNotFoundError:
+            if cursor.parent == cursor:
+                raise KnowledgeCapabilityError(
+                    "atomic append host fence directory has no durable parent"
+                )
+            missing.append(cursor.name)
+            cursor = cursor.parent
+        except OSError as exc:
+            raise KnowledgeCapabilityError(
+                "atomic append host fence namespace must contain only non-symlink directories"
+            ) from exc
+
+    try:
+        for component in reversed(missing):
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            os.fsync(current_fd)
+            child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=current_fd)
+            os.fsync(child_fd)
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _read_host_append_state(
+    fence_fd: int,
+    authority: _AtomicAppendAuthority,
+    path_lock_key: str,
+) -> dict[str, object] | None:
+    name = _host_append_state_name(path_lock_key)
+    try:
+        state_fd = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=fence_fd,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise KnowledgeCapabilityError(
+            "atomic append host state must be a regular non-symlink file"
+        ) from exc
+    try:
+        observed = os.fstat(state_fd)
+        if not stat.S_ISREG(observed.st_mode):
+            raise KnowledgeCapabilityError(
+                "atomic append host state must be a regular file"
+            )
+        raw = _read_all(state_fd)
+    finally:
+        os.close(state_fd)
+    try:
+        state = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise KnowledgeWriteConflict(
+            f"atomic append host state is malformed for {authority.note_rel_path}; "
+            "reconciliation is required before retry"
+        ) from exc
+    if (
+        not isinstance(state, dict)
+        or state.get("schema") != _HOST_APPEND_STATE_SCHEMA
+        or state.get("path_lock_key") != path_lock_key
+        or state.get("locator") != authority.note_rel_path
+        or state.get("state") not in {"active", "clean", "indeterminate"}
+    ):
+        raise KnowledgeWriteConflict(
+            f"atomic append host state is invalid for {authority.note_rel_path}; "
+            "reconciliation is required before retry"
+        )
+    return state
+
+
+def _write_host_append_state(
+    fence_fd: int,
+    path_lock_key: str,
+    payload: dict[str, object],
+) -> None:
+    name = _host_append_state_name(path_lock_key)
+    temp_name = f".{name}.{uuid.uuid4().hex}.tmp"
+    state_fd = os.open(
+        temp_name,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+        dir_fd=fence_fd,
+    )
+    try:
+        _write_all(
+            state_fd,
+            (json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n").encode(
+                "utf-8"
+            ),
+        )
+        os.fsync(state_fd)
+    finally:
+        os.close(state_fd)
+    os.replace(
+        temp_name,
+        name,
+        src_dir_fd=fence_fd,
+        dst_dir_fd=fence_fd,
+    )
+    os.fsync(fence_fd)
+
+
+def _write_host_append_states(
+    authority: _AtomicAppendAuthority,
+    payload: dict[str, object],
+) -> None:
+    fence_fd = _open_durable_host_fence_root(authority)
+    try:
+        path_lock_keys = list(authority.path_lock_keys)
+        if payload.get("state") == "clean":
+            # Keep the canonical/referent key active until every lexical alias
+            # has its clean receipt. Crash between writes therefore leaves a
+            # state every alias will reconcile rather than bypass.
+            path_lock_keys = [
+                key
+                for key in path_lock_keys
+                if key != authority.canonical_path_lock_key
+            ] + [authority.canonical_path_lock_key]
+        for path_lock_key in path_lock_keys:
+            keyed_payload = {
+                **payload,
+                "schema": _HOST_APPEND_STATE_SCHEMA,
+                "path_lock_key": path_lock_key,
+                "locator": authority.note_rel_path,
+            }
+            _write_host_append_state(fence_fd, path_lock_key, keyed_payload)
+    finally:
+        os.close(fence_fd)
 
 
 def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> None:
-    fence_root = _atomic_append_host_fence_root(authority)
+    """Precommit the durable namespace and reject stale/indeterminate roots."""
+
+    fence_fd = _open_durable_host_fence_root(authority)
     try:
-        fence_fd = os.open(fence_root, _DIRECTORY_OPEN_FLAGS)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise KnowledgeCapabilityError(
-            "atomic append host fence directory must be a non-symlink directory"
-        ) from exc
+        for path_lock_key in authority.path_lock_keys:
+            state = _read_host_append_state(fence_fd, authority, path_lock_key)
+            if state is None:
+                continue
+            if state["state"] == "indeterminate" or (
+                state.get("root_dev") != authority.root_stat.st_dev
+                or state.get("root_ino") != authority.root_stat.st_ino
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append authority mapping is indeterminate for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+    finally:
+        os.close(fence_fd)
+
+
+def _host_append_state_exists(authority: _AtomicAppendAuthority) -> bool:
+    fence_fd = _open_durable_host_fence_root(authority)
     try:
-        try:
-            marker = os.stat(
-                _host_indeterminate_marker_name(authority),
-                dir_fd=fence_fd,
-                follow_symlinks=False,
-            )
-        except FileNotFoundError:
-            return
-        if not stat.S_ISREG(marker.st_mode):
-            raise KnowledgeCapabilityError(
-                "atomic append host fence marker must be a regular file"
-            )
-        raise KnowledgeWriteConflict(
-            f"atomic append authority mapping is indeterminate for "
-            f"{authority.note_rel_path}; reconciliation is required before retry"
+        return any(
+            _read_host_append_state(fence_fd, authority, path_lock_key) is not None
+            for path_lock_key in authority.path_lock_keys
         )
     finally:
         os.close(fence_fd)
@@ -773,43 +951,201 @@ def _mark_host_atomic_append_indeterminate(
     transaction_id: str,
     reason: str,
 ) -> None:
-    fence_root = _atomic_append_host_fence_root(authority)
-    fence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fence_fd = os.open(fence_root, _DIRECTORY_OPEN_FLAGS)
+    _write_host_append_states(
+        authority,
+        {
+            "state": "indeterminate",
+            "transaction": transaction_id,
+            "root_dev": authority.root_stat.st_dev,
+            "root_ino": authority.root_stat.st_ino,
+            "reason": reason,
+        },
+    )
+
+
+def _host_mapping_payload(
+    authority: _AtomicAppendAuthority,
+    parent_fd: int,
+    recovery_fd: int,
+) -> dict[str, object]:
+    parent = os.fstat(parent_fd)
+    recovery = os.fstat(recovery_fd)
+    return {
+        "root_dev": authority.root_stat.st_dev,
+        "root_ino": authority.root_stat.st_ino,
+        "parent_dev": parent.st_dev,
+        "parent_ino": parent.st_ino,
+        "recovery_dev": recovery.st_dev,
+        "recovery_ino": recovery.st_ino,
+    }
+
+
+def _host_target_payload(parent_fd: int, target_name: str) -> dict[str, object]:
     try:
-        name = _host_indeterminate_marker_name(authority)
-        try:
-            marker_fd = os.open(
-                name,
-                os.O_WRONLY
-                | os.O_CREAT
-                | os.O_EXCL
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_CLOEXEC", 0),
-                0o600,
-                dir_fd=fence_fd,
+        target_fd = os.open(
+            target_name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_fd,
+        )
+    except FileNotFoundError:
+        return {"target_present": False}
+    except OSError as exc:
+        raise KnowledgeWriteConflict(
+            "atomic append host state target cannot be reconciled"
+        ) from exc
+    try:
+        target = os.fstat(target_fd)
+        if not stat.S_ISREG(target.st_mode) or target.st_nlink != 1:
+            raise KnowledgeWriteConflict(
+                "atomic append host state target cannot be reconciled"
             )
-        except FileExistsError:
-            existing = os.stat(name, dir_fd=fence_fd, follow_symlinks=False)
-            if not stat.S_ISREG(existing.st_mode):
-                raise KnowledgeCapabilityError(
-                    "atomic append host fence marker must be a regular file"
-                )
-            return
-        try:
-            payload = (
-                f"transaction={transaction_id}\n"
-                f"root={authority.root_path}\n"
-                f"locator={authority.note_rel_path}\n"
-                f"reason={reason}\n"
-            ).encode("utf-8")
-            _write_all(marker_fd, payload)
-            os.fsync(marker_fd)
-        finally:
-            os.close(marker_fd)
-        os.fsync(fence_fd)
+        payload, _observed = _read_stable_descriptor(target_fd)
+    finally:
+        os.close(target_fd)
+    return {
+        "target_present": True,
+        "target_dev": target.st_dev,
+        "target_ino": target.st_ino,
+        "target_digest": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def _host_mapping_matches(
+    state: dict[str, object],
+    mapping: dict[str, object],
+) -> bool:
+    return all(state.get(key) == value for key, value in mapping.items())
+
+
+def _reconcile_host_atomic_append_states(
+    authority: _AtomicAppendAuthority,
+    parent_fd: int,
+    recovery_fd: int,
+    target_name: str,
+) -> None:
+    """Converge a crash-precommitted active intent or fail permanently closed."""
+
+    mapping = _host_mapping_payload(authority, parent_fd, recovery_fd)
+    fence_fd = _open_durable_host_fence_root(authority)
+    saw_active = False
+    active_states: list[dict[str, object]] = []
+    transaction = "reconciled"
+    reason: str | None = None
+    try:
+        for path_lock_key in authority.path_lock_keys:
+            state = _read_host_append_state(fence_fd, authority, path_lock_key)
+            if state is None:
+                continue
+            transaction = str(state.get("transaction", transaction))
+            if state["state"] == "indeterminate":
+                reason = "prior host state is indeterminate"
+                break
+            if not _host_mapping_matches(state, mapping):
+                reason = "host state authority mapping changed"
+                break
+            if state["state"] == "clean":
+                continue
+            saw_active = True
+            active_states.append(state)
     finally:
         os.close(fence_fd)
+
+    target: dict[str, object] = {}
+    if reason is None and saw_active:
+        target = _host_target_payload(parent_fd, target_name)
+        for state in active_states:
+            proposal_matches = (
+                target.get("target_present") is True
+                and target.get("target_dev") == state.get("proposal_dev")
+                and target.get("target_ino") == state.get("proposal_ino")
+                and target.get("target_digest") == state.get("proposal_digest")
+            )
+            original_matches = (
+                state.get("source_present") is False
+                and target.get("target_present") is False
+            ) or (
+                state.get("source_present") is True
+                and target.get("target_present") is True
+                and target.get("target_dev") == state.get("source_dev")
+                and target.get("target_ino") == state.get("source_ino")
+                and target.get("target_digest") == state.get("source_digest")
+            )
+            if not proposal_matches and not original_matches:
+                reason = "active host intent matches neither proposal nor original"
+                break
+
+    if reason is not None:
+        _mark_host_atomic_append_indeterminate(authority, transaction, reason)
+        raise KnowledgeWriteConflict(
+            f"atomic append authority mapping is indeterminate for "
+            f"{authority.note_rel_path}; reconciliation is required before retry"
+        )
+    if saw_active:
+        _write_host_append_states(
+            authority,
+            {
+                "state": "clean",
+                "transaction": transaction,
+                **mapping,
+                **target,
+                "reason": "reconciled crash-precommitted intent",
+            },
+        )
+
+
+def _prepare_host_atomic_append_intent(
+    authority: _AtomicAppendAuthority,
+    parent_fd: int,
+    recovery_fd: int,
+    *,
+    transaction_id: str,
+    source_stat: os.stat_result | None,
+    source_digest: str | None,
+    proposal_stat: os.stat_result,
+    proposal_digest: str,
+) -> None:
+    source: dict[str, object]
+    if source_stat is None:
+        source = {"source_present": False}
+    else:
+        source = {
+            "source_present": True,
+            "source_dev": source_stat.st_dev,
+            "source_ino": source_stat.st_ino,
+            "source_digest": source_digest,
+        }
+    _write_host_append_states(
+        authority,
+        {
+            "state": "active",
+            "transaction": transaction_id,
+            **_host_mapping_payload(authority, parent_fd, recovery_fd),
+            **source,
+            "proposal_dev": proposal_stat.st_dev,
+            "proposal_ino": proposal_stat.st_ino,
+            "proposal_digest": proposal_digest,
+        },
+    )
+
+
+def _complete_host_atomic_append_intent(
+    authority: _AtomicAppendAuthority,
+    parent_fd: int,
+    recovery_fd: int,
+    target_name: str,
+    transaction_id: str,
+) -> None:
+    _write_host_append_states(
+        authority,
+        {
+            "state": "clean",
+            "transaction": transaction_id,
+            **_host_mapping_payload(authority, parent_fd, recovery_fd),
+            **_host_target_payload(parent_fd, target_name),
+        },
+    )
 
 
 def _mark_atomic_append_indeterminate(
@@ -819,10 +1155,14 @@ def _mark_atomic_append_indeterminate(
     transaction_id: str,
     reason: str,
 ) -> None:
-    # Persist the authority fence outside the mutable root before writing the
-    # in-vault recovery receipt. A root/_conflicts replacement cannot make a
-    # later retry forget that this lexical resource needs reconciliation.
-    _mark_host_atomic_append_indeterminate(authority, transaction_id, reason)
+    # The crash-precommitted host state already blocks ambiguous retry. Try
+    # both durable receipts independently so failure of one authority cannot
+    # suppress the other.
+    host_error: BaseException | None = None
+    try:
+        _mark_host_atomic_append_indeterminate(authority, transaction_id, reason)
+    except BaseException as exc:  # noqa: BLE001 - preserve after root receipt attempt
+        host_error = exc
     name = (
         f"{_indeterminate_marker_prefix(note_rel_path)}"
         f"{transaction_id}.md.conflict"
@@ -839,6 +1179,8 @@ def _mark_atomic_append_indeterminate(
             dir_fd=recovery_fd,
         )
     except FileExistsError:
+        if host_error is not None:
+            raise host_error
         return
     try:
         payload = (
@@ -849,6 +1191,8 @@ def _mark_atomic_append_indeterminate(
     finally:
         os.close(marker_fd)
     os.fsync(recovery_fd)
+    if host_error is not None:
+        raise host_error
 
 
 def _recovery_name(
@@ -1241,11 +1585,17 @@ def _atomic_append_note_relative(
     try:
         authority.assert_live()
         _require_no_host_indeterminate_fence(authority)
+        host_state_exists = _host_append_state_exists(authority)
         current_dir_fd = os.dup(authority.root_fd)
         for component in parts[:-1]:
             try:
                 child_fd = os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=current_dir_fd)
             except FileNotFoundError:
+                if host_state_exists:
+                    raise KnowledgeWriteConflict(
+                        f"atomic append authority mapping changed for {note_rel_path}; "
+                        "reconciliation is required before retry"
+                    )
                 os.mkdir(component, mode=0o777, dir_fd=current_dir_fd)
                 # Fence the new directory entry before any child mutation. A
                 # prior failed fsync is also repaired by the unconditional
@@ -1265,12 +1615,22 @@ def _atomic_append_note_relative(
             current_dir_fd = child_fd
             os.close(superseded_fd)
 
-        recovery_fd = _open_atomic_append_recovery(authority.root_fd)
+        target_name = parts[-1]
+        recovery_fd = _open_atomic_append_recovery(
+            authority.root_fd,
+            create=not host_state_exists,
+        )
         _require_atomic_append_mapping(
             authority,
             relative_parent,
             current_dir_fd,
             recovery_fd,
+        )
+        _reconcile_host_atomic_append_states(
+            authority,
+            current_dir_fd,
+            recovery_fd,
+            target_name,
         )
         _sweep_atomic_append_recovery_temps(recovery_fd)
         _sweep_atomic_append_stages(current_dir_fd, recovery_fd)
@@ -1280,7 +1640,6 @@ def _atomic_append_note_relative(
         # before observing the canonical target.
         os.fsync(current_dir_fd)
         os.fsync(recovery_fd)
-        target_name = parts[-1]
         try:
             try:
                 source_fd = os.open(
@@ -1399,6 +1758,20 @@ def _atomic_append_note_relative(
             relative_parent,
             current_dir_fd,
             recovery_fd,
+        )
+        _prepare_host_atomic_append_intent(
+            authority,
+            current_dir_fd,
+            recovery_fd,
+            transaction_id=transaction_id,
+            source_stat=source_stat,
+            source_digest=(
+                hashlib.sha256(current_raw).hexdigest()
+                if current_raw is not None
+                else None
+            ),
+            proposal_stat=stage_stat,
+            proposal_digest=replacement_digest,
         )
 
         if target_existed:
@@ -1602,38 +1975,6 @@ def _atomic_append_note_relative(
                     f"atomic append displaced target changed during retirement for {note_rel_path}"
                 )
 
-        live_target = os.stat(
-            target_name,
-            dir_fd=current_dir_fd,
-            follow_symlinks=False,
-        )
-        final_raw, final_metadata = _read_bound_file(
-            stage_fd,
-            stage_stat,
-            context=f"atomic append receipt target {note_rel_path}",
-        )
-        if (
-            not _same_file_identity(live_target, stage_stat)
-            or final_raw != replacement
-            or final_metadata != staged_metadata
-        ):
-            _mark_atomic_append_indeterminate(
-                authority,
-                recovery_fd,
-                note_rel_path,
-                transaction_id,
-                "canonical target changed before acknowledgement",
-            )
-            raise KnowledgeWriteConflict(
-                f"atomic append target changed before acknowledgement for {note_rel_path}"
-            )
-        _require_atomic_append_mapping(
-            authority,
-            relative_parent,
-            current_dir_fd,
-            recovery_fd,
-        )
-        os.fsync(current_dir_fd)
         _retire_recovery_entry(recovery_fd, proposal_snapshot)
         retired_proposal = proposal_snapshot
         proposal_snapshot = None
@@ -1643,6 +1984,64 @@ def _atomic_append_note_relative(
             retired_original = original_snapshot
             original_snapshot = None
             os.close(retired_original.fd)
+
+        if current_dir_fd is None or recovery_fd is None or stage_fd is None:
+            raise AssertionError("atomic append lost receipt descriptors")
+        receipt_parent_fd = current_dir_fd
+        receipt_recovery_fd = recovery_fd
+        receipt_stage_fd = stage_fd
+
+        def require_final_receipt_state() -> None:
+            live_target = os.stat(
+                target_name,
+                dir_fd=receipt_parent_fd,
+                follow_symlinks=False,
+            )
+            final_raw, final_metadata = _read_bound_file(
+                receipt_stage_fd,
+                stage_stat,
+                context=f"atomic append receipt target {note_rel_path}",
+            )
+            if (
+                not _same_file_identity(live_target, stage_stat)
+                or final_raw != replacement
+                or final_metadata != staged_metadata
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append target changed before acknowledgement for {note_rel_path}"
+                )
+            _require_atomic_append_mapping(
+                authority,
+                relative_parent,
+                receipt_parent_fd,
+                receipt_recovery_fd,
+            )
+            os.fsync(receipt_parent_fd)
+
+        try:
+            # Retirement is complete before the receipt proof. The durable
+            # clean host state is then committed, followed by one last proof
+            # so a remap during that host commit cannot escape unfenced.
+            require_final_receipt_state()
+            _complete_host_atomic_append_intent(
+                authority,
+                current_dir_fd,
+                recovery_fd,
+                target_name,
+                transaction_id,
+            )
+            require_final_receipt_state()
+        except BaseException as exc:  # noqa: BLE001 - every post-publication failure fences
+            _mark_atomic_append_indeterminate(
+                authority,
+                recovery_fd,
+                note_rel_path,
+                transaction_id,
+                "post-publication receipt state changed before acknowledgement",
+            )
+            raise KnowledgeWriteConflict(
+                f"atomic append receipt became indeterminate for {note_rel_path}"
+            ) from exc
     finally:
         for snapshot in (proposal_snapshot, original_snapshot):
             if snapshot is not None:
