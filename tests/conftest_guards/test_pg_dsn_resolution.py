@@ -358,6 +358,23 @@ def test_effective_libpq_query_parameters_are_classified_as_production() -> None
     assert _looks_like_prod_test_dsn(db_query)
 
 
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "service=hidden_target",
+        "postgresql:///safe?service=hidden_target",
+    ],
+)
+def test_explicit_service_indirection_aborts_before_connect(spy_log: Path, dsn: str) -> None:
+    result, attempts = _run_pytest([SCRATCH_FACTORY_TARGET], dsn=dsn, spy_log=spy_log)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == PYTEST_USAGE_ERROR, output
+    assert "production-looking database" in output, output
+    assert "hidden_target" not in output, output
+    assert attempts == [], attempts
+
+
 def test_test_guard_reads_effective_libpq_query_port() -> None:
     from tests.conftest import _looks_like_prod_test_dsn
 

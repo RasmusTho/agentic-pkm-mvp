@@ -331,6 +331,13 @@ def _looks_like_prod_test_dsn(dsn: str) -> bool:
         # for a destructive test lane.
         return True
 
+    # A libpq service can supply host, port, database, and credentials from an
+    # external file. Its effective target is not visible in conninfo, so a
+    # destructive lane must treat service indirection as unsafe rather than
+    # accepting an apparently harmless explicit DSN.
+    if str(effective.get("service", "") or "").strip():
+        return True
+
     dbname = str(effective.get("dbname", "") or "").strip()
     ports = str(effective.get("port", "") or "").split(",")
     return dbname == "app" or any(port.strip() == "15432" for port in ports)

@@ -97,6 +97,10 @@ The gate checks **four** ways this repo can name a database, not just the obviou
 | `PGSERVICE` / `PGSERVICEFILE` | libpq service indirection | fail closed whenever either is configured because its effective target cannot be inspected safely before imports |
 | `BUILDEROPS_DATABASE_URL` | the control plane's own `CREATE SCHEMA` path | always |
 
+Service indirection is fail-closed whether selected through `PGSERVICE` / `PGSERVICEFILE` or embedded
+as a `service` option in an explicit conninfo/URI: the service file can supply a target the pre-import
+guard cannot inspect safely.
+
 The second and third are the reason `DATABASE_URL` alone is not sufficient: a run with
 `PKM_DB_HOST=127.0.0.1 PKM_DB_PORT=15432` and no `DATABASE_URL` reaches production through
 `conn_rw()` while the documented pair still looks unconfigured. Each writer is checked independently:
