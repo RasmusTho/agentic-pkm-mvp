@@ -1487,6 +1487,130 @@ def test_steering_log_original_snapshot_unlink_retains_bounded_full_copy(
     ) == 1
 
 
+@pytest.mark.parametrize("mutation", ["unlink", "substitute"])
+def test_steering_log_latest_original_loss_before_cleanup_preserves_prior_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"latest-loss-{mutation}-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    original = target.read_bytes()
+    sentinel = b"unrelated latest-original replacement\n"
+    real_retain = write_ops_module._retain_latest_original_snapshot
+
+    def retain_then_remove_name(
+        recovery_fd: int,
+        entry: object,
+        **kwargs: object,
+    ) -> object:
+        retained = real_retain(recovery_fd, entry, **kwargs)  # type: ignore[arg-type]
+        assert isinstance(retained, write_ops_module._RecoveryEntry)
+        os.unlink(retained.name, dir_fd=recovery_fd)
+        if mutation == "substitute":
+            replacement_fd = os.open(
+                retained.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=recovery_fd,
+            )
+            try:
+                os.write(replacement_fd, sentinel)
+                os.fsync(replacement_fd)
+            finally:
+                os.close(replacement_fd)
+        os.fsync(recovery_fd)
+        return retained
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_retain_latest_original_snapshot",
+        retain_then_remove_name,
+    )
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="recovery retirement became indeterminate",
+    ):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "latest-original-loss",
+            source="item",
+            operation_id=f"latest-loss-{mutation}-proposal",
+            write_guard=guard,
+        )
+
+    recovery = vault_root / "_conflicts"
+    assert any(path.read_bytes() == original for path in recovery.iterdir())
+    if mutation == "substitute":
+        stable_name = write_ops_module._latest_original_recovery_name(
+            note_rel_path(STEERING_LOG)
+        )
+        assert (recovery / stable_name).read_bytes() == sentinel
+    assert target.read_text(encoding="utf-8").count(
+        f'"operation_id":"latest-loss-{mutation}-proposal"'
+    ) == 1
+
+
+def test_steering_log_latest_original_loss_during_final_receipt_preserves_prior_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="latest-receipt-loss-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    original = target.read_bytes()
+    stable_name = write_ops_module._latest_original_recovery_name(
+        note_rel_path(STEERING_LOG)
+    )
+    real_complete = write_ops_module._complete_host_atomic_append_intent
+
+    def complete_then_unlink_latest(*args: object, **kwargs: object) -> None:
+        real_complete(*args, **kwargs)  # type: ignore[arg-type]
+        recovery_fd = args[2]
+        assert isinstance(recovery_fd, int)
+        os.unlink(stable_name, dir_fd=recovery_fd)
+        os.fsync(recovery_fd)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        complete_then_unlink_latest,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="receipt became indeterminate"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "latest-original-receipt-loss",
+            source="item",
+            operation_id="latest-receipt-loss-proposal",
+            write_guard=guard,
+        )
+
+    recovery = vault_root / "_conflicts"
+    assert any(path.read_bytes() == original for path in recovery.iterdir())
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"latest-receipt-loss-proposal"'
+    ) == 1
+
+
 def test_steering_log_active_inode_state_blocks_same_root_relocation(
     tmp_path: Path,
 ) -> None:

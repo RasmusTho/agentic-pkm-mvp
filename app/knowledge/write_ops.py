@@ -2097,6 +2097,61 @@ def _retain_named_latest_original_snapshot(
     )
 
 
+def _require_named_recovery_entry_live(
+    recovery_fd: int,
+    entry: _RecoveryEntry,
+    *,
+    context: str,
+) -> None:
+    """Prove that a held recovery descriptor still has its exact durable name."""
+
+    try:
+        named = os.stat(entry.name, dir_fd=recovery_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise KnowledgeWriteConflict(f"{context} is missing") from exc
+    bound = os.fstat(entry.fd)
+    payload, metadata = _read_bound_file(
+        entry.fd,
+        entry.identity,
+        context=context,
+    )
+    if (
+        not _same_file_identity(named, entry.identity)
+        or not _same_file_identity(bound, entry.identity)
+        or named.st_nlink != 1
+        or bound.st_nlink != 1
+        or hashlib.sha256(payload).hexdigest() != entry.digest
+        or metadata != entry.metadata
+    ):
+        raise KnowledgeWriteConflict(f"{context} changed")
+
+
+def _preserve_unbound_recovery_entry(
+    recovery_fd: int,
+    entry: _RecoveryEntry,
+    *,
+    transaction_id: str,
+) -> None:
+    """Republish a held full copy when its expected durable name was lost."""
+
+    try:
+        _require_named_recovery_entry_live(
+            recovery_fd,
+            entry,
+            context="atomic append retained original",
+        )
+    except KnowledgeWriteConflict:
+        preserved = _publish_recovery_snapshot(
+            entry.fd,
+            entry.identity,
+            recovery_fd,
+            transaction_id=transaction_id,
+            role=f"preserved-original-{uuid.uuid4().hex}",
+            allow_unlinked_source=True,
+        )
+        os.close(preserved.fd)
+
+
 def _retain_stage_after_failure(
     parent_fd: int,
     stage_name: str,
@@ -2630,10 +2685,20 @@ def _atomic_append_note_relative(
                     note_rel_path=note_rel_path,
                     transaction_id=transaction_id,
                 )
+                _require_named_recovery_entry_live(
+                    recovery_fd,
+                    latest_original_snapshot,
+                    context="atomic append latest-original slot",
+                )
                 _retire_recovery_entry(recovery_fd, original_snapshot)
                 retired_original = original_snapshot
                 original_snapshot = None
                 os.close(retired_original.fd)
+                _require_named_recovery_entry_live(
+                    recovery_fd,
+                    latest_original_snapshot,
+                    context="atomic append latest-original slot",
+                )
             if target_existed:
                 if (
                     source_fd is None
@@ -2661,7 +2726,23 @@ def _atomic_append_note_relative(
                         f"atomic append displaced target changed during "
                         f"retirement for {note_rel_path}"
                     )
+                if latest_original_snapshot is None:
+                    raise AssertionError(
+                        "existing target lost latest-original retention authority"
+                    )
+                _require_named_recovery_entry_live(
+                    recovery_fd,
+                    latest_original_snapshot,
+                    context="atomic append latest-original slot",
+                )
         except BaseException as exc:  # noqa: BLE001 - every retirement failure fences
+            recovery_entry = latest_original_snapshot or original_snapshot
+            if recovery_entry is not None:
+                _preserve_unbound_recovery_entry(
+                    recovery_fd,
+                    recovery_entry,
+                    transaction_id=transaction_id,
+                )
             _mark_atomic_append_indeterminate(
                 authority,
                 recovery_fd,
@@ -2708,6 +2789,12 @@ def _atomic_append_note_relative(
                 receipt_parent_fd,
                 receipt_recovery_fd,
             )
+            if latest_original_snapshot is not None:
+                _require_named_recovery_entry_live(
+                    receipt_recovery_fd,
+                    latest_original_snapshot,
+                    context="atomic append latest-original receipt slot",
+                )
             os.fsync(receipt_parent_fd)
 
         try:
@@ -2724,6 +2811,12 @@ def _atomic_append_note_relative(
             )
             require_final_receipt_state()
         except BaseException as exc:  # noqa: BLE001 - every post-publication failure fences
+            if latest_original_snapshot is not None:
+                _preserve_unbound_recovery_entry(
+                    recovery_fd,
+                    latest_original_snapshot,
+                    transaction_id=transaction_id,
+                )
             _mark_atomic_append_indeterminate(
                 authority,
                 recovery_fd,
