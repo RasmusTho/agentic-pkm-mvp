@@ -349,10 +349,18 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
                 owner = parents.get(owner)
             assert isinstance(owner, ast.FunctionDef)
             call_sites.append((str(path.relative_to(repo_root)), owner.name))
-    assert call_sites == [
+    # Sorted census: ``rglob`` yields directory-iteration order, which is
+    # filesystem-dependent (APFS and ext4 disagree), so the closed census
+    # compares as a sorted list to stay deterministic across hosts (#4609).
+    assert sorted(call_sites) == [
         # Meeting finalization (CDLM-08, #4388): create-once Sources-zone
         # artifacts written atomically through the same O_EXCL primitive.
         ("app/heimdal/meeting_finalization.py", "finalize_session"),
+        # Time-spend projection (#4609): no-clobber creation of an absent
+        # weekly projection target through the same O_EXCL primitive, so a
+        # human note created in the check/write window blocks the projection
+        # instead of being overwritten by a versionless write.
+        ("app/heimdal/time_spend.py", "write_time_spend_note"),
         ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
     ]
 

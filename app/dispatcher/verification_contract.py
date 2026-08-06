@@ -61,7 +61,7 @@ def resolve_final_review_rounds(body: object) -> int | None:
     return int(matches[0])
 
 
-# --- pr-contract gate twins (issue #4272) -----------------------------------
+# --- pr-contract gate twins (issue #4272; line-terminator parity #4341) -----
 #
 # The two functions below are a distinct concern from resolve_final_review_rounds
 # above: that function resolves how many verified-merge review rounds the
@@ -69,14 +69,21 @@ def resolve_final_review_rounds(body: object) -> int | None:
 # there on purpose). The `pr-contract` CI gate instead only checks the PR
 # body's *shape* \u2014 exactly one Final-Review-Rounds declaration with a value of
 # 0, 1, or 2 \u2014 regardless of which path that value selects. These twins mirror
-# the workflow's own JS 1:1 (the `// final-review-rounds:start`/`:end` and
-# `// builderops-routing:start`/`:end` marker-delimited blocks in
-# .github/workflows/issue-pr-governance.yml), proven by
-# tests/governance/test_issue_pr_governance.py
+# the workflow's own JS shape checks (the `// final-review-rounds:start`/`:end`
+# and `// builderops-routing:start`/`:end` marker-delimited blocks in
+# .github/workflows/issue-pr-governance.yml), proven equivalent on a corpus
+# that now spans every ECMAScript `LineTerminator` (`\n`, `\r\n`, lone `\r`,
+# U+2028, U+2029) by tests/governance/test_issue_pr_governance.py
 # ::test_final_review_rounds_check_executes_via_canonical_implementation and
 # ::test_builderops_routing_stub_detection_matches_workflow_js, following the
 # same marker-extraction parity pattern as
-# ::test_javascript_and_python_authority_grammar_are_identical.
+# ::test_javascript_and_python_authority_grammar_are_identical. JS's `$`/`^`
+# under the `/m` flag, and its `.` without `/s`, treat all four LineTerminator
+# code points as line breaks; Python's `re.MULTILINE`/dot semantics only
+# recognize `\n`. `_canonicalize_pr_contract_line_terminators` below folds all
+# four into `\n` before either twin matches -- the same `\r\n` -> `\n` step
+# `resolve_final_review_rounds` already applies -- so declared/valid line
+# counts agree with the JS gate regardless of which terminator a PR body uses.
 
 PR_CONTRACT_FINAL_REVIEW_ROUNDS_ALL_LINES_PATTERN = re.compile(
     r"^Final-Review-Rounds:[ \t]*.*$", re.MULTILINE
@@ -84,6 +91,15 @@ PR_CONTRACT_FINAL_REVIEW_ROUNDS_ALL_LINES_PATTERN = re.compile(
 PR_CONTRACT_FINAL_REVIEW_ROUNDS_VALID_LINE_PATTERN = re.compile(
     r"^Final-Review-Rounds:[ \t]*[012][ \t]*$", re.MULTILINE
 )
+# Pattern text kept byte-identical to the workflow's `tier1LanePattern` JS
+# literal on purpose (`scripts/lint_skills_consistency.py` Check 10, issue
+# #4342, asserts textual/flag parity between this constant and the JS regex
+# literal). The `\s` divergence this issue fixes -- Python's Unicode-mode
+# `\s` matches the C0 "information separator" controls \x1c-\x1f that JS's
+# `\s` does not (`chr(0x1c).isspace()` is `True` in Python, `/\s/.test("\x1c")`
+# is `false` in JS) -- is therefore repaired by canonicalizing those controls
+# out of the input in `_canonicalize_pr_contract_line_terminators` below, not
+# by rewriting this pattern's source text.
 TIER1_LANE_PATTERN = re.compile(
     r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b", re.IGNORECASE | re.MULTILINE
 )
@@ -101,6 +117,39 @@ BUILDEROPS_ROUTING_REASON_PATTERN = re.compile(
 BUILDEROPS_ROUTING_PLACEHOLDER_PATTERN = re.compile(r"^<.*>$")
 
 
+# Python's Unicode-mode `\s` treats these four C0 "information separator"
+# controls as whitespace; JS's `\s` does not (issue #4341). Map them to NUL,
+# a byte that satisfies neither language's `\s` and cannot otherwise appear
+# in a GitHub PR body, so `TIER1_LANE_PATTERN`'s untouched `\s` (kept
+# byte-identical to the workflow's JS literal for Check 10) stops accepting
+# separators the JS gate rejects.
+_C0_INFORMATION_SEPARATORS = "\x1c\x1d\x1e\x1f"
+
+
+def _canonicalize_pr_contract_line_terminators(text: str) -> str:
+    """Normalize line-terminator and whitespace-class divergences from the JS gate.
+
+    JS `$`/`^` under `/m`, and JS `.` without `/s`, treat `\\r\\n`, lone `\\r`,
+    U+2028, and U+2029 as line breaks; Python's `re.MULTILINE`/dot semantics
+    only recognize `\\n`. Canonicalizing first (the same `\\r\\n` -> `\\n` step
+    `resolve_final_review_rounds` already applies) keeps the pr-contract gate
+    twins aligned with the workflow's own JS across all four terminators
+    (#4341), instead of `resolve_final_review_rounds`'s stricter fail-closed
+    rejection of non-LF/CRLF bodies, which is specific to that function's own
+    ceremony-round semantics and not shared by these shape-only twins. Also
+    neutralizes `_C0_INFORMATION_SEPARATORS` (see above) for the same reason.
+    """
+    text = (
+        text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\u2028", "\n")
+        .replace("\u2029", "\n")
+    )
+    for separator in _C0_INFORMATION_SEPARATORS:
+        text = text.replace(separator, "\x00")
+    return text
+
+
 @dataclass(frozen=True)
 class PrContractFinalReviewRounds:
     declared_count: int
@@ -115,7 +164,7 @@ def resolve_pr_contract_final_review_rounds(body: object) -> PrContractFinalRevi
     (the light-delivery-path declaration) and only asserts shape, never
     ceremony-round semantics.
     """
-    text = body if isinstance(body, str) else ""
+    text = _canonicalize_pr_contract_line_terminators(body if isinstance(body, str) else "")
     declared = PR_CONTRACT_FINAL_REVIEW_ROUNDS_ALL_LINES_PATTERN.findall(text)
     valid = PR_CONTRACT_FINAL_REVIEW_ROUNDS_VALID_LINE_PATTERN.findall(text)
     return PrContractFinalReviewRounds(
@@ -137,7 +186,7 @@ def resolve_builderops_routing_status(
     body: object, *, has_issue_authority: bool
 ) -> BuilderOpsRoutingStatus:
     """Twin of the `pr-contract` gate's `## BuilderOps Routing` filled-vs-stub check."""
-    text = body if isinstance(body, str) else ""
+    text = _canonicalize_pr_contract_line_terminators(body if isinstance(body, str) else "")
     is_tier1_lane = TIER1_LANE_PATTERN.search(text) is not None
     section_match = BUILDEROPS_ROUTING_SECTION_PATTERN.search(text)
     section = section_match.group(0) if section_match else ""

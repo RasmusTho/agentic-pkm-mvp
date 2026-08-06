@@ -11,6 +11,12 @@ Issue #4434: `ps`'s `command=` column is a display string — argv joined with
 single spaces — not shell syntax. Those tests pin the macOS row parser to that
 reading, so an ordinary quoted command line cannot abort the whole native
 inventory and thereby fail-close a deploy.
+
+Issue #4518: `InventoryError` refusals from the legacy-owner path named neither
+the offending root nor the domain that claimed it, which made a real refusal
+undiagnosable without monkeypatching the module. These tests pin every such
+refusal to carry a domain, a source, and (where a root is involved) a redacted
+identifier for it -- while still never emitting the raw host path.
 """
 
 import json
@@ -239,3 +245,325 @@ def test_parse_macos_ps_row_still_rejects_malformed_rows(row):
 
     with pytest.raises(InventoryError):
         writer_inventory._parse_macos_ps_row(row)
+
+
+# --- Issue #4538: a running deployment must not observe its own subshells ---
+
+CONTROLLER_PID = 900
+CONTROLLER_PGID = 900
+CONTROLLER_TOKEN = "linux:" + "a" * 64
+
+
+def _controller_record(argv=("deploy_channel.sh",)):
+    return writer_inventory.ProcessRecord(
+        pid=CONTROLLER_PID,
+        ppid=1,
+        pgid=CONTROLLER_PGID,
+        start_token=CONTROLLER_TOKEN,
+        argv=argv,
+    )
+
+
+def test_controller_subshell_is_not_a_native_writer(monkeypatch):
+    """A forked child of the controller that shares the controller's argv (the
+    shape of `deploy_channel_compose()`'s `( ... )` subshell) and process group
+    must not be reported as a native writer, even though it is not the
+    controller pid itself.
+    """
+
+    fork = writer_inventory.ProcessRecord(
+        pid=CONTROLLER_PID + 1,
+        ppid=CONTROLLER_PID,
+        pgid=CONTROLLER_PGID,
+        start_token="linux:" + "b" * 64,
+        argv=("/bin/bash", "scripts/deploy_channel.sh", "deploy"),
+    )
+    monkeypatch.setattr(
+        writer_inventory, "_native_processes", lambda *, linux_boot_id=None: [fork]
+    )
+
+    writers = writer_inventory._native_writers(
+        controller_pid=CONTROLLER_PID,
+        controller_start_token=CONTROLLER_TOKEN,
+        controller_pgid=CONTROLLER_PGID,
+        linux_boot_id=None,
+    )
+
+    assert writers == []
+
+
+def test_foreign_deployment_is_still_detected(monkeypatch):
+    """A `deploy_channel` process outside the controller's process tree (its
+    own, distinct process group) must still be reported as a live writer.
+    """
+
+    foreign = writer_inventory.ProcessRecord(
+        pid=7777,
+        ppid=1,
+        pgid=7777,
+        start_token="linux:" + "c" * 64,
+        argv=("/bin/bash", "scripts/deploy_channel.sh", "deploy"),
+    )
+    monkeypatch.setattr(
+        writer_inventory, "_native_processes", lambda *, linux_boot_id=None: [foreign]
+    )
+
+    writers = writer_inventory._native_writers(
+        controller_pid=CONTROLLER_PID,
+        controller_start_token=CONTROLLER_TOKEN,
+        controller_pgid=CONTROLLER_PGID,
+        linux_boot_id=None,
+    )
+
+    assert writers == [
+        {
+            "domain": "native",
+            "role": "deploy_channel",
+            "pid": 7777,
+            "start_token": "linux:" + "c" * 64,
+        }
+    ]
+
+
+def test_non_launcher_writer_sharing_controller_process_group_is_still_detected(
+    monkeypatch,
+):
+    """The process-group exclusion is scoped to launcher roles only. A
+    non-launcher native writer (watcher, worker, uvicorn, celery, heimdal
+    capture-watch) that happens to share the controller's process group must
+    still be reported -- the exclusion must not widen to any process merely
+    because it matches a writer role.
+    """
+
+    same_group_uvicorn = writer_inventory.ProcessRecord(
+        pid=CONTROLLER_PID + 2,
+        ppid=CONTROLLER_PID,
+        pgid=CONTROLLER_PGID,
+        start_token="linux:" + "e" * 64,
+        argv=("uvicorn", "app.api.app:app"),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_processes",
+        lambda *, linux_boot_id=None: [same_group_uvicorn],
+    )
+
+    writers = writer_inventory._native_writers(
+        controller_pid=CONTROLLER_PID,
+        controller_start_token=CONTROLLER_TOKEN,
+        controller_pgid=CONTROLLER_PGID,
+        linux_boot_id=None,
+    )
+
+    assert writers == [
+        {
+            "domain": "native",
+            "role": "uvicorn",
+            "pid": CONTROLLER_PID + 2,
+            "start_token": "linux:" + "e" * 64,
+        }
+    ]
+
+
+@pytest.fixture
+def _proof_stubs(monkeypatch):
+    """Stub the platform-specific probes `prove_quiescent` -> `_snapshot` calls."""
+
+    monkeypatch.setattr(writer_inventory, "_read_linux_boot_id", lambda: "boot-fixture")
+    monkeypatch.setattr(
+        writer_inventory,
+        "_record_for_pid",
+        lambda pid, *, linux_boot_id=None: _controller_record(),
+    )
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+
+
+def test_prove_quiescent_ignores_own_process_tree(monkeypatch, tmp_path, _proof_stubs):
+    """`prove_quiescent` must produce a proof when the only matching native
+    processes belong to the controller's own tree.
+    """
+
+    fork = writer_inventory.ProcessRecord(
+        pid=CONTROLLER_PID + 1,
+        ppid=CONTROLLER_PID,
+        pgid=CONTROLLER_PGID,
+        start_token="linux:" + "b" * 64,
+        argv=("/bin/bash", "scripts/deploy_channel.sh", "deploy"),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_processes",
+        lambda *, linux_boot_id=None: [_controller_record(), fork],
+    )
+    output = tmp_path / "inventory.json"
+
+    writer_inventory.prove_quiescent(
+        controller_pid=CONTROLLER_PID,
+        controller_start_token=CONTROLLER_TOKEN,
+        output=output,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["inventory_complete"] is True
+    assert payload["domains"] == {"dev": [], "native": [], "prod": [], "test": []}
+
+
+def test_prove_quiescent_still_detects_native_writers(monkeypatch, tmp_path, _proof_stubs):
+    """`prove_quiescent` must still fail closed when a non-launcher native
+    writer is running in a foreign process group.
+    """
+
+    foreign_writer = writer_inventory.ProcessRecord(
+        pid=555,
+        ppid=1,
+        pgid=555,
+        start_token="linux:" + "d" * 64,
+        argv=("uvicorn", "app.api.app:app"),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_processes",
+        lambda *, linux_boot_id=None: [_controller_record(), foreign_writer],
+    )
+    output = tmp_path / "inventory.json"
+
+    with pytest.raises(InventoryError, match="live or racing"):
+        writer_inventory.prove_quiescent(
+            controller_pid=CONTROLLER_PID,
+            controller_start_token=CONTROLLER_TOKEN,
+            output=output,
+        )
+
+    assert not output.exists()
+
+
+def test_prove_quiescent_is_deterministic_across_probes(monkeypatch, tmp_path, _proof_stubs):
+    """Repeated `prove_quiescent` invocations on identical host state must
+    return the same verdict.
+    """
+
+    fork = writer_inventory.ProcessRecord(
+        pid=CONTROLLER_PID + 1,
+        ppid=CONTROLLER_PID,
+        pgid=CONTROLLER_PGID,
+        start_token="linux:" + "b" * 64,
+        argv=("/bin/bash", "scripts/deploy_channel.sh", "deploy"),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_processes",
+        lambda *, linux_boot_id=None: [_controller_record(), fork],
+    )
+    first_output = tmp_path / "inventory-1.json"
+    second_output = tmp_path / "inventory-2.json"
+
+    writer_inventory.prove_quiescent(
+        controller_pid=CONTROLLER_PID,
+        controller_start_token=CONTROLLER_TOKEN,
+        output=first_output,
+    )
+    writer_inventory.prove_quiescent(
+        controller_pid=CONTROLLER_PID,
+        controller_start_token=CONTROLLER_TOKEN,
+        output=second_output,
+    )
+
+    first_payload = json.loads(first_output.read_text(encoding="utf-8"))
+    second_payload = json.loads(second_output.read_text(encoding="utf-8"))
+    assert first_payload["snapshot_digests"] == second_payload["snapshot_digests"]
+    assert first_payload["domains"] == second_payload["domains"]
+
+
+# --- Issue #4518: refusals name domain, source, and a redacted root identity -
+
+MALFORMED_APP_LOCAL_FRONTMATTER = b"---\nnot a mapping line\n---\n"
+
+
+def test_inventory_errors_name_domain_and_source():
+    """Every `InventoryError` this module raises must name which domain and
+    which of the four owner sources produced the offending record, so a real
+    refusal is diagnosable from the message alone.
+    """
+
+    with pytest.raises(InventoryError) as excinfo:
+        writer_inventory._parse_app_local_roots(
+            MALFORMED_APP_LOCAL_FRONTMATTER, domain="dev", source="config_app_local"
+        )
+
+    message = str(excinfo.value)
+    assert "domain=dev" in message
+    assert "source=config_app_local" in message
+
+
+def test_missing_and_non_directory_roots_are_distinguishable(tmp_path):
+    """A vanished root and a root that exists but is not a directory must
+    raise distinguishable reasons, not the same bare message.
+    """
+
+    vanished = tmp_path / "does-not-exist"
+    not_a_directory = tmp_path / "a-file"
+    not_a_directory.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(InventoryError) as vanished_excinfo:
+        writer_inventory._owner_identity_material(vanished, domain="dev", source="config_env")
+
+    with pytest.raises(InventoryError) as file_excinfo:
+        writer_inventory._owner_identity_material(
+            not_a_directory, domain="dev", source="config_env"
+        )
+
+    vanished_message = str(vanished_excinfo.value)
+    file_message = str(file_excinfo.value)
+    assert vanished_message != file_message
+    assert "reason=vanished" in vanished_message
+    assert "reason=not-a-directory" in file_message
+    for message in (vanished_message, file_message):
+        assert "domain=dev" in message
+        assert "source=config_env" in message
+
+
+def test_collision_error_names_both_domains(tmp_path):
+    """A cross-domain collision (two channels claiming the same host root, the
+    ADR-0055-adjacent shape this module refuses) must name both domains and a
+    redacted identifier for the shared root.
+    """
+
+    shared_root = tmp_path / "shared-vault"
+    shared_root.mkdir()
+    records = [
+        writer_inventory.LegacyOwnerRecord("dev", str(shared_root), source="config_env"),
+        writer_inventory.LegacyOwnerRecord("prod", str(shared_root), source="config_env"),
+    ]
+
+    with pytest.raises(InventoryError, match="collide across domains") as excinfo:
+        writer_inventory._normalize_legacy_owners(records)
+
+    message = str(excinfo.value)
+    assert "domain_a=dev" in message
+    assert "domain_b=prod" in message
+    assert "id=inode:" in message
+    assert str(shared_root) not in message
+
+
+def test_inventory_errors_never_emit_raw_paths(tmp_path):
+    """No emitted error, log line, or receipt may contain a raw host path,
+    vault name, or operator name. This asserts against the strings the
+    deploy path actually raises, not a redaction helper's return value.
+    """
+
+    vanished = tmp_path / "operator-name" / "does-not-exist"
+
+    with pytest.raises(InventoryError) as excinfo:
+        writer_inventory._owner_identity_material(vanished, domain="dev", source="config_env")
+
+    message = str(excinfo.value)
+    assert str(vanished) not in message
+    assert str(tmp_path) not in message
+    assert "operator-name" not in message
+
+    with pytest.raises(InventoryError) as parse_excinfo:
+        writer_inventory._parse_app_local_roots(
+            MALFORMED_APP_LOCAL_FRONTMATTER, domain="dev", source="native_app_local"
+        )
+
+    assert "not a mapping line" not in str(parse_excinfo.value)

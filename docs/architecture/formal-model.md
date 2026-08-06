@@ -116,10 +116,11 @@ T-review-decide [human, POST memory/review-queue/{id}/decision]  (app/api/routes
   two-phase: decision durable first, terminal flag only after materialization (blocked ⇒ re-pending)
 
 T-ingest-api [any caller, POST /ingest]  (app/api/routes/ingest.py:22)
-  pre:  well-formed payload — NOTHING ELSE (no WG, no vault check, no auth beyond app-level)
+  pre:  WG assert_writes_allowed("ingest.object_create") before any I/O (PR #4549; no bootstrap
+        escape) ∧ well-formed payload — no vault check, no auth beyond app-level
   post: evt(ingest.object.created) ONLY — despite its name, insert_object_and_outbox
         (app/services/outbox.py:247-264) writes no object row; P.objects materializes
-        asynchronously via T-materialize below            — see Divergence F-D
+        asynchronously via T-materialize below            — WG half delivered, see F-D
 
 T-materialize [worker → INGEST_OBJECT_CREATED]  (app/services/indexer.py:93)
   pre:  event delivered (at-least-once)
@@ -305,7 +306,8 @@ audit kernel (`docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §2
 3. **Read purity (Q4):** no durable write on a GET/read path except registered heal transitions.
 4. **Fail-closed guards:** a WG evaluation error blocks the write. #2910 pins this for the three
    named write seams above (`test_raising_guard_blocks_write`); `note/save` deliberately fails open
-   today — divergence F-C, named exemption, owner decision pending on epic #2778.
+   today — divergence F-C, named exemption, **owner-decided: keep fail-open** (epic #2778 chat
+   decision, 2026-08-02).
 5. **Receipt-before-ack (T-capture shape)** as the general mutating-transition contract.
 
 **Gaps, registry → model:** none structural — the cross-scope/envelope invariants (#5–#9, #16,
@@ -375,12 +377,18 @@ domains. Flagged to CES as an extend-candidate, not enacted here.
   `DEFAULT_WRITE_GUARD.assert_writes_allowed("settings.compile.writeback")` before calling
   `write_note_from_absolute`; no event is still emitted (that gap is tracked separately under F-E's
   event-completeness class, not re-opened here).
-- **F-C · note/save WriteGuard fails open** (`app/api/routes/companion.py:4365-4369`, deliberate per comment).
-  Human-edit availability vs. gate integrity. **needs-owner-decision** — surfaced on epic #2778, still open.
-- **F-D · `POST /ingest` is guardless** (`app/api/routes/ingest.py:22`): no WG, no vault/selection check; any
-  well-formed payload becomes a P.objects row + event. Acceptable for a trusted-LAN dev seam,
-  undocumented as such. **needs-owner-decision** (document trust posture vs. add gate) — surfaced
-  on epic #2778, still open.
+- **F-C · note/save WriteGuard fails open** (`app/api/routes/companion.py`, deliberate per comment).
+  Human-edit availability vs. gate integrity. **owner-decided: keep fail-open** (epic #2778 chat
+  decision, 2026-08-02) — current behavior stands, no code change; a human typing in their own note
+  must never be blocked by an unevaluable health snapshot.
+- **F-D · `POST /ingest` was guardless — DELIVERED.** Previously (`app/api/routes/ingest.py:22`): no
+  WG, no vault/selection check; any well-formed payload became a P.objects row + event, acceptable
+  for a trusted-LAN dev seam but undocumented as such. **owner-decided: add guard** (epic #2778 chat
+  decision, 2026-08-02). `POST /ingest` now asserts
+  `DEFAULT_WRITE_GUARD.assert_writes_allowed("ingest.object_create")` at the seam before any I/O,
+  fail-closed like the other named write seams (no bootstrap escape registered for this action) —
+  see PR #4549. Tests:
+  `tests/api/test_ingest_write_guard.py`.
 - **F-E · Mirror-write class (`emit_outbox=False`, no WG)** — eight call sites (C8) make the event
   log an incomplete journal. **fix-code as a class** via the event-completeness invariant
   (registered-mirror list or emitted events); reconciled with KERNEL-02/#2764 scope rather than a

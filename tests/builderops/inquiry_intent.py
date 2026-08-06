@@ -144,6 +144,9 @@ def contract_with_role_targets(
                             # Model-provider credentials are required: a role
                             # cannot resolve without its declared key (#4489).
                             "optional": False,
+                            # Model-provider credentials resolve independently
+                            # per consumer, never shared-domain (#4512).
+                            "shared_key_domain": False,
                         }
                     )
                     declared.add(secret)

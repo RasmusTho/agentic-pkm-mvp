@@ -41,6 +41,7 @@ import pytest
 
 from app.release_channels.channel_isolation_preflight import (
     check_compose_channel_isolation,
+    check_environment_env_file_clobber,
     resolve_effective_dsn,
 )
 
@@ -52,6 +53,7 @@ from app.release_channels.channel_isolation_preflight import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
 PROD_COMPOSE = REPO_ROOT / "docker-compose.prod.yml"
+DEV_COMPOSE = REPO_ROOT / "docker-compose.dev.yml"
 
 #: Mirrors the channel-critical lines of config/runtime.defaults.env: the base
 #: compose env_file supplies prod 'app' DSNs to every app service by default.
@@ -1424,3 +1426,315 @@ def test_resolve_effective_dsn_against_real_prod_compose() -> None:
             f"expected literal default -- update scripts/prod_deploy_retry_preflight.py's "
             "host-translation assumptions if this default DSN's host:port ever changes"
         )
+
+
+# ---------------------------------------------------------------------------
+# check_environment_env_file_clobber (Issue #4230)
+# ---------------------------------------------------------------------------
+
+#: A minimal base compose declaring heimdal-capture-watch's env_file chain,
+#: mirroring the real docker-compose.yaml shape after commit f95a6811 (no
+#: `environment:` block for the service at all -- host-specific values ride
+#: the env_file chain only).
+_BASE_COMPOSE_HEIMDAL_SHAPE = """\
+services:
+  heimdal-capture-watch:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+"""
+
+
+def _write_heimdal_base(tmp_path: Path) -> Path:
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "config" / "runtime.defaults.env").write_text("", encoding="utf-8")
+    p = tmp_path / "docker-compose.yaml"
+    p.write_text(_BASE_COMPOSE_HEIMDAL_SHAPE, encoding="utf-8")
+    return p
+
+
+def _write_heimdal_runtime_layer(tmp_path: Path, value: str) -> Path:
+    p = tmp_path / "tmp" / "runtime.env"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"HEIMDAL_CAPTURE_WATCH_DIR={value}\n", encoding="utf-8")
+    return p
+
+
+def test_pre_fix_heimdal_shape_is_rejected(tmp_path: Path) -> None:
+    """Reproduces the pre-f95a6811 heimdal-capture-watch clobber (Issue #4230).
+
+    An `environment:` entry shaped like `${VAR:-}` interpolates to an empty
+    string against an invoking shell that never sets VAR (deliberate --
+    scripts/lib/deploy_channel_compose.sh never passes the runtime env file as
+    a Compose CLI --env-file, #3875) and silently shadows the real value the
+    same key would otherwise receive from the service's env_file chain. The
+    check must fail closed on this shape.
+    """
+    _write_heimdal_base(tmp_path)
+    _write_heimdal_runtime_layer(tmp_path, "/real/capture/dir")
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          heimdal-capture-watch:
+            env_file:
+              - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+                required: false
+            environment:
+              HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert not result.ok, (
+        "Expected the preflight to FAIL on the pre-fix heimdal-capture-watch "
+        "environment:-vs-env_file: clobber shape, but it passed."
+    )
+    violating = {(v.service, v.field) for v in result.violations}
+    assert ("heimdal-capture-watch", "HEIMDAL_CAPTURE_WATCH_DIR") in violating
+    assert "/real/capture/dir" in result.summary()
+
+
+def test_deleted_environment_block_passes(tmp_path: Path) -> None:
+    """AC2: the post-f95a6811 shape (no `environment:` block at all for the
+    service) passes -- the fix already applied on main must not regress."""
+    _write_heimdal_base(tmp_path)
+    _write_heimdal_runtime_layer(tmp_path, "/real/capture/dir")
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          heimdal-capture-watch:
+            env_file:
+              - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+                required: false
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert result.ok, (
+        f"Expected the fixed shape (no environment: override) to pass, got:\n"
+        f"{result.summary()}"
+    )
+
+
+def test_literal_empty_string_override_is_not_flagged(tmp_path: Path) -> None:
+    """A deliberate literal `""` override (no shell-interpolation token) is an
+    intentional authoring choice, not the shell-interpolation clobber shape
+    this check targets -- mirrors docker-compose.test.yml's real
+    `WATCHER_VAULT_PATH: ""` fail-closed default. Must not be flagged even
+    when a same-named env_file layer carries a non-empty value.
+    """
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "config" / "runtime.defaults.env").write_text(
+        "WATCHER_VAULT_PATH=/app/vault\n", encoding="utf-8"
+    )
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          watcher:
+            environment:
+              WATCHER_VAULT_PATH: ""
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "test", environ={})
+
+    assert result.ok, (
+        f"Expected a literal empty-string override to be treated as intentional, "
+        f"got:\n{result.summary()}"
+    )
+
+
+def test_non_blank_override_is_not_flagged(tmp_path: Path) -> None:
+    """A resolved non-blank override is exactly what compose would bind the
+    service to -- it is never a clobber, whatever the env_file chain says."""
+    _write_heimdal_base(tmp_path)
+    _write_heimdal_runtime_layer(tmp_path, "/should/not/matter")
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          heimdal-capture-watch:
+            env_file:
+              - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+                required: false
+            environment:
+              HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-/explicit/default}
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert result.ok, f"Expected a non-blank override to pass, got:\n{result.summary()}"
+
+
+def test_blank_override_with_no_env_file_value_is_not_flagged(tmp_path: Path) -> None:
+    """A blank override is only a clobber when it actually shadows something.
+    When the env_file chain never defines the key either, there is nothing to
+    shadow -- the service simply starts without the binding, a separate
+    concern from this check."""
+    _write_heimdal_base(tmp_path)
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          heimdal-capture-watch:
+            env_file:
+              - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+                required: false
+            environment:
+              HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert result.ok, (
+        f"Expected a blank override with no shadowed env_file value to pass, "
+        f"got:\n{result.summary()}"
+    )
+
+
+def test_real_dev_compose_passes_environment_clobber_preflight() -> None:
+    """Regression guard: the committed docker-compose.dev.yml must never
+    reintroduce the pre-f95a6811 heimdal-capture-watch clobber shape (or any
+    analogous shape for another CHANNEL_SERVICES key)."""
+    result = check_environment_env_file_clobber(DEV_COMPOSE, "dev", environ={})
+
+    assert result.ok, (
+        f"docker-compose.dev.yml has a blank environment: override shadowing "
+        f"a non-empty env_file value:\n{result.summary()}"
+    )
+
+
+def test_real_test_compose_passes_environment_clobber_preflight() -> None:
+    """Regression guard mirroring the dev-channel check above, for the test
+    channel's committed docker-compose.test.yml."""
+    result = check_environment_env_file_clobber(TEST_COMPOSE, "test", environ={})
+
+    assert result.ok, (
+        f"docker-compose.test.yml has a blank environment: override shadowing "
+        f"a non-empty env_file value:\n{result.summary()}"
+    )
+
+
+def test_real_prod_compose_passes_environment_clobber_preflight() -> None:
+    """Regression guard: prod's own docker-compose.prod.yml must stay free of
+    this class too, even though prod isn't wired to this preflight in
+    scripts/deploy_channel.sh (Constraints: this issue extends the dev/test
+    deploy path only, prod already carries an analogous, DSN-scoped gate)."""
+    result = check_environment_env_file_clobber(PROD_COMPOSE, "prod", environ={})
+
+    assert result.ok, (
+        f"docker-compose.prod.yml has a blank environment: override shadowing "
+        f"a non-empty env_file value:\n{result.summary()}"
+    )
+
+
+#: Base compose declaring a blank-override clobber shape directly on base
+#: services, mirroring the real docker-compose.yaml's `VAULT_*_REL:
+#: ${VAR:-}` entries (#4613): Compose merges these per-service `environment:`
+#: mappings into every dev/test overlay, where they shadow the non-empty
+#: values scripts/export_runtime_env.sh writes into the runtime env layer.
+_BASE_COMPOSE_WITH_BLANK_OVERRIDES = """\
+services:
+  worker:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    environment:
+      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
+  watcher:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    environment:
+      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
+"""
+
+
+def _write_blank_override_base(tmp_path: Path) -> None:
+    (tmp_path / "docker-compose.yaml").write_text(
+        _BASE_COMPOSE_WITH_BLANK_OVERRIDES, encoding="utf-8"
+    )
+    _write_base_defaults(tmp_path, "")
+    runtime = tmp_path / "tmp" / "runtime.env"
+    runtime.parent.mkdir(parents=True, exist_ok=True)
+    runtime.write_text(
+        "VAULT_SYSTEM_DIR_REL=System\nVAULT_INBOX_DIR_REL=Inbox\n",
+        encoding="utf-8",
+    )
+
+
+def test_env_file_clobber_check_merges_base_environment_entries(
+    tmp_path: Path,
+) -> None:
+    """A blank override inherited from the base compose must be detected
+    (#4613, PR #4599 review r3700034271).
+
+    Compose merges the base file's per-service `environment:` mapping into
+    the overlay's (per-key, overlay wins), so a base entry shaped like
+    `${VAR:-}` rides into the dev/test merged model and shadows the
+    non-empty value the same key would otherwise receive from the service's
+    env_file chain. Inspecting only the overlay's own `environment:` mapping
+    silently passes in both shapes this reproduces: an overlay that
+    redeclares the service without the inherited entry (worker) and an
+    overlay that omits the service entirely (watcher).
+    """
+    _write_blank_override_base(tmp_path)
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          worker:
+            environment:
+              PKM_ENVIRONMENT: dev
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert not result.ok, (
+        "Expected the clobber check to FAIL on blank base-compose "
+        "environment: entries shadowing non-empty env_file values, but it "
+        "passed."
+    )
+    violating = {(v.service, v.field) for v in result.violations}
+    assert ("worker", "VAULT_SYSTEM_DIR_REL") in violating
+    assert ("watcher", "VAULT_INBOX_DIR_REL") in violating
+    assert "'System'" in result.summary()
+    assert "'Inbox'" in result.summary()
+
+
+def test_overlay_environment_override_of_base_entry_wins(tmp_path: Path) -> None:
+    """Merge-direction guard for the base-merge fix: compose merges
+    `environment:` per key with the overlay winning, so an overlay that
+    redeclares the key with a resolvable non-blank value replaces the base's
+    blank shape -- nothing is clobbered and the check must pass."""
+    _write_blank_override_base(tmp_path)
+    compose_path = _write_compose(
+        tmp_path,
+        """\
+        services:
+          worker:
+            environment:
+              VAULT_SYSTEM_DIR_REL: /overlay/value
+          watcher:
+            environment:
+              VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-/overlay/default}
+        """,
+    )
+
+    result = check_environment_env_file_clobber(compose_path, "dev", environ={})
+
+    assert result.ok, (
+        f"Expected overlay redeclarations to win over base blank entries, "
+        f"got:\n{result.summary()}"
+    )

@@ -506,7 +506,7 @@ Event types (minimum):
 When present, `sync_state` may include:
 - `last_pull_at` (RFC3339)
 - `source_version` (etag/hash/updated marker)
-- `sync_result` (`ok`, `stale`, `conflict`, `error`)
+- `sync_result` (`ok`, `partial`, `stale`, `conflict`, `error`)
 - `sync_note` (string)
 - `labels` (list of GitHub label names, recorded on every pull since #4441)
 - `url` (the issue's browser `html_url`, or null; Signboard cards and the
@@ -666,6 +666,26 @@ Observable signals:
 - Sync meta row (`_sync_meta:github`) carries `sync_result` and `sync_note` for last-attempt observability.
 - `get_sync_meta(store, provider)` returns the raw metadata dict for CLI or diagnostic use.
 
+## Kill-Switch Partial Sync (#4606)
+
+When the GitHub rate-limit kill switch (`app/dispatcher/github_call_logger.py::is_kill_switch_active`)
+suppresses the non-essential open-issues scan, the pull is truncated, not failed:
+
+- The essential `agent:ready` read still runs and its upserts are preserved; no additional GitHub
+  API calls are spent.
+- `record_sync_partial` writes `sync_result=partial` with `kill_switch_active=true` and a
+  machine-readable `sync_note` — never a plain `ok` (the false-green captured by LearningSignal
+  `lrn_20260730235456_f70f8ccc`).
+- `python -m app.dispatcher pull --json` keeps `ok=true`/exit 0 (not a hard source failure) but
+  reports `sync_result=partial` and `kill_switch_active=true` top-level and per repo.
+- `python -m app.dispatcher status --json` exposes an additive read-only `last_sync` summary
+  (`last_pull_at`, `sync_result`, `sync_note`, `kill_switch_active`) so pickup tooling can
+  distinguish a complete sync from a truncated one without spending GitHub API calls.
+- `scripts/issue_pickup_claim.sh` routes a missing-task claim failure that follows a kill-switch
+  partial sync to explicit GitHub-label-only fallback guidance
+  (`--coordination-mode github-label-only-fallback --fallback-reason kill-switch-partial-sync`)
+  instead of an opaque missing-task failure; `agent:ready` is left untouched on that path.
+
 ## Optional Future Projections
 
 The following are described as **optional projections only** and are not part of the dispatcher hot path.
@@ -785,7 +805,11 @@ python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --jso
 ```
 
 If no vault is currently selected and no explicit path is given, the command fails loud with a
-clear error instead of guessing a location.
+clear error instead of guessing a location. A genuinely never-selected reference (`status: none`)
+and a dangling one — a `lastActiveVaultRef` naming a path that no longer exists on disk
+(`status: missing`) — are reported distinctly (#4223): the dangling case names the missing path
+instead of claiming no vault was ever selected, matching the existing precedent in
+`app/api/routes/companion.py` for the same `VaultContext` status split.
 
 The exporter writes one Markdown file per dispatcher task under status columns:
 
@@ -824,8 +848,10 @@ Run `python -m app.dispatcher signboard-validate [path] --json` to lint the gene
 changing either the board or dispatcher store. As with `export-signboard`, the path is optional and
 defaults to the active vault's `BuilderOpsVault/agent-delivery` root. Validation exits nonzero for
 malformed generated cards, duplicate generated cards, column/status drift, cards stale against the
-dispatcher store, unreadable generated-filename candidates, and a board stamped by a different
-dispatcher store; run `export-signboard` to repair valid generated-card drift. Human-authored files are outside this lint's jurisdiction.
+dispatcher store, a same-column generated card whose title, priority, claim, linked PR, or labels no
+longer match its dispatcher task (`content_drift`), unreadable generated-filename candidates, and a
+board stamped by a different dispatcher store; run `export-signboard` to repair valid generated-card
+drift. Human-authored files are outside this lint's jurisdiction.
 
 A plain `export-signboard` only rewrites cards for task IDs that still exist in the dispatcher
 store, so it cannot clear a card whose task ID has disappeared from the store — those accumulate as

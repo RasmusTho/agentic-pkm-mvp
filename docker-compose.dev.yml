@@ -70,16 +70,15 @@ services:
       # keys here so the governed env_file chain supplies the binding.
 
   heimdal-capture-watch:
-    # The governed dev deploy wrapper materializes this last layer from the
-    # declared Keychain consumer and removes it after Compose creates the
-    # container. The base interpolation key is reset so it cannot blank or
-    # override the bootstrap layer from a caller shell or runtime env file.
-    env_file: !override
-      - ./config/runtime.defaults.env
-      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
-        required: false
-      - path: ${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}
-        required: false
+    # The host-secret env_file layer (HOST_SECRET_RUNTIME_ENV_FILE) now lives
+    # in the base compose file (#4362) so every channel, not just dev, gets
+    # it deterministically -- no per-channel override needed here anymore.
+    # The governed deploy wrapper materializes that layer from the declared
+    # Keychain consumer and removes it after Compose creates the container.
+    # The `environment` reset below still guards against a stray
+    # HEIMDAL_RAW_STORE_KEY reaching this service through any other channel
+    # (`environment:` always wins over `env_file:`), so the bootstrap layer
+    # stays the only source.
     environment:
       LLM_PROVIDER: mock
       PKM_ENVIRONMENT: dev

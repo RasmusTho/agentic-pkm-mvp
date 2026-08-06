@@ -194,18 +194,23 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "child_binding": "HEIMDAL_RAW_STORE_KEY",
             "kind": "raw-store-key",
             "optional": False,
+            # #4512: fed by two consumers (heimdal-capture-watch,
+            # heimdal-api-ingress) into one AES-256-GCM cipher domain.
+            "shared_key_domain": True,
         },
         {
             "logical_id": "openai.api-key",
             "child_binding": "OPENAI_API_KEY",
             "kind": "api-key",
             "optional": False,
+            "shared_key_domain": False,
         },
         {
             "logical_id": "anthropic.api-key",
             "child_binding": "ANTHROPIC_API_KEY",
             "kind": "api-key",
             "optional": False,
+            "shared_key_domain": False,
         },
         # #4489: the cockpit's live GitHub read wants a token, but the api
         # consumer's layer must keep materializing for hosts that have none.
@@ -214,6 +219,7 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "child_binding": "GITHUB_TOKEN",
             "kind": "token",
             "optional": True,
+            "shared_key_domain": False,
         },
     ]
     assert payload["consumers"] == [
@@ -336,3 +342,50 @@ def test_api_consumer_declares_raw_store_key() -> None:
         )
     with pytest.raises(UndeclaredSecretConsumerError):
         contract.require_declared(channel="dev", consumer="heimdal-api-ingress", secret="openai.api-key")
+
+
+def test_raw_store_key_declares_shared_key_domain() -> None:
+    """#4512: heimdal.raw-store-key backs one cipher domain fed by two consumers.
+
+    Every declared consumer of `heimdal.raw-store-key` must resolve to
+    identical material, so it is marked shared-domain. The model-provider
+    secrets keep resolving independently per consumer and are not marked.
+    """
+    contract = load_host_secret_contract()
+
+    assert contract.is_shared_key_domain("heimdal.raw-store-key") is True
+    assert contract.is_shared_key_domain("openai.api-key") is False
+    assert contract.is_shared_key_domain("anthropic.api-key") is False
+    assert contract.is_shared_key_domain("github.token") is False
+    assert contract.consumers_declared_for(
+        channel="dev", secret="heimdal.raw-store-key"
+    ) == frozenset({"heimdal-capture-watch", "heimdal-api-ingress"})
+    with pytest.raises(UndeclaredSecretConsumerError):
+        contract.is_shared_key_domain("unrelated-key")
+
+
+@pytest.mark.parametrize(
+    ("shared_key_domain_value", "expected"),
+    [
+        pytest.param(..., "invalid host secret declaration", id="omitted"),
+        pytest.param(1, "invalid host secret identifier", id="truthy-int"),
+        pytest.param(0, "invalid host secret identifier", id="falsy-int"),
+        pytest.param("true", "invalid host secret identifier", id="string"),
+        pytest.param(None, "invalid host secret identifier", id="null"),
+    ],
+)
+def test_loader_rejects_a_declaration_without_an_explicit_boolean_shared_key_domain(
+    tmp_path: Path, shared_key_domain_value: object, expected: str
+) -> None:
+    payload = json.loads(
+        Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8")
+    )
+    if shared_key_domain_value is ...:
+        del payload["secrets"][0]["shared_key_domain"]
+    else:
+        payload["secrets"][0]["shared_key_domain"] = shared_key_domain_value
+    contract_path = tmp_path / "host_secret_contract.json"
+    contract_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
+        load_host_secret_contract(contract_path)

@@ -4,4 +4,4 @@ kind: concept
 review_state: reviewed
 ---
 # Note
-This is a much longer, repetitive and somewhat rambling version of the same idea that repeats itself and adds little.
+Concise phrasing of the idea, the idea, the idea, the idea, concise phrasing of the idea, concise phrasing of the idea, concise phrasing of the idea.

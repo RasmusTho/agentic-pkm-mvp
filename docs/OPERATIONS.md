@@ -45,6 +45,18 @@ records. It requires `_heimdal/settings.md` to declare a valid
 `retention_window_days`; missing policy fails loud. It neither reads raw
 payloads nor performs archive, retention, or storage lifecycle work.
 
+### Heimdal time-spend projection (SCREEN-05)
+
+Use `python -m app.cli heimdal time-spend [--week YYYY-Www]` to print the JSON
+time-spend rollup over screen span observations (by app/project/scope/day/week),
+and `python -m app.cli heimdal time-spend --rebuild --vault-root <vault>
+[--week YYYY-Www]` to deterministically re-fold the observation stream from
+event zero and (re)write the weekly markdown projection note(s) at
+`heimdal/time-spend/YYYY-Www.md`. The note is a derived, rebuildable projection
+(`requires_review`, never authority): rebuilding overwrites only its own prior
+projection and refuses to touch any other note at the path. A missing store
+backend fails loud (`STORE_BACKEND=memory` or a Postgres DSN is required).
+
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
@@ -56,6 +68,73 @@ payloads nor performs archive, retention, or storage lifecycle work.
   (preflight, smoke test, soak, rollback rehearsal, and receipt), use
   `docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md`. Treat release channels as an operator-governed
   capability with outstanding feature acceptance, not as a fully accepted baseline workflow.
+
+### Forward-only migration floor: `objects` binding key (MVR-05A1, #4560)
+
+Alembic revision `d1e8a0c5f37b` takes ownership of `objects` and `agent_memories`, changes the
+`objects` primary key from `(id)` to `(vault_binding_id, id)`, and scopes `objects_uuid_idx` to
+`UNIQUE (vault_binding_id, uuid)`. The same change **deletes** `app/db/migrations_obsidian.sql` and
+`scripts/run_migration.py`. Operator consequences:
+
+- **A stale database is now refused at startup, not silently reshaped.** The vault-sync seam runs
+  `app/db/db.py::assert_objects_schema` alongside the existing `file_state` preflight, so a database
+  that never ran `alembic upgrade head` fails with a message naming that command instead of an
+  opaque `UndefinedColumn` part-way through a watcher tick. Before #4560 the runtime bootstrap
+  reshaped `objects` on every process boot, which is why the stale state used to be survivable.
+- **Migration authority is unchanged and is now the only authority.** `scripts/run_migrations.sh`
+  (`alembic upgrade head`) applies it, and the compose `migrate` one-shot still gates every runtime
+  container. What changed is that application processes no longer issue any schema statements at
+  startup: before #4560 the first `conn_rw()` of every process replayed the bootstrap SQL, which
+  dropped and re-added `objects_pkey` unconditionally. Existing rows in both tables are adopted in
+  place and attributed to the `legacy-compatibility-binding` sentinel; nothing is recreated, moved,
+  or dropped.
+- **The migration refuses rather than repairs three states.** It stops with an explicit hint if an
+  inbound foreign key still references `objects` (run the #3510 cutover first), if the database
+  holds duplicate `(vault_binding_id, uuid)` rows (reconcile them first — `app/objects/identity.py`
+  already refuses to resolve a duplicated `objects.uuid`), or if a single-column unique index on
+  `uuid` or on `id` survives under some other name (drop it with `DROP INDEX`, or
+  `ALTER TABLE public.objects DROP CONSTRAINT` if it backs a constraint — either one re-imposes the
+  exact constraint the rekey removes). All three refusals are atomic and leave every row untouched.
+- **The revision is forward-only** per `docs/RELEASE_CHANNELS/README.md :: Rollback posture`. Rolling
+  the `stable` ref back to a pre-#4560 image has two possible outcomes, both measured:
+  - on a **single-binding** database the old image starts and its startup bootstrap **silently
+    restores `PRIMARY KEY (id)`**. Rows survive, and `objects_uuid_idx` stays binding-scoped because
+    `CREATE UNIQUE INDEX IF NOT EXISTS` matches on name — which means the old image's
+    `on conflict (uuid)` upsert fallback raises `InvalidColumnReference`. Its primary
+    `on conflict (id)` path works again once the key is restored, so vault-sync ingest continues.
+    Re-run `alembic upgrade head` on a post-#4560 image before creating a second vault binding.
+  - on a database that already holds **two bindings for one artifact UUID** the old image cannot
+    start: `conn_rw()` raises `UniqueViolation: could not create unique index "objects_pkey"` and
+    the schema is left untouched. Roll forward rather than back.
+
+### Forward-only migration floor: `file_state` binding key (MVR-05A0, #4543)
+
+Alembic revision `c7f4b1a83d29` takes ownership of the vault-sync `file_state` table (previously
+created at runtime by the legacy bootstrap SQL, deleted by #4560) and changes its primary key from
+`path` to `(vault_binding_id, path)`. Operator consequences:
+
+- **Migration authority is unchanged.** `scripts/run_migrations.sh` (`alembic upgrade head`) applies
+  it. Existing rows are adopted in place and attributed to the `legacy-compatibility-binding`
+  sentinel; nothing is recreated, moved, or dropped.
+- **The revision is forward-only** per `docs/RELEASE_CHANNELS/README.md :: Rollback posture`. Rolling
+  the `stable` ref back to a pre-#4543 image leaves the database on the new key. That image's
+  `file_state` **upserts** then fail loudly — `ON CONFLICT (path)` has no unique index on `path`
+  alone to match, so Postgres raises `InvalidColumnReference`. Its reads and its path/uuid deletes
+  still execute and stay correct while only one binding exists, which is the only state a rolled-back
+  image can be in. Expect vault-sync **ingest to stop loudly**, not to corrupt. Roll forward rather
+  than back.
+- The constraint rebuild takes a brief `ACCESS EXCLUSIVE` lock on `file_state`. Apply it through the
+  normal `migrate` one-shot, which runtime containers already gate on, rather than against a live
+  writer.
+- **`FileStateSchemaMissingError` means the migration has not run.** A vault-sync producer refuses
+  to touch the table when it is absent, still carries the old `path`-only key, or has a stray unique
+  index on `path` alone. It fails *before* any effect, so no partial write is left behind — run
+  `scripts/run_migrations.sh` and restart. The adapter and API paths propagate the error with its
+  `alembic upgrade head` hint intact; the watcher's deletion-reconciliation path
+  (`app/watcher/vault_watcher.py`) catches broad exceptions and reports only
+  `Warning: unable to reconcile deletion for <path>` plus an incremented error count, so on that path
+  check the schema explicitly rather than expecting the hint.
+- Schema truth for the table is `docs/DB_SCHEMA.md :: file_state`.
 
 ## Runtime prerequisites (registry watcher)
 - `DATABASE_URL` or `DB_DSN` is required in runtime; startup must fail fast if missing.
@@ -81,6 +160,25 @@ Current runtime path:
 1. The registry watcher scans the vault, emits DB outbox events, and appends `watcher.run` audit rows so status can count runtime ticks.
 2. The worker consumes DB outbox rows and performs ingest/index, panel scan, and promotion work, preserving bounded retries for transient missing or unstable notes before giving up.
 3. Health, status, and metrics confirm whether that path is healthy.
+
+## Heimdal screen derivation: host-local model precondition
+
+The screen derivation stage (`app/heimdal/screen_derivation.py`, SCREEN-02) refuses to send a raw
+screen frame to any endpoint it cannot prove is inside this host's trust boundary (HEIM-12: zero
+raw-class egress). Two operator-visible consequences:
+
+- **Endpoint.** The stage reads `OLLAMA_BASE_URL` / `OLLAMA_HOST` / `OLLAMA_URL` and accepts only a
+  loopback address, or a hostname listed in `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS`. A
+  container-network service name is not loopback, so the compose stack declares it explicitly
+  (`docker-compose.prod.yml` sets `HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS: ollama`). Setting that
+  variable is an operator assertion that the named host really is inside this machine's boundary.
+  Without it the stage refuses loudly rather than degrading — that refusal is the feature.
+- **Model.** The route resolves to the census-declared local vision model `ollama/llava:7b`
+  (`docs/settings/models/providers.yaml`). `scripts/cold_boot.sh` does **not** pull it, so the first
+  derivation run on a fresh host fails loud until `ollama pull llava:7b` has run.
+
+The stage has no tick driver yet (SCREEN-06 owns the control surface), so neither precondition
+affects the current runtime path until a caller exists.
 
 ## Canonical Local Test Bootstrap
 
@@ -488,6 +586,15 @@ alerted state pending the one-time key setup and the prod restore (#4282).
   the underlying processing failure first (this preflight never mutates the queue), then redeploy.
   Rollback is deliberately not gated. Full contract:
   `docs/HEALTH.md :: Outbox and dead-letter signals`.
+- A `dev` or `test` deploy (`scripts/deploy_channel.sh deploy <dev|test> <sha>`) refuses to proceed
+  — before pin or migration mutation — when a `CHANNEL_SERVICES` service's compose `environment:`
+  override resolves blank while its `env_file` chain would otherwise supply a non-empty value for
+  the same key (#4230; the shape that crash-looped `heimdal-capture-watch` before commit
+  `f95a6811`). The deploy log always carries a
+  `dev/test environment clobber preflight: ok|skipped:<reason>|blocked ...` status line; on a
+  block, remove the blank override so the value rides the `env_file` chain instead. This preflight
+  is read-only and is not applied to `prod` or to rollback. Full contract:
+  `docs/RELEASE_CHANNELS/README.md :: Environment:-vs-env_file: blank-override clobber invariant`.
 
 Operator triage order:
 1. Run `make verify-runtime`.

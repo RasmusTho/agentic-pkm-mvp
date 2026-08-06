@@ -84,6 +84,18 @@ class _FakeCursor:
         self.rowcount = 0
         self._fetchone = None
         self._fetchall = []
+        # MVR-05A0 (#4543): the vault-sync seam preflights the migrated
+        # file_state key before any statement. Matched first, because the
+        # preflight's index subquery mentions `pg_attribute` and would otherwise
+        # be swallowed by the generic column-introspection matcher below.
+        if normalized.startswith("select to_regclass('public.file_state') is not null"):
+            self._fetchone = (True, ["vault_binding_id", "path"], [])
+            return
+        # MVR-05A1 (#4560): and the migrated `objects` key, for the same
+        # reason -- every `objects` upsert below is binding-scoped.
+        if normalized.startswith("select to_regclass('public.objects') is not null"):
+            self._fetchone = (True, True, ["vault_binding_id", "id"])
+            return
 
         if normalized.startswith("select to_regclass(%s) as oid"):
             self._fetchone = (params[0],)
@@ -101,8 +113,11 @@ class _FakeCursor:
             self._fetchone = (row["payload"],) if row else None
             return
 
-        if normalized.startswith("insert into objects(id, kind, payload, path)"):
-            object_id, kind, payload_json, path = params
+        # MVR-05A1 (#4560): the `objects` upserts lead with vault_binding_id too,
+        # because `ON CONFLICT (id)` / `(uuid)` no longer match a unique index
+        # once the key is `(vault_binding_id, id)`.
+        if normalized.startswith("insert into objects(vault_binding_id, id, kind, payload, path)"):
+            _binding_id, object_id, kind, payload_json, path = params
             self.conn.objects[object_id] = {
                 "id": object_id,
                 "kind": kind,
@@ -111,8 +126,10 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
-        if normalized.startswith("insert into objects(uuid, kind, payload, path)"):
-            object_id, kind, payload_json, path = params
+        if normalized.startswith(
+            "insert into objects(vault_binding_id, uuid, kind, payload, path)"
+        ):
+            _binding_id, object_id, kind, payload_json, path = params
             self.conn.objects[object_id] = {
                 "id": object_id,
                 "kind": kind,
@@ -167,10 +184,9 @@ class _FakeCursor:
                 row["source_ref"] = source_ref
                 self.rowcount = 1
             return
-        if normalized.startswith(
-            "insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"
-        ):
-            path, uuid_value, fm_hash, body_hash, mtime = params
+        # MVR-05A0 (#4543): file_state statements lead with vault_binding_id.
+        if normalized.startswith("insert into file_state("):
+            _binding_id, path, uuid_value, fm_hash, body_hash, mtime = params
             self.conn.file_state[path] = {
                 "path": path,
                 "uuid": uuid_value,
@@ -180,8 +196,10 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
-        if normalized.startswith("delete from file_state where uuid = %s and path <> %s"):
-            uuid_value, keep_path = params
+        if normalized.startswith(
+            "delete from file_state where vault_binding_id = %s and uuid = %s and path <> %s"
+        ):
+            _binding_id, uuid_value, keep_path = params
             before = len(self.conn.file_state)
             self.conn.file_state = {
                 path: row
@@ -191,27 +209,33 @@ class _FakeCursor:
             self.rowcount = before - len(self.conn.file_state)
             return
         if normalized.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and path = %s"
         ):
-            (path,) = params
+            _binding_id, path = params
             self._fetchone = self.conn.file_state.get(path)
             return
         if normalized.startswith(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s"
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and uuid = %s"
         ):
-            (uuid_value,) = params
+            _binding_id, uuid_value = params
             match = next(
                 (row for row in self.conn.file_state.values() if row.get("uuid") == uuid_value),
                 None,
             )
             self._fetchone = match
             return
-        if normalized.startswith("delete from file_state where path = %s"):
-            (path,) = params
+        if normalized.startswith(
+            "delete from file_state where vault_binding_id = %s and path = %s"
+        ):
+            _binding_id, path = params
             self.rowcount = 1 if self.conn.file_state.pop(path, None) else 0
             return
-        if normalized.startswith("select count(*) from file_state where uuid = %s"):
-            (uuid_value,) = params
+        if normalized.startswith(
+            "select count(*) from file_state where vault_binding_id = %s and uuid = %s"
+        ):
+            _binding_id, uuid_value = params
             count = sum(1 for row in self.conn.file_state.values() if row.get("uuid") == uuid_value)
             self._fetchone = (count,)
             return

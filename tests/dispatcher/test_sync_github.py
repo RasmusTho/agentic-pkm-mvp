@@ -858,6 +858,58 @@ def test_pull_kill_switch_fires_when_graphql_exhausted_and_core_healthy(
     assert sync_meta.get("kill_switch_active") is True
 
 
+def test_pull_reports_partial_when_kill_switch_skips_open_issue_scan(
+    tmp_store: SqliteStore,
+) -> None:
+    """A kill-switch-truncated pull must record a machine-readable partial
+    outcome, not plain ok-complete success (#4606,
+    LearningSignal lrn_20260730235456_f70f8ccc).
+
+    The essential agent:ready read still succeeds and upserts, but the
+    suppressed open-issues scan means the queue projection is honestly
+    partial — sync metadata must say so.
+    """
+    source = _mock_source(
+        [SAMPLE_ISSUE_HIGH],
+        rate_limit={"remaining": 10, "reset": "2026-07-31T00:00:00Z"},
+    )
+
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    upserted = adapter.pull(REPO)
+
+    # Constraint: the essential ready read is preserved under the kill switch.
+    assert [task.issue_number for task in upserted] == [101]
+    # Constraint: no additional GitHub API spend — the expensive scan stays off.
+    source.list_open_issues.assert_not_called()
+
+    meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
+    assert meta is not None
+    assert meta["sync_result"] == "partial"
+    assert meta.get("kill_switch_active") is True
+    note = meta.get("sync_note") or ""
+    assert "kill" in note and "open-issues" in note
+
+
+def test_pull_sync_result_stays_ok_when_kill_switch_inactive(
+    tmp_store: SqliteStore,
+) -> None:
+    """Complete-sync success behavior is unchanged when the kill switch is
+    inactive and both scans succeed (#4606 constraint)."""
+    source = _mock_source(
+        [SAMPLE_ISSUE_HIGH],
+        rate_limit={"remaining": 5000, "reset": "2026-07-31T00:00:00Z"},
+    )
+
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull(REPO)
+
+    source.list_open_issues.assert_called_once()
+    meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
+    assert meta is not None
+    assert meta["sync_result"] == "ok"
+    assert meta.get("kill_switch_active") is False
+
+
 def test_gh_cli_get_rate_limit_returns_none_on_gh_failure() -> None:
     """Non-zero gh exit (auth failure, invalid flags, network error) yields None, not a crash."""
     source = GhCliIssueSource()

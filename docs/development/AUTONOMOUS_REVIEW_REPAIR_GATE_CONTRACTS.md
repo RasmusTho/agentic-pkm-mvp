@@ -347,10 +347,25 @@ a new owner-doc authority surface.
 
 The review repair loop connects blocking P0/P1 findings back to implementation.
 
+Severity-visible handoff (#4267): the handoff that starts this loop must make each finding's
+severity explicit to the implementing agent before repair starts, not leave it to the agent's own
+judgement. Concretely, the finding set handed to the implementing agent (packet, receipt, or
+message) must carry, per finding, the `severity` and `disposition` fields the gate already emits
+under `Outputs`; a handoff that strips or omits severity is malformed and must be regenerated
+before repair. The implementing agent's first act on receipt is to partition the findings by
+severity and repair only the P0/P1 subset. Fixing a P2 or P3 finding instead of applying its
+required disposition (defer-with-defect-evidence for P2, record-only for P3) is itself a defect in
+this loop: flag it — as a review finding on the repair receipt or a `LearningSignal` via
+`capture-learning` naming this contract — rather than letting it pass silently. This adds no
+review round and does not change the P2/P3 exclusion below; it makes the exclusion checkable at
+the moment of handoff.
+
 Required loop:
 
-1. Review gate emits blocking P0/P1 findings with actionable criteria.
-2. Implementation agent fixes only the scoped findings on the PR branch.
+1. Review gate emits blocking P0/P1 findings with actionable criteria, carrying each finding's
+   explicit severity and disposition into the handoff per the severity-visible handoff rule above.
+2. Implementation agent confirms the per-finding severities, then fixes only the scoped P0/P1
+   findings on the PR branch.
 3. Agent reruns the validation required by the issue and by the finding.
 4. Agent posts or records a repair receipt with changed files, validation
    evidence, and unresolved risk.

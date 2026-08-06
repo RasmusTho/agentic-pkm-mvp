@@ -422,6 +422,37 @@ def record_sync_success(
     _write_sync_meta(store, provider, sync_state, pull_at)
 
 
+def record_sync_partial(
+    store: DispatcherStore,
+    provider: str,
+    pull_at: str,
+    note: str,
+    rate_limit_remaining: int | None = None,
+    rate_limit_reset: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Persist a degraded/partial pull-sync metadata record for *provider*.
+
+    Used when the essential ready read succeeded but a non-essential scan was
+    suppressed (e.g. the rate-limit kill switch), so the queue projection is
+    honestly partial rather than falsely complete (#4606). Not a hard source
+    failure: task upserts from the essential read are preserved.
+    """
+    merged: dict[str, Any] = dict(extra or {})
+    if rate_limit_remaining is not None:
+        merged["rate_limit_remaining"] = rate_limit_remaining
+    if rate_limit_reset is not None:
+        merged["rate_limit_reset"] = rate_limit_reset
+
+    sync_state = SyncState(
+        last_pull_at=pull_at,
+        sync_result="partial",
+        sync_note=note,
+        extra=merged,
+    )
+    _write_sync_meta(store, provider, sync_state, pull_at)
+
+
 def record_sync_failure(
     store: DispatcherStore,
     provider: str,
@@ -474,6 +505,37 @@ def get_sync_meta(store: DispatcherStore, provider: str) -> dict[str, Any] | Non
     if record is None:
         return None
     return record.sync_state
+
+
+def get_sync_meta_readonly(db_path: Any, provider: str) -> dict[str, Any] | None:
+    """Read the last recorded sync metadata without touching the database.
+
+    Observation commands (``dispatcher status``) must not open the store's
+    normal connection path, which self-heals the schema and mutates the file.
+    SQLite's ``mode=ro`` URI guarantees a pure read; any open/shape error
+    yields ``None`` rather than an initialized or migrated database (#4606).
+    """
+    import json as _json
+    import sqlite3 as _sqlite3
+    from pathlib import Path as _Path
+
+    uri = f"{_Path(db_path).resolve().as_uri()}?mode=ro"
+    try:
+        with _sqlite3.connect(uri, uri=True) as conn:
+            conn.execute("PRAGMA query_only = ON")
+            row = conn.execute(
+                "SELECT sync_state FROM dispatcher_tasks WHERE task_id = ?",
+                (_meta_task_id(provider),),
+            ).fetchone()
+    except _sqlite3.Error:
+        return None
+    if row is None or row[0] is None:
+        return None
+    try:
+        payload = _json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 # ---------------------------------------------------------------------------
@@ -852,14 +914,32 @@ class PullSyncAdapter:
         extra["reconciled_count"] = reconciled
         extra["kill_switch_active"] = kill_switch
 
-        record_sync_success(
-            self._store,
-            self._provider,
-            pull_at,
-            rate_limit_remaining=rl_remaining,
-            rate_limit_reset=rl_reset,
-            extra=extra,
-        )
+        if kill_switch:
+            # The essential ready read succeeded, but the suppressed
+            # open-issues scan makes the queue projection partial. Record a
+            # machine-readable degraded outcome instead of a false-green ok
+            # (#4606, lrn_20260730235456_f70f8ccc).
+            record_sync_partial(
+                self._store,
+                self._provider,
+                pull_at,
+                note=(
+                    "kill switch active: non-essential open-issues scan "
+                    "skipped; queue projection is partial"
+                ),
+                rate_limit_remaining=rl_remaining,
+                rate_limit_reset=rl_reset,
+                extra=extra,
+            )
+        else:
+            record_sync_success(
+                self._store,
+                self._provider,
+                pull_at,
+                rate_limit_remaining=rl_remaining,
+                rate_limit_reset=rl_reset,
+                extra=extra,
+            )
         return upserted
 
     def _reconcile_stale_ready(

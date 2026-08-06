@@ -181,27 +181,22 @@ def test_projection_batch_snapshot_prevents_concurrent_revision_mix(
 
 
 def test_projection_batch_refuses_mixed_database_identity(tmp_path: Path) -> None:
-    store, _, _, _ = _populated(tmp_path / "original")
-    replacement, _, _, _ = _populated(tmp_path / "replacement")
-    original = store._readonly_connect
-    replaced = False
+    store, _, _, _ = _populated(tmp_path)
+    original = store._db_file_identity
+    identity_reads = 0
 
-    def traced() -> sqlite3.Connection:
-        conn = original()
+    def changed_identity() -> tuple[int, int, int, int]:
+        nonlocal identity_reads
+        identity_reads += 1
+        identity = original()
+        if identity_reads == 2:
+            return (*identity[:3], identity[3] + 1)
+        return identity
 
-        def on_statement(statement: str) -> None:
-            nonlocal replaced
-            if replaced or not statement.startswith("SELECT * FROM ckm_capability"):
-                return
-            replaced = True
-            replacement.db_path.replace(store.db_path)
-
-        conn.set_trace_callback(on_statement)
-        return conn
-
-    store._readonly_connect = traced  # type: ignore[method-assign]
+    store._db_file_identity = changed_identity  # type: ignore[method-assign]
     with pytest.raises(CkmProjectionCaptureError) as refusal:
         store.load_projection_batch()
+    assert identity_reads == 2
     assert refusal.value.code == "mixed_epoch"
     assert "identity changed" in str(refusal.value)
 

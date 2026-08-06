@@ -42,7 +42,7 @@ def test_canvas_chat_change_selects_chat_coverage() -> None:
     selection = select_tests(["app/chat/session_log.py", "tests/chat/test_session_log_writer.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("canvas_chat",)
+    assert selection.subsystems == ("canvas_chat", "properties")
     assert selection.unowned_paths == ()
     assert "tests/chat" in selection.targets
     assert "tests/chat/test_session_log_writer.py" in selection.targets
@@ -52,7 +52,7 @@ def test_briefing_change_selects_briefing_coverage() -> None:
     selection = select_tests(["app/briefing/compose.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("briefing",)
+    assert selection.subsystems == ("briefing", "properties")
     assert selection.unowned_paths == ()
     assert "tests/briefing" in selection.targets
 
@@ -64,7 +64,7 @@ def test_instance_registry_change_selects_vault_coverage() -> None:
     vault_module_selection = select_tests(["app/vault/some_new_file.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("vault",)
+    assert selection.subsystems == ("vault", "properties")
     assert selection.unowned_paths == ()
     assert "tests/instance" in selection.targets
     assert "tests/vault" in selection.targets
@@ -379,7 +379,7 @@ def test_index_rebuild_cli_change_selects_memory_retrieval_coverage() -> None:
     selection = select_tests(["app/cli/index_rebuild.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("memory_retrieval",)
+    assert selection.subsystems == ("memory_retrieval", "properties")
     assert selection.unowned_paths == ()
     assert "tests/indexer" in selection.targets
     assert "tests/index" in selection.targets
@@ -399,7 +399,7 @@ def test_runtime_index_producers_select_memory_retrieval_coverage() -> None:
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("memory_retrieval",)
+    assert selection.subsystems == ("memory_retrieval", "properties")
     assert selection.unowned_paths == ()
     assert "tests/index" in selection.targets
     assert "tests/indexer" in selection.targets
@@ -422,7 +422,7 @@ def test_reasoning_expansion_paths_select_owned_cognition_coverage() -> None:
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("reasoning_expansion",)
+    assert selection.subsystems == ("reasoning_expansion", "properties")
     assert selection.unowned_paths == ()
     assert "tests/reasoning" in selection.targets
     assert "tests/expansion" in selection.targets
@@ -505,7 +505,7 @@ def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
     selection = select_tests(["app/stores/postgres.py", "tests/ingest/test_vault_root_ingest_pg.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("store_ingest",)
+    assert selection.subsystems == ("store_ingest", "properties")
     assert selection.unowned_paths == ()
     assert "tests/stores" in selection.targets
     assert "tests/ingest" in selection.targets
@@ -597,12 +597,24 @@ def test_static_selector_targets_are_collectable() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_app_change_to_censused_file_selects_properties_subsystem() -> None:
+    """A change to an app/ file indexed by a tests/properties/_machinery.py line-keyed
+    census (e.g. STORE_PAYLOAD_SINK_CLASSIFICATION, REGISTERED_MIRRORS) must select the
+    properties subsystem even when tests/properties/ itself is untouched -- otherwise the
+    census silently goes stale for that PR's affected-subsystem CI run (#4269)."""
+    selection = select_tests(["app/watcher/vault_watcher.py"])
+
+    assert selection.full_suite is False
+    assert "properties" in selection.subsystems
+    assert "tests/properties" in selection.targets
+
+
 def test_object_store_module_selects_store_ingest_regressions() -> None:
     """The shared object-store producer belongs to the store/ingest contracts."""
     selection = select_tests(["app/objects/__init__.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("store_ingest",)
+    assert selection.subsystems == ("store_ingest", "properties")
     assert selection.unowned_paths == ()
     assert "tests/stores" in selection.targets
     assert "tests/ingest" in selection.targets
@@ -702,13 +714,21 @@ def test_unowned_e2e_file_is_deferred_to_post_merge() -> None:
     [
         pytest.param(
             ["docs/development/TEST_STRATEGY_HOT_PATH.md", "tests/governance/test_new_thing.py"],
-            ("governance",),
+            # tests/governance/ is also builder_system's own scope signal
+            # (builder_system's real targets include tests/builderops and
+            # tests/dispatcher, not just tests/governance) -- #4336 unions
+            # that real subsystem in rather than absorbing it silently into
+            # the governance-only branch.
+            ("governance", "builder_system"),
             "tests/governance/test_new_thing.py",
             id="docs-only+test",
         ),
         pytest.param(
             [".codex/skills/publish-pr/SKILL.md", "tests/scripts/test_new_helper.py"],
-            ("governance",),
+            # tests/scripts/ is also ops_deploy's own scope signal (its real
+            # targets include tests/ops and tests/deploy, not just
+            # tests/scripts) -- #4336 unions it in instead of dropping it.
+            ("governance", "ops_deploy"),
             "tests/scripts/test_new_helper.py",
             id="governance-only+test",
         ),
@@ -807,8 +827,78 @@ def test_skill_contract_file_with_unmapped_test_still_gets_docs_authoring_covera
 def test_governance_target_exact_file_entry_is_tolerated() -> None:
     # GOVERNANCE_TARGETS' one non-directory entry (tests/ops/test_ci_workflow.py)
     # must be matched by _within_target_dirs' exact-equality branch, not just
-    # its directory-prefix branch.
+    # its directory-prefix branch -- it still selects the governance lane's
+    # full target set. tests/ops/test_ci_workflow.py is also ops's own scope
+    # signal (ops's real target is the whole tests/ops directory, wider than
+    # this one exact file), so #4336 unions ops in too instead of silently
+    # narrowing to the two exact tests/ops files GOVERNANCE_TARGETS lists.
     selection = select_tests([".codex/skills/x/SKILL.md", "tests/ops/test_ci_workflow.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance", "ops")
+    assert "tests/architecture" in selection.targets
+    assert "tests/ops" in selection.targets
+
+
+def test_mixed_docs_authoring_and_architecture_test_keeps_builder_targets() -> None:
+    # #4336: tests/architecture/test_builderops_store_boundary.py is
+    # individually carved out as builder_system's own diagnostic signal
+    # (scripts/select_pr_tests.py's builder_system entry), but it also lives
+    # inside GOVERNANCE_TARGETS' tolerated tests/architecture directory. A
+    # mixed PR combining it with a .codex/skills/** change must not collapse
+    # to governance-only and lose builder_system's real targets.
+    selection = select_tests(
+        [".codex/skills/x/SKILL.md", "tests/architecture/test_builderops_store_boundary.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems != ("governance",)
+    assert "tests/builderops" in selection.targets
+    assert "tests/dispatcher" in selection.targets
+    # The pure governance-only fast path's own coverage must not regress.
+    assert "tests/architecture" in selection.targets
+    assert "tests/ops/test_review_before_ci_gate.py" in selection.targets
+
+
+def test_mixed_ops_deploy_and_architecture_test_keeps_ops_targets() -> None:
+    # #4336: scripts/select_pr_tests.py is explicitly tolerated as governance
+    # signal, but it is also ops_deploy's own scripts/-rooted scope signal.
+    # Combined with the builder_system-carved-out architecture test, the diff
+    # must resolve to real ops_deploy/builder_system coverage, not collapse
+    # to governance-only.
+    selection = select_tests(
+        ["scripts/select_pr_tests.py", "tests/architecture/test_builderops_store_boundary.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems != ("governance",)
+    assert "tests/builderops" in selection.targets
+    assert "tests/dispatcher" in selection.targets
+    assert "tests/ops" in selection.targets
+    assert "tests/deploy" in selection.targets
+
+
+def test_mixed_docs_and_review_gate_test_keeps_ops_targets() -> None:
+    # #4336: tests/ops/test_review_before_ci_gate.py is tolerated as both
+    # governance and docs signal, but it also lives under ops's own
+    # tests/ops/ prefix. A docs-only change combined with this file must
+    # still pick up the rest of tests/ops, not collapse to docs-only.
+    selection = select_tests(["docs/STATUS.md", "tests/ops/test_review_before_ci_gate.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems != ("docs",)
+    assert "tests/ops" in selection.targets
+
+
+def test_docs_plus_architecture_still_stays_governance_only_when_no_foreign_owner() -> None:
+    # Sibling assertion to the mixed-PR cases above: an architecture test
+    # with no individual subsystem carve-out (unlike
+    # test_builderops_store_boundary.py / test_no_hardcoded_vault_layout.py /
+    # test_pr_hot_path_governance.py, the last of which gained its own
+    # builder_system carve-out under #4343 so a pure change to that one file
+    # no longer fails closed as unowned) must still resolve through the plain
+    # governance-only fast path.
+    selection = select_tests([".codex/skills/x/SKILL.md", "tests/architecture/test_agent_skill_entrypoints.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("governance",)
@@ -900,7 +990,7 @@ def test_panel_agent_package_change_selects_promotion_panel_coverage() -> None:
     selection = select_tests(["app/agents/panel_agent/runtime.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("promotion_panel",)
+    assert selection.subsystems == ("promotion_panel", "properties")
     assert "tests/panel" in selection.targets
 
 
@@ -1188,3 +1278,57 @@ def test_cli_rejects_an_unowned_path() -> None:
     assert result.returncode == 2
     assert "subsystems=unowned" in result.stdout
     assert "unowned_paths=app/new_surface/example.py" in result.stdout
+
+
+def test_agent_surface_combinations_never_resolve_unowned() -> None:
+    """#4335: the whole {AGENTS.md, CLAUDE.md, .codex/**, docs/**} surface #4330
+    widened `ci-smoke.yaml`'s `code` paths-filter for must never fall through
+    every SUBSYSTEMS prefix into `unowned` (exit 2), no matter how its members
+    are combined on one PR."""
+    import itertools
+
+    universe = (
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".codex/AGENTS.md",
+        ".codex/skills/x/SKILL.md",
+        ".codex/agents/reviewer.toml",
+        ".codex/config.toml",
+        "docs/STATUS.md",
+        "docs/ARCHITECTURE.md",
+        "README.md",
+    )
+
+    for size in (1, 2, 3):
+        for combo in itertools.combinations(universe, size):
+            selection = select_tests(list(combo))
+            assert selection.subsystems != ("unowned",), combo
+            assert selection.unowned_paths == (), combo
+            assert selection.full_suite is False, combo
+
+
+def test_claude_md_is_symmetric_with_agents_md_in_governance_only() -> None:
+    agents_only = select_tests(["AGENTS.md"])
+    agents_and_claude = select_tests(["AGENTS.md", "CLAUDE.md"])
+
+    assert agents_only.subsystems == ("governance",)
+    assert agents_and_claude.subsystems == ("governance",)
+    assert agents_and_claude.reason == "governance-only PR"
+
+
+def test_docs_only_lane_selects_tests_governance() -> None:
+    selection = select_tests(["docs/ARCHITECTURE.md"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("docs",)
+    assert "tests/governance" in selection.targets
+
+
+def test_docs_plus_tests_governance_does_not_narrow_mixed_pr() -> None:
+    selection = select_tests(
+        ["docs/ARCHITECTURE.md", "tests/governance/test_project_pickup_deprecation.py"]
+    )
+
+    assert selection.full_suite is False
+    assert "builder_system" in selection.subsystems
+    assert "tests/governance/test_project_pickup_deprecation.py" in selection.targets

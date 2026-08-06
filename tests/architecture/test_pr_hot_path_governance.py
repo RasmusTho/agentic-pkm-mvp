@@ -297,6 +297,8 @@ def test_owner_doc_policy_requires_pr_specific_child_and_open_parent_receipts() 
 
 import re as _re
 
+from app.dispatcher.verification_contract import resolve_builderops_routing_status
+
 
 _REQUIRED_FIELDS_PATTERNS = [
     _re.compile(r"(?:^|\n)Type:\s*(docs|governance|code)\s*(?:\n|$)", _re.IGNORECASE),
@@ -309,18 +311,15 @@ _DIRECT_REPAIR_REGEX = _re.compile(
     r"## Direct Repair[\s\S]*?(?=\n##\s|\n---)|## Direct Repair[\s\S]*",
     _re.IGNORECASE,
 )
-_BUILDEROPS_ROUTING_REGEX = _re.compile(
-    r"(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*",
-    _re.IGNORECASE,
-)
-_BUILDEROPS_ROUTING_FIELDS = [
-    _re.compile(r"(?:^|\n)\s*-\s*Records/projections/receipts:\s*(.*?)\s*(?:\n|$)", _re.IGNORECASE),
-    _re.compile(r"(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)", _re.IGNORECASE),
-]
 
 
 def _is_direct_repair(body: str) -> bool:
-    """Python port of the JavaScript `isDirectRepair` logic in issue-pr-governance.yml."""
+    """Python port of the JavaScript `isDirectRepair` logic in issue-pr-governance.yml.
+
+    No canonical `verification_contract` twin exists for this check yet (issue
+    #4343 out-of-scope note); this remains the file's own port until one is
+    added under a separate issue.
+    """
     m = _DIRECT_REPAIR_REGEX.search(body)
     if not m:
         return False
@@ -329,44 +328,35 @@ def _is_direct_repair(body: str) -> bool:
 
 
 def _has_builderops_routing(body: str) -> bool:
-    """Python port of the JavaScript `hasBuilderOpsRouting` logic."""
-    m = _BUILDEROPS_ROUTING_REGEX.search(body)
-    if not m:
-        return False
-    section = m.group(0)
-    for pattern in _BUILDEROPS_ROUTING_FIELDS:
-        match = pattern.search(section)
-        if not match:
-            return False
-        value = match.group(1).strip()
-        if not value or _re.fullmatch(r"<.*>", value):
-            return False
-    return True
+    """Thin wrapper over the canonical `verification_contract` twin.
 
-
-_TIER1_LANE_REGEX = _re.compile(
-    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
-    _re.IGNORECASE | _re.MULTILINE,
-)
+    `has_issue_authority` only affects `BuilderOpsRoutingStatus.satisfied`, not
+    `.has_builderops_routing`, so any fixed value is safe here.
+    """
+    return resolve_builderops_routing_status(
+        body, has_issue_authority=False
+    ).has_builderops_routing
 
 
 def _builderops_routing_satisfied(body: str) -> bool:
-    """Python port of the JavaScript `builderOpsRoutingSatisfied` logic.
+    """Thin wrapper over the canonical `verification_contract` twin.
 
     Tier 1 lane PRs (docs/development/GOVERNANCE_PROPORTIONALITY.md) may omit the
     BuilderOps Routing section entirely only when they are not issue-backed —
     absence means "none". A present but unfilled section is still rejected at
     every tier, and issue-backed PRs use the higher Tier 2+ requirement.
+
+    `has_issue_authority` mirrors this file's own long-standing Fixes/Closes/
+    Resolves detection (not the stricter `Governing-Issue:` line format that
+    `resolve_issue_authority` requires) so every existing fixture's expected
+    outcome is unchanged by this import swap.
     """
-    if _has_builderops_routing(body):
-        return True
-    section_present = bool(_BUILDEROPS_ROUTING_REGEX.search(body))
-    has_issue_link = _re.search(r"(Fixes|Closes|Resolves)\s+#\d+", body, _re.IGNORECASE)
-    return (
-        _TIER1_LANE_REGEX.search(body) is not None
-        and has_issue_link is None
-        and not section_present
+    has_issue_authority = bool(
+        _re.search(r"(Fixes|Closes|Resolves)\s+#\d+", body, _re.IGNORECASE)
     )
+    return resolve_builderops_routing_status(
+        body, has_issue_authority=has_issue_authority
+    ).satisfied
 
 
 _VALID_DIRECT_REPAIR_FIELDS = (
@@ -492,6 +482,30 @@ def test_tier1_lane_pr_may_omit_builderops_routing() -> None:
 
     docs_body = "- [x] Docs authoring lane\n\n## Summary\nDocs clarification."
     assert _builderops_routing_satisfied(docs_body), "Expected docs-lane PR without section to pass"
+
+
+def test_canonical_tier1_lane_import_detects_governance_removal(monkeypatch) -> None:
+    """Proves the import swap closes the blind spot named in issue #4343.
+
+    If "Governance" were dropped from the tier-1 lane rule in the canonical
+    `verification_contract.TIER1_LANE_PATTERN` (mirroring a hypothetical
+    matching regression in the workflow's own JS `tier1LanePattern`), this
+    file's `_builderops_routing_satisfied` must observe that change, because
+    it now calls the canonical twin instead of carrying its own untouched
+    local copy of the regex.
+    """
+    import app.dispatcher.verification_contract as verification_contract
+
+    narrowed_pattern = _re.compile(
+        r"^\-\s+\[x\]\s+Docs authoring lane\b", _re.IGNORECASE | _re.MULTILINE
+    )
+    monkeypatch.setattr(verification_contract, "TIER1_LANE_PATTERN", narrowed_pattern)
+
+    governance_body = "- [x] Governance lane\n\n## Summary\nSkill text fix."
+    assert not _builderops_routing_satisfied(governance_body), (
+        "Expected a canonical TIER1_LANE_PATTERN regression to be visible "
+        "through the imported twin instead of masked by a local copy"
+    )
 
 
 def test_tier1_lane_pr_with_unfilled_section_still_rejected() -> None:

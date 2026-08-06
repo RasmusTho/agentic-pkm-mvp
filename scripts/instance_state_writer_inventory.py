@@ -32,6 +32,7 @@ DOMAINS = ("dev", "native", "prod", "test")
 COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "test"}
 COMPOSE_WRITER_SERVICES = {"api", "heimdal-capture-watch", "watcher", "worker"}
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
+LAUNCHER_ROLES = {name.removesuffix(".sh") for name in LAUNCHER_SCRIPTS}
 TOKEN_RE = re.compile(r"^(?:linux|darwin|docker):[0-9a-f]{64}$")
 PYTHON_RE = re.compile(r"^python(?:3(?:\.\d+)*)?$")
 PF_KTHREAD = 0x00200000
@@ -58,6 +59,12 @@ class ProcessRecord:
 class LegacyOwnerRecord:
     channel_id: str
     root: str
+    # Which of this module's owner sources produced this record (docker_env,
+    # docker_app_local, config_env, config_app_local, process_env,
+    # native_app_local). Named so a refusal can identify *what* it refused
+    # without emitting a raw host path. Defaults to "unknown" only as a
+    # safety net; every live construction site below supplies a real value.
+    source: str = "unknown"
 
 
 def _digest_token(kind: str, *parts: object) -> str:
@@ -387,6 +394,19 @@ def _read_env_bytes(raw: bytes) -> dict[str, str]:
     return values
 
 
+class _AppLocalMalformed(RuntimeError):
+    """Internal marker carrying *why* app-local frontmatter parsing failed.
+
+    Never raised across the module boundary: `_parse_app_local_roots` catches
+    this and converts it into a domain/source-qualified `InventoryError`, so
+    the reason tags below never leak file content or paths on their own.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _yaml_mapping_entry(raw: str) -> tuple[str, str]:
     quote = ""
     escaped = False
@@ -408,7 +428,7 @@ def _yaml_mapping_entry(raw: str) -> tuple[str, str]:
             continue
         if character == ":" and not quote and (index + 1 == len(raw) or raw[index + 1].isspace()):
             return raw[:index].strip(), raw[index + 1 :].strip()
-    raise InventoryError("legacy app-local owner source is invalid")
+    raise _AppLocalMalformed("mapping-missing-colon")
 
 
 def _yaml_scalar(raw: str) -> str:
@@ -419,22 +439,22 @@ def _yaml_scalar(raw: str) -> str:
         try:
             decoded = json.loads(value)
         except json.JSONDecodeError as exc:
-            raise InventoryError("legacy app-local owner source is invalid") from exc
+            raise _AppLocalMalformed("scalar-invalid-json") from exc
         if isinstance(decoded, str):
             return decoded
     if not value or value[0] in {"'", '"', "[", "{", "&", "*", "!", "|", ">"}:
-        raise InventoryError("legacy app-local owner source is invalid")
+        raise _AppLocalMalformed("scalar-invalid-syntax")
     return value
 
 
-def _parse_app_local_roots(raw: bytes) -> list[str]:
+def _parse_app_local_roots_body(raw: bytes) -> list[str]:
     try:
         text = raw.decode("utf-8")
         if not text.startswith("---\n") or "\n---\n" not in text[4:]:
             raise ValueError
         frontmatter_text = text[4:].split("\n---\n", 1)[0]
     except (UnicodeDecodeError, ValueError) as exc:
-        raise InventoryError("legacy app-local owner source is invalid") from exc
+        raise _AppLocalMalformed("frontmatter-malformed") from exc
     roots: list[str] = []
     known_seen = False
     in_known = False
@@ -445,14 +465,14 @@ def _parse_app_local_roots(raw: bytes) -> list[str]:
         nonlocal entry_open, entry_path
         if entry_open:
             if not entry_path:
-                raise InventoryError("legacy app-local owner source is invalid")
+                raise _AppLocalMalformed("entry-missing-path")
             roots.append(entry_path)
         entry_open = False
         entry_path = None
 
     for raw_line in frontmatter_text.splitlines():
         if "\t" in raw_line:
-            raise InventoryError("legacy app-local owner source is invalid")
+            raise _AppLocalMalformed("tab-indentation")
         content = raw_line.lstrip(" ")
         if not content or content.startswith("#"):
             continue
@@ -464,12 +484,12 @@ def _parse_app_local_roots(raw: bytes) -> list[str]:
             if _yaml_scalar(key_raw) != "knownVaults":
                 continue
             if known_seen:
-                raise InventoryError("legacy app-local owner source is invalid")
+                raise _AppLocalMalformed("duplicate-known-vaults-key")
             known_seen = True
             if value in {"{}", "{ }"}:
                 continue
             if value:
-                raise InventoryError("legacy app-local owner source is invalid")
+                raise _AppLocalMalformed("known-vaults-unexpected-value")
             in_known = True
             continue
         if not in_known:
@@ -479,20 +499,38 @@ def _parse_app_local_roots(raw: bytes) -> list[str]:
             key_raw, value = _yaml_mapping_entry(content)
             _yaml_scalar(key_raw)
             if value:
-                raise InventoryError("legacy app-local owner source is invalid")
+                raise _AppLocalMalformed("list-item-unexpected-value")
             entry_open = True
             continue
         if indent == 4 and entry_open:
             key_raw, value = _yaml_mapping_entry(content)
             if _yaml_scalar(key_raw) == "path":
                 if entry_path is not None:
-                    raise InventoryError("legacy app-local owner source is invalid")
+                    raise _AppLocalMalformed("duplicate-path-key")
                 entry_path = _yaml_scalar(value)
             continue
         if indent < 4 or not entry_open:
-            raise InventoryError("legacy app-local owner source is invalid")
+            raise _AppLocalMalformed("unexpected-indent")
     finish_entry()
     return roots
+
+
+def _parse_app_local_roots(raw: bytes, *, domain: str, source: str) -> list[str]:
+    """Parse app-local frontmatter, naming *what* failed without leaking content.
+
+    `domain` and `source` identify which of this module's four owner sources
+    produced the offending record; `reason` is a structural diagnosis of the
+    malformed frontmatter shape. Neither carries raw file content or a host
+    path, preserving the module's no-raw-path redaction posture.
+    """
+
+    try:
+        return _parse_app_local_roots_body(raw)
+    except _AppLocalMalformed as exc:
+        raise InventoryError(
+            "legacy app-local owner source is invalid: "
+            f"domain={domain} source={source} reason={exc.reason}"
+        ) from exc
 
 
 def _docker_copy_file(container_id: str, path: str) -> bytes | None:
@@ -650,7 +688,7 @@ def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
         channel = COMPOSE_PROJECT_DOMAINS[str(project)]
         values = _env_list(config.get("Env"))
         for root in _roots_from_values(values, channel=channel, mounts=mounts):
-            owners.append(LegacyOwnerRecord(channel, str(root)))
+            owners.append(LegacyOwnerRecord(channel, str(root), source="docker_env"))
         store_path = values.get("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "").strip()
         if not store_path:
             store_path = (
@@ -664,11 +702,11 @@ def _docker_legacy_owner_sources() -> tuple[list[LegacyOwnerRecord], list[str]]:
             stores[store_key] = _docker_copy_file(container_id, store_path)
         raw_store = stores[store_key]
         if raw_store is not None:
-            for root in _parse_app_local_roots(raw_store):
+            for root in _parse_app_local_roots(raw_store, domain=channel, source="docker_app_local"):
                 translated = _translate_container_root(root, mounts)
                 if translated is None:
                     raise InventoryError("legacy app-local owner root has no host mount")
-                owners.append(LegacyOwnerRecord(channel, str(translated)))
+                owners.append(LegacyOwnerRecord(channel, str(translated), source="docker_app_local"))
         fingerprints.append(
             hashlib.sha256(
                 json.dumps(
@@ -799,7 +837,7 @@ def _config_legacy_owner_sources(
             continue
         values = _read_env_bytes(raw)
         for owner_root in _roots_from_values(values, channel=channel):
-            owners.append(LegacyOwnerRecord(channel, str(owner_root)))
+            owners.append(LegacyOwnerRecord(channel, str(owner_root), source="config_env"))
         runtime_ref = values.get("WATCHER_RUNTIME_ENV_FILE", "").strip()
         if runtime_ref:
             if "$" in runtime_ref:
@@ -822,8 +860,10 @@ def _config_legacy_owner_sources(
                 ).hexdigest()
             )
             owners.extend(
-                LegacyOwnerRecord(channel, root_path)
-                for root_path in _parse_app_local_roots(app_local_raw)
+                LegacyOwnerRecord(channel, root_path, source="config_app_local")
+                for root_path in _parse_app_local_roots(
+                    app_local_raw, domain=channel, source="config_app_local"
+                )
             )
     current_bindings: dict[str, dict[str, str]] = {
         active_channel: {
@@ -841,7 +881,7 @@ def _config_legacy_owner_sources(
     )
     for channel, values in current_bindings.items():
         owners.extend(
-            LegacyOwnerRecord(channel, str(path))
+            LegacyOwnerRecord(channel, str(path), source="process_env")
             for path in _roots_from_values(values, channel=channel)
         )
     native_app_local, native_required = _native_app_local_settings_path()
@@ -853,27 +893,42 @@ def _config_legacy_owner_sources(
     )
     if native_raw is not None:
         owners.extend(
-            LegacyOwnerRecord("native", root_path)
-            for root_path in _parse_app_local_roots(native_raw)
+            LegacyOwnerRecord("native", root_path, source="native_app_local")
+            for root_path in _parse_app_local_roots(
+                native_raw, domain="native", source="native_app_local"
+            )
         )
     return owners, sorted(fingerprints)
 
 
-def _owner_identity_material(root: Path) -> tuple[str, frozenset[str]]:
+def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[str, frozenset[str]]:
     resolved = root.expanduser().resolve(strict=False)
+    # A stable digest of the resolved path, not the path itself: enough to
+    # correlate the same offending root across two runs of the inventory
+    # without emitting a raw host path in the refusal.
+    redacted_id = _digest_token("root", str(resolved))
     try:
         metadata = os.stat(resolved)
     except OSError as exc:
-        raise InventoryError("legacy owner root is missing or invalid") from exc
+        raise InventoryError(
+            "legacy owner root is missing or invalid: "
+            f"domain={domain} source={source} reason=vanished id={redacted_id}"
+        ) from exc
     if not stat.S_ISDIR(metadata.st_mode):
-        raise InventoryError("legacy owner root is missing or invalid")
+        raise InventoryError(
+            "legacy owner root is missing or invalid: "
+            f"domain={domain} source={source} reason=not-a-directory id={redacted_id}"
+        )
     primary = f"inode:{metadata.st_dev}:{metadata.st_ino}"
     ancestors: set[str] = set()
     for ancestor in resolved.parents:
         try:
             ancestor_metadata = os.stat(ancestor)
         except OSError as exc:
-            raise InventoryError("legacy owner ancestor identity is unavailable") from exc
+            raise InventoryError(
+                "legacy owner ancestor identity is unavailable: "
+                f"domain={domain} source={source} id={redacted_id}"
+            ) from exc
         ancestors.add(f"inode:{ancestor_metadata.st_dev}:{ancestor_metadata.st_ino}")
     return primary, frozenset(ancestors)
 
@@ -884,12 +939,16 @@ def _normalize_legacy_owners(
     normalized: dict[tuple[str, str], tuple[LegacyOwnerRecord, frozenset[str]]] = {}
     for record in records:
         if record.channel_id not in DOMAINS:
-            raise InventoryError("legacy owner domain is invalid")
+            raise InventoryError(
+                f"legacy owner domain is invalid: domain={record.channel_id} source={record.source}"
+            )
         root = Path(record.root).expanduser().resolve(strict=False)
-        primary, ancestors = _owner_identity_material(root)
+        primary, ancestors = _owner_identity_material(
+            root, domain=record.channel_id, source=record.source
+        )
         normalized.setdefault(
             (record.channel_id, primary),
-            (LegacyOwnerRecord(record.channel_id, str(root)), ancestors),
+            (LegacyOwnerRecord(record.channel_id, str(root), source=record.source), ancestors),
         )
     values = [
         (record, primary, ancestors)
@@ -904,7 +963,15 @@ def _normalize_legacy_owners(
                 or left_primary in right_ancestors
                 or right_primary in left_ancestors
             ):
-                raise InventoryError("legacy owner roots collide across domains")
+                shared_id = (
+                    left_primary
+                    if left_primary == right_primary or left_primary in right_ancestors
+                    else right_primary
+                )
+                raise InventoryError(
+                    "legacy owner roots collide across domains: "
+                    f"domain_a={left.channel_id} domain_b={right.channel_id} id={shared_id}"
+                )
     ordered = sorted(values, key=lambda item: (item[0].channel_id, item[0].root))
     return (
         [item[0] for item in ordered],
@@ -927,7 +994,11 @@ def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str,
         repo_root, active_channel=active_channel
     )
     owners, owner_identities = _normalize_legacy_owners(docker_owners + config_owners)
-    owner_rows = [record.__dict__ for record in owners]
+    # `source` is diagnostic-only context for InventoryError messages; keep the
+    # persisted receipt schema unchanged so existing consumers are unaffected.
+    owner_rows = [
+        {"channel_id": record.channel_id, "root": record.root} for record in owners
+    ]
     source_evidence = {
         "docker": docker_fingerprints,
         "config": config_fingerprints,
@@ -1200,6 +1271,7 @@ def _native_writers(
     *,
     controller_pid: int,
     controller_start_token: str,
+    controller_pgid: int,
     linux_boot_id: str | None = None,
 ) -> list[dict[str, object]]:
     writers: list[dict[str, object]] = []
@@ -1211,6 +1283,17 @@ def _native_writers(
         if role is None:
             continue
         if process.pid == controller_pid and process.start_token == controller_start_token:
+            continue
+        # A running deployment forks subshells (e.g. `deploy_channel_compose()`
+        # runs its body in `( ... )`) that inherit the launcher argv but are not
+        # the controller pid itself. Those forks stay in the controller's own
+        # process group, so excluding launcher-role processes by process-group
+        # membership covers the controller's whole tree without exempting a
+        # foreign deployment, which runs in its own process group. Scope this
+        # to launcher roles only -- a non-launcher native writer (watcher,
+        # worker, uvicorn, celery, heimdal capture-watch) that happens to share
+        # a process group must still be reported.
+        if role in LAUNCHER_ROLES and process.pgid == controller_pgid:
             continue
         writers.append(
             {
@@ -1232,6 +1315,7 @@ def _snapshot(*, controller_pid: int, controller_start_token: str) -> dict[str, 
     for writer in _docker_writers() + _native_writers(
         controller_pid=controller_pid,
         controller_start_token=controller_start_token,
+        controller_pgid=controller.pgid,
         linux_boot_id=linux_boot_id,
     ):
         domain = str(writer.pop("domain"))

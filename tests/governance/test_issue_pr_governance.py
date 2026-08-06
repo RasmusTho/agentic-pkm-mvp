@@ -50,6 +50,14 @@ def test_final_review_rounds_check_executes_via_canonical_implementation() -> No
         "Final-Review-Rounds:0\n",
         "Final-Review-Rounds:  2  \n",
         "prose mentioning Final-Review-Rounds: 1 mid-line\n",
+        # Non-LF line terminators (issue #4341): JS `$`/`^` under `/m` treat
+        # every ECMAScript `LineTerminator` as a line break, not only `\n`.
+        "Final-Review-Rounds: 1\r\n",
+        "Final-Review-Rounds: 1\r",
+        "Final-Review-Rounds: 1 ",
+        "Final-Review-Rounds: 1 ",
+        "Final-Review-Rounds: 0\r\nFinal-Review-Rounds: 1\r\n",
+        "prose\r\nFinal-Review-Rounds: 2\r\nmore prose\r\n",
     ]
     for body in fixture_bodies:
         js_result = _js_final_review_rounds(body)
@@ -57,6 +65,31 @@ def test_final_review_rounds_check_executes_via_canonical_implementation() -> No
         assert js_result["satisfied"] == py_result.satisfied, body
         assert js_result["declaredCount"] == py_result.declared_count, body
         assert js_result["validCount"] == py_result.valid_count, body
+
+    # Semantic assertion (issue #4342), not only JS-vs-Python agreement: `3`
+    # must actually be rejected by the real gate, not merely agreed-upon
+    # between the twins. Widening `[012]` -> `[0-9]` identically on both
+    # sides would still pass every assertion above.
+    assert resolve_pr_contract_final_review_rounds("Final-Review-Rounds: 3\n").satisfied is False
+
+
+def test_final_review_rounds_workflow_accepts_only_012() -> None:
+    """Semantic pin: the live workflow JS accepts exactly `{0, 1, 2}` (issue #4342).
+
+    Restores the pin PR #4331 deleted (`assert r"Final-Review-Rounds:[ \\t]*
+    [012][ \\t]*$" in workflow`). Asserts against the workflow's own JS text
+    directly via `_js_final_review_rounds`, independent of JS-vs-Python
+    equality, so a value set widened identically on both twins (e.g.
+    `[012]` -> `[0-9]`) still fails this test even though the twins would
+    still agree with each other.
+    """
+    for value in ("0", "1", "2"):
+        result = _js_final_review_rounds(f"Final-Review-Rounds: {value}\n")
+        assert result["satisfied"] is True, value
+
+    for value in ("3", "4", "5", "9", "-1", "01", "10"):
+        result = _js_final_review_rounds(f"Final-Review-Rounds: {value}\n")
+        assert result["satisfied"] is False, value
 
 
 def test_builderops_routing_stub_detection_matches_workflow_js() -> None:
@@ -78,6 +111,16 @@ def test_builderops_routing_stub_detection_matches_workflow_js() -> None:
             "- Records/projections/receipts: x\n- Reason: y\n",
             True,
         ),
+        # \x1c-\x1f "information separator" controls (issue #4341): Python's
+        # Unicode-mode `\s` matches them, JS's `\s` does not, so a body using
+        # one as the checkbox/lane-name separator must NOT be treated as the
+        # Tier 1 lane the way a real space is.
+        ("- [x]\x1cGovernance lane\n", False),
+        ("-\x1f[x]\x1fDocs authoring lane\n", False),
+        # \r-terminated / CRLF lane declarations must still be recognized
+        # (line-terminator canonicalization, not the whitespace-class fix).
+        ("- [x] Governance lane\r\n", False),
+        ("- [x] Docs authoring lane\r", True),
     ]
     for body, has_issue_authority in fixture_cases:
         js_result = _js_builderops_routing(body, has_issue_authority)
@@ -1113,7 +1156,9 @@ def test_commit_message_closing_keywords_are_forbidden() -> None:
     assert "Start with imperative verb (Add, Update, Rebuild, etc.)" in guidance
     assert "Start with imperative verb (Fix, Add, Update, Rebuild, etc.)" not in guidance
     assert "Never include any issue-closing keyword in the commit subject or body" not in guidance
-    assert ".github/workflows/issue-pr-governance.yml :: pr-contract closing authority" in guidance
+    # The citation targets the workflow's `// authority-classifier:start`
+    # marker so it stays resolvable under the section-citation lint (#4297).
+    assert ".github/workflows/issue-pr-governance.yml :: authority-classifier" in guidance
     assert "const closingKeyword =" in workflow
     assert "closingAttemptSeparator" in workflow
     assert "closingAttemptTarget" in workflow

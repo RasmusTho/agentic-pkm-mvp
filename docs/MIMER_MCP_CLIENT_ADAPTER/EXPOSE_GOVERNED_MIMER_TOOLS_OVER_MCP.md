@@ -92,7 +92,7 @@ human may see an uncertain outcome rather than a duplicate hidden replay.
 
 ## Related GitHub Issues
 
-Issue #3368 stays blocked until ADR-0058 is Accepted and links the explicit owner-decision receipt;
+Issue #3368 stays blocked until ADR-0061 is Accepted and links the explicit owner-decision receipt;
 merging the spec or a Proposed ADR is insufficient. It may then run in parallel with MIMER-MCP-03
 when file ownership is isolated. TCD hint: **Codex / xhigh** because an external protocol maps an
 authority-bearing write and subtle ambiguous-failure semantics; require architecture/security

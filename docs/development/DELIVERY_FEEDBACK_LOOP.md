@@ -197,7 +197,10 @@ terminal outcomes:
 - **debt_or_fitness_recorded** - a transition-debt row, fitness-rule backlog item, or rule update
   records the repeatable failure mode.
 - **discarded_or_superseded** - a `BuilderOpsReceipt` explains why the signal is obsolete, invalid,
-  or replaced by newer material.
+  or replaced by newer material, and the terminal `LearningSignal` names its linked successor
+  artifact (Issue/PR/PromotionIntent) in `successor_refs` per the terminal disposition linkage rule
+  in `docs/architecture/SBS_OPERATING_MODEL.md :: Builder Learning, Evaluation, And TCD Governance
+  Loop` (#4267).
 
 The closure receipt names the outcome for each processed signal. Proposal-only mode may still stop
 for human review, but once a pass is accepted for execution it must not leave claimed signals in an

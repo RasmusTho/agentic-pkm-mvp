@@ -59,6 +59,12 @@ def _ensure_legacy_tables(dsn: str) -> None:
     that chance, and fail with ``UndefinedTable`` on a genuinely fresh
     Postgres (#2937). Trigger schema creation explicitly up front instead of
     relying on incidental cross-test ordering.
+
+    Since MVR-05A0 (#4543) ``file_state`` and ``objects.path`` are owned by
+    Alembic revision ``c7f4b1a83d29``, not by the legacy bootstrap SQL. On a
+    migrated database ``ensure_schema`` finds them already present; on a scratch
+    database it supplies them through the ``STORE_SCHEMA_AUTOCREATE=1``
+    test-fixture opt-in that ``tests/conftest.py`` sets for pg-marked tests.
     """
     from app.db.db import ensure_schema
 

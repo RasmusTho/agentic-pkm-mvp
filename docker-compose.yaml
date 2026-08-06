@@ -443,6 +443,21 @@ services:
       - ./config/runtime.defaults.env
       - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
         required: false
+      # Governed host-secret layer for the declared `heimdal-capture-watch`
+      # consumer (#4362, following the `api` consumer's #4422 pattern below):
+      # host_secret_contract.json declares this consumer for every channel
+      # (dev/test/prod), but the layer used to be wired only in the dev
+      # compose overlay -- test and prod deploys never received
+      # HEIMDAL_RAW_STORE_KEY through the generated env at all, forcing an
+      # ad-hoc shell export at compose time. Living in the base file makes
+      # delivery deterministic across every channel without a per-overlay
+      # opt-in. The deploy wrapper (scripts/lib/deploy_channel_compose.sh)
+      # materializes this file from the Keychain and removes it after Compose
+      # creates the container; a channel that never runs the wrapper (e.g. a
+      # bare `docker compose up` outside the governed deploy path) simply
+      # resolves this path to `/dev/null` and the layer contributes nothing.
+      - path: ${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}
+        required: false
     volumes:
       - "/Users:/Users"
       - "/Volumes:/Volumes"

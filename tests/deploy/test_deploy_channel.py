@@ -111,6 +111,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "config/secrets/host_secret_contract.json",
         "scripts/deploy_channel.sh",
         "scripts/companion_ui_postdeploy_smoke.sh",
+        "scripts/dev_test_environment_clobber_preflight.py",
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_state_deployment.sh",
         "scripts/lib/instance_ownership_host_state.sh",
@@ -1828,3 +1829,132 @@ def test_prod_deploy_pending_retry_preflight_fails_open_without_dsn(
     assert result.returncode == 0, result.stdout + result.stderr
     assert "prod pending-retry preflight: skipped:no_dsn" in result.stdout
     assert (tmp_path / "docker-called").exists()
+
+
+# ---------------------------------------------------------------------------
+# Dev/test environment:-vs-env_file: clobber preflight (Issue #4230)
+# ---------------------------------------------------------------------------
+
+#: Reproduces the pre-f95a6811 heimdal-capture-watch shape: an
+#: `environment:` entry interpolating from an unset shell variable shadows
+#: the real value the same key would otherwise receive from the env_file
+#: chain.
+_HEIMDAL_CLOBBER_OVERLAY = """\
+services:
+  heimdal-capture-watch:
+    env_file:
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    environment:
+      HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
+"""
+
+#: The fixed shape (commit f95a6811): no `environment:` override at all for
+#: the host-specific key -- it rides the env_file chain untouched.
+_HEIMDAL_FIXED_OVERLAY = """\
+services:
+  heimdal-capture-watch:
+    env_file:
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+"""
+
+
+def _configure_dev_test_environment_clobber_preflight(
+    root: Path,
+    env: dict[str, str],
+    tmp_path: Path,
+    *,
+    channel: str,
+    overlay_content: str,
+) -> None:
+    """Copy the real checker module into the fixture repo and write a
+    synthetic compose overlay reproducing (or not) the heimdal-capture-watch
+    clobber shape, so the real, unmodified
+    app.release_channels.channel_isolation_preflight resolves it exactly as
+    the production deploy path would.
+    """
+    overlay_filename = "docker-compose.dev.yml" if channel == "dev" else "docker-compose.test.yml"
+    dest = root / "app" / "release_channels" / "channel_isolation_preflight.py"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        REPO_ROOT / "app/release_channels/channel_isolation_preflight.py", dest
+    )
+    (root / overlay_filename).write_text(overlay_content, encoding="utf-8")
+    # The overlay's env_file chain merges with the base compose's -- absent a
+    # base docker-compose.yaml here, check_environment_env_file_clobber models
+    # the base layer as this single required file (Issue #1655's contract);
+    # it must exist (even empty) or the whole chain is unverifiable and the
+    # check would skip rather than detect the clobber.
+    (root / "config").mkdir(exist_ok=True)
+    (root / "config/runtime.defaults.env").write_text("", encoding="utf-8")
+    runtime_dir = root / ("tmp-test" if channel == "test" else "tmp")
+    runtime_dir.mkdir(exist_ok=True)
+    (runtime_dir / "runtime.env").write_text(
+        "HEIMDAL_CAPTURE_WATCH_DIR=/real/capture/dir\n", encoding="utf-8"
+    )
+    # Ambient interpolation sources this preflight must resolve against must
+    # match what the real Compose invocation would see -- neither key is
+    # ever set by deploy_channel_compose.sh (#3875), so a stray host export
+    # must not leak into the subprocess and mask the clobber.
+    env.pop("HEIMDAL_CAPTURE_WATCH_DIR", None)
+    env.pop("WATCHER_RUNTIME_ENV_FILE", None)
+
+
+def test_dev_deploy_preflight_rejects_environment_override_clobbering_env_file(
+    tmp_path: Path,
+) -> None:
+    """AC1 (#4230): a dev-channel deploy fails loud, before pin write or
+    migration execution, when a CHANNEL_SERVICES service's `environment:`
+    override resolves blank while its env_file chain supplies a non-empty
+    value for the same key -- the exact shape that crash-looped
+    heimdal-capture-watch on every dev-channel deploy before commit
+    f95a6811 deleted the offending `environment:` entries.
+    """
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_dev_test_environment_clobber_preflight(
+        root, env, tmp_path, channel="dev", overlay_content=_HEIMDAL_CLOBBER_OVERLAY
+    )
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode != 0
+    assert "dev/test environment clobber preflight: blocked violation_count=1" in result.stdout
+    assert "heimdal-capture-watch" in result.stderr
+    assert "HEIMDAL_CAPTURE_WATCH_DIR" in result.stderr
+    # No pin mutation: the pin file is never created/written before the block.
+    assert not (root / "config/deploy/dev.env").exists()
+    assert not (root / "config/deploy/dev.previous.env").exists()
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_dev_deploy_preflight_passes_fixed_shape(tmp_path: Path) -> None:
+    """The post-f95a6811 shape (no blank `environment:` override) must not
+    be blocked -- a regression here would make every ordinary dev deploy
+    fail."""
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_dev_test_environment_clobber_preflight(
+        root, env, tmp_path, channel="dev", overlay_content=_HEIMDAL_FIXED_OVERLAY
+    )
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "dev/test environment clobber preflight: ok" in result.stdout
+
+
+def test_test_channel_deploy_preflight_rejects_environment_override_clobbering_env_file(
+    tmp_path: Path,
+) -> None:
+    """The deploy path checks the wrapper-derived ``tmp-test`` env file."""
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_dev_test_environment_clobber_preflight(
+        root, env, tmp_path, channel="test", overlay_content=_HEIMDAL_CLOBBER_OVERLAY
+    )
+
+    result = _run_deploy(root, env, sha, channel="test")
+
+    assert result.returncode != 0
+    assert "dev/test environment clobber preflight: blocked violation_count=1" in result.stdout
+    assert not (root / "config/deploy/test.env").exists()
+    assert not (tmp_path / "docker-called").exists()

@@ -1360,6 +1360,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/adr/ADR-0061-mimer-mcp-client-adapter.md",
+      "category": "ii",
+      "why_load_bearing": "The proposed MCP client-adapter decision record preserves an operator-bound ownership reference while its owner decision remains pending.",
+      "disposition": "stay",
+      "issue": "#4320"
+    },
+    {
       "artifact": "docs/adr/ADR-0060-capture-posture-b-full-voice-identity.md",
       "category": "ii",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
@@ -1806,6 +1813,13 @@
       "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
       "disposition": "parameterize",
       "issue": "#2892"
+    },
+    {
+      "artifact": "tests/architecture/test_sbs_operating_model_bifrost_tracking.py",
+      "category": "iv",
+      "why_load_bearing": "The guard test mirrors ADR-0050's hub-tracking condition, which names the Bifrost client repo; repo-coordination lineage, not an operator-bound host detail.",
+      "disposition": "stay",
+      "issue": "#4327"
     },
     {
       "artifact": "tests/builderops/test_epic_run_state.py",

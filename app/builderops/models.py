@@ -48,6 +48,49 @@ PROMOTION_STATUSES = frozenset({
     "superseded",
 })
 
+# Canonical PromotionIntent target-surface registry (issue #4171).
+#
+# This is the single validation authority for `target_authority_surface`:
+# store creation (`SqliteBuilderOpsStore.create_record`) and the promotion
+# gateway's transition path both resolve targets through
+# `canonicalize_promotion_target_surface`, so a record can never be created
+# with a target the gateway later refuses to transition.
+PROMOTION_TARGET_SURFACES = frozenset({
+    "github_issue",
+    "pr_branch_proposal",
+    "adr_doc_proposal",
+    "owner_doc_writeback_proposal",
+    "generated_projection",
+    "discard_receipt",
+})
+
+PROMOTION_TARGET_ALIASES: dict[str, str] = {
+    "github": "github_issue",
+    "github_issue": "github_issue",
+    "issue": "github_issue",
+    "pr": "pr_branch_proposal",
+    "pull_request": "pr_branch_proposal",
+    "branch": "pr_branch_proposal",
+    "pr_branch_proposal": "pr_branch_proposal",
+    "adr": "adr_doc_proposal",
+    "decision_doc": "adr_doc_proposal",
+    "adr_doc_proposal": "adr_doc_proposal",
+    "repo_doc": "owner_doc_writeback_proposal",
+    "repo_skill": "owner_doc_writeback_proposal",
+    "repo_skill_and_workflow_doc": "owner_doc_writeback_proposal",
+    "owner_doc": "owner_doc_writeback_proposal",
+    "doc_writeback": "owner_doc_writeback_proposal",
+    "owner_doc_writeback_proposal": "owner_doc_writeback_proposal",
+    "skill": "owner_doc_writeback_proposal",
+    "skill_or_agents_proposal": "owner_doc_writeback_proposal",
+    "workflow_doc": "owner_doc_writeback_proposal",
+    "agents_md": "owner_doc_writeback_proposal",
+    "generated_projection": "generated_projection",
+    "projection": "generated_projection",
+    "discard": "discard_receipt",
+    "discard_receipt": "discard_receipt",
+}
+
 OBJECT_PREFIXES = {
     "AgentWorklog": "awl",
     "LearningSignal": "lrn",
@@ -336,8 +379,16 @@ SOURCE_REF_LIST_FIELDS = frozenset({
     "last_verified_against",
     "shipped_refs",
     "source_refs",
+    "successor_refs",
     "target_refs",
 })
+
+# Terminal LearningSignal dispositions must name the artifact that enacted or
+# explicitly declined the divergence (issue #4267): a bare `superseded` or
+# `discarded` status transition with no linked successor artifact reads as
+# "handled" while the underlying defect stays unrepaired.
+TERMINAL_SIGNAL_LIFECYCLE_STATES = frozenset({"discarded", "superseded"})
+SUCCESSOR_REF_TYPES = frozenset({"github_issue", "github_pr", "promotion_intent"})
 
 
 class BuilderOpsValidationError(ValueError):
@@ -374,6 +425,24 @@ def normalize_actor(value: Mapping[str, Any] | str | None) -> JsonDict:
     if not actor.get("actor_type") or not actor.get("id"):
         raise BuilderOpsValidationError("actor requires actor_type and id")
     return actor
+
+
+def canonicalize_promotion_target_surface(value: Any) -> str:
+    """Resolve a PromotionIntent target surface to its canonical registry name.
+
+    Raises the canonical allowed-value error for surfaces outside
+    ``PROMOTION_TARGET_SURFACES``. Both store creation and the promotion
+    gateway validate through this single function (issue #4171).
+    """
+    raw = str(value if value is not None else "").strip().lower()
+    normalized = raw.replace("-", "_").replace(" ", "_")
+    canonical = PROMOTION_TARGET_ALIASES.get(normalized)
+    if canonical is None:
+        allowed = ", ".join(sorted(PROMOTION_TARGET_SURFACES))
+        raise BuilderOpsValidationError(
+            f"unsupported promotion target_authority_surface: {raw}; allowed: {allowed}"
+        )
+    return canonical
 
 
 def validate_source_refs(value: Any, field_name: str = "source_refs") -> None:
@@ -444,4 +513,38 @@ def normalize_record(record: Mapping[str, Any]) -> JsonDict:
         if field not in SOURCE_REF_LIST_FIELDS:
             validate_nonempty_list(data[field], field)
     validate_source_refs(data["source_refs"])
+    validate_terminal_signal_successor(data)
     return data
+
+
+def validate_terminal_signal_successor(record: Mapping[str, Any]) -> None:
+    """Require a linked successor artifact on terminal LearningSignal dispositions.
+
+    A `LearningSignal` reaching `superseded` or `discarded` must name, in
+    `successor_refs`, at least one Issue, PR, or PromotionIntent
+    (`ref_type` in ``SUCCESSOR_REF_TYPES``) that actually enacted or explicitly
+    declined the divergence. Enforced per
+    `docs/architecture/SBS_OPERATING_MODEL.md :: Builder Learning, Evaluation,
+    And TCD Governance Loop` (issue #4267).
+    """
+
+    if record.get("object_type") != "LearningSignal":
+        return
+    if record.get("lifecycle_state") not in TERMINAL_SIGNAL_LIFECYCLE_STATES:
+        return
+    successors = record.get("successor_refs")
+    if not isinstance(successors, list) or not successors:
+        raise BuilderOpsValidationError(
+            "LearningSignal terminal disposition "
+            f"'{record.get('lifecycle_state')}' requires successor_refs naming "
+            "the Issue, PR, or PromotionIntent that enacted or explicitly "
+            "declined the divergence"
+        )
+    validate_source_refs(successors, "successor_refs")
+    if not any(ref.get("ref_type") in SUCCESSOR_REF_TYPES for ref in successors):
+        allowed = ", ".join(sorted(SUCCESSOR_REF_TYPES))
+        raise BuilderOpsValidationError(
+            "LearningSignal terminal disposition "
+            f"'{record.get('lifecycle_state')}' requires at least one "
+            f"successor_refs entry with ref_type in: {allowed}"
+        )

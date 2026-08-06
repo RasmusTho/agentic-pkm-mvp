@@ -88,8 +88,8 @@ produces wrong or untrustworthy behavior). Dotted = soft prerequisites (cheaper-
 | #2655/#2698 env separation, pinned images | in-flight | M | M | M | L | M | Operational safety for every later promotion |
 | SoS reconciliation (#2888 closed unmerged; #2890/#2891 closed) | delivered | L | M | M | L | L | ADR and glossary reconciliation have landed |
 | #2795 KAP Phase 2 (one YouTube URL e2e) | next | M | L | H | M | L | First acquisition vertical; platform-first precedent; ends at candidate |
-| Layer-2 event-bus substrate | next | H | M | H | H | H | Open Fable design (generalize outbox vs stream-native); **premature before kernel closeout** — the outbox contract is its foundation either way |
-| Heimdal sensor constituent | next | H | L | H | H | M | Consent OFF-default fixed; KAP-backbone question open; O=H (every constituent consumes its stream) but R/M=H (new always-on surface, privacy seam) |
+| Layer-2 event-bus substrate | next | H | M | H | H | H | Fable design delivered (#4545): generalize the outbox discipline, stream-native deferred as ADR-gated transport swap — [`layer2-event-bus-and-kap-backbone.md :: Event-bus direction`](layer2-event-bus-and-kap-backbone.md#event-bus-direction); **build still premature before kernel closeout** — the outbox contract is its foundation either way |
+| Heimdal sensor constituent | next | H | L | H | H | M | Consent OFF-default fixed; KAP-backbone question resolved at design level (#4545): one shared backbone contract — [`layer2-event-bus-and-kap-backbone.md :: KAP-backbone decision`](layer2-event-bus-and-kap-backbone.md#kap-backbone-decision); O=H (every constituent consumes its stream) but R/M=H (new always-on surface, privacy seam) |
 | SBS Phase 3/4 contract seams (#2359/#2360/#2361/#2362/#2358) | next | L | M | M | L | L | Contract-first, module-lazy: cheap insurance against boundary erosion |
 | WSP ActiveContextSet seams | next | M | H | H | M | M | Kills the `activeVault` scalar leak (transition debt D1); prerequisite for multi-vault done right |
 | #2143 multi-vault | deferred-by-decision | M | L | M | M | M | Correct to defer until WSP seams exist — building it on `activeVault` would harden the debt |
@@ -183,8 +183,14 @@ unfinished journal — the design *names* its substrate prerequisites; (b) risks
 semantics that #2899/#2901 may still move; (c) loses the window. *Graph's recommendation:* (a).
 **Owner decision (2026-08-02, epic #2778 chat decision):** (a) design Heimdal now, docs only (bus
 architecture + KAP-backbone decision), build after substrate — matches the graph's own
-recommendation. Bounded design issue filed: #4545 ("Heimdal event-bus/KAP-backbone design (docs
-only, no runtime code)"), `agent:ready`. No design work performed in this task.
+recommendation. Bounded design issue #4545 ("Heimdal event-bus/KAP-backbone design (docs only, no
+runtime code)") was filed from this decision and later delivered via PR #4585. No design work was
+performed in the decision-recording task.
+*Delivered:* option (a)'s design deliverable landed via #4545 —
+[`layer2-event-bus-and-kap-backbone.md`](layer2-event-bus-and-kap-backbone.md); its
+[substrate-prerequisites section](layer2-event-bus-and-kap-backbone.md#substrate-prerequisites)
+names kernel closeout, FD-P backup, and the property layer and keeps build work waiting on them,
+conforming to this graph's deferral recommendation.
 
 **OD-4 — Backup as an interrupt.**
 *Problem:* FD-P backup appears on no roadmap track at all (observability audit named it; nothing

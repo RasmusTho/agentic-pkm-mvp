@@ -12,7 +12,7 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 
 ## Scope
 
-- Draft `docs/adr/ADR-0058-mimer-mcp-client-adapter.md` as a **Proposed** decision with alternatives
+- Draft `docs/adr/ADR-0061-mimer-mcp-client-adapter.md` as a **Proposed** decision with alternatives
   and a recommendation; do not mark it Accepted or superseding without the owner's receipt.
 - If accepted, implement the exact MCP tool surface without creating a second authority or
   vault-write path.
@@ -43,7 +43,7 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 - Retrieval/context impact: exposes existing ask/retrieve/read behavior without changing ranking, grounding, or context assembly
 - Sync/deployment impact: adds a managed client transport whose binding, restart, and exposure posture must be explicit
 - External boundary impact: adds a constituent-owned protocol adapter and client-facing trust boundary
-- New or changed contract: Proposed ADR-0058 first; accepted/superseding ADR and `docs/contracts/MIMER_CLIENT_CONTRACT.md` change only after an explicit owner receipt; tool-policy contract changes only if internal adapter semantics change
+- New or changed contract: Proposed ADR-0061 first; accepted/superseding ADR and `docs/contracts/MIMER_CLIENT_CONTRACT.md` change only after an explicit owner receipt; tool-policy contract changes only if internal adapter semantics change
 - Owner-doc impact: will-update-in-PR per child; final current-state promotion belongs to the acceptance child
 - Transition debt impact: no SBS transition-debt effect expected; any newly discovered adapter/authority deviation becomes bounded debt
 - Fitness rule impact: strengthens the manual external-adapter/authority review with production-call-site tests
@@ -52,8 +52,8 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 
 - The parent is a validation hub, never an `agent:ready` implementation issue.
 - #3371 remains `agent:needs-human` after the spec merges. Drafting the proposal does not authorize
-  an agent to choose topology, wire transport, authentication, or mark ADR-0058 Accepted.
-- #3368 and #3369 remain blocked until ADR-0058 is Accepted with a linked owner-decision receipt.
+  an agent to choose topology, wire transport, authentication, or mark ADR-0061 Accepted.
+- #3368 and #3369 remain blocked until ADR-0061 is Accepted with a linked owner-decision receipt.
 - Preserve the client contract's authority, index-lag, ambiguous-write, trace, and no-hidden-truth
   rules.
 - Do not expose `app/mcp/vault_tools.py` or internal orchestrator descriptors as the client server.
@@ -64,12 +64,12 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 
 ## Acceptance Criteria
 
-- [ ] ADR-0058 presents explicit topology, wire-transport, and authentication alternatives plus a
+- [ ] ADR-0061 presents explicit topology, wire-transport, and authentication alternatives plus a
       recommendation while remaining Proposed until the owner rules.
-  - Verify: doc writeback at `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Options and recommendation`
-- [ ] The owner decision is recorded durably before ADR-0058 becomes Accepted or supersedes existing
+  - Verify: doc writeback at `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Options and recommendation`
+- [ ] The owner decision is recorded durably before ADR-0061 becomes Accepted or supersedes existing
       authority, and the client contract changes only to the accepted choice.
-  - Verify: owner-decision receipt on GitHub Issue #3371 linked from `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Owner decision receipt` plus doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
+  - Verify: owner-decision receipt on GitHub Issue #3371 linked from `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt` plus doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
 - [ ] The exact contracted MCP tool surface delegates to existing client operations and preserves
       the governed capture response and error envelope.
   - Verify: `tests/mcp/test_mimer_server.py::test_server_exposes_exact_contracted_tool_set`
@@ -115,7 +115,7 @@ the owner explicitly accepts topology, wire transport, and authentication in a d
 ## Implementation Tasks
 
 1. #3371 (`agent:needs-human`) — `docs/MIMER_MCP_CLIENT_ADAPTER/RATIFY_MCP_CLIENT_ADAPTER.md`
-2. In parallel only after ADR-0058 is owner-accepted with a linked decision receipt:
+2. In parallel only after ADR-0061 is owner-accepted with a linked decision receipt:
    - #3368 — `docs/MIMER_MCP_CLIENT_ADAPTER/EXPOSE_GOVERNED_MIMER_TOOLS_OVER_MCP.md`
    - #3369 — `docs/MIMER_MCP_CLIENT_ADAPTER/PACKAGE_AND_HARDEN_MIMER_MCP_TRANSPORT.md`
 3. #3370 — `docs/MIMER_MCP_CLIENT_ADAPTER/PROVE_CLIENT_COMPATIBILITY_AND_ACCEPT_MIMER_MCP.md`

@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.builderops.epic_run_state import TERMINAL_LEARNING_EVALUATION_OUTCOMES
+from app.builderops.models import (
+    SUCCESSOR_REF_TYPES,
+    TERMINAL_SIGNAL_LIFECYCLE_STATES,
+)
 from app.builderops.store import SqliteBuilderOpsStore
 
 RETROSPECTIVE_EVENT_TYPE = "learning_retrospective"
@@ -33,6 +37,7 @@ def build_completeness_report(
             "complete": False,
             "unprocessed_learning_signals": [],
             "retrospective_receipts_missing_terminal_outcomes": [],
+            "terminal_signals_missing_successor_refs": [],
             "reevaluation_candidates_without_outcome": [],
             "stale_compatibility_entries": [],
             "receipt_body": "Completeness report unavailable: BuilderOps storage unavailable.",
@@ -67,6 +72,11 @@ def build_completeness_report(
         receipt for receipt in receipt_reports
         if receipt["missing_terminal_outcomes"]
     ]
+    missing_successors = [
+        _terminal_signal_summary(signal)
+        for signal in learning_signals
+        if _terminal_signal_missing_successor(signal)
+    ]
     unresolved_candidates = [
         _candidate_summary(candidate)
         for candidate in (reevaluation_candidates or [])
@@ -76,6 +86,7 @@ def build_completeness_report(
     complete = not (
         unprocessed
         or missing_terminal
+        or missing_successors
         or unresolved_candidates
         or stale_entries
         or not storage_state.get("available", False)
@@ -89,6 +100,7 @@ def build_completeness_report(
         "last_retrospective_receipt": _last_receipt_summary(retrospective_receipts),
         "unprocessed_learning_signals": unprocessed,
         "retrospective_receipts_missing_terminal_outcomes": missing_terminal,
+        "terminal_signals_missing_successor_refs": missing_successors,
         "reevaluation_candidates_without_outcome": unresolved_candidates,
         "stale_compatibility_entries": stale_entries,
         "terminal_outcomes": list(TERMINAL_LEARNING_EVALUATION_OUTCOMES),
@@ -96,6 +108,7 @@ def build_completeness_report(
             storage_state=storage_state,
             unprocessed=unprocessed,
             missing_terminal=missing_terminal,
+            missing_successors=missing_successors,
             unresolved_candidates=unresolved_candidates,
             stale_entries=stale_entries,
         ),
@@ -195,6 +208,24 @@ def _signal_summary(signal: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _terminal_signal_missing_successor(signal: Mapping[str, Any]) -> bool:
+    if signal.get("lifecycle_state") not in TERMINAL_SIGNAL_LIFECYCLE_STATES:
+        return False
+    successors = signal.get("successor_refs")
+    if not isinstance(successors, list) or not successors:
+        return True
+    return not any(
+        isinstance(ref, Mapping) and ref.get("ref_type") in SUCCESSOR_REF_TYPES
+        for ref in successors
+    )
+
+
+def _terminal_signal_summary(signal: Mapping[str, Any]) -> dict[str, Any]:
+    summary = _signal_summary(signal)
+    summary["lifecycle_state"] = signal.get("lifecycle_state")
+    return summary
+
+
 def _candidate_summary(candidate: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "id": candidate.get("id") or candidate.get("candidate_id"),
@@ -238,6 +269,7 @@ def _receipt_body(
     storage_state: Mapping[str, Any],
     unprocessed: list[dict[str, Any]],
     missing_terminal: list[dict[str, Any]],
+    missing_successors: list[dict[str, Any]],
     unresolved_candidates: list[dict[str, Any]],
     stale_entries: list[dict[str, Any]],
 ) -> str:
@@ -246,6 +278,7 @@ def _receipt_body(
     incomplete = (
         unprocessed
         or missing_terminal
+        or missing_successors
         or unresolved_candidates
         or stale_entries
     )
@@ -254,6 +287,7 @@ def _receipt_body(
         f"Completeness report {posture}: "
         f"unprocessed_learning_signals={len(unprocessed)}, "
         f"receipts_missing_terminal_outcomes={len(missing_terminal)}, "
+        f"terminal_signals_missing_successor_refs={len(missing_successors)}, "
         f"reevaluation_candidates_without_outcome={len(unresolved_candidates)}, "
         f"stale_compatibility_entries={len(stale_entries)}."
     )

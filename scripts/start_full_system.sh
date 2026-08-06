@@ -62,6 +62,8 @@ fi
 unset _pkm_caller_vault_root_set _pkm_channel_vault_root_set
 
 source "scripts/lib/runtime_endpoint_probe.sh"
+source "scripts/lib/worker_heartbeat_probe.sh"
+source "scripts/lib/pinned_image_guard.sh"
 source "scripts/lib/start_full_system_env.sh"
 source "scripts/lib/instance_state_deployment.sh"
 apply_start_full_system_defaults
@@ -1055,15 +1057,15 @@ case "${COMPOSE_PROJECT_NAME:-}" in
   pkm-test) _container_tmp_dir="/app/tmp-test" ;;
   *)        _container_tmp_dir="/app/tmp" ;;
 esac
-# Channel-correct host-side tmp dir for reading container-written runtime
-# artifacts back through the shared bind mount. For pkm-test the container
-# writes worker/watcher heartbeats under /app/tmp-test/, which maps to the host
-# tmp-test/ directory; reading host tmp/ would falsely report a missing
-# heartbeat (issue #1997 symptom 3). Prod/dev keep tmp/ — no runtime change.
-case "${COMPOSE_PROJECT_NAME:-}" in
-  pkm-test) host_tmp_dir="tmp-test" ;;
-  *)        host_tmp_dir="tmp" ;;
-esac
+# NOTE: /app/tmp[-test] is always the `runtime-tmp` Docker-managed named
+# volume declared in docker-compose.yaml, never a host bind mount (not even
+# under the app-bind code overlay, whose more specific /app/tmp mount target
+# still shadows the ./:/app bind at that nested path). There is therefore no
+# host-side tmp dir that reliably mirrors container-written runtime artifacts
+# like the worker/watcher heartbeats; read those through the container
+# boundary (`docker compose exec`, see scripts/lib/worker_heartbeat_probe.sh
+# and watcher_heartbeat_ready/wait_for_watcher_heartbeat below) rather than
+# from a host path (#4361).
 # The host-side "latest tick log" pointer always lives under the host tmp/
 # directory for operator convenience regardless of channel.
 latest_tick_log_path="$ROOT/tmp/latest_watcher_tick_log"
@@ -1202,6 +1204,42 @@ if [ "${AUTO_BOOTSTRAP:-0}" -eq 1 ] && [ "$llm_requires_ollama" -eq 1 ]; then
 fi
 check_compose_port_conflicts "${preflight_services[@]}"
 
+# Pinned-image build guard (#4361): never silently build over an image pin.
+# app_image_pinned_mode (scripts/lib/pinned_image_guard.sh) reads the FINAL
+# resolved COMPOSE_FILE rather than APP_CODE_BIND_MOUNT alone, because
+# callers such as `make prod-start-full` (via scripts/prod/start_midgard_stack.sh)
+# set COMPOSE_FILE directly without ever touching APP_CODE_BIND_MOUNT.
+if app_image_pinned_mode "${COMPOSE_FILE:-}"; then
+  compose_up_build_args=()
+  pinned_pull_targets=()
+  for pinned_svc in api worker watcher; do
+    for candidate_svc in "${preflight_services[@]}"; do
+      if [ "$candidate_svc" = "$pinned_svc" ]; then
+        pinned_pull_targets+=("$pinned_svc")
+      fi
+    done
+  done
+  if [ "${#pinned_pull_targets[@]}" -gt 0 ]; then
+    pinned_image_ref="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}"
+    echo "Pinned-image mode: pulling ${pinned_image_ref} for: ${pinned_pull_targets[*]}"
+    if ! run_docker_compose pull "${pinned_pull_targets[@]}"; then
+      if [ "${APP_BUILD_OVERRIDE:-0}" = "1" ]; then
+        echo "WARNING: pinned image pull failed for ${pinned_image_ref}; APP_BUILD_OVERRIDE=1 is set, building locally instead. Running content will NOT match the pin." >&2
+        compose_up_build_args=("--build")
+      else
+        EXIT_REASON="pinned_image_pull_failed"
+        EXIT_CODE=1
+        export EXIT_REASON EXIT_CODE
+        write_startup_status 0 "$EXIT_REASON"
+        echo "ERROR: pinned image pull failed for ${pinned_image_ref}; refusing to silently build over the pin." >&2
+        echo "Set APP_BUILD_OVERRIDE=1 to explicitly allow a local build instead of the pin (running content will then diverge from the pin)." >&2
+        exit 1
+      fi
+    fi
+  fi
+  unset pinned_pull_targets pinned_image_ref pinned_svc candidate_svc
+fi
+
 alpha_rebuild="${ALPHA_REBUILD:-0}"
 alpha_rebuild_pull="${ALPHA_REBUILD_PULL:-0}"
 if [ "$alpha_rebuild" -eq 1 ]; then
@@ -1294,10 +1332,12 @@ log_flight_recorder_path() {
 
 log_worker_heartbeat_snapshot() {
   log_section "worker heartbeat"
-  if [ -f "${host_tmp_dir:-tmp}/worker_heartbeat.json" ]; then
-    tail -n 20 "${host_tmp_dir:-tmp}/worker_heartbeat.json" >>"$startup_log_path" 2>&1 || true
+  local container_path
+  container_path="$(resolve_container_worker_heartbeat_path)"
+  if worker_heartbeat_ready "$container_path"; then
+    run_docker_compose exec -T worker sh -c "tail -n 20 ${container_path}" >>"$startup_log_path" 2>&1 || true
   else
-    append_startup_log "${host_tmp_dir:-tmp}/worker_heartbeat.json missing"
+    append_startup_log "${container_path} missing (checked via docker compose exec worker)"
   fi
 }
 
@@ -1476,22 +1516,34 @@ run_worker_probe() {
     return
   fi
   echo "--- WORKER HEARTBEAT ---"
+  local container_worker_heartbeat_path
+  container_worker_heartbeat_path="$(resolve_container_worker_heartbeat_path)"
   local worker_start
   worker_start=$SECONDS
   local heartbeat_ready=0
   while [ $((SECONDS - worker_start)) -lt "$WORKER_HEARTBEAT_TIMEOUT" ]; do
-    if [ -s "${host_tmp_dir:-tmp}/worker_heartbeat.json" ]; then
+    if worker_heartbeat_ready "$container_worker_heartbeat_path"; then
       heartbeat_ready=1
       break
     fi
     sleep 1
   done
+  # Boundary check: accept a heartbeat that arrived before the configured
+  # timeout but would otherwise be missed by the poll sleep (mirrors
+  # wait_for_watcher_heartbeat's own boundary check).
+  if [ "$heartbeat_ready" -ne 1 ] && worker_heartbeat_ready "$container_worker_heartbeat_path"; then
+    heartbeat_ready=1
+  fi
   if [ "$heartbeat_ready" -ne 1 ]; then
-    echo "ERROR: worker heartbeat file missing after $WORKER_HEARTBEAT_TIMEOUT seconds (looked in ${host_tmp_dir:-tmp}/worker_heartbeat.json)" >&2
+    EXIT_REASON="worker_heartbeat_timeout"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: worker heartbeat not detected at ${container_worker_heartbeat_path} after $WORKER_HEARTBEAT_TIMEOUT seconds" >&2
     run_docker_compose logs --tail=200 worker || true
     exit 1
   fi
-  tail -n 1 "${host_tmp_dir:-tmp}/worker_heartbeat.json"
+  tail_worker_heartbeat "$container_worker_heartbeat_path" || true
 }
 
 wait_for_healthz() {
@@ -1814,11 +1866,11 @@ PY
 
 if [ "$START_MODE" = "diagnostic" ]; then
   echo "START_MODE=diagnostic: running API in the foreground (no detach)"
-  run_docker_compose up "${compose_up_build_args[@]}" db api
+  run_docker_compose up ${compose_up_build_args[@]+"${compose_up_build_args[@]}"} db api
   exit $?
 fi
 
-if ! capture_step compose_up "db_api" compose_up "${compose_up_build_args[@]}" db api; then
+if ! capture_step compose_up "db_api" compose_up ${compose_up_build_args[@]+"${compose_up_build_args[@]}"} db api; then
   EXIT_REASON="compose_up_failed"
   EXIT_CODE=1
   export EXIT_REASON EXIT_CODE
@@ -2058,12 +2110,12 @@ fi
 # startup from OOM-killing each other. Keep the startup order staggered and
 # leave the host configured with at least 4 GB for this wrapper.
 if [ "$START_WORKER" -eq 1 ]; then
-  compose_up "${compose_up_build_args[@]}" worker
+  compose_up ${compose_up_build_args[@]+"${compose_up_build_args[@]}"} worker
   run_worker_probe
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then
-  compose_up "${compose_up_build_args[@]}" watcher
+  compose_up ${compose_up_build_args[@]+"${compose_up_build_args[@]}"} watcher
 fi
 
 if [ "$START_WATCHERS" -eq 1 ]; then

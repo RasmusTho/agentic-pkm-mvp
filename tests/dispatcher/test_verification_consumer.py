@@ -12,7 +12,8 @@ import re
 import sqlite3
 import subprocess
 import sys
-from threading import Condition, Thread
+from threading import Condition, Event, Thread
+import time
 from typing import Callable, Mapping
 import zipfile
 from zoneinfo import ZoneInfo
@@ -6060,6 +6061,22 @@ def test_background_authority_loss_rejects_late_stdout(
     assert process.stdout.reads == 1
 
 
+# The pre-#4012 harness joined the launcher worker with a fixed 0.5 second
+# wall-clock deadline. Delaying the authority-loss trigger beyond that window
+# reproduces the load-sensitive failure deterministically, so the harness must
+# pass by observing launcher completion, not by winning a scheduling race.
+_AUTHORITY_LOSS_TRIGGER_DELAY = 0.6
+# Fail-closed backstop for the observable launcher-finished condition. It only
+# bounds a genuinely regressed (blocked) launcher; a healthy run finishes right
+# after the intentional trigger delay.
+_LAUNCHER_FINISH_BACKSTOP = 30.0
+
+
+def _delayed_authority_loss_heartbeat() -> None:
+    time.sleep(_AUTHORITY_LOSS_TRIGGER_DELAY)
+    raise RuntimeError("verification lease heartbeat rejected")
+
+
 def _process_group_authority_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[_DescendantHeldStdoutProcess, CodexExecFailure, dict[str, object]]:
@@ -6084,21 +6101,35 @@ def _process_group_authority_loss(
     )
     outcome: dict[str, BaseException] = {}
 
+    launcher_finished = Event()
+
     def launch() -> None:
         try:
             _authority_loss_launcher(tmp_path).launch(
                 {"head_sha": HEAD},
-                on_heartbeat=lambda: (_ for _ in ()).throw(
-                    RuntimeError("verification lease heartbeat rejected")
-                ),
+                on_heartbeat=_delayed_authority_loss_heartbeat,
             )
         except BaseException as exc:  # noqa: BLE001 - asserted thread outcome
             outcome["error"] = exc
+        finally:
+            launcher_finished.set()
 
     worker = Thread(target=launch, daemon=True)
     worker.start()
     try:
-        worker.join(timeout=0.5)
+        # Wait on the observable completion signal instead of a wall-clock
+        # join: the launcher itself must unblock the descendant-held stdout
+        # via the process-group SIGKILL before this event can fire, because
+        # the test only releases stdout in the cleanup path below. Use the
+        # captured unpatched Event.wait — accelerated_wait caps timeouts at
+        # 0.01s and would turn the backstop into a scheduling race again.
+        assert event_wait(launcher_finished, _LAUNCHER_FINISH_BACKSTOP), {
+            "launcher_still_blocked": True,
+            "group_signals": process.group_signals,
+            "parent_returncode": process.returncode,
+            "wait_calls": process.wait_calls,
+        }
+        worker.join(timeout=_LAUNCHER_FINISH_BACKSTOP)
         assert not worker.is_alive(), {
             "launcher_still_blocked": True,
             "group_signals": process.group_signals,

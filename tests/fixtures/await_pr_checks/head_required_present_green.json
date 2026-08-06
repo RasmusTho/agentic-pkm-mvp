@@ -1,0 +1,29 @@
+{
+  "total_count": 3,
+  "check_runs": [
+    {
+      "id": 92000000001,
+      "name": "CodeQL",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-07-29T15:40:03Z",
+      "completed_at": "2026-07-29T15:41:12Z"
+    },
+    {
+      "id": 92000000002,
+      "name": "Unit tests (not pg)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-07-29T15:40:10Z",
+      "completed_at": "2026-07-29T15:52:44Z"
+    },
+    {
+      "id": 92000000003,
+      "name": "pr-contract",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-07-29T15:40:08Z",
+      "completed_at": "2026-07-29T15:40:31Z"
+    }
+  ]
+}

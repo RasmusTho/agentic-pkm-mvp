@@ -71,7 +71,7 @@ authentication, leaks secrets, or leaves an unsupervised process that disappears
 - Tool semantics owned by MIMER-MCP-02.
 - Concrete private host bindings, credentials, desktop-client edits, or operator fleet cutover.
 - A shared ecosystem registry, dynamic remote discovery, or support for transports not selected in
-  the owner-accepted ADR-0058 decision.
+  the owner-accepted ADR-0061 decision.
 
 ## Restart / Durability Posture
 
@@ -90,7 +90,7 @@ transport, preventing a restart from duplicating an append whose acknowledgement
 
 ## Related GitHub Issues
 
-Issue #3369 stays blocked until ADR-0058 is Accepted and links the explicit owner-decision receipt;
+Issue #3369 stays blocked until ADR-0061 is Accepted and links the explicit owner-decision receipt;
 merging the spec or a Proposed ADR is insufficient. It may then run in parallel with MIMER-MCP-02
 under an isolated worktree. TCD hint: **Codex / xhigh** because this is security-sensitive external transport
 and deployment work; require security review and production-call-site trust tests.

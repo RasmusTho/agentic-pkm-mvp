@@ -1,0 +1,974 @@
+{
+  "tables": {
+    "acquisition_requests": {
+      "classification": "explicitly-global",
+      "reason": "`acquisition_requests` is queued acquisition requests against those sources, written by `app/knowledge_acquisition/acquisition_requests.py`. A request describes work to fetch from an external account. No column on it records a vault.",
+      "owning_revision": "b5c6d7e8f9a0",
+      "declaring_revisions": [
+        "b5c6d7e8f9a0"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/knowledge_acquisition/acquisition_requests.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "acquisition_source_registry": {
+      "classification": "explicitly-global",
+      "reason": "`acquisition_source_registry` is the registry of pollable acquisition sources, written by `app/knowledge_acquisition/source_registry.py`. Its `binding_id` primary key and `account_binding_id` column name an *external source* binding — a playlist, feed or account the instance polls — not a vault binding, and its uniqueness constraint is over (collection_kind, collection_ref, account). No column on it records a vault.",
+      "owning_revision": "bd79f3044759",
+      "declaring_revisions": [
+        "bd79f3044759"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/knowledge_acquisition/source_registry.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "agent_memories": {
+      "classification": "binding-scoped",
+      "reason": "Short-term agent working memory. `app/memory_kv/store.py::remember` stores the acting object's id in `provenance->>'object_id'` and `recall` filters on it, so a row is about one binding's artifact and a recall over binding B would otherwise surface binding A's memory. MVR-05A1 (#4560) adopted the table verbatim without a binding column and explicitly left attribution to MVR-05A. No MVR-05A child currently owns it. Lossy by design (decay, in-process fallback), so the cutover may legitimately choose to drop rather than backfill.",
+      "owning_revision": "d1e8a0c5f37b",
+      "declaring_revisions": [
+        "d1e8a0c5f37b"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/memory_kv/store.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "audit": {
+      "classification": "binding-scoped",
+      "reason": "The agent-action audit trail for vault objects (`object_id` referencing the canonical object). It is `decisions`' sibling in every respect the DB owner doc records — both survive object deletion via ON DELETE SET NULL so history is not silently lost — but no MVR-05A child currently owns it. Its `id uuid PRIMARY KEY` does not collide, so the binding column is additive.",
+      "owning_revision": "202510241200",
+      "declaring_revisions": [
+        "202510241200"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/services/audit.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "authority-or-receipt-rows"
+      ]
+    },
+    "chunks": {
+      "classification": "binding-scoped",
+      "reason": "Text chunks of a vault artifact, `object_id` referencing the canonical object. No module under app/** inserts into it today — app/stores/pg.py's reset path is its only remaining producer — but the rows that exist are vault-derived and are read by the backfill predicate.",
+      "owning_revision": "202510241200",
+      "declaring_revisions": [
+        "202510241200"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "inbound-fk-target"
+      ]
+    },
+    "decision_outcomes": {
+      "classification": "binding-scoped",
+      "reason": "The `decision_outcomes` receipt projection, written by app/receipts/outcome_receipt_projection.py: one row per (decision, rung) judgement. Rows carry receipt provenance for a vault object's decision lineage. Its `id uuid DEFAULT gen_random_uuid()` key is minted per row and does not collide.",
+      "owning_revision": "b1c2d3e4f5a6",
+      "declaring_revisions": [
+        "b1c2d3e4f5a6"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/receipts/outcome_receipt_projection.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "authority-or-receipt-rows"
+      ]
+    },
+    "decisions": {
+      "classification": "binding-scoped",
+      "reason": "The decision receipt log for vault objects, rebuilt by TRUNCATE + replay in app/jobs/decisions_projection.py. Rows survive object deletion (`object_id` goes NULL) precisely so judgment history is not lost, so a rebuild must preserve source attribution rather than re-mint it. Its `id uuid DEFAULT gen_random_uuid()` key is minted per row and does not collide, so an additive binding column plus an additive index is sufficient.",
+      "owning_revision": "e1d2c3b4a5f6",
+      "declaring_revisions": [
+        "202510241200",
+        "a80043832e29",
+        "e1d2c3b4a5f6"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/jobs/decisions_projection.py",
+          "operations": [
+            "insert",
+            "truncate"
+          ]
+        },
+        {
+          "module": "app/services/decisions.py",
+          "operations": [
+            "insert"
+          ]
+        },
+        {
+          "module": "app/stores/postgres.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "whole-table-replacement",
+      "escalation_conditions": [
+        "authority-or-receipt-rows"
+      ]
+    },
+    "embeddings": {
+      "classification": "binding-scoped",
+      "reason": "`embeddings` is the deprecated per-chunk embedding table (KERNEL-04, #2766: kept, not dropped, because the zero-readers precondition is unmet). Its rows are vault-derived. Zero writers remain under app/**.",
+      "owning_revision": "a80043832e29",
+      "declaring_revisions": [
+        "202510241200",
+        "a80043832e29"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "entity_review_operations": {
+      "classification": "binding-scoped",
+      "reason": "The entity-review operation journal is already scoped by an explicit `vault_identity` column, and its exactly-once guard `entity_review_operations_active_entry_idx` is UNIQUE (vault_identity, queue_entry_id) WHERE state <> 'cleared' (EROJ-01, #4350). Rows carry the committed `outbox_event_id` and `decision_digest`, so they are receipt-bearing. It reaches binding scope through the vault-identity namespace rather than through `vault_binding_id`; reconciling the two namespaces is MVR-05B's resolver work, not a durable-schema gap.",
+      "owning_revision": "e7a2b9c4d1f8",
+      "declaring_revisions": [
+        "e7a2b9c4d1f8"
+      ],
+      "binding_key": "keyed",
+      "binding_column": "vault_identity",
+      "producers": [
+        {
+          "module": "app/heimdal/entity_review_operation_journal.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "authority-or-receipt-rows"
+      ]
+    },
+    "episode_artifact_binding": {
+      "classification": "binding-scoped",
+      "reason": "The episode/artifact assignment ledger, PRIMARY KEY (artifact_ref, episode_id). Both halves are vault-derived identities and collide across bindings.",
+      "owning_revision": "b7c8d9e0f1a2",
+      "declaring_revisions": [
+        "b7c8d9e0f1a2"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/episodes/assignment.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "episode_engine_state": {
+      "classification": "binding-scoped",
+      "reason": "`episode_engine_state` holds segmentation-engine tick state for the episode resolver, keyed `key TEXT PRIMARY KEY`. The key set is fixed, so one binding's cursor is currently the instance's cursor; per-binding state needs the key itself widened.",
+      "owning_revision": "a1b2c3d4e5f6",
+      "declaring_revisions": [
+        "a1b2c3d4e5f6"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/episodes/engine_state.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "episodes": {
+      "classification": "binding-scoped",
+      "reason": "The derived projection of vault episode notes, rebuilt by TRUNCATE + replay in app/jobs/episodes_projection.py. `episode_id TEXT PRIMARY KEY` is the note's `ep-<uuid>` identity and collides across bindings.",
+      "owning_revision": "e0f2a9c4b7d1",
+      "declaring_revisions": [
+        "e0f2a9c4b7d1"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/episodes/closure.py",
+          "operations": [
+            "update"
+          ]
+        },
+        {
+          "module": "app/episodes/recut.py",
+          "operations": [
+            "update"
+          ]
+        },
+        {
+          "module": "app/episodes/segmenter.py",
+          "operations": [
+            "insert"
+          ]
+        },
+        {
+          "module": "app/jobs/episodes_projection.py",
+          "operations": [
+            "insert",
+            "truncate"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "whole-table-replacement",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "file_state": {
+      "classification": "binding-scoped",
+      "reason": "`file_state` is vault-sync bookkeeping: one row per (binding, absolute note path). Rekeyed to (vault_binding_id, path) by MVR-05A0 (#4543); `path text PRIMARY KEY` made two bindings share one row for the same relative path.",
+      "owning_revision": "c7f4b1a83d29",
+      "declaring_revisions": [
+        "c7f4b1a83d29"
+      ],
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
+      "producers": [
+        {
+          "module": "app/services/vault_sync.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_consent_grant": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_consent_grant` is the consent ledger authorising capture, written by `app/heimdal/consent_ledger.py` and keyed by grant ref and scope. A grant authorises a device and adapter, which is instance-wide. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "c4f7a1b2d9e3",
+      "declaring_revisions": [
+        "c4f7a1b2d9e3"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/consent_ledger.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_media_receipt": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_media_receipt` is append-only receipts for media capture, written by `app/heimdal/media_receipts.py` and keyed by capture id. The row attests that a device captured media under a consent grant. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "e3c1a7f5d2b8",
+      "declaring_revisions": [
+        "e3c1a7f5d2b8"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/media_receipts.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_analysis_revision": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_analysis_revision` is successive revisions of a session's analysis projection, written by `app/heimdal/meeting_projection.py`. Each revision is derived from the session and its segments. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "b8d3f0a5c2e4",
+      "declaring_revisions": [
+        "b8d3f0a5c2e4"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_projection.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_asr_derivation": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_asr_derivation` is derived ASR state for a session, written by `app/heimdal/meeting_projection.py` by delete-and-replace per session. Derived from the session's audio. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "b8d3f0a5c2e4",
+      "declaring_revisions": [
+        "b8d3f0a5c2e4"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_projection.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_block": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_block` is meeting blocks derived from a session, written by `app/heimdal/meeting_blocks.py` and keyed by block id. Blocks are a segmentation of the capture. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "c9e4a1b6d3f5",
+      "declaring_revisions": [
+        "c9e4a1b6d3f5"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_blocks.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_block_refusal": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_block_refusal` is refusals recorded against a meeting block, written by `app/heimdal/meeting_blocks.py`. A refusal is a governance fact about the capture, held before anything reaches a vault. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "c9e4a1b6d3f5",
+      "declaring_revisions": [
+        "c9e4a1b6d3f5"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_blocks.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_finalization_receipt": {
+      "classification": "binding-scoped",
+      "reason": "`heimdal_meeting_finalization_receipt` is the exception in the Heimdal set. Its `artifact_refs JSONB` column records the vault artifacts a finalized session was materialized into — `app/heimdal/meeting_finalization.py::resolve_vault_root` reads `HEIMDAL_MEETING_VAULT_ROOT` and the receipt stores the resulting paths — so the row is bound to one vault, not to the device that captured the session. Its PRIMARY KEY (session_id, state_sha256) carries no vault dimension, so the same session finalized into two vaults is not representable. No MVR-05A child currently owns it.",
+      "owning_revision": "d0f5b2c7e4a6",
+      "declaring_revisions": [
+        "d0f5b2c7e4a6"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_finalization.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "heimdal_meeting_segment": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_segment` is ASR segments for a captured session, written by `app/heimdal/meeting_ledger.py`. Segments are derived from the audio, not from vault content. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "a7c2e9f4b1d3",
+      "declaring_revisions": [
+        "a7c2e9f4b1d3"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_ledger.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_segment_conflict": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_segment_conflict` is recorded conflicts between competing segment submissions for a session, written by `app/heimdal/meeting_ledger.py`. A conflict is a property of the capture stream. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "a7c2e9f4b1d3",
+      "declaring_revisions": [
+        "a7c2e9f4b1d3"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_ledger.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_session": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_session` is the meeting-session ledger, written by `app/heimdal/meeting_ledger.py` and keyed by session id. A session is a capture window on a device. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "a7c2e9f4b1d3",
+      "declaring_revisions": [
+        "a7c2e9f4b1d3"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_ledger.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_meeting_user_note_revision": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_meeting_user_note_revision` is user note revisions attached to a meeting block, written by `app/heimdal/meeting_blocks.py`. These are in-session annotations on the block, not vault notes; the vault-note projection is a separate path that writes files. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "c9e4a1b6d3f5",
+      "declaring_revisions": [
+        "c9e4a1b6d3f5"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/meeting_blocks.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_observation_cursor": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_observation_cursor` is per-consumer cursors over that log, written by `app/heimdal/cursor_store.py`. A cursor is a consumer's position in an instance-wide stream. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "8b21e6a1f0c4",
+      "declaring_revisions": [
+        "8b21e6a1f0c4"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/cursor_store.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_observation_log": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_observation_log` is the append-only observation log, written by `app/heimdal/observation_log.py`, carrying a topic and payload per observation and a database trigger rejecting any UPDATE or DELETE. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "8b21e6a1f0c4",
+      "declaring_revisions": [
+        "8b21e6a1f0c4"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/observation_log.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_raw_deletion_receipt": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_deletion_receipt` is append-only receipts for governed raw erasure, written by `app/heimdal/retention.py`. Its columns are the deleted record's id, content identity, reason and retention window. The module reads a vault settings note to resolve that window, but the receipt stores no vault reference. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "a3f9d1c6e2b8",
+      "declaring_revisions": [
+        "a3f9d1c6e2b8"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/retention.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_raw_read_receipt": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_read_receipt` is append-only receipts for reads of the raw layer, written by `app/heimdal/raw_read_gate.py`. A receipt records who read which raw record under which grant — a property of the raw layer's access control, not of any vault. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "f1c7e2a9b4d6",
+      "declaring_revisions": [
+        "f1c7e2a9b4d6"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_read_gate.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_raw_record": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_record` is the encrypted raw capture record itself, keyed by content identity and written by `app/heimdal/raw_store.py` at ingest. The row exists because a sensor produced bytes, before and independently of any vault; it stores ciphertext, a capture chain and a consent reference, and no vault path. Explicitly global per MVR-05's acceptance criteria.",
+      "owning_revision": "d5a8e2f1b6c3",
+      "declaring_revisions": [
+        "d5a8e2f1b6c3"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_store.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "membership": {
+      "classification": "binding-scoped",
+      "reason": "Set membership for vault artifacts. Two revisions declare it with different primary keys — 202510241200 as `id UUID PRIMARY KEY`, a80043832e29 as PRIMARY KEY(object_id, set_id) — and both use CREATE TABLE IF NOT EXISTS, so the effective key on a database is whichever revision ran first. Either shape is built from colliding object ids.",
+      "owning_revision": "a80043832e29",
+      "declaring_revisions": [
+        "202510241200",
+        "a80043832e29"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/store/membership_store.py",
+          "operations": [
+            "insert"
+          ]
+        },
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "objects": {
+      "classification": "binding-scoped",
+      "reason": "The filesystem-watcher continuity mirror: one row per vault note, written by app/services/vault_sync.py. Rekeyed to (vault_binding_id, id) with objects_uuid_idx scoped to UNIQUE (vault_binding_id, uuid) by MVR-05A1 (#4560), because `id` is the note's artifact UUID and two bindings holding the same note collided on it.",
+      "owning_revision": "d1e8a0c5f37b",
+      "declaring_revisions": [
+        "fe9a3607841f",
+        "202510241200",
+        "d1e8a0c5f37b"
+      ],
+      "binding_key": "keyed",
+      "binding_column": "vault_binding_id",
+      "producers": [
+        {
+          "module": "app/services/vault_sync.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "objects_embeddings": {
+      "classification": "binding-scoped",
+      "reason": "The historical bootstrap-root embedding table (`fe9a3607841f`), superseded by store_vector_index. Zero producers and zero readers remain under app/**; its rows would be vault-derived. Dead schema, retained because dropping a durable table is a separate forward-only migration this slice does not run.",
+      "owning_revision": "fe9a3607841f",
+      "declaring_revisions": [
+        "fe9a3607841f"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [],
+      "rebuild_mechanism": "no-producer",
+      "escalation_conditions": []
+    },
+    "outbox": {
+      "classification": "binding-scoped",
+      "reason": "`outbox` is the canonical dispatch queue. Its rows carry the pre-cutover idempotency lineage that MVR-05A7 (#4581) must preserve in a `legacy_key` column so a post-cutover re-emission cannot duplicate an already-delivered effect; rows are never purged. Its `id uuid DEFAULT gen_random_uuid()` key does not collide, so the binding column is additive. Owned by MVR-05A7, not by any of the three table groups.",
+      "owning_revision": "f3a1c9d2e4b7",
+      "declaring_revisions": [
+        "f3a1c9d2e4b7"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/services/outbox.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "authority-or-receipt-rows"
+      ]
+    },
+    "relations": {
+      "classification": "binding-scoped",
+      "reason": "Legacy relation edges between vault artifacts. Its Alembic-owned shape is (id, src_id, dst_id, type, payload), but its only insert producer app/store/relation_index.py::RelationIndex.link writes (src_uuid, dst_uuid, relation_type, weight, provenance, created_at) — six columns that do not exist on the table. The producer is reachable from production through the app/objects compatibility shim, so it is classified here rather than removed; MVR-05A4 (#4578) owns scoping or deleting it.",
+      "owning_revision": "202510241200",
+      "declaring_revisions": [
+        "202510241200"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/store/relation_index.py",
+          "operations": [
+            "insert"
+          ]
+        },
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "sets": {
+      "classification": "binding-scoped",
+      "reason": "`sets` holds legacy named collections of vault artifacts. Zero producers remain under app/**, so there is nothing to migrate today, but the shape is vault-derived and `membership.set_id` still references it on the fresh lineage.",
+      "owning_revision": "202510241200",
+      "declaring_revisions": [
+        "202510241200"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [],
+      "rebuild_mechanism": "no-producer",
+      "escalation_conditions": [
+        "inbound-fk-target"
+      ]
+    },
+    "standing_questions": {
+      "classification": "binding-scoped",
+      "reason": "The derived projection of vault-canonical Question notes, rebuilt by TRUNCATE + replay in app/standing_questions/projection.py. `question_id TEXT PRIMARY KEY` and `source_path TEXT NOT NULL UNIQUE` are both vault-derived, so a second binding's identical question id or relative source path collides.",
+      "owning_revision": "4d1e0c9a3329",
+      "declaring_revisions": [
+        "4d1e0c9a3329"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/standing_questions/projection.py",
+          "operations": [
+            "insert",
+            "truncate"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "whole-table-replacement",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "store_objects": {
+      "classification": "binding-scoped",
+      "reason": "The canonical object projection: one row per indexed vault artifact, written by app/stores/pg.py. Two bindings holding the same artifact resolve to the same `object_id` (app/objects/identity.py::resolve_vault_uuid_with_connection), so the rows collide.",
+      "owning_revision": "c2766a04d001",
+      "declaring_revisions": [
+        "c2766a04d001"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/episodes/assignment.py",
+          "operations": [
+            "update"
+          ]
+        },
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete",
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite",
+        "inbound-fk-target",
+        "authority-or-receipt-rows"
+      ]
+    },
+    "store_relation_memberships": {
+      "classification": "binding-scoped",
+      "reason": "`store_relation_memberships` holds artifact membership facts, PRIMARY KEY (src_id, rel, value) over store_objects ids; same colliding endpoint identity as store_relations.",
+      "owning_revision": "c2766a04d001",
+      "declaring_revisions": [
+        "c2766a04d001"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "store_relations": {
+      "classification": "binding-scoped",
+      "reason": "`store_relations` holds edges between vault artifacts, PRIMARY KEY (src_id, dst_id, rel) over store_objects ids; the endpoints collide across bindings exactly as their objects do.",
+      "owning_revision": "c2766a04d001",
+      "declaring_revisions": [
+        "c2766a04d001"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "store_vector_index": {
+      "classification": "binding-scoped",
+      "reason": "`store_vector_index` is the per-artifact embedding projection, one row per `object_id`, rebuildable from store_objects. It shares store_objects' colliding key.",
+      "owning_revision": "c2766a04d001",
+      "declaring_revisions": [
+        "c2766a04d001"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/episodes/assignment.py",
+          "operations": [
+            "update"
+          ]
+        },
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete",
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "vector_index_meta": {
+      "classification": "binding-scoped",
+      "reason": "`vector_index_meta` holds the index-level embedding identity for the vector projection it describes. It is a single-row table (`id INTEGER PRIMARY KEY CHECK (id = 1)`), so one binding's embedding identity is currently the whole instance's; per-binding identity needs that singleton constraint replaced, not merely a column added.",
+      "owning_revision": "c2766a04d001",
+      "declaring_revisions": [
+        "c2766a04d001"
+      ],
+      "binding_key": "pending",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/stores/pg.py",
+          "operations": [
+            "delete",
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "key-rewrite"
+      ]
+    },
+    "youtube_account_binding": {
+      "classification": "explicitly-global",
+      "reason": "`youtube_account_binding` is OAuth account bindings for the YouTube adapter, written by `app/knowledge_acquisition/youtube_account_binding.py` and unique per channel. It binds the instance to an external account. No column on it records a vault.",
+      "owning_revision": "a2f1c3e4d5b6",
+      "declaring_revisions": [
+        "a2f1c3e4d5b6"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/knowledge_acquisition/youtube_account_binding.py",
+          "operations": [
+            "delete",
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "youtube_api_quota_daily": {
+      "classification": "explicitly-global",
+      "reason": "`youtube_api_quota_daily` is per-day API quota accounting for that adapter, written by `app/knowledge_acquisition/youtube_api_client.py`. Quota is charged against the instance's API credentials. No column on it records a vault.",
+      "owning_revision": "d9e0f1a2b3c4",
+      "declaring_revisions": [
+        "d9e0f1a2b3c4"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/knowledge_acquisition/youtube_api_client.py",
+          "operations": [
+            "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    }
+  }
+}

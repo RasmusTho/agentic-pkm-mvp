@@ -163,7 +163,7 @@ Commit message must:
 - Start with imperative verb (Add, Update, Rebuild, etc.)
 - Summarize the bounded outcome, not the mechanical changes
 - Be truthful about scope
-- Never use `Fix`, `Fixes`, `Fixed`, `Close`, `Closes`, `Closed`, `Resolve`, `Resolves`, or `Resolved` as an issue-closing reference in the commit subject or body. Ordinary non-target prose such as `Fix runtime env` is allowed. The workflow owns the supported separator, target, case, and malformed-reference recognition; see `.github/workflows/issue-pr-governance.yml :: pr-contract closing authority`. Use evidence-only `Refs #<id>` when an Issue reference is useful; authenticated closing keywords belong only in the PR body.
+- Never use `Fix`, `Fixes`, `Fixed`, `Close`, `Closes`, `Closed`, `Resolve`, `Resolves`, or `Resolved` as an issue-closing reference in the commit subject or body. Ordinary non-target prose such as `Fix runtime env` is allowed. The workflow owns the supported separator, target, case, and malformed-reference recognition; see `.github/workflows/issue-pr-governance.yml :: authority-classifier`. Use evidence-only `Refs #<id>` when an Issue reference is useful; authenticated closing keywords belong only in the PR body.
 - Replace `<agent identity> <agent noreply address>` in the `Co-Authored-By` trailer with the actual agent identity and its own noreply address producing the commit (e.g. Claude's `noreply@anthropic.com`, Codex/ChatGPT's own noreply domain); do not copy a hardcoded model name or a different agent's domain from this template
 
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
@@ -183,7 +183,7 @@ not replace required GitHub checks, branch protection, or final review triage.
 Use `--review-gate-complete` only after the checks returned by the script have run. For a high-risk
 implementation, governance, or direct repair this means a mechanism convergence packet plus a fresh independent high-capability
 review of the local publishable SHA before the selected expensive validation; see
-`AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. If an emergency direct
+`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. If an emergency direct
 repair with no declared high-risk surface must bypass this local gate, use `--bypass-reason` and name
 the bypass in the PR/issue receipt. A declared high-risk surface is never bypassable.
 
@@ -261,8 +261,9 @@ required `Final-Review-Rounds: 0` line and concrete `## BuilderOps Routing` defa
 `<...>` placeholders. Raise `Final-Review-Rounds` to `1` or `2` only when
 `AGENTS.md :: Proportional delivery` selects the full path. The exact shape both fields must satisfy
 is the canonical `app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds`
-and `::resolve_builderops_routing_status` (kept in proven parity with the `pr-contract` gate's own JS
-by `tests/governance/test_issue_pr_governance.py
+and `::resolve_builderops_routing_status` (proven equivalent to the `pr-contract` gate's own JS across
+every ECMAScript line terminator and the JS/Python whitespace-class edge cases, not merely on an
+LF-only corpus, per #4341) by `tests/governance/test_issue_pr_governance.py
 ::test_final_review_rounds_check_executes_via_canonical_implementation` and
 `::test_builderops_routing_stub_detection_matches_workflow_js`) — do not re-derive the rule from this
 prose. The `none` / reason defaults shown match what `scripts/pr_body_generator.py` emits
@@ -403,8 +404,10 @@ Pre-push PR-body contract gate:
   or `Reason:`).
 - The exact shape both checks above enforce is not restated here — it is the canonical
   `app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds` and
-  `::resolve_builderops_routing_status`, proven identical to the `pr-contract` gate's own JS by
-  `tests/governance/test_issue_pr_governance.py`. CI remains the enforcement point; this is a manual
+  `::resolve_builderops_routing_status`, proven equivalent to the `pr-contract` gate's own JS across
+  every ECMAScript line terminator and the JS/Python whitespace-class edge cases (not merely on an
+  LF-only corpus, per #4341) by `tests/governance/test_issue_pr_governance.py`. CI remains the
+  enforcement point; this is a manual
   pre-push read, not a substitute for it.
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.

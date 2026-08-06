@@ -19,7 +19,7 @@ proposal and then waits for the owner's explicit receipt; it does not autonomous
 
 ## What This Task Does
 
-- Drafts `docs/adr/ADR-0058-mimer-mcp-client-adapter.md` with `State: Proposed`, revisiting
+- Drafts `docs/adr/ADR-0061-mimer-mcp-client-adapter.md` with `State: Proposed`, revisiting
   ADR-0047's concrete-server trigger and ADR-0056's fixed transport set.
 - Presents explicit alternatives, consequences, and a reasoned recommendation for server ownership,
   protocol-tier topology, supported wire transport(s), authentication/trust posture, and the exact
@@ -33,7 +33,7 @@ proposal and then waits for the owner's explicit receipt; it does not autonomous
 
 ```text
 current: transports = HTTP API + direct filesystem; MCP deferred
-proposal: ADR-0058 State=Proposed
+proposal: ADR-0061 State=Proposed
           options(topology, wire transport, auth) + consequences + recommendation
 gate:     owner-decision receipt on #3371
 accepted path only: update ADR state/supersession + client contract to the ruled option
@@ -47,16 +47,16 @@ owner receipt makes later code review mechanical without fabricating authority.
 
 ## Acceptance Criteria
 
-- [ ] ADR-0058 exists in Proposed state and enumerates topology, wire-transport, and authentication
+- [ ] ADR-0061 exists in Proposed state and enumerates topology, wire-transport, and authentication
       alternatives, consequences, and a recommendation without claiming acceptance or supersession.
-  Verify: doc writeback at `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Options and recommendation`
+  Verify: doc writeback at `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Options and recommendation`
 - [ ] The proposal fixes the invariant operation boundary—ask, governed capture, retrieve/search,
       note read, and health—and explicitly excludes generic vault write and receipt read-back across
       every option.
-  Verify: doc writeback at `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Invariants across all options`
+  Verify: doc writeback at `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Invariants across all options`
 - [ ] The explicit owner ruling is recorded on #3371 and linked from the ADR before its state becomes
       Accepted or it claims to supersede/reconcile ADR-0047/ADR-0056.
-  Verify: owner-decision receipt on GitHub Issue #3371 linked from `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Owner decision receipt`
+  Verify: owner-decision receipt on GitHub Issue #3371 linked from `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt`
 - [ ] Only after an accepting owner receipt, the Mimer client contract reflects exactly the selected
       topology/transport/auth option while preserving its authority and ambiguous-write invariants.
   Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports` plus the linked owner-decision receipt on #3371
@@ -70,7 +70,7 @@ owner receipt makes later code review mechanical without fabricating authority.
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/architecture/test_docs_index.py`
 - `rg -n "MCP adapter|MCP transport|receipt read-back|vault_tools|protocol-tier" docs/adr docs/contracts/MIMER_CLIENT_CONTRACT.md docs/ARCHITECTURE.md docs/architecture/ecosystem-federation.md`
-- Confirm `docs/adr/ADR-0058-mimer-mcp-client-adapter.md` stays `State: Proposed` and contains no
+- Confirm `docs/adr/ADR-0061-mimer-mcp-client-adapter.md` stays `State: Proposed` and contains no
   superseding/Accepted claim unless the linked #3371 owner-decision receipt exists.
 - Review the selected client-contract writeback against that receipt, if and only if the owner has
   accepted an option; otherwise confirm the current contract is unchanged.
@@ -93,6 +93,6 @@ owner receipt makes later code review mechanical without fabricating authority.
 
 Issue #3371 remains **`agent:needs-human` after the specification merges**. An Opus/xhigh (or
 equivalent frontier architecture capability) may draft alternatives, consequences, and a
-recommendation to minimize owner review time, but it cannot choose for the owner or mark ADR-0058
+recommendation to minimize owner review time, but it cannot choose for the owner or mark ADR-0061
 Accepted. After the explicit owner receipt, use the same high-assurance architecture capability to
 apply the selected decision exactly; architecture-quality review remains mandatory.

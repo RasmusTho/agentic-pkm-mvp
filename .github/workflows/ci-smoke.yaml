@@ -200,6 +200,20 @@ jobs:
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
+      # Full-tree collection health gate (#3942). A module-level import error
+      # in tests/api/ broke collection of the entire `not pg` suite on main
+      # for two days with zero CI signal (#3941): every PR workflow runs
+      # pytest against explicit path slices, so tree-wide ImportError/
+      # SyntaxError/conftest breakage had no PR-time enforcement. This step
+      # collects (never executes) the full `not pg` selection so any PR that
+      # breaks collection anywhere under tests/ fails loud here. Exit code
+      # gates directly — no pipes, no `|| echo`.
+      - name: Pytest full-tree collection health (collect-only)
+        if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
+        timeout-minutes: 5
+        run: |
+          python -m pytest -q --collect-only -m "not pg and not alpha_llm" tests/
+
       - name: Pytest smoke baseline (memory, fail-fast)
         if: github.event_name != 'pull_request' || steps.changes.outputs.heavy_smoke == 'true'
         timeout-minutes: 12
@@ -742,6 +756,29 @@ jobs:
               - 'app/alembic/versions/e7a2b9c4d1f8_eroj01_entity_review_operations.py'
               - 'tests/heimdal/test_entity_review_operation_journal.py'
               - 'tests/migrations/test_entity_review_operation_journal_schema_parity.py'
+              # Durable table ownership (MVR-05A0 #4543, MVR-05A1 #4560): the
+              # adoption, row-survival, rekey, restart and
+              # single-vault-equivalence guards for two forward-only migrations
+              # on live tables are all pg-marked, so this lane is the PR-path
+              # check that catches drift on them (`Unit tests (not pg)`
+              # deselects every one by design, and
+              # `integration-nightly / pg-contracts` only runs on a schedule).
+              - 'app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py'
+              - 'app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py'
+              - 'app/db/db.py'
+              - 'app/memory_kv/store.py'
+              - 'app/services/vault_sync.py'
+              - 'tests/migrations/test_file_state_adoption.py'
+              - 'tests/migrations/test_objects_adoption.py'
+              # Both were pg-marked and in no lane at all before #4560, and both
+              # are guards on the same `objects` table this slice rekeys — they
+              # are what caught the fixture regression during review.
+              - 'tests/migrations/test_legacy_objects_fk_migration.py'
+              - 'tests/migrations/test_outbox_schema_parity.py'
+              - 'tests/services/test_outbox_bootstrap_assert_only.py'
+              - 'tests/instance/test_file_state_binding_key.py'
+              - 'tests/services/test_vault_sync_binding_scope.py'
+              - 'tests/integration/test_single_vault_compatibility.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -761,7 +798,7 @@ jobs:
         if: steps.changes.outputs.index_pg == 'true'
         run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
-      - name: Run exact index, YouTube quota, and entity-review journal PG surface
+      - name: Run exact index, YouTube quota, entity-review journal, and durable table ownership PG surface
         if: steps.changes.outputs.index_pg == 'true'
         shell: bash
         run: |
@@ -772,6 +809,14 @@ jobs:
             tests/knowledge_acquisition/test_youtube_api_quota_pg.py \
             tests/heimdal/test_entity_review_operation_journal.py \
             tests/migrations/test_entity_review_operation_journal_schema_parity.py \
+            tests/migrations/test_file_state_adoption.py \
+            tests/migrations/test_objects_adoption.py \
+            tests/migrations/test_legacy_objects_fk_migration.py \
+            tests/migrations/test_outbox_schema_parity.py \
+            tests/services/test_outbox_bootstrap_assert_only.py \
+            tests/instance/test_file_state_binding_key.py \
+            tests/services/test_vault_sync_binding_scope.py \
+            tests/integration/test_single_vault_compatibility.py \
             --tb=short \
             | tee pytest-index-pg.log
 

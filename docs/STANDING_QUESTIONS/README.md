@@ -124,6 +124,9 @@ Episode Resolution Engine's own provisional-threshold discipline
   association's confidence class must clear to attach a link at all. Starting posture: conservative
   (under-attaching is preferred — a missed link can still be found by a later, stronger-evidence
   pass; a wrongly attached link pollutes the evidence trail a human must then mentally discount).
+  **Shipped as** `EVIDENCE_ATTACH_CONFIDENCE_FLOOR` in `app/standing_questions/evidence_matching.py`
+  — the single source for this threshold, currently `ConfidenceClass.HIGH`. It is **provisional**:
+  nothing else may hard-code an attach cutoff, and retuning it is a one-constant edit.
 
 Both are tuning research resolved after live data accumulates, exactly like RQ-E1/RQ3 in the Episode
 Resolution Engine — not a pre-code gate.

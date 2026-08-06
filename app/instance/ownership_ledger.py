@@ -252,8 +252,23 @@ class OwnershipLedger:
     def resolve_live_owner_bindings(
         self,
         owners: Sequence[LegacyOwner],
+        *,
+        skip_unadopted: bool = False,
     ) -> tuple[LegacyOwner, ...]:
-        """Fill omitted owner binding IDs from the authenticated live ledger."""
+        """Fill omitted owner binding IDs from the authenticated live ledger.
+
+        With ``skip_unadopted``, an owner that carries no binding ID, matches
+        no active lease, **and whose root is not materialized in this
+        process's filesystem view** is treated as a config-derived candidate
+        the ledger never adopted (a root bound after legacy bootstrap
+        completed, seen from a verifier in another mount namespace). It holds
+        no lease, so it cannot participate in lease consistency and is
+        omitted from the result instead of failing resolution (#4371). A
+        lease-less owner whose root IS locally materialized stays fail-closed
+        — there the verifier can adjudicate, and a missing lease is
+        indistinguishable from a ledger that lost one. An ambiguous match
+        always fails.
+        """
 
         self._assert_existing_artifacts()
         with self._locked():
@@ -272,13 +287,37 @@ class OwnershipLedger:
                         and lease.state == "active"
                         and self._matches_complete_root_identity(lease, owner.root, key)
                     ]
+                    if not matches:
+                        # The inventory can retain the host spelling while an
+                        # adopted lease was minted through a bind-mounted
+                        # runtime spelling.  Complete path identity is not
+                        # portable across those mount namespaces, but a
+                        # materialized root fingerprint is.  Keep the
+                        # fallback unique so it only adopts an authenticated
+                        # physical owner, never a path-like candidate.
+                        matches = [
+                            binding_id
+                            for binding_id, lease in current.leases.items()
+                            if lease.channel_id == owner.channel_id
+                            and lease.state == "active"
+                            and self._matches_materialized_root(lease, owner.root, key)
+                        ]
+                    unmaterialized = not resolve_filesystem_root_identity(
+                        owner.root
+                    ).materialized
                 except FilesystemIdentityError as exc:
                     raise LedgerError(
                         "cannot resolve omitted live-owner binding identity"
                     ) from exc
-                if len(matches) != 1:
+                if len(matches) > 1:
                     raise LedgerError(
                         "omitted live-owner binding identity is not unambiguous"
+                    )
+                if not matches:
+                    if skip_unadopted and unmaterialized:
+                        continue
+                    raise LedgerError(
+                        "omitted live-owner binding matches no live lease"
                     )
                 resolved.append(
                     LegacyOwner(owner.channel_id, matches[0], owner.root)

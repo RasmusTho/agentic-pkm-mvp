@@ -5,7 +5,7 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-08-01
+Last reviewed: 2026-08-02
 Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py`
 
 # Test Strategy for the Hot Path
@@ -24,8 +24,10 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Statically declared selector file and node-id targets must be collectable. Before pytest receives a selected node id, the selector checks its file portion exists; its always-selected selector fitness test collect-checks every static file/node-id target so a rename or deletion fails in the changing PR rather than an unrelated downstream selection.
 - The `pr-unit-tests-not-pg` (`Unit tests (not pg)`) job's `code` paths-filter in `.github/workflows/ci-smoke.yaml` includes `AGENTS.md`, `CLAUDE.md`, `.codex/**`, and `docs/**` (#4281): a PR touching only those paths runs the real lane (install, mypy, the KERNEL-13 gate, the selected pytest run) instead of self-skipping to a bare `success`. Once the filter fires, `scripts/select_pr_tests.py`'s shared `GOVERNANCE_TARGETS` (used by both the governance-only branch and the `docs_authoring` subsystem) includes `tests/architecture` and `tests/ops/test_review_before_ci_gate.py` alongside `tests/governance`/`tests/scripts`/`tests/ops/test_ci_workflow.py`, because those are the suites that actually assert on `AGENTS.md`/`CLAUDE.md`/`.codex/**`/`docs/**` content; `CLAUDE.md` is also in the docs-only exact-match set alongside `AGENTS.md` so a `CLAUDE.md`-only PR resolves to the scoped docs lane rather than the unowned/full-suite fallback. `tests/governance/test_ci_smoke_docs_only_gate.py` is the executable proof for this pairing, including a reproduction of the exact diff shape from PR #4275.
 - Every `builder_system` match includes `tests/architecture/test_builderops_store_boundary.py` as an exact run target, not only as an ownership prefix. Ordinary `app/builderops/**` changes must execute the audited store-access guard so new direct-store sites cannot bypass it while their own subsystem tests remain green.
+- `_is_governance_only`/`_is_docs_only` tolerate a changed `tests/**` path inside `GOVERNANCE_TARGETS`/`DOCS_TARGETS` as scope-neutral so a *pure* governance-only/docs-only PR keeps resolving to that lane. Several of those tolerated directories/files are also real per-subsystem scope signal in `SUBSYSTEMS` (`tests/architecture/test_builderops_store_boundary.py` for `builder_system`, `tests/architecture/test_no_hardcoded_vault_layout.py` for `vault`, `tests/governance/`/`scripts/` for `builder_system`/`ops_deploy`, `tests/ops/` for `ops`) — on a mixed PR that also touches one of those subsystem's owned paths, the selector unions that subsystem's own targets into the governance/docs selection (`_foreign_subsystem_matches`) instead of silently narrowing to the governance/docs-only target set and dropping the other subsystem's real coverage (#4336). `subsystems` then lists every contributing subsystem (e.g. `governance,builder_system`), never just `governance`/`docs` alone, whenever this applies; `tests/scripts/test_select_pr_tests.py`'s mixed-PR cases are the executable proof.
 - The neutral top-level `llm_contract/**` leaf is owned by the `model_access` selector. A kernel change runs its direct contract suite, the BuilderOps adapter/runner compatibility suites, and the exact neutral-kernel/import-boundary architecture guards.
 - Every `vault` match includes `tests/architecture/test_no_hardcoded_vault_layout.py` as an exact run target, not only as an ownership prefix. Ordinary `app/vault/**` changes must execute the vault-layout guard without widening the subsystem to all architecture tests.
+- The `properties` subsystem's trigger set is `tests/properties/` plus `PROPERTIES_CENSUSED_APP_SITES` in `scripts/select_pr_tests.py`: the exact `app/` files indexed by a (file, line)-keyed census registry in `tests/properties/_machinery.py` (`REGISTERED_MIRRORS`, `WRITE_FRONTMATTER_SITE_CLASSIFICATION`, `WRITE_MISSING_SITE_CLASSIFICATION`, `WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION`, `STORE_PAYLOAD_SINK_CLASSIFICATION`). Without this, an ordinary edit to one of those files can shift a censused call site's line number without touching `tests/properties/` at all, so `tests/properties` would not run in that PR's affected-subsystem selection and the census would silently go stale until a later full-suite run caught it (#4269). This is additive: `properties` unions into whatever other subsystem already owns the same file (e.g. `store_ingest`, `promotion_panel`) rather than replacing it. Keep `PROPERTIES_CENSUSED_APP_SITES` in sync with those registries' key sets when either side changes.
 - A vault-file replacement may claim Linux ACL preservation only after the real named-user ACL
   fixture in `tests/knowledge/test_linux_acl_fixture.py` passes. The fixture compares the complete
   numeric access ACL before and after a same-directory staged atomic replacement; mode bits alone
@@ -46,6 +48,16 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   `app/outbox/events.py` producer belongs to both `outbox_worker` and `memory_retrieval`, so its
   selection unions delivery-worker/event, indexer, and event-envelope contract coverage. Other
   `app/objects/**` and `app/outbox/**` paths remain unowned unless explicitly mapped.
+- The push-lane `CI gate: vaultwide panel verifier` step (`.github/workflows/ci-smoke.yaml ::
+  smoke-docker`) exercises the MVR-01B instance-state deployment producer against the composed
+  runtime only after merge. Its protected verification logic has pre-merge signal (#4371): every
+  `vault` subsystem match (`app/instance/**`) runs
+  `tests/ops/test_instance_state_volume_contract.py` as an exact target, including the staged-backup
+  regression tests (`test_staged_backup_verification_succeeds_on_fresh_deployment`,
+  `test_staged_backup_failure_surfaces_underlying_cause`,
+  `test_inconsistent_registry_ledger_still_fails_closed`), so a backup/ownership verification defect
+  fails the changing PR instead of first turning `main`'s post-merge smoke red. The docker-compose
+  integration itself (mounts, launcher sequence, seeded vault) remains post-merge-only coverage.
 - E2E tests under `tests/e2e/` run after merge and in the nightly suite, not on ordinary PRs. Opt-in classes (live LLM, browser, human UAT, eval) remain in their dedicated post-merge or nightly lanes.
 
 ## Check Levels

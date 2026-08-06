@@ -189,6 +189,11 @@ exec {sys.executable!s} "$@"
             "PATH": f"{fake_bin}:{env.get('PATH', '')}",
             "HOME": str(Path.home()),
             "XDG_DATA_HOME": str(tmp_path / "xdg"),
+            # #4519 — this env inherits pytest's markers, so the launcher's
+            # runtime env write must be tmp_path-scoped or the exporter's
+            # repo-file guard refuses the run (and before that guard existed,
+            # the run overwrote the repository's real tmp/runtime.env).
+            "RUNTIME_ENV_PATH": str(tmp_path / "runtime.env"),
             "PKM_ENVIRONMENT": "prod",
             "START_MODE": "diagnostic",
             "START_FLIGHT_RECORDER": "0",

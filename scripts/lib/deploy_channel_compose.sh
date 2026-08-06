@@ -122,10 +122,23 @@ sys.stdout.write(container_signboard)
 PY
 }
 
-_deploy_channel_needs_dev_capture_secret() {
+_deploy_channel_signboard_override_document() {
+  cat <<'YAML'
+services:
+  api:
+    environment:
+      SIGNBOARD_ROOT:
+YAML
+}
+
+# host_secret_contract.json declares the `heimdal-capture-watch` consumer for
+# every channel (dev/test/prod), not only dev (#4362 -- before this fix, this
+# helper was dev-only and test/prod deploys never wrapped the compose
+# invocation, so HEIMDAL_RAW_STORE_KEY never reached the service's env_file
+# chain on those channels no matter what the Keychain held).
+_deploy_channel_needs_capture_secret() {
   local channel="${1:?channel required}"
   shift
-  [ "${channel}" = "dev" ] || return 1
   [ "${1:-}" = "up" ] || return 1
   local arg
   for arg in "$@"; do
@@ -309,7 +322,32 @@ deploy_channel_compose() {
     else
       unset SIGNBOARD_ROOT
     fi
-    compose_args+=(-f -)
+    # Deliver the override document through a private temp file rather than
+    # `-f -`/heredoc on the command's own stdin (fd 0): a bare `-f -` binds to
+    # whatever the caller supplied on stdin, so any caller piping real data
+    # into this wrapper (#4536, e.g. prepare_instance_state_deployment feeding
+    # a host-produced inventory into the container) had that data silently
+    # replaced by this override document instead of reaching the container.
+    # Process substitution (`-f <(...)`) was tried first and works with a
+    # plain command, but `docker compose` invokes its compose plugin as a
+    # separate child process that inherits only stdin/stdout/stderr from the
+    # `docker` CLI (Go's os/exec does not forward arbitrary fds without
+    # ExtraFiles), so the plugin process cannot see a process-substitution fd
+    # opened by this shell — confirmed by CI's real docker: `open
+    # /dev/fd/63: no such file or directory`. The override document itself
+    # carries no value of its own and no operator path or secret (Compose
+    # forwards SIGNBOARD_ROOT from this governed shell via the bare `KEY:`
+    # form), so a private temp file does not weaken the runtime env ownership
+    # boundary the earlier in-memory-only comment protected.
+    local signboard_override_file
+    signboard_override_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-signboard-override.XXXXXX")"
+    # EXIT here is scoped to this `( ... )` subshell only (traps set inside a
+    # subshell do not leak into the parent shell), so this fires exactly once
+    # when the subshell running the actual Compose invocation exits, on every
+    # path including an early `exit 1` above or a failing Compose command.
+    trap 'rm -f -- "${signboard_override_file}"' EXIT
+    _deploy_channel_signboard_override_document > "${signboard_override_file}"
+    compose_args+=(-f "${signboard_override_file}")
 
     # Compose gives the caller shell precedence over --env-file values. Pin the
     # governed selectors here so a stale parent shell cannot swap the selected
@@ -339,7 +377,7 @@ deploy_channel_compose() {
       "$@"
     )
 
-    if _deploy_channel_needs_dev_capture_secret "${channel}" "$@"; then
+    if _deploy_channel_needs_capture_secret "${channel}" "$@"; then
       compose_command=(
         "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
         --channel "${channel}"
@@ -377,14 +415,11 @@ deploy_channel_compose() {
       )
     fi
 
-    # Keep the override in memory. A temporary env/compose file would persist
-    # operator paths or runtime secrets and would weaken the existing runtime
-    # env ownership boundary.
-    "${compose_command[@]}" <<'YAML'
-services:
-  api:
-    environment:
-      SIGNBOARD_ROOT:
-YAML
+    # fd 0 is left untouched above (the override document is a temp file, not
+    # a stdin heredoc), so it still carries whatever the caller attached to
+    # this function call (e.g. a host-produced inventory piped into a
+    # `run -T ...` invocation). The temp file itself is removed by the EXIT
+    # trap set above once this command returns.
+    "${compose_command[@]}"
   )
 }

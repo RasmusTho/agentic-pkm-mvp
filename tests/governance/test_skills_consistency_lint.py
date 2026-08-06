@@ -7,6 +7,7 @@ seeded into a synthetic tree.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from scripts.lint_skills_consistency import run_lint
@@ -324,6 +325,304 @@ def test_lint_fails_when_pr_contract_validator_diverges_from_workflow(tmp_path: 
         and "does not match" in e
         for e in errors
     ), errors
+
+
+def test_lint_fails_when_pr_contract_validator_flags_diverge_from_workflow(
+    tmp_path: Path,
+) -> None:
+    """Dropping a regex *flag* (not pattern text) on one side must fail the lint.
+
+    Reproduces the exact drift class from issue #4342: Check 10 previously
+    compared only regex pattern text and discarded the JS trailing flag
+    suffix / the Python flags argument entirely, so a flag-only divergence
+    (e.g. losing `re.IGNORECASE` from `TIER1_LANE_PATTERN` while the
+    workflow's JS `tier1LanePattern` stays `/im`) passed silently.
+    """
+    root = _seed_tree(tmp_path)
+
+    workflow = REPO_ROOT / ".github" / "workflows" / "issue-pr-governance.yml"
+    contract = REPO_ROOT / "app" / "dispatcher" / "verification_contract.py"
+
+    dest_workflows = root / ".github" / "workflows"
+    dest_workflows.mkdir(parents=True, exist_ok=True)
+    (dest_workflows / "issue-pr-governance.yml").write_text(
+        workflow.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    dest_app = root / "app" / "dispatcher"
+    dest_app.mkdir(parents=True, exist_ok=True)
+    (dest_app / "verification_contract.py").write_text(
+        contract.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    baseline_errors = run_lint(root)
+    assert not any("verification_contract.py" in e for e in baseline_errors), baseline_errors
+
+    # Drift the Python TIER1_LANE_PATTERN alone: drop `re.IGNORECASE`,
+    # leaving the workflow's JS `tier1LanePattern` at `/im` unchanged. The
+    # pattern text on both sides is still byte-identical.
+    drifted = contract.read_text(encoding="utf-8").replace(
+        'TIER1_LANE_PATTERN = re.compile(\n'
+        r'    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b", re.IGNORECASE | re.MULTILINE'
+        "\n)",
+        'TIER1_LANE_PATTERN = re.compile(\n'
+        r'    r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b", re.MULTILINE'
+        "\n)",
+    )
+    assert drifted != contract.read_text(encoding="utf-8"), "fixture swap did not apply"
+    (dest_app / "verification_contract.py").write_text(drifted, encoding="utf-8")
+
+    errors = run_lint(root)
+    assert any(
+        "TIER1_LANE_PATTERN" in e and "flags" in e for e in errors
+    ), errors
+
+
+def test_bug_to_issue_duplicate_search_requires_stable_ci_identity() -> None:
+    """CI/test duplicate search must key on stable failure identity, not prose.
+
+    Regression guard for issue #4607 (LearningSignal
+    lrn_20260731204320_6025370c): #4463 was filed as distinct from #4371
+    because the prose symptoms differed, although both described the same
+    failing workflow/job/step. The `bug-to-issue` workflow must require
+    comparing stable CI failure identity (workflow name, job name, step name,
+    script/test target, exception/error class when available) before relying
+    on prose title/symptom or attributed subsystem. The assertions below are
+    semantic markers: they fail if the instruction regresses to
+    title/symptom-only matching, but tolerate rewording and reformatting.
+    """
+    skill = REPO_ROOT / ".codex" / "skills" / "bug-to-issue" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    match = re.search(
+        r"^## Normal bounded bug-Issue workflow$(.*?)(?=^## |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, (
+        f"{skill}: section '## Normal bounded bug-Issue workflow' not found"
+    )
+    section = match.group(1)
+    lowered = section.lower()
+
+    # Every stable CI identity key must be named in the duplicate-search step.
+    for identity_key in ("workflow name", "job name", "step name"):
+        assert identity_key in lowered, (
+            f"duplicate-search guidance no longer names the stable CI identity "
+            f"key '{identity_key}'"
+        )
+    assert "test target" in lowered or "script" in lowered, (
+        "duplicate-search guidance no longer names the failing script/test target"
+    )
+    assert "error class" in lowered or "exception" in lowered, (
+        "duplicate-search guidance no longer names the raised exception/error class"
+    )
+
+    # Identity must be the primary key: stated as compared before prose evidence.
+    assert re.search(r"stable\s+(failure\s+)?identity", lowered), (
+        "duplicate-search guidance no longer keys on stable failure identity"
+    )
+    assert re.search(r"before\s+(?:\S+\s+){0,8}(?:prose|title|symptom)", lowered), (
+        "duplicate-search guidance no longer orders stable-identity comparison "
+        "before prose title/symptom matching"
+    )
+
+    # The pre-existing same-symptom/title search stays as the secondary key.
+    assert "symptom" in lowered and "title" in lowered, (
+        "the existing same-symptom/title search must remain as secondary evidence"
+    )
+
+    # Distinct failures sharing a workflow must not be collapsed.
+    assert re.search(r"(differ|distinct|not\s+collapse|do\s+not\s+collapse)", lowered), (
+        "guidance must keep failures that share a workflow but differ by "
+        "job/step/script/error class as distinct issues"
+    )
+
+    # The motivating duplicate class is named, without reopening either issue.
+    assert "#4371" in section and "#4463" in section, (
+        "guidance must name #4371/#4463 as the motivating duplicate class"
+    )
+    assert re.search(r"(do\s+not\s+reopen|not\s+reopen|without\s+reopening)", lowered), (
+        "guidance must state the motivating issues are precedent, not reopened"
+    )
+
+
+def test_lint_detects_unresolvable_section_citation(tmp_path: Path) -> None:
+    """Check 11 (issue #4297): a `path :: Heading` citation must resolve.
+
+    A citation whose path does not exist, or whose heading does not match a
+    Markdown heading in the cited file, is reported as an error.
+    """
+    root = _seed_tree(tmp_path)
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "GUIDE.md").write_text(
+        "# Guide\n\n## Real Section\n\nBody.\n\n### Deep Subsection\n\nMore.\n",
+        encoding="utf-8",
+    )
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + (
+            "\nSee `docs/GUIDE.md :: Real Section` and"
+            " `docs/GUIDE.md :: Renamed Away Section` and"
+            " `docs/MISSING.md :: Real Section`.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    citation_errors = [e for e in errors if "section citation" in e]
+    assert any(
+        "`docs/GUIDE.md :: Renamed Away Section`" in e and "no Markdown heading" in e
+        for e in citation_errors
+    ), errors
+    assert any(
+        "`docs/MISSING.md :: Real Section`" in e and "does not exist" in e
+        for e in citation_errors
+    ), errors
+    # The resolving citation is not flagged.
+    assert not any("`docs/GUIDE.md :: Real Section`" in e for e in citation_errors), errors
+
+
+def test_section_citations_resolve_on_real_repo() -> None:
+    """The live instruction chain has no unresolvable citations (issue #4297)."""
+    from scripts.lint_skills_consistency import check_section_citations
+
+    errors = check_section_citations(REPO_ROOT)
+    assert errors == [], "unresolvable section citations:\n" + "\n".join(errors)
+
+
+def test_section_citation_resolves_subheading_and_decorated_headings(tmp_path: Path) -> None:
+    """Sub-headings, enum prefixes, parentheticals, and backticks all resolve."""
+    root = _seed_tree(tmp_path)
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "GUIDE.md").write_text(
+        "# Guide\n\n"
+        "## 3. Numbered Section\n\n"
+        "### 4b. Deep Rule\n\n"
+        "## Total Cost (qualifier here)\n\n"
+        "### `Verify:` marker rule\n\n",
+        encoding="utf-8",
+    )
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + (
+            "\nSee `docs/GUIDE.md :: Numbered Section`,"
+            " `docs/GUIDE.md :: Deep Rule`,"
+            " `docs/GUIDE.md :: Total Cost`,"
+            " `docs/GUIDE.md :: Total Cost (qualifier here)`,"
+            " and `docs/GUIDE.md :: Verify: marker rule`.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    assert not any("section citation" in e for e in errors), errors
+
+
+def test_section_citation_ignores_fences_placeholders_and_non_paths(tmp_path: Path) -> None:
+    """Code fences, placeholder citations, and skill-name citations are not parsed."""
+    root = _seed_tree(tmp_path)
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + (
+            "\nThe protocol shape is `FILE :: Section` and"
+            " `docs/<path> :: <anchor>` and"
+            " `alpha-skill :: Some Runbook Step` and"
+            " `docs/learning-log.md :: YYYY-MM-DD entry`.\n"
+            "\n```bash\n"
+            "echo '`docs/NOPE.md :: Fenced Citation`'\n"
+            "```\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    assert not any("section citation" in e for e in errors), errors
+
+
+def test_section_citation_outside_repo_fails(tmp_path: Path) -> None:
+    """A citation whose path escapes the repository root is an error."""
+    root = _seed_tree(tmp_path)
+    # A real file outside the lint root must still not resolve.
+    (tmp_path.parent / "escape.md").write_text("# Escaped\n", encoding="utf-8")
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8") + "\nSee `../escape.md :: Escaped`.\n",
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    assert any(
+        "section citation" in e and "outside the repository" in e for e in errors
+    ), errors
+
+
+def test_section_citation_spanning_a_line_break_resolves(tmp_path: Path) -> None:
+    """A backticked citation wrapped across a line break still parses."""
+    root = _seed_tree(tmp_path)
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "GUIDE.md").write_text(
+        "# Guide\n\n## A Long Heading That Wraps In Prose\n\nBody.\n",
+        encoding="utf-8",
+    )
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + (
+            "\nSee `docs/GUIDE.md :: A Long Heading That\n"
+            "  Wraps In Prose` for details, and the broken"
+            " `docs/GUIDE.md :: Not\n  A Heading` twin.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    citation_errors = [e for e in errors if "section citation" in e]
+    assert not any("A Long Heading That Wraps In Prose" in e for e in citation_errors), errors
+    assert any("Not A Heading" in e for e in citation_errors), errors
+
+
+def test_section_citation_anchor_id_and_non_markdown_targets(tmp_path: Path) -> None:
+    """Stable anchor IDs resolve by presence; non-md targets resolve by content."""
+    root = _seed_tree(tmp_path)
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "STATUS.md").write_text(
+        "# Status\n\nShipped PA9-EXAMPLE earlier.\n", encoding="utf-8"
+    )
+    scripts_dir = root / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "tool.py").write_text(
+        "def real_function() -> None:\n    pass\n", encoding="utf-8"
+    )
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + (
+            "\nSee `docs/STATUS.md :: PA9-EXAMPLE` and"
+            " `docs/STATUS.md :: PA9-GONE` and"
+            " `scripts/tool.py :: real_function` and"
+            " `scripts/tool.py :: missing_function`.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    citation_errors = [e for e in errors if "section citation" in e]
+    assert not any("PA9-EXAMPLE" in e for e in citation_errors), errors
+    assert any("PA9-GONE" in e for e in citation_errors), errors
+    assert not any("real_function" in e for e in citation_errors), errors
+    assert any("missing_function" in e for e in citation_errors), errors
 
 
 def test_planned_marker_allows_unknown_reference(tmp_path: Path) -> None:

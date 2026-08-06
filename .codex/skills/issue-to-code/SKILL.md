@@ -30,12 +30,22 @@ This skill inlines the rules a normal slice needs from
 either parent document. Read the parent section only when the inlined rule is genuinely
 insufficient for the case in front of you.
 
+For accepted constituent repository work, also read
+`docs/architecture/SBS_OPERATING_MODEL.md :: Cross-repo constituent-surface scope` to classify the
+constituent surface and its governing route correctly.
+
 ## Pre-implementation classification check
 
 Before claiming an Issue or producing any implementation, answer the following. Stop as indicated if the answer is unresolvable.
 
-**System boundary** — classify the issue using
-`docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`:
+**System boundary** — classify the issue using the categories below, inlined from
+`docs/architecture/SBS_OPERATING_MODEL.md :: Classification Procedure` (the tie-breaker below is the
+one rule from that subsection this skill does not otherwise reproduce). The parent heading's other
+subsections are already covered elsewhere: `:: Builder System SBS Impact Guidance` and
+`:: Builder System Artifact And Workflow Map` are cited separately and conditionally below (SBS
+Impact / Builder System branch only). Read `:: Builder-Agent Authority Model` or
+`:: Builder Learning, Evaluation, And TCD Governance Loop` only when the categories below are
+genuinely insufficient to classify the case in front of you:
 
 - Product/Runtime System work changes product behavior, runtime code, user-facing semantics,
   Product SBS contracts, durable human knowledge authority, machine memory, retrieval, execution,
@@ -380,6 +390,12 @@ When continuing through anchor drift:
 8. If anchor drift exists, resolve it using the rules above before coding.
 9. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
 10. **Test-first for behavioral ACs**: for each AC whose `Verify:` names a test, ensure that test exists in the repo and currently fails against the unchanged code path. If the test is missing, write it first from the AC; if it is present but does not fail, either the AC is already satisfied (stop and validate) or the test does not actually exercise the AC (fix the test). For enforcement ACs, keep `.codex/skills/_shared/ISSUE_CONTRACT.md :: Verify: marker rule` in view: when the AC is about runtime wiring, config, schema, ports, compose/install behavior, or service integration, the verification must reach the real production path or an integration-equivalent path, not only a stubbed dependency. If a stub is still needed for isolation, add at least one real-path assertion that proves the path under test.
+10a. **Failure-mode completeness (conditional)**: apply this check when the slice reads or writes durable state, aggregates multiple records, crosses a host/provider/config boundary, or adds a refusal or invariant. Before implementation, name one credible malformed, unavailable, stale, partial-failure, or replay/restore case and add a focused production-path test that proves the applicable parts of this contract:
+    - a bad item does not suppress unrelated healthy state where isolation is required;
+    - the affected path returns a typed, truthful refusal or degradation outcome, never a false success or ambiguous empty result; and
+    - retry, replay, retention, migration, or restore preserves the declared contract where that lifecycle transition exists.
+
+    Do not invent this test class for a bounded slice with none of those state or boundary conditions. When the check adds a runtime precondition, apply `AGENTS.md :: Required rules` **Invariant → producers rule** in the same change: migrate every producer and add its fail-loud preflight rather than protecting only the consumer path.
 11. Implement the smallest complete change that turns every behavioral `Verify:` test green without breaking unrelated tests.
 12. **Writeback for non-behavioral ACs**: perform each non-behavioral `Verify:` target in the same change (doc anchor writeback, roadmap wording cleanup, runtime receipt, etc.).
 13. Update owner docs if shipped behavior/contracts changed.

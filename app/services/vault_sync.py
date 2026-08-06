@@ -14,15 +14,24 @@ import yaml
 # stub in app/db/sqlalchemy.py (introduced for the CI smoke path in #30),
 # which always raises RuntimeError("conn_rw unavailable in smoke sqlalchemy
 # stub") and no-ops ensure_schema. The real DB-backed implementation lives in
-# app.db.db (dict-row connections; applies app/db/migrations_obsidian.sql,
-# which is what actually creates public.objects/file_state/outbox) and is
+# app.db.db (dict-row connections; since MVR-05A1 (#4560) it issues no DDL at
+# all outside the STORE_SCHEMA_AUTOCREATE test fixture -- public.file_state and
+# public.objects.path became Alembic-owned in MVR-05A0 (#4543), revision
+# c7f4b1a83d29, and public.objects and public.agent_memories in revision
+# d1e8a0c5f37b) and is
 # what app/services/audit.py, app/services/decisions.py, and
 # app/store/membership_store.py already import directly. vault_sync imported
 # the stub instead, so every pg-marked caller of sync_markdown/handle_rename
 # either failed unconditionally (conn_rw) or hit UndefinedTable on a fresh DB
 # (ensure_schema no-op) once #2818 stopped silently skipping these tests
 # (#2937). Import the real implementation, matching the established pattern.
-from app.db.db import conn_rw, ensure_schema
+from app.db.db import (
+    FILE_STATE_COMPATIBILITY_BINDING_ID,
+    assert_file_state_schema,
+    assert_objects_schema,
+    conn_rw,
+    ensure_schema,
+)
 
 from app.events.models import new_trace_id
 from app.events.types import (
@@ -49,6 +58,73 @@ from app.services.settings import policy
 
 def _conn():
     return conn_rw()
+
+
+def _prepare(conn: psycopg.Connection) -> None:
+    """Gate on the migrated `file_state` key before any vault-sync statement runs.
+
+    MVR-05A0 (#4543): `file_state` is owned by Alembic revision `c7f4b1a83d29`,
+    so a database that never ran it has no table, or still has the `path`-only
+    key. Either way every statement below would fail — but late, opaquely, and
+    part-way through a watcher tick. `assert_file_state_schema` turns that into
+    one fail-loud error naming `alembic upgrade head`, before any effect.
+
+    `objects` gets the same treatment (MVR-05A1, #4560). Its rekey to
+    `(vault_binding_id, id)` is what makes every upsert below binding-scoped, and
+    a database that never ran revision `d1e8a0c5f37b` has no `vault_binding_id`
+    column at all. Before #4560 such a database still worked, because the runtime
+    bootstrap reshaped `objects` on every process boot; that bootstrap is gone,
+    so without this preflight the failure moved to a bare `UndefinedColumn` in
+    the middle of a tick.
+
+    `ensure_schema` is still called first, but since MVR-05A1 (#4560) it is a
+    no-op outside tests: it issues no DDL unless the `STORE_SCHEMA_AUTOCREATE`
+    fixture flag is set. It used to replay the legacy bootstrap SQL here, which
+    silently reverted the `objects` primary key on every process boot.
+    """
+    ensure_schema(conn)
+    assert_file_state_schema(conn)
+    assert_objects_schema(conn)
+    conn.commit()
+
+
+def _binding_id() -> str:
+    """Resolve the vault binding whose rows this process owns.
+
+    MVR-05A0 (#4543) rekeyed ``file_state`` to ``(vault_binding_id, path)`` and
+    MVR-05A1 (#4560) rekeyed ``objects`` to ``(vault_binding_id, id)``, so two
+    bindings can hold the same path and the same artifact UUID without
+    overwriting each other.
+
+    Until MVR-05A (#3859) ships the compatibility ingress translator that
+    derives the request's real authorized binding, this returns the single legacy
+    compatibility binding — **unconditionally**. That constant is what makes the
+    partial scoping below safe today: no shipped code path can produce a second
+    binding value, so every row in both tables carries the same one, and both
+    composite keys have exactly the uniqueness, upsert, and delete semantics
+    their single-column predecessors had.
+
+    .. warning::
+       Replacing this function is **not** sufficient, and this is the one thing
+       MVR-05A must not take on trust. Scoping is currently uneven:
+
+       - every ``file_state`` statement in this module is binding-scoped,
+         including the two formerly UUID-keyed rename deletes and the
+         last-remaining-path count in ``delete_note`` (#4543 audited them all);
+       - only the ``objects`` **upserts** are binding-scoped, because their
+         ``ON CONFLICT`` targets had to name the new key. The UUID-keyed
+         ``objects`` reads and updates in ``_update_path_only``, ``update_path``,
+         ``delete_note`` and ``_object_materialization_state`` still match on
+         ``id``/``uuid`` alone, and ``app/objects/identity.py`` still raises on a
+         duplicated ``objects.uuid``.
+
+       The moment this returns more than one value, those statements can reach
+       another binding's rows and that resolver refuses to run. #4560 left them
+       deliberately — the issue assigns the producer call sites and real binding
+       attribution to #3859 — but they must be scoped in the same change that
+       makes this function variable, not after it.
+    """
+    return FILE_STATE_COMPATIBILITY_BINDING_ID
 
 
 def _hash_dict(data: dict[str, Any]) -> str:
@@ -84,20 +160,27 @@ def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
     write_note_from_absolute(resolved, rendered, vault_root=root)
 
 
-def _get_state_by_path(conn: psycopg.Connection, path: str) -> Optional[dict[str, Any]]:
+def _get_state_by_path(
+    conn: psycopg.Connection, path: str, *, binding_id: str
+) -> Optional[dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s", (path,)
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and path = %s",
+            (binding_id, path),
         )
         row = cur.fetchone()
         return row if isinstance(row, dict) else (dict(row) if row else None)
 
 
-def _get_state_by_uuid(conn: psycopg.Connection, uuid_value: str) -> Optional[dict[str, Any]]:
+def _get_state_by_uuid(
+    conn: psycopg.Connection, uuid_value: str, *, binding_id: str
+) -> Optional[dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute(
-            "select path, uuid, fm_hash, body_hash, mtime from file_state where uuid = %s",
-            (uuid_value,),
+            "select path, uuid, fm_hash, body_hash, mtime from file_state "
+            "where vault_binding_id = %s and uuid = %s",
+            (binding_id, uuid_value),
         )
         row = cur.fetchone()
         return row if isinstance(row, dict) else (dict(row) if row else None)
@@ -241,20 +324,23 @@ def _upsert_file_state(
     fm_hash: str,
     body_hash: str,
     mtime: datetime,
+    binding_id: str,
 ) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)
-            values(%s,%s,%s,%s,%s,now())
-            on conflict (path) do update set
+            insert into file_state(
+              vault_binding_id, path, uuid, fm_hash, body_hash, mtime, last_seen
+            )
+            values(%s,%s,%s,%s,%s,%s,now())
+            on conflict (vault_binding_id, path) do update set
               uuid = excluded.uuid,
               fm_hash = excluded.fm_hash,
               body_hash = excluded.body_hash,
               mtime = excluded.mtime,
               last_seen = now()
             """,
-            (path, uuid_value, fm_hash, body_hash, mtime),
+            (binding_id, path, uuid_value, fm_hash, body_hash, mtime),
         )
 
 
@@ -268,6 +354,7 @@ def _update_path_only(
     fm_hash: str,
     body_hash: str,
     mtime: datetime,
+    binding_id: str,
     canonical_object_id: str | None = None,
 ) -> None:
     canonical_object_id = canonical_object_id or _canonical_object_id(conn, uuid_value)
@@ -341,20 +428,27 @@ def _update_path_only(
     with conn.cursor() as cur:
         cur.execute(
             """
-            insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)
-            values(%s,%s,%s,%s,%s,now())
-            on conflict (path) do update set
+            insert into file_state(
+              vault_binding_id, path, uuid, fm_hash, body_hash, mtime, last_seen
+            )
+            values(%s,%s,%s,%s,%s,%s,now())
+            on conflict (vault_binding_id, path) do update set
               uuid = excluded.uuid,
               fm_hash = excluded.fm_hash,
               body_hash = excluded.body_hash,
               mtime = excluded.mtime,
               last_seen = now()
             """,
-            (new_path, uuid_value, fm_hash, body_hash, mtime),
+            (binding_id, new_path, uuid_value, fm_hash, body_hash, mtime),
         )
+        # Rename cleanup. MVR-05A0 (#4543): scoped by binding, because the
+        # UUID alone is not unique across bindings — the same note copied into
+        # two vaults shares its frontmatter uuid, and the unscoped form of this
+        # statement deleted the other binding's row.
         cur.execute(
-            "delete from file_state where uuid = %s and path <> %s",
-            (uuid_value, new_path),
+            "delete from file_state "
+            "where vault_binding_id = %s and uuid = %s and path <> %s",
+            (binding_id, uuid_value, new_path),
         )
 
 
@@ -375,10 +469,10 @@ def _enqueue(
 
 def update_path(uuid_value: str, new_path: str) -> None:
     resolved_path = str(Path(new_path).resolve())
+    binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
-        state = _get_state_by_uuid(conn, uuid_value)
+        _prepare(conn)
+        state = _get_state_by_uuid(conn, uuid_value, binding_id=binding_id)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         fm_hash = state["fm_hash"] if state else None
         body_hash = state["body_hash"] if state else None
@@ -397,20 +491,25 @@ def update_path(uuid_value: str, new_path: str) -> None:
             )
             cur.execute(
                 """
-                insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)
-                values(%s,%s,%s,%s,%s,now())
-                on conflict (path) do update set
+                insert into file_state(
+                  vault_binding_id, path, uuid, fm_hash, body_hash, mtime, last_seen
+                )
+                values(%s,%s,%s,%s,%s,%s,now())
+                on conflict (vault_binding_id, path) do update set
                   uuid = excluded.uuid,
                   fm_hash = coalesce(excluded.fm_hash, file_state.fm_hash),
                   body_hash = coalesce(excluded.body_hash, file_state.body_hash),
                   mtime = coalesce(excluded.mtime, file_state.mtime),
                   last_seen = now()
                 """,
-                (resolved_path, uuid_value, fm_hash, body_hash, mtime),
+                (binding_id, resolved_path, uuid_value, fm_hash, body_hash, mtime),
             )
+            # Rename cleanup, scoped by binding for the same reason as
+            # `_update_path_only` above (MVR-05A0, #4543).
             cur.execute(
-                "delete from file_state where uuid = %s and path <> %s",
-                (uuid_value, resolved_path),
+                "delete from file_state "
+                "where vault_binding_id = %s and uuid = %s and path <> %s",
+                (binding_id, uuid_value, resolved_path),
             )
         conn.commit()
 
@@ -427,19 +526,32 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
     they must resolve the identity and emit the tombstone event themselves.
     """
     resolved_path = str(Path(path).resolve())
+    binding_id = _binding_id()
     deleted = False
     remaining_for_uuid: int | None = None
     delete_payload: dict[str, Any] | None = None
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
-        state = _get_state_by_path(conn, resolved_path)
+        _prepare(conn)
+        state = _get_state_by_path(conn, resolved_path, binding_id=binding_id)
         effective_uuid = (uuid_value or (state or {}).get("uuid") or "").strip() or None
         with conn.cursor() as cur:
-            cur.execute("delete from file_state where path = %s", (resolved_path,))
+            # MVR-05A0 (#4543): `path` alone stopped being unique when the key
+            # became (vault_binding_id, path), so this delete and the
+            # last-remaining-path count below are both binding-scoped. Unscoped,
+            # the delete would remove another binding's row for the same path,
+            # and the count would let binding A's surviving row suppress binding
+            # B's deletion tombstone.
+            cur.execute(
+                "delete from file_state where vault_binding_id = %s and path = %s",
+                (binding_id, resolved_path),
+            )
             deleted = (cur.rowcount or 0) > 0
             if effective_uuid:
-                cur.execute("select count(*) from file_state where uuid = %s", (effective_uuid,))
+                cur.execute(
+                    "select count(*) from file_state "
+                    "where vault_binding_id = %s and uuid = %s",
+                    (binding_id, effective_uuid),
+                )
                 row = cur.fetchone()
                 if isinstance(row, dict):
                     remaining_for_uuid = int(row.get("count", 0))
@@ -517,10 +629,10 @@ def upsert_object_from_note(
         else datetime.now(timezone.utc)
     )
 
+    binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
-        state = _get_state_by_uuid(conn, uuid_value)
+        _prepare(conn)
+        state = _get_state_by_uuid(conn, uuid_value, binding_id=binding_id)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         with conn.cursor() as cur:
             canonical_payload = _canonical_note_payload(
@@ -534,26 +646,26 @@ def upsert_object_from_note(
             try:
                 cur.execute(
                     """
-                    insert into objects(id, kind, payload, path)
-                    values(%s,%s,%s::jsonb,%s)
-                    on conflict (id) do update set
+                    insert into objects(vault_binding_id, id, kind, payload, path)
+                    values(%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, id) do update set
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (canonical_object_id, "note", payload_json, path_str),
+                    (binding_id, canonical_object_id, "note", payload_json, path_str),
                 )
             except Exception:
                 cur.execute(
                     """
-                    insert into objects(uuid, kind, payload, path)
-                    values(%s,%s,%s::jsonb,%s)
-                    on conflict (uuid) do update set
+                    insert into objects(vault_binding_id, uuid, kind, payload, path)
+                    values(%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, uuid) do update set
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, "note", payload_json, path_str),
+                    (binding_id, uuid_value, "note", payload_json, path_str),
                 )
         merged_payload = _merge_canonical_payload(
             conn,
@@ -577,6 +689,7 @@ def upsert_object_from_note(
             fm_hash=fm_hash,
             body_hash=body_hash,
             mtime=mtime,
+            binding_id=binding_id,
         )
 
         # KERNEL-01 atomicity (#2864): enqueue on the SAME connection, before
@@ -640,17 +753,17 @@ def sync_markdown(path: str) -> dict[str, Any]:
         "path": str(note_path),
     }
 
+    binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
+        _prepare(conn)
 
         # Previous state
-        state = _get_state_by_path(conn, str(note_path))
+        state = _get_state_by_path(conn, str(note_path), binding_id=binding_id)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         result["id"] = canonical_object_id
         rename_state: Optional[dict[str, Any]] = None
         if state is None:
-            rename_state = _get_state_by_uuid(conn, uuid_value)
+            rename_state = _get_state_by_uuid(conn, uuid_value, binding_id=binding_id)
 
         # Compare body before deferral
         prev_body_hash = (state or {}).get("body_hash")
@@ -665,6 +778,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
+                binding_id=binding_id,
             )
             append_change(f"Skipped sync for active edit: {note_path}", vault_path=note_path)
             conn.commit()
@@ -693,6 +807,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
+                binding_id=binding_id,
                 canonical_object_id=canonical_object_id,
             )
             conn.commit()
@@ -722,6 +837,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
+                binding_id=binding_id,
             )
             conn.commit()
             return result
@@ -766,15 +882,22 @@ def sync_markdown(path: str) -> dict[str, Any]:
             try:
                 cur1.execute(
                     """
-                    insert into objects(id, uuid, kind, payload, path)
-                    values(%s,%s,%s,%s::jsonb,%s)
-                    on conflict (id) do update set
+                    insert into objects(vault_binding_id, id, uuid, kind, payload, path)
+                    values(%s,%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, id) do update set
                       uuid = excluded.uuid,
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (canonical_object_id, uuid_value, "note", payload_json, str(note_path)),
+                    (
+                        binding_id,
+                        canonical_object_id,
+                        uuid_value,
+                        "note",
+                        payload_json,
+                        str(note_path),
+                    ),
                 )
                 wrote = True
             except Exception:
@@ -786,14 +909,14 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 try:
                     cur2.execute(
                         """
-                        insert into objects(id, kind, payload, path)
-                        values(%s,%s,%s::jsonb,%s)
-                        on conflict (id) do update set
+                        insert into objects(vault_binding_id, id, kind, payload, path)
+                        values(%s,%s,%s,%s::jsonb,%s)
+                        on conflict (vault_binding_id, id) do update set
                           kind = excluded.kind,
                           payload = excluded.payload,
                           path = excluded.path
                         """,
-                        (canonical_object_id, "note", payload_json, str(note_path)),
+                        (binding_id, canonical_object_id, "note", payload_json, str(note_path)),
                     )
                     wrote = True
                 except Exception:
@@ -804,14 +927,14 @@ def sync_markdown(path: str) -> dict[str, Any]:
             with conn.cursor() as cur3:
                 cur3.execute(
                     """
-                    insert into objects(uuid, kind, payload, path)
-                    values(%s,%s,%s::jsonb,%s)
-                    on conflict (uuid) do update set
+                    insert into objects(vault_binding_id, uuid, kind, payload, path)
+                    values(%s,%s,%s,%s::jsonb,%s)
+                    on conflict (vault_binding_id, uuid) do update set
                       kind = excluded.kind,
                       payload = excluded.payload,
                       path = excluded.path
                     """,
-                    (uuid_value, "note", payload_json, str(note_path)),
+                    (binding_id, uuid_value, "note", payload_json, str(note_path)),
                 )
 
         merged_payload = _merge_canonical_payload(
@@ -843,6 +966,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
             fm_hash=fm_hash,
             body_hash=body_hash,
             mtime=mtime,
+            binding_id=binding_id,
         )
         conn.commit()
 
@@ -862,12 +986,12 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     )
     mtime = datetime.fromtimestamp(new.stat().st_mtime, tz=timezone.utc)
     result = {"uuid": frontmatter["uuid"], "updated": False}
+    binding_id = _binding_id()
     with _conn() as conn:
-        ensure_schema(conn)
-        conn.commit()
-        state = _get_state_by_path(conn, str(old))
+        _prepare(conn)
+        state = _get_state_by_path(conn, str(old), binding_id=binding_id)
         if not state:
-            state = _get_state_by_uuid(conn, frontmatter["uuid"])
+            state = _get_state_by_uuid(conn, frontmatter["uuid"], binding_id=binding_id)
         if not state:
             append_change(f"Rename detected without state for {new_path}", vault_path=new)
             conn.commit()
@@ -887,6 +1011,7 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
             fm_hash=fm_hash,
             body_hash=body_hash,
             mtime=mtime,
+            binding_id=binding_id,
         )
         conn.commit()
         result["updated"] = True

@@ -6,6 +6,8 @@ import argparse
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 import ctypes
+import hashlib
+import hmac
 import os
 from pathlib import Path
 import re
@@ -52,6 +54,22 @@ class HostSecretBootstrapTerminated(HostSecretBootstrapError):
     def __init__(self, signum: int) -> None:
         super().__init__("host secret bootstrap terminated for declared consumer")
         self.signum = signum
+
+
+class HostSecretSharedDomainDivergenceError(HostSecretBootstrapError):
+    """Two declared consumers of a shared-domain secret resolved to different material.
+
+    Raised without either value, or anything derived from which a value could
+    be recovered — only the declared logical secret identifier, which is what
+    an operator needs to locate and re-provision the diverged Keychain items.
+    """
+
+    def __init__(self, shared_domain_secret_ref: str) -> None:
+        super().__init__(
+            "host secret bootstrap failed for declared consumer: shared-domain "
+            f"secret diverges across consumers: {shared_domain_secret_ref}"
+        )
+        self.shared_domain_secret_ref = shared_domain_secret_ref
 
 
 SignalHandler = Callable[[int, FrameType | None], None]
@@ -304,6 +322,78 @@ def _secret_failure(*, secret: str, kind: str) -> HostSecretBootstrapError:
     )
 
 
+def _shared_domain_comparable_bytes(kind: str, value: str) -> bytes:
+    """Normalize *value* to the bytes the cipher domain actually uses.
+
+    `raw-store-key` values are hex text that the raw store decodes with
+    `bytes.fromhex` before use as key material (`app/heimdal/raw_store.py`), so
+    two hex strings that differ only in case are the *same* key. Comparing the
+    raw text would flag that pair as diverged even though the domain agrees;
+    decode first so the equivalence check matches the cipher's own reading of
+    the value. A value that fails to decode is left as UTF-8 text — it is
+    already malformed for its declared kind and will fail
+    ``_validate_secret`` on its own path; this function only has to make sure
+    it does not COMPARE EQUAL to a well-formed sibling by accident, and text
+    bytes never collide with decoded key bytes here.
+    """
+    if kind == "raw-store-key":
+        try:
+            return bytes.fromhex(value)
+        except ValueError:
+            return value.encode("utf-8")
+    return value.encode("utf-8")
+
+
+def _shared_domain_digest(kind: str, value: str) -> bytes:
+    """Non-reversible fingerprint used to compare shared-domain material.
+
+    Never return, log, or persist this alongside the value it was derived
+    from; it exists only to be compared against another digest in-process.
+    """
+    return hashlib.sha256(_shared_domain_comparable_bytes(kind, value)).digest()
+
+
+def _check_shared_domain_agreement(
+    *,
+    channel: str,
+    consumer: str,
+    secret: str,
+    kind: str,
+    value: str,
+    contract: HostSecretContract,
+    keychain_lookup: KeychainLookup,
+) -> None:
+    """Refuse rather than proceed when a sibling consumer's material differs.
+
+    Only secrets declared `shared_key_domain` are checked. A sibling consumer
+    whose own material cannot be resolved (not yet provisioned, a lookup
+    failure the sibling's own bootstrap will surface on its own path) is not
+    itself evidence of divergence, so it is skipped here rather than failing
+    this consumer closed — narrowly, on the same typed failure every
+    `keychain_lookup` implementation in this module raises, so an unexpected
+    programming error (wrong callable signature, a decode bug) still fails
+    this consumer closed instead of silently disabling the check. Only two
+    resolvable values that disagree count as divergence.
+    """
+    if not contract.is_shared_key_domain(secret):
+        return
+    own_digest = _shared_domain_digest(kind, value)
+    for sibling_consumer in sorted(
+        contract.consumers_declared_for(channel=channel, secret=secret)
+    ):
+        if sibling_consumer == consumer:
+            continue
+        sibling_account = contract.keychain_account(
+            channel=channel, consumer=sibling_consumer, secret=secret
+        )
+        try:
+            sibling_value = keychain_lookup(contract.keychain_service, sibling_account)
+        except HostSecretBootstrapError:
+            continue
+        if not hmac.compare_digest(_shared_domain_digest(kind, sibling_value), own_digest):
+            raise HostSecretSharedDomainDivergenceError(secret)
+
+
 def _resolve_consumer_environment(
     *,
     channel: str,
@@ -340,6 +430,20 @@ def _resolve_consumer_environment(
             # is present and wrong is a misconfiguration, never an opt-out.
             if not _validate_secret(kind, value):
                 raise _secret_failure(secret=secret, kind=kind)
+            # A shared-domain secret backs one cipher domain fed by more than
+            # one consumer process (#4512): a value that is individually valid
+            # is still wrong if a sibling consumer holds different material,
+            # so refuse before this consumer's bootstrap can proceed into a
+            # split cipher domain.
+            _check_shared_domain_agreement(
+                channel=channel,
+                consumer=consumer,
+                secret=secret,
+                kind=kind,
+                value=value,
+                contract=contract,
+                keychain_lookup=keychain_lookup,
+            )
             resolved[env_name] = value
     except HostSecretBootstrapError:
         raise

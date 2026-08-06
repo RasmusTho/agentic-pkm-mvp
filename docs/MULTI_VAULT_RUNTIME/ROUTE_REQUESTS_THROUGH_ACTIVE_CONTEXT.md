@@ -158,10 +158,13 @@ not background lifecycles.
   independently safe `global` work. The worker releases the global fence after the stable snapshot
   but holds the shared lease through external dispatch, acknowledgement, and receipt; revocation,
   relocation, or removal therefore waits for an already-authorized effect or blocks it before effect.
-  Before 05A enables that dispatch, it migrates every already-enabled GOV revocation producer to
-  acquire the host-global ownership fence and the same binding's exclusive effect lease before
-  advancing the authorization epoch. Removal and relocation remain capability-not-ready, but an
-  enabled revocation can no longer cross the worker validation-to-dispatch window.
+  Before 05A enables that dispatch, it seals the GOV revocation seam: any enabled production path
+  must acquire the host-global ownership fence and the same binding's exclusive effect lease before
+  advancing the authorization epoch, and the enabled production set is closed by inventory. That set
+  is empty at 05A — the one production caller of the binding authorizer seeds binding facts and never
+  revokes — so the seal guards against the first producer landing unfenced rather than migrating
+  producers that already exist. Removal and relocation remain capability-not-ready, and no enabled
+  revocation can cross the worker validation-to-dispatch window.
   MVR-06 owns multi-binding dispatch and governed quarantine
   recovery; until it lands no ambiguous row can execute against an env-selected vault.
 - While every old DB/outbox producer is fenced and before any upgraded producer is enabled, classify
@@ -250,18 +253,22 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## Bounded implementation issue decomposition
 
-This specification maps to four serial implementation issues and must never be filed as one child.
-Each extracted issue copies a complete canonical Issue contract/SBS block and carries only the
-acceptance criteria prefixed with its ID:
+This specification maps to four serial implementation stages — 05A, 05B, 05C, 05D — and must never
+be filed as one child. A stage is a contract boundary, not a promise that the stage fits one
+delivery: stage 05A is itself decomposed into bounded children under `05A child decomposition`
+below. Each extracted issue copies a complete canonical Issue contract/SBS block and carries only
+the acceptance criteria prefixed with its ID:
 
 1. **MVR-05A — binding-keyed persistence cutover:** projection/outbox schema and backfill,
    idempotency classification, all-process mixed-version fence, minimum-runtime floor, duplicate-
    binding projection isolation, and an immediately shipped scalar-worker poll/ack compatibility
-   gate holding the per-binding shared effect lease through dispatch/ack/receipt plus migration of
-   every enabled GOV-revocation producer to the matching exclusive lease before dispatch activates,
+   gate holding the per-binding shared effect lease through dispatch/ack/receipt plus a sealed
+   GOV-revocation seam requiring the matching exclusive lease before dispatch activates, with the
+   enabled production producer set closed by inventory and empty on delivery,
    with a non-skippable
    real-PostgreSQL CI receipt and DB/deployment/release owner-doc
-   writebacks.
+   writebacks. This stage does not fit one delivery and is executed by the bounded children in
+   `05A child decomposition`; #3859 is its hub, not a pickup Issue.
 2. **MVR-05B — request ingress and reads:** production resolver, picker, API/CLI/agent/MCP context
    propagation including distinct one-request-override and retained-session carriers, preserved
    cognitive dimensions plus separately server-derived per-call GOV action/permission, foreground
@@ -291,8 +298,79 @@ acceptance criteria prefixed with its ID:
    dedup, remaining-producer migration and full worker delivery, event-contract writeback, and aggregate request
    acceptance. Depends on 05C and closes MVR-05.
 
-Every partial state remains fenced as described in `Cross-Task Invariants / Interaction Safety`;
-four distinct merged receipts are required on #2143.
+Every partial state remains fenced as described in `Cross-Task Invariants / Interaction Safety`.
+One merged receipt is required on #2143 for **every filed child**, and one stage receipt for each of
+05A–05D. The receipt count is the number of children actually filed, not a constant: it was four
+when this section was written, and each later decomposition raises it. A stage receipt is posted by
+the stage's hub Issue after every child of that stage has merged.
+
+### 05A child decomposition
+
+Stage 05A was filed as one Issue (#3859) and stopped three times without a line of production code.
+The stops were not capability failures: the first two found real blockers, and the third found that
+the remaining scope has no reachable end state, because the stage's own partial-delivery gates
+forbid merging a subset of it. Two prerequisites had already been carved out of it reactively, one
+blocker at a time (MVR-05A0 #4543, MVR-05A1 #4560). This section does that decomposition once,
+deliberately, for the remainder.
+
+**Sizing basis.** The two carved-out prerequisites are the calibration, because they did exactly the
+work the remainder repeats at this repository's documentation and proof bar: PR #4550 adopted and
+rekeyed one table in 2,202 added lines across 20 files; PR #4569 adopted two tables in 2,562 lines
+across 23 files. Both merged cleanly. The remainder is fifteen more tables plus five workstreams the
+table work does not amortise, so it does not fit one delivery.
+
+**Why seven children, and what changes that number.** The children are drawn on *mechanism*
+boundaries, not on table count. Each owns exactly one adoption, rebuild, or producer mechanism, so a
+child never pays to wire the same producer module or parity harness twice. The number is therefore
+derived — one classification gate, one child per durable-projection producer module, one per missing
+concurrency primitive, one for the outbox key mechanism, and one closer — and it changes when the
+inventory in 05A2 reports a new producer module or a new rebuild mechanism, not when the table count
+moves. Group membership is likewise defined by query against that inventory (the rows classified
+`binding-scoped` whose binding column is still absent, filtered to the group's producer module)
+rather than by a list re-typed into three Issue bodies.
+
+Order is serial and deliberate. The classification gate goes first because it carries no schema risk
+and because it is what prevents an unclassified durable table from landing in the middle of a
+multi-slice cutover. The effect lease sits after the table groups because it is a prerequisite only
+of the closer and touches no durable projection, so delaying it delays nothing and keeps its
+from-scratch concurrency risk from compounding with migration risk.
+
+| Child | Issue | Owns | Depends on | Initial capability |
+| --- | --- | --- | --- | --- |
+| MVR-05A0 | [#4543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4543) | `file_state` adoption and binding rekey | 03, 04 | delivered — PR #4550 |
+| MVR-05A1 | [#4560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4560) | `objects` / `agent_memories` adoption, runtime-DDL retirement | 05A0 | delivered — PR #4569 |
+| MVR-05A2 | [#4576](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4576) | durable-table classification inventory and the architecture gate that derives its population from the revision chain | 05A1 | Sol/high |
+| MVR-05A3 | [#4577](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4577) | `store_*` projection group and `app/stores/pg.py` producers | 05A2 | Terra/high |
+| MVR-05A4 | [#4578](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4578) | ingest projection group and `app/db/db.py` producers | 05A3 | Terra/high |
+| MVR-05A5 | [#4579](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4579) | replay projection group and the binding-scoped rebuild paths | 05A4 | Terra/high |
+| MVR-05A6 | [#4580](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4580) | the per-binding shared/exclusive effect lease | 05A5 | Sol/xhigh |
+| MVR-05A7 | [#4581](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4581) | outbox binding column and dual-key compatibility dedup | 05A6 | Sol/xhigh |
+| MVR-05A8 | [#4582](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4582) | all-process fence, minimum-runtime floor, worker gate, owner-doc writebacks, stage closure | 05A7 | Sol/high |
+
+The three table groups route to Terra/high because the classification contract is frozen by 05A2
+before they start, which is what makes them mechanical. A group escalates to Sol/high when any table
+it owns trips a stated condition: it needs a primary-key or unique-constraint rewrite rather than an
+additive column plus additive index; it is an inbound foreign-key target whose consumer set must be
+re-derived; or its rows carry authority or receipt provenance. 05A2's inventory records which
+condition each table trips, so the routing is read off the inventory rather than guessed. Needing a
+schema-parity proof written from scratch is *not* an escalation condition — nine of the fifteen
+tables need one, so treating it as a trigger would escalate everything and route nothing.
+
+**AC-6 was not implementable as specified and has been replaced.** The original criterion required
+pending legacy outbox keys to be "scoped/coalesced" into upgraded keys before the first binding-keyed
+producer starts. `derive_idempotency_key` is `uuid5(namespace, sha256(topic ␟ source_id ␟
+content_fingerprint))`, but the `outbox` table has six columns — `id`, `topic`, `payload`,
+`created_at`, `delivered_at`, `attempts` — and no revision has altered it since `f3a1c9d2e4b7`.
+Neither `source_id` nor `content_fingerprint` is persisted; thirty-six call sites each choose their
+own, and one producer mixes in a marker deliberately kept out of the payload. No migration can
+recompute the upgraded key for a stored row, so coalescing cannot be a key rewrite at all. The
+replacement delivers the same invariant — one canonical dispatch lineage across the cutover, and no
+duplicated effect — by preserving each row's pre-cutover key in a `legacy_key` column and having
+binding-keyed producers derive both keys and suppress against either. It does not rotate
+`OUTBOX_IDEMPOTENCY_NAMESPACE`, whose documented never-rotate promise stays literally intact. The
+delivered-row case is load-bearing rather than incidental: outbox rows are never purged, so a
+post-cutover re-emission that is not deduped against an already-*delivered* legacy row is a genuine
+duplicate effect, not a harmless extra row.
 
 Partial-delivery gates are explicit: after 05A, only the compatible new runtime may use the migrated
 binding-keyed store and its scalar worker may poll/ack only a row matching its explicit current
@@ -379,11 +457,16 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - [ ] **MVR-05A:** Two registered bindings containing the same artifact UUID retain independent object,
   file-state, vector/index, retrieval, and receipt provenance without overwrite or cross-read.
   - Verify: `tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding`
-- [ ] **MVR-05A:** A checked-in closed production-projection inventory classifies every durable
-  projection schema, migration, and producer under `app/**` as binding-scoped or explicitly global;
-  it includes the standing-question and episode projections, and an architecture gate fails for any
-  new or existing vault-backed table mutation, replacement, or `TRUNCATE` path that is unclassified.
+- [ ] **MVR-05A:** A checked-in production-projection inventory classifies every durable projection
+  schema, migration, and producer under `app/**` as binding-scoped or explicitly global, each with a
+  written reason; it includes the standing-question and episode projections. The architecture gate
+  derives the durable-table population from the Alembic revision chain instead of listing it, and
+  fails on the difference `discovered_durable_tables - classified_tables`, so a table introduced by a
+  future revision — and any mutation, replacement, or `TRUNCATE` path targeting it — fails the gate
+  until it is classified. The manifest carries no default classification and no wildcard. "Closed"
+  means nothing durable may be unclassified, not that a fixed set is enumerated.
   - Verify: `tests/architecture/test_multi_vault_projection_inventory.py::test_every_production_projection_schema_and_producer_is_classified`
+  - Verify: `tests/architecture/test_multi_vault_projection_inventory.py::test_a_durable_table_added_by_a_later_revision_fails_until_classified`
 - [ ] **MVR-05A:** Replacing or rebuilding standing-question and episode projections for binding B
   scopes deletion, uniqueness, and insertion by stable binding, so rows for binding A—including
   colliding question or episode IDs—remain intact and readable only through A.
@@ -396,10 +479,16 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   SHA; the tests error rather than skip when PostgreSQL or required constraints are absent.
   - Verify: `tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip` +
     successful exact-SHA `integration-nightly / pg-contracts` workflow receipt on #2143
-- [ ] **MVR-05A:** Before any binding-keyed producer starts, all pending legacy outbox keys are classified and
-  scoped/coalesced under the DB fence; an identical retry produces one canonical dispatch lineage,
-  while conflicting or ambiguous rows quarantine and cannot later duplicate the upgraded event.
-  - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_idempotency_keys_coalesce_before_new_producer_enable`
+- [ ] **MVR-05A:** Before any binding-keyed producer starts, every legacy outbox row — pending and
+  already delivered — is classified under the DB fence and retains its pre-cutover key in a preserved
+  `legacy_key` column, without recomputing any key and without rotating
+  `OUTBOX_IDEMPOTENCY_NAMESPACE`. A binding-keyed producer derives both the legacy and the
+  binding-scoped key and suppresses the emission when a row exists under either, so an identical
+  retry produces one canonical dispatch lineage across the cutover and a re-emission cannot duplicate
+  an already-delivered legacy effect. Rows whose binding is not provable quarantine and cannot later
+  duplicate the upgraded event.
+  - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_rows_keep_their_keys_and_classify_or_quarantine`
+  - Verify: `tests/services/test_multi_vault_outbox_dual_key_dedup.py::test_binding_keyed_producer_suppresses_against_pending_and_delivered_legacy_rows`
 - [ ] **MVR-05A:** The migration records the MVR-05 minimum-runtime floor before any binding-keyed database
   state is written; scalar rollback then fails before starting an old API/worker, including on a
   one-binding instance, while a compatible roll-forward retains the full lineage.
@@ -424,11 +513,16 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   It holds the binding shared-effect lease from final validation through dispatch, acknowledgement,
   and receipt, so concurrent revocation/removal/relocation cannot complete across an effect window.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch`
-- [ ] **MVR-05A:** Before vault-bound worker dispatch activates, every enabled GOV-revocation
-  production path takes the ownership fence and matching exclusive binding lease before advancing
-  authorization state; a revocation after worker validation either blocks dispatch or waits for the
-  authorized dispatch, acknowledgement, and receipt to finish. Removal/relocation stay dormant.
+- [ ] **MVR-05A:** Before vault-bound worker dispatch activates, the GOV-revocation seam is sealed:
+  no enabled production path may advance binding authorization state without first taking the
+  host-global ownership fence and the matching exclusive binding lease. The enabled production
+  producer set is closed by a checked-in inventory and is **empty on delivery** — production seeds
+  binding facts but never revokes — so this criterion is discharged by proving that set empty and by
+  the gate failing when a producer is added without the fence, not by migrating existing producers.
+  A revocation that does reach the seam after worker validation either blocks dispatch or waits for
+  the authorized dispatch, acknowledgement, and receipt to finish. Removal/relocation stay dormant.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_revocation_cannot_cross_worker_dispatch_effect_window`
+  - Verify: `tests/architecture/test_multi_vault_projection_inventory.py::test_enabled_gov_revocation_producers_are_fenced_or_absent`
 - [ ] **MVR-05C:** Production capture/governed-write paths require one explicit authorized target,
   reject an otherwise registered/owned/GOV-authorized target outside the immutable selected binding
   set (and any batch that is not a subset), and record vault/context provenance in their receipt.
@@ -653,7 +747,14 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05A validation
 
-- `pytest -q tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding tests/integration/test_multi_vault_projection_isolation.py::test_binding_scoped_rebuild_preserves_standing_question_and_episode_rows tests/architecture/test_multi_vault_projection_inventory.py::test_every_production_projection_schema_and_producer_is_classified tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_idempotency_keys_coalesce_before_new_producer_enable tests/ops/test_mvr05_mixed_version_fence.py::test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process tests/ops/test_mvr05_mixed_version_fence.py::test_compatibility_translator_keeps_existing_producers_live_without_legacy_rows tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip`
+This is the stage-level aggregate, executed by the 05A hub Issue once every child of
+`05A child decomposition` has merged. Each child runs only the subset its own acceptance criteria
+map to, plus the whole-suite selection its diff forces. Every new PostgreSQL-marked test a child adds
+must be registered in each lane that is supposed to run it — the durable-ownership target list, the
+nightly `pg-contracts` invocation, and both the paths filter and the pytest block of the PR-path
+`index_pg` lane — or it runs in no lane at all while the gates still pass.
+
+- `pytest -q tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding tests/integration/test_multi_vault_projection_isolation.py::test_binding_scoped_rebuild_preserves_standing_question_and_episode_rows tests/architecture/test_multi_vault_projection_inventory.py::test_every_production_projection_schema_and_producer_is_classified tests/architecture/test_multi_vault_projection_inventory.py::test_a_durable_table_added_by_a_later_revision_fails_until_classified tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_rows_keep_their_keys_and_classify_or_quarantine tests/services/test_multi_vault_outbox_dual_key_dedup.py::test_binding_keyed_producer_suppresses_against_pending_and_delivered_legacy_rows tests/ops/test_mvr05_mixed_version_fence.py::test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process tests/ops/test_mvr05_mixed_version_fence.py::test_compatibility_translator_keeps_existing_producers_live_without_legacy_rows tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip`
 - `pytest -q tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_revocation_cannot_cross_worker_dispatch_effect_window`
 - Dispatch exact-head `.github/workflows/integration-nightly.yaml` job `pg-contracts`, whose asserted
   MVR-05A manifest runs the binding-keyed migration/backfill/dedup targets against provisioned

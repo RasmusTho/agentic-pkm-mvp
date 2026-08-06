@@ -35,6 +35,14 @@ history, repository file, issue, or receipt. HSP-02 will own non-interactive ret
 runtime material. A raw-store key is generated only when the governed preflight proves no encrypted
 records require an existing key; rotation is a separate migration, never a bootstrap retry.
 
+**Shared-domain secrets** (`shared_key_domain: true`, currently only `heimdal.raw-store-key`) feed one
+cipher domain from more than one consumer process — `heimdal-capture-watch` and `heimdal-api-ingress`
+both encrypt/decrypt the same raw-evidence records with it. When creating or re-provisioning that item
+on a channel, write the *identical* generated value to every declared consumer's account for that
+channel in the same operation. The bootstrap fail-closed check added in #4512 only detects a mismatch
+after the fact and refuses rather than proceeding into a split cipher domain; it cannot repair one, and
+a diverged domain that already produced records is out of scope for that check to fix.
+
 ## Acceptance criteria
 
 - [x] The contract lists every initial logical secret, consumer, and permitted channel without a

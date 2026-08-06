@@ -267,6 +267,13 @@ def _fake_inventory_python_bin(bin_dir: Path) -> None:
     )
 
 
+def _read_optional_bytes(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
 def _runtime_env(tmp_path: Path, health: dict[str, object]) -> dict[str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -286,6 +293,7 @@ def _runtime_env(tmp_path: Path, health: dict[str, object]) -> dict[str, str]:
     for name in (
         "DESIGN_HANDOFF_APP_LOCAL_SETTINGS",
         "INSTANCE_LEGACY_OWNER_CONFIG_PATHS",
+        "RUNTIME_ENV_PATH",
         "VAULT_HOST_ROOT",
         "VAULT_ROOT_DEV",
         "VAULT_ROOT_PROD",
@@ -297,6 +305,12 @@ def _runtime_env(tmp_path: Path, health: dict[str, object]) -> dict[str, str]:
     env.update(
         {
             "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+            # #4519 — scope the launcher's runtime env write to this test's
+            # tmp_path. export_runtime_env.sh derives its default output path
+            # from its own repo location, so without this override a launcher
+            # subprocess overwrites the repository's real tmp/runtime.env with
+            # pytest tmp paths that later dangle and block channel deploys.
+            "RUNTIME_ENV_PATH": str(tmp_path / "runtime.env"),
             "VAULT_ROOT": str(vault),
             "XDG_DATA_HOME": str(tmp_path / "xdg"),
             "DATABASE_URL": "postgresql://app:app@db:5432/app",
@@ -406,3 +420,146 @@ def test_runtime_verify_rejects_hard_health_failures(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "required health ok=true not met" in result.stdout
     assert "API_READY=false" in result.stdout
+
+
+def test_launcher_tests_do_not_write_repo_runtime_env(tmp_path: Path) -> None:
+    """#4519 enforcement: a real launcher run leaves the repo's runtime env alone.
+
+    Runs the same prod launcher invocation whose temp vault path was found in
+    the host's real ``tmp/runtime.env`` and asserts against the real repo paths
+    afterwards — no mocked writer. The launcher must instead write the
+    ``tmp_path``-scoped file selected via ``RUNTIME_ENV_PATH``.
+    """
+    repo_runtime_env = REPO_ROOT / "tmp" / "runtime.env"
+    repo_test_runtime_env = REPO_ROOT / "tmp-test" / "runtime.env"
+    before = _read_optional_bytes(repo_runtime_env)
+    before_test = _read_optional_bytes(repo_test_runtime_env)
+
+    env = _runtime_env(tmp_path, _deferred_index_health())
+    env["COMPOSE_FILE"] = "docker-compose.yaml:docker-compose.prod.yml"
+    env["COMPOSE_PROJECT_NAME"] = "pkm-prod"
+    env["PKM_ENVIRONMENT"] = "prod"
+
+    result = run_runtime_start(
+        ["bash", "scripts/start_full_system.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        progress_path=Path(env["STARTUP_HARNESS_PROGRESS_PATH"]),
+        total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
+    )
+
+    # Same launcher conclusion as the deferred-index prod rejection scenario;
+    # a launcher that failed before exporting the runtime env would make the
+    # invariance below vacuous, so prove the scoped write actually happened.
+    assert result.returncode == 1, result.stderr + result.stdout
+    scoped_runtime_env = tmp_path / "runtime.env"
+    assert scoped_runtime_env.exists(), result.stderr + result.stdout
+    scoped_content = scoped_runtime_env.read_text(encoding="utf-8")
+    assert f"VAULT_HOST_ROOT={tmp_path / 'vault'}" in scoped_content
+
+    # The repository's own operator state stayed byte-identical.
+    assert _read_optional_bytes(repo_runtime_env) == before
+    assert _read_optional_bytes(repo_test_runtime_env) == before_test
+
+
+def test_unscoped_runtime_env_write_is_refused_under_pytest(tmp_path: Path) -> None:
+    """#4519 guard: without RUNTIME_ENV_PATH, a pytest-driven export fails loud.
+
+    A future launcher test that forgets to scope its runtime env must be
+    refused before any write to the repository's real ``tmp/runtime.env`` —
+    not silently redirected.
+    """
+    repo_runtime_env = REPO_ROOT / "tmp" / "runtime.env"
+    repo_test_runtime_env = REPO_ROOT / "tmp-test" / "runtime.env"
+    before = _read_optional_bytes(repo_runtime_env)
+    before_test = _read_optional_bytes(repo_test_runtime_env)
+
+    env = _runtime_env(tmp_path, _deferred_index_health())
+    env.pop("RUNTIME_ENV_PATH", None)
+    env.pop("COMPOSE_PROJECT_NAME", None)
+    # The guard keys on the marker pytest itself exports to subprocesses; the
+    # harness env must still carry it for the guard to be reachable at all.
+    assert "PYTEST_CURRENT_TEST" in env
+
+    result = subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 3, result.stderr + result.stdout
+    assert "refusing to write" in result.stderr
+    assert "RUNTIME_ENV_PATH" in result.stderr
+    assert _read_optional_bytes(repo_runtime_env) == before
+    assert _read_optional_bytes(repo_test_runtime_env) == before_test
+
+
+def test_operator_invocation_still_writes_repo_runtime_env(tmp_path: Path) -> None:
+    """#4519 non-regression: a real operator invocation writes the repo default.
+
+    The exporter is copied into a tmp_path-scoped fake repo root so the
+    repo-relative default (``<root>/tmp/runtime.env``, derived from the
+    script's own location) can be exercised end-to-end without touching this
+    repository's real file. The pytest markers are removed from the child
+    environment exactly as an operator shell would lack them.
+    """
+    fake_root = tmp_path / "fake-repo"
+    (fake_root / "scripts" / "lib").mkdir(parents=True)
+    for rel in ("scripts/export_runtime_env.sh", "scripts/lib/load_env_defaults.sh"):
+        (fake_root / rel).write_bytes((REPO_ROOT / rel).read_bytes())
+
+    # The exporter's inline Python needs the interpreter that carries the app
+    # dependencies; expose it as `python3` the way an operator PATH would.
+    bin_dir = tmp_path / "operator-bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "python3",
+        f"""
+        #!/usr/bin/env bash
+        exec {sys.executable!s} "$@"
+        """,
+    )
+
+    vault = tmp_path / "operator-vault"
+    vault.mkdir()
+
+    env = os.environ.copy()
+    for name in (
+        "COMPOSE_PROJECT_NAME",
+        "NO_VAULT_MODE",
+        "PYTEST_CURRENT_TEST",
+        "PYTEST_VERSION",
+        "RUNTIME_ENV_PATH",
+        "VAULT_HOST_ROOT",
+        "WATCHER_RUNTIME_ENV_FILE",
+    ):
+        env.pop(name, None)
+    env.update(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+            "PYTHONPATH": str(REPO_ROOT),
+            "VAULT_ROOT": str(vault),
+            "DATABASE_URL": "postgresql://app:app@db:5432/app",
+            "DB_DSN": "postgresql://app:app@db:5432/app",
+            "LLM_PROVIDER": "mock",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(fake_root / "scripts" / "export_runtime_env.sh")],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    written = fake_root / "tmp" / "runtime.env"
+    assert written.exists(), result.stderr + result.stdout
+    content = written.read_text(encoding="utf-8")
+    assert f"VAULT_HOST_ROOT={vault}" in content
+    assert "VAULT_ROOT=/app/vault" in content

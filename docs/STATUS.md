@@ -49,12 +49,54 @@ promote public internet readiness.
 - Prod promotion model fix (#2656): AC1 and AC3 are done, while AC2 remains operator-gated pending operator receipt and sibling-doc reconciliation.
 - Delivery wave follow-on receipts: GraphQL exhaustion fix #2686, watcher settings receipts #2678, nested-vault boundary enforcement #2689, and deployment environment-separation spec #2692 are merged and reflected in the current shipped baseline.
 
+2026-08-04 fix writeback:
+- `semanticmd` merge driver's content-loss backstop no longer accepts lossy resolutions (#4616):
+  a post-merge review of PR #4604 found that link carryover could report a clean resolve while
+  dropping THEIRS' distinct non-link prose, and that the token-similarity near-duplicate bypass
+  (order/negation-blind) let a non-vault repository doc resolve to OURS silently. Link carryover
+  now counts only when it is verifiably lossless (all of THEIRS' links land in the merged body and
+  THEIRS' remaining non-link prose already appears, word-aligned, in the merged body), and the
+  near-duplicate pick is scoped to vault notes with a non-empty `uuid:` identity on both sides.
+  Everything else conflicts. See `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
+
+2026-08-03 fix writeback:
+- `semanticmd` merge driver's content-loss guard now applies to vault notes too (#4603):
+  delivering #4505 surfaced that its non-vault-only scoping assumed vault-note merging performs
+  real semantic judgment; it does not (`judge_locus` is a stub, so `apply_decisions` always keeps
+  OURS). Once #4561 made the driver actually write `resolved` results to `%A`, a genuine two-sided
+  vault-note edit became a clean, silent `git rebase`/`git merge` that permanently dropped one
+  side's content while reporting success. `app/agents/merge_resolver/agent.py::merge_note_from_blobs`
+  now refuses `status=resolved` for any diverging bodies (vault or not) unless an exact match, the
+  markdown-link-carryover heuristic, or a genuine near-duplicate pick (token similarity `>= 0.85`)
+  accounts for the divergence; a length-based "prefer concise" mislabeling that fired regardless of
+  real similarity is also fixed. See `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
+
+2026-08-02 fix writeback:
+- `semanticmd` merge driver no longer routes repository documentation (#4505): `.gitattributes`
+  narrows `merge=semanticmd` off `docs/**`, `/README.md`, `/AGENTS.md`, `/CLAUDE.md`,
+  `/CONTRIBUTING.md`, `/THIRD_PARTY_NOTICES.md`, and `.codex/**` back to git's built-in text merge,
+  and `app/agents/merge_resolver/agent.py::merge_note_from_blobs` now refuses `status=resolved`
+  when neither side of a merge carries vault-note `uuid:` frontmatter identity and the bodies
+  diverge, forcing a real conflict instead of silently discarding one side's committed content.
+  Vault-note merging under `vault/**` is unchanged. See
+  `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
+- `semanticmd` merge driver now honours git's merge-driver file contract (#4496):
+  `app/cli/merge_driver.py` writes the resolved merge result to git's `%A` path instead of only
+  printing it to stdout (which git never reads), so a clean auto-merge no longer silently keeps
+  OURS while reporting success. `MERGE_STATUS`/`MERGE_REASON` diagnostics moved to stderr and can no
+  longer land inside merged markdown. Non-resolved outcomes (`conflict`/`prompted`) still leave `%A`
+  untouched for git's normal conflict handling. See
+  `docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md`.
+
 ## Health spine
 - HealthContract + WriteGuard + incident logging now form the deterministic spine for startup readiness; this snapshot is the baseline for initial go-live visibility.
+- `POST /ingest` now asserts `DEFAULT_WRITE_GUARD.assert_writes_allowed("ingest.object_create")` at the seam before any I/O, fail-closed like the other named WriteGuard seams (owner-decided epic #2778 F-D, `docs/architecture/formal-model.md :: 7. Divergences`); previously this seam was guardless.
+- The Heimdal time-spend projection's vault writes (#4609, repairing PR #4586 P1 residuals) quarantine observed bucket labels through the HEIM-9 path before materialization, replace owned notes only by expected-version compare-and-swap, create absent targets atomically no-clobber, and clear owned weekly notes the rebuild fold no longer targets — a racing human edit or creation always wins with a loud, item-scoped `blocked` receipt entry (`docs/HEIMDAL_SCREEN_STREAM/PROJECT_TIME_SPEND_ANALYSIS.md`).
 
 ## Runtime verification
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `watcher.run` audit rows plus `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
+- The worker heartbeat probe in `scripts/start_full_system.sh` reads the worker's heartbeat file through the container boundary (`docker compose exec`, `scripts/lib/worker_heartbeat_probe.sh`), matching the pre-existing watcher heartbeat probe. `/app/tmp` (and `/app/tmp-test`) is always the `runtime-tmp` Docker-managed named volume in every channel, never a host bind mount, so a host-path read could never observe a healthy worker's heartbeat — this previously failed `make prod-start-full` against a fully healthy pinned-image prod stack (#4361). The same startup path now never silently builds over an `APP_IMAGE_TAG` pin: pinned-image mode (`COMPOSE_FILE` without the `docker-compose.app-bind.yml` overlay) pulls the pin and fails loud on a pull miss unless `APP_BUILD_OVERRIDE=1` is explicitly set (`scripts/lib/pinned_image_guard.sh`), mirroring the existing `scripts/deploy_channel.sh` pull-only contract.
 - `/api/orientation` now provides a minimal read-only orientation runtime seam that returns a situational frame without a query term; explanation remains bounded to `leave_point`, `open_items`, and `notable_change` derived from runtime signals.
 - Leave-point cursor lookup now applies scope filtering at the DB boundary and uses a wider corrupt-row recovery candidate window; this is hardening of the existing read-only orientation seam, not a new mutation surface or semantic authority.
 - Workspace orientation and Companion UI repair hardening keeps placeholder "no unresolved" text out of returned open loops, requires independent signal categories before emitting MemoryCandidate handoff intents, preserves non-UTC authored timestamp offsets in Vault Browser metadata, exposes previous-page cursor metadata for Vault Browser navigation, renders structured leave-point fields (`logical_ref`/`artifact_uuid`/`captured_at`), and keeps direct note-save paths and proxied runtime error details bounded to the active vault/runtime response.
@@ -81,8 +123,20 @@ promote public internet readiness.
   deploy; a Keychain item that resolves to a *malformed* value does fail it, since the bootstrap is
   fail-closed on validation, and #4489 extended that to the optional `github.token` declared for the
   same consumer — tracked as `KD-4489-malformed-declared-secret-aborts-channel-deploy` on #4172) and
-  the `api` Compose service consumes it via its own env-file handle, without changing
-  how `heimdal-capture-watch` is provisioned. An api startup preflight detects a missing
+  the `api` Compose service consumes it via its own env-file handle. **`heimdal-capture-watch`'s
+  own provisioning is now channel-independent too (#4362):** the `HOST_SECRET_RUNTIME_ENV_FILE`
+  env-file layer that delivers `HEIMDAL_RAW_STORE_KEY` to that service lives in the base Compose
+  file (previously only the dev overlay carried it, so `test`/`prod` deploys never received the
+  key through the generated runtime env at all), the deploy wrapper's bootstrap gate now fires
+  for that service on every channel (previously dev-only), and `scripts/export_runtime_env.sh`
+  forwards an operator-set `HEIMDAL_CAPTURE_WATCH_DIR`/`HEIMDAL_RAW_READ_ALLOWLIST` into the
+  generated runtime env instead of requiring an ad-hoc shell export at compose time; the test
+  channel gets a hardcoded test-scoped watch dir the same way the `WATCHER_STATE_DIR`-family
+  paths already are. The supervised CLI entrypoint (no `--once`) also no longer exits on a
+  startup config error — it retries in place so the container stays resident long enough for the
+  independent Compose healthcheck to actually observe and report a config-missing failure as
+  `unhealthy`, instead of racing a `restart: unless-stopped` crash-loop that hid behind a stale
+  `healthy` status. An api startup preflight detects a missing
   `HEIMDAL_RAW_STORE_KEY` before first use, logs it loudly, and reports the media and screen
   ingress lanes `unavailable` on `/api/status` while every other API function keeps serving; the
   request-time named 500 `raw_store_key_unavailable` / `not_acknowledged` contract is unchanged.
@@ -188,6 +242,7 @@ promote public internet readiness.
 
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
+- `CI Smoke`'s push-lane `smoke-docker >> "CI gate: vaultwide panel verifier"` no longer false-positives on `main` (#4371): staged-backup verification (`_verify_staged_backup` -> `_global_live_owners`) validates the drained owner inventory by shape and ledger consistency instead of requiring every owner root to be a live directory in the verifying container, its top-level error names the failing inventory field, and the `vault` PR-test selection runs `tests/ops/test_instance_state_volume_contract.py` so this surface has pre-merge signal.
 - CI no longer treats absent model-provider credentials as a passing live-provider check: the optional
   Panel LLM E2E job and credential-gated Codex docs-guardian path are removed. Reintroducing either
   requires a separately declared credential backend and explicit cost/egress posture; deterministic
@@ -429,6 +484,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
   predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
   reconcile next.)
+- BuilderOps `PromotionIntent` creation validates `target_authority_surface` against the canonical
+  promotion target registry shared with the promotion gateway
+  (`app/builderops/models.py::PROMOTION_TARGET_SURFACES`): unsupported targets fail before
+  persistence at every boundary (store, CLI, MCP boundary, API), and legacy records persisted with
+  unsupported targets can only reach `rejected`/`discarded` through a receipt-bearing terminal
+  recovery transition that performs no promotion effect (#4171).
 - The BCP-05 verification lane now has a repo-side BuilderOps API/PostgreSQL/outbox implementation
   under PR #4416. That code presence is not a delivery claim: issue #3603 and its installed-main
   Demerzel pilot receipt remain the authority for whether BCP-05 acceptance is complete. The
@@ -469,7 +530,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   The projection remains read-only for coordination fields
   and has no write path for claim, lease, or lock state; dispatcher SQLite remains the authority for
   the legacy dispatcher/signboard claim lane per ADR-0010, while BCP-05 verification coordination
-  is the separately bounded BuilderOps API/PostgreSQL lane described above.
+  is the separately bounded BuilderOps API/PostgreSQL lane described above. `default_signboard_root()`
+  now distinguishes a dangling `lastActiveVaultRef` (`VaultContext.status == "missing"`, a
+  previously-selected vault whose path no longer exists on disk) from a genuinely never-selected
+  vault (`status == "none"`): the dangling case raises `DanglingActiveVaultReferenceError`, names the
+  missing path, and no longer claims "no active vault is selected" — matching the same status split
+  already established for `app/api/routes/companion.py`'s vault-selection-required responses (#4223).
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /
   `close`, `/api/canvas/sessions*`, session-log persistence, and governance-bearing mutation routing
   are shipped; broader Chat cognition and hybrid Panel/Chat mutation remain separate follow-up work.
@@ -626,6 +692,14 @@ Platform-side governance applied:
 - local Agent Issue Dispatcher hot-path coordination is now active: agents use dispatcher
   `status` / `next` / `claim` / `heartbeat` / `complete` for operational pickup while GitHub
   Issues, labels, and PR state remain the durable lifecycle truth
+- dispatcher pull sync is honest under the GitHub rate-limit kill switch (#4606,
+  LearningSignal `lrn_20260730235456_f70f8ccc`): a kill-switch-truncated pull records
+  `sync_result=partial` with `kill_switch_active=true` instead of a false-green `ok`,
+  `dispatcher pull --json` and the additive read-only `last_sync` block in
+  `dispatcher status --json` surface the partial outcome, and
+  `scripts/issue_pickup_claim.sh` routes a missing-task claim failure after such a sync to
+  explicit GitHub-label-only fallback guidance (see
+  `docs/AGENT_ISSUE_DISPATCHER.md :: Kill-Switch Partial Sync (#4606)`)
 - the verification-dispatch integration line now fails closed on exact-head, authoritative
   `github-actions` required-check evidence, preserves review/repair budgets across restart, and
   rejects ambiguous legacy active-plus-terminal authority chains. Host rollout remains disabled

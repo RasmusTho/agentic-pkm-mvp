@@ -817,6 +817,21 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "this call, in addition to the port's own guard; a blocked caller guard "
         "returns the item-scoped, re-runnable 'blocked' result."
     ),
+    ("app/heimdal/time_spend.py", "write_time_spend_note", 1): (
+        "guarded_by_port: write_time_spend_note passes write_guard (and the "
+        "distinct heimdal.time_spend.write action) through to "
+        "write_note_relative, which asserts write_guard.assert_writes_allowed"
+        "(action) at the port itself before any I/O (#2953); the caller-side "
+        "pre-assert #3345 added was removed by #4609 when the write became an "
+        "expected-version compare-and-swap (for this write_note_relative call "
+        "site the port guard is the only gate -- the function's create branch "
+        "is separately gated by create_candidate_note_once's own assert and "
+        "separately registered in the create-once census -- and "
+        "WritesBlockedError from it still converts to the loud, "
+        "item-scoped, re-runnable 'blocked' result). Re-classified from "
+        "guarded_by_caller as a directly-related repair in the same change "
+        "that altered the seam, per this census's own convention (#4609)."
+    ),
     ("app/heimdal/capture_note.py", "write_capture_note", 1): (
         "guarded_by_port: write_capture_note passes write_guard through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"

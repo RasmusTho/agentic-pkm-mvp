@@ -377,11 +377,21 @@ def test_create_once_stays_behind_knowledge_service_boundary() -> None:
             assert isinstance(owner, ast.FunctionDef)
             call_sites.append((str(path.relative_to(REPO_ROOT)), owner.name))
 
-    assert call_sites == [
+    # Sorted census: ``rglob`` yields directory-iteration order, which is
+    # filesystem-dependent (APFS and ext4 disagree), so the closed census
+    # compares as a sorted list to stay deterministic across hosts (#4609,
+    # mirroring the tests/properties create-once census).
+    assert sorted(call_sites) == [
         # Meeting finalization (CDLM-08, #4388): create-once Sources-zone
         # artifacts written atomically through the same O_EXCL primitive,
         # WriteGuard-gated with its own action string.
         ("app/heimdal/meeting_finalization.py", "finalize_session"),
+        # Time-spend projection (#4609): no-clobber creation of an absent
+        # weekly projection target through the same O_EXCL primitive at the
+        # write_ops boundary, WriteGuard-gated with its own action string, so
+        # a human note created in the check/write window blocks the
+        # projection instead of being overwritten by a versionless write.
+        ("app/heimdal/time_spend.py", "write_time_spend_note"),
         ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
     ]
     writeback_path = app_root / "knowledge_acquisition" / "candidate_writeback.py"

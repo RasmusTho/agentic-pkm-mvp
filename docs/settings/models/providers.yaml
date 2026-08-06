@@ -59,6 +59,12 @@ providers:
       - id: llama3.1:8b
         effective_identity: ollama/llama3.1:8b
         capabilities: {structured_output: true, system_prompt_channel: true}
+      # Local vision model for the always-on Heimdal screen-derivation stage
+      # (heimdal.screen_derivation, SCREEN-02). Declared here so that stage's
+      # route names a census-declared model instead of an ad-hoc string.
+      - id: llava:7b
+        effective_identity: ollama/llava:7b
+        capabilities: {}
       - id: nomic-embed-text:latest
         effective_identity: ollama/nomic-embed-text:latest
         capabilities: {}

@@ -113,12 +113,12 @@ owned by no single constituent. This is the concrete build-list this model impli
 
 | Substrate | Today | Target (Layer 2) | SBS reconciliation |
 |---|---|---|---|
-| **Event bus** | No cross-constituent bus; the DB outbox (`docs/EVENTS.md`) is Munin-internal | A shared publish/subscribe seam Heimdal publishes to and others subscribe to. **Open design (Fable):** whether this generalizes the existing outbox or is a new stream-native bus | `extend` (generalize outbox) or `reshape` if it changes outbox ownership |
+| **Event bus** | No cross-constituent bus; the DB outbox (`docs/EVENTS.md`) is Munin-internal | A shared publish/subscribe seam Heimdal publishes to and others subscribe to. **Design resolved (#4545):** generalize the outbox discipline (append-only log + per-consumer cursors, DB-native; stream-native deferred as an ADR-gated transport swap) — see [`docs/architecture/layer2-event-bus-and-kap-backbone.md :: Event-bus direction`](../architecture/layer2-event-bus-and-kap-backbone.md#event-bus-direction) | `extend` (generalize outbox) or `reshape` if it changes outbox ownership |
 | **Identity / entity register** | Implicit; entities resolved per-surface | **Shared canonical register** (owner decision, §6) so "Rasmus"/"Anna" mean the same entity across Heimdal and Munin | `extend` |
 | **Build / CI** | Monorepo CI owned by the repo | Constituent-agnostic build/CI substrate; per-constituent gates compose onto it | `conform` |
 | **Container base / runtime image** | Per-app compose | Shared base image + compose fragments constituents extend | `conform` |
 | **Hardware / host topology** | Mac-mini + gaming-PC + thin-client over Tailscale (`ops/host-setup/README.md`) | Substrate all constituents schedule onto; sensor capture may pin dedicated hardware | `conform` |
-| **Provenance / replay primitives** | KAP defines source-plugin + refinement + provenance/replay (`docs/KNOWLEDGE_ACQUISITION/`) | Candidate Layer-2 standard both KAP and Heimdal conform to. **Open design (Fable):** shared backbone vs. Heimdal-native (owner left this to Fable, §6) | `extend` |
+| **Provenance / replay primitives** | KAP defines source-plugin + refinement + provenance/replay (`docs/KNOWLEDGE_ACQUISITION/`) | Candidate Layer-2 standard both KAP and Heimdal conform to. **Design resolved (#4545):** one shared backbone contract (the Heimdal published-observation backbone, on the fixed shared provenance primitives) — see [`docs/architecture/layer2-event-bus-and-kap-backbone.md :: KAP-backbone decision`](../architecture/layer2-event-bus-and-kap-backbone.md#kap-backbone-decision) | `extend` |
 
 Promotion of any substrate item is itself a governed move (Layer 1) and lands via ADR/CES when it is
 enacted; nothing here is built by this doc.
@@ -138,7 +138,8 @@ Captured 2026-07-04 (full rationale in `OWNER_DECISIONS.md`):
 - **Retention/decay** — event-triggered relevance decay is the primary model, plus a bounded hard
   retention on the raw layer for privacy. `[conform — aligns with the established decay direction]`
 - **Heimdal vs. KAP backbone** — **left open for Fable**; the fixed guardrail is a shared provenance
-  standard, the stream-vs-batch architecture is Fable's to design. `[open]`
+  standard, the stream-vs-batch architecture is Fable's to design. `[open]` *(Since resolved at
+  design level: [`docs/architecture/layer2-event-bus-and-kap-backbone.md :: KAP-backbone decision`](../architecture/layer2-event-bus-and-kap-backbone.md#kap-backbone-decision), #4545.)*
 
 ## SBS reconciliation summary
 
@@ -151,7 +152,7 @@ Captured 2026-07-04 (full rationale in `OWNER_DECISIONS.md`):
 | Consent + raw-layer privacy seam guardrails | `extend` | Charter FIXED section |
 | Monorepo-until-forcing-function; Layer 1 is not runtime; CI/container/hardware substrate | `conform` | No routing needed |
 | Retention = event-triggered relevance decay | `conform` | Aligns with established direction |
-| Heimdal-vs-KAP backbone | `open` | Fable design within guardrail |
+| Heimdal-vs-KAP backbone | `open` → resolved at design level ([#4545 design](../architecture/layer2-event-bus-and-kap-backbone.md#kap-backbone-decision)) | Fable design within guardrail |
 
 ## References
 

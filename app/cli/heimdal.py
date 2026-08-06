@@ -8,9 +8,15 @@ from pathlib import Path
 import click
 
 from app.heimdal.archive_capacity import build_archive_capacity_report
+from app.heimdal.time_spend import (
+    TimeSpendProjectionError,
+    rebuild_time_spend,
+    time_spend_summary,
+)
 from app.heimdal.capture_runtime import (
     CaptureRuntimeConfig,
     CaptureRuntimeConfigError,
+    resolve_config_for_supervised_run,
     run_capture_tick,
     run_forever,
 )
@@ -37,17 +43,19 @@ def heimdal_group() -> None:
     help="Optional safety: stop after N ticks (ignored with --once; defaults to run forever).",
 )
 def capture_watch(once: bool, max_ticks: int | None) -> None:
-    try:
-        cfg = CaptureRuntimeConfig.from_env()
-    except CaptureRuntimeConfigError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    click.echo(
-        "heimdal capture-watch: "
-        f"watch_dir={cfg.watch_dir} interval_seconds={cfg.interval_seconds}"
-    )
-
     if once:
+        # A manually-invoked diagnostic command: fail loud and exit
+        # immediately on a config error, matching Heimdal's posture
+        # everywhere else.
+        try:
+            cfg = CaptureRuntimeConfig.from_env()
+        except CaptureRuntimeConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        click.echo(
+            "heimdal capture-watch: "
+            f"watch_dir={cfg.watch_dir} interval_seconds={cfg.interval_seconds}"
+        )
         result = run_capture_tick(cfg)
         if result is None:
             # `None` means the tick itself failed (e.g. the watch dir became
@@ -62,6 +70,16 @@ def capture_watch(once: bool, max_ticks: int | None) -> None:
         summary = {"admitted": len(result.admitted), "refused": len(result.refused)}
         click.echo(json.dumps(summary, ensure_ascii=False))
         return
+
+    # Supervised path (the compose service's default): see
+    # `resolve_config_for_supervised_run`'s docstring for why this must not
+    # exit immediately on a startup config error (#4362).
+    cfg = resolve_config_for_supervised_run()
+
+    click.echo(
+        "heimdal capture-watch: "
+        f"watch_dir={cfg.watch_dir} interval_seconds={cfg.interval_seconds}"
+    )
 
     try:
         ticks = run_forever(cfg, max_ticks=max_ticks)
@@ -86,6 +104,45 @@ def capacity(vault_root: Path) -> None:
     try:
         receipt = build_archive_capacity_report(vault_root).as_dict()
     except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(receipt, ensure_ascii=False))
+
+
+@heimdal_group.command(
+    name="time-spend",
+    help=(
+        "Rebuildable time-spend rollup over screen span observations (SCREEN-05). "
+        "Without --rebuild, prints the JSON rollup summary. With --rebuild, "
+        "deterministically re-folds the observation stream from event zero and "
+        "(re)writes the weekly markdown projection note(s) through the governed "
+        "write path (derived class, never over a human note)."
+    ),
+)
+@click.option("--week", default=None, help="ISO week label (e.g. 2026-W28); defaults to all weeks observed.")
+@click.option("--rebuild", is_flag=True, help="Re-fold from event zero and write the markdown note(s).")
+@click.option(
+    "--vault-root",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    default=None,
+    help="Vault to write the projection note(s) into (required with --rebuild).",
+)
+def time_spend(week: str | None, rebuild: bool, vault_root: Path | None) -> None:
+    if not rebuild:
+        click.echo(json.dumps(time_spend_summary(week), ensure_ascii=False))
+        return
+    if vault_root is None:
+        raise click.ClickException("--rebuild requires --vault-root to select the target vault")
+    from app.vault.manager import VaultContext
+
+    context = VaultContext(
+        status="selected",
+        active_vault_id="cli",
+        active_vault_name="cli",
+        active_vault_path=str(vault_root),
+    )
+    try:
+        receipt = rebuild_time_spend(vault_context=context, week=week)
+    except TimeSpendProjectionError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(receipt, ensure_ascii=False))
 

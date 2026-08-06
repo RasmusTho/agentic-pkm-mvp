@@ -748,6 +748,56 @@ print(line)
   return 0
 }
 
+dev_test_environment_env_file_clobber_preflight() {
+  # Read-only dev/test deploy-only preflight (#4230): detect a CHANNEL_SERVICES
+  # service whose explicit `environment:` block resolves a key to an empty
+  # string while that service's env_file chain would otherwise supply a
+  # non-empty value for the same key -- the exact shape that crash-looped
+  # heimdal-capture-watch on every dev-channel deploy until commit f95a6811
+  # deleted the offending `environment:` entries (that instance is already
+  # fixed; this preflight guards the still-open general class). Runs before
+  # write_pin / migration execution, mirroring prod_pending_retry_preflight's
+  # placement and rationale: read-only, no Docker, no network, resolved
+  # entirely by app.release_channels.channel_isolation_preflight (the one
+  # purpose-built, tested Compose environment:-vs-env_file: resolver), never
+  # re-derived from pin/runtime-env files by hand. Deliberately NOT applied to
+  # rollback or the prod channel (prod's own DSN-scoped gate above is
+  # unaffected -- docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md).
+  local receipt_json rc=0
+  receipt_json="$(
+    "${PYTHON}" "${ROOT}/scripts/dev_test_environment_clobber_preflight.py" "${channel}"
+  )" || rc=$?
+
+  printf '%s' "${receipt_json}" | "${PYTHON}" -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    data = {}
+status = data.get("status") or "error"
+if status == "blocked":
+    line = (
+        "dev/test environment clobber preflight: blocked violation_count="
+        + str(data.get("violation_count"))
+    )
+elif status == "skipped":
+    line = "dev/test environment clobber preflight: skipped:" + str(data.get("reason") or "unknown")
+elif status == "ok":
+    line = "dev/test environment clobber preflight: ok"
+else:
+    line = "dev/test environment clobber preflight: " + str(status)
+print(line)
+'
+
+  if [ "${rc}" -ne 0 ]; then
+    echo "dev/test deploy blocked before pin or Compose mutation: a service environment: override would clobber a non-empty env_file value (heimdal-capture-watch clobber class, #4230)" >&2
+    printf '%s\n' "${receipt_json}" >&2
+    echo "guidance: remove the blank environment: override for the reported key(s) so the value rides the env_file chain instead (see docker-compose.yaml's heimdal-capture-watch comment for the pattern); this preflight is read-only and never mutates compose, pin, or env_file layers" >&2
+    return 1
+  fi
+  return 0
+}
+
 version_gate() {
   local version_json health_json version_sha health_sha rc=0
   version_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/version")" || rc=$?
@@ -956,6 +1006,13 @@ export INSTANCE_STATE_LEGACY_ROLLBACK
 # the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
 if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
   prod_pending_retry_preflight || exit 87
+fi
+
+# Same deploy-only-by-contract posture as the prod gate above (#4230): dev and
+# test never previously ran any Compose environment:-vs-env_file: precedence
+# check before mutation.
+if { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } && [ "${action}" = "deploy" ]; then
+  dev_test_environment_env_file_clobber_preflight || exit 90
 fi
 
 ensure_prod_instance_state_volume

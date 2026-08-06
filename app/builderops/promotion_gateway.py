@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from app.builderops.models import (
+    PROMOTION_TARGET_ALIASES,
+    PROMOTION_TARGET_SURFACES,
     BuilderOpsValidationError,
+    canonicalize_promotion_target_surface,
     normalize_actor,
     utc_now,
     validate_source_refs,
@@ -65,34 +68,21 @@ TARGET_SPECS: dict[str, PromotionTargetSpec] = {
     ),
 }
 
-TARGET_ALIASES = {
-    "github": "github_issue",
-    "github_issue": "github_issue",
-    "issue": "github_issue",
-    "pr": "pr_branch_proposal",
-    "pull_request": "pr_branch_proposal",
-    "branch": "pr_branch_proposal",
-    "pr_branch_proposal": "pr_branch_proposal",
-    "adr": "adr_doc_proposal",
-    "decision_doc": "adr_doc_proposal",
-    "adr_doc_proposal": "adr_doc_proposal",
-    "repo_doc": "owner_doc_writeback_proposal",
-    "repo_skill": "owner_doc_writeback_proposal",
-    "repo_skill_and_workflow_doc": "owner_doc_writeback_proposal",
-    "owner_doc": "owner_doc_writeback_proposal",
-    "doc_writeback": "owner_doc_writeback_proposal",
-    "owner_doc_writeback_proposal": "owner_doc_writeback_proposal",
-    "skill": "owner_doc_writeback_proposal",
-    "skill_or_agents_proposal": "owner_doc_writeback_proposal",
-    "workflow_doc": "owner_doc_writeback_proposal",
-    "agents_md": "owner_doc_writeback_proposal",
-    "generated_projection": "generated_projection",
-    "projection": "generated_projection",
-    "discard": "discard_receipt",
-    "discard_receipt": "discard_receipt",
-}
+# The alias registry is the canonical models registry: creation-time store
+# validation and gateway transitions share one validation authority (#4171).
+TARGET_ALIASES = PROMOTION_TARGET_ALIASES
+
+if set(TARGET_SPECS) != set(PROMOTION_TARGET_SURFACES):  # pragma: no cover
+    raise RuntimeError(
+        "promotion target registry drift between TARGET_SPECS and "
+        f"PROMOTION_TARGET_SURFACES: {sorted(set(TARGET_SPECS) ^ set(PROMOTION_TARGET_SURFACES))}"
+    )
 
 FINAL_PROMOTION_STATES = frozenset({"promoted", "discarded", "superseded"})
+
+# Terminal decisions that never perform a promotion effect; only these may
+# recover a legacy intent whose persisted target surface is unsupported.
+TERMINAL_RECOVERY_DECISIONS = frozenset({"rejected", "discarded"})
 
 
 class BuilderOpsPromotionGateway:
@@ -212,7 +202,22 @@ class BuilderOpsPromotionGateway:
             )
         if result_refs:
             validate_source_refs(result_refs, "result_refs")
-        proposal = self.render_proposal(intent_id)
+        try:
+            self._target_spec(intent)
+            target_supported = True
+        except BuilderOpsPromotionError:
+            # Terminal recovery for legacy intents persisted before
+            # creation-time target validation (#4171): rejected/discarded may
+            # proceed with a receipt and no promotion effect; every promoting
+            # decision keeps raising the canonical unsupported-target error.
+            if normalized_decision not in TERMINAL_RECOVERY_DECISIONS:
+                raise
+            target_supported = False
+        proposal = (
+            self.render_proposal(intent_id)
+            if target_supported
+            else _unsupported_target_recovery_proposal(intent)
+        )
         refs = source_refs if source_refs is not None else intent["source_refs"]
         receipt_extra: dict[str, Any] = {
             "promotion_decision": normalized_decision,
@@ -250,14 +255,12 @@ class BuilderOpsPromotionGateway:
         return record
 
     def _target_spec(self, intent: Mapping[str, Any]) -> PromotionTargetSpec:
-        raw = str(intent.get("target_authority_surface", "")).strip().lower()
-        normalized = raw.replace("-", "_").replace(" ", "_")
-        canonical = TARGET_ALIASES.get(normalized)
-        if canonical is None:
-            allowed = ", ".join(sorted(TARGET_SPECS))
-            raise BuilderOpsPromotionError(
-                f"unsupported promotion target_authority_surface: {raw}; allowed: {allowed}"
+        try:
+            canonical = canonicalize_promotion_target_surface(
+                intent.get("target_authority_surface")
             )
+        except BuilderOpsValidationError as exc:
+            raise BuilderOpsPromotionError(str(exc)) from exc
         return TARGET_SPECS[canonical]
 
     def _validate_transition(
@@ -368,6 +371,49 @@ def _render_repo_proposal_body(
     ])
 
 
+def _unsupported_target_recovery_proposal(intent: Mapping[str, Any]) -> dict[str, Any]:
+    """Receipt material for terminally recovering an unsupported-target intent.
+
+    Never a promotable proposal: it exists so an already-persisted legacy
+    intent whose ``target_authority_surface`` is outside the canonical
+    registry can reach ``rejected``/``discarded`` with a durable receipt and
+    no promotion effect (issue #4171).
+    """
+    return {
+        "intent_id": intent["id"],
+        "proposal_kind": "unsupported_target_terminal_recovery",
+        "target_authority_surface": str(intent.get("target_authority_surface", "")),
+        "target_action": intent["target_action"],
+        "target_ref": intent["target_ref"],
+        "requires_human_gate": True,
+        "requires_pr": False,
+        "would_mutate_authority": False,
+        "title": intent["summary"],
+        "body": _render_unsupported_target_recovery_body(intent),
+        "source_refs": intent["source_refs"],
+    }
+
+
+def _render_unsupported_target_recovery_body(intent: Mapping[str, Any]) -> str:
+    allowed = ", ".join(sorted(TARGET_SPECS))
+    return "\n".join([
+        f"# Terminal recovery receipt for {intent['id']}",
+        "",
+        "## Rationale",
+        (
+            f"target_authority_surface `{intent.get('target_authority_surface', '')}` "
+            f"is outside the canonical promotion target registry (allowed: {allowed})."
+        ),
+        "This records a terminal non-promoted disposition only; no promotion effect was performed.",
+        "",
+        "## Source Anchors",
+        *_format_source_refs(intent["source_refs"]),
+        "",
+        "## Authority Boundary",
+        "Unsupported-target PromotionIntents can only be rejected or discarded; they are never promoted.",
+    ])
+
+
 def _render_discard_body(intent: Mapping[str, Any]) -> str:
     return "\n".join([
         f"# Discard receipt proposal for {intent['id']}",
@@ -412,5 +458,6 @@ def _parent_ref(intent: Mapping[str, Any]) -> str:
 __all__ = [
     "BuilderOpsPromotionError",
     "BuilderOpsPromotionGateway",
+    "TARGET_ALIASES",
     "TARGET_SPECS",
 ]

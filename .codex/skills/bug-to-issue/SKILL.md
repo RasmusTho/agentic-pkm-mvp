@@ -72,7 +72,12 @@ The helper:
 - sends P0/P1 defects back to the normal bug-Issue path;
 - derives `KD-<12 uppercase hex>` deterministically from source identity and normalized symptom;
 - accepts `--defect-key <stable-key>` when later source SHAs or evidence wording should deduplicate
-  to the same defect;
+  to the same defect at the time of that intake call — the key itself is not persisted anywhere, so
+  it cannot be used to re-derive the id in a later, separate intake call;
+- accepts `--defect-id <KD-...>` to re-intake an existing entry explicitly: pass the id from the
+  original intake receipt (or a `lookup` call) and the id is used as-is, skipping derivation
+  entirely, so updated symptom/SHA/evidence text on the re-intake still converges on the same entry
+  without reconstructing `--defect-key`;
 - finds or creates and locks the single rolling registry Issue;
 - rejects unlocked or mislabeled registries and parses only exact first-line markers with the
   expected schema shape;
@@ -190,8 +195,22 @@ authority across the current open registry instead of reopening history or dupli
 1. Resolve repo:
    - If repo specified, use it.
    - If not, infer from current git remote; if still unknown, ask for `owner/repo`.
-2. Check for existing issue:
-   - Search open issues for the same symptom/title. If a matching issue exists, comment with new evidence instead of creating a duplicate.
+2. Check for existing issue (live, immediately before creating one):
+   - **CI/test failures dedupe by stable failure identity first, not prose.** When the bug is a
+     CI or test failure, compare stable failure identity against open issues before relying on
+     prose title, symptom wording, or attributed subsystem: workflow name, job name, step name,
+     the failing script/test target, and the raised exception/error class when available. Two
+     reporters can describe the same red step with unrelated symptoms — motivating duplicate
+     class: #4463 was filed as distinct from #4371 although both described the same failing
+     `smoke-docker` / `CI gate: vaultwide panel verifier` step. Cite them as precedent only; do
+     not reopen either closed issue.
+   - A match on the same workflow/job/step plus the same script/test target or error class is a
+     duplicate: comment on the existing issue with the new evidence instead of creating another.
+     Failures that share a workflow but differ by job, step, script/test target, or error class
+     are distinct defects — do not collapse them into one issue.
+   - Keep the existing same-symptom/title search as the secondary key: it remains the primary
+     search for non-CI bugs and the fallback when stable identity fields are unavailable. If a
+     matching issue exists, comment with new evidence instead of creating a duplicate.
 3. Create or update Issue body:
    - Always use the canonical contract sections from `.codex/skills/_shared/ISSUE_CONTRACT.md`.
    - Classify the defect as Product/Runtime System, Builder System, or boundary work using

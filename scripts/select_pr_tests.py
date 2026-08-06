@@ -106,6 +106,62 @@ GOVERNANCE_TARGETS = (
     "tests/ops/test_review_before_ci_gate.py",
 )
 
+# Every app/ file indexed by a (file, line)-keyed census registry in
+# tests/properties/_machinery.py (REGISTERED_MIRRORS, WRITE_FRONTMATTER_SITE_CLASSIFICATION,
+# WRITE_MISSING_SITE_CLASSIFICATION, WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION,
+# STORE_PAYLOAD_SINK_CLASSIFICATION). An ordinary edit to one of these files can shift a
+# censused call site's line number without touching tests/properties/ at all, so the
+# "properties" subsystem below needs its own app/ trigger set instead of relying only on the
+# tests/properties/ prefix (#4269). This list is exact files, not directory prefixes, so it
+# does not widen "properties" to all of app/ broadly; keep it in sync with the file set the
+# _machinery.py registries actually key on when either side changes.
+PROPERTIES_CENSUSED_APP_SITES = (
+    "app/agent_memory/materialization.py",
+    "app/agent_memory/provisional_write.py",
+    "app/agents/normalizer/agent.py",
+    "app/agents/panel/writeback.py",
+    "app/agents/panel_agent/execution.py",
+    "app/agents/panel_agent/runtime.py",
+    "app/agents/planner/agent.py",
+    "app/agents/planner/graph.py",
+    "app/briefing/compose.py",
+    "app/chat/session_log.py",
+    "app/cli/alpha_human_flows.py",
+    "app/cli/index_rebuild.py",
+    "app/cli/smoke.py",
+    "app/episodes/segmenter.py",
+    "app/episodes/store.py",
+    "app/eval/failure_capture.py",
+    "app/fitness/metrics.py",
+    "app/heimdal/candidate_projection.py",
+    "app/heimdal/capture_note.py",
+    "app/heimdal/entity_register.py",
+    "app/heimdal/settings_notes.py",
+    "app/heimdal/time_spend.py",
+    "app/indexer/consumer.py",
+    "app/ingest/api.py",
+    "app/ingest/external.py",
+    "app/ingest/reflection_consumer.py",
+    "app/ingest/vault_alpha.py",
+    "app/ingest/vault_root.py",
+    "app/instance/vault_registry.py",
+    "app/knowledge_acquisition/raw_record.py",
+    "app/mcp/vault_tools.py",
+    "app/objects/__init__.py",
+    "app/ports/filesystem_vault_adapter.py",
+    "app/promotion/consumer.py",
+    "app/reasoning/multi.py",
+    "app/relevance/materialization.py",
+    "app/search/service.py",
+    "app/services/commitment_persistence.py",
+    "app/services/indexer.py",
+    "app/standing_questions/question_store.py",
+    "app/stores/postgres.py",
+    "app/vault/manager.py",
+    "app/vault/settings_service.py",
+    "app/watcher/vault_watcher.py",
+)
+
 E2E_TARGETS = {
     "companion_ui": (
         "tests/e2e/test_panel_to_promotion_consume.py",
@@ -163,6 +219,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # BuilderOps store-access inventory fitness. Keep this exact file
             # owned without widening builder_system to all architecture tests.
             "tests/architecture/test_builderops_store_boundary.py",
+            # pr-contract/BuilderOps-routing hot-path governance fitness
+            # (#4343): a pure change to this one test file has no non-test
+            # governance/docs path alongside it, so `_is_governance_only`
+            # (which requires real non-test signal) never fires and the PR
+            # fell through the SUBSYSTEMS loop into `unowned` (exit 2). Own
+            # this exact file the same way test_builderops_store_boundary.py
+            # is owned above, without widening builder_system to all
+            # architecture tests.
+            "tests/architecture/test_pr_hot_path_governance.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
@@ -176,6 +241,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/dispatcher",
             "tests/governance",
             "tests/architecture/test_builderops_store_boundary.py",
+            "tests/architecture/test_pr_hot_path_governance.py",
         ),
     ),
     (
@@ -227,6 +293,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Vault-layout hardcoded-literal fitness guard. Keep this exact
             # file owned without widening vault to all architecture tests.
             "tests/architecture/test_no_hardcoded_vault_layout.py",
+            # The semanticmd vault-note merge driver/resolver (#4505): cross-
+            # device vault-note merging is its real job (uuid: frontmatter
+            # identity, near-duplicate/"prefer concise" heuristics), so it was
+            # previously unowned runtime code that failed CI selection closed.
+            "app/agents/merge_resolver/",
+            "app/cli/merge_driver.py",
+            "docs/development/SEMANTIC_MARKDOWN_MERGE_DRIVER.md",
+            "tests/fixtures/merge/",
         ),
         (
             "tests/instance",
@@ -234,6 +308,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/knowledge",
             "tests/ports",
             "tests/architecture/test_no_hardcoded_vault_layout.py",
+            "tests/agents/test_merge_resolver.py",
+            "tests/agents/test_merge_resolver_repo_docs.py",
+            "tests/cli/test_merge_driver.py",
+            # Pre-merge signal for the instance-state deployment surface that
+            # the push-lane `CI gate: vaultwide panel verifier` protects
+            # (#4371): a backup/ownership verification defect in
+            # `app/instance/**` must fail the changing PR instead of first
+            # turning `main`'s post-merge smoke red.
+            "tests/ops/test_instance_state_volume_contract.py",
         ),
     ),
     (
@@ -736,6 +819,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/promotion",
             "tests/panel",
             *E2E_TARGETS["promotion_panel"],
+            # `app/agents/panel_agent/state.py` defines PanelAgentState. These two
+            # suites are the ONLY gates in the repo asserting the shared
+            # RuntimeStateModel authority/trace spine on it. Without them a
+            # `promotion_panel`-only selection goes green while a state class
+            # that dropped the spine merges -- the same false-green window closed
+            # for `ask` in PR #4495 (#2921; #4501).
+            "tests/architecture/test_agent_state_spine.py",
+            "tests/agents/test_runtime_state_contract.py",
         ),
     ),
     (
@@ -797,7 +888,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         # A changed test_*.py file already runs directly; this covers the
         # shared machinery those tests import.
         "properties",
-        ("tests/properties/",),
+        ("tests/properties/", *PROPERTIES_CENSUSED_APP_SITES),
         ("tests/properties",),
     ),
 )
@@ -865,18 +956,59 @@ def _is_docs_only(paths: tuple[str, ...]) -> bool:
         # CLAUDE.md is the Claude compatibility entrypoint documented alongside
         # AGENTS.md (#4281); it must resolve here so a CLAUDE.md-only PR routes
         # to tests/architecture instead of falling through to unowned/full-suite.
-        and (path.startswith("docs/") or path in {"README.md", "AGENTS.md", "CLAUDE.md"})
+        # `.codex/` is included so a `.codex/**` path (e.g. `.codex/agents/*.toml`,
+        # `.codex/config.toml`) mixed with a `docs/**` path or `CLAUDE.md` still
+        # resolves here instead of falling through every SUBSYSTEMS prefix into
+        # `unowned` (#4335) -- a pure `.codex/**` diff still resolves via
+        # `_is_governance_only` first, since that branch is checked before this
+        # one in `select_tests`.
+        and (
+            path.startswith("docs/")
+            or path.startswith(".codex/")
+            or path in {"README.md", "AGENTS.md", "CLAUDE.md"}
+        )
         for path in non_test
     )
 
 
 def _is_governance_only(paths: tuple[str, ...]) -> bool:
-    governance_prefixes = (".github/", "docs/development/", "AGENTS.md", ".codex/")
+    # CLAUDE.md is added here symmetrically with AGENTS.md so
+    # `select_tests(["AGENTS.md", "CLAUDE.md"])` resolves the same way as
+    # `select_tests(["AGENTS.md"])` alone (both governance), instead of the
+    # combination silently falling through to the docs branch (#4335).
+    governance_prefixes = (".github/", "docs/development/", "AGENTS.md", "CLAUDE.md", ".codex/")
     non_test = _non_test_signal(paths, GOVERNANCE_TARGETS)
     return bool(non_test) and all(
         path.startswith(governance_prefixes) or path == "scripts/select_pr_tests.py"
         for path in non_test
     )
+
+
+def _foreign_subsystem_matches(
+    paths: tuple[str, ...], tolerated_targets: tuple[str, ...]
+) -> list[tuple[str, tuple[str, ...]]]:
+    # `_is_docs_only`/`_is_governance_only` treat any tests/** path inside
+    # `tolerated_targets` (DOCS_TARGETS / GOVERNANCE_TARGETS) as scope-neutral
+    # so a *pure* docs-only/governance-only diff keeps resolving to that
+    # lane. But several of those same directories/files are ALSO real
+    # per-subsystem scope signal in SUBSYSTEMS -- e.g.
+    # `tests/architecture/test_builderops_store_boundary.py` is individually
+    # carved out for builder_system, `tests/ops/` for ops, `tests/scripts/`/
+    # `scripts/` for ops_deploy. On a *mixed* PR, silently absorbing that
+    # signal into the governance/docs branch drops the subsystem's real
+    # target tests from the selection (#4336) even though a non-empty,
+    # non-full-suite selection still runs -- nothing signals the coverage
+    # loss. Return every subsystem match whose OWN targets are not already a
+    # subset of `tolerated_targets` (docs_authoring's targets ARE
+    # GOVERNANCE_TARGETS, so it never appears here) so the caller can union
+    # that subsystem's real targets into the selection instead of it being
+    # silently dropped.
+    return [
+        (name, subsystem_targets)
+        for name, prefixes, subsystem_targets in SUBSYSTEMS
+        if any(path.startswith(prefix) for path in paths for prefix in prefixes)
+        and any(target not in tolerated_targets for target in subsystem_targets)
+    ]
 
 
 def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
@@ -950,12 +1082,28 @@ def select_tests(changed_files: list[str]) -> Selection:
     changed_tests = _changed_test_targets(paths)
     targets = list(ALWAYS_TARGETS)
 
-    if _is_governance_only(paths):
-        targets.extend(GOVERNANCE_TARGETS)
-        subsystems, reason = ("governance",), "governance-only PR"
-    elif _is_docs_only(paths):
-        targets.extend(DOCS_TARGETS)
-        subsystems, reason = ("docs",), "docs-only PR"
+    governance_only = _is_governance_only(paths)
+    docs_only = _is_docs_only(paths) if not governance_only else False
+
+    if governance_only or docs_only:
+        tolerated_targets = GOVERNANCE_TARGETS if governance_only else DOCS_TARGETS
+        targets.extend(tolerated_targets)
+        subsystems_list = ["governance" if governance_only else "docs"]
+        # A mixed PR can still have a real subsystem owner behind one of the
+        # tolerated GOVERNANCE_TARGETS/DOCS_TARGETS test directories (#4336) --
+        # union that subsystem's own targets in rather than silently dropping
+        # them, instead of collapsing the whole diff to governance/docs-only.
+        for name, subsystem_targets in _foreign_subsystem_matches(paths, tolerated_targets):
+            subsystems_list.append(name)
+            targets.extend(subsystem_targets)
+        subsystems = _dedupe(subsystems_list)
+        reason = (
+            "governance-only PR"
+            if governance_only and len(subsystems) == 1
+            else "docs-only PR"
+            if docs_only and len(subsystems) == 1
+            else "mixed governance/docs PR with a foreign subsystem-owned test path"
+        )
     else:
         matched: list[str] = []
         for name, prefixes, subsystem_targets in SUBSYSTEMS:

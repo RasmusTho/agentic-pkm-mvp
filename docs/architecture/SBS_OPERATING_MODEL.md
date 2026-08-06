@@ -62,7 +62,7 @@ The SBS is described across several docs, each with a single owner. Do not dupli
 | Review-gate fallback policy | this doc §12 | What to do when a required automated review gate is unavailable. |
 | Builder System boundary, authority model, and artifact map | this doc §3 | Defines the continuous-development enabling system, its relationship to the Product/Runtime SBS and CES, how builder agents classify Product, Builder, and boundary work, and the owner/authority/writeback map for Builder System artifacts and workflows. |
 | Builder Learning, evaluation, and TCD governance loop | this doc §3 + `docs/development/DELIVERY_FEEDBACK_LOOP.md` | Defines the allowed inputs, durable destinations, TCD signals, reevaluation inputs, terminal outcomes, and promotion path for builder learning without contaminating Product/Runtime memory. |
-| Cross-repo constituent-surface governance | `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md` | Owns the accepted Bifrost constituent-repo decision and the hub tracking posture; this operating model owns the Builder System's classification and process implications. |
+| Cross-repo constituent-surface governance | `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md` | Owns the accepted Bifrost constituent-repo decision and the temporary hub-tracking posture (until Bifrost has its own board); this operating model owns the Builder System's classification and process implications. |
 
 This matrix is the **source-of-truth verification matrix** required for SBS operationalization. If a new SBS concern appears, add a row here naming exactly one owner doc.
 
@@ -86,10 +86,11 @@ they are used to produce or verify repo-governed changes.
 
 The Builder System may govern a constituent-surface repository as well as this hub repository when
 an accepted decision names that relationship. ADR-0050 is the owner decision for the Bifrost
-constituent-surface repository (`RasmusTho/bifrost`); it keeps cross-repo tracking in this hub and
-does not make Bifrost a Builder System or a Product/Runtime SBS subsystem. Work in that repository
-is classified against this model: the constituent surface is Product/Runtime System work built by
-the Builder System, and changes to the governing route are boundary work.
+constituent-surface repository (`RasmusTho/bifrost`); it keeps cross-repo tracking in this hub only
+until Bifrost has its own board — a temporary posture whose terms ADR-0050 owns, not a permanent
+routing rule — and does not make Bifrost a Builder System or a Product/Runtime SBS subsystem. Work
+in that repository is classified against this model: the constituent surface is Product/Runtime
+System work built by the Builder System, and changes to the governing route are boundary work.
 
 Hub `_shared` skill contracts that Bifrost mirrors are an explicitly **unchecked transition
 posture**, not a synchronization guarantee: drift is accepted only as visible debt until a governed
@@ -309,6 +310,22 @@ Terminal outcome rule: once a retrospective or reevaluation pass claims a set of
 signal in scope must end as applied, already satisfied, issue created, promotion pending,
 debt/fitness recorded, or discarded/superseded with a receipt. "Carry forward later" is not a
 terminal outcome unless represented by a bounded GitHub Issue or PromotionIntent.
+
+Terminal disposition linkage rule (#4267): a `LearningSignal` reaching a `superseded` or
+`discarded` terminal disposition must name, in its `successor_refs`, the linked successor artifact
+— the GitHub Issue, PR, or `PromotionIntent` — that actually enacted or explicitly declined the
+divergence. A bare status transition is not a terminal outcome: a signal marked handled without an
+enacting artifact creates false confidence that the divergence is tracked while the defect stays
+unrepaired (the 2026-06 `publish-pr` template gap re-derived from scratch by the #3927–#4162 audit
+and repaired only via #4187/#4192 is the motivating case). Another `LearningSignal` is not a valid
+successor — supersession by newer material still points at whatever artifact enacts or declines
+the repair. Mechanically enforced at the BuilderOps write path
+(`app/builderops/models.py::validate_terminal_signal_successor`, exercised by
+`app/builderops/store.py::transition_record_state`); legacy terminal records without a successor
+are machine-flaggable via the observe-only
+`python3 -m app.builderops builderops completeness-report check`
+(`terminal_signals_missing_successor_refs`). Verified by
+`tests/builderops/test_learning_signal_terminal_disposition.py`.
 
 Runtime/user memory contamination is a blocking failure mode. Failed prompts, quota/context failures,
 delivery receipts, BuilderOps records, TCD rationales, review comments, and skill retrospectives must

@@ -4,8 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from app.builderops.models import BuilderOpsValidationError
+from app.builderops.models import (
+    PROMOTION_TARGET_ALIASES,
+    PROMOTION_TARGET_SURFACES,
+    BuilderOpsValidationError,
+    canonicalize_promotion_target_surface,
+    normalize_record,
+)
 from app.builderops.promotion_gateway import (
+    TARGET_ALIASES,
+    TARGET_SPECS,
     BuilderOpsPromotionError,
     BuilderOpsPromotionGateway,
 )
@@ -279,16 +287,164 @@ def test_repo_skill_and_workflow_doc_target_renders_as_writeback_proposal(
     assert "normal PR workflow" in proposal["body"]
 
 
+def _inject_legacy_intent(
+    store: SqliteBuilderOpsStore,
+    *,
+    intent_id: str,
+    target_surface: str,
+) -> dict[str, object]:
+    """Persist an intent bypassing creation validation.
+
+    Simulates records persisted before issue #4171 added creation-time
+    target-surface validation (e.g. `prom_20260727085216_b24bc805` with
+    `target_authority_surface=github_issue_set`).
+    """
+    record = normalize_record({
+        "object_type": "PromotionIntent",
+        "id": intent_id,
+        "summary": "Legacy intent persisted before creation validation",
+        "target_authority_surface": "github_issue",
+        "target_action": "create",
+        "target_ref": "pending",
+        "target_authority_class": "operational",
+        "intended_output": "Legacy record with an unsupported target surface.",
+        "source_refs": _source_refs(),
+        "created_by": _actor(),
+    })
+    record["target_authority_surface"] = target_surface
+    with store._connect() as conn:
+        store._insert_record_payload(conn, record)
+        conn.commit()
+    return record
+
+
 def test_disallowed_target_rejected(
     store: SqliteBuilderOpsStore,
     gateway: BuilderOpsPromotionGateway,
 ) -> None:
-    intent = _create_intent(
+    intent = _inject_legacy_intent(
         store,
         intent_id="prom_bad_target",
         target_surface="product_runtime_truth",
-        target_ref="runtime",
     )
 
     with pytest.raises(BuilderOpsPromotionError, match="unsupported promotion target"):
         gateway.render_proposal(intent["id"])
+
+
+def test_creation_and_transition_share_target_registry(
+    store: SqliteBuilderOpsStore,
+    gateway: BuilderOpsPromotionGateway,
+) -> None:
+    """Store creation and gateway transition validate against one registry."""
+    # The gateway's registry is literally the canonical models registry.
+    assert TARGET_ALIASES is PROMOTION_TARGET_ALIASES
+    assert set(TARGET_SPECS) == set(PROMOTION_TARGET_SURFACES)
+    assert set(PROMOTION_TARGET_ALIASES.values()) == set(PROMOTION_TARGET_SURFACES)
+    for canonical in PROMOTION_TARGET_SURFACES:
+        assert TARGET_SPECS[canonical].canonical == canonical
+
+    # Every supported alias is accepted at creation and canonicalized
+    # identically by the gateway.
+    for index, (alias, canonical) in enumerate(sorted(PROMOTION_TARGET_ALIASES.items())):
+        intent = _create_intent(
+            store,
+            intent_id=f"prom_alias_{index:03d}",
+            target_surface=alias,
+        )
+        assert intent["target_authority_surface"] == alias
+        proposal = gateway.render_proposal(intent["id"])
+        assert proposal["target_authority_surface"] == canonical
+        assert canonicalize_promotion_target_surface(alias) == canonical
+
+    # An unsupported surface fails at creation with the same canonical error
+    # the gateway raises at transition time.
+    with pytest.raises(BuilderOpsValidationError) as creation_error:
+        _create_intent(
+            store,
+            intent_id="prom_registry_bad",
+            target_surface="github_issue_set",
+        )
+
+    legacy = _inject_legacy_intent(
+        store,
+        intent_id="prom_registry_legacy",
+        target_surface="github_issue_set",
+    )
+    lease = store.acquire_lease(legacy["id"], actor=_actor())
+    with pytest.raises(BuilderOpsPromotionError) as transition_error:
+        gateway.transition_intent(
+            legacy["id"],
+            decision="accepted",
+            actor=_actor(),
+            lease_id=lease["lease_id"],
+            idempotency_key="transition:registry-legacy-accept",
+            rationale="Unsupported targets must not be accepted.",
+        )
+    assert str(creation_error.value) == str(transition_error.value)
+    assert "unsupported promotion target_authority_surface: github_issue_set" in str(
+        creation_error.value
+    )
+
+
+def test_unsupported_legacy_intent_can_be_discarded_without_effect(
+    store: SqliteBuilderOpsStore,
+    gateway: BuilderOpsPromotionGateway,
+) -> None:
+    intent = _inject_legacy_intent(
+        store,
+        intent_id="prom_legacy_stuck_001",
+        target_surface="github_issue_set",
+    )
+    lease = store.acquire_lease(intent["id"], actor=_actor())
+
+    # No promotion effect is reachable for the unsupported target.
+    with pytest.raises(BuilderOpsPromotionError, match="unsupported promotion target"):
+        gateway.transition_intent(
+            intent["id"],
+            decision="accepted",
+            actor=_actor(),
+            lease_id=lease["lease_id"],
+            idempotency_key="transition:legacy-accept",
+            rationale="Must not accept an unsupported target.",
+        )
+    with pytest.raises(BuilderOpsPromotionError, match="unsupported promotion target"):
+        gateway.dry_run_promotion(
+            intent["id"],
+            actor=_actor(),
+            idempotency_key="dry-run:legacy",
+        )
+
+    # The terminal recovery path works and carries a durable receipt.
+    discarded = gateway.transition_intent(
+        intent["id"],
+        decision="discarded",
+        actor=_actor(),
+        lease_id=lease["lease_id"],
+        idempotency_key="transition:legacy-discard",
+        rationale="Terminal recovery: target surface is outside the registry.",
+    )
+    record = discarded["record"]
+    receipt = discarded["receipt"]
+    assert record["lifecycle_state"] == "discarded"
+    assert record["promotion_status"] == "discarded"
+    assert record["target_authority_surface"] == "github_issue_set"
+    assert receipt["object_type"] == "BuilderOpsReceipt"
+    assert receipt["promotion_decision"] == "discarded"
+    assert receipt["promotion_proposal"]["proposal_kind"] == (
+        "unsupported_target_terminal_recovery"
+    )
+    assert receipt["promotion_proposal"]["would_mutate_authority"] is False
+    assert store.get_record(receipt["id"]) == receipt
+    assert store.get_record(intent["id"])["lifecycle_state"] == "discarded"
+
+    # Recovery is terminal only: the record never becomes promotable.
+    with pytest.raises(BuilderOpsPromotionError, match="already terminal"):
+        gateway.transition_intent(
+            intent["id"],
+            decision="accepted",
+            actor=_actor(),
+            lease_id=lease["lease_id"],
+            idempotency_key="transition:legacy-accept-after-discard",
+            rationale="Terminal records stay terminal.",
+        )

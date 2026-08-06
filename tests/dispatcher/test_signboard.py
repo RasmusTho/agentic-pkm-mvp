@@ -20,6 +20,7 @@ from app.dispatcher import signboard as signboard_module
 from app.dispatcher.signboard import (
     DEFAULT_SIGNBOARD_SUBPATH,
     STORE_STAMP_FILENAME,
+    DanglingActiveVaultReferenceError,
     NoActiveVaultError,
     SignboardStoreOwnershipError,
     default_signboard_root,
@@ -289,6 +290,53 @@ def test_default_signboard_root_raises_when_no_vault_selected(monkeypatch) -> No
         default_signboard_root()
 
 
+def test_default_signboard_root_reports_dangling_vault_reference_distinctly(
+    tmp_path, monkeypatch
+) -> None:
+    """A dangling ``lastActiveVaultRef`` (#4223) must not be reported as "no
+    active vault is selected" — that message is false here, and it drops the
+    dangling path an operator needs to diagnose the reference.
+    """
+
+    dead_path = str(tmp_path / "gone-vault")
+    context = VaultContext(status="missing", active_vault_path=dead_path)
+    monkeypatch.setattr(
+        signboard_module, "get_vault_manager", lambda: _StubVaultManager(context)
+    )
+
+    with pytest.raises(DanglingActiveVaultReferenceError) as excinfo:
+        default_signboard_root()
+
+    message = str(excinfo.value)
+    assert "no active vault is selected" not in message
+    assert dead_path in message
+    assert excinfo.value.active_vault_path == dead_path
+    # Subclasses NoActiveVaultError so existing callers that only catch the
+    # base class keep working without new plumbing.
+    assert isinstance(excinfo.value, NoActiveVaultError)
+
+
+def test_default_signboard_root_falls_back_to_missing_from_load_last_active(
+    monkeypatch,
+) -> None:
+    dead_path = "/tmp/does-not-exist-either"
+    loaded = VaultContext(status="missing", active_vault_path=dead_path)
+
+    class _NoneThenMissing(_StubVaultManager):
+        def __init__(self) -> None:
+            super().__init__(VaultContext(status="none"))
+
+        def load_last_active(self) -> VaultContext:
+            return loaded
+
+    monkeypatch.setattr(signboard_module, "get_vault_manager", _NoneThenMissing)
+
+    with pytest.raises(DanglingActiveVaultReferenceError) as excinfo:
+        default_signboard_root()
+
+    assert dead_path in str(excinfo.value)
+
+
 def test_cli_export_signboard_without_path_uses_default_vault(
     tmp_env, store, tmp_path, monkeypatch
 ) -> None:
@@ -414,6 +462,58 @@ def test_validate_detects_stale_card_for_missing_task(tmp_env, store, tmp_path: 
     result = validate_signboard(store, board)
 
     assert any(finding["kind"] == "stale_card" for finding in result["findings"])
+
+
+# ---------------------------------------------------------------------------
+# #4324: same-column content drift (stale title/priority/claim/PR metadata)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_signboard_detects_same_column_content_drift(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """A card whose column is still correct but whose generated content has
+    drifted from the live task (title, priority, claim, or linked PR) must
+    still fail validation. `validate_signboard` previously only compared
+    column placement, so a same-column stale card passed silently."""
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    card = next((board / "Ready").glob(f"{ready.task_id}--*.md"))
+
+    # Task changes without a re-export: title, priority, claim, and linked PR
+    # drift while status/column stay "ready"/"Ready".
+    ready.title = "Test: implement feature A (renamed)"
+    ready.priority = "high" if ready.priority != "high" else "med"
+    ready.claimed_by = "agent-drift"
+    ready.linked_pr = "9999"
+    store.upsert_task(ready)
+
+    result = validate_signboard(store, board)
+
+    drift_findings = [f for f in result["findings"] if f["kind"] == "content_drift"]
+    assert len(drift_findings) == 1
+    assert drift_findings[0]["path"] == str(card.relative_to(board))
+    assert not any(f["kind"] == "stale_card" for f in result["findings"])
+    assert not any(f["kind"] == "column_status_mismatch" for f in result["findings"])
+
+
+def test_validate_signboard_reports_repair_for_content_drift(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """Content-drift findings must name the normal export repair path, the
+    same as the existing stale-card repair guidance (#4198)."""
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+
+    ready.claimed_by = "agent-drift"
+    store.upsert_task(ready)
+
+    result = validate_signboard(store, board)
+
+    assert any(f["kind"] == "content_drift" for f in result["findings"])
+    assert "export-signboard" in result["repair"]
 
 
 def test_validate_detects_malformed_generated_card(tmp_env, store, tmp_path: Path) -> None:
