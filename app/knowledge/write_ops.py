@@ -1582,6 +1582,16 @@ def _host_next_latest_original_matches(
     return all(state.get(key) == value for key, value in expected.items())
 
 
+def _host_uses_present_next_latest_original(
+    state: dict[str, object],
+    payload: dict[str, object],
+) -> bool:
+    return (
+        state.get("next_latest_original_present") is True
+        and _host_next_latest_original_matches(state, payload)
+    )
+
+
 def _open_latest_original_snapshot(
     recovery_fd: int,
     note_rel_path: str,
@@ -1663,7 +1673,10 @@ def _reconcile_host_atomic_append_states(
                 state["state"] == "active"
                 and (
                     transaction in matching_clean_transactions
-                    or _host_next_latest_original_matches(state, latest_payload)
+                    or _host_uses_present_next_latest_original(
+                        state,
+                        latest_payload,
+                    )
                 )
             ):
                 reason = "latest-original slot changed from durable host record"
@@ -1700,9 +1713,10 @@ def _reconcile_host_atomic_append_states(
                 and target.get("target_ino") == state.get("source_ino")
                 and target.get("target_digest") == state.get("source_digest")
             )
-            if _host_next_latest_original_matches(state, latest_payload) and not (
-                proposal_matches
-            ):
+            if _host_uses_present_next_latest_original(
+                state,
+                latest_payload,
+            ) and not proposal_matches:
                 reason = "latest-original rotation precedes canonical proposal"
                 break
             if not proposal_matches and not original_matches:

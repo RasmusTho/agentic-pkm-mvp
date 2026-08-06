@@ -1959,6 +1959,56 @@ def test_steering_log_retry_recovers_crash_after_latest_original_rotation(
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
 
 
+def test_steering_log_initial_create_retry_recovers_active_precommit_crash(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    target = vault_root / note_rel_path(STEERING_LOG)
+    context = multiprocessing.get_context("fork")
+
+    def crash_after_active_precommit() -> None:
+        real_prepare = write_ops_module._prepare_host_atomic_append_intent
+
+        def prepare_then_exit(*args: object, **kwargs: object) -> None:
+            real_prepare(*args, **kwargs)  # type: ignore[arg-type]
+            os._exit(99)
+
+        write_ops_module._prepare_host_atomic_append_intent = (  # type: ignore[method-assign]
+            prepare_then_exit
+        )
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "initial-precommit-crash",
+            source="chat",
+            operation_id="initial-precommit-crash-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_after_active_precommit)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 99
+    assert not target.exists()
+
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "initial-precommit-crash",
+        source="chat",
+        operation_id="initial-precommit-crash-proposal",
+        write_guard=guard,
+    )
+    assert durable_line
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"initial-precommit-crash-proposal"'
+    ) == 1
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+
+
 @pytest.mark.parametrize("fail_write", [1, 2, 3, 4, 5, 6])
 def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     monkeypatch: pytest.MonkeyPatch,
