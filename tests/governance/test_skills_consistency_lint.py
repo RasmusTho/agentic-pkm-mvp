@@ -377,7 +377,7 @@ def test_lint_fails_when_pr_contract_validator_flags_diverge_from_workflow(
     ), errors
 
 
-def test_bug_to_issue_duplicate_search_requires_stable_ci_identity() -> None:
+def test_bug_to_issue_duplicate_search_requires_all_available_ci_discriminators() -> None:
     """CI/test duplicate search must key on stable failure identity, not prose.
 
     Regression guard for issue #4607 (LearningSignal
@@ -424,6 +424,23 @@ def test_bug_to_issue_duplicate_search_requires_stable_ci_identity() -> None:
         "duplicate-search guidance no longer orders stable-identity comparison "
         "before prose title/symptom matching"
     )
+
+    # Duplicate classification is conjunctive: one matching target cannot
+    # outweigh a different error class (PR #4628 review r3712645788).
+    assert re.search(
+        r"(?:all|every)\s+(?:\S+\s+){0,5}available\s+(?:\S+\s+){0,5}"
+        r"(?:agree|match)",
+        lowered,
+    ), "every available stable CI discriminator must agree before deduping"
+    assert re.search(
+        r"(?:any|one)\s+(?:\S+\s+){0,16}(?:differ|mismatch|missing)\S*"
+        r"(?:\S+\s+){0,16}(?:distinct|separate|not\s+(?:a\s+)?duplicate)",
+        lowered,
+    ), "one available discriminator mismatch must keep failures distinct"
+    assert not re.search(
+        r"same\s+(?:script/)?test\s+target\s+or\s+(?:exception/)?error\s+class",
+        lowered,
+    ), "target-or-error matching reintroduces the contradictory duplicate rule"
 
     # The pre-existing same-symptom/title search stays as the secondary key.
     assert "symptom" in lowered and "title" in lowered, (

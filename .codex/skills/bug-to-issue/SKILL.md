@@ -204,13 +204,13 @@ authority across the current open registry instead of reopening history or dupli
      class: #4463 was filed as distinct from #4371 although both described the same failing
      `smoke-docker` / `CI gate: vaultwide panel verifier` step. Cite them as precedent only; do
      not reopen either closed issue.
-   - A match on the same workflow/job/step plus the same script/test target or error class is a
-     duplicate: comment on the existing issue with the new evidence instead of creating another.
-     Failures that share a workflow but differ by job, step, script/test target, or error class
-     are distinct defects — do not collapse them into one issue.
+   - Every available stable failure discriminator must agree across both reports before classifying
+     a duplicate. If any available workflow, job, step, script/test target, or error
+     class differs or is missing from the other report, the evidence is not a duplicate match:
+     keep the failures distinct instead of collapsing them into one issue.
    - Keep the existing same-symptom/title search as the secondary key: it remains the primary
-     search for non-CI bugs and the fallback when stable identity fields are unavailable. If a
-     matching issue exists, comment with new evidence instead of creating a duplicate.
+     search for non-CI bugs and the fallback only when neither report provides stable identity
+     fields. If a matching issue exists, comment with new evidence instead of creating a duplicate.
 3. Create or update Issue body:
    - Always use the canonical contract sections from `.codex/skills/_shared/ISSUE_CONTRACT.md`.
    - Classify the defect as Product/Runtime System, Builder System, or boundary work using
