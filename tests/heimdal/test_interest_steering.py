@@ -1905,6 +1905,60 @@ def test_steering_log_latest_original_substitution_during_rotation_is_preserved(
     ).count('"operation_id":"live-slot-substitution-third"') == 1
 
 
+def test_steering_log_retry_recovers_crash_after_latest_original_rotation(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="post-rotation-crash-seed",
+        write_guard=guard,
+    )
+    context = multiprocessing.get_context("fork")
+
+    def crash_before_clean_state() -> None:
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(98)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "post-rotation-crash",
+            source="item",
+            operation_id="post-rotation-crash-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_before_clean_state)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 98
+
+    target = vault_root / note_rel_path(STEERING_LOG)
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"post-rotation-crash-proposal"'
+    ) == 1
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "post-rotation-crash",
+        source="item",
+        operation_id="post-rotation-crash-proposal",
+        write_guard=guard,
+    )
+    assert durable_line
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"post-rotation-crash-proposal"'
+    ) == 1
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+
+
 @pytest.mark.parametrize("fail_write", [1, 2, 3, 4, 5, 6])
 def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     monkeypatch: pytest.MonkeyPatch,

@@ -1554,11 +1554,32 @@ def _latest_original_host_payload(
     }
 
 
+def _next_latest_original_host_payload(
+    entry: _RecoveryEntry | None,
+) -> dict[str, object]:
+    payload = _latest_original_host_payload(entry)
+    return {
+        key.replace("latest_original", "next_latest_original", 1): value
+        for key, value in payload.items()
+    }
+
+
 def _host_latest_original_matches(
     state: dict[str, object],
     payload: dict[str, object],
 ) -> bool:
     return all(state.get(key) == value for key, value in payload.items())
+
+
+def _host_next_latest_original_matches(
+    state: dict[str, object],
+    payload: dict[str, object],
+) -> bool:
+    expected = {
+        key.replace("latest_original", "next_latest_original", 1): value
+        for key, value in payload.items()
+    }
+    return all(state.get(key) == value for key, value in expected.items())
 
 
 def _open_latest_original_snapshot(
@@ -1640,7 +1661,10 @@ def _reconcile_host_atomic_append_states(
                 break
             if not _host_latest_original_matches(state, latest_payload) and not (
                 state["state"] == "active"
-                and transaction in matching_clean_transactions
+                and (
+                    transaction in matching_clean_transactions
+                    or _host_next_latest_original_matches(state, latest_payload)
+                )
             ):
                 reason = "latest-original slot changed from durable host record"
                 break
@@ -1676,6 +1700,11 @@ def _reconcile_host_atomic_append_states(
                 and target.get("target_ino") == state.get("source_ino")
                 and target.get("target_digest") == state.get("source_digest")
             )
+            if _host_next_latest_original_matches(state, latest_payload) and not (
+                proposal_matches
+            ):
+                reason = "latest-original rotation precedes canonical proposal"
+                break
             if not proposal_matches and not original_matches:
                 reason = "active host intent matches neither proposal nor original"
                 break
@@ -1713,6 +1742,7 @@ def _prepare_host_atomic_append_intent(
     proposal_stat: os.stat_result,
     proposal_digest: str,
     prior_latest_original: _RecoveryEntry | None,
+    next_latest_original: _RecoveryEntry | None,
 ) -> None:
     source: dict[str, object]
     if source_stat is None:
@@ -1735,6 +1765,7 @@ def _prepare_host_atomic_append_intent(
             "proposal_ino": proposal_stat.st_ino,
             "proposal_digest": proposal_digest,
             **_latest_original_host_payload(prior_latest_original),
+            **_next_latest_original_host_payload(next_latest_original),
         },
     )
 
@@ -2053,17 +2084,21 @@ def _retain_latest_original_snapshot(
     note_rel_path: str,
     transaction_id: str,
     expected_prior: _RecoveryEntry | None,
+    prepared: _RecoveryEntry | None = None,
 ) -> _RecoveryEntry:
     """Keep one bounded full original, replacing only a proven prior slot."""
 
-    working = _publish_recovery_snapshot(
-        entry.fd,
-        entry.identity,
-        recovery_fd,
-        transaction_id=transaction_id,
-        role="latestcopy",
-        allow_unlinked_source=True,
-    )
+    working = prepared
+    owns_working = working is None
+    if working is None:
+        working = _publish_recovery_snapshot(
+            entry.fd,
+            entry.identity,
+            recovery_fd,
+            transaction_id=transaction_id,
+            role="latestcopy",
+            allow_unlinked_source=True,
+        )
     try:
         return _retain_named_latest_original_snapshot(
             recovery_fd,
@@ -2073,7 +2108,8 @@ def _retain_latest_original_snapshot(
             expected_prior=expected_prior,
         )
     except BaseException:
-        os.close(working.fd)
+        if owns_working:
+            os.close(working.fd)
         raise
 
 
@@ -2385,6 +2421,7 @@ def _atomic_append_note_relative(
     proposal_snapshot: _RecoveryEntry | None = None
     original_snapshot: _RecoveryEntry | None = None
     prior_latest_original_snapshot: _RecoveryEntry | None = None
+    prepared_latest_original_snapshot: _RecoveryEntry | None = None
     latest_original_snapshot: _RecoveryEntry | None = None
     displaced_name: str | None = None
     cleanup_error: BaseException | None = None
@@ -2570,6 +2607,13 @@ def _atomic_append_note_relative(
                 transaction_id=transaction_id,
                 role="original",
             )
+            prepared_latest_original_snapshot = _publish_recovery_snapshot(
+                original_snapshot.fd,
+                original_snapshot.identity,
+                recovery_fd,
+                transaction_id=transaction_id,
+                role="latestcopy",
+            )
 
         _require_atomic_append_mapping(
             authority,
@@ -2591,6 +2635,7 @@ def _atomic_append_note_relative(
             proposal_stat=stage_stat,
             proposal_digest=replacement_digest,
             prior_latest_original=prior_latest_original_snapshot,
+            next_latest_original=prepared_latest_original_snapshot,
         )
 
         if target_existed:
@@ -2780,7 +2825,9 @@ def _atomic_append_note_relative(
                     note_rel_path=note_rel_path,
                     transaction_id=transaction_id,
                     expected_prior=prior_latest_original_snapshot,
+                    prepared=prepared_latest_original_snapshot,
                 )
+                prepared_latest_original_snapshot = None
                 if prior_latest_original_snapshot is not None:
                     os.close(prior_latest_original_snapshot.fd)
                     prior_latest_original_snapshot = None
@@ -2932,6 +2979,7 @@ def _atomic_append_note_relative(
             proposal_snapshot,
             original_snapshot,
             prior_latest_original_snapshot,
+            prepared_latest_original_snapshot,
             latest_original_snapshot,
         ):
             if snapshot is not None:
