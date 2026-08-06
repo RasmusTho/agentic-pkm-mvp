@@ -184,8 +184,8 @@ class TestKillSwitchDisablesScanBelowThreshold:
 
         captured_extra: dict[str, Any] = {}
 
-        def fake_record_sync_success(store, provider, pull_at, *, rate_limit_remaining=None,
-                                     rate_limit_reset=None, extra=None):
+        def fake_record_sync_partial(store, provider, pull_at, *, note,
+                                     rate_limit_remaining=None, rate_limit_reset=None, extra=None):
             captured_extra.update(extra or {})
 
         mock_store = MagicMock()
@@ -202,8 +202,8 @@ class TestKillSwitchDisablesScanBelowThreshold:
             "GITHUB_CALL_LOG_PATH": str(log_file),
             "GITHUB_RATELIMIT_KILL_THRESHOLD": "200",
         }), patch(
-            "app.dispatcher.sync_github.record_sync_success",
-            side_effect=fake_record_sync_success,
+            "app.dispatcher.sync_github.record_sync_partial",
+            side_effect=fake_record_sync_partial,
         ):
             adapter.pull("owner/repo")
 

@@ -106,11 +106,12 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 566): (
+    ("app/ingest/vault_alpha.py", 585): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run. Line drifted "
-        "527 -> 555 -> 582 -> 558 (site unchanged); re-pinned by #3180 (ERE-05) -- round-3 "
+        "527 -> 555 -> 582 -> 558 -> 566 -> 585 (site unchanged); re-pinned for #4610 after "
+        "the Standing Questions exclusion guard shifted the existing sink; #3180 (ERE-05) round-3 "
         "extracted the episode_ref helper into app/ingest/episode_ref.py, shifting this line "
         "back up. The census gate only fires when this machinery is touched, so the drift "
         "surfaces on the first PR to edit this file."
@@ -1466,16 +1467,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 566): (
+    ("app/ingest/vault_alpha.py", 585): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 601): (
+    ("app/ingest/vault_alpha.py", 620): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 615): (
+    ("app/ingest/vault_alpha.py", 634): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
     ("app/ingest/vault_root.py", 91): (
