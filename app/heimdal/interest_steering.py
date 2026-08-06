@@ -542,7 +542,7 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
                 host_witness_root_fd=lock_root_fd,
                 host_witness_root_stat=os.fstat(lock_root_fd),
                 host_witness_fds=tuple(
-                    (key, lock_fd_by_key[key]) for key in authority.path_lock_keys
+                    (key, lock_fd_by_key[key]) for key in authority.host_state_keys
                 ),
             )
             try:

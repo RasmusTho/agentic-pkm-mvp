@@ -97,7 +97,7 @@ def _host_witness_paths(vault_root: Path) -> tuple[Path, ...]:
         return tuple(
             lock_root
             / f"{steering_module.hashlib.sha256(key.encode('utf-8')).hexdigest()}.lock"
-            for key in authority.path_lock_keys
+            for key in authority.host_state_keys
         )
 
 
@@ -984,7 +984,12 @@ def test_steering_log_crash_with_app_local_namespace_loss_remains_blocked(
     )
     assert not list(host_root.glob(".heimdal-atomic-append-*.state"))
 
-    with pytest.raises(KnowledgeWriteConflict, match="app-local state is missing"):
+    expected_failure = (
+        "host state is invalid"
+        if replace_vault_root
+        else "app-local state is missing"
+    )
+    with pytest.raises(KnowledgeWriteConflict, match=expected_failure):
         append_steering_log(
             vault_root,
             "mute",
@@ -1323,15 +1328,24 @@ def test_steering_log_app_state_exchange_proves_displaced_record(
         nonlocal substituted
         if not substituted:
             substituted = True
-            state_path = next(
-                _host_fence_root().glob(".heimdal-atomic-append-*.state")
-            )
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-            payload["transaction"] = "foreign-after-snapshot"
-            state_path.write_text(
-                json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            fence_fd = args[0]
+            state_name = args[1]
+            assert isinstance(fence_fd, int)
+            assert isinstance(state_name, str)
+            state_fd = os.open(state_name, os.O_RDWR, dir_fd=fence_fd)
+            try:
+                raw = os.read(state_fd, 1024 * 1024)
+                payload = json.loads(raw)
+                payload["transaction"] = "foreign-after-snapshot"
+                replacement = (
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+                ).encode("utf-8")
+                os.ftruncate(state_fd, 0)
+                os.lseek(state_fd, 0, os.SEEK_SET)
+                os.write(state_fd, replacement)
+                os.fsync(state_fd)
+            finally:
+                os.close(state_fd)
         real_exchange(*args)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
@@ -1418,7 +1432,225 @@ def test_steering_log_live_lock_authority_replacement_never_receipts(
     assert durable.count(f'"operation_id":"live-{replacement}-proposal"') == 1
 
 
-@pytest.mark.parametrize("fail_write", [1, 2, 3, 4])
+def test_steering_log_original_snapshot_unlink_retains_bounded_full_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="original-unlink-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    original = target.read_bytes()
+    real_retain = write_ops_module._retain_latest_original_snapshot
+
+    def unlink_original_before_retention(
+        recovery_fd: int,
+        entry: object,
+        **kwargs: object,
+    ) -> object:
+        assert isinstance(entry, write_ops_module._RecoveryEntry)
+        os.unlink(entry.name, dir_fd=recovery_fd)
+        os.fsync(recovery_fd)
+        return real_retain(recovery_fd, entry, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_retain_latest_original_snapshot",
+        unlink_original_before_retention,
+    )
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="recovery retirement became indeterminate",
+    ):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "unlink-original-snapshot",
+            source="item",
+            operation_id="original-unlink-proposal",
+            write_guard=guard,
+        )
+
+    stable_name = write_ops_module._latest_original_recovery_name(
+        note_rel_path(STEERING_LOG)
+    )
+    assert (vault_root / "_conflicts" / stable_name).read_bytes() == original
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"original-unlink-proposal"'
+    ) == 1
+
+
+def test_steering_log_active_inode_state_blocks_same_root_relocation(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="inode-relocation-seed",
+        write_guard=guard,
+    )
+    context = multiprocessing.get_context("fork")
+
+    def crash_after_exchange() -> None:
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(97)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "inode-relocation",
+            source="item",
+            operation_id="inode-relocation-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_after_exchange)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 97
+
+    relocated_root = tmp_path / "relocated-vault"
+    vault_root.replace(relocated_root)
+    with pytest.raises(KnowledgeWriteConflict, match="host state is invalid"):
+        append_steering_log(
+            relocated_root,
+            "mute",
+            "inode-relocation",
+            source="item",
+            operation_id="inode-relocation-proposal",
+            write_guard=guard,
+        )
+    durable = (relocated_root / note_rel_path(STEERING_LOG)).read_text(
+        encoding="utf-8"
+    )
+    assert durable.count('"operation_id":"inode-relocation-proposal"') == 1
+
+
+def test_steering_log_conflicting_active_transactions_across_aliases_block(
+    tmp_path: Path,
+) -> None:
+    real_root = tmp_path / "cross-alias-vault"
+    real_root.mkdir()
+    lexical_root = tmp_path / "cross-alias-link"
+    lexical_root.symlink_to(real_root, target_is_directory=True)
+    guard = _allowing_guard()
+    append_steering_log(
+        lexical_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="cross-alias-active-seed",
+        write_guard=guard,
+    )
+
+    state_paths = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    witness_paths = list(_host_witness_paths(lexical_root))
+    keys = sorted(
+        json.loads(path.read_text(encoding="utf-8"))["path_lock_key"]
+        for path in state_paths
+    )
+    transaction_by_key = {
+        key: ("active-transaction-a" if index == 0 else "active-transaction-b")
+        for index, key in enumerate(keys)
+    }
+    for path in [*state_paths, *witness_paths]:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["state"] = "active"
+        payload["transaction"] = transaction_by_key[payload["path_lock_key"]]
+        path.write_text(
+            json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflicting transactions"):
+        append_steering_log(
+            lexical_root,
+            "mute",
+            "cross-alias-active",
+            source="item",
+            operation_id="cross-alias-active-proposal",
+            write_guard=guard,
+        )
+    durable = (real_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert '"operation_id":"cross-alias-active-proposal"' not in durable
+
+
+def test_steering_log_nonwritable_original_fails_before_publication(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="nonwritable-original-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    original = target.read_bytes()
+    recovery = vault_root / "_conflicts"
+    prior_recovery = {path.name: path.read_bytes() for path in recovery.iterdir()}
+    target.chmod(0o400)
+    try:
+        with pytest.raises(KnowledgeCapabilityError, match="writable before publication"):
+            append_steering_log(
+                vault_root,
+                "mute",
+                "nonwritable-original",
+                source="item",
+                operation_id="nonwritable-original-proposal",
+                write_guard=guard,
+            )
+    finally:
+        target.chmod(0o600)
+
+    assert target.read_bytes() == original
+    assert {path.name: path.read_bytes() for path in recovery.iterdir()} == prior_recovery
+
+
+def test_steering_log_latest_original_retention_is_bounded(tmp_path: Path) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "first",
+        source="chat",
+        operation_id="bounded-original-first",
+        write_guard=guard,
+    )
+    first_complete = (vault_root / note_rel_path(STEERING_LOG)).read_bytes()
+    append_steering_log(
+        vault_root,
+        "mute",
+        "second",
+        source="item",
+        operation_id="bounded-original-second",
+        write_guard=guard,
+    )
+    stable = list(
+        (vault_root / "_conflicts").glob(
+            ".steering-append-latest-original-*.md.conflict"
+        )
+    )
+    assert len(stable) == 1
+    assert stable[0].read_bytes() == first_complete
+
+
+@pytest.mark.parametrize("fail_write", [1, 2, 3, 4, 5, 6])
 def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1467,9 +1699,9 @@ def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     assert failed
     body = read_steering_log_body(real_root)
     proposal_count = body.count(f'"operation_id":"state-write-{fail_write}-proposal"')
-    assert proposal_count == (0 if fail_write <= 2 else 1)
+    assert proposal_count == (0 if fail_write <= 3 else 1)
     monkeypatch.setattr(write_ops_module, "_write_host_append_state", real_write_state)
-    if fail_write <= 2:
+    if fail_write <= 3:
         durable_line = append_steering_log(
             lexical_root,
             "mute",
