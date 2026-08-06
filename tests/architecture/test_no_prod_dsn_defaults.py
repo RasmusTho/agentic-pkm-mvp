@@ -100,8 +100,9 @@ def test_no_test_default_resolves_to_a_prod_dsn() -> None:
 _DSN_ENV_VARS = {"DATABASE_URL", "DB_DSN", "BUILDEROPS_DATABASE_URL"}
 # The runtime gate in tests/conftest.py checks four writer families; the census
 # must not be narrower, or `injected-prod` stays open through the ones it omits.
-_DSN_HOST_VARS = {"PKM_DB_HOST", "PGHOST"}
+_DSN_HOST_VARS = {"PKM_DB_HOST", "PGHOST", "PGHOSTADDR"}
 _DSN_PORT_VARS = {"PKM_DB_PORT", "PGPORT"}
+_DSN_SERVICE_VARS = {"PGSERVICE", "PGSERVICEFILE"}
 
 # Loopback plus the prod-published port: the address a production container on
 # the developer's own machine actually answers on. Unreachable prod-*shaped*
@@ -174,11 +175,14 @@ def _flag_host_port_dict(
         value = _resolve_str(value_node, bound)
         if key is None or value is None:
             continue
+        if key in _DSN_SERVICE_VARS and value:
+            hits.append((lineno, f"{key}=<configured service indirection>"))
+            continue
         if key in _DSN_HOST_VARS:
             seen["host"] = value
         elif key in _DSN_PORT_VARS:
             seen["port"] = value
-        elif key in {"PKM_DB_NAME_PROD", "PGDATABASE"}:
+        elif key in {"PKM_DB_NAME_PROD", "PGDATABASE", "PGUSER"}:
             seen["db"] = value
     if seen.get("host") in _REACHABLE_PROD_HOSTS:
         port, db = seen.get("port", ""), seen.get("db", "")
@@ -260,11 +264,14 @@ def _injected_reachable_prod_dsns(tree: ast.AST) -> list[tuple[int, str]]:
         value = _resolve_str(value_node, bound)
         if value is None:
             return
+        if key in _DSN_SERVICE_VARS and value:
+            hits.append((lineno, f"{key}=<configured service indirection>"))
+            return
         if key in _DSN_HOST_VARS:
             host_port.setdefault(0, {})["host"] = value
         elif key in _DSN_PORT_VARS:
             host_port.setdefault(0, {})["port"] = value
-        elif key in {"PKM_DB_NAME_PROD", "PGDATABASE"}:
+        elif key in {"PKM_DB_NAME_PROD", "PGDATABASE", "PGUSER"}:
             host_port.setdefault(0, {})["db"] = value
         else:
             return
@@ -304,6 +311,7 @@ def _injected_reachable_prod_dsns(tree: ast.AST) -> list[tuple[int, str]]:
             for target in node.targets:
                 if isinstance(target, ast.Subscript) and _is_os_environ(target.value):
                     flag(node.lineno, target.slice, node.value)
+                    flag_pair(node.lineno, target.slice, node.value)
 
     return sorted(set(hits))
 
@@ -409,3 +417,30 @@ def test_census_recognises_injected_keyword_conninfo() -> None:
         f'def test_it(monkeypatch):\n    monkeypatch.setenv("DATABASE_URL", "{scratch}")\n'
     )
     assert not _injected_reachable_prod_dsns(scratch_tree)
+
+
+def test_census_recognises_late_ambient_writer_shapes() -> None:
+    monkeypatch_hostaddr = ast.parse(
+        "def test_it(monkeypatch):\n"
+        '    monkeypatch.setenv("PGHOSTADDR", "127.0.0.1")\n'
+        '    monkeypatch.setenv("PGPORT", "15432")\n'
+    )
+    assert _injected_reachable_prod_dsns(monkeypatch_hostaddr)
+
+    raw_environ = ast.parse(
+        "import os\n" 'os.environ["PGHOST"] = "127.0.0.1"\n' 'os.environ["PGPORT"] = "15432"\n'
+    )
+    assert _injected_reachable_prod_dsns(raw_environ)
+
+    service_file = ast.parse(
+        "import os\n" 'os.environ["PGSERVICEFILE"] = "/tmp/hidden-service.conf"\n'
+    )
+    assert _injected_reachable_prod_dsns(service_file)
+
+    scratch = ast.parse(
+        "def test_it(monkeypatch):\n"
+        '    monkeypatch.setenv("PGHOSTADDR", "127.0.0.1")\n'
+        '    monkeypatch.setenv("PGPORT", "15434")\n'
+        '    monkeypatch.setenv("PGDATABASE", "app_test")\n'
+    )
+    assert not _injected_reachable_prod_dsns(scratch)
