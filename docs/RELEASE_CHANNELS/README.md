@@ -134,7 +134,8 @@ On an established completed ledger it atomically reconciles any newly materializ
 backup verification; binding reassignment, retired/transferring binding reuse, or a forbidden
 release-channel collision aborts and leaves the fence in place. The native/channel exception is
 limited to one owner root on each side of a complete overlap-connected component, including retained
-tombstone/transfer ownership, so neither domain can bridge additional owners. It then optionally restores a
+tombstone/transfer ownership, so neither domain can bridge additional owners. Reconciliation,
+backup consistency, and key rotation revalidate that persisted component even on a no-op. It then optionally restores a
 verified backup and creates the next registry/ledger/key backup. The fence is
 removed only after that sequence succeeds; consumer preflight rejects a missing mount, missing
 established state, incomplete owner bootstrap, or surviving fence without creating replacement

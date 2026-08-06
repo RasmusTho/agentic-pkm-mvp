@@ -943,6 +943,61 @@ def test_native_channel_overlap_component_includes_retained_ownership_state(
     assert ledger.load() == before
 
 
+def test_persisted_ambiguous_overlap_fails_every_authority_gate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    parent = tmp_path / "parent"
+    dev_root = parent / "dev"
+    prod_root = parent / "prod"
+    dev_root.mkdir(parents=True)
+    prod_root.mkdir()
+    owners = [
+        LegacyOwner("native", "legacy-native", parent),
+        LegacyOwner("dev", "legacy-dev", dev_root),
+        LegacyOwner("prod", "legacy-prod", prod_root),
+    ]
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    component_guard = ledger._assert_native_release_component_cardinality
+    monkeypatch.setattr(
+        ledger,
+        "_assert_native_release_component_cardinality",
+        lambda _leases: None,
+    )
+    ledger.bootstrap_legacy_owners(
+        owners,
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    monkeypatch.setattr(
+        ledger,
+        "_assert_native_release_component_cardinality",
+        component_guard,
+    )
+
+    with pytest.raises(LedgerCollisionError, match="ambiguous native/channel"):
+        ledger.bootstrap_legacy_owners(
+            owners,
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    with pytest.raises(LedgerCollisionError, match="ambiguous native/channel"):
+        ledger.require_registry_consistency(
+            channel_id="dev",
+            registrations={"legacy-dev": dev_root},
+            tombstones={},
+            transfer_lineage=(),
+            global_live_owners=owners,
+        )
+    with pytest.raises(LedgerCollisionError, match="ambiguous native/channel"):
+        ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+
 def test_first_upgrade_still_rejects_release_channel_shared_root(tmp_path) -> None:
     root = tmp_path / "shared"
     root.mkdir()

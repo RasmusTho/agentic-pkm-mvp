@@ -374,6 +374,9 @@ class OwnershipLedger:
                 raise LedgerError(
                     "registry/ledger consistency cannot commit an in-progress transfer"
                 )
+            self._assert_native_release_component_cardinality(
+                self._component_leases(current)
+            )
 
             ledger_live_owners: set[tuple[str, str]] = set()
             ledger_live_roots: list[tuple[str, str, str]] = []
@@ -912,6 +915,9 @@ class OwnershipLedger:
                 self._assert_no_collision(staged, candidate, allow_same_channel_nested=True)
                 leases[candidate.vault_binding_id] = candidate
                 staged = self._replace(staged, leases=leases)
+            self._assert_native_release_component_cardinality(
+                self._component_leases(staged)
+            )
             staged = self._replace(staged, legacy_bootstrap_complete=True)
             if staged == current:
                 return current
@@ -934,6 +940,9 @@ class OwnershipLedger:
                 )
             old_key = self._load_or_create_key_locked(allow_create=False)
             current = self._load_or_create_ledger_locked(old_key, allow_create=False)
+            self._assert_native_release_component_cardinality(
+                self._component_leases(current)
+            )
             live_roots = {
                 binding: Path(self._open_root(lease.sealed_root, old_key))
                 for binding, lease in current.leases.items()
@@ -1038,19 +1047,7 @@ class OwnershipLedger:
         *,
         allow_same_channel_nested: bool,
     ) -> None:
-        leases = list(current.leases.values()) + list(current.tombstones.values())
-        if current.transfer is not None:
-            transfer = current.transfer
-            leases.append(
-                OwnershipLease(
-                    channel_id=transfer.destination_channel_id,
-                    vault_binding_id=transfer.destination_binding_id,
-                    root_fingerprint=transfer.root_fingerprint,
-                    ancestor_fingerprints=transfer.ancestor_fingerprints,
-                    sealed_root=transfer.sealed_root,
-                    state="transferring",
-                )
-            )
+        leases = self._component_leases(current)
         for lease in leases:
             exact = candidate.root_fingerprint == lease.root_fingerprint
             overlap = (
@@ -1081,6 +1078,25 @@ class OwnershipLedger:
             if lease.vault_binding_id != candidate.vault_binding_id
         ] + [candidate]
         self._assert_native_release_component_cardinality(component_leases)
+
+    def _component_leases(
+        self,
+        current: LedgerSnapshot,
+    ) -> list[OwnershipLease]:
+        leases = list(current.leases.values()) + list(current.tombstones.values())
+        if current.transfer is not None:
+            transfer = current.transfer
+            leases.append(
+                OwnershipLease(
+                    channel_id=transfer.destination_channel_id,
+                    vault_binding_id=transfer.destination_binding_id,
+                    root_fingerprint=transfer.root_fingerprint,
+                    ancestor_fingerprints=transfer.ancestor_fingerprints,
+                    sealed_root=transfer.sealed_root,
+                    state="transferring",
+                )
+            )
+        return leases
 
     def _assert_native_release_component_cardinality(
         self,

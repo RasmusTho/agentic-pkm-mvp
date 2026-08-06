@@ -113,7 +113,9 @@ forbidden release-channel overlap fails closed rather than being silently omitte
 deployments, the same stopped finalizer reconciles newly discovered, materialized owners into an
 established completed ledger before backup verification; binding reassignment, transfer/tombstone
 reuse, an over-cardinality native/channel component, or a forbidden release-channel collision aborts
-atomically and leaves the fence in place. The fence prevents
+atomically and leaves the fence in place. Reconciliation, backup consistency, and key rotation all
+revalidate the complete persisted component, so state written by an older implementation cannot
+pass as a no-op. The fence prevents
 upgraded consumers from restarting through a failed post-stop validation or import; a changed final
 fingerprint, missing inventory, missing established ledger/key, or unfenced finalizer also aborts.
 The independently durable legacy source is never deleted.

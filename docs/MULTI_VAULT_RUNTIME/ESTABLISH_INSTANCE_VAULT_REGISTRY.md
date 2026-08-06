@@ -70,7 +70,8 @@ This slice promotes the existing seed without changing content-vault authority.
   bridge multiple owners through the exception. A completed legacy bootstrap is reconcilable only
   inside a freshly proved stopped deployment: newly materialized owners are added
   atomically, while binding reassignment, retired/transferring binding reuse, and forbidden
-  release-channel overlap fail without changing the ledger.
+  release-channel overlap fail without changing the ledger. Reconciliation, backup consistency,
+  and key rotation revalidate persisted component cardinality even when no binding changes.
   One channel/instance may register an initialized parent vault and initialized nested child as
   distinct bindings only when the existing nested-vault boundary contract is active: parent traversal
   prunes the child, each effect targets one explicit binding/lease, and neither registration aliases

@@ -97,7 +97,8 @@ legacy-owner bootstrap, and reconciles newly materialized owners even when that 
 completed. Reconciliation preserves authenticated binding identity and is atomic with respect to
 forbidden release-channel collisions, tombstones, and transfers. The native/channel exception
 requires exactly one owner root from each side of the complete overlap-connected component; retained
-ownership participates, so an indirect bridge also fails closed. The finalizer then creates a
+ownership participates, so an indirect bridge also fails closed. Reconciliation and backup
+consistency revalidate persisted state even when the current inventory adds no owner. The finalizer then creates a
 verified registry/ledger/key backup and clears the fence.
 `INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored inside that stopped interval
 before finalization and consumer startup. Failure leaves the fence in place, so upgraded consumer
