@@ -77,7 +77,7 @@ onboarding beyond writing the `sources/*.md` filter notes.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fcntl
@@ -107,6 +107,7 @@ from app.heimdal.settings_notes import (
 from app.knowledge.write_ops import (
     _AtomicAppendAuthority,
     _open_atomic_append_authority,
+    _require_no_host_indeterminate_fence,
     append_note_relative,
 )
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -459,26 +460,36 @@ def _build_steering_log_transaction(
 
 @contextmanager
 def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
-    """Serialize one filesystem resource across equivalent path spellings."""
+    """Serialize one inode and lexical resource across remaps and aliases."""
     relative = note_rel_path(STEERING_LOG)
     with _open_atomic_append_authority(vault_root, relative) as authority:
+        lock_keys = sorted({authority.lock_key, authority.path_lock_key})
         with _STEERING_LOCKS_GUARD:
-            process_lock = _STEERING_LOCKS.setdefault(
-                authority.lock_key,
-                threading.RLock(),
-            )
+            process_locks = [
+                _STEERING_LOCKS.setdefault(key, threading.RLock())
+                for key in lock_keys
+            ]
 
         lock_root = Path(tempfile.gettempdir()) / "agentic-pkm-heimdal-locks"
         lock_root.mkdir(parents=True, exist_ok=True)
-        lock_name = hashlib.sha256(authority.lock_key.encode("utf-8")).hexdigest()
-        with process_lock, (lock_root / f"{lock_name}.lock").open("a+b") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        lock_names = [hashlib.sha256(key.encode("utf-8")).hexdigest() for key in lock_keys]
+        with ExitStack() as stack:
+            for process_lock in process_locks:
+                stack.enter_context(process_lock)
+            lock_handles = [
+                stack.enter_context((lock_root / f"{name}.lock").open("a+b"))
+                for name in lock_names
+            ]
+            for lock_handle in lock_handles:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
             try:
                 authority.assert_live()
+                _require_no_host_indeterminate_fence(authority)
                 yield authority
                 authority.assert_live()
             finally:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                for lock_handle in reversed(lock_handles):
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -497,6 +508,8 @@ def _steering_log_entries(raw: bytes) -> list[_SteeringLogEntry]:
         content = line.rstrip("\r\n")
         if not content.startswith("- [") or "] " not in content:
             continue
+        if not line_bytes.endswith(b"\n"):
+            raise RuntimeError("unterminated steering log entry")
         timestamp, payload_text = content[3:].split("] ", 1)
         if payload_text.startswith("{"):
             try:
