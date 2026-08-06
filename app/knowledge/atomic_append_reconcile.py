@@ -25,12 +25,12 @@ from typing import TYPE_CHECKING, Callable, Literal
 import unicodedata
 import uuid
 
-from app.knowledge.adapters import (
-    _atomic_exchange_at,
-    _atomic_rename_noreplace_at,
-    _same_file_identity,
-)
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
+from app.knowledge.filesystem_primitives import (
+    atomic_exchange_at as _atomic_exchange_at,
+    atomic_rename_noreplace_at as _atomic_rename_noreplace_at,
+    same_file_identity as _same_file_identity,
+)
 
 if TYPE_CHECKING:
     from app.write_guard import WriteGuard

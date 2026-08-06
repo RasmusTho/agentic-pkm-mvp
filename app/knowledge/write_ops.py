@@ -8,9 +8,11 @@ import stat
 from typing import TYPE_CHECKING, Literal
 import uuid
 
-from app.knowledge.adapters import _atomic_rename_noreplace_at
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.filesystem_primitives import (
+    atomic_rename_noreplace_at as _atomic_rename_noreplace_at,
+)
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
 from app.knowledge.references import build_obsidian_advanced_uri
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings

@@ -130,7 +130,8 @@ own `WriteGuard` action and authority decision.
   identity with another fingerprint is an identity collision before publication. A new identity
   returns `appended`. These structured results, rather than a mutable path read, are the caller's
   outcome authority.
-- Vault root, each parent component, and target are opened descriptor-relatively with no symlink
+- The caller-authorized source binding, each parent component, and target are opened
+  descriptor-relatively with no symlink
   following. The primitive rejects aliases, non-regular targets, or root/parent/target identity
   changes. Cooperating writers serialize on a separate descriptor-bound per-target lock whose inode
   survives target exchange; a replacement race is retained for recovery and fails without a success
