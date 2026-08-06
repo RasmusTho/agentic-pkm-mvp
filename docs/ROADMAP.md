@@ -409,6 +409,15 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 | v6.0 seams | Capability-seam baseline on top of v5.5/v5.6: closed capability spec directories, minimal orientation/resurfacing runtimes, commitment domain + minimal runtime, context-dimensions payload + runtime threading, read-only Chat cognition scaffold, flag-gated canvas session slice. Preserves all v5.5/v5.6 safety properties. | Shipped (seam-level baseline) |
 | v6.1+ | Broader v6.0 target-state work that the seams enable: full Chat mutation surface, Panel/Chat capability consumption, next-action/review-cycle commitment surfacing, persistence-surface runtime separation, relation-aware signal fusion. Target described in `docs/plans/V60_ARCHITECTURE_TARGET.md`. | Planned (post-v6.0 seams) |
 
+Reconciliation note (OD-1, `docs/architecture/evolution-graph.md :: Owner decisions`, owner
+decision 2026-08-02 on epic #2778): this table's strict v6.1-follows-seams reading is superseded by
+the owner-decided parallel-tracks sequencing — v6.1 chat-mutation/capability-consumption surfaces
+and substrate closeout (kernel closeout, property layer, backup) run on parallel tracks, not
+substrate-first-then-v6.1, with the substrate track keeping its own internal ordering. This table
+row is retained as historical seam-baseline context, not current sequencing authority. The
+parallel-tracks decision recorded here is this roadmap's current sequencing rule; the evolution
+graph remains advisory decision evidence.
+
 ## Tracks (details moved)
 - Watcher track details: `docs/tracks/TRACK_WATCHER.md`
 - PanelAgent LangGraph track: `docs/tracks/TRACK_PANELAGENT_LANGGRAPH.md`

@@ -151,6 +151,10 @@ puts kernel closeout + property layer + backup first.
 surfaces); (c) chat mutation writes through seams P-1/P-5 would have pinned — new surface, unpinned
 guarantees, highest silent-defect exposure. *Graph's recommendation:* (b), with (a)'s ordering
 inside the substrate track.
+**Owner decision (2026-08-02, epic #2778 chat decision):** (b) parallel tracks, with (a)'s internal
+ordering preserved *within* the substrate track — matches the graph's own recommendation verbatim.
+No new work breakdown beyond this graph's existing OD-1 scope; `docs/ROADMAP.md` reconciliation is
+tracked separately below.
 
 **OD-2 — What follows the substrate: #2314 RAG/memory vs KAP Phase 2.**
 *Problem:* both are H-optionality; the roadmap sequences neither explicitly.
@@ -160,6 +164,14 @@ retrieval work then benefits from); (c) interleave (KAP's bounded slice inside #
 *Consequences:* (a) deepens the core loop, no new content sources; (b) widens input, retrieval
 debt remains; (c) most total progress, most coordination. *Graph's recommendation:* (c) — KAP
 Phase 2 is one bounded vertical; #2314 is a long arc that shouldn't block it.
+**Owner decision (2026-08-02, epic #2778 chat decision):** (c) interleave — KAP Phase 2 as a
+bounded slice inside #2314's larger arc, matching the graph's own recommendation. As of this
+decision, #2795 ("KAP Phase 2: one YouTube URL e2e" — the node this OD names) is already **closed**;
+this graph's "next" status for it is stale relative to today. No bounded child issue named "KAP
+Phase 2 interleaved slice" exists, and this graph names no further concrete next bounded slice to
+interleave (the open Karakeep Acquisition line, #3367 and children, already runs as its own tracked
+work rather than as a slice reconciled against #2314). No new issue is filed here; slice-filing for
+any future KAP-class interleave is left to whoever picks up #2314 next.
 
 **OD-3 — Heimdal timing.**
 *Problem:* Fable-window pressure (charter, owner decisions fresh) argues for starting Heimdal now;
@@ -169,6 +181,11 @@ substrate; (b) build now; (c) full defer.
 *Consequences:* (a) captures the frontier-design value while the window exists, builds nothing on an
 unfinished journal — the design *names* its substrate prerequisites; (b) risks baking outbox
 semantics that #2899/#2901 may still move; (c) loses the window. *Graph's recommendation:* (a).
+**Owner decision (2026-08-02, epic #2778 chat decision):** (a) design Heimdal now, docs only (bus
+architecture + KAP-backbone decision), build after substrate — matches the graph's own
+recommendation. Bounded design issue #4545 ("Heimdal event-bus/KAP-backbone design (docs only, no
+runtime code)") was filed from this decision and later delivered via PR #4585. No design work was
+performed in the decision-recording task.
 *Delivered:* option (a)'s design deliverable landed via #4545 —
 [`layer2-event-bus-and-kap-backbone.md`](layer2-event-bus-and-kap-backbone.md); its
 [substrate-prerequisites section](layer2-event-bus-and-kap-backbone.md#substrate-prerequisites)
@@ -183,6 +200,17 @@ for cold-storage design.
 *Consequences:* (a) days-level effort, closes the largest unbounded-loss exposure; (b) coherent
 home but couples to a slower epic; (c) confuses tiering (lifecycle) with backup (disaster) — they
 are different problems. *Graph's recommendation:* (a).
+**Owner decision (2026-08-02, epic #2778 chat decision):** (a) file + execute backup as ops-lane
+work now. Investigation at decision time found the core gap this OD names (`decisions`/`audit`/
+`outbox` — the FD-P stores with zero backup as of this graph's 2026-07-04 cutoff) was already
+closed operationally the day after that cutoff: `local.prod-pgdump` was hardened 2026-07-05 to
+write daily compressed dumps of those three tables to an external SSD, fail-loud if unmounted (see
+issue #2965's own context note). The only still-open scope is off-machine/regional-DR replication,
+which is already filed as issue #2965 and was explicitly deferred by a separate 2026-07-11 owner
+ruling ("deferred until there is a stable, working system holding data worth regional-DR
+protection") — a prior owner decision this task does not re-litigate. No new issue is filed: (a) is
+already executed for the scope this OD names, and the residual off-machine scope's own owner
+deferral stands.
 
 ## SBS reconciliation (binding)
 
