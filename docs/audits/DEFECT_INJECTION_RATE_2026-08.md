@@ -61,6 +61,11 @@ bugs = [i for i in issues if "type:bug" in {l["name"] for l in i["labels"]}]
 **Heuristic classifiers** (regex over title+body; first match wins in the stated priority
 order) are quoted in full in the sections that use them, with their limits. Gate arrival dates
 come from `git log` on `origin/main` (commands quoted in section "Detection versus injection").
+The subject-surface classifier reports mutually exclusive `builder only`, `product only`,
+`both`, and `neither` buckets, but this snapshot does not cross-tabulate the `both` bucket by
+defect vintage, ownership, or whether a defect reached shipped product code. Consequently its
+product conclusion is limited to the `product only` bucket; mixed Builder/product involvement
+remains unclassified rather than evidence against a product regression.
 
 **Classification-drift sample:** n=40 drawn from the 292-issue spike cohort with
 `random.seed(4619)`, stratified proportionally by week (21 from W29, 4 from W30, 15 from W31),
@@ -333,8 +338,10 @@ evidence in the issue's own text):
 ## Verdict
 
 **The evidence supports a composite of reading 2 (improved detection, broadly construed) and
-a scoped form of reading 1 (injection confined to newly built Builder System machinery), with
-reading 3 (classification drift) real but minor.**
+a scoped form of reading 1 (substantial injection in newly built Builder System machinery), with
+reading 3 (classification drift) real but minor. It rejects a spike in the `product only`
+path-mention bucket, not product regression generally: the 63-issue `both` bucket has not been
+classified by surface ownership or shipping status.**
 
 - **Reading 2 — supported, in two forms.** Directly: ~25% of the sampled cohort (95% CI
   ~13–41%) are pre-existing defects surfaced by gates newly in force — above all the restored
@@ -345,14 +352,16 @@ reading 3 (classification drift) real but minor.**
   heads — defects that in the W20–W23 regime would have been review comments fixed in-PR and
   never counted. The `type:bug` creation rate stopped measuring "shipped defects" and started
   measuring "findings the verification machine writes down".
-- **Reading 1 — supported only for the Builder System's new machinery, rejected for the
-  product.** ~47.5% of the sample are defects in machinery built W27+ (verification spine,
+- **Reading 1 — supported for new Builder System machinery; product conclusion remains
+  uncertain.** ~47.5% of the sample are defects in machinery built W27+ (verification spine,
   selectors, validators, deployment guards); the #3603/#3620 cluster alone accounts for ~24%
-  of the spike cohort. That is genuine injection — new code carrying defects — but it is
-  concentrated in new builder surfaces, found overwhelmingly by the same wave's own review and
-  gates, and 91% of the cohort was closed by the audit date. Product-only bugs run at 5% of
-  the spike cohort (~7/week absolute, versus 51 in W25 alone). There is no evidence the
-  shipped product's defect rate rose.
+  of the spike cohort. That is genuine injection — new code carrying defects — and the measured
+  builder-only concentration is found overwhelmingly by the same wave's own review and gates;
+  91% of the cohort was closed by the audit date. Product-only bugs run at 5% of the spike
+  cohort (~7/week absolute, versus 51 in W25 alone), so this evidence rejects a product-only
+  spike. It cannot reject a product regression involving the 63 mixed Builder/product issues:
+  this audit did not classify those issues by owning surface or whether the defect reached
+  shipped product code.
 - **Reading 3 — measurable, minor.** 10% clear + 10% borderline drift in the sample; removing
   all of it leaves the spike share at ~43%, still ~3× the baseline band. Contributing
   process changes are visible (canonical `bug:` titling 46%→88%, review-finding minting,
@@ -364,6 +373,9 @@ reading 3 (classification drift) real but minor.**
 - Actor and filing-path classes are regex/shape heuristics over a single shared author login;
   they measure filing form, not identity, and misclassification is uncorrected.
 - The surface split is a path-mention heuristic; 33 spike bugs (11%) match no path pattern.
+- The 63 spike bugs in the `both` path-mention bucket (22%) were not cross-tabulated by vintage,
+  owning surface, or shipping status. The product-only comparison therefore cannot establish
+  that the shipped product's defect rate did not rise when mixed-surface issues are included.
 - Vintage and drift verdicts come from one reviewer over a 13.7% sample; the binomial
   intervals above are the honest width. W30 contributes only 4 sampled issues.
 - The `area:*` axis (96% uncovered) and the baseline lane axis (100% uncovered) cannot
