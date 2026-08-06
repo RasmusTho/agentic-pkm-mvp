@@ -95,7 +95,9 @@ incomplete, non-private, or unvalidated inventory, captures the final legacy fin
 on first volume or preserves it beside an established dormant registry, calls the host-global
 legacy-owner bootstrap, and reconciles newly materialized owners even when that bootstrap previously
 completed. Reconciliation preserves authenticated binding identity and is atomic with respect to
-forbidden release-channel collisions, tombstones, and transfers. The finalizer then creates a
+forbidden release-channel collisions, tombstones, and transfers. The native/channel exception
+requires exactly one owner root from each side of the complete overlap-connected component; retained
+ownership participates, so an indirect bridge also fails closed. The finalizer then creates a
 verified registry/ledger/key backup and clears the fence.
 `INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored inside that stopped interval
 before finalization and consumer startup. Failure leaves the fence in place, so upgraded consumer

@@ -69,7 +69,9 @@ root (or an overlapping ancestor/descendant alias) from becoming active in two d
 channels, while preserving nested child-vault traversal boundaries within one channel. One native
 runtime and one release channel may carry distinct authenticated bindings for the same or an
 overlapping vault root: ADR-0055 governs those concurrent writers at the write seam instead of
-making deployment reject their declared topology.
+making deployment reject their declared topology. The exception is one overlap-connected owner-root
+pair, never a bridge to additional native or release roots; retained ownership lineage participates
+in that cardinality check.
 It does not change the runtime topology authority decision: the registry is still dormant,
 production reads remain on the legacy scalar selection, and MVR-01C is the sole cutover owner.
 

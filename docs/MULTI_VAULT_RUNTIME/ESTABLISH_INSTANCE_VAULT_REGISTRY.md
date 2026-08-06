@@ -64,8 +64,11 @@ This slice promotes the existing seed without changing content-vault authority.
   of ancestor/descendant overlap across two different release channels; `/vault` and
   `/vault/project` therefore cannot belong to different release channels. One `native` owner and one
   release channel may carry distinct authenticated bindings for equal or overlapping roots because
-  ADR-0055 declares them concurrent writers of the same vault. A completed legacy bootstrap remains
-  reconcilable only inside a freshly proved stopped deployment: newly materialized owners are added
+  ADR-0055 declares them concurrent writers of the same vault. The exception remains narrow at the
+  connected-component level: native plus release overlap contains exactly one owner
+  root from each side, including retained tombstone and transfer ownership, so neither side can
+  bridge multiple owners through the exception. A completed legacy bootstrap is reconcilable only
+  inside a freshly proved stopped deployment: newly materialized owners are added
   atomically, while binding reassignment, retired/transferring binding reuse, and forbidden
   release-channel overlap fail without changing the ledger.
   One channel/instance may register an initialized parent vault and initialized nested child as
@@ -403,7 +406,8 @@ new-schema state before fork/merge protection exists.
 - [ ] **MVR-01B:** Registering, relocating, or starting equal, ancestor, or descendant canonical
   content roots across two different release channels is rejected by the shared ownership ledger,
   including symlink and bind-mount aliases; one sanctioned native/channel pair may share or overlap
-  the vault root. A later stopped deployment reconciles a newly discovered native owner into an
+  the vault root, but an overlap-connected component with native plus release ownership must contain
+  exactly one owner root on each side, including tombstone and transfer ownership. A later stopped deployment reconciles a newly discovered native owner into an
   established ledger before backup verification, while forbidden collisions and binding-identity
   changes remain atomic failures. Injected crashes in reserve/commit/activate recover to at most one
   non-overlapping release-channel owner without exposing raw host paths.

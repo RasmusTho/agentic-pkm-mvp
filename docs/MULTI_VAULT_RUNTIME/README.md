@@ -64,9 +64,11 @@ HMAC fingerprints of canonical filesystem identity plus its canonical ancestor-i
 two different release channels, including after symlink or bind-mount alias resolution. The narrow
 exception is one `native` owner paired with one release channel: ADR-0055 declares both runtimes as
 writers of the same vault, so their equal or overlapping roots may carry distinct authenticated
-bindings. One channel/instance may register initialized parent and child vaults only under the
-existing nested-vault boundary contract: parent traversal prunes the child and effects target one
-explicit binding. One CSPRNG-generated,
+bindings. The complete overlap-connected component must contain exactly those two owner roots;
+native cannot bridge multiple release owners, a release owner cannot bridge multiple native roots,
+and retained tombstone/transfer ownership counts in that component. One channel/instance may
+register initialized parent and child vaults only under the existing nested-vault boundary contract:
+parent traversal prunes the child and effects target one explicit binding. One CSPRNG-generated,
 host-global ledger key lives mode `0600` in private host app-data outside every channel volume and
 is mounted read-only into all channel/native consumers; generation, permissions, durable backup,
 and key ID are host-bootstrap truth. Missing, ephemeral, channel-specific, mismatched, or permissive
@@ -110,7 +112,8 @@ the wrapper marks the inventory drained and seeds every owner. A missing, change
 forbidden release-channel overlap fails closed rather than being silently omitted. On later
 deployments, the same stopped finalizer reconciles newly discovered, materialized owners into an
 established completed ledger before backup verification; binding reassignment, transfer/tombstone
-reuse, or a forbidden release-channel collision aborts atomically and leaves the fence in place. The fence prevents
+reuse, an over-cardinality native/channel component, or a forbidden release-channel collision aborts
+atomically and leaves the fence in place. The fence prevents
 upgraded consumers from restarting through a failed post-stop validation or import; a changed final
 fingerprint, missing inventory, missing established ledger/key, or unfenced finalizer also aborts.
 The independently durable legacy source is never deleted.

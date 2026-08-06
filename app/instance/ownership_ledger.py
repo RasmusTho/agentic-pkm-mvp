@@ -1075,6 +1075,58 @@ class OwnershipLedger:
             ):
                 continue
             raise LedgerCollisionError("canonical content roots overlap across ownership domains")
+        component_leases = [
+            lease
+            for lease in leases
+            if lease.vault_binding_id != candidate.vault_binding_id
+        ] + [candidate]
+        self._assert_native_release_component_cardinality(component_leases)
+
+    def _assert_native_release_component_cardinality(
+        self,
+        leases: Sequence[OwnershipLease],
+    ) -> None:
+        overlap_graph = {index: set() for index in range(len(leases))}
+        for index, left in enumerate(leases):
+            for right_index, right in enumerate(
+                leases[index + 1 :],
+                start=index + 1,
+            ):
+                if (
+                    left.root_fingerprint != right.root_fingerprint
+                    and left.root_fingerprint not in right.ancestor_fingerprints
+                    and right.root_fingerprint not in left.ancestor_fingerprints
+                ):
+                    continue
+                overlap_graph[index].add(right_index)
+                overlap_graph[right_index].add(index)
+
+        unseen = set(overlap_graph)
+        while unseen:
+            seed = unseen.pop()
+            component = {seed}
+            pending = [seed]
+            while pending:
+                current = pending.pop()
+                adjacent = overlap_graph[current] & unseen
+                unseen.difference_update(adjacent)
+                component.update(adjacent)
+                pending.extend(adjacent)
+            native_owners = [
+                index for index in component if leases[index].channel_id == "native"
+            ]
+            release_owners = [
+                index
+                for index in component
+                if leases[index].channel_id in _RELEASE_CHANNELS
+            ]
+            if native_owners and release_owners and (
+                len(native_owners) != 1 or len(release_owners) != 1
+            ):
+                raise LedgerCollisionError(
+                    "canonical content roots form an ambiguous native/channel "
+                    "overlap component"
+                )
 
     def _matches_root(self, lease: OwnershipLease, root: Path, key: _KeyMaterial) -> bool:
         return lease.root_fingerprint == self._lease_for_root(

@@ -656,18 +656,38 @@ def test_forbidden_cross_domain_arrangements_are_named(owner_sources, tmp_path):
 
     shared = _vault(tmp_path, "vault")
     nested = _vault(tmp_path, "vault", "project")
+    sibling = _vault(tmp_path, "vault", "sibling")
+    native_one = _vault(tmp_path, "release-vault", "native-one")
+    native_two = _vault(tmp_path, "release-vault", "native-two")
+    release_parent = native_one.parent
 
     forbidden = {
         "two channels on one root": [("dev", shared), ("prod", shared)],
         "one channel nested under another": [("prod", shared), ("test", nested)],
         "ancestor direction reversed": [("test", nested), ("dev", shared)],
+        "native bridges two release channels": [
+            ("native", shared),
+            ("dev", nested),
+            ("prod", sibling),
+        ],
+        "release channel bridges two native roots": [
+            ("prod", release_parent),
+            ("native", native_one),
+            ("native", native_two),
+        ],
     }
 
     for label, owners in forbidden.items():
         owner_sources["owners"] = owners
         output = tmp_path / "forbidden-owners.json"
 
-        with pytest.raises(InventoryError, match="collide across release channels"):
+        with pytest.raises(
+            InventoryError,
+            match=(
+                "collide across release channels|"
+                "ambiguous native/channel overlap component"
+            ),
+        ):
             writer_inventory.produce_legacy_owners(
                 repo_root=REPO_ROOT, active_channel="dev", output=output
             )

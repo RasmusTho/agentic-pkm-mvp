@@ -862,6 +862,87 @@ def test_first_upgrade_allows_native_and_release_channel_shared_root(tmp_path, n
     } == {"native", "prod"}
 
 
+@pytest.mark.parametrize("native_is_parent", [True, False])
+def test_legacy_bootstrap_rejects_ambiguous_native_channel_overlap_component(
+    tmp_path,
+    native_is_parent,
+) -> None:
+    parent = tmp_path / "parent"
+    first_child = parent / "first"
+    second_child = parent / "second"
+    first_child.mkdir(parents=True)
+    second_child.mkdir()
+    owners = (
+        [
+            LegacyOwner("native", "legacy-native", parent),
+            LegacyOwner("dev", "legacy-dev", first_child),
+            LegacyOwner("prod", "legacy-prod", second_child),
+        ]
+        if native_is_parent
+        else [
+            LegacyOwner("prod", "legacy-prod", parent),
+            LegacyOwner("native", "legacy-native-first", first_child),
+            LegacyOwner("native", "legacy-native-second", second_child),
+        ]
+    )
+    ledger = OwnershipLedger(tmp_path / "host-global")
+
+    with pytest.raises(LedgerCollisionError, match="ambiguous native/channel"):
+        ledger.bootstrap_legacy_owners(
+            owners,
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    assert ledger.load().leases == {}
+
+
+@pytest.mark.parametrize("retained_state", ["tombstone", "transfer"])
+def test_native_channel_overlap_component_includes_retained_ownership_state(
+    tmp_path,
+    retained_state,
+) -> None:
+    parent = tmp_path / "parent"
+    first_child = parent / "first"
+    second_child = parent / "second"
+    first_child.mkdir(parents=True)
+    second_child.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.bootstrap_legacy_owners(
+        [
+            LegacyOwner("native", "legacy-native", parent),
+            LegacyOwner("dev", "legacy-dev", first_child),
+        ],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    if retained_state == "tombstone":
+        ledger.release_to_tombstone(
+            "legacy-dev",
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    else:
+        ledger.begin_transfer(
+            source_binding_id="legacy-dev",
+            destination_channel_id="dev",
+            destination_binding_id="legacy-dev-destination",
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    before = ledger.load()
+
+    with pytest.raises(LedgerCollisionError, match="ambiguous native/channel"):
+        ledger.bootstrap_legacy_owners(
+            [LegacyOwner("prod", "legacy-prod", second_child)],
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    assert ledger.load() == before
+
+
 def test_first_upgrade_still_rejects_release_channel_shared_root(tmp_path) -> None:
     root = tmp_path / "shared"
     root.mkdir()

@@ -29,7 +29,11 @@ Forbidden
     by two *different release channels*.  ADR-0055 declares one Mac runtime,
     not one per channel; ``docs/ENVIRONMENTS.md`` keeps channels isolated.  Two
     channel runtimes on one vault is ambiguous authority no write-time
-    mechanism resolves, so it still aborts the deploy.
+    mechanism resolves, so it still aborts the deploy.  The native exception
+    is one owner-root pair, not a bridge: an overlap-connected component that
+    contains native plus release ownership must contain exactly one owner from
+    each side.  A native parent with two release children, or a release parent
+    with two native children, is therefore also forbidden.
 
 This predicate is about ownership only.  The quiescence property -- that no
 writer is running during the deployment's stopped window -- is proved
@@ -988,8 +992,21 @@ def _normalize_legacy_owners(
         (record, primary, ancestors)
         for (_, primary), (record, ancestors) in normalized.items()
     ]
+    overlap_graph = {index: set() for index in range(len(values))}
     for index, (left, left_primary, left_ancestors) in enumerate(values):
-        for right, right_primary, right_ancestors in values[index + 1 :]:
+        for right_index, (right, right_primary, right_ancestors) in enumerate(
+            values[index + 1 :],
+            start=index + 1,
+        ):
+            overlap = (
+                left_primary == right_primary
+                or left_primary in right_ancestors
+                or right_primary in left_ancestors
+            )
+            if not overlap:
+                continue
+            overlap_graph[index].add(right_index)
+            overlap_graph[right_index].add(index)
             if left.channel_id == right.channel_id:
                 continue
             if (
@@ -1000,22 +1017,46 @@ def _normalize_legacy_owners(
                 # resolves their collisions at write time, so a shared root is
                 # the designed topology rather than ambiguous authority.
                 continue
-            if (
-                left_primary == right_primary
-                or left_primary in right_ancestors
-                or right_primary in left_ancestors
-            ):
-                shared_id = (
-                    left_primary
-                    if left_primary == right_primary or left_primary in right_ancestors
-                    else right_primary
-                )
-                # Both domains are release channels by the carve-out above, so
-                # the message names that narrower rule rather than "domains".
-                raise InventoryError(
-                    "legacy owner roots collide across release channels: "
-                    f"domain_a={left.channel_id} domain_b={right.channel_id} id={shared_id}"
-                )
+            shared_id = (
+                left_primary
+                if left_primary == right_primary or left_primary in right_ancestors
+                else right_primary
+            )
+            # Both domains are release channels by the carve-out above, so
+            # the message names that narrower rule rather than "domains".
+            raise InventoryError(
+                "legacy owner roots collide across release channels: "
+                f"domain_a={left.channel_id} domain_b={right.channel_id} id={shared_id}"
+            )
+
+    unseen = set(overlap_graph)
+    while unseen:
+        seed = unseen.pop()
+        component = {seed}
+        pending = [seed]
+        while pending:
+            current = pending.pop()
+            adjacent = overlap_graph[current] & unseen
+            unseen.difference_update(adjacent)
+            component.update(adjacent)
+            pending.extend(adjacent)
+        native_owners = [
+            index for index in component if values[index][0].channel_id == "native"
+        ]
+        release_owners = [
+            index
+            for index in component
+            if values[index][0].channel_id in CHANNEL_DOMAINS
+        ]
+        if native_owners and release_owners and (
+            len(native_owners) != 1 or len(release_owners) != 1
+        ):
+            component_id = min(values[index][1] for index in component)
+            raise InventoryError(
+                "legacy owner roots form an ambiguous native/channel overlap component: "
+                f"native_owners={len(native_owners)} "
+                f"release_owners={len(release_owners)} id={component_id}"
+            )
     ordered = sorted(values, key=lambda item: (item[0].channel_id, item[0].root))
     return (
         [item[0] for item in ordered],
