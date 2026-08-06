@@ -2542,22 +2542,32 @@ def _load_legacy_owner_inventory(
     if not isinstance(owner_payload, list):
         raise InstanceStatePreflightError("legacy-owner inventory entries are invalid")
     owners: list[LegacyOwner] = []
-    for item in owner_payload:
+    for index, item in enumerate(owner_payload):
         if not isinstance(item, dict):
-            raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
+            raise InstanceStatePreflightError(
+                "canonical global live-owner inventory is invalid: "
+                f"owners[{index}] is not an owner entry"
+            )
         owner_channel = str(item.get("channel_id") or "").strip()
         raw_root = str(item.get("root") or "").strip()
-        if (
-            not owner_channel
-            or not raw_root
-            or not Path(raw_root).expanduser().is_absolute()
-        ):
-            raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
+        if not owner_channel:
+            raise InstanceStatePreflightError(
+                "canonical global live-owner inventory is invalid: "
+                f"owners[{index}].channel_id is missing"
+            )
+        if not raw_root or not Path(raw_root).expanduser().is_absolute():
+            raise InstanceStatePreflightError(
+                "canonical global live-owner inventory is invalid: "
+                f"owners[{index}].root is missing or not absolute"
+            )
         root = Path(raw_root).expanduser().resolve(strict=False)
         if not root.is_dir():
             if skip_unmaterialized:
                 continue
-            raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
+            raise InstanceStatePreflightError(
+                "canonical global live-owner inventory is invalid: "
+                f"owners[{index}].root is not materialized"
+            )
         binding_id = str(item.get("vault_binding_id") or "").strip()
         if owner_channel == channel:
             for registration in registry.registrations.values():
@@ -2831,7 +2841,13 @@ def _finish_instance_state_deployment_locked(
     )
     had_populated_registry = has_registry_state and store.load().revision > 0
     if had_populated_registry and restore_root is None:
-        ledger.require_existing()
+        try:
+            ledger.require_existing()
+        except LedgerError as exc:
+            raise InstanceStatePreflightError(
+                "backup registry/ledger consistency verification failed during "
+                "ownership ledger preflight"
+            ) from exc
 
     source = Path(legacy_path).expanduser().resolve(strict=False)
     final_fingerprint: str | None = None
@@ -2862,20 +2878,32 @@ def _finish_instance_state_deployment_locked(
         store.load()
 
     registry = store.load()
-    try:
-        ledger_snapshot = ledger.require_existing()
-    except LedgerError:
+    if not ledger.path.exists() and not ledger.key_path.exists():
         ledger_snapshot = None
-    owners = _load_legacy_owner_inventory(
-        inventory_path,
-        registry=registry,
-        channel=channel,
-        quiescence_proof=quiescence_proof,
-        skip_unmaterialized=(
-            ledger_snapshot is not None
-            and ledger_snapshot.legacy_bootstrap_complete
-        ),
-    )
+    else:
+        try:
+            ledger_snapshot = ledger.require_existing()
+        except LedgerError as exc:
+            raise InstanceStatePreflightError(
+                "backup registry/ledger consistency verification failed during "
+                "ownership ledger preflight"
+            ) from exc
+    try:
+        owners = _load_legacy_owner_inventory(
+            inventory_path,
+            registry=registry,
+            channel=channel,
+            quiescence_proof=quiescence_proof,
+            skip_unmaterialized=(
+                ledger_snapshot is not None
+                and ledger_snapshot.legacy_bootstrap_complete
+            ),
+        )
+    except InstanceStatePreflightError as exc:
+        raise InstanceStatePreflightError(
+            "backup registry/ledger consistency verification failed: "
+            f"{exc}"
+        ) from exc
     ledger_snapshot = ledger.bootstrap_legacy_owners(
         owners,
         inventory_complete=True,

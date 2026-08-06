@@ -67,7 +67,14 @@ This slice promotes the existing seed without changing content-vault authority.
   ADR-0055 declares them concurrent writers of the same vault. The exception remains narrow at the
   connected-component level: native plus release overlap contains exactly one owner
   root from each side, including retained tombstone and transfer ownership, so neither side can
-  bridge multiple owners through the exception. A completed legacy bootstrap is reconcilable only
+  bridge multiple owners through the exception. Cardinality counts authenticated stable bindings,
+  not lifecycle-record rows: an active lease and immutable retired tombstone for the same binding
+  normalize to one authority only when map/internal ID, channel, HMAC identity, ancestor chain, and
+  authenticated canonical root agree (their randomized sealed-root ciphertext may differ). Transfer
+  source and destination bindings stay distinct and both count, including while the recoverable
+  reservation is pending. The v1 tombstone map preserves one immutable removal epoch per binding;
+  after same-binding reactivation a second removal fails closed rather than overwriting that epoch,
+  until MVR-06B owns a versioned repeated-removal journal. A completed legacy bootstrap is reconcilable only
   inside a freshly proved stopped deployment: newly materialized owners are added
   atomically, while binding reassignment, retired/transferring binding reuse, and forbidden
   release-channel overlap fail without changing the ledger. Reconciliation, backup consistency,

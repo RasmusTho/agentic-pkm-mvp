@@ -66,7 +66,11 @@ exception is one `native` owner paired with one release channel: ADR-0055 declar
 writers of the same vault, so their equal or overlapping roots may carry distinct authenticated
 bindings. The complete overlap-connected component must contain exactly those two owner roots;
 native cannot bridge multiple release owners, a release owner cannot bridge multiple native roots,
-and retained tombstone/transfer ownership counts in that component. One channel/instance may
+and retained tombstone/transfer ownership counts in that component. Lifecycle rows for one stable
+binding normalize once only after their authenticated channel/root identity agrees; independently
+sealed active and retired rows may therefore coexist. Transfer endpoints remain distinct. The v1
+tombstone slot is immutable, so a second removal after reactivation fails closed pending the MVR-06B
+versioned lifecycle journal. One channel/instance may
 register initialized parent and child vaults only under the existing nested-vault boundary contract:
 parent traversal prunes the child and effects target one explicit binding. One CSPRNG-generated,
 host-global ledger key lives mode `0600` in private host app-data outside every channel volume and

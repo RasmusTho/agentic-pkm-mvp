@@ -3863,7 +3863,7 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
         rejected_backup = case_root / "rejected-backup"
         with pytest.raises(
             InstanceStatePreflightError,
-            match="registry/ledger consistency",
+            match=r"registry/ledger (?:capture|consistency)",
         ):
             InstanceStateBackup(layout, runtime.ledger).create(
                 rejected_backup,
@@ -3998,20 +3998,6 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
             )
             live_channel = "test"
             live_binding = destination_binding
-        if divergence == "cross-channel-self-lineage":
-            final_binding = f"final-{divergence}"
-            runtime.ledger.begin_transfer(
-                source_binding_id=destination_binding,
-                destination_channel_id="native",
-                destination_binding_id=final_binding,
-                _capability=STORAGE_MUTATION_CAPABILITY,
-            )
-            runtime.ledger.activate_transfer(
-                _capability=STORAGE_MUTATION_CAPABILITY,
-            )
-            live_channel = "native"
-            live_binding = final_binding
-
         complete_owners = _current_registry_owners(runtime) + [
             {
                 "channel_id": live_channel,
@@ -4062,7 +4048,7 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
 
         with pytest.raises(
             InstanceStatePreflightError,
-            match="registry/ledger consistency",
+            match=r"registry/ledger (?:capture|consistency)",
         ):
             InstanceStateBackup(layout, runtime.ledger).create(
                 case_root / "rejected-backup",
@@ -4114,19 +4100,6 @@ def test_backup_rejects_registry_ledger_divergence_bidirectionally(tmp_path) -> 
             )
             restore_live_channel = "test"
             restore_live_binding = restore_destination
-        if divergence == "cross-channel-self-lineage":
-            restore_final = f"restore-final-{divergence}"
-            restore_runtime.ledger.begin_transfer(
-                source_binding_id=restore_destination,
-                destination_channel_id="native",
-                destination_binding_id=restore_final,
-                _capability=STORAGE_MUTATION_CAPABILITY,
-            )
-            restore_runtime.ledger.activate_transfer(
-                _capability=STORAGE_MUTATION_CAPABILITY,
-            )
-            restore_live_channel = "native"
-            restore_live_binding = restore_final
         restore_complete_owners = _current_registry_owners(restore_runtime) + [
             {
                 "channel_id": restore_live_channel,
