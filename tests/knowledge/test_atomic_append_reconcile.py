@@ -1067,6 +1067,67 @@ def test_recovery_capacity_refuses_before_stage_creation(
     assert _active_stage_paths(target.parent) == []
 
 
+def test_reservation_descriptor_open_failure_restores_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    target = vault / "Logs" / "steering.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("original")
+    monkeypatch.setattr(atomic_append_module, "_MAX_RECOVERY_ENTRIES", 2)
+    real_open = os.open
+    fail_reserved_open = True
+
+    def open_with_reservation_failure(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal fail_reserved_open
+        if fail_reserved_open and os.fsdecode(path).startswith("reserved-"):
+            fail_reserved_open = False
+            raise OSError("injected reservation descriptor open failure")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", open_with_reservation_failure)
+    with pytest.raises(OSError, match="injected reservation descriptor open failure"):
+        atomic_append_reconcile_relative(
+            "Logs/steering.md",
+            operation_id="reservation-open-failure",
+            payload="payload",
+            payload_fingerprint=_fingerprint("payload"),
+            vault_root=vault,
+            action="test.atomic_append",
+            write_guard=_healthy_guard(),
+            reconcile=_unchanged,
+        )
+
+    capacity = (
+        target.parent
+        / atomic_append_module._RECOVERY_DIRECTORY
+        / atomic_append_module._CAPACITY_DIRECTORY
+    )
+    assert sorted(path.name for path in capacity.glob("free-*")) == [
+        "free-0000",
+        "free-0001",
+    ]
+    assert list(capacity.glob("reserved-*")) == []
+
+    result = atomic_append_reconcile_relative(
+        "Logs/steering.md",
+        operation_id="reservation-open-retry",
+        payload="payload",
+        payload_fingerprint=_fingerprint("payload"),
+        vault_root=vault,
+        action="test.atomic_append",
+        write_guard=_healthy_guard(),
+        reconcile=_unchanged,
+    )
+    assert result.outcome == "appended"
+
+
 def test_concurrent_capacity_reservations_refuse_before_stage_creation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

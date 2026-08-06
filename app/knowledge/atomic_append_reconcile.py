@@ -589,8 +589,17 @@ def _reserve_recovery_capacity(recovery_fd: int) -> _CapacityReservation:
                 )
             except FileNotFoundError:
                 continue
-            slot_fd = os.open(reserved_name, _TARGET_OPEN_FLAGS, dir_fd=capacity_fd)
-            descriptor_stat = os.fstat(slot_fd)
+            # The no-replace rename transfers this slot to this reservation.
+            # Record that rollback ownership before any descriptor operation
+            # can fail so exception cleanup cannot strand capacity.
+            slot = _CapacitySlot(index, reserved_name, -1)
+            slots.append(slot)
+            slot.descriptor = os.open(
+                reserved_name,
+                _TARGET_OPEN_FLAGS,
+                dir_fd=capacity_fd,
+            )
+            descriptor_stat = os.fstat(slot.descriptor)
             entry_stat = os.stat(
                 reserved_name,
                 dir_fd=capacity_fd,
@@ -601,9 +610,7 @@ def _reserve_recovery_capacity(recovery_fd: int) -> _CapacityReservation:
                 or descriptor_stat.st_nlink != 1
                 or not _same_file_identity(descriptor_stat, entry_stat)
             ):
-                os.close(slot_fd)
                 raise KnowledgeCapabilityError("atomic append recovery reservation changed")
-            slots.append(_CapacitySlot(index, reserved_name, slot_fd))
         os.fsync(capacity_fd)
         if len(slots) != 2:
             raise KnowledgeCapabilityError("atomic append recovery capacity is exhausted")
@@ -630,6 +637,26 @@ def _release_recovery_capacity(reservation: _CapacityReservation) -> None:
     for slot in reservation.slots:
         try:
             if not slot.consumed:
+                if slot.descriptor < 0:
+                    slot.descriptor = os.open(
+                        slot.name,
+                        _TARGET_OPEN_FLAGS,
+                        dir_fd=reservation.directory,
+                    )
+                descriptor_stat = os.fstat(slot.descriptor)
+                reserved_stat = os.stat(
+                    slot.name,
+                    dir_fd=reservation.directory,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISREG(descriptor_stat.st_mode)
+                    or descriptor_stat.st_nlink != 1
+                    or not _same_file_identity(descriptor_stat, reserved_stat)
+                ):
+                    raise KnowledgeWriteConflict(
+                        "atomic append capacity release changed identity"
+                    )
                 free_name = _free_capacity_name(slot.index)
                 _atomic_rename_noreplace_at(
                     reservation.directory,
