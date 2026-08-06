@@ -1596,7 +1596,11 @@ class OwnershipLedger:
                     "release ownership transfer history is cyclic or disconnected"
                 )
 
-            live_bindings = binding_ids & set(current.leases)
+            live_bindings = {
+                binding_id
+                for binding_id, lease in current.leases.items()
+                if binding_id in binding_ids and lease.state == "active"
+            }
             retired_bindings = binding_ids & set(current.tombstones)
             if len(live_bindings) > 1:
                 raise LedgerCollisionError(

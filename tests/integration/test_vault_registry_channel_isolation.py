@@ -1330,6 +1330,92 @@ def test_cross_release_history_requires_authenticated_transfer_lineage(
         assert _ownership_artifact_bytes(ledger) == corrupted
 
 
+def test_completed_transfer_pending_terminal_fails_every_authority_gate_without_mutation(
+    tmp_path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("dev", "binding-dev", root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.begin_transfer(
+        source_binding_id="binding-dev",
+        destination_channel_id="test",
+        destination_binding_id="binding-test",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.begin_transfer(
+        source_binding_id="binding-test",
+        destination_channel_id="prod",
+        destination_binding_id="binding-prod",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY)
+    assert ledger.load().leases["binding-prod"].state == "active"
+
+    runtime = _runtime(tmp_path, "prod", ledger.root)
+    runtime.registry.register(
+        VaultRegistration(
+            vault_binding_id="binding-prod",
+            ref=f"path:{root.resolve()}",
+            path=str(root.resolve()),
+            vault_id="terminal-live-authority",
+            local_instance_id="local-prod",
+            extensions={"status": "initialized", "contentEpoch": 1},
+        ),
+        expected_revision=0,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["leases"]["binding-prod"]["state"] = "pending"
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    corrupted = _ownership_artifact_bytes(ledger)
+    backup_callback_called = False
+
+    def capture_registry_artifacts() -> dict[str, bytes]:
+        nonlocal backup_callback_called
+        backup_callback_called = True
+        return {}
+
+    consumers = (
+        ledger.load,
+        ledger.require_existing,
+        lambda: ledger.capture_backup_artifacts(
+            capture_registry_artifacts=capture_registry_artifacts,
+        ),
+        lambda: runtime._require_established_ownership(runtime.registry.load()),
+        lambda: ledger.bootstrap_legacy_owners(
+            [LegacyOwner("prod", "binding-prod", root)],
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        ),
+        lambda: ledger.require_registry_consistency(
+            channel_id="prod",
+            registrations={"binding-prod": root},
+            tombstones={},
+            transfer_lineage=(),
+            global_live_owners=[LegacyOwner("prod", "binding-prod", root)],
+        ),
+        lambda: ledger.rotate_key(
+            precondition=lambda _snapshot, _roots: None,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        ),
+    )
+    for consume in consumers:
+        with pytest.raises(LedgerError):
+            consume()
+        assert _ownership_artifact_bytes(ledger) == corrupted
+
+    assert not backup_callback_called
+
+
 @pytest.mark.parametrize(
     "corruption",
     [
