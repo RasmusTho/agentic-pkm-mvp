@@ -76,14 +76,14 @@ def _isolated_atomic_append_host_fence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(tmp_path / "app-local.md"))
+    monkeypatch.setenv(
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS",
+        str(tmp_path / "app-local-state" / "app-local.md"),
+    )
 
 
 def _host_fence_root() -> Path:
-    return (
-        Path(os.environ["DESIGN_HANDOFF_APP_LOCAL_SETTINGS"]).parent
-        / "heimdal-atomic-append-fences"
-    )
+    return Path(os.environ["DESIGN_HANDOFF_APP_LOCAL_SETTINGS"]).parent
 
 
 def _vault(tmp_path: Path) -> Path:
@@ -856,6 +856,8 @@ def test_steering_log_first_host_state_namespace_fsyncs_its_parent(
     )
 
     assert parent_fsynced
+    assert list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert not (_host_fence_root() / "heimdal-atomic-append-fences").exists()
 
 
 def test_steering_log_retry_reconciles_crash_precommitted_exchange_intent(
@@ -890,7 +892,7 @@ def test_steering_log_retry_reconciles_crash_precommitted_exchange_intent(
     process.start()
     process.join(timeout=10)
     assert process.exitcode == 92
-    states = list(_host_fence_root().glob("*.state"))
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
     assert states
     assert any(json.loads(path.read_text())["state"] == "active" for path in states)
 
@@ -905,6 +907,125 @@ def test_steering_log_retry_reconciles_crash_precommitted_exchange_intent(
 
     assert read_steering_log_body(vault_root).count(durable_line) == 1
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+
+
+@pytest.mark.parametrize("fail_write", [1, 2, 3, 4])
+def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fail_write: int,
+) -> None:
+    real_root = tmp_path / "state-write-vault"
+    real_root.mkdir()
+    lexical_root = tmp_path / "state-write-alias"
+    lexical_root.symlink_to(real_root, target_is_directory=True)
+    guard = _allowing_guard()
+    append_steering_log(
+        lexical_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"state-write-{fail_write}-seed",
+        write_guard=guard,
+    )
+    real_write_state = write_ops_module._write_host_append_state
+    writes = 0
+    failed = False
+
+    def fail_indexed_state_write(*args: object) -> None:
+        nonlocal writes, failed
+        writes += 1
+        if writes == fail_write and not failed:
+            failed = True
+            raise OSError("indexed host state write failure")
+        real_write_state(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_write_host_append_state",
+        fail_indexed_state_write,
+    )
+    with pytest.raises((OSError, KnowledgeWriteConflict)):
+        append_steering_log(
+            lexical_root,
+            "mute",
+            "indexed-state-write",
+            source="item",
+            operation_id=f"state-write-{fail_write}-proposal",
+            write_guard=guard,
+        )
+
+    assert failed
+    body = read_steering_log_body(real_root)
+    proposal_count = body.count(f'"operation_id":"state-write-{fail_write}-proposal"')
+    assert proposal_count == (0 if fail_write <= 2 else 1)
+    monkeypatch.setattr(write_ops_module, "_write_host_append_state", real_write_state)
+    if fail_write <= 2:
+        durable_line = append_steering_log(
+            lexical_root,
+            "mute",
+            "indexed-state-write",
+            source="item",
+            operation_id=f"state-write-{fail_write}-proposal",
+            write_guard=guard,
+        )
+        assert read_steering_log_body(real_root).count(durable_line) == 1
+    else:
+        with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+            append_steering_log(
+                lexical_root,
+                "mute",
+                "indexed-state-write",
+                source="item",
+                operation_id=f"state-write-{fail_write}-proposal",
+                write_guard=guard,
+            )
+
+
+def test_steering_log_held_app_local_authority_blocks_namespace_swap_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="host-authority-swap-seed",
+        write_guard=guard,
+    )
+    host_root = _host_fence_root()
+    parked_host_root = host_root.with_name("app-local-state-parked")
+    real_complete = write_ops_module._complete_host_atomic_append_intent
+
+    def replace_host_authority_before_clean(*args: object) -> None:
+        host_root.replace(parked_host_root)
+        host_root.mkdir()
+        real_complete(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        replace_host_authority_before_clean,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="host state authority changed"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "host-authority-swap",
+            source="item",
+            operation_id="host-authority-swap-proposal",
+            write_guard=guard,
+        )
+
+    parked_states = list(
+        parked_host_root.glob(".heimdal-atomic-append-*.state")
+    )
+    assert parked_states
+    assert all(json.loads(path.read_text())["state"] == "active" for path in parked_states)
+    assert not list(host_root.glob(".heimdal-atomic-append-*.state"))
 
 
 def test_steering_log_exchange_race_retains_every_version_and_blocks_retry(
@@ -1180,7 +1301,7 @@ def test_steering_log_post_exchange_authority_replacement_keeps_external_fence(
         )
 
     fence_root = _host_fence_root()
-    states = list(fence_root.glob("*.state"))
+    states = list(fence_root.glob(".heimdal-atomic-append-*.state"))
     assert states
     assert any(json.loads(path.read_text())["state"] == "indeterminate" for path in states)
     monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", real_exchange)
@@ -1388,7 +1509,7 @@ def test_steering_log_retirement_window_remap_fails_with_durable_host_state(
             write_guard=guard,
         )
 
-    states = list(_host_fence_root().glob("*.state"))
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
     assert states
     assert all(json.loads(path.read_text())["state"] == "indeterminate" for path in states)
     if remap == "target":
@@ -1447,7 +1568,7 @@ def test_steering_log_final_mapping_remap_after_clean_state_is_refenced(
             write_guard=guard,
         )
 
-    states = list(_host_fence_root().glob("*.state"))
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
     assert states
     assert all(json.loads(path.read_text())["state"] == "indeterminate" for path in states)
 

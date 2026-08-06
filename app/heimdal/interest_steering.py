@@ -78,11 +78,12 @@ onboarding beyond writing the `sources/*.md` filter notes.
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
@@ -109,6 +110,7 @@ from app.knowledge.write_ops import (
     _AtomicAppendAuthority,
     _mark_host_atomic_append_indeterminate,
     _open_atomic_append_authority,
+    _open_durable_host_fence_root,
     _require_no_host_indeterminate_fence,
     append_note_relative,
 )
@@ -484,20 +486,32 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
             ]
             for lock_handle in lock_handles:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            host_state_fd = _open_durable_host_fence_root(authority)
+            bound_authority = replace(
+                authority,
+                host_state_fd=host_state_fd,
+                host_state_stat=os.fstat(host_state_fd),
+            )
             try:
-                authority.assert_live()
-                _require_no_host_indeterminate_fence(authority)
-                yield authority
+                bound_authority.assert_live()
+                bound_authority.assert_host_state_live()
+                _require_no_host_indeterminate_fence(bound_authority)
+                yield bound_authority
                 try:
-                    authority.assert_live()
+                    bound_authority.assert_live()
+                    bound_authority.assert_host_state_live()
                 except KnowledgeWriteConflict:
-                    _mark_host_atomic_append_indeterminate(
-                        authority,
-                        "post-transaction-authority-check",
-                        "root authority changed before lock release",
-                    )
+                    try:
+                        _mark_host_atomic_append_indeterminate(
+                            bound_authority,
+                            "post-transaction-authority-check",
+                            "root or host authority changed before lock release",
+                        )
+                    except BaseException:
+                        pass
                     raise
             finally:
+                os.close(host_state_fd)
                 for lock_handle in reversed(lock_handles):
                     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 

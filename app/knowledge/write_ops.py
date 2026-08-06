@@ -80,6 +80,8 @@ class _AtomicAppendAuthority:
     lock_key: str
     canonical_path_lock_key: str
     path_lock_keys: tuple[str, ...]
+    host_state_fd: int | None = None
+    host_state_stat: os.stat_result | None = None
 
     def assert_live(self) -> None:
         try:
@@ -98,6 +100,28 @@ class _AtomicAppendAuthority:
         ):
             raise KnowledgeWriteConflict(
                 f"atomic append authority mapping changed for {self.note_rel_path}"
+            )
+
+    def assert_host_state_live(self) -> None:
+        if self.host_state_fd is None or self.host_state_stat is None:
+            raise AssertionError("atomic append host state authority is not bound")
+        try:
+            current = os.stat(
+                _atomic_append_host_fence_root(self),
+                follow_symlinks=False,
+            )
+            opened = os.fstat(self.host_state_fd)
+        except OSError as exc:
+            raise KnowledgeWriteConflict(
+                f"atomic append host state authority changed for {self.note_rel_path}"
+            ) from exc
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or not _same_file_identity(current, self.host_state_stat)
+            or not _same_file_identity(opened, self.host_state_stat)
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append host state authority changed for {self.note_rel_path}"
             )
 
 
@@ -740,10 +764,7 @@ def _atomic_append_host_fence_root(authority: _AtomicAppendAuthority) -> Path:
     # another configuration surface.
     from app.instance.vault_registry import default_app_local_settings_path
 
-    fence_root = (
-        default_app_local_settings_path().expanduser().resolve(strict=False).parent
-        / "heimdal-atomic-append-fences"
-    )
+    fence_root = default_app_local_settings_path().expanduser().resolve(strict=False).parent
     try:
         fence_root.relative_to(authority.root_path)
     except ValueError:
@@ -758,11 +779,15 @@ _HOST_APPEND_STATE_SCHEMA = "agentic-pkm.heimdal-atomic-append-state.v1"
 
 def _host_append_state_name(path_lock_key: str) -> str:
     token = hashlib.sha256(path_lock_key.encode("utf-8")).hexdigest()
-    return f"{token}.state"
+    return f".heimdal-atomic-append-{token}.state"
 
 
 def _open_durable_host_fence_root(authority: _AtomicAppendAuthority) -> int:
     """Create every missing namespace component with a parent fsync."""
+
+    if authority.host_state_fd is not None:
+        authority.assert_host_state_live()
+        return os.dup(authority.host_state_fd)
 
     fence_root = _atomic_append_host_fence_root(authority)
     missing: list[str] = []
@@ -1992,6 +2017,7 @@ def _atomic_append_note_relative(
         receipt_stage_fd = stage_fd
 
         def require_final_receipt_state() -> None:
+            authority.assert_host_state_live()
             live_target = os.stat(
                 target_name,
                 dir_fd=receipt_parent_fd,
