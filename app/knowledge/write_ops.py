@@ -4,6 +4,7 @@ import errno
 import ctypes
 from contextlib import contextmanager
 from dataclasses import dataclass
+import fcntl
 import hashlib
 import json
 import os
@@ -12,7 +13,6 @@ import re
 import stat
 import sys
 from typing import TYPE_CHECKING, Callable, Iterator, Literal
-import unicodedata
 import uuid
 
 from app.knowledge.adapters import (
@@ -79,6 +79,7 @@ class _AtomicAppendAuthority:
     note_rel_path: str
     lock_key: str
     canonical_path_lock_key: str
+    lexical_path_lock_key: str
     path_lock_keys: tuple[str, ...]
     host_state_fd: int | None = None
     host_state_stat: os.stat_result | None = None
@@ -89,7 +90,22 @@ class _AtomicAppendAuthority:
 
     @property
     def host_state_keys(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys((self.lock_key, *self.path_lock_keys)))
+        # Durable state follows the opened resource and its filesystem-reported
+        # canonical path. Caller spellings remain live lock fences only: adding
+        # a symlink or case alias must not change the persisted record set.
+        return tuple(dict.fromkeys((self.lock_key, self.canonical_path_lock_key)))
+
+    @property
+    def route_key(self) -> str:
+        return f"route:{self.lexical_path_lock_key}"
+
+    @property
+    def coordination_keys(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (self.lock_key, *self.path_lock_keys, self.route_key)
+            )
+        )
 
     def assert_live(self) -> None:
         try:
@@ -180,6 +196,45 @@ class _AtomicAppendAuthority:
             ) from exc
 
 
+def _opened_directory_path(fd: int, fallback: Path) -> Path:
+    """Return the filesystem-reported path for an already-open directory."""
+
+    raw: bytes | str
+    try:
+        if sys.platform == "darwin":
+            # F_GETPATH reports the filesystem's preserved spelling rather
+            # than the spelling used by the caller to reach the directory.
+            raw = fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024).split(b"\0", 1)[0]
+        elif sys.platform.startswith("linux"):
+            raw = os.readlink(f"/proc/self/fd/{fd}")
+        else:
+            return fallback
+    except OSError:
+        return fallback
+    candidate = Path(os.fsdecode(raw))
+    return candidate if candidate.is_absolute() else fallback
+
+
+def _filesystem_reported_lexical_path(path: Path) -> Path:
+    """Preserve a route while using the filesystem's entry spelling."""
+
+    flags = getattr(os, "O_CLOEXEC", 0)
+    if sys.platform == "darwin":
+        flags |= getattr(os, "O_SYMLINK", 0)
+    elif sys.platform.startswith("linux") and hasattr(os, "O_PATH"):
+        flags |= os.O_PATH | getattr(os, "O_NOFOLLOW", 0)
+    else:
+        return path
+    try:
+        route_fd = os.open(path, flags)
+    except OSError:
+        return path
+    try:
+        return _opened_directory_path(route_fd, path)
+    finally:
+        os.close(route_fd)
+
+
 @contextmanager
 def _open_atomic_append_authority(
     vault_root: Path | str,
@@ -191,17 +246,14 @@ def _open_atomic_append_authority(
     lexical_root_path = Path(
         os.path.abspath(os.path.expanduser(os.fspath(vault_root)))
     )
-    root_path = lexical_root_path.resolve()
-    root_fd = os.open(root_path, _DIRECTORY_OPEN_FLAGS)
+    requested_root_path = lexical_root_path.resolve()
+    root_fd = os.open(requested_root_path, _DIRECTORY_OPEN_FLAGS)
     try:
         root_stat = os.fstat(root_fd)
-        normalized_relative = unicodedata.normalize("NFC", note_rel_path).casefold()
-        normalized_root = unicodedata.normalize("NFC", os.fspath(root_path)).casefold()
-        normalized_lexical_root = unicodedata.normalize(
-            "NFC", os.fspath(lexical_root_path)
-        ).casefold()
-        canonical_path_lock_key = f"{normalized_root}:{normalized_relative}"
-        lexical_path_lock_key = f"{normalized_lexical_root}:{normalized_relative}"
+        root_path = _opened_directory_path(root_fd, requested_root_path)
+        lexical_route_path = _filesystem_reported_lexical_path(lexical_root_path)
+        canonical_path_lock_key = f"{os.fspath(root_path)}:{note_rel_path}"
+        lexical_path_lock_key = f"{os.fspath(lexical_route_path)}:{note_rel_path}"
         path_lock_keys = tuple(
             dict.fromkeys((canonical_path_lock_key, lexical_path_lock_key))
         )
@@ -212,9 +264,10 @@ def _open_atomic_append_authority(
             root_stat=root_stat,
             note_rel_path=note_rel_path,
             lock_key=(
-                f"{root_stat.st_dev}:{root_stat.st_ino}:{normalized_relative}"
+                f"{root_stat.st_dev}:{root_stat.st_ino}:{note_rel_path}"
             ),
             canonical_path_lock_key=canonical_path_lock_key,
+            lexical_path_lock_key=lexical_path_lock_key,
             path_lock_keys=path_lock_keys,
         )
         authority.assert_live()
@@ -837,6 +890,7 @@ def _atomic_append_host_fence_root(authority: _AtomicAppendAuthority) -> Path:
 
 
 _HOST_APPEND_STATE_SCHEMA = "agentic-pkm.heimdal-atomic-append-state.v1"
+_HOST_APPEND_ROUTE_SCHEMA = "agentic-pkm.heimdal-atomic-append-route.v1"
 _atomic_host_state_exchange_at = _atomic_exchange_at
 
 
@@ -855,6 +909,14 @@ def _host_append_state_name(path_lock_key: str) -> str:
 def _host_append_swap_name(path_lock_key: str) -> str:
     token = hashlib.sha256(path_lock_key.encode("utf-8")).hexdigest()
     return f".heimdal-atomic-append-{token}.swap"
+
+
+def _host_append_route_names(route_key: str) -> tuple[str, str]:
+    token = hashlib.sha256(route_key.encode("utf-8")).hexdigest()
+    return (
+        f".heimdal-atomic-route-{token}.state",
+        f".heimdal-atomic-route-{token}.swap",
+    )
 
 
 def _open_durable_host_fence_root(authority: _AtomicAppendAuthority) -> int:
@@ -1088,9 +1150,12 @@ def _write_host_append_state(
     payload: dict[str, object],
     expected_state: _HostStateRecord,
     expected_swap: _HostStateRecord,
+    *,
+    state_name: str | None = None,
+    swap_name: str | None = None,
 ) -> None:
-    name = _host_append_state_name(path_lock_key)
-    swap_name = _host_append_swap_name(path_lock_key)
+    name = state_name or _host_append_state_name(path_lock_key)
+    swap_name = swap_name or _host_append_swap_name(path_lock_key)
     state_fd, state_created = _open_host_state_slot(fence_fd, name)
     try:
         swap_fd, swap_created = _open_host_state_slot(fence_fd, swap_name)
@@ -1161,6 +1226,83 @@ def _write_host_append_state(
     finally:
         os.close(state_fd)
         os.close(swap_fd)
+
+
+def _bind_host_append_route(authority: _AtomicAppendAuthority) -> None:
+    """Bind one caller route immutably to its opened resource identity."""
+
+    route_key = authority.route_key
+    route_state_name, route_swap_name = _host_append_route_names(route_key)
+    expected_payload: dict[str, object] = {
+        "schema": _HOST_APPEND_ROUTE_SCHEMA,
+        "route_key": route_key,
+        "locator": authority.note_rel_path,
+        "resource_keys": sorted(authority.host_state_keys),
+        "root_dev": authority.root_stat.st_dev,
+        "root_ino": authority.root_stat.st_ino,
+    }
+    fence_fd = _open_durable_host_fence_root(authority)
+    try:
+        witness_fd = dict(authority.host_witness_fds).get(route_key)
+        if witness_fd is None:
+            raise AssertionError("atomic append route witness authority is not bound")
+        state_record = _read_host_state_record(
+            fence_fd,
+            authority,
+            route_key,
+            route_state_name,
+            decode=False,
+        )
+        swap_record = _read_host_state_record(
+            fence_fd,
+            authority,
+            route_key,
+            route_swap_name,
+            decode=False,
+        )
+        candidates: list[bytes] = []
+        for raw in (state_record.raw, swap_record.raw):
+            if raw:
+                candidates.append(raw)
+        witness_copy = os.dup(witness_fd)
+        try:
+            witness_raw = _read_all(witness_copy)
+        finally:
+            os.close(witness_copy)
+        all_candidates = [*candidates]
+        if witness_raw:
+            all_candidates.append(witness_raw)
+        if all_candidates:
+            try:
+                decoded = [json.loads(raw) for raw in all_candidates]
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise KnowledgeWriteConflict(
+                    f"atomic append app-local route is malformed for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                ) from exc
+            if any(candidate != expected_payload for candidate in decoded):
+                raise KnowledgeWriteConflict(
+                    f"atomic append app-local route changed for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+        if not witness_raw:
+            authority.assert_host_witness_live()
+            _write_host_witness_state(witness_fd, expected_payload)
+
+        if not candidates:
+            _write_host_append_state(
+                fence_fd,
+                authority,
+                route_key,
+                expected_payload,
+                state_record,
+                swap_record,
+                state_name=route_state_name,
+                swap_name=route_swap_name,
+            )
+        authority.assert_host_witness_live()
+    finally:
+        os.close(fence_fd)
 
 
 def _write_host_append_states(
@@ -1343,18 +1485,35 @@ def _validate_host_append_inventories(
         ]
     ],
 ) -> list[dict[str, object]]:
-    states: list[dict[str, object]] = []
-    for _path_lock_key, app_record, swap_record, witness_state in inventories:
-        app_states = [
-            state
-            for state in (app_record.state, swap_record.state)
-            if state is not None
-        ]
-        if app_states and witness_state is None:
+    inventory_records = [
+        (
+            [
+                state
+                for state in (app_record.state, swap_record.state)
+                if state is not None
+            ],
+            witness_state,
+        )
+        for _path_lock_key, app_record, swap_record, witness_state in inventories
+    ]
+    if any(app_states or witness_state is not None for app_states, witness_state in inventory_records):
+        if any(
+            not app_states and witness_state is None
+            for app_states, witness_state in inventory_records
+        ):
             raise KnowledgeWriteConflict(
-                f"atomic append host witness is missing for "
+                f"atomic append app-local state is missing for "
                 f"{authority.note_rel_path}; reconciliation is required before retry"
             )
+
+    states: list[dict[str, object]] = []
+    for app_states, witness_state in inventory_records:
+        if app_states and witness_state is None:
+            if any(state.get("state") != "clean" for state in app_states):
+                raise KnowledgeWriteConflict(
+                    f"atomic append host witness is missing for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
         if witness_state is not None and not app_states:
             raise KnowledgeWriteConflict(
                 f"atomic append app-local state is missing for "

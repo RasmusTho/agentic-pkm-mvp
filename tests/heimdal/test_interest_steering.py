@@ -101,6 +101,24 @@ def _host_witness_paths(vault_root: Path) -> tuple[Path, ...]:
         )
 
 
+def _host_route_paths(vault_root: Path) -> tuple[Path, Path, Path]:
+    lock_root = Path(steering_module.tempfile.gettempdir()) / (
+        "agentic-pkm-heimdal-locks"
+    )
+    with write_ops_module._open_atomic_append_authority(
+        vault_root,
+        note_rel_path(STEERING_LOG),
+    ) as authority:
+        token = steering_module.hashlib.sha256(
+            authority.route_key.encode("utf-8")
+        ).hexdigest()
+    return (
+        _host_fence_root() / f".heimdal-atomic-route-{token}.state",
+        _host_fence_root() / f".heimdal-atomic-route-{token}.swap",
+        lock_root / f"{token}.lock",
+    )
+
+
 def _vault(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir(parents=True, exist_ok=True)
@@ -985,7 +1003,7 @@ def test_steering_log_crash_with_app_local_namespace_loss_remains_blocked(
     assert not list(host_root.glob(".heimdal-atomic-append-*.state"))
 
     expected_failure = (
-        "host state is invalid"
+        "app-local route changed"
         if replace_vault_root
         else "app-local state is missing"
     )
@@ -1074,6 +1092,80 @@ def test_steering_log_crash_with_host_witness_loss_remains_blocked(
     durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
     assert durable.count('"operation_id":"witness-loss-proposal"') == 1
     assert all(path.exists() and path.stat().st_size == 0 for path in witness_paths)
+
+
+def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="clean-witness-loss-seed",
+        write_guard=guard,
+    )
+    state_paths = sorted(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert len(state_paths) == 2
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in state_paths)
+
+    witness_paths = _host_witness_paths(vault_root)
+    lock_root = witness_paths[0].parent
+    for path in lock_root.iterdir():
+        path.unlink()
+    lock_root.rmdir()
+
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "after-clean-witness-loss",
+        source="item",
+        operation_id="clean-witness-loss-proposal",
+        write_guard=guard,
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    assert all(path.exists() and path.stat().st_size > 0 for path in witness_paths)
+    assert len(list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))) == 2
+
+
+def test_steering_log_incomplete_clean_state_without_witness_remains_blocked(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="incomplete-clean-seed",
+        write_guard=guard,
+    )
+    state_paths = sorted(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert len(state_paths) == 2
+    witness_paths = _host_witness_paths(vault_root)
+    lock_root = witness_paths[0].parent
+    for path in lock_root.iterdir():
+        path.unlink()
+    lock_root.rmdir()
+    state_paths[0].unlink()
+
+    with pytest.raises(KnowledgeWriteConflict, match="app-local state is missing"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "after-incomplete-clean",
+            source="item",
+            operation_id="incomplete-clean-proposal",
+            write_guard=guard,
+        )
+
+    assert '"operation_id":"incomplete-clean-proposal"' not in read_steering_log_body(
+        vault_root
+    )
 
 
 @pytest.mark.parametrize("crash_point", ["active-app", "clean-witness"])
@@ -2129,7 +2221,7 @@ def test_steering_log_missing_published_initial_target_cannot_look_prepublicatio
     )
 
 
-@pytest.mark.parametrize("fail_write", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("fail_write", [1, 2, 3, 4])
 def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2178,9 +2270,9 @@ def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     assert failed
     body = read_steering_log_body(real_root)
     proposal_count = body.count(f'"operation_id":"state-write-{fail_write}-proposal"')
-    assert proposal_count == (0 if fail_write <= 3 else 1)
+    assert proposal_count == (0 if fail_write <= 2 else 1)
     monkeypatch.setattr(write_ops_module, "_write_host_append_state", real_write_state)
-    if fail_write <= 3:
+    if fail_write <= 2:
         durable_line = append_steering_log(
             lexical_root,
             "mute",
@@ -2993,6 +3085,18 @@ def test_steering_log_case_aliases_share_one_lock(tmp_path: Path) -> None:
     except FileNotFoundError:
         pytest.skip("filesystem is case-sensitive")
 
+    with write_ops_module._open_atomic_append_authority(
+        vault_root,
+        note_rel_path(STEERING_LOG),
+    ) as original_authority:
+        original_route_key = original_authority.route_key
+    with write_ops_module._open_atomic_append_authority(
+        alias_root,
+        note_rel_path(STEERING_LOG),
+    ) as alias_authority:
+        alias_route_key = alias_authority.route_key
+    assert original_route_key == alias_route_key
+
     context = multiprocessing.get_context("fork")
     barrier = context.Barrier(2)
     results = context.Queue()
@@ -3030,6 +3134,155 @@ def test_steering_log_case_aliases_share_one_lock(tmp_path: Path) -> None:
     note = read_settings_note(vault_root, STEERING_LOG)
     assert note is not None
     assert note.values["entry_count"] == 2
+
+
+def test_steering_log_equivalent_root_spellings_share_durable_authority(
+    tmp_path: Path,
+) -> None:
+    real_root = tmp_path / "equivalent-root-vault"
+    real_root.mkdir()
+    alias_root = tmp_path / "equivalent-root-alias"
+    alias_root.symlink_to(real_root, target_is_directory=True)
+
+    with write_ops_module._open_atomic_append_authority(
+        real_root,
+        note_rel_path(STEERING_LOG),
+    ) as real_authority:
+        real_keys = real_authority.host_state_keys
+    with write_ops_module._open_atomic_append_authority(
+        alias_root,
+        note_rel_path(STEERING_LOG),
+    ) as alias_authority:
+        alias_keys = alias_authority.host_state_keys
+    assert real_keys == alias_keys
+
+    guard = _allowing_guard()
+    first = append_steering_log(
+        real_root,
+        "wrong",
+        "real-spelling",
+        source="chat",
+        operation_id="equivalent-root-real",
+        write_guard=guard,
+    )
+    second = append_steering_log(
+        alias_root,
+        "mute",
+        "alias-spelling",
+        source="item",
+        operation_id="equivalent-root-alias",
+        write_guard=guard,
+    )
+
+    body = read_steering_log_body(real_root)
+    assert body.count(first) == 1
+    assert body.count(second) == 1
+    assert len(list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))) == 2
+    assert len(list(_host_fence_root().glob(".heimdal-atomic-route-*.state"))) == 2
+
+
+@pytest.mark.parametrize("missing_copy", ["app-local", "temporary"])
+def test_steering_log_route_binding_recovers_one_copy_and_still_blocks_retarget(
+    tmp_path: Path,
+    missing_copy: str,
+) -> None:
+    root_a = tmp_path / f"route-copy-{missing_copy}-a"
+    root_b = tmp_path / f"route-copy-{missing_copy}-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    alias_root = tmp_path / f"route-copy-{missing_copy}-alias"
+    alias_root.symlink_to(root_a, target_is_directory=True)
+    guard = _allowing_guard()
+    append_steering_log(
+        alias_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"route-copy-{missing_copy}-seed",
+        write_guard=guard,
+    )
+    route_state, route_swap, route_witness = _host_route_paths(alias_root)
+    if missing_copy == "app-local":
+        route_state.unlink()
+        route_swap.unlink()
+    else:
+        route_witness.unlink()
+
+    recovered_line = append_steering_log(
+        alias_root,
+        "mute",
+        "recovered-copy",
+        source="item",
+        operation_id=f"route-copy-{missing_copy}-recovered",
+        write_guard=guard,
+    )
+    assert read_steering_log_body(root_a).count(recovered_line) == 1
+    assert route_state.stat().st_size > 0
+    assert route_swap.exists()
+    assert route_witness.stat().st_size > 0
+
+    alias_root.unlink()
+    alias_root.symlink_to(root_b, target_is_directory=True)
+    with pytest.raises(KnowledgeWriteConflict, match="app-local route changed"):
+        append_steering_log(
+            alias_root,
+            "mute",
+            "retarget-must-block",
+            source="item",
+            operation_id=f"route-copy-{missing_copy}-retarget",
+            write_guard=guard,
+        )
+    assert not (root_b / "_heimdal").exists()
+
+
+def test_steering_log_distinct_case_sensitive_roots_remain_independent(
+    tmp_path: Path,
+) -> None:
+    upper_root = tmp_path / "CaseVault"
+    lower_root = tmp_path / "casevault"
+    upper_root.mkdir()
+    try:
+        lower_root.mkdir()
+    except FileExistsError:
+        pytest.skip("filesystem is case-insensitive")
+    if upper_root.samefile(lower_root):
+        pytest.skip("filesystem is case-insensitive")
+
+    with write_ops_module._open_atomic_append_authority(
+        upper_root,
+        note_rel_path(STEERING_LOG),
+    ) as upper_authority:
+        upper_keys = set(upper_authority.host_state_keys)
+    with write_ops_module._open_atomic_append_authority(
+        lower_root,
+        note_rel_path(STEERING_LOG),
+    ) as lower_authority:
+        lower_keys = set(lower_authority.host_state_keys)
+    assert upper_keys.isdisjoint(lower_keys)
+
+    guard = _allowing_guard()
+    append_steering_log(
+        upper_root,
+        "wrong",
+        "upper",
+        source="chat",
+        operation_id="case-sensitive-upper",
+        write_guard=guard,
+    )
+    append_steering_log(
+        lower_root,
+        "mute",
+        "lower",
+        source="item",
+        operation_id="case-sensitive-lower",
+        write_guard=guard,
+    )
+    assert '"operation_id":"case-sensitive-upper"' in read_steering_log_body(
+        upper_root
+    )
+    assert '"operation_id":"case-sensitive-lower"' in read_steering_log_body(
+        lower_root
+    )
 
 
 def test_steering_log_racing_aliases_fail_closed(
@@ -3085,7 +3338,7 @@ def test_steering_log_racing_aliases_fail_closed(
     def swap_parent(stage_fd: int, content: bytes) -> None:
         nonlocal swapped
         real_write_all(stage_fd, content)
-        if not swapped:
+        if not swapped and (fresh_vault / "_heimdal").exists():
             swapped = True
             (fresh_vault / "_heimdal").replace(parked_parent)
             (fresh_vault / "_heimdal").symlink_to(outside, target_is_directory=True)

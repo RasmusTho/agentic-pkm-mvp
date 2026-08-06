@@ -109,6 +109,7 @@ from app.heimdal.settings_notes import (
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import (
     _AtomicAppendAuthority,
+    _bind_host_append_route,
     _mark_host_atomic_append_indeterminate,
     _open_atomic_append_authority,
     _open_durable_host_fence_root,
@@ -468,7 +469,7 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
     """Serialize one inode and lexical resource across remaps and aliases."""
     relative = note_rel_path(STEERING_LOG)
     with _open_atomic_append_authority(vault_root, relative) as authority:
-        lock_keys = sorted({authority.lock_key, *authority.path_lock_keys})
+        lock_keys = sorted(authority.coordination_keys)
         with _STEERING_LOCKS_GUARD:
             process_locks = [
                 _STEERING_LOCKS.setdefault(key, threading.RLock())
@@ -542,13 +543,14 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
                 host_witness_root_fd=lock_root_fd,
                 host_witness_root_stat=os.fstat(lock_root_fd),
                 host_witness_fds=tuple(
-                    (key, lock_fd_by_key[key]) for key in authority.host_state_keys
+                    (key, lock_fd_by_key[key]) for key in authority.coordination_keys
                 ),
             )
             try:
                 bound_authority.assert_live()
                 bound_authority.assert_host_state_live()
                 bound_authority.assert_host_witness_live()
+                _bind_host_append_route(bound_authority)
                 _require_no_host_indeterminate_fence(bound_authority)
                 yield bound_authority
                 try:
