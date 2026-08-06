@@ -1959,6 +1959,73 @@ def test_steering_log_retry_recovers_crash_after_latest_original_rotation(
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
 
 
+def test_steering_log_missing_post_rotation_original_cannot_look_pre_rotation(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="missing-post-rotation-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    seed_bytes = target.read_bytes()
+    context = multiprocessing.get_context("fork")
+
+    def crash_before_clean_state() -> None:
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(101)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "missing-post-rotation",
+            source="item",
+            operation_id="missing-post-rotation-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_before_clean_state)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 101
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"missing-post-rotation-proposal"'
+    ) == 1
+
+    recovery = vault_root / "_conflicts"
+    stable_name = write_ops_module._latest_original_recovery_name(
+        note_rel_path(STEERING_LOG)
+    )
+    stable = recovery / stable_name
+    assert stable.read_bytes() == seed_bytes
+    stable.unlink()
+    recovery_fd = os.open(recovery, os.O_RDONLY)
+    try:
+        os.fsync(recovery_fd)
+    finally:
+        os.close(recovery_fd)
+
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "missing-post-rotation",
+            source="item",
+            operation_id="missing-post-rotation-proposal",
+            write_guard=guard,
+        )
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(
+        json.loads(path.read_text())["state"] == "indeterminate" for path in states
+    )
+
+
 def test_steering_log_initial_create_retry_recovers_active_precommit_crash(
     tmp_path: Path,
 ) -> None:

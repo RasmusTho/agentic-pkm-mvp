@@ -1558,10 +1558,13 @@ def _next_latest_original_host_payload(
     entry: _RecoveryEntry | None,
 ) -> dict[str, object]:
     payload = _latest_original_host_payload(entry)
-    return {
+    next_payload = {
         key.replace("latest_original", "next_latest_original", 1): value
         for key, value in payload.items()
     }
+    if entry is not None:
+        next_payload["next_latest_original_name"] = entry.name
+    return next_payload
 
 
 def _host_latest_original_matches(
@@ -1590,6 +1593,46 @@ def _host_uses_present_next_latest_original(
         state.get("next_latest_original_present") is True
         and _host_next_latest_original_matches(state, payload)
     )
+
+
+def _host_prepared_next_latest_original_is_named(
+    recovery_fd: int,
+    state: dict[str, object],
+) -> bool:
+    name = state.get("next_latest_original_name")
+    if (
+        not isinstance(name, str)
+        or not name.startswith(".steering-append-")
+        or os.path.basename(name) != name
+    ):
+        return False
+    try:
+        prepared_fd = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=recovery_fd,
+        )
+    except OSError:
+        return False
+    try:
+        observed = os.fstat(prepared_fd)
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or observed.st_nlink != 1
+            or observed.st_dev != state.get("next_latest_original_dev")
+            or observed.st_ino != state.get("next_latest_original_ino")
+        ):
+            return False
+        payload, stable = _read_stable_descriptor(prepared_fd)
+        return (
+            _same_file_identity(stable, observed)
+            and hashlib.sha256(payload).hexdigest()
+            == state.get("next_latest_original_digest")
+        )
+    finally:
+        os.close(prepared_fd)
 
 
 def _open_latest_original_snapshot(
@@ -1669,7 +1712,23 @@ def _reconcile_host_atomic_append_states(
             if state["state"] == "indeterminate":
                 reason = "prior host state is indeterminate"
                 break
-            if not _host_latest_original_matches(state, latest_payload) and not (
+            latest_matches_prior = _host_latest_original_matches(
+                state,
+                latest_payload,
+            )
+            if (
+                state["state"] == "active"
+                and latest_matches_prior
+                and state.get("latest_original_present") is False
+                and state.get("next_latest_original_present") is True
+                and not _host_prepared_next_latest_original_is_named(
+                    recovery_fd,
+                    state,
+                )
+            ):
+                reason = "prepared latest-original phase evidence is missing"
+                break
+            if not latest_matches_prior and not (
                 state["state"] == "active"
                 and (
                     transaction in matching_clean_transactions
