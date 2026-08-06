@@ -1671,13 +1671,7 @@ def atomic_append_reconcile_relative(
                     )
                 if retirement_receipt is None:
                     raise KnowledgeWriteConflict("atomic append cleanup has no retirement proof")
-                _revalidate_retirement(
-                    retirement_receipt,
-                    recovery_fd,
-                    target_fd,
-                    capacity,
-                )
-                if not any(
+                retirement_is_in_inventory = any(
                     entry.namespace == "retained"
                     and entry.name == retirement_receipt.name
                     and _same_file_identity(
@@ -1685,7 +1679,18 @@ def atomic_append_reconcile_relative(
                         os.fstat(retirement_receipt.descriptor),
                     )
                     for entry in final_inventory
-                ):
+                )
+                # Inventory membership is descriptor-only.  Establish it first,
+                # then make pathname/link/descriptor revalidation the success
+                # linearization point.  If membership already failed because a
+                # name was substituted, revalidation still snapshots the owner.
+                _revalidate_retirement(
+                    retirement_receipt,
+                    recovery_fd,
+                    target_fd,
+                    capacity,
+                )
+                if not retirement_is_in_inventory:
                     raise KnowledgeWriteConflict(
                         "atomic append retirement is absent from the final inventory"
                     )

@@ -875,6 +875,75 @@ def test_retained_name_substitution_fails_before_success(
     assert b"original" in retained_bytes
 
 
+def test_post_revalidation_substitution_snapshots_owner_before_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    target = vault / "Logs" / "steering.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("original")
+    replacement = b"foreign-post-revalidation"
+    real_open_inventory = atomic_append_module._open_stable_stage_inventory
+    real_fstat = os.fstat
+    inventory_descriptor = -1
+    inventory_fstat_calls = 0
+    retained_name = ""
+    retained_directory_fd = -1
+    substitution_injected = False
+
+    def arm_after_final_inventory(
+        parent_fd: int,
+        recovery_fd: int,
+        scope_prefix: str,
+    ) -> object:
+        nonlocal inventory_descriptor, retained_name, retained_directory_fd
+        entries = real_open_inventory(parent_fd, recovery_fd, scope_prefix)
+        retained = [entry for entry in entries if entry.namespace == "retained"]
+        if retained:
+            assert len(retained) == 1
+            inventory_descriptor = retained[0].descriptor
+            retained_name = retained[0].name
+            retained_directory_fd = recovery_fd
+        return entries
+
+    def substitute_on_inventory_membership(fd: int) -> os.stat_result:
+        nonlocal inventory_fstat_calls, substitution_injected
+        if fd == inventory_descriptor:
+            inventory_fstat_calls += 1
+            if inventory_fstat_calls == 2:
+                substitution_injected = True
+                _replace_cleanup_candidate(
+                    retained_directory_fd,
+                    retained_name,
+                    payload=replacement,
+                )
+        return real_fstat(fd)
+
+    monkeypatch.setattr(
+        atomic_append_module,
+        "_open_stable_stage_inventory",
+        arm_after_final_inventory,
+    )
+    monkeypatch.setattr(os, "fstat", substitute_on_inventory_membership)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        atomic_append_reconcile_relative(
+            "Logs/steering.md",
+            operation_id="post-revalidation-substitution",
+            payload="payload",
+            payload_fingerprint=_fingerprint("payload"),
+            vault_root=vault,
+            action="test.atomic_append",
+            write_guard=_healthy_guard(),
+            reconcile=_unchanged,
+        )
+
+    assert substitution_injected
+    retained_bytes = {path.read_bytes() for path in _retained_stage_paths(target.parent)}
+    assert replacement in retained_bytes
+    assert b"original" in retained_bytes
+
+
 def test_mid_retirement_substitution_snapshots_unlinked_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
