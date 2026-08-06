@@ -4702,6 +4702,52 @@ def _run_fenced_deployment(
     )
 
 
+def test_established_ledger_adopts_new_sanctioned_native_owner(tmp_path) -> None:
+    """A later native alias is reconciled before staged-backup verification."""
+
+    instance_state_root = tmp_path / "instance-state"
+    host_global_root = tmp_path / "host-global"
+    shared_root = tmp_path / "shared-vault"
+    instance_state_root.mkdir()
+    host_global_root.mkdir()
+    legacy_store = AppLocalSettingsStore(tmp_path / "legacy" / "app-local.md")
+    VaultManager(app_local_store=legacy_store).initialize_vault(
+        shared_root,
+        remember=True,
+    )
+    legacy_path = legacy_store.path
+    prod_owner = {"channel_id": "prod", "root": str(shared_root)}
+    native_owner = {"channel_id": "native", "root": str(shared_root)}
+
+    first = _run_fenced_deployment(
+        channel="prod",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        inventory_payload=_legacy_owner_inventory_payload([prod_owner]),
+        backup_root=host_global_root / "backups" / "prod" / "latest",
+    )
+    assert first["restart_fence_cleared"] is True
+
+    second = _run_fenced_deployment(
+        channel="prod",
+        instance_state_root=instance_state_root,
+        host_global_root=host_global_root,
+        legacy_path=legacy_path,
+        inventory_payload=_legacy_owner_inventory_payload([prod_owner, native_owner]),
+        backup_root=host_global_root / "backups" / "prod" / "latest",
+    )
+
+    assert second["restart_fence_cleared"] is True
+    ledger = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(instance_state_root, "prod"),
+        host_global_root,
+        initialize_layout=False,
+    ).ledger.load()
+    assert {lease.channel_id for lease in ledger.leases.values()} == {"native", "prod"}
+    assert not _deployment_fence_path(host_global_root, "prod").exists()
+
+
 def test_staged_backup_verification_succeeds_on_fresh_deployment(tmp_path) -> None:
     """#4371 AC1: staged-backup verification must not require the drained
     inventory's owner roots to be visible in the verifying process.

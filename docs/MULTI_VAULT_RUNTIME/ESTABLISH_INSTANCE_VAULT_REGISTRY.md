@@ -60,9 +60,14 @@ This slice promotes the existing seed without changing content-vault authority.
   lifecycle preflight. It stores channel plus stable binding and HMAC fingerprints of the canonical
   filesystem identity and its canonical ancestor-identity chain, not raw paths. Canonicalization
   resolves symlinks, bind-mount aliases, and filesystem identity before comparison. Registration or
-  relocation under the global lock always rejects duplicate physical identity under different
-  bindings and rejects either direction of ancestor/descendant overlap across different channel/native
-  ownership domains; `/vault` and `/vault/project` therefore cannot belong to different channels.
+  relocation under the global lock always rejects duplicate physical identity and either direction
+  of ancestor/descendant overlap across two different release channels; `/vault` and
+  `/vault/project` therefore cannot belong to different release channels. One `native` owner and one
+  release channel may carry distinct authenticated bindings for equal or overlapping roots because
+  ADR-0055 declares them concurrent writers of the same vault. A completed legacy bootstrap remains
+  reconcilable only inside a freshly proved stopped deployment: newly materialized owners are added
+  atomically, while binding reassignment, retired/transferring binding reuse, and forbidden
+  release-channel overlap fail without changing the ledger.
   One channel/instance may register an initialized parent vault and initialized nested child as
   distinct bindings only when the existing nested-vault boundary contract is active: parent traversal
   prunes the child, each effect targets one explicit binding/lease, and neither registration aliases
@@ -396,10 +401,15 @@ new-schema state before fork/merge protection exists.
   reconstruction, never metadata-only restore).
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
 - [ ] **MVR-01B:** Registering, relocating, or starting equal, ancestor, or descendant canonical
-  content roots across different release-channel/native ownership domains is rejected by the shared ownership ledger, including
-  symlink and bind-mount aliases; injected crashes in reserve/commit/activate recover to at most one
-  non-overlapping active owner without exposing raw host paths.
+  content roots across two different release channels is rejected by the shared ownership ledger,
+  including symlink and bind-mount aliases; one sanctioned native/channel pair may share or overlap
+  the vault root. A later stopped deployment reconciles a newly discovered native owner into an
+  established ledger before backup verification, while forbidden collisions and binding-identity
+  changes remain atomic failures. Injected crashes in reserve/commit/activate recover to at most one
+  non-overlapping release-channel owner without exposing raw host paths.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels`
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_allows_native_and_release_channel_shared_root`
+  - Verify: `tests/ops/test_instance_state_volume_contract.py::test_established_ledger_adopts_new_sanctioned_native_owner`
 - [ ] **MVR-01B:** One channel/instance can register an initialized parent vault and initialized
   nested child as distinct stable bindings; the production parent walker prunes the child, direct
   child selection remains usable, and duplicate-root aliases still coalesce or fail rather than

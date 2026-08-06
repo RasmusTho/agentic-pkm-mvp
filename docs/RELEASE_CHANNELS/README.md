@@ -129,8 +129,11 @@ release channels, fails closed before partial ledger seeding; a root shared betw
 channel is the topology `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` declares and does
 not fail closed. A post-stop failure leaves the fence in place. While
 stopped the finalizer captures the final legacy scalar payload, imports or preserves it on the
-durable volume, verifies the private production-derived owner inventory, seeds the shared ledger,
-optionally restores a verified backup, and creates the next registry/ledger/key backup. The fence is
+durable volume, verifies the private production-derived owner inventory, and seeds the shared ledger.
+On an established completed ledger it atomically reconciles any newly materialized owner before
+backup verification; binding reassignment, retired/transferring binding reuse, or a forbidden
+release-channel collision aborts and leaves the fence in place. It then optionally restores a
+verified backup and creates the next registry/ledger/key backup. The fence is
 removed only after that sequence succeeds; consumer preflight rejects a missing mount, missing
 established state, incomplete owner bootstrap, or surviving fence without creating replacement
 state. An explicitly selected rollback image that predates the runtime preflight module may pass

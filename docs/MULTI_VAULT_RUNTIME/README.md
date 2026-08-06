@@ -60,11 +60,13 @@ Per-channel registry isolation is not sufficient because current containers can 
 roots. A separate host-local **channel ownership ledger** is mounted consistently into every channel
 and native runtime. Under one global mode-`0600` lock it records `channel_id`, stable binding, and
 HMAC fingerprints of canonical filesystem identity plus its canonical ancestor-identity chain
-(never a raw host path). Duplicate physical identity under different bindings is always a conflict;
-ancestor/descendant overlap conflicts across different channel/native ownership domains, including
-after symlink or bind-mount alias resolution. One channel/instance may register initialized parent
-and child vaults only under the existing nested-vault boundary contract: parent traversal prunes the
-child and effects target one explicit binding. One CSPRNG-generated,
+(never a raw host path). Duplicate physical identity and ancestor/descendant overlap conflict across
+two different release channels, including after symlink or bind-mount alias resolution. The narrow
+exception is one `native` owner paired with one release channel: ADR-0055 declares both runtimes as
+writers of the same vault, so their equal or overlapping roots may carry distinct authenticated
+bindings. One channel/instance may register initialized parent and child vaults only under the
+existing nested-vault boundary contract: parent traversal prunes the child and effects target one
+explicit binding. One CSPRNG-generated,
 host-global ledger key lives mode `0600` in private host app-data outside every channel volume and
 is mounted read-only into all channel/native consumers; generation, permissions, durable backup,
 and key ID are host-bootstrap truth. Missing, ephemeral, channel-specific, mismatched, or permissive
@@ -73,8 +75,9 @@ re-fingerprints every canonical root, and atomically advances ledger plus key ge
 owner resumes; interrupted rotation recovers one complete generation and never compares mixed keys.
 Registration uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
-active in two dev/test/prod/native ownership domains simultaneously, and nested roots cannot straddle
-those domains. Relocation is implemented but capability-gated until MVR-06C proves every foreground
+active in two release-channel ownership domains simultaneously; the sanctioned native/channel pair
+above is the sole cross-domain exception. Relocation is implemented but capability-gated until
+MVR-06C proves every foreground
 and background consumer uses the matching shared/exclusive effect-lease order. Explicit transfer
 remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
 uses a production-derived source-channel inventory to close foreground ingress, drain and stop every
@@ -88,8 +91,8 @@ The first MVR-01 rollout is a host-wide ownership migration, not a per-channel b
 any new reservation is accepted, deployment acquires a global bootstrap fence, blocks legacy
 selection/registry ingress, inventories every dev/test/prod Compose deployment and native runtime
 that can reach the host roots, and drains or stops all of their registry and lifecycle writers. It
-then rejects any pre-existing root collision and seeds one ledger generation with every legacy
-channel/native owner before opening claims. A seeded old channel may resume before its own upgrade
+then rejects any pre-existing root collision outside the sanctioned native/channel pair and seeds one
+ledger generation with every legacy channel/native owner before opening claims. A seeded old channel may resume before its own upgrade
 only on that fixed root behind mutation-denying ingress; a native or channel runtime that cannot be
 fenced remains stopped. Missing inventory, a racing writer, ambiguous ownership, or duplicate roots
 blocks every MVR-01 claim rather than letting an upgraded channel race an old image.
@@ -104,7 +107,10 @@ canonical channel/runtime env files, stopped or running Compose service config p
 the native scalar store, and the governed caller binding. Two identical probes create a private
 baseline; after lease-bound quiescence is proven, two more probes must reproduce it exactly before
 the wrapper marks the inventory drained and seeds every owner. A missing, changed, ambiguous, or
-cross-domain-overlapping source fails closed rather than being silently omitted. The fence prevents
+forbidden release-channel overlap fails closed rather than being silently omitted. On later
+deployments, the same stopped finalizer reconciles newly discovered, materialized owners into an
+established completed ledger before backup verification; binding reassignment, transfer/tombstone
+reuse, or a forbidden release-channel collision aborts atomically and leaves the fence in place. The fence prevents
 upgraded consumers from restarting through a failed post-stop validation or import; a changed final
 fingerprint, missing inventory, missing established ledger/key, or unfenced finalizer also aborts.
 The independently durable legacy source is never deleted.

@@ -871,8 +871,6 @@ class OwnershipLedger:
         with self._locked():
             key = self._load_or_create_key_locked()
             current = self._load_or_create_ledger_locked(key)
-            if current.legacy_bootstrap_complete:
-                return current
             staged = current
             leases = dict(current.leases)
             for owner in owners:
@@ -883,10 +881,40 @@ class OwnershipLedger:
                     key=key,
                     state="active",
                 )
+                existing = leases.get(candidate.vault_binding_id)
+                if existing is not None:
+                    if (
+                        existing.channel_id != candidate.channel_id
+                        or not self._matches_complete_root_identity(
+                            existing,
+                            owner.root,
+                            key,
+                        )
+                    ):
+                        raise LedgerCollisionError(
+                            "legacy owner binding no longer identifies its active root"
+                        )
+                    if existing.state != "active":
+                        leases[candidate.vault_binding_id] = candidate
+                        staged = self._replace(staged, leases=leases)
+                    continue
+                if candidate.vault_binding_id in current.tombstones or (
+                    current.transfer is not None
+                    and candidate.vault_binding_id
+                    in {
+                        current.transfer.source_binding_id,
+                        current.transfer.destination_binding_id,
+                    }
+                ):
+                    raise LedgerCollisionError(
+                        "legacy owner binding is retired or transferring"
+                    )
                 self._assert_no_collision(staged, candidate, allow_same_channel_nested=True)
                 leases[candidate.vault_binding_id] = candidate
                 staged = self._replace(staged, leases=leases)
             staged = self._replace(staged, legacy_bootstrap_complete=True)
+            if staged == current:
+                return current
             self._write_ledger_locked(staged, key)
             return staged
 

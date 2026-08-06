@@ -93,7 +93,10 @@ by the next `deployment-begin` instead of fatal. The nonce-plus-inventory-digest
 is required for restore, final export/preservation, and legacy bootstrap. The finalizer rejects an
 incomplete, non-private, or unvalidated inventory, captures the final legacy fingerprint, imports it
 on first volume or preserves it beside an established dormant registry, calls the host-global
-legacy-owner bootstrap, creates a verified registry/ledger/key backup, and clears the fence.
+legacy-owner bootstrap, and reconciles newly materialized owners even when that bootstrap previously
+completed. Reconciliation preserves authenticated binding identity and is atomic with respect to
+forbidden release-channel collisions, tombstones, and transfers. The finalizer then creates a
+verified registry/ledger/key backup and clears the fence.
 `INSTANCE_STATE_RESTORE_PATH`, when set, is verified and restored inside that stopped interval
 before finalization and consumer startup. Failure leaves the fence in place, so upgraded consumer
 preflight refuses restart. Rollback to a previous image that predates `app.instance.runtime` is

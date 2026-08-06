@@ -2516,6 +2516,7 @@ def _load_legacy_owner_inventory(
     registry: RegistrySnapshot,
     channel: str,
     quiescence_proof: DeploymentQuiescenceProof | None = None,
+    skip_unmaterialized: bool = False,
 ) -> list[LegacyOwner]:
     payload = _load_legacy_owner_inventory_payload(inventory_path)
     if quiescence_proof is not None:
@@ -2545,8 +2546,17 @@ def _load_legacy_owner_inventory(
         if not isinstance(item, dict):
             raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
         owner_channel = str(item.get("channel_id") or "").strip()
-        root = Path(str(item.get("root") or "")).expanduser().resolve(strict=False)
-        if not owner_channel or not root.is_dir():
+        raw_root = str(item.get("root") or "").strip()
+        if (
+            not owner_channel
+            or not raw_root
+            or not Path(raw_root).expanduser().is_absolute()
+        ):
+            raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
+        root = Path(raw_root).expanduser().resolve(strict=False)
+        if not root.is_dir():
+            if skip_unmaterialized:
+                continue
             raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
         binding_id = str(item.get("vault_binding_id") or "").strip()
         if owner_channel == channel:
@@ -2565,7 +2575,14 @@ def _load_legacy_owner_inventory(
         raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
     represented = {owner.vault_binding_id for owner in owners if owner.channel_id == channel}
     missing_bindings = set(registry.registrations) - represented
-    if missing_bindings:
+    materialized_missing_bindings = {
+        binding_id
+        for binding_id in missing_bindings
+        if Path(registry.registrations[binding_id].path).expanduser().is_dir()
+    }
+    if missing_bindings and (
+        not skip_unmaterialized or materialized_missing_bindings
+    ):
         raise InstanceStatePreflightError(
             "legacy-owner inventory omits a current-channel registration"
         )
@@ -2849,19 +2866,22 @@ def _finish_instance_state_deployment_locked(
         ledger_snapshot = ledger.require_existing()
     except LedgerError:
         ledger_snapshot = None
-    if ledger_snapshot is None or not ledger_snapshot.legacy_bootstrap_complete:
-        owners = _load_legacy_owner_inventory(
-            inventory_path,
-            registry=registry,
-            channel=channel,
-            quiescence_proof=quiescence_proof,
-        )
-        ledger_snapshot = ledger.bootstrap_legacy_owners(
-            owners,
-            inventory_complete=True,
-            writers_drained=True,
-            _capability=_STORAGE_MUTATION_CAPABILITY,
-        )
+    owners = _load_legacy_owner_inventory(
+        inventory_path,
+        registry=registry,
+        channel=channel,
+        quiescence_proof=quiescence_proof,
+        skip_unmaterialized=(
+            ledger_snapshot is not None
+            and ledger_snapshot.legacy_bootstrap_complete
+        ),
+    )
+    ledger_snapshot = ledger.bootstrap_legacy_owners(
+        owners,
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=_STORAGE_MUTATION_CAPABILITY,
+    )
     if scalar_roll_forward_merged:
         ledger.require_scalar_rollback_ready(
             channel_id=channel,

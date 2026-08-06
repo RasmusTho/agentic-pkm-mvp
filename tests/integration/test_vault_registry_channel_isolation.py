@@ -877,6 +877,55 @@ def test_first_upgrade_still_rejects_release_channel_shared_root(tmp_path) -> No
         )
 
 
+def test_established_ledger_still_rejects_release_channel_shared_root(tmp_path) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    seeded = ledger.bootstrap_legacy_owners(
+        [LegacyOwner("prod", "legacy-prod", root)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    with pytest.raises(LedgerCollisionError, match="overlap"):
+        ledger.bootstrap_legacy_owners(
+            [
+                LegacyOwner("prod", "legacy-prod", root),
+                LegacyOwner("dev", "legacy-dev", root),
+            ],
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    assert ledger.load() == seeded
+
+
+def test_established_ledger_rejects_binding_identity_reassignment(tmp_path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    seeded = ledger.bootstrap_legacy_owners(
+        [LegacyOwner("prod", "legacy-prod", first)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    with pytest.raises(LedgerCollisionError, match="no longer identifies"):
+        ledger.bootstrap_legacy_owners(
+            [LegacyOwner("prod", "legacy-prod", second)],
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    assert ledger.load() == seeded
+
+
 def test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed(tmp_path) -> None:
     runtime = _runtime(tmp_path, "dev", tmp_path / "host-global")
     root = tmp_path / "vault"
