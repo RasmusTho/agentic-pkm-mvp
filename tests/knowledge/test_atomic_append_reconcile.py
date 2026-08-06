@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -512,10 +513,9 @@ def test_failure_points_are_fail_loud_and_retry_reconciles(
         destination_fd: int,
         destination_name: str,
     ) -> None:
-        del source_fd, destination_fd, destination_name
         if source_name.startswith(".atomic-append-reconcile-"):
             raise OSError("injected cleanup retirement failure")
-        raise AssertionError("unexpected retirement source")
+        real_rename_noreplace(source_fd, source_name, destination_fd, destination_name)
 
     monkeypatch.setattr(
         atomic_append_module,
@@ -555,7 +555,8 @@ def test_failure_points_are_fail_loud_and_retry_reconciles(
             destination_fd,
             destination_name,
         )
-        cleanup_fsync = True
+        if source_name.startswith(".atomic-append-reconcile-"):
+            cleanup_fsync = True
 
     def reject_cleanup_fsync(fd: int) -> None:
         if cleanup_fsync:
@@ -605,13 +606,14 @@ def test_cleanup_race_retains_foreign_prepublication_entry(
         stage_name: str,
         owner_fd: int,
         retention_fd: int,
+        capacity: object,
     ) -> object:
         nonlocal retirement_injected
         assert stat.S_ISREG(os.fstat(owner_fd).st_mode)
         if not retirement_injected:
             retirement_injected = True
             _replace_cleanup_candidate(parent_fd, stage_name, payload=foreign)
-        return real_retire(parent_fd, stage_name, owner_fd, retention_fd)
+        return real_retire(parent_fd, stage_name, owner_fd, retention_fd, capacity)
 
     monkeypatch.setattr(atomic_append_module, "_atomic_exchange_at", reject_exchange)
     monkeypatch.setattr(
@@ -656,13 +658,14 @@ def test_cleanup_race_retains_foreign_displaced_entry(
         stage_name: str,
         owner_fd: int,
         retention_fd: int,
+        capacity: object,
     ) -> object:
         nonlocal retirement_injected
         assert os.pread(owner_fd, len(b"original"), 0) == b"original"
         if not retirement_injected:
             retirement_injected = True
             _replace_cleanup_candidate(parent_fd, stage_name, payload=foreign)
-        return real_retire(parent_fd, stage_name, owner_fd, retention_fd)
+        return real_retire(parent_fd, stage_name, owner_fd, retention_fd, capacity)
 
     monkeypatch.setattr(
         atomic_append_module,
@@ -783,11 +786,12 @@ def test_cleanup_restore_collision_retains_every_entry(
         stage_name: str,
         owner_fd: int,
         recovery_fd: int,
+        capacity: object,
     ) -> object:
         nonlocal retiring_name
         retiring_name = stage_name
         _replace_cleanup_candidate(parent_fd, stage_name, payload=foreign)
-        return real_retire(parent_fd, stage_name, owner_fd, recovery_fd)
+        return real_retire(parent_fd, stage_name, owner_fd, recovery_fd, capacity)
 
     monkeypatch.setattr(
         atomic_append_module,
@@ -832,8 +836,9 @@ def test_retained_name_substitution_fails_before_success(
         stage_name: str,
         owner_fd: int,
         recovery_fd: int,
+        capacity: object,
     ) -> object:
-        receipt = real_retire(parent_fd, stage_name, owner_fd, recovery_fd)
+        receipt = real_retire(parent_fd, stage_name, owner_fd, recovery_fd, capacity)
         os.unlink(receipt.name, dir_fd=recovery_fd)
         replacement_fd = os.open(
             receipt.name,
@@ -870,6 +875,87 @@ def test_retained_name_substitution_fails_before_success(
     assert b"original" in retained_bytes
 
 
+def test_mid_retirement_substitution_snapshots_unlinked_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    target = vault / "Logs" / "steering.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("original")
+    replacement = b"foreign-mid-retirement"
+    real_retire = atomic_append_module._retire_owned_stage
+    real_fstat = os.fstat
+
+    def substitute_between_retained_and_owner_stat(
+        parent_fd: int,
+        stage_name: str,
+        owner_fd: int,
+        recovery_fd: int,
+        capacity: object,
+    ) -> object:
+        owner_stat_calls = 0
+
+        def injecting_fstat(fd: int) -> os.stat_result:
+            nonlocal owner_stat_calls
+            if fd == owner_fd:
+                owner_stat_calls += 1
+                if owner_stat_calls == 2:
+                    retained_name = next(
+                        name
+                        for name in os.listdir(recovery_fd)
+                        if name.startswith(stage_name) and name.endswith(".recovery")
+                    )
+                    os.unlink(retained_name, dir_fd=recovery_fd)
+                    replacement_fd = os.open(
+                        retained_name,
+                        os.O_WRONLY
+                        | os.O_CREAT
+                        | os.O_EXCL
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        0o600,
+                        dir_fd=recovery_fd,
+                    )
+                    try:
+                        os.write(replacement_fd, replacement)
+                        os.fsync(replacement_fd)
+                    finally:
+                        os.close(replacement_fd)
+                    os.fsync(recovery_fd)
+            return real_fstat(fd)
+
+        monkeypatch.setattr(os, "fstat", injecting_fstat)
+        try:
+            return real_retire(
+                parent_fd,
+                stage_name,
+                owner_fd,
+                recovery_fd,
+                capacity,
+            )
+        finally:
+            monkeypatch.setattr(os, "fstat", real_fstat)
+
+    monkeypatch.setattr(
+        atomic_append_module,
+        "_retire_owned_stage",
+        substitute_between_retained_and_owner_stat,
+    )
+    with pytest.raises(KnowledgeWriteConflict):
+        atomic_append_reconcile_relative(
+            "Logs/steering.md",
+            operation_id="mid-retirement-substitution",
+            payload="payload",
+            payload_fingerprint=_fingerprint("payload"),
+            vault_root=vault,
+            action="test.atomic_append",
+            write_guard=_healthy_guard(),
+            reconcile=_unchanged,
+        )
+    retained_bytes = {path.read_bytes() for path in _retained_stage_paths(target.parent)}
+    assert replacement in retained_bytes
+    assert b"original" in retained_bytes
+
+
 def test_late_active_stage_entry_prevents_success_and_is_recoverable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -885,8 +971,9 @@ def test_late_active_stage_entry_prevents_success_and_is_recoverable(
         stage_name: str,
         owner_fd: int,
         recovery_fd: int,
+        capacity: object,
     ) -> object:
-        receipt = real_retire(parent_fd, stage_name, owner_fd, recovery_fd)
+        receipt = real_retire(parent_fd, stage_name, owner_fd, recovery_fd, capacity)
         late_fd = os.open(
             f"{stage_name}late",
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -978,6 +1065,55 @@ def test_recovery_capacity_refuses_before_stage_creation(
         )
     assert target.read_text() == "original"
     assert _active_stage_paths(target.parent) == []
+
+
+def test_concurrent_capacity_reservations_refuse_before_stage_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setattr(atomic_append_module, "_MAX_RECOVERY_ENTRIES", 2)
+    real_reserve = atomic_append_module._reserve_recovery_capacity
+    barrier = threading.Barrier(3)
+    outcomes: list[str] = []
+
+    def synchronized_reserve(recovery_fd: int) -> object:
+        barrier.wait(timeout=5)
+        return real_reserve(recovery_fd)
+
+    def append(target_name: str) -> None:
+        try:
+            result = atomic_append_reconcile_relative(
+                f"Logs/{target_name}.md",
+                operation_id=f"capacity-{target_name}",
+                payload="payload",
+                payload_fingerprint=_fingerprint("payload"),
+                vault_root=vault,
+                action="test.atomic_append",
+                write_guard=_healthy_guard(),
+                reconcile=_unchanged,
+            )
+        except KnowledgeCapabilityError:
+            outcomes.append("refused")
+        else:
+            outcomes.append(result.outcome)
+
+    monkeypatch.setattr(
+        atomic_append_module,
+        "_reserve_recovery_capacity",
+        synchronized_reserve,
+    )
+    threads = [threading.Thread(target=append, args=(str(index),)) for index in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["appended", "refused", "refused"]
+    recovery = vault / "Logs" / atomic_append_module._RECOVERY_DIRECTORY
+    assert len(list(recovery.glob("*.recovery"))) == 1
+    assert _active_stage_paths(vault / "Logs") == []
 
 
 def test_inventory_enumeration_race_fails_loud(
@@ -1120,8 +1256,9 @@ def test_vault_chain_or_metadata_swap_fails_without_a_success_result(
         stage_name: str,
         owner_fd: int,
         recovery_fd: int,
+        capacity: object,
     ) -> object:
-        receipt = real_retire(parent_fd, stage_name, owner_fd, recovery_fd)
+        receipt = real_retire(parent_fd, stage_name, owner_fd, recovery_fd, capacity)
         target_fd = os.open("steering.md", os.O_WRONLY, dir_fd=parent_fd)
         try:
             os.write(target_fd, b"tampered")

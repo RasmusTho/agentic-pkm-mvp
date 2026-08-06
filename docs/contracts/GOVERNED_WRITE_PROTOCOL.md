@@ -143,9 +143,12 @@ own `WriteGuard` action and authority decision.
 - Before mutation and again before success, the primitive takes a stable descriptor-bound inventory
   of both active and scanner-inert entries for the target/operation scope. Inventory races,
   malformed or aliased entries, and late active entrants fail loud. The transitional implementation
-  caps the aggregate recovery directory at 256 entries and reserves capacity for one retirement
-  plus one owner snapshot before stage creation; capacity exhaustion refuses mutation and never
-  prunes evidence.
+  caps the aggregate recovery directory at 256 entries. It atomically no-replace reserves two
+  durable capacity slots before stage creation—one retirement plus one owner snapshot—across all
+  target locks sharing that directory. An entry consumes its slot at the namespace transition, so
+  crashes and failed durability fences cannot release occupied capacity; unused slots are restored
+  without clobbering. Capacity exhaustion refuses mutation and never prunes evidence or adds a
+  second blocking lock.
 - The operation keeps its stage or displaced-target descriptor open until cleanup retirement. It
   atomically renames the active stage entry without replacement into a hidden recovery directory,
   then compares the moved inode with that descriptor. Matching evidence is retired from the active

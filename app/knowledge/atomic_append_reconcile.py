@@ -46,6 +46,9 @@ _LOCK_OPEN_FLAGS = os.O_RDWR | os.O_CREAT | _OPEN_NOFOLLOW | _OPEN_CLOEXEC
 _RECOVERY_DIRECTORY = ".atomic-append-reconcile-recovery"
 _RECOVERY_SUFFIX = ".recovery"
 _MAX_RECOVERY_ENTRIES = 256
+_CAPACITY_DIRECTORY = ".capacity-slots"
+_CAPACITY_INITIALIZING = ".initializing"
+_CAPACITY_INITIALIZED = ".initialized"
 _FRAME_PREFIX = b"\x1ePKM-ATOMIC-APPEND-RECONCILE-V1 "
 _FRAME_HEADER_END = b" -->\n"
 _FRAME_COMMIT_PREFIX = b"\n<!-- /pkm-atomic-append-reconcile:commit "
@@ -86,6 +89,20 @@ class _RetirementReceipt:
     stage_name: str
     name: str
     descriptor: int
+
+
+@dataclass
+class _CapacitySlot:
+    index: int
+    name: str
+    descriptor: int
+    consumed: bool = False
+
+
+@dataclass
+class _CapacityReservation:
+    directory: int
+    slots: list[_CapacitySlot]
 
 
 ReconcileCallback = Callable[[bytes, tuple[AtomicAppendRecord, ...]], bytes | str | None]
@@ -428,6 +445,223 @@ def _require_recovery_directory_binding(parent_fd: int, recovery_fd: int) -> Non
         raise KnowledgeWriteConflict("atomic append recovery namespace identity changed")
 
 
+def _free_capacity_name(index: int) -> str:
+    return f"free-{index:04d}"
+
+
+def _require_capacity_directory_binding(recovery_fd: int, capacity_fd: int) -> None:
+    try:
+        entry_stat = os.stat(
+            _CAPACITY_DIRECTORY,
+            dir_fd=recovery_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError as exc:
+        raise KnowledgeWriteConflict("atomic append capacity namespace disappeared") from exc
+    held_stat = os.fstat(capacity_fd)
+    if not stat.S_ISDIR(entry_stat.st_mode) or not _same_file_identity(entry_stat, held_stat):
+        raise KnowledgeWriteConflict("atomic append capacity namespace identity changed")
+
+
+def _reserved_capacity_name(index: int) -> str:
+    return f"reserved-{uuid.uuid4().hex}-{index:04d}"
+
+
+def _capacity_slot_index(name: str) -> int | None:
+    match = re.fullmatch(r"(?:free-\d{4}|reserved-(?:legacy|[0-9a-f]{32})-\d{4})", name)
+    if match is None:
+        return None
+    try:
+        return int(name[-4:])
+    except ValueError:  # pragma: no cover - regex already constrains the suffix
+        return None
+
+
+def _open_or_initialize_capacity_directory(recovery_fd: int) -> int:
+    """Open the atomic no-replace reservation pool for retained evidence."""
+
+    try:
+        capacity_fd = os.open(
+            _CAPACITY_DIRECTORY,
+            _DIRECTORY_FLAGS | _OPEN_NOFOLLOW | _OPEN_CLOEXEC,
+            dir_fd=recovery_fd,
+        )
+    except FileNotFoundError:
+        try:
+            os.mkdir(_CAPACITY_DIRECTORY, mode=0o700, dir_fd=recovery_fd)
+        except FileExistsError:
+            pass
+        os.fsync(recovery_fd)
+        capacity_fd = os.open(
+            _CAPACITY_DIRECTORY,
+            _DIRECTORY_FLAGS | _OPEN_NOFOLLOW | _OPEN_CLOEXEC,
+            dir_fd=recovery_fd,
+        )
+    try:
+        legacy_count = sum(
+            name.endswith(_RECOVERY_SUFFIX) for name in os.listdir(recovery_fd)
+        )
+        if legacy_count > _MAX_RECOVERY_ENTRIES:
+            raise KnowledgeCapabilityError("atomic append recovery capacity is exhausted")
+        if _CAPACITY_INITIALIZED not in os.listdir(capacity_fd):
+            try:
+                initializing_fd = os.open(
+                    _CAPACITY_INITIALIZING,
+                    _RECOVERY_OPEN_FLAGS,
+                    0o600,
+                    dir_fd=capacity_fd,
+                )
+            except FileExistsError:
+                raise KnowledgeCapabilityError(
+                    "atomic append recovery capacity initialization is incomplete"
+                )
+            else:
+                try:
+                    os.fsync(initializing_fd)
+                    for index in range(_MAX_RECOVERY_ENTRIES):
+                        name = (
+                            f"reserved-legacy-{index:04d}"
+                            if index < legacy_count
+                            else _free_capacity_name(index)
+                        )
+                        slot_fd = os.open(
+                            name,
+                            _RECOVERY_OPEN_FLAGS,
+                            0o600,
+                            dir_fd=capacity_fd,
+                        )
+                        os.fsync(slot_fd)
+                        os.close(slot_fd)
+                    initialized_fd = os.open(
+                        _CAPACITY_INITIALIZED,
+                        _RECOVERY_OPEN_FLAGS,
+                        0o600,
+                        dir_fd=capacity_fd,
+                    )
+                    os.fsync(initialized_fd)
+                    os.close(initialized_fd)
+                    os.fsync(capacity_fd)
+                finally:
+                    os.close(initializing_fd)
+
+        names = tuple(
+            name
+            for name in os.listdir(capacity_fd)
+            if name not in {_CAPACITY_INITIALIZING, _CAPACITY_INITIALIZED}
+        )
+        indexed: dict[int, list[str]] = {}
+        for name in names:
+            slot_index = _capacity_slot_index(name)
+            if slot_index is None or slot_index >= _MAX_RECOVERY_ENTRIES:
+                raise KnowledgeCapabilityError("atomic append recovery capacity state is invalid")
+            indexed.setdefault(slot_index, []).append(name)
+        if len(indexed) != _MAX_RECOVERY_ENTRIES or any(
+            len(indexed.get(index, [])) != 1 for index in range(_MAX_RECOVERY_ENTRIES)
+        ):
+            raise KnowledgeCapabilityError("atomic append recovery capacity state is incomplete")
+        reserved_count = sum(
+            name.startswith("reserved-") for names_for_index in indexed.values() for name in names_for_index
+        )
+        if legacy_count > reserved_count:
+            raise KnowledgeCapabilityError("unreserved atomic append recovery evidence exists")
+        os.fsync(capacity_fd)
+        return capacity_fd
+    except Exception:
+        os.close(capacity_fd)
+        raise
+
+
+def _reserve_recovery_capacity(recovery_fd: int) -> _CapacityReservation:
+    capacity_fd = _open_or_initialize_capacity_directory(recovery_fd)
+    slots: list[_CapacitySlot] = []
+    try:
+        for index in range(_MAX_RECOVERY_ENTRIES):
+            if len(slots) == 2:
+                break
+            free_name = _free_capacity_name(index)
+            reserved_name = _reserved_capacity_name(index)
+            try:
+                _atomic_rename_noreplace_at(
+                    capacity_fd,
+                    free_name,
+                    capacity_fd,
+                    reserved_name,
+                )
+            except FileNotFoundError:
+                continue
+            slot_fd = os.open(reserved_name, _TARGET_OPEN_FLAGS, dir_fd=capacity_fd)
+            descriptor_stat = os.fstat(slot_fd)
+            entry_stat = os.stat(
+                reserved_name,
+                dir_fd=capacity_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(descriptor_stat.st_mode)
+                or descriptor_stat.st_nlink != 1
+                or not _same_file_identity(descriptor_stat, entry_stat)
+            ):
+                os.close(slot_fd)
+                raise KnowledgeCapabilityError("atomic append recovery reservation changed")
+            slots.append(_CapacitySlot(index, reserved_name, slot_fd))
+        os.fsync(capacity_fd)
+        if len(slots) != 2:
+            raise KnowledgeCapabilityError("atomic append recovery capacity is exhausted")
+        _require_capacity_directory_binding(recovery_fd, capacity_fd)
+        return _CapacityReservation(capacity_fd, slots)
+    except Exception:
+        reservation = _CapacityReservation(capacity_fd, slots)
+        _release_recovery_capacity(reservation)
+        raise
+
+
+def _consume_recovery_capacity(reservation: _CapacityReservation) -> None:
+    for slot in reservation.slots:
+        if not slot.consumed:
+            slot.consumed = True
+            os.close(slot.descriptor)
+            slot.descriptor = -1
+            return
+    raise KnowledgeCapabilityError("atomic append recovery reservation is exhausted")
+
+
+def _release_recovery_capacity(reservation: _CapacityReservation) -> None:
+    release_error: BaseException | None = None
+    for slot in reservation.slots:
+        try:
+            if not slot.consumed:
+                free_name = _free_capacity_name(slot.index)
+                _atomic_rename_noreplace_at(
+                    reservation.directory,
+                    slot.name,
+                    reservation.directory,
+                    free_name,
+                )
+                os.fsync(reservation.directory)
+                entry_stat = os.stat(
+                    free_name,
+                    dir_fd=reservation.directory,
+                    follow_symlinks=False,
+                )
+                if not _same_file_identity(entry_stat, os.fstat(slot.descriptor)):
+                    raise KnowledgeWriteConflict("atomic append capacity release changed identity")
+        except BaseException as exc:  # noqa: BLE001 - release must fail loud
+            release_error = release_error or exc
+        finally:
+            if slot.descriptor >= 0:
+                try:
+                    os.close(slot.descriptor)
+                except BaseException as exc:  # noqa: BLE001
+                    release_error = release_error or exc
+                slot.descriptor = -1
+    try:
+        os.close(reservation.directory)
+    except BaseException as exc:  # noqa: BLE001
+        release_error = release_error or exc
+    if release_error is not None:
+        raise release_error
+
+
 def _read_fd(fd: int) -> bytes:
     size = os.fstat(fd).st_size
     chunks: list[bytes] = []
@@ -731,8 +965,6 @@ def _open_stable_stage_inventory(
     parent_fd: int,
     recovery_fd: int,
     scope_prefix: str,
-    *,
-    reserve_recovery_entries: int = 0,
 ) -> tuple[_InventoryEntry, ...]:
     """Open a stable target/operation inventory without following mutable names."""
 
@@ -743,9 +975,6 @@ def _open_stable_stage_inventory(
     )
     if len(before_active) > 1:
         raise AtomicAppendRecoveryError("multiple active append recovery entries are ambiguous")
-    aggregate_recovery_count = len(os.listdir(recovery_fd))
-    if aggregate_recovery_count + reserve_recovery_entries > _MAX_RECOVERY_ENTRIES:
-        raise KnowledgeCapabilityError("atomic append recovery capacity is exhausted")
     entries: list[_InventoryEntry] = []
     try:
         entries.extend(
@@ -803,6 +1032,7 @@ def _classify_interrupted_stages(
     operation_id: str,
     payload_fingerprint: str,
     target_records: tuple[AtomicAppendRecord, ...],
+    capacity: _CapacityReservation,
 ) -> None:
     """Validate both namespaces and descriptor-retire any interrupted active stage."""
 
@@ -813,7 +1043,6 @@ def _classify_interrupted_stages(
         parent_fd,
         recovery_fd,
         scope_prefix,
-        reserve_recovery_entries=2,
     )
     try:
         _validate_inventory_payloads(
@@ -830,9 +1059,15 @@ def _classify_interrupted_stages(
             active[0].name,
             active[0].descriptor,
             recovery_fd,
+            capacity,
         )
         try:
-            _revalidate_retirement(receipt, recovery_fd, active[0].descriptor)
+            _revalidate_retirement(
+                receipt,
+                recovery_fd,
+                active[0].descriptor,
+                capacity,
+            )
         finally:
             os.close(receipt.descriptor)
         raise AtomicAppendRecoveryError(
@@ -881,7 +1116,12 @@ def _recovery_name(stage_name: str, *, snapshot: bool = False) -> str:
     return f"{stage_name}.{uuid.uuid4().hex}.{kind}{_RECOVERY_SUFFIX}"
 
 
-def _retain_untrusted_stage(parent_fd: int, stage_name: str, recovery_fd: int) -> str | None:
+def _retain_untrusted_stage(
+    parent_fd: int,
+    stage_name: str,
+    recovery_fd: int,
+    capacity: _CapacityReservation,
+) -> str | None:
     """Move an active stage aside without deleting or overwriting any entry."""
 
     for _attempt in range(9):
@@ -899,13 +1139,22 @@ def _retain_untrusted_stage(parent_fd: int, stage_name: str, recovery_fd: int) -
             if exc.errno == errno.EEXIST:
                 continue
             raise
+        # The reservation becomes permanent at the namespace transition.  It
+        # must not be released if a later durability fence fails or the process
+        # crashes before returning from this helper.
+        _consume_recovery_capacity(capacity)
         os.fsync(parent_fd)
         os.fsync(recovery_fd)
         return retained_name
     raise KnowledgeCapabilityError("cannot allocate atomic append recovery entry")
 
 
-def _snapshot_owned_descriptor(owner_fd: int, recovery_fd: int, stage_name: str) -> str:
+def _snapshot_owned_descriptor(
+    owner_fd: int,
+    recovery_fd: int,
+    stage_name: str,
+    capacity: _CapacityReservation,
+) -> str:
     """Durably copy a still-open owner inode after its directory link was lost."""
 
     owner_stat = os.fstat(owner_fd)
@@ -926,6 +1175,7 @@ def _snapshot_owned_descriptor(owner_fd: int, recovery_fd: int, stage_name: str)
             )
         except FileExistsError:
             continue
+        _consume_recovery_capacity(capacity)
         break
     else:
         raise KnowledgeCapabilityError("cannot allocate descriptor-owned recovery snapshot")
@@ -952,15 +1202,26 @@ def _retire_owned_stage(
     stage_name: str,
     owner_fd: int,
     recovery_fd: int,
+    capacity: _CapacityReservation,
 ) -> _RetirementReceipt:
     """Retire a stage by descriptor identity without unlinking a mutable name."""
 
     owner_stat = os.fstat(owner_fd)
     if not stat.S_ISREG(owner_stat.st_mode):
         raise KnowledgeWriteConflict("atomic append cleanup owner is not a regular file")
-    retained_name = _retain_untrusted_stage(parent_fd, stage_name, recovery_fd)
+    retained_name = _retain_untrusted_stage(
+        parent_fd,
+        stage_name,
+        recovery_fd,
+        capacity,
+    )
     if retained_name is None:
-        snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+        snapshot_name = _snapshot_owned_descriptor(
+            owner_fd,
+            recovery_fd,
+            stage_name,
+            capacity,
+        )
         raise KnowledgeWriteConflict(
             "atomic append cleanup entry disappeared; "
             f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
@@ -970,7 +1231,12 @@ def _retire_owned_stage(
         try:
             retained_fd = os.open(retained_name, _TARGET_OPEN_FLAGS, dir_fd=recovery_fd)
         except OSError as exc:
-            snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+            snapshot_name = _snapshot_owned_descriptor(
+                owner_fd,
+                recovery_fd,
+                stage_name,
+                capacity,
+            )
             raise KnowledgeWriteConflict(
                 "atomic append retained entry cannot be descriptor-bound; "
                 f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
@@ -979,12 +1245,28 @@ def _retire_owned_stage(
         moved_entry = os.stat(retained_name, dir_fd=recovery_fd, follow_symlinks=False)
         owner_after = os.fstat(owner_fd)
         if not _same_file_identity(moved, moved_entry):
-            snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+            snapshot_name = _snapshot_owned_descriptor(
+                owner_fd,
+                recovery_fd,
+                stage_name,
+                capacity,
+            )
             raise KnowledgeWriteConflict(
                 "atomic append retained entry changed after retirement; "
                 f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
             )
         if _same_file_identity(moved, owner_after):
+            if owner_after.st_nlink == 0:
+                snapshot_name = _snapshot_owned_descriptor(
+                    owner_fd,
+                    recovery_fd,
+                    stage_name,
+                    capacity,
+                )
+                raise KnowledgeWriteConflict(
+                    "atomic append cleanup owner lost its retained link; "
+                    f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
+                )
             if moved.st_nlink != 1 or owner_after.st_nlink != 1:
                 raise KnowledgeWriteConflict(
                     "atomic append cleanup owner acquired a hard-link alias; entry retained"
@@ -993,7 +1275,12 @@ def _retire_owned_stage(
             retained_fd = -1
             return receipt
 
-        snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+        snapshot_name = _snapshot_owned_descriptor(
+            owner_fd,
+            recovery_fd,
+            stage_name,
+            capacity,
+        )
         try:
             _atomic_rename_noreplace_at(
                 recovery_fd,
@@ -1037,11 +1324,17 @@ def _revalidate_retirement(
     receipt: _RetirementReceipt,
     recovery_fd: int,
     owner_fd: int,
+    capacity: _CapacityReservation,
 ) -> None:
     try:
         entry_stat = os.stat(receipt.name, dir_fd=recovery_fd, follow_symlinks=False)
     except FileNotFoundError as exc:
-        snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, receipt.stage_name)
+        snapshot_name = _snapshot_owned_descriptor(
+            owner_fd,
+            recovery_fd,
+            receipt.stage_name,
+            capacity,
+        )
         raise KnowledgeWriteConflict(
             "retained append recovery entry disappeared; "
             f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
@@ -1055,7 +1348,12 @@ def _revalidate_retirement(
         or not _same_file_identity(retained_stat, entry_stat)
         or not _same_file_identity(retained_stat, owner_stat)
     ):
-        snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, receipt.stage_name)
+        snapshot_name = _snapshot_owned_descriptor(
+            owner_fd,
+            recovery_fd,
+            receipt.stage_name,
+            capacity,
+        )
         raise KnowledgeWriteConflict(
             "retained append recovery ownership changed before final proof; "
             f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
@@ -1163,6 +1461,7 @@ def atomic_append_reconcile_relative(
         stage_stat: os.stat_result | None = None
         stage_owned = False
         retirement_receipt: _RetirementReceipt | None = None
+        capacity: _CapacityReservation | None = None
         try:
             root_fd = _open_absolute_directory_no_follow(vault_path)
             root_stat = os.fstat(root_fd)
@@ -1193,6 +1492,7 @@ def atomic_append_reconcile_relative(
             target_entry = _canonical_target_entry(parent_fd, target_name, target_stat)
             recovery_fd = _open_or_create_recovery_directory(parent_fd)
             _require_recovery_directory_binding(parent_fd, recovery_fd)
+            capacity = _reserve_recovery_capacity(recovery_fd)
 
             original = _read_fd(target_fd)
             records = _parse_complete_records(original)
@@ -1205,6 +1505,7 @@ def atomic_append_reconcile_relative(
                 operation_id,
                 payload_fingerprint,
                 records,
+                capacity,
             )
             matching = [record for record in records if record.operation_id == operation_id]
             if matching and matching[0].payload_fingerprint != payload_fingerprint:
@@ -1301,6 +1602,7 @@ def atomic_append_reconcile_relative(
                     stage_name,
                     target_fd,
                     recovery_fd,
+                    capacity,
                 )
                 _require_recovery_directory_binding(parent_fd, recovery_fd)
 
@@ -1342,7 +1644,12 @@ def atomic_append_reconcile_relative(
                     )
                 if retirement_receipt is None:
                     raise KnowledgeWriteConflict("atomic append cleanup has no retirement proof")
-                _revalidate_retirement(retirement_receipt, recovery_fd, target_fd)
+                _revalidate_retirement(
+                    retirement_receipt,
+                    recovery_fd,
+                    target_fd,
+                    capacity,
+                )
                 if not any(
                     entry.namespace == "retained"
                     and entry.name == retirement_receipt.name
@@ -1358,6 +1665,7 @@ def atomic_append_reconcile_relative(
             finally:
                 _close_inventory(final_inventory)
             _require_recovery_directory_binding(parent_fd, recovery_fd)
+            _require_capacity_directory_binding(recovery_fd, capacity.directory)
             return AtomicAppendReconcileResult(outcome, operation_id, payload_fingerprint)
         except _RetryAnchoredIdentity:
             pass
@@ -1369,6 +1677,7 @@ def atomic_append_reconcile_relative(
                 and stage_fd >= 0
                 and parent_fd >= 0
                 and recovery_fd >= 0
+                and capacity is not None
             ):
                 try:
                     cleanup_receipt = _retire_owned_stage(
@@ -1376,9 +1685,15 @@ def atomic_append_reconcile_relative(
                         stage_name,
                         stage_fd,
                         recovery_fd,
+                        capacity,
                     )
                     try:
-                        _revalidate_retirement(cleanup_receipt, recovery_fd, stage_fd)
+                        _revalidate_retirement(
+                            cleanup_receipt,
+                            recovery_fd,
+                            stage_fd,
+                            capacity,
+                        )
                     finally:
                         os.close(cleanup_receipt.descriptor)
                 except BaseException as exc:  # noqa: BLE001 - cleanup must be fail-loud
@@ -1397,6 +1712,16 @@ def atomic_append_reconcile_relative(
                 try:
                     os.close(target_fd)
                 except BaseException as exc:  # noqa: BLE001 - preserve a close failure
+                    cleanup_error = cleanup_error or exc
+            if capacity is not None:
+                try:
+                    if recovery_fd >= 0:
+                        _require_capacity_directory_binding(recovery_fd, capacity.directory)
+                except BaseException as exc:  # noqa: BLE001 - binding must fail loud
+                    cleanup_error = cleanup_error or exc
+                try:
+                    _release_recovery_capacity(capacity)
+                except BaseException as exc:  # noqa: BLE001 - release must fail loud
                     cleanup_error = cleanup_error or exc
             if recovery_fd >= 0:
                 try:
