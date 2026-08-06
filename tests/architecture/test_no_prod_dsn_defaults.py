@@ -100,8 +100,23 @@ def test_no_test_default_resolves_to_a_prod_dsn() -> None:
 _DSN_ENV_VARS = {"DATABASE_URL", "DB_DSN", "BUILDEROPS_DATABASE_URL"}
 # The runtime gate in tests/conftest.py checks four writer families; the census
 # must not be narrower, or `injected-prod` stays open through the ones it omits.
-_DSN_HOST_VARS = {"PKM_DB_HOST", "PGHOST", "PGHOSTADDR"}
-_DSN_PORT_VARS = {"PKM_DB_PORT", "PGPORT"}
+_RUNTIME_WRITER_VARS = {
+    "PKM_DB_HOST",
+    "PKM_DB_PORT",
+    "PKM_DB_NAME_DEV",
+    "PKM_DB_NAME_TEST",
+    "PKM_DB_NAME_PROD",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+}
+_RUNTIME_SELECTOR_VARS = {"PKM_ENVIRONMENT", "PKM_SETTINGS_PROFILE"}
+_AMBIENT_WRITER_VARS = {
+    "PGHOST",
+    "PGHOSTADDR",
+    "PGPORT",
+    "PGDATABASE",
+    "PGUSER",
+}
 _DSN_SERVICE_VARS = {"PGSERVICE", "PGSERVICEFILE"}
 
 # Loopback plus the prod-published port: the address a production container on
@@ -164,32 +179,84 @@ def _is_os_environ(node: ast.AST) -> bool:
     return isinstance(node, ast.Name) and node.id == "environ"
 
 
-def _flag_host_port_dict(
-    lineno: int, pairs: list[tuple[ast.AST, ast.AST]], bound: dict[str, str], hits: list
+def _record_writer_env(
+    lineno: int,
+    key: str | None,
+    value: str | None,
+    seen: dict[str, str],
+    hits: list[tuple[int, str]],
 ) -> None:
-    """A dict literal naming host+port directly, e.g. env overrides in a call."""
+    """Classify one late environment mutation through its writer family."""
 
-    seen: dict[str, str] = {}
-    for key_node, value_node in pairs:
-        key = _resolve_str(key_node, bound)
-        value = _resolve_str(value_node, bound)
-        if key is None or value is None:
-            continue
-        if key in _DSN_SERVICE_VARS and value:
+    if key is None or value is None:
+        return
+    if key in _DSN_SERVICE_VARS:
+        seen[key] = value
+        if value:
             hits.append((lineno, f"{key}=<configured service indirection>"))
-            continue
-        if key in _DSN_HOST_VARS:
-            seen["host"] = value
-        elif key in _DSN_PORT_VARS:
-            seen["port"] = value
-        elif key in {"PKM_DB_NAME_PROD", "PGDATABASE", "PGUSER"}:
-            seen["db"] = value
-    if seen.get("host") in _REACHABLE_PROD_HOSTS:
-        port, db = seen.get("port", ""), seen.get("db", "")
-        if port == str(_PROD_PUBLISHED_PORT) or (
-            port in ("", str(_DEFAULT_POSTGRES_PORT)) and db == "app"
+        return
+    if key not in _RUNTIME_WRITER_VARS | _RUNTIME_SELECTOR_VARS | _AMBIENT_WRITER_VARS:
+        return
+    seen[key] = value
+
+    runtime_named = any(seen.get(name) for name in _RUNTIME_WRITER_VARS)
+    runtime_host = seen.get("PKM_DB_HOST", "db")
+    if runtime_named and runtime_host in _REACHABLE_PROD_HOSTS:
+        environment = seen.get("PKM_ENVIRONMENT", "").strip().lower()
+        profile = seen.get("PKM_SETTINGS_PROFILE", "").strip().lower()
+        if environment == "test":
+            runtime_db = seen.get("PKM_DB_NAME_TEST", "app_test")
+        elif environment == "dev" or (not environment and profile == "lab"):
+            runtime_db = seen.get("PKM_DB_NAME_DEV", "app_dev")
+        else:
+            runtime_db = seen.get("PKM_DB_NAME_PROD", "app")
+        runtime_port = seen.get("PKM_DB_PORT", str(_DEFAULT_POSTGRES_PORT))
+        if runtime_port == str(_PROD_PUBLISHED_PORT) or (
+            runtime_port == str(_DEFAULT_POSTGRES_PORT) and runtime_db == "app"
         ):
-            hits.append((lineno, f"{seen['host']}:{port or _DEFAULT_POSTGRES_PORT}/{db or '?'}"))
+            hits.append((lineno, f"{runtime_host}:{runtime_port}/{runtime_db}"))
+
+    ambient_named = any(seen.get(name) for name in _AMBIENT_WRITER_VARS)
+    if not ambient_named:
+        return
+    ambient_hosts = [
+        part.strip()
+        for name in ("PGHOST", "PGHOSTADDR")
+        for part in seen.get(name, "").split(",")
+        if part.strip()
+    ]
+    # No host means libpq's local socket. A named non-loopback host remains a
+    # legal unreachable sentinel for tests that exercise error paths.
+    if ambient_hosts and not any(host in _REACHABLE_PROD_HOSTS for host in ambient_hosts):
+        return
+    ambient_ports = [
+        part.strip() for part in seen.get("PGPORT", "").split(",") if part.strip()
+    ] or [str(_DEFAULT_POSTGRES_PORT)]
+    ambient_db = seen.get("PGDATABASE", "") or seen.get("PGUSER", "")
+    if str(_PROD_PUBLISHED_PORT) in ambient_ports or (
+        str(_DEFAULT_POSTGRES_PORT) in ambient_ports and ambient_db == "app"
+    ):
+        host_label = ",".join(ambient_hosts) or "<local socket>"
+        hits.append((lineno, f"{host_label}:{','.join(ambient_ports)}/{ambient_db or '?'}"))
+
+
+def _flag_writer_dict(
+    lineno: int,
+    pairs: list[tuple[ast.AST, ast.AST]],
+    bound: dict[str, str],
+    seen: dict[str, str],
+    hits: list[tuple[int, str]],
+) -> None:
+    """Classify a dict literal of late environment overrides."""
+
+    for key_node, value_node in pairs:
+        _record_writer_env(
+            lineno,
+            _resolve_str(key_node, bound),
+            _resolve_str(value_node, bound),
+            seen,
+            hits,
+        )
 
 
 def _module_string_constants(tree: ast.AST) -> dict[str, str]:
@@ -247,7 +314,7 @@ def _injected_reachable_prod_dsns(tree: ast.AST) -> list[tuple[int, str]]:
 
     bound = _module_string_constants(tree)
     hits: list[tuple[int, str]] = []
-    host_port: dict[int, dict[str, str]] = {}
+    writer_env: dict[str, str] = {}
 
     def flag(lineno: int, key_node: ast.AST, value_node: ast.AST) -> None:
         key = _resolve_str(key_node, bound)
@@ -258,33 +325,15 @@ def _injected_reachable_prod_dsns(tree: ast.AST) -> list[tuple[int, str]]:
             hits.append((lineno, value))
 
     def flag_pair(lineno: int, key_node: ast.AST, value_node: ast.AST) -> None:
-        """`PKM_DB_HOST`/`PGHOST` + the prod port name a target without a URL."""
+        """Feed every named writer through one family-aware classifier."""
 
-        key = _resolve_str(key_node, bound)
-        value = _resolve_str(value_node, bound)
-        if value is None:
-            return
-        if key in _DSN_SERVICE_VARS and value:
-            hits.append((lineno, f"{key}=<configured service indirection>"))
-            return
-        if key in _DSN_HOST_VARS:
-            host_port.setdefault(0, {})["host"] = value
-        elif key in _DSN_PORT_VARS:
-            host_port.setdefault(0, {})["port"] = value
-        elif key in {"PKM_DB_NAME_PROD", "PGDATABASE", "PGUSER"}:
-            host_port.setdefault(0, {})["db"] = value
-        else:
-            return
-        seen = host_port[0]
-        if seen.get("host") in _REACHABLE_PROD_HOSTS:
-            port = seen.get("port", "")
-            db = seen.get("db", "")
-            if port == str(_PROD_PUBLISHED_PORT) or (
-                port in ("", str(_DEFAULT_POSTGRES_PORT)) and db == "app"
-            ):
-                hits.append(
-                    (lineno, f"{seen.get('host')}:{port or _DEFAULT_POSTGRES_PORT}/{db or '?'}")
-                )
+        _record_writer_env(
+            lineno,
+            _resolve_str(key_node, bound),
+            _resolve_str(value_node, bound),
+            writer_env,
+            hits,
+        )
 
     for node in ast.walk(tree):
         # monkeypatch.setenv("DATABASE_URL", "...")
@@ -302,7 +351,7 @@ def _injected_reachable_prod_dsns(tree: ast.AST) -> list[tuple[int, str]]:
                 ]
                 for k, v in pairs:
                     flag(node.lineno, k, v)
-                _flag_host_port_dict(node.lineno, pairs, bound, hits)
+                _flag_writer_dict(node.lineno, pairs, bound, writer_env, hits)
 
         # os.environ["DATABASE_URL"] = "..."
         if isinstance(node, ast.Assign) and isinstance(
@@ -444,3 +493,25 @@ def test_census_recognises_late_ambient_writer_shapes() -> None:
         '    monkeypatch.setenv("PGDATABASE", "app_test")\n'
     )
     assert not _injected_reachable_prod_dsns(scratch)
+
+
+def test_census_resolves_late_writer_defaults_by_family() -> None:
+    runtime_prod_default = ast.parse(
+        "def test_it(monkeypatch):\n" '    monkeypatch.setenv("PKM_DB_HOST", "127.0.0.1")\n'
+    )
+    assert _injected_reachable_prod_dsns(runtime_prod_default)
+
+    runtime_test_default = ast.parse(
+        "def test_it(monkeypatch):\n"
+        '    monkeypatch.setenv("PKM_ENVIRONMENT", "test")\n'
+        '    monkeypatch.setenv("PKM_DB_HOST", "127.0.0.1")\n'
+    )
+    assert not _injected_reachable_prod_dsns(runtime_test_default)
+
+    local_socket_database = ast.parse(
+        "def test_it(monkeypatch):\n" '    monkeypatch.setenv("PGDATABASE", "app")\n'
+    )
+    assert _injected_reachable_prod_dsns(local_socket_database)
+
+    local_socket_user_default = ast.parse("import os\n" 'os.environ["PGUSER"] = "app"\n')
+    assert _injected_reachable_prod_dsns(local_socket_user_default)
