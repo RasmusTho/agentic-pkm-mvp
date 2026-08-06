@@ -1635,6 +1635,46 @@ def _host_prepared_next_latest_original_is_named(
         os.close(prepared_fd)
 
 
+def _host_prepared_proposal_is_named(
+    parent_fd: int,
+    state: dict[str, object],
+) -> bool:
+    name = state.get("proposal_name")
+    if (
+        not isinstance(name, str)
+        or not name.startswith(".atomic-append-")
+        or not name.endswith(".stage")
+        or os.path.basename(name) != name
+    ):
+        return False
+    try:
+        proposal_fd = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_fd,
+        )
+    except OSError:
+        return False
+    try:
+        observed = os.fstat(proposal_fd)
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or observed.st_nlink != 1
+            or observed.st_dev != state.get("proposal_dev")
+            or observed.st_ino != state.get("proposal_ino")
+        ):
+            return False
+        payload, stable = _read_stable_descriptor(proposal_fd)
+        return (
+            _same_file_identity(stable, observed)
+            and hashlib.sha256(payload).hexdigest() == state.get("proposal_digest")
+        )
+    finally:
+        os.close(proposal_fd)
+
+
 def _open_latest_original_snapshot(
     recovery_fd: int,
     note_rel_path: str,
@@ -1772,6 +1812,13 @@ def _reconcile_host_atomic_append_states(
                 and target.get("target_ino") == state.get("source_ino")
                 and target.get("target_digest") == state.get("source_digest")
             )
+            if (
+                state.get("source_present") is False
+                and target.get("target_present") is False
+                and not _host_prepared_proposal_is_named(parent_fd, state)
+            ):
+                reason = "prepared initial proposal phase evidence is missing"
+                break
             if _host_uses_present_next_latest_original(
                 state,
                 latest_payload,
@@ -1814,6 +1861,7 @@ def _prepare_host_atomic_append_intent(
     source_digest: str | None,
     proposal_stat: os.stat_result,
     proposal_digest: str,
+    proposal_name: str,
     prior_latest_original: _RecoveryEntry | None,
     next_latest_original: _RecoveryEntry | None,
 ) -> None:
@@ -1837,6 +1885,7 @@ def _prepare_host_atomic_append_intent(
             "proposal_dev": proposal_stat.st_dev,
             "proposal_ino": proposal_stat.st_ino,
             "proposal_digest": proposal_digest,
+            "proposal_name": proposal_name,
             **_latest_original_host_payload(prior_latest_original),
             **_next_latest_original_host_payload(next_latest_original),
         },
@@ -2707,6 +2756,7 @@ def _atomic_append_note_relative(
             ),
             proposal_stat=stage_stat,
             proposal_digest=replacement_digest,
+            proposal_name=stage_name,
             prior_latest_original=prior_latest_original_snapshot,
             next_latest_original=prepared_latest_original_snapshot,
         )

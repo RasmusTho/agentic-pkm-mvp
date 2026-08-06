@@ -2076,6 +2076,59 @@ def test_steering_log_initial_create_retry_recovers_active_precommit_crash(
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
 
 
+def test_steering_log_missing_published_initial_target_cannot_look_prepublication(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    target = vault_root / note_rel_path(STEERING_LOG)
+    context = multiprocessing.get_context("fork")
+
+    def crash_before_clean_state() -> None:
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(102)
+        )
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "published-initial-target",
+            source="chat",
+            operation_id="published-initial-target-first",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_before_clean_state)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 102
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"published-initial-target-first"'
+    ) == 1
+
+    target.unlink()
+    parent_fd = os.open(target.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "later-operation",
+            source="item",
+            operation_id="published-initial-target-second",
+            write_guard=guard,
+        )
+    assert not target.exists()
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(
+        json.loads(path.read_text())["state"] == "indeterminate" for path in states
+    )
+
+
 @pytest.mark.parametrize("fail_write", [1, 2, 3, 4, 5, 6])
 def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     monkeypatch: pytest.MonkeyPatch,
