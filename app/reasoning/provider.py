@@ -296,7 +296,9 @@ def run_reasoning(
                 result={"summary": "", "issues": [], "suggestions": []},
             )
         backend = _reasoning_backend()
-        if backend == "mock":
+        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
+        provider = "mock" if provider in {"", "fake"} else provider
+        if backend == "mock" or provider == "mock":
             summary = f"Summary: {_simple_preview(text, 90)}"
             issues = ["needs review for clarity"]
             suggestions = ["Clarify objectives", "Add sources"]
@@ -312,6 +314,8 @@ def run_reasoning(
                 trace_id=trace_id,
             )
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("review output was not a JSON object")
         except Exception as exc:
             return ReasoningRun(
                 mode=mode,
@@ -349,7 +353,9 @@ def run_reasoning(
                 result={"ranking": []},
             )
         backend = _reasoning_backend()
-        if backend == "mock":
+        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
+        provider = "mock" if provider in {"", "fake"} else provider
+        if backend == "mock" or provider == "mock":
             ranking = []
             for idx, (oid, text) in enumerate(texts):
                 score = max(0.0, 1.0 - 0.05 * idx)
@@ -380,6 +386,8 @@ def run_reasoning(
                 trace_id=trace_id,
             )
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("ranking output was not a JSON object")
         except Exception as exc:
             return ReasoningRun(
                 mode=mode,
