@@ -45,6 +45,7 @@ _RECOVERY_OPEN_FLAGS = os.O_RDWR | os.O_CREAT | os.O_EXCL | _OPEN_NOFOLLOW | _OP
 _LOCK_OPEN_FLAGS = os.O_RDWR | os.O_CREAT | _OPEN_NOFOLLOW | _OPEN_CLOEXEC
 _RECOVERY_DIRECTORY = ".atomic-append-reconcile-recovery"
 _RECOVERY_SUFFIX = ".recovery"
+_MAX_RECOVERY_ENTRIES = 256
 _FRAME_PREFIX = b"\x1ePKM-ATOMIC-APPEND-RECONCILE-V1 "
 _FRAME_HEADER_END = b" -->\n"
 _FRAME_COMMIT_PREFIX = b"\n<!-- /pkm-atomic-append-reconcile:commit "
@@ -71,6 +72,20 @@ class AtomicAppendReconcileResult:
     outcome: Literal["appended", "reconciled_replay"]
     operation_id: str
     payload_fingerprint: str
+
+
+@dataclass(frozen=True)
+class _InventoryEntry:
+    namespace: Literal["active", "retained"]
+    name: str
+    descriptor: int
+
+
+@dataclass(frozen=True)
+class _RetirementReceipt:
+    stage_name: str
+    name: str
+    descriptor: int
 
 
 ReconcileCallback = Callable[[bytes, tuple[AtomicAppendRecord, ...]], bytes | str | None]
@@ -633,12 +648,15 @@ def _target_lock_name(parent_fd: int, target_name: str) -> str:
     return f".atomic-append-reconcile-{digest}.lock"
 
 
-def _stage_prefix(target_name: str, operation_id: str, fingerprint: str) -> str:
-    target_digest = hashlib.sha256(target_name.encode("utf-8")).hexdigest()
-    operation_digest = hashlib.sha256(
-        f"{operation_id}\0{fingerprint}".encode("ascii")
-    ).hexdigest()
+def _stage_scope_prefix(target_name: str, operation_id: str) -> str:
+    target_digest = hashlib.sha256(target_name.encode("utf-8")).hexdigest()[:32]
+    operation_digest = hashlib.sha256(operation_id.encode("ascii")).hexdigest()[:32]
     return f".atomic-append-reconcile-{target_digest}-{operation_digest}.stage-"
+
+
+def _stage_prefix(target_name: str, operation_id: str, fingerprint: str) -> str:
+    fingerprint_digest = hashlib.sha256(fingerprint.encode("ascii")).hexdigest()[:32]
+    return f"{_stage_scope_prefix(target_name, operation_id)}{fingerprint_digest}-"
 
 
 def _open_target_lock(parent_fd: int, target_name: str) -> int:
@@ -662,44 +680,166 @@ def _open_target_lock(parent_fd: int, target_name: str) -> int:
         raise
 
 
+def _stage_inventory_names(
+    parent_fd: int,
+    recovery_fd: int,
+    scope_prefix: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    active = tuple(sorted(name for name in os.listdir(parent_fd) if name.startswith(scope_prefix)))
+    retained_candidates = tuple(
+        sorted(name for name in os.listdir(recovery_fd) if name.startswith(scope_prefix))
+    )
+    if any(not name.endswith(_RECOVERY_SUFFIX) for name in retained_candidates):
+        raise AtomicAppendRecoveryError("append recovery inventory has an invalid retained name")
+    retained = retained_candidates
+    return active, retained
+
+
+def _open_inventory_entry(
+    directory_fd: int,
+    namespace: Literal["active", "retained"],
+    name: str,
+) -> _InventoryEntry:
+    try:
+        descriptor = os.open(name, _TARGET_OPEN_FLAGS, dir_fd=directory_fd)
+        descriptor_stat = os.fstat(descriptor)
+        entry_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except OSError as exc:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise AtomicAppendRecoveryError(
+            f"cannot bind {namespace} append recovery entry"
+        ) from exc
+    if (
+        not stat.S_ISREG(descriptor_stat.st_mode)
+        or descriptor_stat.st_nlink != 1
+        or not _same_file_identity(descriptor_stat, entry_stat)
+    ):
+        os.close(descriptor)
+        raise AtomicAppendRecoveryError(
+            f"{namespace} append recovery entry is not one exclusive regular inode"
+        )
+    return _InventoryEntry(namespace, name, descriptor)
+
+
+def _close_inventory(entries: tuple[_InventoryEntry, ...]) -> None:
+    for entry in entries:
+        os.close(entry.descriptor)
+
+
+def _open_stable_stage_inventory(
+    parent_fd: int,
+    recovery_fd: int,
+    scope_prefix: str,
+    *,
+    reserve_recovery_entries: int = 0,
+) -> tuple[_InventoryEntry, ...]:
+    """Open a stable target/operation inventory without following mutable names."""
+
+    before_active, before_retained = _stage_inventory_names(
+        parent_fd,
+        recovery_fd,
+        scope_prefix,
+    )
+    if len(before_active) > 1:
+        raise AtomicAppendRecoveryError("multiple active append recovery entries are ambiguous")
+    aggregate_recovery_count = len(os.listdir(recovery_fd))
+    if aggregate_recovery_count + reserve_recovery_entries > _MAX_RECOVERY_ENTRIES:
+        raise KnowledgeCapabilityError("atomic append recovery capacity is exhausted")
+    entries: list[_InventoryEntry] = []
+    try:
+        entries.extend(
+            _open_inventory_entry(parent_fd, "active", name) for name in before_active
+        )
+        entries.extend(
+            _open_inventory_entry(recovery_fd, "retained", name)
+            for name in before_retained
+        )
+        after_active, after_retained = _stage_inventory_names(
+            parent_fd,
+            recovery_fd,
+            scope_prefix,
+        )
+        if (before_active, before_retained) != (after_active, after_retained):
+            raise AtomicAppendRecoveryError("append recovery inventory changed during enumeration")
+        for entry in entries:
+            directory_fd = parent_fd if entry.namespace == "active" else recovery_fd
+            descriptor_stat = os.fstat(entry.descriptor)
+            entry_stat = os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)
+            if not _same_file_identity(descriptor_stat, entry_stat):
+                raise AtomicAppendRecoveryError(
+                    "append recovery entry changed during enumeration"
+                )
+        return tuple(entries)
+    except Exception:
+        _close_inventory(tuple(entries))
+        raise
+
+
+def _validate_inventory_payloads(
+    entries: tuple[_InventoryEntry, ...],
+    *,
+    operation_id: str,
+    payload_fingerprint: str,
+    target_has_operation: bool,
+) -> None:
+    for entry in entries:
+        records = _parse_complete_records(_read_fd(entry.descriptor))
+        matching = [record for record in records if record.operation_id == operation_id]
+        if any(record.payload_fingerprint != payload_fingerprint for record in matching):
+            raise AtomicAppendIdentityCollision(
+                f"atomic append identity collision for {operation_id}"
+            )
+        if not target_has_operation and not matching:
+            raise AtomicAppendRecoveryError(
+                f"{entry.namespace} append recovery entry has another identity"
+            )
+
+
 def _classify_interrupted_stages(
     parent_fd: int,
     recovery_fd: int,
-    stage_prefix: str,
+    scope_prefix: str,
     operation_id: str,
+    payload_fingerprint: str,
     target_records: tuple[AtomicAppendRecord, ...],
 ) -> None:
-    """Refuse a retry that would silently ignore a target-scoped torn stage.
-
-    A process crash bypasses normal owned-stage cleanup.  A complete stage is
-    never a commit authority (only the target's frame is), but a partial stage
-    for this identity is evidence of an uncertain attempt and must remain
-    inspectable rather than be unlinked by a later process using a mutable name.
-    Entries already retired into the recovery directory are intentionally
-    scanner-inert: they are evidence, not replay or commit authority.
-    """
+    """Validate both namespaces and descriptor-retire any interrupted active stage."""
 
     target_has_operation = any(
         record.operation_id == operation_id for record in target_records
     )
-    for name in os.listdir(parent_fd):
-        if not name.startswith(stage_prefix):
-            continue
-        stage_fd = -1
+    entries = _open_stable_stage_inventory(
+        parent_fd,
+        recovery_fd,
+        scope_prefix,
+        reserve_recovery_entries=2,
+    )
+    try:
+        _validate_inventory_payloads(
+            entries,
+            operation_id=operation_id,
+            payload_fingerprint=payload_fingerprint,
+            target_has_operation=target_has_operation,
+        )
+        active = tuple(entry for entry in entries if entry.namespace == "active")
+        if not active:
+            return
+        receipt = _retire_owned_stage(
+            parent_fd,
+            active[0].name,
+            active[0].descriptor,
+            recovery_fd,
+        )
         try:
-            stage_fd = os.open(name, _TARGET_OPEN_FLAGS, dir_fd=parent_fd)
-            if not stat.S_ISREG(os.fstat(stage_fd).st_mode):
-                raise AtomicAppendRecoveryError("interrupted append stage is not regular")
-            if not target_has_operation:
-                records = _parse_complete_records(_read_fd(stage_fd))
-                if not any(record.operation_id == operation_id for record in records):
-                    raise AtomicAppendRecoveryError("interrupted append stage has another identity")
-        except OSError as exc:
-            raise AtomicAppendRecoveryError("cannot classify interrupted append stage") from exc
+            _revalidate_retirement(receipt, recovery_fd, active[0].descriptor)
         finally:
-            if stage_fd >= 0:
-                os.close(stage_fd)
-        _retain_untrusted_stage(parent_fd, name, recovery_fd)
+            os.close(receipt.descriptor)
+        raise AtomicAppendRecoveryError(
+            "interrupted active append stage was retained; retry required"
+        )
+    finally:
+        _close_inventory(entries)
 
 
 def _require_anchored_identity(
@@ -812,7 +952,7 @@ def _retire_owned_stage(
     stage_name: str,
     owner_fd: int,
     recovery_fd: int,
-) -> str:
+) -> _RetirementReceipt:
     """Retire a stage by descriptor identity without unlinking a mutable name."""
 
     owner_stat = os.fstat(owner_fd)
@@ -825,39 +965,101 @@ def _retire_owned_stage(
             "atomic append cleanup entry disappeared; "
             f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
         )
-    moved = os.stat(retained_name, dir_fd=recovery_fd, follow_symlinks=False)
-    owner_after = os.fstat(owner_fd)
-    if _same_file_identity(moved, owner_after):
-        if moved.st_nlink != 1 or owner_after.st_nlink != 1:
-            raise KnowledgeWriteConflict(
-                "atomic append cleanup owner acquired a hard-link alias; entry retained"
-            )
-        return retained_name
-
-    snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+    retained_fd = -1
     try:
-        _atomic_rename_noreplace_at(
-            recovery_fd,
-            retained_name,
-            parent_fd,
-            stage_name,
-        )
-    except OSError as exc:
-        os.fsync(parent_fd)
+        try:
+            retained_fd = os.open(retained_name, _TARGET_OPEN_FLAGS, dir_fd=recovery_fd)
+        except OSError as exc:
+            snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+            raise KnowledgeWriteConflict(
+                "atomic append retained entry cannot be descriptor-bound; "
+                f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
+            ) from exc
+        moved = os.fstat(retained_fd)
+        moved_entry = os.stat(retained_name, dir_fd=recovery_fd, follow_symlinks=False)
+        owner_after = os.fstat(owner_fd)
+        if not _same_file_identity(moved, moved_entry):
+            snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+            raise KnowledgeWriteConflict(
+                "atomic append retained entry changed after retirement; "
+                f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
+            )
+        if _same_file_identity(moved, owner_after):
+            if moved.st_nlink != 1 or owner_after.st_nlink != 1:
+                raise KnowledgeWriteConflict(
+                    "atomic append cleanup owner acquired a hard-link alias; entry retained"
+                )
+            receipt = _RetirementReceipt(stage_name, retained_name, retained_fd)
+            retained_fd = -1
+            return receipt
+
+        snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, stage_name)
+        try:
+            _atomic_rename_noreplace_at(
+                recovery_fd,
+                retained_name,
+                parent_fd,
+                stage_name,
+            )
+        except OSError as exc:
+            os.fsync(parent_fd)
+            os.fsync(recovery_fd)
+            retained_entry = os.stat(
+                retained_name,
+                dir_fd=recovery_fd,
+                follow_symlinks=False,
+            )
+            if not _same_file_identity(retained_entry, moved):
+                raise KnowledgeWriteConflict(
+                    "foreign atomic append cleanup entry changed after restoration collision"
+                ) from exc
+            raise KnowledgeWriteConflict(
+                "foreign atomic append cleanup entry retained after restoration collision; "
+                f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
+            ) from exc
         os.fsync(recovery_fd)
+        os.fsync(parent_fd)
+        restored = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_file_identity(restored, moved):
+            raise KnowledgeWriteConflict(
+                "foreign atomic append cleanup entry changed during restoration"
+            )
         raise KnowledgeWriteConflict(
-            "foreign atomic append cleanup entry retained after restoration collision; "
+            "foreign atomic append cleanup entry restored without deletion; "
+            f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
+        )
+    finally:
+        if retained_fd >= 0:
+            os.close(retained_fd)
+
+
+def _revalidate_retirement(
+    receipt: _RetirementReceipt,
+    recovery_fd: int,
+    owner_fd: int,
+) -> None:
+    try:
+        entry_stat = os.stat(receipt.name, dir_fd=recovery_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, receipt.stage_name)
+        raise KnowledgeWriteConflict(
+            "retained append recovery entry disappeared; "
             f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
         ) from exc
-    os.fsync(recovery_fd)
-    os.fsync(parent_fd)
-    restored = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
-    if not _same_file_identity(restored, moved):
-        raise KnowledgeWriteConflict("foreign atomic append cleanup entry changed during restoration")
-    raise KnowledgeWriteConflict(
-        "foreign atomic append cleanup entry restored without deletion; "
-        f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
-    )
+    retained_stat = os.fstat(receipt.descriptor)
+    owner_stat = os.fstat(owner_fd)
+    if (
+        not stat.S_ISREG(retained_stat.st_mode)
+        or retained_stat.st_nlink != 1
+        or owner_stat.st_nlink != 1
+        or not _same_file_identity(retained_stat, entry_stat)
+        or not _same_file_identity(retained_stat, owner_stat)
+    ):
+        snapshot_name = _snapshot_owned_descriptor(owner_fd, recovery_fd, receipt.stage_name)
+        raise KnowledgeWriteConflict(
+            "retained append recovery ownership changed before final proof; "
+            f"owner retained as {_RECOVERY_DIRECTORY}/{snapshot_name}"
+        )
 
 
 def _require_open_descriptor_payload_and_metadata(
@@ -960,6 +1162,7 @@ def atomic_append_reconcile_relative(
         stage_name: str | None = None
         stage_stat: os.stat_result | None = None
         stage_owned = False
+        retirement_receipt: _RetirementReceipt | None = None
         try:
             root_fd = _open_absolute_directory_no_follow(vault_path)
             root_stat = os.fstat(root_fd)
@@ -993,12 +1196,14 @@ def atomic_append_reconcile_relative(
 
             original = _read_fd(target_fd)
             records = _parse_complete_records(original)
+            stage_scope_prefix = _stage_scope_prefix(target_entry, operation_id)
             stage_prefix = _stage_prefix(target_entry, operation_id, payload_fingerprint)
             _classify_interrupted_stages(
                 parent_fd,
                 recovery_fd,
-                stage_prefix,
+                stage_scope_prefix,
                 operation_id,
+                payload_fingerprint,
                 records,
             )
             matching = [record for record in records if record.operation_id == operation_id]
@@ -1091,7 +1296,12 @@ def atomic_append_reconcile_relative(
                         "atomic append vault chain changed after publication; recovery stage retained"
                     ) from exc
             finally:
-                _retire_owned_stage(parent_fd, stage_name, target_fd, recovery_fd)
+                retirement_receipt = _retire_owned_stage(
+                    parent_fd,
+                    stage_name,
+                    target_fd,
+                    recovery_fd,
+                )
                 _require_recovery_directory_binding(parent_fd, recovery_fd)
 
             # Cleanup is a state transition too.  Re-read the surviving
@@ -1114,10 +1324,39 @@ def atomic_append_reconcile_relative(
                 raise KnowledgeWriteConflict(
                     "atomic append vault chain changed during cleanup"
                 ) from exc
-            if stage_name in os.listdir(parent_fd):
-                raise KnowledgeWriteConflict(
-                    "atomic append cleanup left an active recovery entry"
+            final_inventory = _open_stable_stage_inventory(
+                parent_fd,
+                recovery_fd,
+                stage_scope_prefix,
+            )
+            try:
+                _validate_inventory_payloads(
+                    final_inventory,
+                    operation_id=operation_id,
+                    payload_fingerprint=payload_fingerprint,
+                    target_has_operation=True,
                 )
+                if any(entry.namespace == "active" for entry in final_inventory):
+                    raise KnowledgeWriteConflict(
+                        "atomic append cleanup left an active recovery entry"
+                    )
+                if retirement_receipt is None:
+                    raise KnowledgeWriteConflict("atomic append cleanup has no retirement proof")
+                _revalidate_retirement(retirement_receipt, recovery_fd, target_fd)
+                if not any(
+                    entry.namespace == "retained"
+                    and entry.name == retirement_receipt.name
+                    and _same_file_identity(
+                        os.fstat(entry.descriptor),
+                        os.fstat(retirement_receipt.descriptor),
+                    )
+                    for entry in final_inventory
+                ):
+                    raise KnowledgeWriteConflict(
+                        "atomic append retirement is absent from the final inventory"
+                    )
+            finally:
+                _close_inventory(final_inventory)
             _require_recovery_directory_binding(parent_fd, recovery_fd)
             return AtomicAppendReconcileResult(outcome, operation_id, payload_fingerprint)
         except _RetryAnchoredIdentity:
@@ -1132,9 +1371,23 @@ def atomic_append_reconcile_relative(
                 and recovery_fd >= 0
             ):
                 try:
-                    _retire_owned_stage(parent_fd, stage_name, stage_fd, recovery_fd)
+                    cleanup_receipt = _retire_owned_stage(
+                        parent_fd,
+                        stage_name,
+                        stage_fd,
+                        recovery_fd,
+                    )
+                    try:
+                        _revalidate_retirement(cleanup_receipt, recovery_fd, stage_fd)
+                    finally:
+                        os.close(cleanup_receipt.descriptor)
                 except BaseException as exc:  # noqa: BLE001 - cleanup must be fail-loud
                     cleanup_error = exc
+            if retirement_receipt is not None:
+                try:
+                    os.close(retirement_receipt.descriptor)
+                except BaseException as exc:  # noqa: BLE001 - preserve a close failure
+                    cleanup_error = cleanup_error or exc
             if stage_fd >= 0:
                 try:
                     os.close(stage_fd)
