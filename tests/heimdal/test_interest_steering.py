@@ -76,6 +76,13 @@ def _isolated_atomic_append_host_fence(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    host_temp_root = tmp_path / "host-temp"
+    host_temp_root.mkdir()
+    monkeypatch.setattr(
+        steering_module.tempfile,
+        "gettempdir",
+        lambda: os.fspath(host_temp_root),
+    )
     monkeypatch.setenv(
         "DESIGN_HANDOFF_APP_LOCAL_SETTINGS",
         str(tmp_path / "app-local-state" / "app-local.md"),
@@ -1097,6 +1104,15 @@ def test_steering_log_crash_with_host_witness_loss_remains_blocked(
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
+    isolated_temp_root = Path(steering_module.tempfile.gettempdir())
+    assert isolated_temp_root == tmp_path / "host-temp"
+    unrelated_lock_root = tmp_path / "unrelated-host-temp" / (
+        "agentic-pkm-heimdal-locks"
+    )
+    unrelated_lock_root.mkdir(parents=True)
+    unrelated_sentinel = unrelated_lock_root / "unrelated-live-resource.lock"
+    unrelated_sentinel.write_text("held elsewhere\n", encoding="utf-8")
+
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
     append_steering_log(
@@ -1129,6 +1145,7 @@ def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     assert read_steering_log_body(vault_root).count(durable_line) == 1
     assert all(path.exists() and path.stat().st_size > 0 for path in witness_paths)
     assert len(list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))) == 2
+    assert unrelated_sentinel.read_text(encoding="utf-8") == "held elsewhere\n"
 
 
 def test_steering_log_incomplete_clean_state_without_witness_remains_blocked(
