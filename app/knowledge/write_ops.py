@@ -1541,25 +1541,108 @@ def _host_mapping_matches(
     return all(state.get(key) == value for key, value in mapping.items())
 
 
+def _latest_original_host_payload(
+    entry: _RecoveryEntry | None,
+) -> dict[str, object]:
+    if entry is None:
+        return {"latest_original_present": False}
+    return {
+        "latest_original_present": True,
+        "latest_original_dev": entry.identity.st_dev,
+        "latest_original_ino": entry.identity.st_ino,
+        "latest_original_digest": entry.digest,
+    }
+
+
+def _host_latest_original_matches(
+    state: dict[str, object],
+    payload: dict[str, object],
+) -> bool:
+    return all(state.get(key) == value for key, value in payload.items())
+
+
+def _open_latest_original_snapshot(
+    recovery_fd: int,
+    note_rel_path: str,
+) -> _RecoveryEntry | None:
+    name = _latest_original_recovery_name(note_rel_path)
+    try:
+        snapshot_fd = os.open(
+            name,
+            os.O_RDWR
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=recovery_fd,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise KnowledgeWriteConflict(
+            "atomic append latest-original slot cannot be authenticated"
+        ) from exc
+    try:
+        observed = os.fstat(snapshot_fd)
+        if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
+            raise KnowledgeWriteConflict(
+                "atomic append latest-original slot must be one regular file"
+            )
+        payload, metadata = _read_bound_file(
+            snapshot_fd,
+            observed,
+            context="atomic append prior latest-original slot",
+        )
+        return _RecoveryEntry(
+            name=name,
+            identity=observed,
+            digest=hashlib.sha256(payload).hexdigest(),
+            metadata=metadata,
+            fd=snapshot_fd,
+        )
+    except BaseException:
+        os.close(snapshot_fd)
+        raise
+
+
 def _reconcile_host_atomic_append_states(
     authority: _AtomicAppendAuthority,
     parent_fd: int,
     recovery_fd: int,
     target_name: str,
-) -> None:
+) -> dict[str, object]:
     """Converge a crash-precommitted active intent or fail permanently closed."""
 
     mapping = _host_mapping_payload(authority, parent_fd, recovery_fd)
     fence_fd = _open_durable_host_fence_root(authority)
+    observed_latest: _RecoveryEntry | None = None
     saw_active = False
     active_states: list[dict[str, object]] = []
     transaction = "reconciled"
     reason: str | None = None
     try:
-        for state in _read_all_host_append_states(fence_fd, authority):
+        observed_latest = _open_latest_original_snapshot(
+            recovery_fd,
+            authority.note_rel_path,
+        )
+        latest_payload = _latest_original_host_payload(observed_latest)
+        states = _read_all_host_append_states(fence_fd, authority)
+        if not states and latest_payload["latest_original_present"] is True:
+            reason = "latest-original slot has no durable host record"
+        matching_clean_transactions = {
+            str(state.get("transaction"))
+            for state in states
+            if state.get("state") == "clean"
+            and _host_latest_original_matches(state, latest_payload)
+        }
+        for state in states:
             transaction = str(state.get("transaction", transaction))
             if state["state"] == "indeterminate":
                 reason = "prior host state is indeterminate"
+                break
+            if not _host_latest_original_matches(state, latest_payload) and not (
+                state["state"] == "active"
+                and transaction in matching_clean_transactions
+            ):
+                reason = "latest-original slot changed from durable host record"
                 break
             if not _host_mapping_matches(state, mapping):
                 reason = "host state authority mapping changed"
@@ -1570,6 +1653,8 @@ def _reconcile_host_atomic_append_states(
             active_states.append(state)
     finally:
         os.close(fence_fd)
+        if observed_latest is not None:
+            os.close(observed_latest.fd)
 
     target: dict[str, object] = {}
     if reason is None and saw_active:
@@ -1609,10 +1694,12 @@ def _reconcile_host_atomic_append_states(
                 "transaction": transaction,
                 **mapping,
                 **target,
+                **latest_payload,
                 "reason": "reconciled crash-precommitted intent",
             },
             allow_reconciled_clean=True,
         )
+    return latest_payload
 
 
 def _prepare_host_atomic_append_intent(
@@ -1625,6 +1712,7 @@ def _prepare_host_atomic_append_intent(
     source_digest: str | None,
     proposal_stat: os.stat_result,
     proposal_digest: str,
+    prior_latest_original: _RecoveryEntry | None,
 ) -> None:
     source: dict[str, object]
     if source_stat is None:
@@ -1646,6 +1734,7 @@ def _prepare_host_atomic_append_intent(
             "proposal_dev": proposal_stat.st_dev,
             "proposal_ino": proposal_stat.st_ino,
             "proposal_digest": proposal_digest,
+            **_latest_original_host_payload(prior_latest_original),
         },
     )
 
@@ -1656,6 +1745,7 @@ def _complete_host_atomic_append_intent(
     recovery_fd: int,
     target_name: str,
     transaction_id: str,
+    latest_original: _RecoveryEntry | None,
 ) -> None:
     _write_host_append_states(
         authority,
@@ -1664,6 +1754,7 @@ def _complete_host_atomic_append_intent(
             "transaction": transaction_id,
             **_host_mapping_payload(authority, parent_fd, recovery_fd),
             **_host_target_payload(parent_fd, target_name),
+            **_latest_original_host_payload(latest_original),
         },
     )
 
@@ -1961,6 +2052,7 @@ def _retain_latest_original_snapshot(
     *,
     note_rel_path: str,
     transaction_id: str,
+    expected_prior: _RecoveryEntry | None,
 ) -> _RecoveryEntry:
     """Keep one bounded full original, replacing only a proven prior slot."""
 
@@ -1977,6 +2069,8 @@ def _retain_latest_original_snapshot(
             recovery_fd,
             working,
             note_rel_path=note_rel_path,
+            transaction_id=transaction_id,
+            expected_prior=expected_prior,
         )
     except BaseException:
         os.close(working.fd)
@@ -1988,10 +2082,18 @@ def _retain_named_latest_original_snapshot(
     entry: _RecoveryEntry,
     *,
     note_rel_path: str,
+    transaction_id: str,
+    expected_prior: _RecoveryEntry | None,
 ) -> _RecoveryEntry:
     """Move one named exact copy into the bounded latest-original slot."""
 
     stable_name = _latest_original_recovery_name(note_rel_path)
+    if expected_prior is not None:
+        _require_named_recovery_entry_live(
+            recovery_fd,
+            expected_prior,
+            context="atomic append authenticated prior latest-original slot",
+        )
     try:
         _atomic_rename_noreplace_at(
             recovery_fd,
@@ -2003,6 +2105,19 @@ def _retain_named_latest_original_snapshot(
         if exc.errno != errno.EEXIST:
             raise
     else:
+        if expected_prior is not None:
+            preserved = _publish_recovery_snapshot(
+                expected_prior.fd,
+                expected_prior.identity,
+                recovery_fd,
+                transaction_id=transaction_id,
+                role=f"preserved-prior-{uuid.uuid4().hex}",
+                allow_unlinked_source=True,
+            )
+            os.close(preserved.fd)
+            raise KnowledgeWriteConflict(
+                "atomic append prior latest-original slot disappeared during rotation"
+            )
         os.fsync(recovery_fd)
         stable = os.stat(stable_name, dir_fd=recovery_fd, follow_symlinks=False)
         if not _same_file_identity(stable, entry.identity):
@@ -2017,76 +2132,44 @@ def _retain_named_latest_original_snapshot(
             fd=entry.fd,
         )
 
-    prior_flags = (
-        os.O_RDWR
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
+    if expected_prior is None:
+        raise KnowledgeWriteConflict(
+            "atomic append latest-original slot appeared without a durable host record"
+        )
+    _atomic_exchange_at(
+        recovery_fd,
+        entry.name,
+        recovery_fd,
+        stable_name,
     )
-    try:
-        prior_fd = os.open(stable_name, prior_flags, dir_fd=recovery_fd)
-    except PermissionError:
-        prior_fd = os.open(
-            stable_name,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0),
-            dir_fd=recovery_fd,
+    os.fsync(recovery_fd)
+    installed = os.stat(
+        stable_name,
+        dir_fd=recovery_fd,
+        follow_symlinks=False,
+    )
+    displaced = os.stat(
+        entry.name,
+        dir_fd=recovery_fd,
+        follow_symlinks=False,
+    )
+    if (
+        not _same_file_identity(installed, entry.identity)
+        or not _same_file_identity(displaced, expected_prior.identity)
+    ):
+        raise KnowledgeWriteConflict(
+            "atomic append latest-original slot changed during exchange"
         )
-        try:
-            prior_mode = stat.S_IMODE(os.fstat(prior_fd).st_mode)
-            os.fchmod(prior_fd, prior_mode | stat.S_IWUSR)
-        finally:
-            os.close(prior_fd)
-        prior_fd = os.open(stable_name, prior_flags, dir_fd=recovery_fd)
-
-    try:
-        prior_stat = os.fstat(prior_fd)
-        if not stat.S_ISREG(prior_stat.st_mode) or prior_stat.st_nlink != 1:
-            raise KnowledgeWriteConflict(
-                "atomic append latest-original slot must be one regular file"
-            )
-        prior_payload, prior_metadata = _read_bound_file(
-            prior_fd,
-            prior_stat,
-            context="atomic append prior latest-original slot",
-        )
-        prior_digest = hashlib.sha256(prior_payload).hexdigest()
-        _atomic_exchange_at(
-            recovery_fd,
-            entry.name,
-            recovery_fd,
-            stable_name,
-        )
-        os.fsync(recovery_fd)
-        installed = os.stat(
-            stable_name,
-            dir_fd=recovery_fd,
-            follow_symlinks=False,
-        )
-        displaced = os.stat(
-            entry.name,
-            dir_fd=recovery_fd,
-            follow_symlinks=False,
-        )
-        if (
-            not _same_file_identity(installed, entry.identity)
-            or not _same_file_identity(displaced, prior_stat)
-        ):
-            raise KnowledgeWriteConflict(
-                "atomic append latest-original slot changed during exchange"
-            )
-        _retire_recovery_entry(
-            recovery_fd,
-            _RecoveryEntry(
-                name=entry.name,
-                identity=prior_stat,
-                digest=prior_digest,
-                metadata=prior_metadata,
-                fd=prior_fd,
-            ),
-        )
-    finally:
-        os.close(prior_fd)
+    _retire_recovery_entry(
+        recovery_fd,
+        _RecoveryEntry(
+            name=entry.name,
+            identity=expected_prior.identity,
+            digest=expected_prior.digest,
+            metadata=expected_prior.metadata,
+            fd=expected_prior.fd,
+        ),
+    )
 
     return _RecoveryEntry(
         name=stable_name,
@@ -2301,6 +2384,7 @@ def _atomic_append_note_relative(
     source_metadata: _AccessMetadata | None = None
     proposal_snapshot: _RecoveryEntry | None = None
     original_snapshot: _RecoveryEntry | None = None
+    prior_latest_original_snapshot: _RecoveryEntry | None = None
     latest_original_snapshot: _RecoveryEntry | None = None
     displaced_name: str | None = None
     cleanup_error: BaseException | None = None
@@ -2354,12 +2438,22 @@ def _atomic_append_note_relative(
             current_dir_fd,
             recovery_fd,
         )
-        _reconcile_host_atomic_append_states(
+        expected_latest_payload = _reconcile_host_atomic_append_states(
             authority,
             current_dir_fd,
             recovery_fd,
             target_name,
         )
+        prior_latest_original_snapshot = _open_latest_original_snapshot(
+            recovery_fd,
+            note_rel_path,
+        )
+        if _latest_original_host_payload(
+            prior_latest_original_snapshot
+        ) != expected_latest_payload:
+            raise KnowledgeWriteConflict(
+                "atomic append latest-original slot changed after reconciliation"
+            )
         _sweep_atomic_append_recovery_temps(recovery_fd)
         _sweep_atomic_append_stages(current_dir_fd, recovery_fd)
         _require_no_indeterminate_marker(recovery_fd, note_rel_path)
@@ -2496,6 +2590,7 @@ def _atomic_append_note_relative(
             ),
             proposal_stat=stage_stat,
             proposal_digest=replacement_digest,
+            prior_latest_original=prior_latest_original_snapshot,
         )
 
         if target_existed:
@@ -2684,7 +2779,11 @@ def _atomic_append_note_relative(
                     original_snapshot,
                     note_rel_path=note_rel_path,
                     transaction_id=transaction_id,
+                    expected_prior=prior_latest_original_snapshot,
                 )
+                if prior_latest_original_snapshot is not None:
+                    os.close(prior_latest_original_snapshot.fd)
+                    prior_latest_original_snapshot = None
                 _require_named_recovery_entry_live(
                     recovery_fd,
                     latest_original_snapshot,
@@ -2808,6 +2907,7 @@ def _atomic_append_note_relative(
                 recovery_fd,
                 target_name,
                 transaction_id,
+                latest_original_snapshot,
             )
             require_final_receipt_state()
         except BaseException as exc:  # noqa: BLE001 - every post-publication failure fences
@@ -2831,6 +2931,7 @@ def _atomic_append_note_relative(
         for snapshot in (
             proposal_snapshot,
             original_snapshot,
+            prior_latest_original_snapshot,
             latest_original_snapshot,
         ):
             if snapshot is not None:

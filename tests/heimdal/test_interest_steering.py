@@ -1774,6 +1774,137 @@ def test_steering_log_latest_original_retention_is_bounded(tmp_path: Path) -> No
     assert stable[0].read_bytes() == first_complete
 
 
+def test_steering_log_preexisting_latest_original_substitution_blocks_rotation(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "first",
+        source="chat",
+        operation_id="prior-slot-substitution-first",
+        write_guard=guard,
+    )
+    append_steering_log(
+        vault_root,
+        "mute",
+        "second",
+        source="item",
+        operation_id="prior-slot-substitution-second",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    before_third = target.read_bytes()
+    recovery = vault_root / "_conflicts"
+    stable_name = write_ops_module._latest_original_recovery_name(
+        note_rel_path(STEERING_LOG)
+    )
+    stable = recovery / stable_name
+    authentic = stable.read_bytes()
+    parked = recovery / ".parked-authentic-latest-original"
+    stable.replace(parked)
+    sentinel = b"unrelated preexisting latest-original content\n"
+    stable.write_bytes(sentinel)
+
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "boost",
+            "third",
+            source="item",
+            operation_id="prior-slot-substitution-third",
+            write_guard=guard,
+        )
+
+    assert target.read_bytes() == before_third
+    assert stable.read_bytes() == sentinel
+    assert parked.read_bytes() == authentic
+
+
+def test_steering_log_latest_original_substitution_during_rotation_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "first",
+        source="chat",
+        operation_id="live-slot-substitution-first",
+        write_guard=guard,
+    )
+    append_steering_log(
+        vault_root,
+        "mute",
+        "second",
+        source="item",
+        operation_id="live-slot-substitution-second",
+        write_guard=guard,
+    )
+    recovery = vault_root / "_conflicts"
+    stable_name = write_ops_module._latest_original_recovery_name(
+        note_rel_path(STEERING_LOG)
+    )
+    stable = recovery / stable_name
+    authentic = stable.read_bytes()
+    parked = recovery / ".parked-live-authentic-latest-original"
+    sentinel = b"unrelated live latest-original content\n"
+    real_retain = write_ops_module._retain_latest_original_snapshot
+
+    def substitute_before_rotation(
+        recovery_fd: int,
+        entry: object,
+        **kwargs: object,
+    ) -> object:
+        os.rename(
+            stable_name,
+            parked.name,
+            src_dir_fd=recovery_fd,
+            dst_dir_fd=recovery_fd,
+        )
+        replacement_fd = os.open(
+            stable_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=recovery_fd,
+        )
+        try:
+            os.write(replacement_fd, sentinel)
+            os.fsync(replacement_fd)
+        finally:
+            os.close(replacement_fd)
+        os.fsync(recovery_fd)
+        return real_retain(recovery_fd, entry, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_retain_latest_original_snapshot",
+        substitute_before_rotation,
+    )
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="recovery retirement became indeterminate",
+    ):
+        append_steering_log(
+            vault_root,
+            "boost",
+            "third",
+            source="item",
+            operation_id="live-slot-substitution-third",
+            write_guard=guard,
+        )
+
+    assert stable.read_bytes() == sentinel
+    assert parked.read_bytes() == authentic
+    assert (vault_root / note_rel_path(STEERING_LOG)).read_text(
+        encoding="utf-8"
+    ).count('"operation_id":"live-slot-substitution-third"') == 1
+
+
 @pytest.mark.parametrize("fail_write", [1, 2, 3, 4, 5, 6])
 def test_steering_log_multi_alias_state_write_failure_never_false_receipts(
     monkeypatch: pytest.MonkeyPatch,
