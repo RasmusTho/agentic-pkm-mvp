@@ -1888,8 +1888,9 @@ def _configure_dev_test_environment_clobber_preflight(
     # check would skip rather than detect the clobber.
     (root / "config").mkdir(exist_ok=True)
     (root / "config/runtime.defaults.env").write_text("", encoding="utf-8")
-    (root / "tmp").mkdir(exist_ok=True)
-    (root / "tmp/runtime.env").write_text(
+    runtime_dir = root / ("tmp-test" if channel == "test" else "tmp")
+    runtime_dir.mkdir(exist_ok=True)
+    (runtime_dir / "runtime.env").write_text(
         "HEIMDAL_CAPTURE_WATCH_DIR=/real/capture/dir\n", encoding="utf-8"
     )
     # Ambient interpolation sources this preflight must resolve against must
@@ -1945,8 +1946,7 @@ def test_dev_deploy_preflight_passes_fixed_shape(tmp_path: Path) -> None:
 def test_test_channel_deploy_preflight_rejects_environment_override_clobbering_env_file(
     tmp_path: Path,
 ) -> None:
-    """Mirrors the dev-channel AC for the test channel, confirming the guard
-    is wired to both non-prod channels, not just dev."""
+    """The deploy path checks the wrapper-derived ``tmp-test`` env file."""
     root, env, sha = _deploy_harness(tmp_path)
     _configure_dev_test_environment_clobber_preflight(
         root, env, tmp_path, channel="test", overlay_content=_HEIMDAL_CLOBBER_OVERLAY
