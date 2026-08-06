@@ -22,7 +22,7 @@ from app.ops.test_channel_bootstrap import (
     bootstrap_test_channel,
     derive_test_channel_env,
 )
-from app.vault.manager import REQUIRED_SETTINGS_FILES
+from app.vault.manager import REQUIRED_SETTINGS_FILES, SETTINGS_DIR_NAME
 
 
 def test_bootstrap_brings_up_a_selected_channel_correct_vault(tmp_path: Path) -> None:
@@ -32,7 +32,7 @@ def test_bootstrap_brings_up_a_selected_channel_correct_vault(tmp_path: Path) ->
     assert result.ok, (result.vault_status, result.preflight.format_report() if result.preflight else None)
     assert result.vault_status == "selected"
     # vault init actually scaffolded the #1991-required settings files.
-    settings_dir = next(p for p in vault.iterdir() if p.is_dir())
+    settings_dir = vault / SETTINGS_DIR_NAME
     for required in REQUIRED_SETTINGS_FILES:
         assert (settings_dir / required).exists(), f"missing {required}"
 
