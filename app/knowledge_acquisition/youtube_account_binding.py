@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.db.dsn import resolve_dsn
 
 PROVIDER_YOUTUBE = "youtube"
@@ -169,7 +170,9 @@ class _MemoryAccountBindingBackend:
         with self._lock:
             return tuple(self._rows.values())
 
-    def set_state(self, account_binding_id: str, state: str, reason_code: str | None) -> AccountBinding:
+    def set_state(
+        self, account_binding_id: str, state: str, reason_code: str | None
+    ) -> AccountBinding:
         with self._lock:
             row = self._rows.get(account_binding_id)
             if row is None:
@@ -226,42 +229,51 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    if not (row and row[0]):
-        raise AccountBindingSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=("youtube_account_binding_channel_uq",),
+        error_type=AccountBindingSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            account_binding_id TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
-            provider_channel_id TEXT NOT NULL,
-            display_label TEXT NOT NULL,
-            state TEXT NOT NULL,
-            reason_code TEXT,
-            scopes JSONB NOT NULL,
-            obtained_at TIMESTAMPTZ NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT youtube_account_binding_state_chk CHECK (state IN ('connected', 'degraded')),
-            CONSTRAINT youtube_account_binding_connected_reason_chk CHECK (
-                state <> 'connected' OR reason_code IS NULL
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                account_binding_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                provider_channel_id TEXT NOT NULL,
+                display_label TEXT NOT NULL,
+                state TEXT NOT NULL,
+                reason_code TEXT,
+                scopes JSONB NOT NULL,
+                obtained_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                CONSTRAINT youtube_account_binding_state_chk CHECK (state IN ('connected', 'degraded')),
+                CONSTRAINT youtube_account_binding_connected_reason_chk CHECK (
+                    state <> 'connected' OR reason_code IS NULL
+                )
             )
+            """
         )
-        """
-    )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS youtube_account_binding_channel_uq "
-        f"ON {_TABLE} (provider, provider_channel_id)"
-    )
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS youtube_account_binding_channel_uq "
+            f"ON {_TABLE} (provider, provider_channel_id)"
+        )
 
 
 def _iso(value: Any) -> str | None:
@@ -379,7 +391,9 @@ class _PgAccountBindingBackend:
         finally:
             conn.close()
 
-    def set_state(self, account_binding_id: str, state: str, reason_code: str | None) -> AccountBinding:
+    def set_state(
+        self, account_binding_id: str, state: str, reason_code: str | None
+    ) -> AccountBinding:
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
@@ -402,7 +416,9 @@ class _PgAccountBindingBackend:
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
-            cur.execute(f"DELETE FROM {_TABLE} WHERE account_binding_id = %s", (account_binding_id,))
+            cur.execute(
+                f"DELETE FROM {_TABLE} WHERE account_binding_id = %s", (account_binding_id,)
+            )
             return cur.rowcount > 0
         finally:
             conn.close()

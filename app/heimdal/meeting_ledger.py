@@ -57,6 +57,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.events.schema import make_outbox_event
 from app.events.types import HEIMDAL_MEETING_SEGMENT_LATE_ADMITTED
 from app.heimdal._backend import resolve_heimdal_backend
@@ -477,10 +478,26 @@ def _assert_pg_schema(conn: Any) -> None:
         row = cur.fetchone()
         if not (row and row[0]):
             raise MeetingLedgerSchemaMissingError(f"Missing table '{table}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_SEGMENT_TABLE,
+        indexes=("heimdal_meeting_segment_session_idx",),
+        error_type=MeetingLedgerSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_CONFLICT_TABLE,
+        indexes=("heimdal_meeting_segment_conflict_session_idx",),
+        error_type=MeetingLedgerSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
-_PG_AUTOCREATE_DDL = f"""
-CREATE TABLE IF NOT EXISTS {_SESSION_TABLE} (
+_PG_AUTOCREATE_GROUPS = (
+    (
+        _SESSION_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_SESSION_TABLE} (
     session_id TEXT PRIMARY KEY,
     device_id TEXT NOT NULL,
     template_selection JSONB NOT NULL DEFAULT '{{}}'::jsonb,
@@ -490,7 +507,11 @@ CREATE TABLE IF NOT EXISTS {_SESSION_TABLE} (
     closed_at TIMESTAMPTZ,
     trace_id TEXT NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS {_SEGMENT_TABLE} (
+""",
+    ),
+    (
+        _SEGMENT_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_SEGMENT_TABLE} (
     session_id TEXT NOT NULL,
     session_seq INTEGER NOT NULL,
     receipt_id TEXT NOT NULL,
@@ -502,7 +523,11 @@ CREATE TABLE IF NOT EXISTS {_SEGMENT_TABLE} (
 );
 CREATE INDEX IF NOT EXISTS heimdal_meeting_segment_session_idx
     ON {_SEGMENT_TABLE} (session_id);
-CREATE TABLE IF NOT EXISTS {_CONFLICT_TABLE} (
+""",
+    ),
+    (
+        _CONFLICT_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_CONFLICT_TABLE} (
     id BIGSERIAL PRIMARY KEY,
     session_id TEXT NOT NULL,
     session_seq INTEGER NOT NULL,
@@ -512,7 +537,24 @@ CREATE TABLE IF NOT EXISTS {_CONFLICT_TABLE} (
 );
 CREATE INDEX IF NOT EXISTS heimdal_meeting_segment_conflict_session_idx
     ON {_CONFLICT_TABLE} (session_id);
-"""
+""",
+    ),
+)
+
+
+def _ensure_pg_schema(conn: Any) -> None:
+    if not _schema_autocreate_enabled():
+        _assert_pg_schema(conn)
+        return
+    cur = conn.cursor()
+    for table, ddl in _PG_AUTOCREATE_GROUPS:
+        cur.execute("SELECT to_regclass(%s)", (table,))
+        row = cur.fetchone()
+        present = bool(row and row[0])
+        if present:
+            continue
+        cur.execute(ddl)
+    _assert_pg_schema(conn)
 
 
 class _PgLedgerStore:
@@ -521,10 +563,7 @@ class _PgLedgerStore:
     def __init__(self) -> None:
         conn = _pg_connect()
         try:
-            if _schema_autocreate_enabled():
-                conn.cursor().execute(_PG_AUTOCREATE_DDL)
-            else:
-                _assert_pg_schema(conn)
+            _ensure_pg_schema(conn)
         finally:
             conn.close()
 
@@ -571,9 +610,7 @@ class _PgLedgerStore:
             newly_closed = cur.rowcount == 1
             session = self._get_session(conn, session_id)
             if session is None:
-                raise MeetingSessionNotFoundError(
-                    f"session {session_id!r} is not in the ledger"
-                )
+                raise MeetingSessionNotFoundError(f"session {session_id!r} is not in the ledger")
             return session, newly_closed
         finally:
             conn.close()
@@ -825,9 +862,7 @@ def open_meeting_session(
     return _backend().open_session(session)
 
 
-def close_meeting_session(
-    *, session_id: str, final_seq_count: int
-) -> tuple[MeetingSession, bool]:
+def close_meeting_session(*, session_id: str, final_seq_count: int) -> tuple[MeetingSession, bool]:
     """Record the client's declared final segment count and close the session.
 
     Idempotent: a re-post replays the recorded close outcome unchanged —

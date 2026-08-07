@@ -53,6 +53,13 @@ Backend selection mirrors `app.heimdal.observation_log` /
 (or no Postgres DSN configured) uses an in-process append-only list; a
 resolvable Postgres DSN uses the real ``heimdal_raw_record`` table.
 
+Alembic is the sole production owner of that table's attached indexes,
+reject-mutation trigger, and trigger function. Runtime startup only
+SELECT-asserts a present table; complete fixture creation requires an absent
+table plus the explicit test autocreate flag. The assertion preserves the
+``app.heimdal_retention_bypass`` deletion exception owned by retention
+migration ``a3f9d1c6e2b8``.
+
 Out of scope for this slice: key management/rotation (v1 uses one
 process-lifetime key from an env var); ASR / transcription. The gated read
 path (allowlist + receipt evaluation over this table) is
@@ -71,6 +78,10 @@ from uuid import uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from app.db.attached_schema import (
+    MigrationOwnedTrigger,
+    assert_migration_owned_attached_objects,
+)
 from app.heimdal._backend import resolve_heimdal_backend
 
 _TABLE = "heimdal_raw_record"
@@ -128,9 +139,7 @@ def resolve_raw_store_key() -> bytes:
     try:
         key = bytes.fromhex(raw.strip())
     except ValueError as exc:
-        raise RawStoreKeyMissingError(
-            f"{_KEY_ENV_VAR} is not valid hex: {exc}"
-        ) from exc
+        raise RawStoreKeyMissingError(f"{_KEY_ENV_VAR} is not valid hex: {exc}") from exc
     if len(key) != _AES_KEY_BYTES:
         raise RawStoreKeyMissingError(
             f"{_KEY_ENV_VAR} must decode to {_AES_KEY_BYTES} bytes (AES-256), got {len(key)}"
@@ -297,78 +306,101 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise RawStoreSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=("heimdal_raw_record_seq_idx", "heimdal_raw_record_content_identity_uq"),
+        trigger=MigrationOwnedTrigger(
+            "heimdal_raw_record_no_update",
+            "heimdal_raw_record_reject_mutation",
+            function_body_fragments=("app.heimdal_retention_bypass",),
+        ),
+        error_type=RawStoreSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            id uuid PRIMARY KEY,
-            content_identity text NOT NULL,
-            capture_chain jsonb NOT NULL,
-            sensor jsonb NOT NULL,
-            consent jsonb NOT NULL,
-            ciphertext bytea NOT NULL,
-            nonce bytea NOT NULL,
-            key_ref text NOT NULL,
-            source_path text NOT NULL,
-            ingested_at timestamptz NOT NULL DEFAULT now(),
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            sequence bigserial NOT NULL
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                id uuid PRIMARY KEY,
+                content_identity text NOT NULL,
+                capture_chain jsonb NOT NULL,
+                sensor jsonb NOT NULL,
+                consent jsonb NOT NULL,
+                ciphertext bytea NOT NULL,
+                nonce bytea NOT NULL,
+                key_ref text NOT NULL,
+                source_path text NOT NULL,
+                ingested_at timestamptz NOT NULL DEFAULT now(),
+                payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                sequence bigserial NOT NULL
+            )
+            """
         )
-        """
-    )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_raw_record_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(
-        f"CREATE UNIQUE INDEX IF NOT EXISTS heimdal_raw_record_content_identity_uq "
-        f"ON {_TABLE} (content_identity)"
-    )
-    cur.execute(
-        f"""
-        CREATE OR REPLACE FUNCTION heimdal_raw_record_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            -- D-RETENTION (Charter FIXED #7): the raw layer is the one place
-            -- true erasure exists, by design. The ONLY admitted exception is
-            -- a governed hard-delete that sets this session-local guard in
-            -- the same transaction immediately before issuing the DELETE
-            -- (see hard_delete_raw_record below) -- UPDATE is never admitted
-            -- under any guard, so no code path can rewrite a raw record,
-            -- only remove it wholesale under the governed job.
-            IF TG_OP = 'DELETE' AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true' THEN
-                RETURN OLD;
-            END IF;
-            RAISE EXCEPTION 'heimdal_raw_record is append-only (HEIM-1): % is not permitted '
-                'outside the governed hard-retention job (D-RETENTION)', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_raw_record_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_record_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_record_reject_mutation()
-        """
-    )
+        cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_raw_record_seq_idx ON {_TABLE} (sequence)")
+        cur.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS heimdal_raw_record_content_identity_uq "
+            f"ON {_TABLE} (content_identity)"
+        )
+        cur.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION heimdal_raw_record_reject_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                -- D-RETENTION (Charter FIXED #7): the raw layer is the one place
+                -- true erasure exists, by design. The ONLY admitted exception is
+                -- a governed hard-delete that sets this session-local guard in
+                -- the same transaction immediately before issuing the DELETE
+                -- (see hard_delete_raw_record below) -- UPDATE is never admitted
+                -- under any guard, so no code path can rewrite a raw record,
+                -- only remove it wholesale under the governed job.
+                IF TG_OP = 'DELETE' AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true' THEN
+                    RETURN OLD;
+                END IF;
+                RAISE EXCEPTION 'heimdal_raw_record is append-only (HEIM-1): % is not permitted '
+                    'outside the governed hard-retention job (D-RETENTION)', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute(f"DROP TRIGGER IF EXISTS heimdal_raw_record_no_update ON {_TABLE}")
+        cur.execute(
+            f"""
+            CREATE TRIGGER heimdal_raw_record_no_update
+            BEFORE UPDATE OR DELETE ON {_TABLE}
+            FOR EACH ROW EXECUTE FUNCTION heimdal_raw_record_reject_mutation()
+            """
+        )
 
 
 def _row_from_db(row: tuple) -> RawRecord:
     (
-        row_id, content_identity, capture_chain, sensor, consent,
-        ciphertext, nonce, key_ref, source_path, ingested_at, payload, sequence,
+        row_id,
+        content_identity,
+        capture_chain,
+        sensor,
+        consent,
+        ciphertext,
+        nonce,
+        key_ref,
+        source_path,
+        ingested_at,
+        payload,
+        sequence,
     ) = row
 
     def _as_dict(value: Any) -> Dict[str, Any]:
@@ -562,7 +594,9 @@ def insert_raw_record(
     if not capture_chain:
         raise ValueError("capture_chain must be a non-empty list (FABLE_COMPANION §1.1)")
     if not sensor:
-        raise ValueError("sensor identity must be provided (T5 mitigation: no unregistered-source ingestion)")
+        raise ValueError(
+            "sensor identity must be provided (T5 mitigation: no unregistered-source ingestion)"
+        )
     if not consent or not consent.get("grant_ref"):
         raise ValueError("consent block with a resolvable grant_ref must be provided (HEIM-3)")
 

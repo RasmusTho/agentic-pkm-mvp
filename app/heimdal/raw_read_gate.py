@@ -46,6 +46,11 @@ declared gap, not a silent one"). What it DOES enforce, for real, today:
 Backend selection mirrors every other Heimdal store (dual-backend,
 fail-loud resolution via `app.heimdal._backend.resolve_heimdal_backend`).
 
+Alembic revision ``f1c7e2a9b4d6`` is the sole production owner of the
+receipt table's indexes, reject-mutation trigger, and trigger function.
+Runtime startup only SELECT-asserts a present table; complete fixture creation
+requires both an absent table and the explicit test autocreate flag.
+
 Out of scope for this slice: full CrossScopeFlow grant evaluation (v2);
 export (a distinct, ungranted-by-this-module operation); ASR/attribution/
 publish stages; cryptographic erasure (v2).
@@ -61,6 +66,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from app.db.attached_schema import (
+    MigrationOwnedTrigger,
+    assert_migration_owned_attached_objects,
+)
 from app.heimdal import raw_store
 from app.heimdal._backend import resolve_heimdal_backend
 
@@ -136,7 +145,7 @@ def _record_id_from_raw_ref(raw_ref: str) -> str:
             f"raw_ref {raw_ref!r} is not a recognized opaque handle (must start with "
             f"{_RAW_REF_PREFIX!r})."
         )
-    record_id = raw_ref[len(_RAW_REF_PREFIX):]
+    record_id = raw_ref[len(_RAW_REF_PREFIX) :]
     if not record_id:
         raise RawReadRefusedError(f"raw_ref {raw_ref!r} carries no record id.")
     return record_id
@@ -224,56 +233,70 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise RawReadReceiptSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=("heimdal_raw_read_receipt_seq_idx", "heimdal_raw_read_receipt_raw_ref_idx"),
+        trigger=MigrationOwnedTrigger(
+            "heimdal_raw_read_receipt_no_update",
+            "heimdal_raw_read_receipt_reject_mutation",
+        ),
+        error_type=RawReadReceiptSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            id uuid PRIMARY KEY,
-            raw_ref text NOT NULL,
-            content_identity text NOT NULL,
-            reader text NOT NULL,
-            purpose text NOT NULL,
-            read_at timestamptz NOT NULL DEFAULT now(),
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            sequence bigserial NOT NULL
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                id uuid PRIMARY KEY,
+                raw_ref text NOT NULL,
+                content_identity text NOT NULL,
+                reader text NOT NULL,
+                purpose text NOT NULL,
+                read_at timestamptz NOT NULL DEFAULT now(),
+                payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                sequence bigserial NOT NULL
+            )
+            """
         )
-        """
-    )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_raw_read_receipt_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS heimdal_raw_read_receipt_raw_ref_idx ON {_TABLE} (raw_ref)"
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_read_receipt_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_raw_read_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_raw_read_receipt_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_read_receipt_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_read_receipt_reject_mutation()
-        """
-    )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_raw_read_receipt_seq_idx ON {_TABLE} (sequence)"
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_raw_read_receipt_raw_ref_idx ON {_TABLE} (raw_ref)"
+        )
+        cur.execute(
+            """
+            CREATE OR REPLACE FUNCTION heimdal_raw_read_receipt_reject_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'heimdal_raw_read_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute(f"DROP TRIGGER IF EXISTS heimdal_raw_read_receipt_no_update ON {_TABLE}")
+        cur.execute(
+            f"""
+            CREATE TRIGGER heimdal_raw_read_receipt_no_update
+            BEFORE UPDATE OR DELETE ON {_TABLE}
+            FOR EACH ROW EXECUTE FUNCTION heimdal_raw_read_receipt_reject_mutation()
+            """
+        )
 
 
 def _row_from_db(row: tuple) -> RawReadReceipt:
@@ -406,8 +429,7 @@ def read_raw_record(
     record = _resolve_record_by_id(record_id)
     if record is None:
         raise RawReadRefusedError(
-            f"Raw read refused: raw_ref {raw_ref!r} does not resolve to any known raw "
-            "record."
+            f"Raw read refused: raw_ref {raw_ref!r} does not resolve to any known raw " "record."
         )
 
     encryption_key = key if key is not None else raw_store.resolve_raw_store_key()

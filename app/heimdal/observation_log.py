@@ -34,6 +34,11 @@ Postgres DSN configured) uses an in-process append-only list; a resolvable
 Postgres DSN uses the real ``heimdal_observation_log`` table. Backend
 resolution is fail-loud (KERNEL-03 / I-S4 precedent) -- a configured-but-
 unreachable Postgres never silently degrades to memory.
+
+Alembic is the sole production owner of this table's attached indexes,
+reject-mutation trigger, and trigger function. Runtime startup is SELECT-only
+for a present table; the explicit test autocreate flag may create the complete
+fixture shape only when the table is absent.
 """
 
 from __future__ import annotations
@@ -45,6 +50,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.db.attached_schema import (
+    MigrationOwnedTrigger,
+    assert_migration_owned_attached_objects,
+)
 from app.events.schema import OutboxEvent
 from app.heimdal._backend import resolve_heimdal_backend
 
@@ -99,7 +108,9 @@ class _MemoryObservationLog:
         self._rows: List[ObservationRow] = []
         self._keys: set[str] = set()
 
-    def append(self, *, topic: str, idempotency_key: str, envelope: Dict[str, Any]) -> Optional[ObservationRow]:
+    def append(
+        self, *, topic: str, idempotency_key: str, envelope: Dict[str, Any]
+    ) -> Optional[ObservationRow]:
         with self._lock:
             if idempotency_key in self._keys:
                 return None
@@ -162,55 +173,68 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise ObservationLogSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=("heimdal_observation_log_seq_idx", "heimdal_observation_log_topic_idx"),
+        trigger=MigrationOwnedTrigger(
+            "heimdal_observation_log_no_update",
+            "heimdal_observation_log_reject_mutation",
+        ),
+        error_type=ObservationLogSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            id uuid PRIMARY KEY,
-            topic text NOT NULL,
-            payload jsonb NOT NULL,
-            created_at timestamptz NOT NULL DEFAULT now(),
-            sequence bigserial NOT NULL
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                id uuid PRIMARY KEY,
+                topic text NOT NULL,
+                payload jsonb NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                sequence bigserial NOT NULL
+            )
+            """
         )
-        """
-    )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_observation_log_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_observation_log_topic_idx ON {_TABLE} (topic)")
-    # Append-only enforcement at the DB level (HEIM-1): a trigger rejects any
-    # UPDATE/DELETE against the log table, independent of which role or code
-    # path issues the statement. This is defense in depth on top of "there is
-    # no update/delete method in this module's Python API".
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_observation_log_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_observation_log is append-only (HEIM-1): % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_observation_log_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_observation_log_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_observation_log_reject_mutation()
-        """
-    )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_observation_log_seq_idx ON {_TABLE} (sequence)"
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_observation_log_topic_idx ON {_TABLE} (topic)"
+        )
+        # Test-fixture parity only; Alembic owns the production trigger.
+        cur.execute(
+            """
+            CREATE OR REPLACE FUNCTION heimdal_observation_log_reject_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'heimdal_observation_log is append-only (HEIM-1): % is not permitted', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute(f"DROP TRIGGER IF EXISTS heimdal_observation_log_no_update ON {_TABLE}")
+        cur.execute(
+            f"""
+            CREATE TRIGGER heimdal_observation_log_no_update
+            BEFORE UPDATE OR DELETE ON {_TABLE}
+            FOR EACH ROW EXECUTE FUNCTION heimdal_observation_log_reject_mutation()
+            """
+        )
 
 
 class _PgObservationLog:
@@ -223,7 +247,9 @@ class _PgObservationLog:
         finally:
             conn.close()
 
-    def append(self, *, topic: str, idempotency_key: str, envelope: Dict[str, Any]) -> Optional[ObservationRow]:
+    def append(
+        self, *, topic: str, idempotency_key: str, envelope: Dict[str, Any]
+    ) -> Optional[ObservationRow]:
         conn = _pg_connect()
         try:
             _assert_pg_schema(conn)
@@ -299,7 +325,9 @@ def _backend() -> "_MemoryObservationLog | _PgObservationLog":
     return _MEMORY_LOG
 
 
-def append_observation(event: OutboxEvent | Dict[str, Any], *, idempotency_key: str) -> Optional[ObservationRow]:
+def append_observation(
+    event: OutboxEvent | Dict[str, Any], *, idempotency_key: str
+) -> Optional[ObservationRow]:
     """Append one observation event to the log.
 
     Idempotent by ``idempotency_key`` (derive with
@@ -314,7 +342,9 @@ def append_observation(event: OutboxEvent | Dict[str, Any], *, idempotency_key: 
     There is deliberately no ``update``/``delete`` function in this module.
     """
     if not isinstance(idempotency_key, str) or not idempotency_key.strip():
-        raise ValueError(f"append_observation requires a non-empty idempotency_key, got {idempotency_key!r}")
+        raise ValueError(
+            f"append_observation requires a non-empty idempotency_key, got {idempotency_key!r}"
+        )
     envelope = _normalize_envelope(event)
     topic = str(envelope.get("event") or envelope.get("event_type") or "")
     if not topic:

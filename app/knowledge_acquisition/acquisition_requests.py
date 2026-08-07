@@ -65,6 +65,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.db.dsn import resolve_dsn
 from app.events.models import new_event
 from app.events.types import (
@@ -159,7 +160,9 @@ def compute_backoff_seconds(attempt: int, *, rng: Callable[[], float] | None = N
 
 def requested_event_key(request_id: str, policy_version: int) -> str:
     """``acquisition.requested`` key — ``(topic, request_id, policy_version)``."""
-    return derive_idempotency_key(ACQUISITION_REQUESTED_TOPIC, request_id, f"policy:{policy_version}")
+    return derive_idempotency_key(
+        ACQUISITION_REQUESTED_TOPIC, request_id, f"policy:{policy_version}"
+    )
 
 
 def attempt_event_key(topic: str, request_id: str, attempt: int) -> str:
@@ -214,7 +217,9 @@ class DiscoveryTrigger:
         if self.playlist_item_id is not None and (
             not isinstance(self.playlist_item_id, str) or not self.playlist_item_id.strip()
         ):
-            raise AcquisitionRequestValidationError("trigger.playlist_item_id must be a non-empty string or None")
+            raise AcquisitionRequestValidationError(
+                "trigger.playlist_item_id must be a non-empty string or None"
+            )
 
     def stored_dict(self, *, discovered_at: str) -> dict[str, Any]:
         """The contract trigger row persisted into ``discovery_triggers``.
@@ -550,54 +555,63 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    if not (row and row[0]):
-        raise AcquisitionRequestsSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=("acquisition_requests_drain_idx", "acquisition_requests_identity_uq"),
+        error_type=AcquisitionRequestsSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            request_id TEXT PRIMARY KEY,
-            source_kind TEXT NOT NULL,
-            item_ref TEXT NOT NULL,
-            source_ref TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            priority TEXT NOT NULL DEFAULT 'normal',
-            requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            completed_at TIMESTAMPTZ,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            next_attempt_at TIMESTAMPTZ,
-            last_failure JSONB,
-            discovery_triggers JSONB NOT NULL DEFAULT '[]'::jsonb,
-            policy_snapshot JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            policy_version INTEGER NOT NULL DEFAULT 1,
-            trace_id TEXT,
-            content_identity TEXT,
-            artifact_path TEXT,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT acquisition_requests_status_chk CHECK (
-                status IN ('pending', 'in_progress', 'completed', 'dead_lettered')
-            ),
-            CONSTRAINT acquisition_requests_priority_chk CHECK (priority IN ('high', 'normal'))
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                request_id TEXT PRIMARY KEY,
+                source_kind TEXT NOT NULL,
+                item_ref TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                priority TEXT NOT NULL DEFAULT 'normal',
+                requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                completed_at TIMESTAMPTZ,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TIMESTAMPTZ,
+                last_failure JSONB,
+                discovery_triggers JSONB NOT NULL DEFAULT '[]'::jsonb,
+                policy_snapshot JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                policy_version INTEGER NOT NULL DEFAULT 1,
+                trace_id TEXT,
+                content_identity TEXT,
+                artifact_path TEXT,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                CONSTRAINT acquisition_requests_status_chk CHECK (
+                    status IN ('pending', 'in_progress', 'completed', 'dead_lettered')
+                ),
+                CONSTRAINT acquisition_requests_priority_chk CHECK (priority IN ('high', 'normal'))
+            )
+            """
         )
-        """
-    )
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS acquisition_requests_drain_idx "
-        f"ON {_TABLE} (status, priority, requested_at)"
-    )
-    cur.execute(
-        f"CREATE UNIQUE INDEX IF NOT EXISTS acquisition_requests_identity_uq "
-        f"ON {_TABLE} (source_kind, item_ref, policy_version)"
-    )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS acquisition_requests_drain_idx "
+            f"ON {_TABLE} (status, priority, requested_at)"
+        )
+        cur.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS acquisition_requests_identity_uq "
+            f"ON {_TABLE} (source_kind, item_ref, policy_version)"
+        )
 
 
 def _iso_or_none(value: Any) -> str | None:
@@ -832,7 +846,12 @@ class _PgAcquisitionRequestsBackend:
         )
 
     def set_failed_retryable(
-        self, request_id: str, *, last_failure: dict[str, Any], next_attempt_at: datetime, now: datetime
+        self,
+        request_id: str,
+        *,
+        last_failure: dict[str, Any],
+        next_attempt_at: datetime,
+        now: datetime,
     ) -> AcquisitionRequest | None:
         return self._mutate(
             request_id,
@@ -913,7 +932,11 @@ class AcquisitionRequests:
         appended and nothing else is touched — a completed/dead-lettered request
         is never reopened by a late duplicate discovery.
         """
-        for name, value in (("source_kind", source_kind), ("item_ref", item_ref), ("source_ref", source_ref)):
+        for name, value in (
+            ("source_kind", source_kind),
+            ("item_ref", item_ref),
+            ("source_ref", source_ref),
+        ):
             if not isinstance(value, str) or not value.strip() or "\x00" in value:
                 raise AcquisitionRequestValidationError(
                     f"{name} must be a non-empty NUL-free string, got {value!r}"
@@ -928,7 +951,11 @@ class AcquisitionRequests:
 
         snapshot = dict(policy_snapshot) if policy_snapshot is not None else {"policy_version": 1}
         policy_version = snapshot.get("policy_version", 1)
-        if not isinstance(policy_version, int) or isinstance(policy_version, bool) or policy_version < 1:
+        if (
+            not isinstance(policy_version, int)
+            or isinstance(policy_version, bool)
+            or policy_version < 1
+        ):
             raise AcquisitionRequestValidationError(
                 f"policy_snapshot.policy_version must be a positive int, got {policy_version!r}"
             )
@@ -1113,7 +1140,9 @@ class AcquisitionRequests:
             row = self._backend.set_dead_lettered(request_id, last_failure=last_failure, now=moment)
             if row is None:
                 return self._classify_guard_miss(request_id, action="fail")
-            self._emit_failed(row, attempt, reason_code, terminal=True, next_attempt_at=None, conn=conn)
+            self._emit_failed(
+                row, attempt, reason_code, terminal=True, next_attempt_at=None, conn=conn
+            )
             return row
         gate = moment + timedelta(seconds=compute_backoff_seconds(attempt, rng=rng))
         row = self._backend.set_failed_retryable(
@@ -1121,7 +1150,9 @@ class AcquisitionRequests:
         )
         if row is None:
             return self._classify_guard_miss(request_id, action="fail")
-        self._emit_failed(row, attempt, reason_code, terminal=False, next_attempt_at=_iso(gate), conn=conn)
+        self._emit_failed(
+            row, attempt, reason_code, terminal=False, next_attempt_at=_iso(gate), conn=conn
+        )
         return row
 
     def dead_letter(

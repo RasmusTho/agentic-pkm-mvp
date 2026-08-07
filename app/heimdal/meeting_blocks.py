@@ -55,6 +55,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.heimdal._backend import resolve_heimdal_backend
 
 logger = logging.getLogger(__name__)
@@ -463,10 +464,26 @@ def _assert_pg_schema(conn: Any) -> None:
         row = cur.fetchone()
         if not (row and row[0]):
             raise MeetingBlockSchemaMissingError(f"Missing table '{table}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_BLOCK_TABLE,
+        indexes=("heimdal_meeting_block_session_idx",),
+        error_type=MeetingBlockSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_REFUSAL_TABLE,
+        indexes=("heimdal_meeting_block_refusal_session_idx",),
+        error_type=MeetingBlockSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
-_PG_AUTOCREATE_DDL = f"""
-CREATE TABLE IF NOT EXISTS {_BLOCK_TABLE} (
+_PG_AUTOCREATE_GROUPS = (
+    (
+        _BLOCK_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_BLOCK_TABLE} (
     block_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     owner TEXT NOT NULL,
@@ -481,7 +498,11 @@ CREATE TABLE IF NOT EXISTS {_BLOCK_TABLE} (
 );
 CREATE INDEX IF NOT EXISTS heimdal_meeting_block_session_idx
     ON {_BLOCK_TABLE} (session_id);
-CREATE TABLE IF NOT EXISTS {_NOTE_REVISION_TABLE} (
+""",
+    ),
+    (
+        _NOTE_REVISION_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_NOTE_REVISION_TABLE} (
     note_block_id TEXT NOT NULL,
     revision INTEGER NOT NULL,
     text TEXT NOT NULL,
@@ -489,7 +510,11 @@ CREATE TABLE IF NOT EXISTS {_NOTE_REVISION_TABLE} (
     written_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (note_block_id, revision)
 );
-CREATE TABLE IF NOT EXISTS {_REFUSAL_TABLE} (
+""",
+    ),
+    (
+        _REFUSAL_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_REFUSAL_TABLE} (
     id BIGSERIAL PRIMARY KEY,
     session_id TEXT NOT NULL,
     block_id TEXT NOT NULL,
@@ -500,7 +525,24 @@ CREATE TABLE IF NOT EXISTS {_REFUSAL_TABLE} (
 );
 CREATE INDEX IF NOT EXISTS heimdal_meeting_block_refusal_session_idx
     ON {_REFUSAL_TABLE} (session_id);
-"""
+""",
+    ),
+)
+
+
+def _ensure_pg_schema(conn: Any) -> None:
+    if not _schema_autocreate_enabled():
+        _assert_pg_schema(conn)
+        return
+    cur = conn.cursor()
+    for table, ddl in _PG_AUTOCREATE_GROUPS:
+        cur.execute("SELECT to_regclass(%s)", (table,))
+        row = cur.fetchone()
+        present = bool(row and row[0])
+        if present:
+            continue
+        cur.execute(ddl)
+    _assert_pg_schema(conn)
 
 
 class _PgBlockStore:
@@ -509,10 +551,7 @@ class _PgBlockStore:
     def __init__(self) -> None:
         conn = _pg_connect()
         try:
-            if _schema_autocreate_enabled():
-                conn.cursor().execute(_PG_AUTOCREATE_DDL)
-            else:
-                _assert_pg_schema(conn)
+            _ensure_pg_schema(conn)
         finally:
             conn.close()
 
@@ -978,11 +1017,7 @@ def apply_block_write(
         if provenance_extra:
             provenance = {
                 **provenance,
-                **{
-                    k: v
-                    for k, v in provenance_extra.items()
-                    if k not in _RESERVED_PROVENANCE_KEYS
-                },
+                **{k: v for k, v in provenance_extra.items() if k not in _RESERVED_PROVENANCE_KEYS},
             }
         now = _utcnow()
         block = MeetingBlock(
@@ -1090,11 +1125,7 @@ def apply_block_write(
         if provenance_extra:
             provenance = {
                 **provenance,
-                **{
-                    k: v
-                    for k, v in provenance_extra.items()
-                    if k not in _RESERVED_PROVENANCE_KEYS
-                },
+                **{k: v for k, v in provenance_extra.items() if k not in _RESERVED_PROVENANCE_KEYS},
             }
         revised = MeetingBlock(
             block_id=existing.block_id,

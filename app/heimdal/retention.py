@@ -44,6 +44,11 @@ here): event-triggered relevance-decay (the decay-model half of HEIM-7
 stays a named future runtime, see `docs/HEIMDAL/FABLE_COMPANION.md` §8);
 consent-revocation-triggered deletion runtime (§11#14); cryptographic
 erasure of published event content (v2 hardening candidate).
+
+Alembic is the sole production owner of the deletion-receipt table's attached
+indexes, reject-mutation trigger, and trigger function. Runtime startup is
+SELECT-only for a present table; the explicit test autocreate flag may create
+the complete fixture shape only when the table is absent.
 """
 
 from __future__ import annotations
@@ -55,6 +60,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from app.db.attached_schema import (
+    MigrationOwnedTrigger,
+    assert_migration_owned_attached_objects,
+)
 from app.heimdal import raw_store
 from app.heimdal._backend import resolve_heimdal_backend
 from app.heimdal.settings_notes import (
@@ -138,7 +147,9 @@ class RetentionEnforcementReceipt:
     receipted: bool = True
 
 
-def _resolve_retention_window_days(vault_root: Path, *, settings_dir: str = DEFAULT_SETTINGS_DIR) -> int:
+def _resolve_retention_window_days(
+    vault_root: Path, *, settings_dir: str = DEFAULT_SETTINGS_DIR
+) -> int:
     """Read the hard-retention bound from `_heimdal/settings.md` (A14, markdown-first).
 
     Fail-loud: no note, or a note without `retention_window_days` set, or a
@@ -193,7 +204,9 @@ def resolve_screen_frame_retention_minutes(
 
     root = vault_root if vault_root is not None else resolve_optional_vault_root()
     if root is None:
-        raise RetentionWindowMissingError("No vault root configured for screen_frame_retention_minutes")
+        raise RetentionWindowMissingError(
+            "No vault root configured for screen_frame_retention_minutes"
+        )
     note = read_settings_note(root, SETTINGS, settings_dir=settings_dir)
     raw_value = note.values.get("screen_frame_retention_minutes") if note is not None else None
     try:
@@ -203,7 +216,9 @@ def resolve_screen_frame_retention_minutes(
             "_heimdal/settings.md must set a positive screen_frame_retention_minutes; no default is safe"
         ) from exc
     if minutes <= 0:
-        raise RetentionWindowMissingError("screen_frame_retention_minutes must be a positive integer")
+        raise RetentionWindowMissingError(
+            "screen_frame_retention_minutes must be a positive integer"
+        )
     return minutes
 
 
@@ -270,64 +285,87 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise DeletionReceiptSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=(
+            "heimdal_raw_deletion_receipt_seq_idx",
+            "heimdal_raw_deletion_receipt_record_id_idx",
+        ),
+        trigger=MigrationOwnedTrigger(
+            "heimdal_raw_deletion_receipt_no_update",
+            "heimdal_raw_deletion_receipt_reject_mutation",
+        ),
+        error_type=DeletionReceiptSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            id uuid PRIMARY KEY,
-            record_id uuid NOT NULL,
-            content_identity text NOT NULL,
-            reason text NOT NULL,
-            retention_window_days integer NOT NULL,
-            deleted_at timestamptz NOT NULL DEFAULT now(),
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            sequence bigserial NOT NULL
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                id uuid PRIMARY KEY,
+                record_id uuid NOT NULL,
+                content_identity text NOT NULL,
+                reason text NOT NULL,
+                retention_window_days integer NOT NULL,
+                deleted_at timestamptz NOT NULL DEFAULT now(),
+                payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                sequence bigserial NOT NULL
+            )
+            """
         )
-        """
-    )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_record_id_idx ON {_TABLE} (record_id)"
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_raw_deletion_receipt_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_raw_deletion_receipt_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
-        """
-    )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_seq_idx ON {_TABLE} (sequence)"
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_raw_deletion_receipt_record_id_idx ON {_TABLE} (record_id)"
+        )
+        cur.execute(
+            """
+            CREATE OR REPLACE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'heimdal_raw_deletion_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute(f"DROP TRIGGER IF EXISTS heimdal_raw_deletion_receipt_no_update ON {_TABLE}")
+        cur.execute(
+            f"""
+            CREATE TRIGGER heimdal_raw_deletion_receipt_no_update
+            BEFORE UPDATE OR DELETE ON {_TABLE}
+            FOR EACH ROW EXECUTE FUNCTION heimdal_raw_deletion_receipt_reject_mutation()
+            """
+        )
 
 
 def _row_from_db(row: tuple) -> DeletionReceipt:
     import json
 
     (
-        row_id, record_id, content_identity, reason, retention_window_days,
-        deleted_at, payload, sequence,
+        row_id,
+        record_id,
+        content_identity,
+        reason,
+        retention_window_days,
+        deleted_at,
+        payload,
+        sequence,
     ) = row
 
     def _as_dict(value: Any) -> Dict[str, Any]:
@@ -507,7 +545,9 @@ def enforce_hard_retention_bound(
 
 
 def enforce_screen_frame_retention(
-    *, vault_root: Optional[Path] = None, settings_dir: str = DEFAULT_SETTINGS_DIR,
+    *,
+    vault_root: Optional[Path] = None,
+    settings_dir: str = DEFAULT_SETTINGS_DIR,
     now: Optional[datetime] = None,
 ) -> RetentionEnforcementReceipt:
     """Hard-delete only aged screen-frame records through the shared raw store.
@@ -523,15 +563,30 @@ def enforce_screen_frame_retention(
     for record in raw_store.all_raw_records():
         if record.payload.get("modality") != "screen":
             continue
-        ingested_at = record.ingested_at if record.ingested_at.tzinfo else record.ingested_at.replace(tzinfo=timezone.utc)
+        ingested_at = (
+            record.ingested_at
+            if record.ingested_at.tzinfo
+            else record.ingested_at.replace(tzinfo=timezone.utc)
+        )
         if ingested_at >= cutoff or not raw_store.hard_delete_raw_record(record.id):
             continue
-        deletions.append(_backend().append(DeletionReceipt(
-            id=str(uuid4()), record_id=record.id, content_identity=record.content_identity,
-            reason=REASON_SCREEN_FRAME_RETENTION_BUFFER, retention_window_days=0,
-            deleted_at=reference_time, payload={"screen_frame_retention_minutes": minutes}, sequence=-1,
-        )))
-    return RetentionEnforcementReceipt(deleted_count=len(deletions), retention_window_days=0, deletions=tuple(deletions))
+        deletions.append(
+            _backend().append(
+                DeletionReceipt(
+                    id=str(uuid4()),
+                    record_id=record.id,
+                    content_identity=record.content_identity,
+                    reason=REASON_SCREEN_FRAME_RETENTION_BUFFER,
+                    retention_window_days=0,
+                    deleted_at=reference_time,
+                    payload={"screen_frame_retention_minutes": minutes},
+                    sequence=-1,
+                )
+            )
+        )
+    return RetentionEnforcementReceipt(
+        deleted_count=len(deletions), retention_window_days=0, deletions=tuple(deletions)
+    )
 
 
 __all__ = [

@@ -64,6 +64,11 @@ append-only list seeded with the same standing grants the migrations seed for
 Postgres; a resolvable Postgres DSN uses the real `heimdal_consent_grant`
 table.
 
+Alembic is the sole production owner of the table's indexes, trigger, and
+trigger function. Runtime startup only SELECT-asserts those objects when the
+table exists; complete fixture creation is allowed only for an absent table
+under the explicit test autocreate flag.
+
 Out of scope for this slice (per governing Issue #3042): the capture
 adapter itself, ASR, third-party voice detection, place/session grant
 runtime (contract-stub only), revocation propagation/suppression runtime
@@ -80,6 +85,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 from uuid import uuid4
 
+from app.db.attached_schema import (
+    MigrationOwnedTrigger,
+    assert_migration_owned_attached_objects,
+)
 from app.heimdal._backend import resolve_heimdal_backend
 
 _TABLE = "heimdal_consent_grant"
@@ -262,8 +271,7 @@ def _media_capture_seed_row(sequence: int) -> ConsentGrant:
             "degradation_rules": ["third_party_speech"],
         },
         note=(
-            "standing media-capture grant (memory backend seed, mirrors migration "
-            "a9f3c2d7b6e1)"
+            "standing media-capture grant (memory backend seed, mirrors migration " "a9f3c2d7b6e1)"
         ),
         sequence=sequence,
     )
@@ -373,68 +381,91 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise ConsentLedgerSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=(
+            "heimdal_consent_grant_seq_idx",
+            "heimdal_consent_grant_grant_ref_idx",
+            "heimdal_consent_grant_scope_idx",
+        ),
+        trigger=MigrationOwnedTrigger(
+            "heimdal_consent_grant_no_update",
+            "heimdal_consent_grant_reject_mutation",
+        ),
+        error_type=ConsentLedgerSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
+    created = False
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            id uuid PRIMARY KEY,
-            grant_ref text NOT NULL,
-            basis text NOT NULL,
-            scope text NOT NULL,
-            granted_by text NOT NULL,
-            granted_at timestamptz NOT NULL,
-            expiry timestamptz,
-            capture_profile jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            third_party_policy text NOT NULL DEFAULT 'degrade',
-            vad_gate jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            third_party jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            retention jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            erasure jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            revokes_grant_ref text,
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            created_at timestamptz NOT NULL DEFAULT now(),
-            sequence bigserial NOT NULL
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        created = True
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                id uuid PRIMARY KEY,
+                grant_ref text NOT NULL,
+                basis text NOT NULL,
+                scope text NOT NULL,
+                granted_by text NOT NULL,
+                granted_at timestamptz NOT NULL,
+                expiry timestamptz,
+                capture_profile jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                third_party_policy text NOT NULL DEFAULT 'degrade',
+                vad_gate jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                third_party jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                retention jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                erasure jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                revokes_grant_ref text,
+                payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                sequence bigserial NOT NULL
+            )
+            """
         )
-        """
-    )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_consent_grant_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_consent_grant_grant_ref_idx ON {_TABLE} (grant_ref)")
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_consent_grant_scope_idx ON {_TABLE} (scope)")
-    # Append-only enforcement at the DB level (HEIM-1): a trigger rejects any
-    # UPDATE/DELETE against the ledger table, independent of which role or
-    # code path issues the statement. Defense in depth on top of "there is no
-    # update/delete method in this module's Python API".
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_consent_grant_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_consent_grant is append-only (HEIM-1): % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_consent_grant_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_consent_grant_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_consent_grant_reject_mutation()
-        """
-    )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_consent_grant_seq_idx ON {_TABLE} (sequence)"
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_consent_grant_grant_ref_idx ON {_TABLE} (grant_ref)"
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_consent_grant_scope_idx ON {_TABLE} (scope)"
+        )
+        # Test-fixture parity only; Alembic owns the production trigger.
+        cur.execute(
+            """
+            CREATE OR REPLACE FUNCTION heimdal_consent_grant_reject_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'heimdal_consent_grant is append-only (HEIM-1): % is not permitted', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute(f"DROP TRIGGER IF EXISTS heimdal_consent_grant_no_update ON {_TABLE}")
+        cur.execute(
+            f"""
+            CREATE TRIGGER heimdal_consent_grant_no_update
+            BEFORE UPDATE OR DELETE ON {_TABLE}
+            FOR EACH ROW EXECUTE FUNCTION heimdal_consent_grant_reject_mutation()
+            """
+        )
+    if not created:
+        return
     # Seed every standing grant (idempotent), from the same builder tuple the
     # memory backend uses -- a standing grant cannot land in one in-process
     # producer and not the other.
@@ -476,9 +507,23 @@ def _bootstrap_pg(conn: Any) -> None:
 
 def _row_from_db(row: tuple) -> ConsentGrant:
     (
-        row_id, grant_ref, basis, scope, granted_by, granted_at, expiry,
-        capture_profile, third_party_policy, vad_gate, third_party,
-        retention, erasure, revokes_grant_ref, payload, created_at, sequence,
+        row_id,
+        grant_ref,
+        basis,
+        scope,
+        granted_by,
+        granted_at,
+        expiry,
+        capture_profile,
+        third_party_policy,
+        vad_gate,
+        third_party,
+        retention,
+        erasure,
+        revokes_grant_ref,
+        payload,
+        created_at,
+        sequence,
     ) = row
 
     def _as_dict(value: Any) -> Dict[str, Any]:
@@ -635,7 +680,9 @@ def grant_consent(
     return _backend().append(grant)
 
 
-def revoke_consent(*, grant_ref: str, revoked_by: str, payload: Optional[Mapping[str, Any]] = None) -> ConsentGrant:
+def revoke_consent(
+    *, grant_ref: str, revoked_by: str, payload: Optional[Mapping[str, Any]] = None
+) -> ConsentGrant:
     """Append a revocation row that lapses ``grant_ref`` (HEIM-1: new event, never a rewrite).
 
     FABLE_COMPANION §6.4: future capture lapses immediately (the ledger is
@@ -673,7 +720,9 @@ def _revoked_grant_refs(rows: List[ConsentGrant]) -> set:
     return {r.revokes_grant_ref for r in rows if r.is_revocation and r.revokes_grant_ref}
 
 
-def list_active_grants(*, scope: Optional[str] = None, at: Optional[datetime] = None) -> List[ConsentGrant]:
+def list_active_grants(
+    *, scope: Optional[str] = None, at: Optional[datetime] = None
+) -> List[ConsentGrant]:
     """Return every currently-active (non-revoked, non-expired) grant.
 
     A grant is active iff: it is not a revocation row, no later revocation
@@ -773,7 +822,9 @@ class AdmittedEvidence:
     consent: ConsentBlock
 
 
-def admit_raw_evidence(*, scope: str, third_party: str = "none", at: Optional[datetime] = None) -> AdmittedEvidence:
+def admit_raw_evidence(
+    *, scope: str, third_party: str = "none", at: Optional[datetime] = None
+) -> AdmittedEvidence:
     """The HEIM-3 capture-time check: the only sanctioned signal->raw admission call.
 
     Resolves an active grant for ``scope`` BEFORE the caller may admit raw

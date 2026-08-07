@@ -332,8 +332,12 @@ def test_every_autocreate_group_only_touches_the_table_it_probes() -> None:
     assert {table for table, _ in _MIGRATION_OWNED_AUTOCREATE_SQL} == set(STORE_TABLES)
     for table, statements in _MIGRATION_OWNED_AUTOCREATE_SQL:
         for statement in statements:
-            targets = set(re.findall(r"(?i)\b(?:table|index|on)\s+(?:if\s+not\s+exists\s+)?"
-                                     r"(?:public\.)?(\w+)", statement)) & set(STORE_TABLES)
+            targets = set(
+                re.findall(
+                    r"(?i)\b(?:table|index|on)\s+(?:if\s+not\s+exists\s+)?" r"(?:public\.)?(\w+)",
+                    statement,
+                )
+            ) & set(STORE_TABLES)
             assert targets <= {table}, (
                 f"the {table!r} autocreate group issues {statement.split()[0:4]} against "
                 f"{sorted(targets - {table})}. A group runs when *its* table is absent, so a "
@@ -390,9 +394,9 @@ def test_the_store_seam_never_reshapes_a_table_that_already_exists() -> None:
         for match in [re.match(r"(?i)^CREATE TABLE IF NOT EXISTS (\w+)", statement)]
         if match
     }
-    assert created == set(STORE_TABLES), (
-        f"the fixture path created {sorted(created)} on an empty database"
-    )
+    assert created == set(
+        STORE_TABLES
+    ), f"the fixture path created {sorted(created)} on an empty database"
 
     existing = _schema_statements(
         _statements_executed_by_ensure_tables(autocreate=True, tables_present=STORE_TABLES)
@@ -431,9 +435,9 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
     )
 
     db_source = DB_MODULE.read_text(encoding="utf-8")
-    assert "_MIGRATION_SQL_PATH" not in db_source, (
-        "app/db/db.py reads a bootstrap SQL file again (MVR-05A1, #4560)."
-    )
+    assert (
+        "_MIGRATION_SQL_PATH" not in db_source
+    ), "app/db/db.py reads a bootstrap SQL file again (MVR-05A1, #4560)."
     executed_sql_file = re.search(r"(?im)^[^#\n]*\.sql\b", db_source)
     assert executed_sql_file is None, (
         f"app/db/db.py references a SQL file again ({executed_sql_file.group(0).strip()!r}); "
@@ -525,7 +529,8 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
         f"{seam.path}:{seam.lineno} {seam.verb.upper()} {seam.table} "
         f"(in {seam.function or '<module level>'})"
         for seam in seams
-        if seam.durable_database_source and seam.owned_by_revision_chain
+        if seam.durable_database_source
+        and seam.owned_by_revision_chain
         and not seam.autocreate_gated
     ]
     assert ungated == [], (
@@ -534,9 +539,8 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
         "migration-owned table:\n  " + "\n  ".join(ungated)
     )
 
-    # Statements already recorded as debt are excluded here and pinned by
-    # `test_the_attached_object_ddl_debt_is_exactly_what_is_recorded` instead.
-    # A *new* attached-object statement is in neither place and fails here.
+    # #4598 retired the recorded bound to zero. Keep the accounting path so a
+    # future intentional reduction cannot be silently replaced by a new seam.
     recorded = dict(RECORDED_ATTACHED_DDL_DEBT)
     unprobed: list[str] = []
     for seam in seams:
@@ -556,9 +560,8 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
         "these statements reshape a durable table from the runtime without first "
         "skipping the group when the table already exists:\n  "
         + "\n  ".join(unprobed)
-        + "\nIf this is a *new* seam, give it the probe. If it belongs to the debt "
-        "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598 owns, that Issue is "
-        "where it retires — do not widen RECORDED_ATTACHED_DDL_DEBT to make this pass. "
+        + "\nGive every new seam the absent-table probe; #4598 retired "
+        "RECORDED_ATTACHED_DDL_DEBT to zero, so do not widen it to make this pass. "
         "Idempotence must come from the `to_regclass` probe `app/db/db.py` uses, "
         "not from `IF NOT EXISTS`: `CREATE TABLE IF NOT EXISTS` no-ops silently "
         "against an older shape while the ALTERs after it still run against it. "
@@ -574,37 +577,15 @@ def test_no_durable_ddl_executes_outside_the_revision_chain() -> None:
 
 
 def test_the_attached_object_ddl_debt_is_exactly_what_is_recorded() -> None:
-    """The recorded attached-object DDL debt is a measurement, not a waiver.
-
-    MVR-05A2 widened this scan's vocabulary past table-level DDL, because an
-    index or trigger dropped and recreated against a migration-owned table is
-    the same drop-and-re-add mechanism MVR-05A1 (#4560) removed from
-    `objects_pkey`. Forty-five such statements across fourteen modules already
-    run without an existence probe, including six
-    `DROP TRIGGER` / `CREATE TRIGGER` pairs —
-    `app/heimdal/raw_read_gate.py`'s own docstring records that migration
-    `f1c7e2a9b4d6` installs an identical trigger, so a migration owns the object
-    and the runtime recreates it.
-
-    MVR-05A2's AC-5 asks for the existence probe in exactly one place
-    (`app/stores/pg.py`, delivered), so repairing the rest belongs to
-    https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598, which owns both
-    the repair and shrinking this mapping as statements retire. Pinning the
-    count is what keeps it evidence: a statement that goes away must come off
-    the pin, and a statement that appears is in neither the pin nor the
-    exclusion and fails the guard above.
-
-    **This mapping is not a clean bill of health.** Reading it as one is the
-    mistake it exists to prevent.
-    """
+    """The #4598 attached-object debt bound remains exactly zero."""
     observed = observed_attached_ddl_debt(discover_runtime_ddl_seams(discover_durable_tables()))
     assert dict(observed) == dict(RECORDED_ATTACHED_DDL_DEBT), (
         "the recorded attached-object DDL debt no longer matches the tree.\n"
         f"  gone:  {sorted(set(RECORDED_ATTACHED_DDL_DEBT) - set(observed))}\n"
         f"  new:   {sorted(set(observed) - set(RECORDED_ATTACHED_DDL_DEBT))}\n"
         f"  moved: {sorted(k for k in set(observed) & set(RECORDED_ATTACHED_DDL_DEBT) if observed[k] != RECORDED_ATTACHED_DDL_DEBT[k])}\n"
-        "If a statement retired, lower its count here — that is #4598 making progress. "
-        "If one appeared, it needs the existence probe, not a bigger pin."
+        "#4598 retired the bound to zero. A new statement needs the absent-table "
+        "probe, not a bigger pin."
     )
 
 
@@ -617,9 +598,9 @@ def test_no_durable_ddl_has_two_owners() -> None:
     second owner written in the repo's other native style walk straight past.
     """
     file_state_owners = _table_ddl_owners("file_state")
-    assert len(file_state_owners) == 1, (
-        f"expected exactly one Alembic revision to own file_state DDL, got {file_state_owners}"
-    )
+    assert (
+        len(file_state_owners) == 1
+    ), f"expected exactly one Alembic revision to own file_state DDL, got {file_state_owners}"
     assert file_state_owners[0].startswith(FILE_STATE_OWNING_REVISION), file_state_owners
 
     agent_memories_owners = _table_ddl_owners("agent_memories")
@@ -642,9 +623,9 @@ def test_no_durable_ddl_has_two_owners() -> None:
         for name, text in _revision_sources().items()
         if objects_path_raw_ddl.search(text) or objects_path_op_ddl.search(text)
     )
-    assert len(objects_path_owners) == 1, (
-        f"expected exactly one Alembic revision to own objects.path, got {objects_path_owners}"
-    )
+    assert (
+        len(objects_path_owners) == 1
+    ), f"expected exactly one Alembic revision to own objects.path, got {objects_path_owners}"
     assert objects_path_owners[0].startswith(FILE_STATE_OWNING_REVISION), objects_path_owners
 
 
@@ -668,7 +649,8 @@ def test_the_objects_key_shape_has_exactly_one_owner() -> None:
     assert pkey_writers == [_owning_revision_filename(OBJECTS_OWNING_REVISION)], pkey_writers
 
     uuid_index_writers = sorted(
-        name for name, text in _revision_sources().items()
+        name
+        for name, text in _revision_sources().items()
         if re.search(r"(?is)\bobjects_uuid_idx\b", text)
     )
     assert uuid_index_writers == sorted(
@@ -715,9 +697,7 @@ def test_adopted_tables_are_reachable_from_the_alembic_revision_chain() -> None:
         creating = sorted(
             name
             for name, text in sources.items()
-            if re.search(
-                rf"(?is)create\s+table\s+if\s+not\s+exists\s+(?:public\.)?{table}\b", text
-            )
+            if re.search(rf"(?is)create\s+table\s+if\s+not\s+exists\s+(?:public\.)?{table}\b", text)
         )
         assert creating, (
             f"no Alembic revision creates {table}; MVR-05A's AC-1 becomes "
@@ -805,9 +785,7 @@ def test_durable_ownership_pg_targets_run_in_both_pg_lanes() -> None:
     for workflow_path, step_fragment in PG_LANES:
         workflow = workflow_path.read_text(encoding="utf-8")
         invocation = _pytest_invocation_after(workflow, step_fragment)
-        missing = [
-            target for target in DURABLE_OWNERSHIP_PG_TARGETS if target not in invocation
-        ]
+        missing = [target for target in DURABLE_OWNERSHIP_PG_TARGETS if target not in invocation]
         assert missing == [], (
             f"{missing} are pg-marked but absent from the {step_fragment!r} pytest "
             f"invocation in {workflow_path.name}; they would not run in that lane."

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Tuple
 
 from app.config.database import explicit_runtime_database_url
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.db.errors import OutboxSchemaMissingError
 from app.events.models import Event, new_event
 from app.events.schema import OutboxEvent
@@ -72,7 +73,9 @@ def _assert_outbox_schema(conn: Any) -> None:
     if row is not None:
         oid = row[0] if not isinstance(row, dict) else row.get("oid")
     if not oid:
-        raise OutboxSchemaMissingError(f"Missing table 'outbox' in the configured Postgres. {_OUTBOX_MIGRATION_HINT}")
+        raise OutboxSchemaMissingError(
+            f"Missing table 'outbox' in the configured Postgres. {_OUTBOX_MIGRATION_HINT}"
+        )
     cur = _exec(
         conn,
         "SELECT column_name FROM information_schema.columns "
@@ -85,6 +88,13 @@ def _assert_outbox_schema(conn: Any) -> None:
         raise OutboxSchemaMissingError(
             f"outbox table is missing column(s) {missing_columns}. {_OUTBOX_MIGRATION_HINT}"
         )
+    assert_migration_owned_attached_objects(
+        conn,
+        table="outbox",
+        indexes=("outbox_created_idx", "outbox_delivered_idx"),
+        error_type=OutboxSchemaMissingError,
+        migration_hint=_OUTBOX_MIGRATION_HINT,
+    )
 
 
 def _open_conn():
@@ -295,6 +305,37 @@ def _row_value(row: Any, index: int, key: str | None = None) -> Any:
     return row[index]
 
 
+def _autocreate_outbox_fixture(conn: Any) -> None:
+    if not _outbox_schema_autocreate_enabled():
+        return
+    for table, statements in (
+        (
+            "outbox",
+            (
+                """
+        create table if not exists outbox (
+            id uuid primary key default gen_random_uuid(),
+            topic text not null,
+            payload jsonb not null,
+            created_at timestamptz not null default now(),
+            delivered_at timestamptz,
+            attempts int not null default 0
+        )""",
+                "create index if not exists outbox_created_idx on outbox (created_at)",
+                "create index if not exists outbox_delivered_idx on outbox (delivered_at)",
+            ),
+        ),
+    ):
+        cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table,))
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        present = _row_value(row, 0, "oid") if row is not None else None
+        if present:
+            continue
+        _exec(conn, "create extension if not exists pgcrypto")
+        for statement in statements:
+            _exec(conn, statement)
+
+
 def bootstrap(conn: Any = None) -> None:
     """Initiera outbox-tabellen. Valfritt extern conn för tester.
 
@@ -312,24 +353,8 @@ def bootstrap(conn: Any = None) -> None:
         # No longer swallowed (KERNEL-05, #2850): a failure here must surface,
         # not silently mask a broken connection/legacy-schema seam.
         ensure_schema(conn)  # type: ignore[arg-type]
-        if not _outbox_schema_autocreate_enabled():
-            _assert_outbox_schema(conn)
-            return
-        _exec(conn, "create extension if not exists pgcrypto")
-        _exec(
-            conn,
-            """
-        create table if not exists outbox (
-            id uuid primary key default gen_random_uuid(),
-            topic text not null,
-            payload jsonb not null,
-            created_at timestamptz not null default now(),
-            delivered_at timestamptz,
-            attempts int not null default 0
-        )""",
-        )
-        _exec(conn, "create index if not exists outbox_created_idx on outbox (created_at)")
-        _exec(conn, "create index if not exists outbox_delivered_idx on outbox (delivered_at)")
+        _autocreate_outbox_fixture(conn)
+        _assert_outbox_schema(conn)
     finally:
         if close:
             conn.close()
@@ -405,7 +430,9 @@ def serialize_outbox_record(event: Any, *, default_source: str = "app") -> dict[
     return coerced.model_dump(mode="json", exclude_none=True)
 
 
-def append_jsonl_outbox_event(outbox_path: Path, event: Any, *, default_source: str = "app") -> bool:
+def append_jsonl_outbox_event(
+    outbox_path: Path, event: Any, *, default_source: str = "app"
+) -> bool:
     record = serialize_outbox_record(event, default_source=default_source)
     if record is None:
         return False
@@ -477,12 +504,18 @@ def derive_idempotency_key(topic: str, source_id: str, content_fingerprint: str)
     parts = {"topic": topic, "source_id": source_id, "content_fingerprint": content_fingerprint}
     for name, value in parts.items():
         if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"derive_idempotency_key requires a non-empty string {name!r}, got {value!r}")
-    digest = hashlib.sha256("\x1f".join((topic, source_id, content_fingerprint)).encode("utf-8")).hexdigest()
+            raise ValueError(
+                f"derive_idempotency_key requires a non-empty string {name!r}, got {value!r}"
+            )
+    digest = hashlib.sha256(
+        "\x1f".join((topic, source_id, content_fingerprint)).encode("utf-8")
+    ).hexdigest()
     return str(uuid_module.uuid5(OUTBOX_IDEMPOTENCY_NAMESPACE, digest))
 
 
-def payload_fingerprint(payload: Mapping[str, Any] | None, *, exclude: tuple[str, ...] = ("trace_id",)) -> str:
+def payload_fingerprint(
+    payload: Mapping[str, Any] | None, *, exclude: tuple[str, ...] = ("trace_id",)
+) -> str:
     """Stable sha256 fingerprint of an event payload for key derivation.
 
     Canonical JSON (sorted keys) over the payload minus volatile keys
@@ -525,7 +558,9 @@ def write_outbox_event(
     authoritative and caller-owned regardless of ambient backend settings.
     """
     if not isinstance(idempotency_key, str) or not idempotency_key.strip():
-        raise ValueError(f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}")
+        raise ValueError(
+            f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}"
+        )
     envelope = _coerce_event(event)
     if is_registered_topic(envelope.event_type):
         validate_topic_payload(envelope.event_type, envelope.payload)
@@ -534,11 +569,15 @@ def write_outbox_event(
         stamped_meta = dict(envelope.meta or {})
         stamped_meta["payload_schema"] = current_schema_ref(envelope.event_type)
         envelope = envelope.model_copy(update={"meta": stamped_meta})
-    if conn is None and _self_owned_outbox_write_policy(
-        backend=os.environ.get("STORE_BACKEND"),
-        dsn_configured=_self_owned_database_is_named(),
-        required_db=required_db,
-    ) == "skip":
+    if (
+        conn is None
+        and _self_owned_outbox_write_policy(
+            backend=os.environ.get("STORE_BACKEND"),
+            dsn_configured=_self_owned_database_is_named(),
+            required_db=required_db,
+        )
+        == "skip"
+    ):
         # Outbox emission is best effort outside an explicitly configured
         # Postgres runtime.  ``""`` is the existing no-insert result (used for
         # a deduplicated event); only callers that request ``required_db`` may
@@ -730,7 +769,10 @@ def poll_outbox_one(
     """
     conn, close = _use_conn(conn)
     try:
-        cur = _exec(conn, "select id, topic, payload from outbox where delivered_at is null order by created_at asc limit 1")
+        cur = _exec(
+            conn,
+            "select id, topic, payload from outbox where delivered_at is null order by created_at asc limit 1",
+        )
         row = cur.fetchone()
         if not row:
             return None
@@ -738,7 +780,12 @@ def poll_outbox_one(
         row_topic = _row_value(row, 1, "topic")
         row_payload = _row_value(row, 2, "payload")
         event = _coerce_event_from_db(row_payload, row_topic)
-        msg = {"id": str(row_id), "topic": event.event_type, "payload": dict(event.payload), "event": event}
+        msg = {
+            "id": str(row_id),
+            "topic": event.event_type,
+            "payload": dict(event.payload),
+            "event": event,
+        }
         if handler:
             try:
                 handler(event.event_type, event.payload)

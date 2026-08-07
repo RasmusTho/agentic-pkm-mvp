@@ -29,6 +29,11 @@ same identity even before the store is read, and the primary key itself makes
 a second receipt for the same pair impossible. `append_media_receipt` returns
 ``(row, created)`` with ``created=False`` for a replay -- the same shape
 `app.heimdal.raw_store.insert_raw_record` uses.
+
+Alembic is the sole production owner of this table's attached indexes,
+reject-mutation trigger, and trigger function. Runtime startup is SELECT-only
+for a present table; the explicit test autocreate flag may create the complete
+fixture shape only when the table is absent.
 """
 
 from __future__ import annotations
@@ -41,6 +46,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.db.attached_schema import (
+    MigrationOwnedTrigger,
+    assert_migration_owned_attached_objects,
+)
 from app.heimdal._backend import resolve_heimdal_backend
 
 _TABLE = "heimdal_media_receipt"
@@ -216,58 +225,72 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise MediaReceiptSchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=("heimdal_media_receipt_seq_idx", "heimdal_media_receipt_capture_id_idx"),
+        trigger=MigrationOwnedTrigger(
+            "heimdal_media_receipt_no_update",
+            "heimdal_media_receipt_reject_mutation",
+        ),
+        error_type=MediaReceiptSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            receipt_id text PRIMARY KEY,
-            capture_id text NOT NULL,
-            content_sha256 text NOT NULL,
-            raw_ref text NOT NULL,
-            kind text NOT NULL,
-            lane text NOT NULL,
-            admitted_at timestamptz NOT NULL DEFAULT now(),
-            trace_id text NOT NULL DEFAULT '',
-            payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            sequence bigserial NOT NULL
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                receipt_id text PRIMARY KEY,
+                capture_id text NOT NULL,
+                content_sha256 text NOT NULL,
+                raw_ref text NOT NULL,
+                kind text NOT NULL,
+                lane text NOT NULL,
+                admitted_at timestamptz NOT NULL DEFAULT now(),
+                trace_id text NOT NULL DEFAULT '',
+                payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                sequence bigserial NOT NULL
+            )
+            """
         )
-        """
-    )
-    cur.execute(f"CREATE INDEX IF NOT EXISTS heimdal_media_receipt_seq_idx ON {_TABLE} (sequence)")
-    cur.execute(
-        f"CREATE INDEX IF NOT EXISTS heimdal_media_receipt_capture_id_idx ON {_TABLE} (capture_id)"
-    )
-    cur.execute(
-        """
-        CREATE OR REPLACE FUNCTION heimdal_media_receipt_reject_mutation()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'heimdal_media_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
-        END;
-        $$ LANGUAGE plpgsql
-        """
-    )
-    cur.execute(f"DROP TRIGGER IF EXISTS heimdal_media_receipt_no_update ON {_TABLE}")
-    cur.execute(
-        f"""
-        CREATE TRIGGER heimdal_media_receipt_no_update
-        BEFORE UPDATE OR DELETE ON {_TABLE}
-        FOR EACH ROW EXECUTE FUNCTION heimdal_media_receipt_reject_mutation()
-        """
-    )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_media_receipt_seq_idx ON {_TABLE} (sequence)"
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS heimdal_media_receipt_capture_id_idx ON {_TABLE} (capture_id)"
+        )
+        cur.execute(
+            """
+            CREATE OR REPLACE FUNCTION heimdal_media_receipt_reject_mutation()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'heimdal_media_receipt is append-only (HEIM-1): % is not permitted', TG_OP;
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        cur.execute(f"DROP TRIGGER IF EXISTS heimdal_media_receipt_no_update ON {_TABLE}")
+        cur.execute(
+            f"""
+            CREATE TRIGGER heimdal_media_receipt_no_update
+            BEFORE UPDATE OR DELETE ON {_TABLE}
+            FOR EACH ROW EXECUTE FUNCTION heimdal_media_receipt_reject_mutation()
+            """
+        )
 
 
 _SELECT_COLUMNS = (

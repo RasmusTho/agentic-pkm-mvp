@@ -60,6 +60,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.heimdal import meeting_blocks, meeting_ledger
 from app.heimdal._backend import resolve_heimdal_backend
 from app.media import transcribe as transcribe_module
@@ -260,9 +261,7 @@ def _derive_analysis_blocks(transcript_text: str) -> List[Dict[str, Any]]:
         if counts[word] > 1
     ]
 
-    decisions = [
-        s for s in sentences if any(marker in s.lower() for marker in _DECISION_MARKERS)
-    ]
+    decisions = [s for s in sentences if any(marker in s.lower() for marker in _DECISION_MARKERS)]
     questions = [s for s in sentences if s.endswith("?")]
     actions = [
         s
@@ -328,9 +327,7 @@ def _sqlite_path() -> str:
     global _process_tmp_path
     with _process_tmp_lock:
         if _process_tmp_path is None:
-            fd, path = tempfile.mkstemp(
-                prefix="heimdal-meeting-projection-", suffix=".sqlite3"
-            )
+            fd, path = tempfile.mkstemp(prefix="heimdal-meeting-projection-", suffix=".sqlite3")
             os.close(fd)
             _process_tmp_path = path
         return _process_tmp_path
@@ -562,13 +559,20 @@ def _assert_pg_schema(conn: Any) -> None:
         cur.execute("SELECT to_regclass(%s)", (table,))
         row = cur.fetchone()
         if not (row and row[0]):
-            raise MeetingProjectionSchemaMissingError(
-                f"Missing table '{table}'. {_MIGRATION_HINT}"
-            )
+            raise MeetingProjectionSchemaMissingError(f"Missing table '{table}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_REVISION_TABLE,
+        indexes=("heimdal_meeting_analysis_revision_set_idx",),
+        error_type=MeetingProjectionSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
-_PG_AUTOCREATE_DDL = f"""
-CREATE TABLE IF NOT EXISTS {_DERIVATION_TABLE} (
+_PG_AUTOCREATE_GROUPS = (
+    (
+        _DERIVATION_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_DERIVATION_TABLE} (
     content_sha256 TEXT PRIMARY KEY,
     status TEXT NOT NULL,
     text TEXT NOT NULL DEFAULT '',
@@ -578,7 +582,11 @@ CREATE TABLE IF NOT EXISTS {_DERIVATION_TABLE} (
     engine JSONB NOT NULL DEFAULT '{{}}'::jsonb,
     derived_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE TABLE IF NOT EXISTS {_REVISION_TABLE} (
+""",
+    ),
+    (
+        _REVISION_TABLE,
+        f"""CREATE TABLE IF NOT EXISTS {_REVISION_TABLE} (
     session_id TEXT NOT NULL,
     revision INTEGER NOT NULL,
     input_set_sha256 TEXT NOT NULL,
@@ -591,7 +599,24 @@ CREATE TABLE IF NOT EXISTS {_REVISION_TABLE} (
 );
 CREATE INDEX IF NOT EXISTS heimdal_meeting_analysis_revision_set_idx
     ON {_REVISION_TABLE} (session_id, input_set_sha256);
-"""
+""",
+    ),
+)
+
+
+def _ensure_pg_schema(conn: Any) -> None:
+    if not _schema_autocreate_enabled():
+        _assert_pg_schema(conn)
+        return
+    cur = conn.cursor()
+    for table, ddl in _PG_AUTOCREATE_GROUPS:
+        cur.execute("SELECT to_regclass(%s)", (table,))
+        row = cur.fetchone()
+        present = bool(row and row[0])
+        if present:
+            continue
+        cur.execute(ddl)
+    _assert_pg_schema(conn)
 
 
 class _PgProjectionStore:
@@ -600,10 +625,7 @@ class _PgProjectionStore:
     def __init__(self) -> None:
         conn = _pg_connect()
         try:
-            if _schema_autocreate_enabled():
-                conn.cursor().execute(_PG_AUTOCREATE_DDL)
-            else:
-                _assert_pg_schema(conn)
+            _ensure_pg_schema(conn)
         finally:
             conn.close()
 
@@ -1151,9 +1173,7 @@ def build_projection(session_id: str) -> Dict[str, Any]:
         count = run_end - run_start + 1
         if count <= _GAP_RUN_COLLAPSE_THRESHOLD:
             for missing_seq in range(run_start, run_end + 1):
-                transcript.append(
-                    {"seq": missing_seq, "kind": "gap", "reason": "segment_missing"}
-                )
+                transcript.append({"seq": missing_seq, "kind": "gap", "reason": "segment_missing"})
         else:
             transcript.append(
                 {

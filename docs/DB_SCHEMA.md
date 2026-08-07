@@ -86,18 +86,17 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   against objects *attached to* a durable table (indexes, triggers, rules) as well as the table
   itself, because an index or trigger dropped and recreated against a migration-owned table is the
   same drop-and-re-add mechanism MVR-05A1 removed from `objects_pkey`.
-- **Forty-five attached-object statements across fourteen modules run without an existence probe,
-  and are recorded rather than fixed** (MVR-05A2, #4576).
-  `tests/architecture/durable_table_classification.py::RECORDED_ATTACHED_DDL_DEBT` pins them by
-  (module, verb, table) with a count. **It is a measurement, not a clean bill of health.** Six of
-  the fourteen modules issue a `DROP TRIGGER` / `CREATE TRIGGER` pair against a table whose trigger
-  a migration already owns — `app/heimdal/raw_read_gate.py`'s own docstring records that
-  `f1c7e2a9b4d6` installs an identical reject-mutation trigger. MVR-05A2's acceptance criteria ask
-  for the existence probe in exactly one place (`app/stores/pg.py`, delivered), so repairing the
-  rest and shrinking that mapping is owned by
-  [#4598](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598). A statement that retires must
-  come off the pin; a statement that appears is in neither the pin nor the exclusion and fails the
-  guard.
+- **All forty-five formerly recorded attached-object statements across fourteen modules are now
+  absent-table-only fixture DDL** (#4598). Alembic is the sole production owner of the indexes,
+  triggers, trigger functions and rules attached to durable tables. For a present migration-owned
+  table, runtime startup performs SELECT-only shape assertions and fails loud on a missing or
+  incompatible attached object; it never repairs, drops or recreates one. Complete fixture creation
+  remains available only when `STORE_SCHEMA_AUTOCREATE=1` and the table itself is absent. The six
+  Heimdal append-only seams therefore have no `DROP TRIGGER` / `CREATE TRIGGER` window, including
+  the raw-record function's `app.heimdal_retention_bypass` exception introduced by migration
+  `a3f9d1c6e2b8`. The repository-derived bound
+  `tests/architecture/durable_table_classification.py::RECORDED_ATTACHED_DDL_DEBT` is now empty;
+  any new unprobed attached-object DDL fails the guard instead of growing the bound.
 - **`app/db/sql/relations_init.sql` is deleted** (MVR-05A2, #4576). It declared a primary-key-less
   `relations` shape disagreeing with its Alembic owner
   (`202510241200_sot41_amg_core.py`) and had zero readers repo-wide; its absence and the absence of

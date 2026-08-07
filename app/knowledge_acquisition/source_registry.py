@@ -71,6 +71,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.db.dsn import resolve_dsn
 
 # --- Contract vocab ---------------------------------------------------------
@@ -116,9 +117,19 @@ _KIND_DEFAULT_POLL_INTERVAL_SECONDS: dict[str, int] = {
     "subscription_feed": 21600,
 }
 
-_ALLOWED_POLICY_KEYS: frozenset[str] = frozenset({"mode", "policy_version", "extractor_ids", "captions", "media"})
+_ALLOWED_POLICY_KEYS: frozenset[str] = frozenset(
+    {"mode", "policy_version", "extractor_ids", "captions", "media"}
+)
 _ALLOWED_MEDIA_KEYS: frozenset[str] = frozenset(
-    {"enabled", "max_quality", "format", "storage_binding", "min_free_gb", "retention_days", "checksum"}
+    {
+        "enabled",
+        "max_quality",
+        "format",
+        "storage_binding",
+        "min_free_gb",
+        "retention_days",
+        "checksum",
+    }
 )
 
 _TABLE = "acquisition_source_registry"
@@ -248,16 +259,22 @@ def _default_media_policy() -> dict[str, Any]:
 
 def _validate_media_policy(media: Any) -> None:
     if not isinstance(media, dict):
-        raise SourceRegistryValidationError(f"acquisition_policy.media must be an object, got {media!r}")
+        raise SourceRegistryValidationError(
+            f"acquisition_policy.media must be an object, got {media!r}"
+        )
     unknown = set(media) - _ALLOWED_MEDIA_KEYS
     if unknown:
-        raise SourceRegistryValidationError(f"acquisition_policy.media has unknown keys: {sorted(unknown)}")
+        raise SourceRegistryValidationError(
+            f"acquisition_policy.media has unknown keys: {sorted(unknown)}"
+        )
     if "enabled" in media and not isinstance(media["enabled"], bool):
         raise SourceRegistryValidationError("acquisition_policy.media.enabled must be a boolean")
     for key in ("max_quality", "format", "storage_binding"):
         if key in media and media[key] is not None:
             if not isinstance(media[key], str):
-                raise SourceRegistryValidationError(f"acquisition_policy.media.{key} must be a string or null")
+                raise SourceRegistryValidationError(
+                    f"acquisition_policy.media.{key} must be a string or null"
+                )
             _check_portable_string(media[key], f"acquisition_policy.media.{key}")
     for key in ("min_free_gb", "retention_days"):
         if key in media and media[key] is not None:
@@ -265,7 +282,11 @@ def _validate_media_policy(media: Any) -> None:
             # ``bool`` passes ``isinstance(..., int)`` and NaN/infinity are
             # accepted by memory but rejected by Postgres jsonb. Refuse all
             # three before either backend sees the policy.
-            if isinstance(number, bool) or not isinstance(number, int | float) or not math.isfinite(number):
+            if (
+                isinstance(number, bool)
+                or not isinstance(number, int | float)
+                or not math.isfinite(number)
+            ):
                 raise SourceRegistryValidationError(
                     f"acquisition_policy.media.{key} must be a finite number or null"
                 )
@@ -295,10 +316,14 @@ def _default_acquisition_policy(collection_kind: str) -> dict[str, Any]:
 
 def _validate_acquisition_policy_override(override: Any) -> None:
     if not isinstance(override, dict):
-        raise SourceRegistryValidationError(f"acquisition_policy must be an object, got {override!r}")
+        raise SourceRegistryValidationError(
+            f"acquisition_policy must be an object, got {override!r}"
+        )
     unknown = set(override) - _ALLOWED_POLICY_KEYS
     if unknown:
-        raise SourceRegistryValidationError(f"acquisition_policy has unknown keys: {sorted(unknown)}")
+        raise SourceRegistryValidationError(
+            f"acquisition_policy has unknown keys: {sorted(unknown)}"
+        )
     if "mode" in override and (
         not isinstance(override["mode"], str) or override["mode"] not in VALID_ACQUISITION_MODES
     ):
@@ -309,11 +334,17 @@ def _validate_acquisition_policy_override(override: Any) -> None:
     if "policy_version" in override:
         version = override["policy_version"]
         if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-            raise SourceRegistryValidationError("acquisition_policy.policy_version must be a positive int")
+            raise SourceRegistryValidationError(
+                "acquisition_policy.policy_version must be a positive int"
+            )
     if "extractor_ids" in override:
         extractor_ids = override["extractor_ids"]
-        if not isinstance(extractor_ids, list) or not all(isinstance(x, str) for x in extractor_ids):
-            raise SourceRegistryValidationError("acquisition_policy.extractor_ids must be a list of strings")
+        if not isinstance(extractor_ids, list) or not all(
+            isinstance(x, str) for x in extractor_ids
+        ):
+            raise SourceRegistryValidationError(
+                "acquisition_policy.extractor_ids must be a list of strings"
+            )
         for index, extractor_id in enumerate(extractor_ids):
             _check_portable_string(extractor_id, f"acquisition_policy.extractor_ids[{index}]")
     if "captions" in override and not isinstance(override["captions"], bool):
@@ -322,7 +353,9 @@ def _validate_acquisition_policy_override(override: Any) -> None:
         _validate_media_policy(override["media"])
 
 
-def _build_acquisition_policy(collection_kind: str, override: dict[str, Any] | None) -> dict[str, Any]:
+def _build_acquisition_policy(
+    collection_kind: str, override: dict[str, Any] | None
+) -> dict[str, Any]:
     base = _default_acquisition_policy(collection_kind)
     if override is None:
         return base
@@ -392,9 +425,7 @@ def _portable_json_copy(value: Any, *, field: str) -> Any:
                 _validate(child, f"{path}.{key}", active)
             active.remove(identity)
             return
-        raise SourceRegistryValidationError(
-            f"{path} contains unsupported non-JSON value {item!r}"
-        )
+        raise SourceRegistryValidationError(f"{path} contains unsupported non-JSON value {item!r}")
 
     _validate(value, field, set())
     try:
@@ -525,7 +556,9 @@ class _MemorySourceRegistryBackend:
     def list_for_account(self, account_binding_id: str | None) -> tuple[SourceBinding, ...]:
         with self._lock:
             return tuple(
-                _copy_binding(row) for row in self._rows.values() if row.account_binding_id == account_binding_id
+                _copy_binding(row)
+                for row in self._rows.values()
+                if row.account_binding_id == account_binding_id
             )
 
     def update_title(self, binding_id: str, title: str) -> SourceBinding:
@@ -700,79 +733,91 @@ def _schema_autocreate_enabled() -> bool:
 
 
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT to_regclass(%s)", (_TABLE,))
-    row = cur.fetchone()
-    oid = row[0] if row else None
-    if not oid:
-        raise SourceRegistrySchemaMissingError(f"Missing table '{_TABLE}'. {_MIGRATION_HINT}")
+    assert_migration_owned_attached_objects(
+        conn,
+        table=_TABLE,
+        indexes=(
+            "acquisition_source_registry_binding_triple_uq",
+            "acquisition_source_registry_single_inbox_uq",
+            "acquisition_source_registry_account_idx",
+        ),
+        error_type=SourceRegistrySchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
 
 
 def _bootstrap_pg(conn: Any) -> None:
+    cur = conn.cursor()
     if not _schema_autocreate_enabled():
         _assert_pg_schema(conn)
         return
-    cur = conn.cursor()
-    cur.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {_TABLE} (
-            binding_id TEXT PRIMARY KEY,
-            account_binding_id TEXT,
-            collection_kind TEXT NOT NULL,
-            collection_ref TEXT NOT NULL,
-            title TEXT NOT NULL,
-            enabled BOOLEAN NOT NULL DEFAULT false,
-            discovery_mode TEXT NOT NULL,
-            poll_interval_seconds INTEGER NOT NULL,
-            priority TEXT NOT NULL,
-            cursor JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-            last_attempt_at TIMESTAMPTZ,
-            last_success_at TIMESTAMPTZ,
-            last_error JSONB,
-            acquisition_policy JSONB NOT NULL,
-            provenance JSONB NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT acquisition_source_registry_kind_chk CHECK (
-                collection_kind IN (
-                    'inbox_playlist', 'owned_playlist', 'liked_videos',
-                    'public_playlist', 'subscription_feed'
+    for table in (_TABLE,):
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS present", (table,))
+        row = cur.fetchone()
+        present = bool(row and (row.get("present") if isinstance(row, dict) else row[0]))
+        if present:
+            _assert_pg_schema(conn)
+            continue
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_TABLE} (
+                binding_id TEXT PRIMARY KEY,
+                account_binding_id TEXT,
+                collection_kind TEXT NOT NULL,
+                collection_ref TEXT NOT NULL,
+                title TEXT NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT false,
+                discovery_mode TEXT NOT NULL,
+                poll_interval_seconds INTEGER NOT NULL,
+                priority TEXT NOT NULL,
+                cursor JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                last_attempt_at TIMESTAMPTZ,
+                last_success_at TIMESTAMPTZ,
+                last_error JSONB,
+                acquisition_policy JSONB NOT NULL,
+                provenance JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                CONSTRAINT acquisition_source_registry_kind_chk CHECK (
+                    collection_kind IN (
+                        'inbox_playlist', 'owned_playlist', 'liked_videos',
+                        'public_playlist', 'subscription_feed'
+                    )
+                ),
+                CONSTRAINT acquisition_source_registry_discovery_mode_chk CHECK (
+                    discovery_mode IN ('api_poll', 'rss_poll', 'backfill_only')
+                ),
+                CONSTRAINT acquisition_source_registry_priority_chk CHECK (
+                    priority IN ('high', 'normal')
+                ),
+                CONSTRAINT acquisition_source_registry_poll_interval_chk CHECK (
+                    poll_interval_seconds >= 60 AND poll_interval_seconds <= 604800
+                ),
+                CONSTRAINT acquisition_source_registry_account_binding_chk CHECK (
+                    collection_kind IN ('public_playlist', 'subscription_feed')
+                    OR account_binding_id IS NOT NULL
+                ),
+                CONSTRAINT acquisition_source_registry_account_binding_uuid_chk CHECK (
+                    account_binding_id IS NULL OR account_binding_id ~
+                    '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$'
                 )
-            ),
-            CONSTRAINT acquisition_source_registry_discovery_mode_chk CHECK (
-                discovery_mode IN ('api_poll', 'rss_poll', 'backfill_only')
-            ),
-            CONSTRAINT acquisition_source_registry_priority_chk CHECK (
-                priority IN ('high', 'normal')
-            ),
-            CONSTRAINT acquisition_source_registry_poll_interval_chk CHECK (
-                poll_interval_seconds >= 60 AND poll_interval_seconds <= 604800
-            ),
-            CONSTRAINT acquisition_source_registry_account_binding_chk CHECK (
-                collection_kind IN ('public_playlist', 'subscription_feed')
-                OR account_binding_id IS NOT NULL
-            ),
-            CONSTRAINT acquisition_source_registry_account_binding_uuid_chk CHECK (
-                account_binding_id IS NULL OR account_binding_id ~
-                '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$'
             )
+            """
         )
-        """
-    )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_binding_triple_uq "
-        f"ON {_TABLE} (collection_kind, collection_ref, "
-        f"COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}'))"
-    )
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_single_inbox_uq "
-        f"ON {_TABLE} (COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}')) "
-        "WHERE collection_kind = 'inbox_playlist' AND enabled = true"
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS acquisition_source_registry_account_idx "
-        f"ON {_TABLE} (account_binding_id)"
-    )
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_binding_triple_uq "
+            f"ON {_TABLE} (collection_kind, collection_ref, "
+            f"COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}'))"
+        )
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS acquisition_source_registry_single_inbox_uq "
+            f"ON {_TABLE} (COALESCE(account_binding_id, '{_NULL_ACCOUNT_SENTINEL}')) "
+            "WHERE collection_kind = 'inbox_playlist' AND enabled = true"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS acquisition_source_registry_account_idx "
+            f"ON {_TABLE} (account_binding_id)"
+        )
 
 
 def _row_to_binding(row: tuple[Any, ...]) -> SourceBinding:
@@ -1169,7 +1214,10 @@ class SourceRegistry:
                 f"collection_kind must be one of {sorted(VALID_COLLECTION_KINDS)}, got {collection_kind!r}"
             )
         resolved_account_binding_id = _normalize_account_binding_id(account_binding_id)
-        if collection_kind in _ACCOUNT_BOUND_COLLECTION_KINDS and resolved_account_binding_id is None:
+        if (
+            collection_kind in _ACCOUNT_BOUND_COLLECTION_KINDS
+            and resolved_account_binding_id is None
+        ):
             raise SourceRegistryValidationError(
                 f"account_binding_id is required for authenticated collection_kind {collection_kind!r}"
             )
@@ -1185,8 +1233,13 @@ class SourceRegistry:
 
         resolved_discovery_mode = discovery_mode
         if resolved_discovery_mode is None:
-            resolved_discovery_mode = "rss_poll" if collection_kind == "subscription_feed" else "api_poll"
-        elif not isinstance(resolved_discovery_mode, str) or resolved_discovery_mode not in VALID_DISCOVERY_MODES:
+            resolved_discovery_mode = (
+                "rss_poll" if collection_kind == "subscription_feed" else "api_poll"
+            )
+        elif (
+            not isinstance(resolved_discovery_mode, str)
+            or resolved_discovery_mode not in VALID_DISCOVERY_MODES
+        ):
             raise SourceRegistryValidationError(
                 f"discovery_mode must be one of {sorted(VALID_DISCOVERY_MODES)}, got {resolved_discovery_mode!r}"
             )
@@ -1232,7 +1285,9 @@ class SourceRegistry:
         this account (if any) and enables the target, as a single atomic
         operation -- a second enabled inbox is structurally impossible.
         """
-        return self._backend.set_inbox(_normalize_account_binding_id(account_binding_id), binding_id)
+        return self._backend.set_inbox(
+            _normalize_account_binding_id(account_binding_id), binding_id
+        )
 
     def rename(self, binding_id: str, title: str) -> SourceBinding:
         """Change only ``title``; identity, cursor, and policy are untouched."""

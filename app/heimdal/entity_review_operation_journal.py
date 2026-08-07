@@ -68,6 +68,7 @@ import uuid as uuid_module
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Protocol
 
+from app.db.attached_schema import assert_migration_owned_attached_objects
 from app.events.models import new_event
 from app.events.types import HEIMDAL_REGISTER_ENTITY_MERGED
 from app.services.outbox import write_outbox_event
@@ -350,6 +351,20 @@ def _is_unique_violation(exc: Exception) -> bool:
     return sqlstate == "23505"
 
 
+def _autocreate_journal_fixture(conn: Any) -> None:
+    if not _schema_autocreate_enabled():
+        return
+    for table, statements in ((JOURNAL_TABLE, (_TABLE_DDL, _ACTIVE_ENTRY_INDEX_DDL)),):
+        cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table,))
+        row = cur.fetchone() if hasattr(cur, "fetchone") else None
+        present = _col(row, 0, "oid") if row is not None else None
+        if present:
+            continue
+        for statement in statements:
+            _exec(conn, statement)
+        conn.commit()
+
+
 def ensure_journal_schema(conn: Any) -> None:
     """Assert (or, under the test flag, create) the journal schema.
 
@@ -361,18 +376,14 @@ def ensure_journal_schema(conn: Any) -> None:
     ``tests/migrations/test_entity_review_operation_journal_schema_parity.py``
     holds byte-parity with the Alembic revision.
     """
-    if _schema_autocreate_enabled():
-        _exec(conn, _TABLE_DDL)
-        _exec(conn, _ACTIVE_ENTRY_INDEX_DDL)
-        conn.commit()
-        return
-    cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (JOURNAL_TABLE,))
-    row = cur.fetchone() if hasattr(cur, "fetchone") else None
-    oid = _col(row, 0, "oid") if row is not None else None
-    if not oid:
-        raise EntityReviewOperationSchemaMissingError(
-            f"Missing table '{JOURNAL_TABLE}' in the configured Postgres. {_MIGRATION_HINT}"
-        )
+    _autocreate_journal_fixture(conn)
+    assert_migration_owned_attached_objects(
+        conn,
+        table=JOURNAL_TABLE,
+        indexes=("entity_review_operations_active_entry_idx",),
+        error_type=EntityReviewOperationSchemaMissingError,
+        migration_hint=_MIGRATION_HINT,
+    )
     cur = _exec(
         conn,
         "SELECT column_name FROM information_schema.columns "
