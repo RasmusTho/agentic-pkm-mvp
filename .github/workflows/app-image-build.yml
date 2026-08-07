@@ -136,11 +136,12 @@ jobs:
               --arg architecture "${architecture}" \
               '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture) | .digest' \
               "${manifest_json}")"
+            platform_ref="${image%:*}@${platform_digest}"
             probe_result="pass"
             if ! docker run --rm \
               --platform "${platform}" \
               --entrypoint sh \
-              "${image_ref}" \
+              "${platform_ref}" \
               -ec 'command -v piper >/dev/null; piper --help >/dev/null 2>&1; python -c "import asyncio; import kokoro_onnx; import os; from app.api.routes.health_contract import healthz; from app.main import app; from app.version import get_runtime_version; version = get_runtime_version(); assert app is not None; assert asyncio.run(healthz()) == {\"ok\": True}; assert version[\"git_sha\"] == os.environ[\"VCS_REF\"], version; assert version[\"built_at\"] == os.environ[\"BUILT_AT\"], version"'; then
               probe_result="fail"
               failures=$((failures + 1))
