@@ -141,6 +141,50 @@ def _blocking_guard() -> WriteGuard:
     return WriteGuard(lambda: {"state": "safe_mode", "reason": "test-induced block"})
 
 
+def _crash_virgin_active_app_persistence(
+    vault_root: Path,
+    crash_before_active_app_write: int,
+) -> None:
+    real_write_state = write_ops_module._write_host_append_state
+    active_writes = 0
+
+    def crash_on_selected_active_write(
+        fence_fd: int,
+        authority: object,
+        path_lock_key: str,
+        payload: dict[str, object],
+        expected_state: object,
+        expected_swap: object,
+        **kwargs: object,
+    ) -> None:
+        nonlocal active_writes
+        if payload.get("state") == "active":
+            active_writes += 1
+            if active_writes == crash_before_active_app_write:
+                os._exit(76 + crash_before_active_app_write)
+        real_write_state(
+            fence_fd,
+            authority,  # type: ignore[arg-type]
+            path_lock_key,
+            payload,
+            expected_state,  # type: ignore[arg-type]
+            expected_swap,  # type: ignore[arg-type]
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+        crash_on_selected_active_write
+    )
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "virgin-active-crash",
+        source="chat",
+        operation_id=f"virgin-active-crash-{crash_before_active_app_write}",
+        write_guard=_allowing_guard(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC: a hand-edited interests.md weight is explicit intent and outranks
 # inference.
@@ -899,48 +943,10 @@ def test_steering_log_virgin_active_persistence_crash_recovers(
     vault_root = _vault(tmp_path)
     target = vault_root / note_rel_path(STEERING_LOG)
     context = multiprocessing.get_context("fork")
-
-    def crash_during_active_app_persistence() -> None:
-        real_write_state = write_ops_module._write_host_append_state
-        active_writes = 0
-
-        def crash_on_selected_active_write(
-            fence_fd: int,
-            authority: object,
-            path_lock_key: str,
-            payload: dict[str, object],
-            expected_state: object,
-            expected_swap: object,
-            **kwargs: object,
-        ) -> None:
-            nonlocal active_writes
-            if payload.get("state") == "active":
-                active_writes += 1
-                if active_writes == crash_before_active_app_write:
-                    os._exit(76 + crash_before_active_app_write)
-            real_write_state(
-                fence_fd,
-                authority,  # type: ignore[arg-type]
-                path_lock_key,
-                payload,
-                expected_state,  # type: ignore[arg-type]
-                expected_swap,  # type: ignore[arg-type]
-                **kwargs,  # type: ignore[arg-type]
-            )
-
-        write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
-            crash_on_selected_active_write
-        )
-        append_steering_log(
-            vault_root,
-            "wrong",
-            "virgin-active-crash",
-            source="chat",
-            operation_id=f"virgin-active-crash-{crash_before_active_app_write}",
-            write_guard=_allowing_guard(),
-        )
-
-    process = context.Process(target=crash_during_active_app_persistence)
+    process = context.Process(
+        target=_crash_virgin_active_app_persistence,
+        args=(vault_root, crash_before_active_app_write),
+    )
     process.start()
     process.join(timeout=10)
     assert process.exitcode == 76 + crash_before_active_app_write
@@ -966,6 +972,104 @@ def test_steering_log_virgin_active_persistence_crash_recovers(
     states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
     assert len(states) == 2
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+
+
+def test_steering_log_virgin_missing_app_rejects_foreign_clean_record(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    target = vault_root / note_rel_path(STEERING_LOG)
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_virgin_active_app_persistence,
+        args=(vault_root, 2),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 78
+    state_path = next(
+        _host_fence_root().glob(".heimdal-atomic-append-*.state")
+    )
+    foreign = json.loads(state_path.read_text())
+    foreign["state"] = "clean"
+    foreign["transaction"] = "foreign-clean-transaction"
+    state_path.write_text(
+        json.dumps(foreign, ensure_ascii=True, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    app_before = {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    }
+    witnesses = _host_witness_paths(vault_root)
+    witness_before = {path.name: path.read_bytes() for path in witnesses}
+
+    with pytest.raises(KnowledgeWriteConflict, match="partial app-local state"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-active-crash",
+            source="chat",
+            operation_id="virgin-active-crash-2",
+            write_guard=_allowing_guard(),
+        )
+
+    assert not target.exists()
+    assert {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    } == app_before
+    assert {path.name: path.read_bytes() for path in witnesses} == witness_before
+
+
+@pytest.mark.parametrize(
+    "proof_failure",
+    ["mapping", "proposal-name", "proposal-metadata"],
+)
+def test_steering_log_virgin_missing_app_proof_failure_is_read_only(
+    tmp_path: Path,
+    proof_failure: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    target = vault_root / note_rel_path(STEERING_LOG)
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_virgin_active_app_persistence,
+        args=(vault_root, 1),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 77
+    parent = target.parent
+    stage = next(parent.glob(".atomic-append-*.stage"))
+    if proof_failure == "mapping":
+        parent.replace(vault_root / "_heimdal-parked")
+        parent.mkdir()
+    elif proof_failure == "proposal-name":
+        stage.replace(parent / ".parked-proposal-stage")
+    else:
+        stage.chmod(0o640)
+    app_before = {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    }
+    witnesses = _host_witness_paths(vault_root)
+    witness_before = {path.name: path.read_bytes() for path in witnesses}
+
+    with pytest.raises(KnowledgeWriteConflict, match="app-local state is missing"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-active-crash",
+            source="chat",
+            operation_id="virgin-active-crash-1",
+            write_guard=_allowing_guard(),
+        )
+
+    assert not target.exists()
+    assert {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    } == app_before
+    assert {path.name: path.read_bytes() for path in witnesses} == witness_before
 
 
 def test_steering_log_retry_sweeps_process_crash_stage_to_root_recovery(
