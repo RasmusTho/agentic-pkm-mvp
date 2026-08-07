@@ -11,7 +11,11 @@ Mechanism issue: #2082. Health-surface contract: `companion-ui/docs/LOCAL_FIRST_
 enablement — which cannot live in the repo.
 
 ## How it fits together
-- The runtime image bakes the engines: `piper` (CLI on PATH) + `kokoro_onnx` (Python).
+- The ordinary SHA-tagged runtime image bakes the engines from one shared dependency manifest:
+  `piper` (CLI on PATH) + `kokoro_onnx` (Python). On `linux/amd64` and `linux/arm64`, the main image
+  workflow verifies Piper CLI loading, Kokoro importability, application import, and health
+  behavior. Its `app-image-tts-engine-proof.v1` receipt is package-presence proof, not model-backed synthesis,
+  and records the exact probe scope plus the image-index and per-platform digests.
 - Compose bind-mounts the SSD root `${TTS_HOST_ROOT}` → `/data/tts` in the `api` container; the app
   reads the fixed container paths `TTS_MODEL_DIR=/data/tts/models`, `TTS_CACHE_DIR=/data/tts/cache`,
   `TTS_LOG_DIR=/data/tts/logs` (tracked in `docker-compose.yaml`).
@@ -27,14 +31,12 @@ enablement — which cannot live in the repo.
 2. Fetch models: `scripts/fetch_tts_models.sh "$TTS_HOST_ROOT/models"`
    (confirm upstream URLs/checksums on first run).
 3. Set `~/workspace-prod/.env.prod.local`: `TTS_HOST_ROOT=...`, `TTS_ENABLED=true`.
-4. Deploy (prod overlay pattern — cherry-pick the merged commit, do NOT `git pull`; see
-   project demerzel prod ops). Pass `--env-file .env.prod.local` so Compose picks up `TTS_HOST_ROOT`
-   / `TTS_ENABLED` for host-side interpolation (Compose only auto-loads `.env`, not `.env.prod.local`;
-   without this, `${TTS_HOST_ROOT:-./tmp/tts}` in `docker-compose.yaml` falls back to the dev scratch
-   dir and the SSD models from step 2 are never mounted at `/data/tts`):
-   `docker compose --env-file .env.prod.local -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod up -d --build api`
-   — validate the engine builds on the host arch (linux/arm64 on Apple silicon); if a pinned wheel
-   lacks an arm64 build, swap to a system `piper` binary and set `TTS_PIPER_COMMAND`.
+4. Before any separately governed deployment, require the normal SHA-tagged image's
+   `app-image-tts-engine-proof.v1` receipt to show `probe_result=pass` for the exact image-index
+   digest and its `linux/arm64` platform digest. Promote that same prebuilt artifact through the
+   release-channel workflow; do not rebuild on the host, substitute a system Piper binary, or create
+   a TTS-only image variant. Pass `.env.prod.local` through the governed channel configuration so
+   Compose binds the SSD models at `/data/tts`.
 5. Verify: `curl -s http://127.0.0.1:18000/api/companion/tts/status | jq '.environment, .providers'`
    → `TTS_ENABLED=true`, providers `available=true`. Post the receipt to #1699 (this is AC4) and close it.
 

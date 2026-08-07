@@ -3,7 +3,8 @@
 # `kokoro_onnx` is importable. Model files are NOT installed here — they live on
 # the external SSD (scripts/fetch_tts_models.sh + companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md).
 #
-# NOTE: validate these resolve on the prod arch (linux/arm64, Apple silicon) at
-# image build — tracked as AC1 of the mechanism issue and the mac-mini deploy task.
-piper-tts==1.2.0
-kokoro-onnx==0.4.9
+# Piper 1.6 uses CPython-ABI3 manylinux wheels published for both x86_64 and
+# aarch64; Kokoro 0.5 supports Python 3.12. The main image workflow executes
+# both packages on each published platform before emitting its proof receipt.
+piper-tts==1.6.0
+kokoro-onnx==0.5.0

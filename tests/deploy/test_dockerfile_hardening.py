@@ -30,10 +30,8 @@ docs, .git, ops). Contracts guarded here:
    package) must be re-included in .dockerignore and COPYed by the runtime
    stage or the worker/watcher/heimdal compose services crash at boot with
    ModuleNotFoundError.
-7. The TTS layer (requirements-tts.txt) is opt-in: its pins cannot install
-   on the python:3.12 base (piper-phonemize~=1.1.0 has no cp312 linux
-   wheels), so attempting it by default makes `docker build .` fail — the
-   #3896 AC requires the default build to produce a working image.
+7. The default builder installs the shared TTS requirements so every ordinary
+   app image contains the Piper and Kokoro engine dependencies (#4655).
 """
 
 from __future__ import annotations
@@ -224,28 +222,12 @@ def test_runtime_imported_scripts_modules_are_baked_into_image() -> None:
         )
 
 
-def test_tts_layer_is_opt_in_so_default_build_succeeds() -> None:
-    """requirements-tts.txt pins piper-tts==1.2.0 -> piper-phonemize~=1.1.0,
-    which publishes no cp312 linux wheels and no sdist, so installing it on
-    the python:3.12 base fails EVERY default build (`docker build .`,
-    compose build, app-image-build.yml — none pass INSTALL_TTS). The #3896 AC
-    requires the default build to produce a working image, so the TTS layer
-    must be opt-in (default 0) until the pins gain 3.12 support; the guarded
-    RUN keeps the skip loud in the build log."""
+def test_tts_layer_is_installed_in_default_builder() -> None:
+    """The ordinary image always installs the shared TTS manifest (#4655)."""
     text = _dockerfile_text()
-    assert re.search(r"^ARG INSTALL_TTS=0\s*$", text, flags=re.MULTILINE), (
-        "INSTALL_TTS must default to 0: the TTS pins cannot install on the "
-        "python:3.12 base, so a default of 1 makes every default build fail "
-        "(#3896 AC: image builds)"
-    )
-    assert 'if [ "$INSTALL_TTS" = "1" ]' in text, (
-        "the TTS install must stay behind the INSTALL_TTS guard so it can be "
-        "re-enabled with --build-arg INSTALL_TTS=1 once the pins support 3.12"
-    )
-    assert "requirements-tts.txt" in text, (
-        "the guarded TTS layer (requirements-tts.txt) must remain in the "
-        "builder stage as the opt-in path"
-    )
+    builder_stage = text.split("FROM ", 2)[1]
+    assert "INSTALL_TTS" not in text
+    assert "pip install --no-cache-dir -r requirements-tts.txt" in builder_stage
 
 
 def test_docs_settings_runtime_tree_is_reincluded_and_copied() -> None:

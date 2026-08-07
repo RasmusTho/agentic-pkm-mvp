@@ -94,9 +94,15 @@ bind-mounted to a fixed container path and the `TTS_*_DIR` values above are the 
   (`docker-compose.yaml`, `api` service).
 - Container: `TTS_MODEL_DIR=/data/tts/models`, `TTS_CACHE_DIR=/data/tts/cache`,
   `TTS_LOG_DIR=/data/tts/logs` (tracked, fixed for every channel).
-- Machine-local values (`TTS_HOST_ROOT`, `TTS_ENABLED`) live in `.env.prod.local`; the engines
-  (`piper`, `kokoro_onnx`) are baked into the image. Direct (non-container) hosts use the SSD paths
-  above directly.
+- Machine-local values (`TTS_HOST_ROOT`, `TTS_ENABLED`) live in `.env.prod.local`. The ordinary
+  SHA-tagged app image bakes the `piper` command and importable `kokoro_onnx` dependency from one
+  shared manifest on both `linux/amd64` and `linux/arm64`; the main image workflow verifies Piper
+  CLI loading, Kokoro importability, application import, and health behavior on each platform. Its
+  `app-image-tts-engine-proof.v1` receipt is package-presence proof, not model-backed synthesis, and
+  records the exact probe scope plus each platform digest. Direct (non-container) hosts use the SSD
+  paths above directly.
+- Engine presence does not enable TTS. Models and generated audio remain on the external mount,
+  `TTS_ENABLED` remains false by default, and local-only/no-fallback policy remains unchanged.
 
 Provisioning runbook: `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
 

@@ -65,9 +65,10 @@ def test_built_image_version_reports_build_sha(monkeypatch) -> None:
     assert "if: github.event_name == 'pull_request'" in workflow
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
     assert "docker buildx imagetools inspect" in workflow
-    assert "manifest_platforms=\"" in workflow
-    assert "awk '" in workflow
-    assert "--platform linux/amd64" in workflow
+    assert 'manifest_json="$(mktemp)"' in workflow
+    assert 'image_ref="${image%:*}@${{ steps.build-app-main.outputs.digest }}"' in workflow
+    assert 'for platform in linux/amd64 linux/arm64' in workflow
+    assert '--platform "${platform}"' in workflow
 
     monkeypatch.setenv("VCS_REF", "0123456789abcdef0123456789abcdef01234567")
     monkeypatch.setenv("BUILT_AT", "2026-06-30T00:00:00Z")
@@ -83,7 +84,7 @@ def test_single_image_artifact_per_commit() -> None:
 
     assert "strategy:" not in product_image_job
     assert product_image_job.count("uses: docker/build-push-action@") == 2
-    assert product_image_job.count("if: github.event_name == 'pull_request'") == 2
+    assert product_image_job.count("if: github.event_name == 'pull_request'") == 3
     assert (
         product_image_job.count("if: github.event_name == 'push' && github.ref == 'refs/heads/main'")
         >= 1
