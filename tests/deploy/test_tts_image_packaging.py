@@ -40,6 +40,8 @@ def test_app_image_workflow_probes_tts_engines_on_each_platform() -> None:
     assert 'image_ref="${image%:*}@${{ steps.build-app-main.outputs.digest }}"' in workflow
     assert "image_index_digest" in workflow
     assert "platform_digest" in workflow
+    assert 'platform_ref="${image%:*}@${platform_digest}"' in workflow
+    assert '"${platform_ref}" \\' in workflow
     assert "linux/amd64" in workflow
     assert "linux/arm64" in workflow
     assert "Upload TTS engine proof" in workflow
