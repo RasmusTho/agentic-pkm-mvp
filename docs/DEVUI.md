@@ -78,6 +78,49 @@ devUI may render a derived chain or graph, but it does not persist a Delivery Kn
 copy source lifecycle state. A new dashboard module, top-level mode, status, or durable entity is
 out of scope unless it removes an owner reconstruction step that the three zones cannot answer.
 
+### Decision-support and information-depth contract
+
+Low cognitive load does not mean low information. devUI reduces the mental work of locating,
+joining, and interpreting evidence; it does not remove evidence needed for a sound decision. The
+surface therefore organizes each item around three situation-awareness questions:
+
+1. **What is happening?** — the current owner-facing state and source freshness.
+2. **What does it mean?** — why the item is shown, material uncertainty, and consequence for the
+   goal or capability.
+3. **What happens next?** — the next legal transition, who owns it, and the consequence of waiting.
+
+Information is disclosed in a fixed depth rather than split across products:
+
+1. **Glance** — state, why now, next step, and whether owner action is legal.
+2. **Understand** — capability context, dependencies, uncertainty, expected result, and material
+   limitations.
+3. **Verify** — evidence groups, freshness, receipts, and source-level provenance.
+4. **Inspect** — Issues, PRs, SHAs, workers, leases, raw graphs, logs, and exact technical fields.
+
+Moving deeper must not replace, summarize away, or reclassify the underlying evidence. It reveals
+the same selected item's evidence with more precision. This is progressive disclosure without
+information loss.
+
+The following decision-science rules are binding presentation constraints:
+
+- **Needs you is a high-precision signal.** False owner escalations create alert fatigue and train
+  the owner to ignore the surface. An item enters this zone only with a named owner authority
+  category; missing or ambiguous technical evidence remains a system block in **Now**.
+- **Decision support is organized around the owner's goal, not subsystem topology.** CKM,
+  BuilderOps, DDO, agents, and GitHub appear as evidence sources, never as the primary navigation.
+- **The selected context stays spatially and semantically stable.** Cockpit, detail, command, run,
+  and receipt preserve the same subject, goal, scope, and evidence frame so the owner does not have
+  to remember or mentally rejoin them.
+- **Quantified claims retain their denominator and limitations.** Prefer concrete forms such as
+  “3 of 8 required checks remain” over an unexplained score or percentage. Aggregate maturity,
+  confidence, risk, or priority numbers never replace their components.
+- **Automation confidence is item-specific and evidenced.** Show freshness, completeness,
+  disagreement, and limitations for the actual recommendation; do not use one global “AI
+  confidence” indicator as a substitute for evidence.
+- **A genuine owner decision is presented as one decision.** Show the recommendation, viable
+  alternatives, consequence of each, consequence of waiting, and the exact evidence and scope the
+  action will bind. Routine agent choices and technical recovery are not offered as owner options.
+
 ## Scope
 
 ### In scope
@@ -231,6 +274,41 @@ Capabilities, work, evidence, and receipts are lenses within these surfaces, not
 top-level modes. Moving from cockpit to detail to command and receipt preserves the selected item,
 goal, scope, evidence, and owner-facing state.
 
+### Visual composition
+
+The cockpit is intentionally asymmetric rather than three equal dashboard columns. **Now** is the
+wide situation field because it carries the system model. **Needs you** is a compact, high-salience
+decision rail. **Ready to try** is a compact result rail below it. A calm trust frame spans the top
+and states when the picture was assembled, which sources are degraded, and which claims have been
+withdrawn. Source health must not compete visually with actual owner decisions.
+
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│ Trust frame · when this picture was assembled · material blind spots │
+├───────────────────────────────────────────────┬──────────────────────┤
+│ NOW — primary situation field                 │ NEEDS YOU            │
+│ what is moving · blocked by system · next     │ one decision at a time│
+│                                               ├──────────────────────┤
+│ stable work/capability rows                   │ READY TO TRY         │
+│                                               │ result · how · limits │
+└───────────────────────────────────────────────┴──────────────────────┘
+```
+
+Selecting any row opens one focus canvas inside the same shell. The selected subject remains named
+in a persistent context header. The main region explains situation, meaning, and next step; an
+adjacent evidence region exposes capability evidence, work chain, receipts, provenance, and then
+technical detail. This avoids making the owner alternate between a summary screen, a decision
+screen, and a source screen to understand one choice.
+
+The contextual command region occupies one stable place in the focus canvas and changes role
+without changing context: no lawful owner action → proposal/preview → exact approval → live run and
+legal controls → terminal receipt and try guidance. Read-only analysis and source links remain
+visually distinct from authority-bearing actions.
+
+On narrow layouts the same regions stack and keep the same names, item identity, information depth,
+and evidence order. Narrow mode must not collapse into a technically different product or require a
+horizontal delivery graph.
+
 ## Current state and target
 
 Delivered now:
@@ -257,11 +335,17 @@ delivery console becomes devUI's authenticated decision/run mode behind a separa
       or recreating context.
 - [ ] Each item shows one owner-facing state, why it is shown, what happens next, and whether owner
       action is legal.
+- [ ] Glance, understand, verify, and inspect reveal progressively deeper information about the
+      same item without dropping evidence or forcing a product switch.
 - [ ] Every claim names source, freshness, and whether it is confirmed, candidate, stale, unread,
       or unavailable.
 - [ ] CKM score or model proposal cannot start or prioritize work alone.
 - [ ] Preview is read-only; approval binds exact request, preview, and acceptance profile.
 - [ ] Technical blocking never appears as an owner decision without explicit authority category.
+- [ ] A true owner-decision view presents one decision, a recommendation, viable alternatives,
+      consequences, consequence of waiting, and the exact evidence/scope the action binds.
+- [ ] Quantified summaries preserve counts or denominators and cannot replace source components
+      with an unexplained aggregate score.
 - [ ] Active runs can reconnect without duplicate workers or effects.
 - [ ] The surface degrades honestly to read-only when the action boundary is unavailable.
 - [ ] Terminal receipts show actual outcome and update CKM only as derived evidence.
