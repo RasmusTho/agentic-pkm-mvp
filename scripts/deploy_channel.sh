@@ -953,6 +953,9 @@ if [ "${action}" = "rollback" ] && [ "${dry_run}" = "1" ]; then
   echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
   exit 0
 fi
+if [ "${action}" = "deploy" ]; then
+  deploy_channel_tts_config_preflight "${ROOT}" "${channel}" "${pin_file}" || exit $?
+fi
 migration_from_sha="${current_sha:-}"
 if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
   pending_target="$(read_pending_migration_field TARGET_SHA || true)"

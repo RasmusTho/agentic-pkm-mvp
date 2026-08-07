@@ -94,7 +94,16 @@ bind-mounted to a fixed container path and the `TTS_*_DIR` values above are the 
   (`docker-compose.yaml`, `api` service).
 - Container: `TTS_MODEL_DIR=/data/tts/models`, `TTS_CACHE_DIR=/data/tts/cache`,
   `TTS_LOG_DIR=/data/tts/logs` (tracked, fixed for every channel).
-- Machine-local values (`TTS_HOST_ROOT`, `TTS_ENABLED`) live in `.env.prod.local`. The ordinary
+- Machine-local values (`TTS_HOST_ROOT`, `TTS_ENABLED`) originate in the channel's untracked local
+  environment (for prod, `.env.prod.local`) and are persisted together by
+  `scripts/export_runtime_env.sh` into the generated runtime-env file selected by
+  `config/deploy/<channel>.env`. Pinned deploys consume only that governed runtime-env snapshot:
+  `scripts/deploy_channel.sh deploy <channel> <sha>` validates the exact lowercase boolean and,
+  when enabled, a readable/executable absolute directory outside the repo before any pin, migration,
+  or Compose mutation. It forwards the two selectors through the Compose process environment so
+  stale caller-shell values cannot win; it never sources or prints the runtime-env file and never
+  passes that file as Compose's CLI `--env-file`. Rollback deliberately bypasses this deploy-only
+  preflight. The ordinary
   SHA-tagged app image bakes the `piper` command and importable `kokoro_onnx` dependency from one
   shared manifest on both `linux/amd64` and `linux/arm64`; the main image workflow verifies Piper
   CLI loading, Kokoro importability, application import, and health behavior on each platform. Its

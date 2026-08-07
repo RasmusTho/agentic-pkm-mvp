@@ -18,6 +18,139 @@ _deploy_channel_env_value() {
   ' "${file_path}"
 }
 
+_deploy_channel_resolve_runtime_env_file() {
+  local root="${1:?repo root required}"
+  local channel="${2:?channel required}"
+  local channel_env_file="${3:?channel env file required}"
+  local runtime_env_ref
+
+  runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
+  if [ -z "${runtime_env_ref}" ]; then
+    case "${channel}" in
+      test) runtime_env_ref="./tmp-test/runtime.env" ;;
+      *) runtime_env_ref="./tmp/runtime.env" ;;
+    esac
+  fi
+
+  DEPLOY_CHANNEL_RUNTIME_ENV_REF="${runtime_env_ref}"
+  case "${runtime_env_ref}" in
+    /*) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${runtime_env_ref}" ;;
+    ./*) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${root}/${runtime_env_ref#./}" ;;
+    *) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${root}/${runtime_env_ref}" ;;
+  esac
+}
+
+_deploy_channel_tts_config_blocked() {
+  local reason="${1:?reason required}"
+  local path_class="${2:?path class required}"
+  echo "TTS config preflight: blocked reason=${reason} keys=TTS_ENABLED,TTS_HOST_ROOT path_class=${path_class}" >&2
+  return 91
+}
+
+deploy_channel_tts_config_preflight() {
+  local root="${1:?repo root required}"
+  local channel="${2:?channel required}"
+  local channel_env_file="${3:?channel env file required}"
+  local runtime_env_file enabled host_root enabled_count host_root_count path_rc=0
+
+  _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
+  runtime_env_file="${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}"
+  enabled=""
+  host_root=""
+  enabled_count=0
+  host_root_count=0
+  if [ -f "${runtime_env_file}" ]; then
+    enabled_count="$(awk '/^TTS_ENABLED=/{count += 1} END {print count + 0}' "${runtime_env_file}")"
+    host_root_count="$(awk '/^TTS_HOST_ROOT=/{count += 1} END {print count + 0}' "${runtime_env_file}")"
+    if [ "${enabled_count}" -gt 1 ]; then
+      _deploy_channel_tts_config_blocked duplicate_key not_evaluated
+      return $?
+    fi
+    if [ "${host_root_count}" -gt 1 ]; then
+      _deploy_channel_tts_config_blocked duplicate_key not_evaluated
+      return $?
+    fi
+    enabled="$(_deploy_channel_env_value "${runtime_env_file}" TTS_ENABLED)"
+    host_root="$(_deploy_channel_env_value "${runtime_env_file}" TTS_HOST_ROOT)"
+  fi
+
+  case "${enabled}" in
+    ""|false)
+      DEPLOY_TTS_CONFIG_GOVERNED=1
+      DEPLOY_TTS_ENABLED=false
+      unset DEPLOY_TTS_HOST_ROOT
+      export DEPLOY_TTS_CONFIG_GOVERNED DEPLOY_TTS_ENABLED
+      echo "TTS config preflight: ok enabled=false path_class=not_required"
+      return 0
+      ;;
+    true) ;;
+    *)
+      _deploy_channel_tts_config_blocked invalid_boolean not_evaluated
+      return $?
+      ;;
+  esac
+
+  if [ -z "${host_root}" ]; then
+    _deploy_channel_tts_config_blocked missing_enabled_root empty_or_unset
+    return $?
+  fi
+
+  ROOT="${root}" TTS_HOST_ROOT="${host_root}" "${PYTHON:-python3}" - <<'PY' || path_rc=$?
+import os
+from pathlib import Path
+import stat
+
+root = Path(os.environ["ROOT"])
+candidate = Path(os.environ["TTS_HOST_ROOT"])
+if not candidate.is_absolute():
+    raise SystemExit(3)
+try:
+    metadata = candidate.stat()
+except FileNotFoundError:
+    raise SystemExit(4)
+except OSError:
+    raise SystemExit(6)
+if not stat.S_ISDIR(metadata.st_mode):
+    raise SystemExit(5)
+if not os.access(candidate, os.R_OK | os.X_OK):
+    raise SystemExit(6)
+try:
+    with os.scandir(candidate):
+        pass
+    resolved_candidate = candidate.resolve(strict=True)
+    resolved_root = root.resolve(strict=True)
+except OSError:
+    raise SystemExit(6)
+try:
+    candidate.relative_to(root)
+except ValueError:
+    pass
+else:
+    raise SystemExit(7)
+try:
+    resolved_candidate.relative_to(resolved_root)
+except ValueError:
+    pass
+else:
+    raise SystemExit(7)
+PY
+  case "${path_rc}" in
+    0) ;;
+    3) _deploy_channel_tts_config_blocked invalid_enabled_root relative; return $? ;;
+    4) _deploy_channel_tts_config_blocked invalid_enabled_root missing; return $? ;;
+    5) _deploy_channel_tts_config_blocked invalid_enabled_root not_directory; return $? ;;
+    6) _deploy_channel_tts_config_blocked invalid_enabled_root inaccessible; return $? ;;
+    7) _deploy_channel_tts_config_blocked invalid_enabled_root repo_contained; return $? ;;
+    *) _deploy_channel_tts_config_blocked invalid_enabled_root validation_failed; return $? ;;
+  esac
+
+  DEPLOY_TTS_CONFIG_GOVERNED=1
+  DEPLOY_TTS_ENABLED=true
+  DEPLOY_TTS_HOST_ROOT="${host_root}"
+  export DEPLOY_TTS_CONFIG_GOVERNED DEPLOY_TTS_ENABLED DEPLOY_TTS_HOST_ROOT
+  echo "TTS config preflight: ok enabled=true path_class=absolute_outside_repo_accessible_directory"
+}
+
 _deploy_channel_uses_full_host_vault_path() {
   local vault_path="${1:?vault path required}"
   python3 - "${vault_path}" <<'PY'
@@ -248,19 +381,9 @@ deploy_channel_compose() {
   # that would expose its DSNs and other values to Compose interpolation (#3875
   # — a previous dead `env_args` block here looked like it did exactly that; do
   # not reintroduce it).
-  runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
-  if [ -z "${runtime_env_ref}" ]; then
-    case "${channel}" in
-      test) runtime_env_ref="./tmp-test/runtime.env" ;;
-      *) runtime_env_ref="./tmp/runtime.env" ;;
-    esac
-  fi
-  runtime_env_file=""
-  case "${runtime_env_ref}" in
-    /*) runtime_env_file="${runtime_env_ref}" ;;
-    ./*) runtime_env_file="${root}/${runtime_env_ref#./}" ;;
-    *) runtime_env_file="${root}/${runtime_env_ref}" ;;
-  esac
+  _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
+  runtime_env_ref="${DEPLOY_CHANNEL_RUNTIME_ENV_REF}"
+  runtime_env_file="${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}"
 
   llm_provider="$(_deploy_channel_env_value "${channel_env_file}" LLM_PROVIDER)"
   runtime_llm_provider=""
@@ -355,6 +478,14 @@ deploy_channel_compose() {
     # runtime env itself stays a service env_file; passing it as a CLI --env-file
     # would expose its DSNs and other values to Compose interpolation.
     export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
+    if [ "${DEPLOY_TTS_CONFIG_GOVERNED:-0}" = "1" ]; then
+      export TTS_ENABLED="${DEPLOY_TTS_ENABLED}"
+      if [ "${DEPLOY_TTS_ENABLED}" = "true" ]; then
+        export TTS_HOST_ROOT="${DEPLOY_TTS_HOST_ROOT}"
+      else
+        unset TTS_HOST_ROOT
+      fi
+    fi
     if [ -n "${llm_provider}" ]; then
       export LLM_PROVIDER="${llm_provider}"
     else

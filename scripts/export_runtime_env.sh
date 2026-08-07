@@ -91,6 +91,9 @@ ENV
   if [ -n "${TTS_ENABLED:-}" ]; then
     printf "TTS_ENABLED=%s\n" "$TTS_ENABLED" >> "$runtime_env_path"
   fi
+  if [ -n "${TTS_HOST_ROOT:-}" ]; then
+    printf "TTS_HOST_ROOT=%s\n" "$TTS_HOST_ROOT" >> "$runtime_env_path"
+  fi
   if [ -n "${SIGNBOARD_ROOT:-}" ]; then
     printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
   fi
@@ -309,11 +312,14 @@ if [ -n "${VAULT_DESK_DIR_REL:-}" ]; then
   printf "%s\n" "VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL}" >> "$runtime_env_path"
 fi
 
-# Forward the TTS read-back master switch so compose interpolation of
-# `TTS_ENABLED: ${TTS_ENABLED:-false}` resolves to the operator's value rather
-# than the compose default. Loaded from .env / .env.prod.local above (#2189).
+# Forward both machine-local TTS selectors so governed deploy preflight and
+# Compose interpolation consume one generated snapshot rather than ambient
+# caller-shell state. Loaded from .env / .env.prod.local above (#2189/#4656).
 if [ -n "${TTS_ENABLED:-}" ]; then
   printf "%s\n" "TTS_ENABLED=${TTS_ENABLED}" >> "$runtime_env_path"
+fi
+if [ -n "${TTS_HOST_ROOT:-}" ]; then
+  printf "%s\n" "TTS_HOST_ROOT=${TTS_HOST_ROOT}" >> "$runtime_env_path"
 fi
 
 # Determine whether we are generating a test-channel env file.

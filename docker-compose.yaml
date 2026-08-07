@@ -167,7 +167,8 @@ services:
       - "/Users:/Users"
       - "/Volumes:/Volumes"
       # External-SSD TTS store (models/cache/logs) bind-mounted to a fixed container path.
-      # Host root is machine-local (${TTS_HOST_ROOT} in .env.prod.local); defaults to a dev scratch dir.
+      # Host root is machine-local. Governed deploys pin it from the selected generated runtime env;
+      # disabled/non-deploy compose consumers retain the dev scratch fallback.
       - "${TTS_HOST_ROOT:-./tmp/tts}:/data/tts"
       # Shared runtime-artifact volume (#2991): api/worker/watcher each did their
       # own `mkdir -p /app/tmp`, so the three containers had NO shared filesystem
@@ -233,8 +234,8 @@ services:
       TTS_LOG_DIR: /data/tts/logs
       # Read-back master switch. Compose interpolation only sees shell vars, a
       # default .env, or the --env-file passed by the start wrappers; the source
-      # tmp/runtime.env is populated from .env by export_runtime_env.sh so an
-      # operator's TTS_ENABLED=true actually reaches load_tts_config() (#2189).
+      # generated runtime env is populated by export_runtime_env.sh; governed deploys preflight
+      # and pin its value so an operator's TTS_ENABLED=true reaches load_tts_config() (#2189/#4656).
       TTS_ENABLED: ${TTS_ENABLED:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
