@@ -1014,11 +1014,17 @@ def _host_append_state_has_valid_phase_shape(
     ):
         return False
     if phase == "active":
+        predecessor_transaction = state.get("predecessor_transaction")
+        predecessor_state_digest = state.get("predecessor_state_digest")
         return (
             "predecessor_transaction" in state
+            and "predecessor_state_digest" in state
             and (
-                state.get("predecessor_transaction") is None
-                or isinstance(state.get("predecessor_transaction"), str)
+                (predecessor_transaction is None and predecessor_state_digest is None)
+                or (
+                    isinstance(predecessor_transaction, str)
+                    and isinstance(predecessor_state_digest, str)
+                )
             )
             and has_optional_identity("source")
             and has_identity("proposal", named=True)
@@ -1552,20 +1558,30 @@ def _write_host_append_states(
 
         state_payload = dict(payload)
         if payload.get("state") == "active":
-            prior_transactions = {
-                str(state.get("transaction"))
+            prior_clean_states = [
+                state
                 for state in validated_states
                 if state.get("state") == "clean"
+            ]
+            prior_transactions = {
+                str(state.get("transaction"))
+                for state in prior_clean_states
+            }
+            prior_state_digests = {
+                _host_append_state_digest(state) for state in prior_clean_states
             }
             if any(
                 state.get("state") != "clean" for state in validated_states
-            ) or len(prior_transactions) > 1:
+            ) or len(prior_transactions) > 1 or len(prior_state_digests) > 1:
                 raise KnowledgeWriteConflict(
                     f"atomic append active predecessor is inconsistent for "
                     f"{authority.note_rel_path}; reconciliation is required before retry"
                 )
             state_payload["predecessor_transaction"] = (
                 next(iter(prior_transactions)) if prior_transactions else None
+            )
+            state_payload["predecessor_state_digest"] = (
+                next(iter(prior_state_digests)) if prior_state_digests else None
             )
 
         keyed_payloads = {
@@ -2116,6 +2132,21 @@ def _host_states_match_across_keys(
     }
 
 
+def _host_append_state_digest(state: dict[str, object]) -> str:
+    """Hash one normalized durable record independently of its stable-key copy."""
+
+    normalized = {
+        key: value for key, value in state.items() if key != "path_lock_key"
+    }
+    raw = json.dumps(
+        normalized,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _host_clean_matches_active_source(
     clean_state: dict[str, object],
     active_state: dict[str, object],
@@ -2170,6 +2201,8 @@ def _host_clean_precedes_active(
     if (
         clean_state.get("transaction")
         != active_state.get("predecessor_transaction")
+        or _host_append_state_digest(clean_state)
+        != active_state.get("predecessor_state_digest")
     ):
         return False
     mapping_keys = (
@@ -2271,78 +2304,133 @@ def _validate_host_append_inventory_topology(
 ) -> None:
     """Reject phase combinations no ordered producer transition can create."""
 
+    all_states = [
+        state
+        for _path_lock_key, app_record, swap_record, witness_state in inventories
+        for state in (app_record.state, swap_record.state, witness_state)
+        if state is not None
+    ]
+    indeterminate = [
+        state for state in all_states if state.get("state") == "indeterminate"
+    ]
+    if indeterminate:
+        if len(indeterminate) != len(all_states) or any(
+            not _host_states_match_across_keys(indeterminate[0], state)
+            for state in indeterminate[1:]
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append host state phase topology is invalid for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        return
+
+    active_states = [
+        state for state in all_states if state.get("state") == "active"
+    ]
+    if active_states and any(
+        not _host_states_match_across_keys(active_states[0], state)
+        for state in active_states[1:]
+    ):
+        raise KnowledgeWriteConflict(
+            f"atomic append active phase topology is mismatched for "
+            f"{authority.note_rel_path}; reconciliation is required before retry"
+        )
+    active_seed = active_states[0] if active_states else None
+
+    def relation_to_active(state: dict[str, object] | None) -> str | None:
+        if state is None:
+            return None
+        if active_seed is None:
+            return "clean" if state.get("state") == "clean" else "invalid"
+        if state.get("state") == "active":
+            return (
+                "active"
+                if _host_states_match_across_keys(state, active_seed)
+                else "invalid"
+            )
+        if state.get("state") != "clean":
+            return "invalid"
+        if _host_clean_precedes_active(state, active_seed):
+            return "predecessor"
+        if _host_clean_succeeds_active(state, active_seed):
+            return "successor"
+        return "invalid"
+
+    if active_seed is not None and any(
+        relation_to_active(state) == "invalid" for state in all_states
+    ):
+        raise KnowledgeWriteConflict(
+            f"atomic append clean/active phase topology is invalid for "
+            f"{authority.note_rel_path}; reconciliation is required before retry"
+        )
+
+    allowed_active_slot_pairs = {
+        (None, None),
+        (None, "active"),
+        ("predecessor", None),
+        ("predecessor", "active"),
+        ("predecessor", "successor"),
+        ("active", None),
+        ("active", "predecessor"),
+        ("active", "successor"),
+        ("successor", None),
+        ("successor", "active"),
+        ("successor", "predecessor"),
+    }
     for _path_lock_key, app_record, swap_record, witness_state in inventories:
         app_state = app_record.state
         swap_state = swap_record.state
-        states = [
-            state
-            for state in (app_state, swap_state, witness_state)
-            if state is not None
-        ]
-        indeterminate = [
-            state for state in states if state.get("state") == "indeterminate"
-        ]
-        if indeterminate:
-            if any(
-                not _host_states_match_across_keys(indeterminate[0], state)
-                for state in states
-                if state is not indeterminate[0]
-            ):
-                raise KnowledgeWriteConflict(
-                    f"atomic append host state phase topology is invalid for "
-                    f"{authority.note_rel_path}; reconciliation is required before retry"
-                )
-            continue
-
-        active_states = [
-            state for state in states if state.get("state") == "active"
-        ]
-        clean_states = [
-            state for state in states if state.get("state") == "clean"
-        ]
-        if active_states and any(
-            not _host_states_match_across_keys(active_states[0], state)
-            for state in active_states[1:]
-        ):
-            raise KnowledgeWriteConflict(
-                f"atomic append active phase topology is mismatched for "
-                f"{authority.note_rel_path}; reconciliation is required before retry"
+        if active_seed is None:
+            clean_witness_is_exact = (
+                witness_state is not None
+                and witness_state.get("state") == "clean"
+                and app_state is not None
+                and app_state.get("state") == "clean"
+                and _host_states_match_across_keys(app_state, witness_state)
             )
-        if active_states and any(
-            not _host_clean_is_related_to_active(clean_state, active_states[0])
-            for clean_state in clean_states
-        ):
-            raise KnowledgeWriteConflict(
-                f"atomic append clean/active phase topology is invalid for "
-                f"{authority.note_rel_path}; reconciliation is required before retry"
-            )
-
-        if witness_state is not None and witness_state.get("state") == "clean":
             if (
-                app_state is None
-                or app_state.get("state") != "clean"
-                or not _host_states_match_across_keys(app_state, witness_state)
-                or swap_state is not None
+                swap_state is not None
                 or bool(swap_record.raw)
+                or (
+                    witness_state is not None
+                    and not clean_witness_is_exact
+                )
+                or (
+                    app_state is not None
+                    and app_state.get("state") != "clean"
+                )
             ):
                 raise KnowledgeWriteConflict(
                     f"atomic append clean receipt topology is invalid for "
                     f"{authority.note_rel_path}; reconciliation is required before retry"
                 )
-        elif witness_state is not None and witness_state.get("state") == "active":
-            if any(
-                not _host_states_match_across_keys(state, witness_state)
-                for state in (app_state, swap_state)
-                if state is not None and state.get("state") == "active"
-            ) or any(
-                not _host_clean_is_related_to_active(state, witness_state)
-                for state in (app_state, swap_state)
-                if state is not None and state.get("state") == "clean"
-            ):
-                raise KnowledgeWriteConflict(
-                    f"atomic append active receipt topology is invalid for "
-                    f"{authority.note_rel_path}; reconciliation is required before retry"
-                )
+            continue
+
+        app_relation = relation_to_active(app_state)
+        swap_relation = relation_to_active(swap_state)
+        if (app_relation, swap_relation) not in allowed_active_slot_pairs:
+            raise KnowledgeWriteConflict(
+                f"atomic append app-local slot topology is invalid for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        if witness_state is None:
+            continue
+        witness_relation = relation_to_active(witness_state)
+        if witness_relation == "active":
+            continue
+        if (
+            witness_relation in {"predecessor", "successor"}
+            and app_state is not None
+            and _host_states_match_across_keys(app_state, witness_state)
+            and swap_state is None
+            and not swap_record.raw
+        ):
+            continue
+        raise KnowledgeWriteConflict(
+            f"atomic append witness topology is invalid for "
+            f"{authority.note_rel_path}; reconciliation is required before retry"
+        )
+
 
 def _plan_malformed_host_swap_repairs(
     inventories: list[

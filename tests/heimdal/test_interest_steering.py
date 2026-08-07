@@ -2275,6 +2275,185 @@ def test_steering_log_cross_key_unrelated_clean_cohort_blocks_unchanged(
     assert (vault_root / rel_path).read_bytes() == durable_before
 
 
+@pytest.mark.parametrize("duplicate_phase", ["active", "predecessor"])
+def test_steering_log_duplicate_state_swap_phase_blocks_unchanged(
+    tmp_path: Path,
+    duplicate_phase: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"duplicate-{duplicate_phase}-seed",
+        write_guard=guard,
+    )
+
+    def crash_with_phase() -> None:
+        if duplicate_phase == "active":
+            write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+                lambda *_args, **_kwargs: os._exit(126)
+            )
+        else:
+            real_write = write_ops_module._write_host_append_state
+
+            def stop_before_active_write(
+                fence_fd: int,
+                authority: object,
+                path_lock_key: str,
+                payload: dict[str, object],
+                expected_state: object,
+                expected_swap: object,
+                **kwargs: object,
+            ) -> None:
+                if payload.get("state") == "active":
+                    os._exit(124)
+                real_write(
+                    fence_fd,
+                    authority,  # type: ignore[arg-type]
+                    path_lock_key,
+                    payload,
+                    expected_state,  # type: ignore[arg-type]
+                    expected_swap,  # type: ignore[arg-type]
+                    **kwargs,
+                )
+
+            write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+                stop_before_active_write
+            )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id=f"duplicate-{duplicate_phase}-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = multiprocessing.get_context("fork").Process(target=crash_with_phase)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == (126 if duplicate_phase == "active" else 124)
+    expected_state_phase = "active" if duplicate_phase == "active" else "clean"
+    state_path = next(
+        path
+        for path in sorted(
+            _host_fence_root().glob(".heimdal-atomic-append-*.state")
+        )
+        if json.loads(path.read_text())["state"] == expected_state_phase
+    )
+    duplicate_raw = state_path.read_bytes()
+    swap_path = state_path.with_suffix(".swap")
+    assert swap_path.read_bytes() == b""
+    swap_path.write_bytes(duplicate_raw)
+    durable_before = read_steering_log_body(vault_root)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id=f"duplicate-{duplicate_phase}-proposal",
+            write_guard=guard,
+        )
+
+    assert state_path.read_bytes() == duplicate_raw
+    assert swap_path.read_bytes() == duplicate_raw
+    assert read_steering_log_body(vault_root) == durable_before
+
+
+def test_steering_log_changed_predecessor_record_blocks_unchanged(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="changed-predecessor-seed",
+        write_guard=guard,
+    )
+
+    def crash_before_second_active_app_write() -> None:
+        real_write = write_ops_module._write_host_append_state
+        active_writes = 0
+
+        def stop_on_second_active_write(
+            fence_fd: int,
+            authority: object,
+            path_lock_key: str,
+            payload: dict[str, object],
+            expected_state: object,
+            expected_swap: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal active_writes
+            if payload.get("state") == "active":
+                active_writes += 1
+                if active_writes == 2:
+                    os._exit(125)
+            real_write(
+                fence_fd,
+                authority,  # type: ignore[arg-type]
+                path_lock_key,
+                payload,
+                expected_state,  # type: ignore[arg-type]
+                expected_swap,  # type: ignore[arg-type]
+                **kwargs,
+            )
+
+        write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+            stop_on_second_active_write
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="changed-predecessor-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = multiprocessing.get_context("fork").Process(
+        target=crash_before_second_active_app_write
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 125
+    clean_path = next(
+        path
+        for path in sorted(
+            _host_fence_root().glob(".heimdal-atomic-append-*.state")
+        )
+        if json.loads(path.read_text())["state"] == "clean"
+    )
+    foreign = json.loads(clean_path.read_text())
+    foreign["target_digest"] = "f" * 64
+    foreign_raw = (
+        json.dumps(foreign, ensure_ascii=True, sort_keys=True) + "\n"
+    ).encode()
+    clean_path.write_bytes(foreign_raw)
+    durable_before = read_steering_log_body(vault_root)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="changed-predecessor-proposal",
+            write_guard=guard,
+        )
+
+    assert clean_path.read_bytes() == foreign_raw
+    assert read_steering_log_body(vault_root) == durable_before
+
+
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
@@ -3075,7 +3254,10 @@ def test_steering_log_conflicting_active_transactions_across_aliases_block(
             encoding="utf-8",
         )
 
-    with pytest.raises(KnowledgeWriteConflict, match="conflicting transactions"):
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="active phase topology is mismatched|conflicting transactions",
+    ):
         append_steering_log(
             lexical_root,
             "mute",
