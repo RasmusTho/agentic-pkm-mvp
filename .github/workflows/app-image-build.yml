@@ -75,6 +75,7 @@ jobs:
             BUILT_AT=${{ env.BUILT_AT }}
 
       - name: Build and push app image (main multi-arch)
+        id: build-app-main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
@@ -97,30 +98,82 @@ jobs:
             "${{ steps.build-identity.outputs.image }}" \
             -c 'from app.version import get_runtime_version; import os; version = get_runtime_version(); assert version["git_sha"] == os.environ["VCS_REF"], version; assert version["built_at"] == os.environ["BUILT_AT"], version'
 
-      - name: Verify pushed app image runtime version and platforms
+      - name: Probe TTS engines in PR image
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --entrypoint sh \
+            "${{ steps.build-identity.outputs.image }}" \
+            -ec 'command -v piper >/dev/null; piper --help >/dev/null 2>&1; python -c "import asyncio; import kokoro_onnx; from app.api.routes.health_contract import healthz; from app.main import app; assert app is not None; assert asyncio.run(healthz()) == {\"ok\": True}"'
+
+      - name: Verify pushed app image runtime, platforms, and TTS engines
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
           image="${{ steps.build-identity.outputs.image }}"
-          manifest_platforms="$(docker buildx imagetools inspect "${image}" | awk '
-            $1 == "Platform:" {
-              print $2
-            }
-          ' | sort -u)"
-          echo "Discovered manifest platforms:"
-          echo "${manifest_platforms}"
-          for required_platform in linux/amd64 linux/arm64; do
-            if ! echo "${manifest_platforms}" | grep -qx "${required_platform}"; then
-              echo "missing required platform in image manifest: ${required_platform}"
-              exit 1
+          image_ref="${image%:*}@${{ steps.build-app-main.outputs.digest }}"
+          manifest_json="$(mktemp)"
+          proof_file="app-image-tts-engine-proof.json"
+          docker buildx imagetools inspect --raw "${image_ref}" > "${manifest_json}"
+
+          jq -n \
+            --arg contract "app-image-tts-engine-proof.v1" \
+            --arg candidate_sha "${GITHUB_SHA}" \
+            --arg image "${image}" \
+            --arg image_ref "${image_ref}" \
+            --arg image_index_digest "${{ steps.build-app-main.outputs.digest }}" \
+            --arg probe_scope "package_presence_cli_load_import_app_health" \
+            '{contract: $contract, candidate_sha: $candidate_sha, image: $image, image_ref: $image_ref, image_index_digest: $image_index_digest, probe_scope: $probe_scope, platforms: []}' \
+            > "${proof_file}"
+
+          failures=0
+          for platform in linux/amd64 linux/arm64; do
+            architecture="${platform#linux/}"
+            platform_digest="$(jq -er \
+              --arg architecture "${architecture}" \
+              '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture) | .digest' \
+              "${manifest_json}")"
+            probe_result="pass"
+            if ! docker run --rm \
+              --platform "${platform}" \
+              --entrypoint sh \
+              "${image_ref}" \
+              -ec 'command -v piper >/dev/null; piper --help >/dev/null 2>&1; python -c "import asyncio; import kokoro_onnx; import os; from app.api.routes.health_contract import healthz; from app.main import app; from app.version import get_runtime_version; version = get_runtime_version(); assert app is not None; assert asyncio.run(healthz()) == {\"ok\": True}; assert version[\"git_sha\"] == os.environ[\"VCS_REF\"], version; assert version[\"built_at\"] == os.environ[\"BUILT_AT\"], version"'; then
+              probe_result="fail"
+              failures=$((failures + 1))
             fi
+
+            jq \
+              --arg platform "${platform}" \
+              --arg platform_digest "${platform_digest}" \
+              --arg probe_result "${probe_result}" \
+              '.platforms += [{platform: $platform, platform_digest: $platform_digest, probe_result: $probe_result}]' \
+              "${proof_file}" > "${proof_file}.tmp"
+            mv "${proof_file}.tmp" "${proof_file}"
           done
-          docker run --rm \
-            --platform linux/amd64 \
-            --entrypoint python \
-            "${image}" \
-            -c 'from app.version import get_runtime_version; import os; version = get_runtime_version(); assert version["git_sha"] == os.environ["VCS_REF"], version; assert version["built_at"] == os.environ["BUILT_AT"], version'
+
+          jq -e '
+            .contract == "app-image-tts-engine-proof.v1" and
+            (.candidate_sha | length == 40) and
+            (.image_index_digest | startswith("sha256:")) and
+            .probe_scope == "package_presence_cli_load_import_app_health" and
+            ([.platforms[].platform] | sort == ["linux/amd64", "linux/arm64"]) and
+            (all(.platforms[]; (.platform_digest | startswith("sha256:")) and .probe_result == "pass"))
+          ' "${proof_file}"
+          if [ "${failures}" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Upload TTS engine proof
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-image-tts-engine-proof-${{ github.sha }}
+          path: app-image-tts-engine-proof.json
+          if-no-files-found: error
 
   build-builderops-images:
     name: Build independent BuilderOps images

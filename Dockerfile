@@ -12,14 +12,6 @@
 # (tests/deploy/test_dockerfile_python_alignment.py).
 FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28 AS builder
 
-# TTS layer toggle — see the guarded RUN below. Declared after FROM so it is
-# in scope for this stage. Default 0: the TTS pins cannot install on this
-# python:3.12 base (see the KNOWN BREAKAGE note at the guarded RUN), so
-# attempting them by default made every default build fail — `docker build .`,
-# the compose builds and app-image-build.yml pass no INSTALL_TTS arg. The
-# layer is opt-in (--build-arg INSTALL_TTS=1) until the pins gain 3.12 support.
-ARG INSTALL_TTS=0
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -30,24 +22,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY requirements.txt requirements-tts.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# KNOWN BREAKAGE (#3896 review): requirements-tts.txt pins piper-tts==1.2.0
-# -> piper-phonemize~=1.1.0, and piper-phonemize 1.1.0 publishes NO cp312
-# linux wheels and no sdist (PyPI has cp39–cp311 manylinux x86_64/aarch64
-# wheels only; the sole cp312 wheel is macOS x86_64). On this python:3.12
-# base the TTS layer therefore CANNOT install on linux; it worked on the
-# pre-#3893 python:3.11 base (cp311 manylinux wheels exist). The #3893 CI
-# alignment (python 3.12) and a buildable default TTS image are mutually
-# exclusive until the TTS pins gain 3.12 support, and the #3896 AC requires
-# the default `docker build .` to produce a working image — so the layer is
-# OPT-IN (ARG INSTALL_TTS=0 above). The default image ships WITHOUT
-# piper/kokoro baked in: app/tts/providers.py degrades (those voices report
-# unavailable rather than crashing) and the skip is loud in the build log.
-# Once the pins support 3.12, bake TTS with: docker build --build-arg INSTALL_TTS=1 .
-RUN if [ "$INSTALL_TTS" = "1" ]; then \
-      pip install --no-cache-dir -r requirements-tts.txt; \
-    else \
-      echo "INSTALL_TTS=$INSTALL_TTS: SKIPPING requirements-tts.txt — piper/kokoro NOT baked into this image"; \
-    fi
+# Piper 1.6 ships CPython-ABI3 manylinux wheels for both x86_64 and aarch64,
+# so the Python 3.12 default image can carry the same TTS manifest everywhere.
+RUN pip install --no-cache-dir -r requirements-tts.txt
 
 
 FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28 AS runtime
