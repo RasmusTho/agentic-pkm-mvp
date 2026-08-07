@@ -1094,12 +1094,12 @@ def _read_host_witness_state(
         os.close(duplicate)
     if not raw:
         return None
-    try:
-        return _decode_host_append_state(raw, authority, path_lock_key)
-    except KnowledgeWriteConflict:
-        if malformed_as_missing:
+    if malformed_as_missing:
+        try:
+            json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
             return None
-        raise
+    return _decode_host_append_state(raw, authority, path_lock_key)
 
 
 def _write_host_witness_state(
@@ -1509,13 +1509,15 @@ def _read_host_append_inventories(
         )
         if swap_record.raw:
             try:
+                json.loads(swap_record.raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                swap_state = None
+            else:
                 swap_state = _decode_host_append_state(
                     swap_record.raw,
                     authority,
                     path_lock_key,
                 )
-            except KnowledgeWriteConflict:
-                swap_state = None
             swap_record = _HostStateRecord(
                 identity=swap_record.identity,
                 raw=swap_record.raw,

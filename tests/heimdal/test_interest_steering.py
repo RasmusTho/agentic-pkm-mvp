@@ -1752,6 +1752,98 @@ def test_steering_log_missing_app_swap_repair_interruption_recovers(
     assert read_steering_log_body(vault_root).count(durable_line) == 1
 
 
+@pytest.mark.parametrize("phase", ["clean", "active"])
+@pytest.mark.parametrize("surface", ["witness", "swap"])
+@pytest.mark.parametrize(
+    "foreign_field",
+    ["schema", "locator", "path_lock_key", "authority_keys", "state"],
+)
+def test_steering_log_valid_foreign_recovery_json_remains_blocking(
+    tmp_path: Path,
+    phase: str,
+    surface: str,
+    foreign_field: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=(
+            f"foreign-{surface}-{foreign_field}-{phase}-seed"
+        ),
+        write_guard=guard,
+    )
+    operation_id = f"foreign-{surface}-{foreign_field}-{phase}-proposal"
+    context = multiprocessing.get_context("fork")
+    if phase == "active":
+        def crash_after_publication_before_clean() -> None:
+            write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+                lambda *_args: os._exit(100)
+            )
+            append_steering_log(
+                vault_root,
+                "mute",
+                "valid-foreign-recovery-json",
+                source="item",
+                operation_id=operation_id,
+                write_guard=_allowing_guard(),
+            )
+
+        process = context.Process(target=crash_after_publication_before_clean)
+        process.start()
+        process.join(timeout=10)
+        assert process.exitcode == 100
+
+    witness_path = _host_witness_paths(vault_root)[0]
+    if surface == "witness":
+        foreign_path = witness_path
+    else:
+        state_path = next(
+            path
+            for path in _host_fence_root().glob(
+                ".heimdal-atomic-append-*.state"
+            )
+            if json.loads(path.read_text())["path_lock_key"]
+            == json.loads(witness_path.read_text())["path_lock_key"]
+        )
+        foreign_path = state_path.with_suffix(".swap")
+    payload = json.loads(witness_path.read_text())
+    if foreign_field == "schema":
+        payload[foreign_field] = "foreign.schema.v1"
+    elif foreign_field == "locator":
+        payload[foreign_field] = "_heimdal/foreign.md"
+    elif foreign_field == "path_lock_key":
+        payload[foreign_field] = "foreign:path-lock-key"
+    elif foreign_field == "authority_keys":
+        payload[foreign_field] = ["foreign:authority-key"]
+    else:
+        payload[foreign_field] = "foreign"
+    foreign_raw = (
+        json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    foreign_path.write_bytes(foreign_raw)
+    durable_before = read_steering_log_body(vault_root)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "valid-foreign-recovery-json",
+            source="item",
+            operation_id=operation_id,
+            write_guard=guard,
+        )
+
+    assert foreign_path.read_bytes() == foreign_raw
+    assert read_steering_log_body(vault_root) == durable_before
+    assert durable_before.count(f'"operation_id":"{operation_id}"') == (
+        1 if phase == "active" else 0
+    )
+
+
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
