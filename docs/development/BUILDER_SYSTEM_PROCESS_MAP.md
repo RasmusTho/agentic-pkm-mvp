@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-06
+Last reviewed: 2026-08-07
 
 # Builder System Process Map
 
@@ -70,7 +70,7 @@ Read-only GitHub evidence used:
 | Component | Status | Current artifact(s) | Responsibility | Inputs | Outputs | Mutation authority | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | intent capture | partially_implemented | Docs, issues, `AGENTS.md`, `docs/DOCS_INDEX.md` | Capture strategy and constraints as repo-governed artifacts | Human intent, owner docs | Docs, issues, decisions | PR or GitHub issue | [AGENTS.md :: Agency default], [docs/DOCS_INDEX.md:11-17] |
-| Product Owner development experience (`devUI`) | proposed_target; read sources partially implemented | `docs/DEVUI.md`, CKM Direction B, BuilderOps Cockpit, DDO-06 | Present one coherent understand → choose → preview → approve → run → receipt flow while preserving separate evidence, auth, execution, and delivery authorities | CKM/read registry/run/receipt projections plus exact owner actions | Owner-readable state, typed requests, decisions, and receipts | None in the shell; CKM is read-only and every action routes through its owning authenticated contract | [docs/DEVUI.md:33-58], [docs/DEVUI.md:244-273], [docs/DEVUI.md:299-328], [docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md:17-57] |
+| Product Owner development experience (`devUI`) | accepted_target; read sources partially implemented | `docs/DEVUI.md`, CKM Direction B, BuilderOps Cockpit, DDO-06 | Present one coherent see → decide → act → verify flow while preserving separate evidence, auth, execution, and delivery authorities | CKM/read registry/run/receipt projections plus exact owner actions | Owner-readable state, typed requests, decisions, and receipts | None in the shell; CKM is read-only and every action routes through its owning authenticated contract | [docs/DEVUI.md:30-80], [docs/DEVUI.md:116-168], [docs/DEVUI.md:219-270], [docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md:17-57] |
 | docs/spec authority | implemented | `docs/DOCS_INDEX.md`, owner docs, SBS docs | Route doc authority and conflict resolution | Docs tree | Owner-doc truth and routing | Docs PR | [docs/DOCS_INDEX.md:1-17], [docs/DOCS_INDEX.md:80-90] |
 | docs index | implemented | `docs/DOCS_INDEX.md` | Stable role map and reading order | Repo docs | Role and owner routing | Docs PR | [docs/DOCS_INDEX.md:1-17], [docs/DOCS_INDEX.md:48-90] |
 | owner docs | implemented | `docs/ARCHITECTURE.md`, `docs/STATUS.md`, subsystem docs, contracts | Current shipped truth and contract ownership | Code, PRs, accepted delivery | Current-state claims | PR | [docs/architecture/SBS_OPERATING_MODEL.md:332-342] |

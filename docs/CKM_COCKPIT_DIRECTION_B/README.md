@@ -5,7 +5,7 @@ Owner: BuilderOps governance / Capability Knowledge Model
 Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: this directory for Direction B implementation-task shape; ADR-0057 for CKM authority posture; `docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_DIRECTION_A.md` for the delivered presentation contract being amended; `docs/CKM_MEASUREMENT_AND_ACCESS/README.md` for retained-observation semantics.
-Last reviewed: 2026-08-01
+Last reviewed: 2026-08-07
 
 # CKM Cockpit Direction B
 
@@ -40,10 +40,10 @@ affordance can mutate CKM, GitHub, repo docs, Product/Runtime state, or BuilderO
 
 ## Relationship to the devUI target
 
-`docs/DEVUI.md` proposes the target Product Owner experience that connects capability understanding
-to governed delivery; it becomes owner authority after explicit acceptance. Direction B remains
-the delivered static evidence snapshot/export and fallback
-inside that architecture. devUI may reuse its owner-readable trust, change, attention, and
+`docs/DEVUI.md` owns the accepted target Product Owner experience that connects capability
+understanding to governed delivery. Direction B remains the delivered static evidence
+snapshot/export and fallback inside that architecture. devUI may reuse its owner-readable trust,
+change, attention, and
 progressive-detail patterns, but it must read CKM through a versioned read contract and keep every
 approval or lifecycle control in a separately authenticated action boundary. Nothing in the devUI
 target turns this generated artifact into a hosted or mutating cockpit.

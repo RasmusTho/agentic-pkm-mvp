@@ -1,19 +1,19 @@
-State: Proposed target-state owner-function contract, pending Product Owner acceptance. `devUI` is
-the working owner-facing name. The CKM Development Overview and BuilderOps Cockpit are delivered as
-separate read-only surfaces; the unified experience, authenticated approval path, live delivery
-controls, and receipt loop described here are not yet delivered.
+State: Accepted strategic target-state owner-function contract (2026-08-07). `devUI` is the working
+owner-facing name. The CKM Development Overview and BuilderOps Cockpit are delivered as separate
+read-only surfaces; the unified experience, authenticated approval path, live delivery controls,
+and receipt loop described here are not yet delivered.
 Doc role: Builder System owner-function and experience contract
-Authority: Proposed owner contract for what the Product Owner must be able to understand, decide,
-initiate, follow, and accept through devUI. It becomes canonical only after explicit owner
-acceptance. Existing CKM, delivery, authentication, execution, and GitHub contracts remain binding.
+Authority: Owns the accepted owner-experience goal and guardrails for what the Product Owner must be
+able to see, decide, initiate, follow, and verify through devUI. Existing CKM, delivery,
+authentication, execution, and GitHub mechanism contracts remain binding.
 Owner: Builder System governance
 Temporal class: Strategic target state with an explicit current-state section
 Review cadence: Event-driven
-Source of truth: Accepted ADRs and linked capability specifications remain binding while this
-contract is proposed. After acceptance, this document owns the experience; live GitHub, CI,
-dispatcher, and receipt evidence continues to own delivery truth.
-Last reviewed: 2026-08-06
-Last verified against: `origin/main` `3f140bba2c677c37d81b7e166133e24e4e182845`, ADR-0057,
+Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
+specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
+truth.
+Last reviewed: 2026-08-07
+Last verified against: `origin/main` `8cbf80b9cfa2b0ba71a28e991b5340bfa3cb97a3`, ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, and the Deterministic
 Delivery Orchestration specification.
 
@@ -33,14 +33,16 @@ devUI is where the Product Owner makes development and build decisions from one 
 The owner should not have to reconstruct the situation from documents, Issues, PRs, CI, agent
 threads, and receipts.
 
-The proposed owner loop is:
+Its primary success criterion is reduced cognitive load: the owner can keep directing the project
+without first rebuilding an internal model of the delivery machinery.
+
+The owner loop has four verbs:
 
 ```text
-understand → choose → review proposal → approve the exact previewed delivery proposal
-→ follow by exception → receive a receipt → try and reassess
+see → decide → act → verify
 ```
 
-In system terms:
+The internal systems may implement a longer chain:
 
 ```text
 intent → capability → evidence and gaps → delivery request → preview
@@ -49,6 +51,32 @@ intent → capability → evidence and gaps → delivery request → preview
 
 This is one experience, not merged authority. CKM only describes. The authenticated delivery
 boundary approves exact scope. GitHub, CI, review, merge, and closure prove what happened.
+
+## Cognitive-load contract
+
+The cockpit home has three stable zones:
+
+1. **Now** — what is moving, what is safely continuing, and what is blocked by the system.
+2. **Needs you** — only decisions that genuinely require Product Owner authority.
+3. **Ready to try** — delivered results whose evidence is complete enough for owner evaluation.
+
+Every surfaced item answers, without opening another product:
+
+- what it is and why it is shown;
+- its single owner-facing state;
+- what happens next;
+- whether the owner can or must act;
+- source freshness and any material uncertainty; and
+- the result or receipt when one exists.
+
+The default view hides Issues, PRs, SHAs, workers, leases, worktrees, provider sessions, and raw
+source graphs. They remain available as progressive technical detail and source links. The owner
+must not understand CKM, DDO, BuilderOps, dispatcher, GitHub, or CI as separate products to use the
+core flow.
+
+devUI may render a derived chain or graph, but it does not persist a Delivery Knowledge Graph or
+copy source lifecycle state. A new dashboard module, top-level mode, status, or durable entity is
+out of scope unless it removes an owner reconstruction step that the three zones cannot answer.
 
 ## Scope
 
@@ -89,14 +117,9 @@ are not delivery-run states and are not part of the first devUI acceptance.
 
 ### Orient the whole system
 
-The home view answers, in order:
-
-1. What is moving now?
-2. What needs attention?
-3. What genuinely needs my decision?
-4. What was delivered recently and is ready to try?
-
-The first view uses owner language and freshness. A dead or unread source must never look like zero.
+The home view uses the three stable zones from the cognitive-load contract. Technical attention that
+an agent or deterministic rule can handle remains in **Now**; it must not inflate **Needs you**. The
+first view uses owner language and freshness. A dead or unread source must never look like zero.
 
 ### Understand a capability
 
@@ -113,6 +136,17 @@ measurement-quality gate.
 Work appears as a comprehensible chain from intent to terminal receipt. The owner sees the current
 state, why it is waiting, and the next legal transition. Internal identifiers appear only on demand.
 Normal use never requires a query string, file path, Issue identifier, or other free technical key.
+
+### Use a contextual command surface
+
+Commands are attached to the selected capability, problem, delivery proposal, or active run. devUI
+does not require a global command language or a second task system. A short owner-authored outcome
+may seed a proposal, but it cannot bypass evidence selection, exact preview, authentication, or
+delivery policy.
+
+The command surface shows one primary next action, or explains why no owner action is legal. Work
+that AI can safely continue is not turned into an owner button. Authority-bearing commands use
+outcome language, remain visibly separate from links and read-only analysis, and return a receipt.
 
 ### Review and approve an exact proposal
 
@@ -185,16 +219,17 @@ external effect.
 ## Information architecture
 
 The detailed visual design must go through Yggdrasil design handoff before implementation. devUI has
-five connected modes, not five products:
+three connected owner surfaces, not separate capability, work, agent, and receipt products:
 
-1. **Overview** — movement, attention, true owner decisions, and items ready to try.
-2. **Capabilities** — system capability, evidence, gaps, change, and optional technical detail.
-3. **Work** — the live chain across work in progress, delivered, flawed, and forgotten.
-4. **Decision and run** — proposal, preview, exact approval, live progress, and typed controls.
-5. **Receipts and learning** — terminal result, CKM reassessment, learning evidence, and future
-   durable owner acceptance only if INV-DG-7 is approved.
+1. **Cockpit** — the three zones: Now, Needs you, and Ready to try.
+2. **Detail** — one selected item with its capability context, work chain, evidence, gaps, sources,
+   and progressive technical detail.
+3. **Command and receipt** — exact proposal/preview, lawful owner controls, live progress, terminal
+   result, and reassessment, all attached to the same selected item.
 
-Moving from a capability to proposal to run preserves capability, goal, scope, and evidence.
+Capabilities, work, evidence, and receipts are lenses within these surfaces, not additional
+top-level modes. Moving from cockpit to detail to command and receipt preserves the selected item,
+goal, scope, evidence, and owner-facing state.
 
 ## Current state and target
 
@@ -208,7 +243,8 @@ Delivered now:
 
 Not delivered now: a composed versioned read contract; one devUI shell; request/preview/authenticated
 approval in one owner experience; PostgreSQL authority cutover; full live run controls; receipt-to-
-CKM reassessment in the unified surface; owner acceptance; and ADR-0065 dispositions.
+CKM reassessment in the unified surface; owner pilot and tried-by-owner acceptance; and ADR-0065
+dispositions.
 
 The target turns the current cockpits from competing owner products into sources: Direction B stays
 an exportable/static evidence fallback, BuilderOps Cockpit supplies the work view, and the planned
@@ -216,8 +252,11 @@ delivery console becomes devUI's authenticated decision/run mode behind a separa
 
 ## Owner-experience acceptance criteria
 
-- [ ] A capability can be followed from overview to terminal receipt without product switching or
-      recreating context.
+- [ ] The first view answers Now, Needs you, and Ready to try without owner-side reconstruction.
+- [ ] One selected item can be followed from cockpit to terminal receipt without product switching
+      or recreating context.
+- [ ] Each item shows one owner-facing state, why it is shown, what happens next, and whether owner
+      action is legal.
 - [ ] Every claim names source, freshness, and whether it is confirmed, candidate, stale, unread,
       or unavailable.
 - [ ] CKM score or model proposal cannot start or prioritize work alone.
@@ -227,6 +266,8 @@ delivery console becomes devUI's authenticated decision/run mode behind a separa
 - [ ] The surface degrades honestly to read-only when the action boundary is unavailable.
 - [ ] Terminal receipts show actual outcome and update CKM only as derived evidence.
 - [ ] Normal owner flow needs no technical identifier.
+- [ ] No persisted graph, parallel intent object, or second task/state system is introduced for the
+      owner experience.
 - [ ] The visual surface has passed Yggdrasil design handoff and desktop, narrow/200%, keyboard,
       degraded, and many-at-once validation.
 

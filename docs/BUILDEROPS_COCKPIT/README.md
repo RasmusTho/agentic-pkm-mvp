@@ -34,11 +34,11 @@ pack is supporting input.
 
 ## Relationship to the devUI target
 
-`docs/DEVUI.md` proposes the target Product Owner experience across capability evidence, work in
-motion, delivery decisions, active runs, and receipts; it becomes owner authority after explicit
-acceptance. This cockpit remains the delivered read-only work
-register and a source view for that target. Its registry, freshness, chain, and lens contracts should
-be reused by devUI; its no-decision, no-persistence, and no-authority boundaries do not move.
+`docs/DEVUI.md` owns the accepted target Product Owner experience across capability evidence, work
+in motion, delivery decisions, active runs, and receipts. This cockpit remains the delivered
+read-only work register and a source view for that target. Its registry, freshness, chain, and lens
+contracts should be reused by devUI; its no-decision, no-persistence, and no-authority boundaries do
+not move.
 
 The planned authenticated delivery controls are not added to this static/read-time join. They appear
 inside the owner-perceived devUI flow through a separately authenticated action boundary owned by
