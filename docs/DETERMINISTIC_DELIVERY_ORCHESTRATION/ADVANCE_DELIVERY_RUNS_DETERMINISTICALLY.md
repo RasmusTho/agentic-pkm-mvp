@@ -19,6 +19,12 @@ capability_rationale: "Explicit state machine spanning claims, workers, CI, revi
 Replace the prompt-driven plan/dispatch/wait/verify loop with one deterministic transition
 function while keeping implementation, diagnosis, and independent review bounded and agentic.
 
+Current-state reconciliation note (2026-08-06): the delivered reducer and the acceptance criterion
+below route `authority_conflict` and Issue contract drift to `owner_decision`. The newer DDO-06
+target requires missing/conflicting/ambiguous technical authority to remain system-blocked unless a
+canonical Human Exception category explicitly reserves the decision. #4169 owns that reclassification
+or category binding; this note does not claim the delivered reducer has changed.
+
 ## What This Task Does
 
 - Implements the reducer states and legal transitions for plan admission, claim, worker start,

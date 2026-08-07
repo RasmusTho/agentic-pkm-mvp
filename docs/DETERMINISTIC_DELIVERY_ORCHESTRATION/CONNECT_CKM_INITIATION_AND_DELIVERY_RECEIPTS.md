@@ -1,6 +1,6 @@
 ---
 name: Connect CKM Initiation and Delivery Receipts
-description: Let CKM draft and display delivery initiation and receipts through a separate governed boundary.
+description: Let devUI use CKM evidence to draft delivery, then approve and follow it through a separate governed boundary inside one owner experience.
 task_id: DDO-06
 github_issue: 4169
 source_anchor: docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md :: Architecture reconciliation for autonomous scheduled bug delivery
@@ -16,19 +16,27 @@ capability_rationale: "Authenticated external boundary plus CKM authority separa
 
 ## Purpose
 
-Give the owner a capability-centric initiation and overview loop without making CKM or its static
-HTML a delivery control plane.
+Give the owner a capability-centric initiation and overview loop in the unified devUI experience
+without making CKM, its static HTML, or the devUI shell a delivery control plane.
+
+Reconciliation note (2026-08-06): the unified-devUI wording and owner-state correction in this task
+spec are proposed target writeback. Live Issue #4169 must be reconciled to them before pickup; this
+docs pass did not change the Issue or authorize implementation.
 
 ## What This Task Does
 
 - Adds a CKM-side draft builder for carrier-neutral `DeliveryRequest.v1`.
 - Invokes the pure compiler for `DeliveryPreview.v1` before approval, with scope, exclusions, waves,
   risk, policy, acceptance meaning, and estimated TCD.
-- Adds a separate authenticated approval/handoff boundary outside the static Direction B HTML.
+- Adds a separate authenticated approval/handoff boundary outside the static Direction B HTML but
+  inside the owner-perceived devUI flow.
 - Approves the exact request and preview hashes into `DeliveryInitiation.v2`; authority drift
   requires a new preview and approval.
-- Projects `DeliveryRunView.v1` through the separate authenticated console/CLI, never through a
-  polling or mutating static cockpit.
+- Admits the approved initiation and typed lifecycle commands through BuilderOps' command/journal
+  transaction; the action endpoint does not start a worker or execute an external effect. The DDO
+  reducer chooses the next legal effect and BuilderOps outbox/effect adapters execute/reconcile it.
+- Projects `DeliveryRunView.v1` through devUI's separately authenticated action region and the
+  operator CLI/API, never through a polling or mutating static cockpit.
 - Projects terminal `DeliveryReceipt.v2` evidence back into CKM with source links, freshness, and
   explicit derived/non-authoritative framing.
 - Projects additive attempt-terminal evidence, observed outcome quality, failure mechanism,
@@ -41,20 +49,27 @@ HTML a delivery control plane.
 ## Concretely
 
 The generated cockpit may render inert capability evidence, gaps, and a request/preview reference.
-It cannot fetch, approve, or execute. The Product Owner uses a separate governed console/command/API
-to approve the exact request+preview hashes and request typed pause, resume, cancel, or supersession.
-The receipt projection later displays accepted/partial/blocked/failed/cancelled/superseded evidence
-with links, but cannot close an Issue or mark a capability authoritative.
+It cannot fetch, approve, or execute. In the target owner experience, the Product Owner stays in
+devUI while its separately authenticated action region approves the exact request+preview hashes or
+requests typed pause, resume, cancel, or supersession. The same operations remain available through
+the governed CLI/API. The receipt projection later displays accepted/partial/blocked/failed/
+cancelled/superseded evidence with links, but cannot close an Issue or mark a capability
+authoritative.
 
 ## Why This Matters
 
-CKM becomes the place to understand and initiate delivery while the reasons to change for overview,
-authorization, execution, and evidence remain separate.
+devUI becomes the coherent place to understand and initiate delivery. CKM supplies its
+non-authoritative evidence lens, while overview, authorization, execution, and evidence keep
+separate internal owners and trust boundaries.
 
 ## Acceptance Criteria
 
 - [ ] CKM request generation uses only `DeliveryRequest.v1` and captured projection evidence.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_ckm_request_is_carrier_neutral_and_projection_bound`.
+- [ ] CKM remains `single_operator_local` unless a new access-policy decision explicitly binds
+  remote audience, read auth/scope, redaction, redistribution, and version refusal. A service or
+  remote adapter fails closed without that decision.
+  - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_remote_ckm_read_refuses_without_access_policy`.
 - [ ] Preview calls the pure compiler and performs no authority mutation.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_ckm_preview_precedes_approval_and_is_read_only`.
 - [ ] Static Direction B HTML contains no approval, network, persistence, or execution path.
@@ -74,8 +89,9 @@ authorization, execution, and evidence remain separate.
 - [ ] Specs, code, tests, acceptance evidence, gaps, and freshness are exposed as distinct
   capability proof groups rather than inferred from one aggregate score.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_capability_delivery_proof_groups_remain_distinct`.
-- [ ] The separate authenticated surface displays `DeliveryRunView.v1` and sends only typed,
-  version-bound lifecycle commands; the static cockpit has no active-run polling path.
+- [ ] devUI's separate authenticated action region displays `DeliveryRunView.v1` and sends only
+  typed, version-bound lifecycle commands; the static cockpit has no active-run polling path and the
+  owner does not have to switch products to keep context.
   - Verify: `tests/builderops/ckm/test_delivery_bridge.py::test_active_run_and_controls_stay_outside_static_cockpit`.
 - [ ] Receipt projection preserves exact source refs, freshness, limitations, and non-authority
   framing.
@@ -111,11 +127,12 @@ authorization, execution, and evidence remain separate.
 - Product/Runtime UI or memory changes.
 - Choosing the durable intent carrier in this slice unless the preceding semantic gate has resolved
   it.
-- Requiring the static cockpit or interactive console for CLI/API delivery availability.
+- Requiring the static cockpit or devUI for CLI/API delivery availability.
 
 ## Related Docs
 
 - `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
+- `docs/DEVUI.md`
 - `docs/CKM_COCKPIT_DIRECTION_B/README.md`
 - `docs/adr/ADR-0057-capability-knowledge-model-kvasir.md`
 - `.codex/skills/yggdrasil-design-handoff/SKILL.md`

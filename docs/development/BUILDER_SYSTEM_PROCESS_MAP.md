@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-07-29
+Last reviewed: 2026-08-06
 
 # Builder System Process Map
 
@@ -18,16 +18,18 @@ dispatch, CI triage, PR closing, post-merge documentation checking, and learning
 performed by the Builder System when the governing contracts are sufficient. Human attention is an
 exception path: the canonical builder instructions say the default posture is to act, and to
 escalate only for irreversible, external-facing, or genuinely ambiguous authority decisions
-[AGENTS.md:161-169]. The review-gate fallback policy applies only when the selected delivery path
-requires that gate and it is unavailable, or when a human override is needed
+[AGENTS.md :: Agency default]. The review-gate fallback policy applies only when the selected delivery
+path requires that gate and it is unavailable. It keeps the work technically blocked and routes
+through the autonomous classifier; a human path opens only for a separately named authority
+exception
 [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
 The Builder System has these layers:
 
-1. Intent layer: human intent enters through docs, issues, tasks, explicit decisions, and strategic constraints. Observed authority: `PROJECT_KERNEL`, charter, docs, and GitHub issue contracts route intent; `AGENTS.md` names the owner as the authority for irreversible and strategic calls [AGENTS.md:161-169], [docs/DOCS_INDEX.md:48-90].
+1. Intent layer: human intent enters through docs, issues, tasks, explicit decisions, and strategic constraints. Observed authority: `PROJECT_KERNEL`, charter, docs, and GitHub issue contracts route intent; `AGENTS.md` names the owner as the authority for irreversible and strategic calls [AGENTS.md :: Agency default], [docs/DOCS_INDEX.md:48-90].
 2. Docs-as-code/spec authority layer: docs are primary Builder System authority, not background. `docs/DOCS_INDEX.md` is the stable role/routing map and says to read Core SoT docs before references, and plans/historical docs as context only [docs/DOCS_INDEX.md:1-17].
 3. Contract layer: GitHub issues, PR templates, shared skill contracts, labels, `Verify:` markers, and SBS impact blocks define executable work [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109].
-4. Dispatch/routing layer: dispatcher queue/leases, labels, skill routing, model/reasoning policy, and worktree isolation select work and prevent collisions; Project status is projection evidence only [docs/AGENT_ISSUE_DISPATCHER.md:132-180], [AGENTS.md:171-182].
+4. Dispatch/routing layer: dispatcher queue/leases, labels, skill routing, model/reasoning policy, and worktree isolation select work and prevent collisions; Project status is projection evidence only [docs/AGENT_ISSUE_DISPATCHER.md:132-180], [AGENTS.md :: Parallel-agent execution].
 5. Execution layer: skills, agents, scripts, local worktrees, implementation PRs, and publication boundaries perform work [`.codex/skills/README.md`:144-164], [`.codex/skills/publish-pr/SKILL.md`:53-159].
 6. Verification/evidence layer: local validation, CI, REST-only check waiting, tier-selected review, delivery receipts, optional Project reconciliation, and owner-doc receipts prove work. Terminal epic lifecycle dry-runs use the same latest-check-run-per-name selector as CI handoff, with a numeric run-id fallback and fail-closed latest non-green checks; Issue, PR, and CI blockers are reported independently from whether optional projection writes are allowed [`.codex/skills/verification-and-closure/SKILL.md`:46-77], [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82], [`app/builderops/epic_lifecycle_plan.py`].
 7. Closure/spec-feedback layer: merge, issue closure, dispatcher completion, parent validation receipts, post-merge owner-doc decisions, and roadmap/spec state updates close work truthfully [`.codex/skills/verification-and-closure/SKILL.md`:194-208], [docs/development/PARENT_ISSUE_CLOSURE.md:13-49].
@@ -67,20 +69,21 @@ Read-only GitHub evidence used:
 
 | Component | Status | Current artifact(s) | Responsibility | Inputs | Outputs | Mutation authority | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| intent capture | partially_implemented | Docs, issues, `AGENTS.md`, `docs/DOCS_INDEX.md` | Capture strategy and constraints as repo-governed artifacts | Human intent, owner docs | Docs, issues, decisions | PR or GitHub issue | [AGENTS.md:161-169], [docs/DOCS_INDEX.md:11-17] |
+| intent capture | partially_implemented | Docs, issues, `AGENTS.md`, `docs/DOCS_INDEX.md` | Capture strategy and constraints as repo-governed artifacts | Human intent, owner docs | Docs, issues, decisions | PR or GitHub issue | [AGENTS.md :: Agency default], [docs/DOCS_INDEX.md:11-17] |
+| Product Owner development experience (`devUI`) | proposed_target; read sources partially implemented | `docs/DEVUI.md`, CKM Direction B, BuilderOps Cockpit, DDO-06 | Present one coherent understand → choose → preview → approve → run → receipt flow while preserving separate evidence, auth, execution, and delivery authorities | CKM/read registry/run/receipt projections plus exact owner actions | Owner-readable state, typed requests, decisions, and receipts | None in the shell; CKM is read-only and every action routes through its owning authenticated contract | [docs/DEVUI.md:33-58], [docs/DEVUI.md:244-273], [docs/DEVUI.md:299-328], [docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md:17-57] |
 | docs/spec authority | implemented | `docs/DOCS_INDEX.md`, owner docs, SBS docs | Route doc authority and conflict resolution | Docs tree | Owner-doc truth and routing | Docs PR | [docs/DOCS_INDEX.md:1-17], [docs/DOCS_INDEX.md:80-90] |
 | docs index | implemented | `docs/DOCS_INDEX.md` | Stable role map and reading order | Repo docs | Role and owner routing | Docs PR | [docs/DOCS_INDEX.md:1-17], [docs/DOCS_INDEX.md:48-90] |
 | owner docs | implemented | `docs/ARCHITECTURE.md`, `docs/STATUS.md`, subsystem docs, contracts | Current shipped truth and contract ownership | Code, PRs, accepted delivery | Current-state claims | PR | [docs/architecture/SBS_OPERATING_MODEL.md:332-342] |
 | SRS/SBS/system engineering docs | partially_implemented | `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, `docs/architecture/**`, `docs/REQUIREMENTS_INDEX.md` | Target classification, boundary, requirements coverage | Architecture and requirements | SBS impact, debt, fitness rules | PR | [docs/DOCS_INDEX.md:56-64], [docs/architecture/SBS_OPERATING_MODEL.md:42-66] |
-| governance docs | implemented | `AGENTS.md`, `docs/development/**`, `.codex/skills/**` | Builder workflow authority | Task and delivery evidence | Process rules | PR | [AGENTS.md:8-17], [docs/architecture/SBS_OPERATING_MODEL.md:173-186] |
+| governance docs | implemented | `AGENTS.md`, `docs/development/**`, `.codex/skills/**` | Builder workflow authority | Task and delivery evidence | Process rules | PR | [AGENTS.md :: Reading order], [docs/architecture/SBS_OPERATING_MODEL.md:173-186] |
 | issue contract | implemented | `.codex/skills/_shared/ISSUE_CONTRACT.md`, `.github/ISSUE_TEMPLATE/task.yml` | Executable backlog shape | Source docs | Issue body with `Verify:` markers | Issue creation/edit | [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109] |
 | issue template | implemented | `.github/ISSUE_TEMPLATE/task.yml` | Form enforcement for task contracts | Human/agent issue creation | Structured issue fields | GitHub issue form | [`.github/ISSUE_TEMPLATE/task.yml`:1-119] |
 | issue readiness validator | partially_implemented | `issue-pr-governance.yml`, `validate_source_anchors.py`, skills | Enforce sections and source anchors for ready/blocked issues | Issue body/labels | Failed checks or valid issue | GitHub Action read/write labels only for cleanup | [`.github/workflows/issue-pr-governance.yml`:40-78] |
 | issue queue | partially_implemented | GitHub labels, dispatcher SQLite | Expose ready work | strictly validated `agent:ready`, dispatcher pull | Queue entries | GitHub labels; dispatcher store | [docs/AGENT_ISSUE_DISPATCHER.md:132-180] |
 | dispatcher | implemented | `app/dispatcher/**`, `docs/AGENT_ISSUE_DISPATCHER.md`, Makefile targets | Queue, claim, lease, heartbeat, completion | GitHub `agent:ready` issues | Local tasks/leases/events | Local dispatcher DB only | [docs/AGENT_ISSUE_DISPATCHER.md:21-36], [Makefile:356-361], [app/dispatcher/cli.py:31-32] |
-| model router | implicit | `AGENTS.md` TCD policy, `.codex/agents/*.toml` | Choose model/reasoning by risk | Task risk/TCD | Model/effort choice | Agent/session config | [AGENTS.md:112-157], [`.codex/agents/slice-implementer.toml`:1-20] |
-| skill router | partially_implemented | `AGENTS.md`, `.codex/skills/README.md` | Route work to workflow skill | Task class | Skill path | Agent behavior | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
-| context builder | implemented (dry-run helper) | `docs/DOCS_INDEX.md`, skill first-context sections, `app/builderops/epic_dispatch.py` | Select source docs and owner docs, then emit minimal worker packet | Issue source anchors, docs index, candidate issue facts | Runtime-neutral Codex/Claude context packet | Local JSON output; optional run-state evidence | [AGENTS.md:8-17], [`.codex/skills/issue-to-code/SKILL.md`:236-256], [app/builderops/epic_dispatch.py:1] |
+| model router | implicit | `AGENTS.md` TCD policy, `.codex/agents/*.toml` | Choose model/reasoning by risk | Task risk/TCD | Model/effort choice | Agent/session config | [AGENTS.md :: Total Cost of Development], [`.codex/agents/slice-implementer.toml`:1-20] |
+| skill router | partially_implemented | `AGENTS.md`, `.codex/skills/README.md` | Route work to workflow skill | Task class | Skill path | Agent behavior | [AGENTS.md :: Repo-local skill routing], [`.codex/skills/README.md`:64-128] |
+| context builder | implemented (dry-run helper) | `docs/DOCS_INDEX.md`, skill first-context sections, `app/builderops/epic_dispatch.py` | Select source docs and owner docs, then emit minimal worker packet | Issue source anchors, docs index, candidate issue facts | Runtime-neutral Codex/Claude context packet | Local JSON output; optional run-state evidence | [AGENTS.md :: Reading order], [`.codex/skills/issue-to-code/SKILL.md`:236-256], [app/builderops/epic_dispatch.py:1] |
 | worktree/branch allocator | partially_implemented | `scripts/agent_workspace_preflight.sh`, branch-truth gate | Detect worktree/branch drift; refuse shared root by default | Branch/worktree | Preflight pass/fail | Local script | [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77], [scripts/agent_workspace_preflight.sh:55-61] |
 | claim coordinator | implemented | dispatcher claim + `scripts/issue_pickup_claim.sh` | Claim issue and remove ready label | Ready issue | Lease plus label mutation | Dispatcher + `gh issue edit` | [`.codex/skills/issue-to-code/SKILL.md`:129-175], [scripts/issue_pickup_claim.sh:39-59] |
 | implementation agent | implemented | `issue-to-code`, `slice_implementer` adapter | Execute bounded issue | Ready issue, owner docs | Diff, validation, PR | Local files/PR | [`.codex/skills/issue-to-code/SKILL.md`:236-260], [`.codex/agents/slice-implementer.toml`:1-20] |
@@ -106,7 +109,7 @@ Read-only GitHub evidence used:
 | GitHub event automations | partially_implemented | `.github/workflows/**` | Validate issues/PRs, project status, docs watchdog, CI | GitHub events | Checks/comments/status projections | Actions token/PAT | [`.github/workflows/issue-pr-governance.yml`:3-12], [`.github/workflows/project-status-reconcile.yml`:3-23] |
 | Codex Action integration | partially_implemented | Codex verdict resolver retained; the optional credential-gated `architecture-ci` docs-guardian path was removed by MAS-03 | Optional verdict read | PR bot surfaces | Verdict | Agent read | [`.codex/skills/verification-and-closure/SKILL.md`:165-192] |
 | Claude Action integration | missing | Claude compatibility docs and local hook documentation only | GitHub-driven Claude agent tasks | N/A | N/A | None | [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50] |
-| human exception router | implicit | `agent:needs-human`, review-gate fallback, this doc packet | Route authority exceptions | Ambiguity/failure | Human Exception packet | Human decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12] |
+| human exception router | implicit | canonical authority classifier, `agent:needs-human`, this doc packet | Route explicit owner-authority exceptions; technical gate outage stays blocked | Named Human Exception category | Human Exception packet | Human decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 
 ## 3. Docs-As-Code / Spec Authority Map
 
@@ -115,7 +118,7 @@ Observed current-state truth:
 - `docs/DOCS_INDEX.md` is the canonical stable map for document roles, authority routing, and reading order [docs/DOCS_INDEX.md:1-17].
 - Current runtime truth is routed to `docs/ARCHITECTURE.md` and `docs/STATUS.md` [docs/DOCS_INDEX.md:65-67].
 - Current shipped reality wins over roadmap/design docs when they conflict [docs/DOCS_INDEX.md:80-90].
-- Owner docs must be updated when behavior, contracts, or shipped truth changes [AGENTS.md:103-108], [docs/architecture/SBS_OPERATING_MODEL.md:332-342].
+- Owner docs must be updated when behavior, contracts, or shipped truth changes [AGENTS.md :: Required rules], [docs/architecture/SBS_OPERATING_MODEL.md:332-342].
 
 Observed target-state/proposal truth:
 
@@ -138,7 +141,7 @@ Observed code-to-doc feedback:
 Observed contradiction handling:
 
 - Current-state SoT wins over roadmap/design for current runtime [docs/DOCS_INDEX.md:80-90].
-- Target-state docs must not be presented as shipped behavior [AGENTS.md:89-101], [docs/architecture/SBS_OPERATING_MODEL.md:28-34].
+- Target-state docs must not be presented as shipped behavior [AGENTS.md :: Change classification], [docs/architecture/SBS_OPERATING_MODEL.md:28-34].
 
 ```mermaid
 flowchart TD
@@ -173,10 +176,10 @@ flowchart TD
 | issue validation | Before coding | Agent | Issue | `AGENT_OPERATING_PROTOCOL`, issue contract | issue-to-code | source-anchor validation | pass/block | labels; optional Project projection | all `Verify:` targets | source truth sufficient? | issue maintenance | `agent:blocked` or `needs-human` | authority unclear | [`.codex/skills/issue-to-code/SKILL.md`:19-72] |
 | readiness classification | Queue eligibility | Agent + GitHub state | labels | label taxonomy, issue contract | issue-maintenance | readiness validator | ready/non-active | labels | strictly valid `agent:ready` | agent-ready? | drift repair | no pickup | named decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`], [`.codex/skills/_shared/ISSUE_CONTRACT.md`] |
 | dispatcher / queue selection | Work pickup | Agent + dispatcher | Ready tasks | dispatcher contract | issue-to-code | `python -m app.dispatcher next/claim` | Lease/task | dispatcher DB + GitHub label | lease acquired | priority and fit | release/reclaim | fallback to GitHub-label-only | dispatcher unavailable plus unsafe fallback | [docs/AGENT_ISSUE_DISPATCHER.md:165-180] |
-| model routing | Before work | Agent | risk/TCD | `AGENTS.md` TCD | relevant skill | none | model/effort choice | session only | review outcome | under/over-model? | learning | escalate capability | >10 min human steering or repeated failures | [AGENTS.md:112-157] |
-| skill routing | Task start | Agent | task class | `AGENTS.md`, skills README | matching skill | none | loaded skill | none | skill instructions | narrowest skill | learning | wrong skill -> repair | unclear route | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
+| model routing | Before work | Agent | risk/TCD | `AGENTS.md` TCD | relevant skill | none | model/effort choice | session only | review outcome | under/over-model? | learning | escalate capability | >10 min human steering or repeated failures | [AGENTS.md :: Total Cost of Development] |
+| skill routing | Task start | Agent | task class | `AGENTS.md`, skills README | matching skill | none | loaded skill | none | skill instructions | narrowest skill | learning | wrong skill -> repair | unclear route | [AGENTS.md :: Repo-local skill routing], [`.codex/skills/README.md`:64-128] |
 | context building | Before edit | Agent | source anchors | `DOCS_INDEX`, owner docs | active skill | rg/cat | context | none | owner docs read | current vs target | docs repair | stop | owner doc unavailable | [docs/DOCS_INDEX.md:11-17], [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37] |
-| repo orientation | Before edit | Agent | git/docs | `AGENTS.md` | agentic-pkm/skill | `git status`, rg | state | none | diff/status | dirty tree? | resume-work | stop if conflict | destructive ambiguity | [AGENTS.md:159-182] |
+| repo orientation | Before edit | Agent | git/docs | `AGENTS.md` | agentic-pkm/skill | `git status`, rg | state | none | diff/status | dirty tree? | resume-work | stop if conflict | destructive ambiguity | [AGENTS.md :: Agency default], [AGENTS.md :: Parallel-agent execution] |
 | work pickup / claim | Active work begins | Agent | ready issue | issue-to-code | issue-to-code | `scripts/issue_pickup_claim.sh` | In Progress, label removed | GitHub/dispatcher | gh view verify | claim can proceed? | release/blocked | blocked label/comment | human decision | [`.codex/skills/issue-to-code/SKILL.md`:129-175], [scripts/issue_pickup_claim.sh:39-59] |
 | implementation | Claimed issue | Agent | issue + owner docs | issue-to-code | issue-to-code | local tests | diff | files | local validation | can proceed? | local repair | block issue | safety/authority risk | [`.codex/skills/issue-to-code/SKILL.md`:236-260] |
 | mechanism convergence review | Before expensive validation when high-risk stateful work triggers | Fresh reviewer | local publishable SHA + convergence packet | review/repair contract | issue-to-code / publish-pr | `review_before_ci_gate.py` + independent review | clean/blocking receipt | none | invariants/states/crash-ordering/races/test map | clean? | focused repair + refreshed packet | block expensive proof | authority conflict only | [docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md#mechanism-convergence-gate] |
@@ -195,7 +198,7 @@ flowchart TD
 | BuilderOps/governance work | Workflow/governance change | Agent | learning/worklog/docs | BuilderOps docs | capture-learning, learning-retrospective | BuilderOps CLI/API | records, proposals, PRs | BuilderOps + PR | receipt/projection | promote? | learning loop | fallback log | authority crossing | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:40-81] |
 | learning/retrospective | Divergence or cadence | Agent | LearningSignals | delivery feedback | capture-learning, learning-retrospective | BuilderOps CLI | proposals/PRs/issues | BuilderOps + PR | receipt | upstream artifact? | retro loop | proposal-only | human review in default mode | [docs/development/DELIVERY_FEEDBACK_LOOP.md:67-188] |
 | continuous improvement / reevaluation | Divergence, epic close, review/CI/TCD pattern, CKM projection, or cadence | Agent + BuilderOps + optional human review | LearningSignals, evidence packs, review findings, TCD signals, CKM projections, fitness/debt state | delivery feedback, SBS operating model, CKM specs | learning-retrospective, capture-learning, future learning-to-issue | BuilderOps CLI/API, gh, docs/governance PRs | applied edit, already-satisfied receipt, bounded issue, PromotionIntent, debt/fitness update, discard/supersession receipt | BuilderOps + GitHub/PR through explicit gates | terminal outcome per signal | Product vs Builder? actionability? authority crossing? | reevaluation loop | unresolved signals remain open | strategic/Product authority or unsafe promotion | [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220], [docs/CAPABILITY_KNOWLEDGE_MODEL/README.md:51-77] |
-| human exception routing | Stop condition | Agent | failure packet | this doc + fallback policy | active skill | issue/PR comment | Human Exception packet | human | explicit decision | continue unsafe? | returns to queue | `agent:needs-human` | safety/authority/intent/failure-critical | [docs/architecture/SBS_OPERATING_MODEL.md §12] |
+| human exception routing | Explicit authority-classifier outcome | Agent | authority evidence | this doc + classifier | active skill | issue/PR comment | Human Exception packet | human | named authority decision | continue without authority? | returns to queue | `agent:needs-human` | irreversible/external/strategic or other canonical Human Exception category | [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 
 ## 5. Dispatcher And Routing Model
 
@@ -216,9 +219,9 @@ Mechanism classification:
 | labels affect readiness | deterministic | `agent:ready` is the external pickup qualifier after strict validation; `agent:blocked` and `needs-human` are non-active | [`.codex/skills/_shared/LABEL_TAXONOMY.md`] |
 | Project status affects routing | none | Project is an optional legacy projection and is not consulted by dispatcher sync or pickup | [docs/AGENT_ISSUE_DISPATCHER.md :: Source-of-Truth Boundaries] |
 | work is claimed | deterministic | Dispatcher lease then GitHub label removal; fallback GitHub-label-only | [`.codex/skills/issue-to-code/SKILL.md`:133-175] |
-| branch/worktree allocation | partially deterministic | Dedicated worktree required by policy; preflight detects shared root/drift; no central allocator | [AGENTS.md:171-182], [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
-| model choice | agentic | TCD policy and adapter defaults; no deterministic router service | [AGENTS.md:112-157], [`.codex/agents/issue-set-coordinator.toml`:1-21] |
-| skill choice | agentic + documented | `AGENTS.md` and skill README route by task class | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
+| branch/worktree allocation | partially deterministic | Dedicated worktree required by policy; preflight detects shared root/drift; no central allocator | [AGENTS.md :: Parallel-agent execution], [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
+| model choice | agentic | TCD policy and adapter defaults; no deterministic router service | [AGENTS.md :: Total Cost of Development], [`.codex/agents/issue-set-coordinator.toml`:1-21] |
+| skill choice | agentic + documented | `AGENTS.md` and skill README route by task class | [AGENTS.md :: Repo-local skill routing], [`.codex/skills/README.md`:64-128] |
 | docs/source context selection | agentic + documented | `DOCS_INDEX`, source anchors, owner docs; no context-builder script | [docs/DOCS_INDEX.md:11-17], [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37] |
 | parallel collision prevention | deterministic + partial | Dispatcher leases, label removal, worktree preflight; no branch allocator | [docs/AGENT_ISSUE_DISPATCHER.md:152-180], [scripts/agent_workspace_preflight.sh:55-61] |
 | stale claims detection | deterministic + partial | Dispatcher TTL/heartbeat and reclaim semantics; GitHub-label-only fallback has weaker stale detection | [docs/AGENT_ISSUE_DISPATCHER.md:165-180], [tests/dispatcher/test_leases.py:194-222] |
@@ -436,10 +439,10 @@ Human Exception merely because a retry budget is exhausted. The only route to
 | Is an issue executable? | issue contract + `Verify:` | partial | yes | no | ACs/body | ready/repair | untestable AC | [`.codex/skills/_shared/ISSUE_CONTRACT.md`:53-72] |
 | Is issue agent-ready? | strict issue validation + label | yes | yes | no | body/labels | queue eligible | malformed issue labeled ready | [`.codex/skills/_shared/ISSUE_CONTRACT.md`], [`.codex/skills/_shared/LABEL_TAXONOMY.md`] |
 | Product/Runtime, Builder, or boundary? | SBS classification | partial | yes | if unclear | touched surface | SBS impact | wrong authority | [docs/architecture/SBS_OPERATING_MODEL.md:95-118] |
-| Risk level? | TCD + PR hot path | partial | yes | no | lane/touched surface | low/normal/high | under-modeling | [AGENTS.md:142-157], [docs/development/PR_HOT_PATH.md:12-25] |
+| Risk level? | TCD + PR hot path | partial | yes | no | lane/touched surface | low/normal/high | under-modeling | [AGENTS.md :: Total Cost of Development], [docs/development/PR_HOT_PATH.md:12-25] |
 | Docs-only/code/runtime/governance/release/Mimer/BuilderOps? | lane and skill routing | partial | yes | no | files/scope | lane | wrong lane | [docs/development/DEV_WORKFLOW.md:107-169], [`.codex/skills/README.md`:130-164] |
 | Requires frontier planning? | feature-breakdown/deliver-issue-set | no | yes | maybe | scope size | breakdown | parent issue used as slice | [`.codex/skills/feature-breakdown/SKILL.md`:25-47] |
-| Requires human exception? | escalation classifier + fallback | partial | yes | yes | explicit authority category | packet/blocker | unnecessary interrupt or unsafe continue | [AGENTS.md:161-169], [docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier] |
+| Requires human exception? | escalation classifier | partial | yes | yes | explicit authority category | packet/blocker | unnecessary interrupt or unsafe continue | [AGENTS.md :: Agency default], [docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier] |
 | Can an agent claim? | dispatcher/preflight/labels | yes | yes | no | queue/preflight | lease/claim | double claim | [docs/AGENT_ISSUE_DISPATCHER.md:152-180] |
 | Can implementation proceed? | issue-to-code stop conditions | partial | yes | if unclear | issue/docs/env | proceed/block | scope drift | [`.codex/skills/issue-to-code/SKILL.md`:62-72] |
 | Which tests/checks required? | `DEV_WORKFLOW`, issue `Verify:` | partial | yes | no | touched files/ACs | validation plan | missing coverage | [docs/development/DEV_WORKFLOW.md:60-83] |
@@ -485,7 +488,7 @@ flowchart TD
   Validate -->|pass| Publish["Publish PR"]
 ```
 
-Implementation/local validation repair loop: triggered by local failing check; no max retry in scripts; evidence is terminal output/PR body; escalates under TCD triggers such as two failed attempts or hard-to-assess risk [AGENTS.md:142-149].
+Implementation/local validation repair loop: triggered by local failing check; no max retry in scripts; evidence is terminal output/PR body; escalates under TCD triggers such as two failed attempts or hard-to-assess risk [AGENTS.md :: Total Cost of Development].
 
 ```mermaid
 flowchart TD
@@ -526,7 +529,11 @@ review before another full-suite/CI cycle. Light-path PRs do not enter this loop
 mechanism after two attempts enters capability escalation plus classifier triage, not an automatic
 owner interrupt [`.codex/skills/verification-and-closure/SKILL.md`:145-225].
 
-Frontier rescue loop: triggered by repeated failure, feature-level issue, hidden invariants, or route ambiguity; actor is agent; state moves to issue maintenance, feature-breakdown, or `agent:needs-human`; evidence is blocker receipt or follow-up issue [`.codex/skills/issue-to-code/SKILL.md`:121-124], [AGENTS.md:142-149].
+Frontier rescue loop: triggered by repeated failure, feature-level issue, hidden invariants, or route
+ambiguity; actor is agent; state moves to issue maintenance, feature-breakdown, capability
+escalation, or technical block. It reaches `agent:needs-human` only after the canonical classifier
+names an explicit authority category; evidence is a blocker receipt or follow-up issue
+[`.codex/skills/issue-to-code/SKILL.md`:121-124], [AGENTS.md :: Total Cost of Development].
 
 Closure loop: triggered after merge/verification; actor is verification-and-closure; authoritative
 state is Issue/PR/dispatcher, with Project optional. A crash in the open neutralized window resumes
@@ -578,7 +585,10 @@ output remains projection-only and never mutates Product/Runtime authority by it
 
 Promotion/rollback loop: triggered by test/prod promotion; actor is release skills plus operator; stop condition is PASS receipt or rollback verification; human/operator ack is required for prod promotion [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
 
-Human exception loop: triggered by safety-critical, authority-critical, intent-critical, or autonomous-failure-critical condition; state is `agent:needs-human` plus packet; returns when decision supplies authority [docs/architecture/SBS_OPERATING_MODEL.md §12].
+Human exception loop: triggered only by an explicit canonical authority category such as an
+irreversible external action, strategic choice, or genuinely ambiguous authority. Technical
+failure remains blocked/repairable and does not enter the loop. State is `agent:needs-human` plus a
+packet and returns when the decision supplies authority [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
 ## 9. Automation Surface Matrix
 
@@ -588,7 +598,7 @@ Human exception loop: triggered by safety-critical, authority-critical, intent-c
 | `Verify:` validation | skill-enforced prose | deterministic script + GitHub Action | Detect non-executable ACs before pickup | high | medium | medium | [docs/development/DEV_WORKFLOW.md:226-255] |
 | source anchor validation | script in Action | deterministic script | Already appropriate | medium | medium | low | [`.github/workflows/issue-pr-governance.yml`:68-78] |
 | dispatcher pull/claim | script/CLI + skill | hybrid: script + agent | Keep queue deterministic while selection remains judgment-based | high | medium | medium | [docs/AGENT_ISSUE_DISPATCHER.md:165-180] |
-| model routing | agent policy | shared contract, later deterministic hints | Avoid under-modeling; no deterministic model service yet | medium | low | medium | [AGENTS.md:112-157] |
+| model routing | agent policy | shared contract, later deterministic hints | Avoid under-modeling; no deterministic model service yet | medium | low | medium | [AGENTS.md :: Total Cost of Development] |
 | skill routing | docs/skill index | shared contract + optional checker | Prevent wrong workflow entry | medium | medium | low | [`.codex/skills/README.md`:64-128] |
 | context builder | dry-run helper + agent review | hybrid: script + agent | Build compact source pack from issue anchors | high | high | medium | [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37], [app/builderops/epic_dispatch.py:1] |
 | worktree/branch preflight | deterministic script | Claude hook + script for local sessions | Local safety before mutation | high | medium | medium if hook blocks valid work | [scripts/agent_workspace_preflight.sh:55-61] |
@@ -616,10 +626,10 @@ Candidate hooks:
 | run formatter/lint subset after edits | PostToolUse / Stop | script, not hook for all edits | maybe | Deterministic validation belongs in scripts; hook should only suggest or receipt | latency | [docs/development/DEV_WORKFLOW.md:60-83] |
 | reduce long test logs | PostToolUse | hook or wrapper script | maybe | Saves tokens after command output | hiding evidence | [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82] |
 | create local validation receipt | Stop | hook + script | yes for local sessions | Reduces forgotten receipts | stale receipts | [docs/development/PR_HOT_PATH.md:50-54] |
-| prevent protected branch mutation | PreToolUse | hook | yes | Local safety before Git operations | false positive for deliberate release work | [AGENTS.md:171-182] |
-| suppress routine notifications | Notification | hook | maybe | Reduce attention drain | missed important blockers | [AGENTS.md:130-169] |
+| prevent protected branch mutation | PreToolUse | hook | yes | Local safety before Git operations | false positive for deliberate release work | [AGENTS.md :: Parallel-agent execution] |
+| suppress routine notifications | Notification | hook | maybe | Reduce attention drain | missed important blockers | [AGENTS.md :: Agency default] |
 | emit Human Exception packet | Stop / SubagentStop | hook/template | yes, only on stop-condition state | Ensures escalation is actionable | over-escalation | [docs/architecture/SBS_OPERATING_MODEL.md §12] |
-| PreCompact context receipt | PreCompact | hook | yes | Preserve work state before compaction | stale context | [`.codex/skills/resume-work/SKILL.md` listed in AGENTS.md:24-25] |
+| PreCompact context receipt | PreCompact | hook | yes | Preserve work state before compaction | stale context | [`.codex/skills/resume-work/SKILL.md` listed in AGENTS.md :: Repo-local skill routing] |
 
 Tasks that should stay scripts: source-anchor validation, branch/worktree preflight, CI wait, skills consistency lint, project status reconcile, dispatcher operations. These are deterministic validation/mutation surfaces and already have scripts or CLI paths [scripts/agent_workspace_preflight.sh:1-61], [scripts/await_pr_checks.sh:1-25], [`.codex/skills/README.md`:189-195].
 
@@ -705,8 +715,8 @@ Canonical packet:
 
 ```markdown
 # Human Exception Required
-## Failure class
-safety-critical / authority-critical / intent-critical / autonomous-failure-critical
+## Authority category
+irreversible / external-facing / strategic / explicitly ambiguous authority / other named canonical Human Exception
 ## Original intent
 ## Current state
 ## What agents/automation tried

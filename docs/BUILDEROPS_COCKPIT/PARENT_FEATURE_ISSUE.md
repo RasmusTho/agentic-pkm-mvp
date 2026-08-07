@@ -1,5 +1,6 @@
-State: Filed. The live parent feature issue is #4447 (open, validation hub); children
-#4448-#4453. GitHub is the authoritative backlog/validation surface; this file mirrors it.
+State: Delivered child ledger. All seven v1 slices are delivered; the live parent feature issue
+#4447 remains open as the validation hub. GitHub is the authoritative backlog/validation surface;
+this file mirrors it.
 
 # Parent feature issue — BuilderOps Cockpit v1
 
@@ -8,17 +9,17 @@ Title: `feature: BuilderOps cockpit v1 — chain-derived register over live auth
 ## Context
 
 The owner needs one register of everything in motion with coverage control (four questions, five
-chain-derived thread states, honest freshness/emptiness). The first increment is delivered
-(#4438); this parent tracks the remaining v1 slices specified in `docs/BUILDEROPS_COCKPIT/`
-(normalized from the accepted 2026-07-30 design exploration; decisions in `DESIGN_DECISIONS.md`).
+chain-derived thread states, honest freshness/emptiness). The initial join and all six later v1
+slices are delivered as recorded in `docs/BUILDEROPS_COCKPIT/README.md`. This parent now remains the
+validation hub; it does not imply that the separate INV-DG-7 owner-acceptance receipt exists.
 Upstream evidence: `docs/audits/DELIVERY_GRAPH_JOIN_SUBSTRATE_2026-07-30.md`. The join contract is
 upstream input to #4169's DeliveryRunView — extend/depend, never duplicate.
 
 ## Scope
 
-The v1 capability outcome across the remaining slices: browser-level induced-failure journeys;
-the live GitHub plane; the docs/capability plane; chain-derived states and flaw predicates;
-the three lenses and scale states; the Builder-scoped cognitive-load sibling doc.
+The delivered v1 capability outcome covers browser-level induced-failure journeys; the live GitHub
+plane; the docs/capability plane; chain-derived states and flaw predicates; the three lenses and
+scale states; and the Builder-scoped cognitive-load sibling doc.
 
 ## Source Anchors
 
@@ -50,11 +51,11 @@ the three lenses and scale states; the Builder-scoped cognitive-load sibling doc
 
 ## Acceptance Criteria
 
-- [ ] All child slices delivered and green
+- [x] All child slices delivered and green
   - Verify: child issue closures linked below, each with its receipt
-- [ ] Induced dead-source journey red-not-calm in the post-merge lane
+- [x] Induced dead-source journey red-not-calm in the post-merge lane
   - Verify: `tests/companion_ui/test_cockpit_journeys.py::test_dead_source_renders_refusal_not_calm`
-- [ ] Spec directory truthful post-delivery (states, issue links, decisions)
+- [x] Spec directory truthful post-delivery (states, issue links, decisions)
   - Verify: doc writeback at `docs/BUILDEROPS_COCKPIT/README.md :: Implementation tasks and execution order`
 
 ## Out of Scope
@@ -63,8 +64,8 @@ The binding list in `docs/BUILDEROPS_COCKPIT/README.md :: Out of scope for v1 (b
 
 ## Implementation Tasks
 
-`docs/BUILDEROPS_COCKPIT/` — BOPS-COCKPIT-01 (delivered #4438), 02, 07, 03, 05, 04, 06 in that
-order (02/07 parallel; 03/05 parallel; 04 may run parallel with 05 once 03 lands).
+`docs/BUILDEROPS_COCKPIT/` — BOPS-COCKPIT-01 (#4438), 02 (#4448 / PR #4458), 07 (#4449 / PR
+#4467), 03 (#4450), 05 (#4451), 04 (#4452), and 06 (#4453 / PR #4478) are delivered.
 
 ## Verification Path
 
@@ -72,12 +73,10 @@ Per-task `Verify:` targets on head SHA + required unit lane; browser journeys po
 
 ## Validation / Acceptance Path
 
-Each child posts a validation receipt comment here before the next child is picked up. Parent
-closes when all children are delivered and the rows under
-`docs/BUILDEROPS_COCKPIT/README.md :: Capability acceptance criteria` are checked; owner-doc
-promotion happens inside the child PRs (the README lives in the spec directory). The top rung —
-owner use — is explicitly not automatable and stays visible as the empty tried tier until
-INV-DG-7 exists.
+All child delivery and automated capability rows under
+`docs/BUILDEROPS_COCKPIT/README.md :: Capability acceptance criteria` are complete. Parent #4447
+remains the live validation hub. The top rung — owner use — is explicitly not automatable and stays
+visible as the empty tried tier until a separate owner decision authorizes INV-DG-7.
 
 ## Suggested Validation
 
