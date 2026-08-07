@@ -121,6 +121,7 @@ from app.vault.settings_service import (
     SettingsWriteError,
 )
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+from app.standing_questions.registration import register_question_explicitly
 
 router = APIRouter(prefix="/companion", tags=["companion"])
 
@@ -130,6 +131,20 @@ logger = logging.getLogger(__name__)
 def _reflection_now() -> datetime.datetime:
     """Local-time seam shared by offer evaluation and deterministic tests."""
     return datetime.datetime.now().astimezone()
+
+
+class QuestionRegistrationRequest(BaseModel):
+    """One explicit human request to register an open standing question."""
+
+    text: str = Field(min_length=1)
+    scope: str = Field(default="personal", min_length=1)
+
+
+class QuestionRegistrationResponse(BaseModel):
+    question_id: str
+    status: Literal["open"]
+    registered_via: Literal["explicit"]
+    receipt_locator: str
 
 _LAST_ACTIVE_LOAD_ATTEMPTED_ATTR = "_companion_last_active_load_attempted"
 
@@ -834,6 +849,35 @@ def _active_companion_vault_root_or_picker(
             trace_id=trace_id,
             configured_vault_root=exc.configured_path,
         )
+
+
+@router.post(
+    "/questions/register",
+    response_model=QuestionRegistrationResponse | VaultSelectionRequiredResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
+def register_companion_question(
+    req: QuestionRegistrationRequest,
+) -> QuestionRegistrationResponse | VaultSelectionRequiredResponse:
+    """Register text the owner explicitly supplied; no proposal parse is involved."""
+    vault_root = _active_companion_vault_root_or_picker(require_initialized=True)
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    try:
+        note, receipt = register_question_explicitly(
+            text=req.text, scope=req.scope, vault_root=vault_root
+        )
+    except WritesBlockedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "writeguard_blocked", "state": "blocked", "message": str(exc)},
+        ) from exc
+    return QuestionRegistrationResponse(
+        question_id=note["question_id"],
+        status="open",
+        registered_via="explicit",
+        receipt_locator=str(receipt.locator),
+    )
 
 
 def _companion_vault_context_with_lazy_last_active(manager: Any) -> VaultContext:

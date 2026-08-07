@@ -74,6 +74,7 @@ from app.services.outbox import (
 )
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+from app.standing_questions.registration import RegistrationProposalResult, propose_question_registration
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,8 @@ class CaptureResponse(BaseModel):
     events_emitted: list[str] = Field(default_factory=list)
     governed_write: dict[str, Any] | None = None
     ingest_warning: str | None = None
+    registration_state: Literal["proposal_pending", "not_qualified", "degraded"] = "not_qualified"
+    registration_proposal_id: str | None = None
 
 
 def _capture_note_rel(vault_root: Path) -> str:
@@ -191,6 +194,21 @@ def _writeguard_blocked_detail(exc: WritesBlockedError) -> dict[str, Any]:
         "message": str(exc),
         "reason": exc.reason,
     }
+
+
+def _offer_question_registration_proposal(
+    *, vault_root: Path, note_rel: str, trace_id: str
+) -> RegistrationProposalResult | None:
+    """Run proposal-only capture classification after the durable append."""
+    try:
+        return propose_question_registration(
+            capture_note_path=vault_root / note_rel,
+            vault_root=vault_root,
+            trace_id=trace_id,
+        )
+    except (OSError, WritesBlockedError):
+        logger.warning("standing-question proposal pass degraded trace_id=%s", trace_id, exc_info=True)
+        return None
 
 
 def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
@@ -358,6 +376,17 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
             },
         ) from exc
 
+    registration = _offer_question_registration_proposal(
+        vault_root=vault_root, note_rel=note_rel, trace_id=trace_id
+    )
+    registration_state: Literal["proposal_pending", "not_qualified", "degraded"]
+    if registration is None or not registration.classification.classified:
+        registration_state = "degraded"
+    elif registration.proposal_id is not None:
+        registration_state = "proposal_pending"
+    else:
+        registration_state = "not_qualified"
+
     # Ingest-binding visibility (#3119) — the write above already succeeded;
     # this only decides whether to accompany "written" with a warning that the
     # watcher/worker are not confirmed bound to this vault. Never gates or
@@ -380,6 +409,8 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
         events_emitted=events_emitted,
         governed_write=governed_write,
         ingest_warning=ingest_warning,
+        registration_state=registration_state,
+        registration_proposal_id=registration.proposal_id if registration else None,
     )
 
 
