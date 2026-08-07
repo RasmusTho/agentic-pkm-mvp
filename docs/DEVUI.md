@@ -243,7 +243,8 @@ Delivered now:
 
 Not delivered now: a composed versioned read contract; one devUI shell; request/preview/authenticated
 approval in one owner experience; PostgreSQL authority cutover; full live run controls; receipt-to-
-CKM reassessment in the unified surface; owner acceptance; and ADR-0065 dispositions.
+CKM reassessment in the unified surface; owner pilot and tried-by-owner acceptance; and ADR-0065
+dispositions.
 
 The target turns the current cockpits from competing owner products into sources: Direction B stays
 an exportable/static evidence fallback, BuilderOps Cockpit supplies the work view, and the planned
