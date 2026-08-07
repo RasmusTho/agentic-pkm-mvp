@@ -294,6 +294,18 @@ class _RecoveryEntry:
     fd: int
 
 
+def _access_metadata_host_payload(metadata: _AccessMetadata) -> dict[str, object]:
+    """Encode exact access metadata into a stable JSON-compatible value."""
+
+    return {
+        "mode": metadata.mode,
+        "uid": metadata.uid,
+        "gid": metadata.gid,
+        "xattrs": [[name, value.hex()] for name, value in metadata.xattrs],
+        "acl": metadata.acl.hex() if metadata.acl is not None else None,
+    }
+
+
 def _split_frontmatter_body_bytes(raw: bytes) -> tuple[bytes, bytes]:
     """Split a Markdown note without normalizing any body byte."""
 
@@ -1682,7 +1694,11 @@ def _host_target_payload(parent_fd: int, target_name: str) -> dict[str, object]:
             raise KnowledgeWriteConflict(
                 "atomic append host state target cannot be reconciled"
             )
-        payload, _observed = _read_stable_descriptor(target_fd)
+        payload, metadata = _read_bound_file(
+            target_fd,
+            target,
+            context="atomic append host state target",
+        )
     finally:
         os.close(target_fd)
     return {
@@ -1690,6 +1706,7 @@ def _host_target_payload(parent_fd: int, target_name: str) -> dict[str, object]:
         "target_dev": target.st_dev,
         "target_ino": target.st_ino,
         "target_digest": hashlib.sha256(payload).hexdigest(),
+        "target_metadata": _access_metadata_host_payload(metadata),
     }
 
 
@@ -1710,6 +1727,7 @@ def _latest_original_host_payload(
         "latest_original_dev": entry.identity.st_dev,
         "latest_original_ino": entry.identity.st_ino,
         "latest_original_digest": entry.digest,
+        "latest_original_metadata": _access_metadata_host_payload(entry.metadata),
     }
 
 
@@ -1784,11 +1802,16 @@ def _host_prepared_next_latest_original_is_named(
             or observed.st_ino != state.get("next_latest_original_ino")
         ):
             return False
-        payload, stable = _read_stable_descriptor(prepared_fd)
+        payload, metadata = _read_bound_file(
+            prepared_fd,
+            observed,
+            context="atomic append prepared latest-original",
+        )
         return (
-            _same_file_identity(stable, observed)
-            and hashlib.sha256(payload).hexdigest()
+            hashlib.sha256(payload).hexdigest()
             == state.get("next_latest_original_digest")
+            and _access_metadata_host_payload(metadata)
+            == state.get("next_latest_original_metadata")
         )
     finally:
         os.close(prepared_fd)
@@ -1825,10 +1848,15 @@ def _host_prepared_proposal_is_named(
             or observed.st_ino != state.get("proposal_ino")
         ):
             return False
-        payload, stable = _read_stable_descriptor(proposal_fd)
+        payload, metadata = _read_bound_file(
+            proposal_fd,
+            observed,
+            context="atomic append prepared proposal",
+        )
         return (
-            _same_file_identity(stable, observed)
-            and hashlib.sha256(payload).hexdigest() == state.get("proposal_digest")
+            hashlib.sha256(payload).hexdigest() == state.get("proposal_digest")
+            and _access_metadata_host_payload(metadata)
+            == state.get("proposal_metadata")
         )
     finally:
         os.close(proposal_fd)
@@ -1960,6 +1988,8 @@ def _reconcile_host_atomic_append_states(
                 and target.get("target_dev") == state.get("proposal_dev")
                 and target.get("target_ino") == state.get("proposal_ino")
                 and target.get("target_digest") == state.get("proposal_digest")
+                and target.get("target_metadata")
+                == state.get("proposal_metadata")
             )
             original_matches = (
                 state.get("source_present") is False
@@ -1970,13 +2000,15 @@ def _reconcile_host_atomic_append_states(
                 and target.get("target_dev") == state.get("source_dev")
                 and target.get("target_ino") == state.get("source_ino")
                 and target.get("target_digest") == state.get("source_digest")
+                and target.get("target_metadata")
+                == state.get("source_metadata")
             )
             if (
-                state.get("source_present") is False
-                and target.get("target_present") is False
+                original_matches
+                and not proposal_matches
                 and not _host_prepared_proposal_is_named(parent_fd, state)
             ):
-                reason = "prepared initial proposal phase evidence is missing"
+                reason = "prepared proposal phase evidence is missing"
                 break
             if _host_uses_present_next_latest_original(
                 state,
@@ -2018,8 +2050,10 @@ def _prepare_host_atomic_append_intent(
     transaction_id: str,
     source_stat: os.stat_result | None,
     source_digest: str | None,
+    source_metadata: _AccessMetadata | None,
     proposal_stat: os.stat_result,
     proposal_digest: str,
+    proposal_metadata: _AccessMetadata,
     proposal_name: str,
     prior_latest_original: _RecoveryEntry | None,
     next_latest_original: _RecoveryEntry | None,
@@ -2028,11 +2062,14 @@ def _prepare_host_atomic_append_intent(
     if source_stat is None:
         source = {"source_present": False}
     else:
+        if source_metadata is None:
+            raise AssertionError("existing source lost access metadata authority")
         source = {
             "source_present": True,
             "source_dev": source_stat.st_dev,
             "source_ino": source_stat.st_ino,
             "source_digest": source_digest,
+            "source_metadata": _access_metadata_host_payload(source_metadata),
         }
     _write_host_append_states(
         authority,
@@ -2044,6 +2081,7 @@ def _prepare_host_atomic_append_intent(
             "proposal_dev": proposal_stat.st_dev,
             "proposal_ino": proposal_stat.st_ino,
             "proposal_digest": proposal_digest,
+            "proposal_metadata": _access_metadata_host_payload(proposal_metadata),
             "proposal_name": proposal_name,
             **_latest_original_host_payload(prior_latest_original),
             **_next_latest_original_host_payload(next_latest_original),
@@ -2299,7 +2337,7 @@ def _sweep_atomic_append_stages(parent_fd: int, recovery_fd: int) -> None:
 
 
 def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
-    """Unlink one proven recovery name without mutating its bound inode."""
+    """Quarantine one proven entry without deleting through a mutable name."""
 
     current = os.fstat(entry.fd)
     payload, metadata = _read_bound_file(
@@ -2334,7 +2372,6 @@ def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
         raise KnowledgeWriteConflict(
             "atomic append recovery snapshot changed during retirement"
         )
-    os.unlink(retirement_name, dir_fd=recovery_fd)
     os.fsync(recovery_fd)
     bound_after = os.fstat(entry.fd)
     payload_after, metadata_after = _read_bound_file(
@@ -2344,7 +2381,7 @@ def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
     )
     if (
         not _same_file_identity(bound_after, entry.identity)
-        or bound_after.st_nlink != 0
+        or bound_after.st_nlink != 1
         or hashlib.sha256(payload_after).hexdigest() != entry.digest
         or metadata_after != entry.metadata
     ):
@@ -2694,6 +2731,7 @@ def _atomic_append_note_relative(
     stage_name: str | None = None
     stage_stat: os.stat_result | None = None
     stage_named = False
+    intent_prepared = False
     exchange_completed = False
     target_existed = False
     current_raw: bytes | None = None
@@ -2859,6 +2897,7 @@ def _atomic_append_note_relative(
             # special mode bits on macOS and chown can clear them elsewhere.
             _copy_access_metadata(source_fd, stage_fd)
         os.fsync(stage_fd)
+        os.fsync(current_dir_fd)
         staged_raw, staged_metadata = _read_bound_file(
             stage_fd,
             stage_stat,
@@ -2902,6 +2941,11 @@ def _atomic_append_note_relative(
             current_dir_fd,
             recovery_fd,
         )
+        # Once intent preparation starts, the exact named stage is part of
+        # restart reconciliation even if a later publication call returns an
+        # ordinary error. Cleanup must not rename it out from under that
+        # durable record.
+        intent_prepared = True
         _prepare_host_atomic_append_intent(
             authority,
             current_dir_fd,
@@ -2913,8 +2957,10 @@ def _atomic_append_note_relative(
                 if current_raw is not None
                 else None
             ),
+            source_metadata=source_metadata,
             proposal_stat=stage_stat,
             proposal_digest=replacement_digest,
+            proposal_metadata=staged_metadata,
             proposal_name=stage_name,
             prior_latest_original=prior_latest_original_snapshot,
             next_latest_original=prepared_latest_original_snapshot,
@@ -3192,6 +3238,7 @@ def _atomic_append_note_relative(
                 dir_fd=receipt_parent_fd,
                 follow_symlinks=False,
             )
+            bound_target = os.fstat(receipt_stage_fd)
             final_raw, final_metadata = _read_bound_file(
                 receipt_stage_fd,
                 stage_stat,
@@ -3199,6 +3246,11 @@ def _atomic_append_note_relative(
             )
             if (
                 not _same_file_identity(live_target, stage_stat)
+                or not _same_file_identity(bound_target, stage_stat)
+                or not stat.S_ISREG(live_target.st_mode)
+                or not stat.S_ISREG(bound_target.st_mode)
+                or live_target.st_nlink != 1
+                or bound_target.st_nlink != 1
                 or final_raw != replacement
                 or final_metadata != staged_metadata
             ):
@@ -3272,6 +3324,7 @@ def _atomic_append_note_relative(
                 record_cleanup_error(exc)
         if (
             stage_named
+            and not (intent_prepared and not exchange_completed)
             and stage_name is not None
             and stage_stat is not None
             and current_dir_fd is not None

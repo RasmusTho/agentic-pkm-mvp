@@ -31,6 +31,7 @@ network, no real Postgres, no real vault.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import errno
 import json
 import multiprocessing
 import os
@@ -823,6 +824,71 @@ def test_steering_log_retry_recovers_interrupted_states(
     note = read_settings_note(vault_root, STEERING_LOG)
     assert note is not None
     assert note.values["entry_count"] == 6
+
+
+def test_steering_log_initial_publish_error_preserves_recorded_stage_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    target = vault_root / note_rel_path(STEERING_LOG)
+    real_rename_noreplace = write_ops_module._atomic_rename_noreplace_at
+
+    def fail_only_target_publication(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        if destination_name == target.name:
+            raise OSError(errno.EIO, "initial target publication")
+        real_rename_noreplace(
+            source_fd,
+            source_name,
+            destination_fd,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        fail_only_target_publication,
+    )
+    with pytest.raises(OSError, match="initial target publication"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "initial-publication-error",
+            source="chat",
+            operation_id="initial-publication-error",
+            write_guard=guard,
+        )
+
+    assert not target.exists()
+    stages = list(target.parent.glob(".atomic-append-*.stage"))
+    assert len(stages) == 1
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(json.loads(path.read_text())["state"] == "active" for path in states)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        real_rename_noreplace,
+    )
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "initial-publication-error",
+        source="chat",
+        operation_id="initial-publication-error",
+        write_guard=guard,
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    assert not list(target.parent.glob(".atomic-append-*.stage"))
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
 
 
 def test_steering_log_retry_sweeps_process_crash_stage_to_root_recovery(
@@ -1883,6 +1949,109 @@ def test_steering_log_latest_original_retention_is_bounded(tmp_path: Path) -> No
     assert stable[0].read_bytes() == first_complete
 
 
+def test_steering_log_latest_original_metadata_change_blocks_reconciliation(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "first",
+        source="chat",
+        operation_id="latest-metadata-first",
+        write_guard=guard,
+    )
+    append_steering_log(
+        vault_root,
+        "mute",
+        "second",
+        source="item",
+        operation_id="latest-metadata-second",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    before = target.read_bytes()
+    stable = next(
+        (vault_root / "_conflicts").glob(
+            ".steering-append-latest-original-*.md.conflict"
+        )
+    )
+    stable.chmod(0o640)
+
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "boost",
+            "third",
+            source="item",
+            operation_id="latest-metadata-third",
+            write_guard=guard,
+        )
+
+    assert target.read_bytes() == before
+    assert stat.S_IMODE(stable.stat().st_mode) == 0o640
+
+
+@pytest.mark.parametrize("mutation", ["source", "proposal"])
+def test_steering_log_active_metadata_change_blocks_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"active-metadata-{mutation}-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    before = target.read_bytes()
+    real_exchange = write_ops_module._atomic_exchange_at
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_exchange_at",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EIO, "publication stopped")
+        ),
+    )
+    with pytest.raises(OSError, match="publication stopped"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "active-metadata",
+            source="item",
+            operation_id=f"active-metadata-{mutation}-proposal",
+            write_guard=guard,
+        )
+
+    stage = next(target.parent.glob(".atomic-append-*.stage"))
+    (target if mutation == "source" else stage).chmod(0o640)
+    monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", real_exchange)
+
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "active-metadata",
+            source="item",
+            operation_id=f"active-metadata-{mutation}-proposal",
+            write_guard=guard,
+        )
+
+    assert target.read_bytes() == before
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert states
+    assert all(
+        json.loads(path.read_text())["state"] == "indeterminate"
+        for path in states
+    )
+
+
 def test_steering_log_preexisting_latest_original_substitution_blocks_rotation(
     tmp_path: Path,
 ) -> None:
@@ -2781,6 +2950,47 @@ def test_steering_log_retirement_never_deletes_substituted_name(
     assert (vault_root / "_conflicts" / substituted_name).read_bytes() == sentinel
 
 
+def test_steering_log_retirement_never_unlinks_a_mutable_recovery_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="retirement-no-unlink-seed",
+        write_guard=guard,
+    )
+    real_unlink = write_ops_module.os.unlink
+    retired_unlink_attempted = False
+
+    def reject_retired_unlink(path: object, *args: object, **kwargs: object) -> None:
+        nonlocal retired_unlink_attempted
+        if isinstance(path, str) and "-retired-" in path:
+            retired_unlink_attempted = True
+            raise AssertionError("retirement must not delete through a mutable name")
+        real_unlink(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(write_ops_module.os, "unlink", reject_retired_unlink)
+    append_steering_log(
+        vault_root,
+        "mute",
+        "retirement-no-unlink",
+        source="item",
+        operation_id="retirement-no-unlink-proposal",
+        write_guard=guard,
+    )
+
+    assert retired_unlink_attempted is False
+    assert any(
+        "-retired-" in path.name
+        for path in (vault_root / "_conflicts").iterdir()
+    )
+
+
 @pytest.mark.parametrize("remap", ["target", "parent", "root", "recovery"])
 def test_steering_log_retirement_window_remap_fails_with_durable_host_state(
     monkeypatch: pytest.MonkeyPatch,
@@ -2900,6 +3110,63 @@ def test_steering_log_final_mapping_remap_after_clean_state_is_refenced(
     states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
     assert states
     assert all(json.loads(path.read_text())["state"] == "indeterminate" for path in states)
+
+
+def test_steering_log_post_clean_hard_link_never_receipts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="post-clean-hard-link-seed",
+        write_guard=guard,
+    )
+    target = vault_root / note_rel_path(STEERING_LOG)
+    alias = tmp_path / "post-clean-hard-link.md"
+    real_complete = write_ops_module._complete_host_atomic_append_intent
+
+    def complete_then_link(*args: object, **kwargs: object) -> None:
+        real_complete(*args, **kwargs)  # type: ignore[arg-type]
+        os.link(target, alias)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        complete_then_link,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="receipt became indeterminate"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "post-clean-hard-link",
+            source="item",
+            operation_id="post-clean-hard-link-proposal",
+            write_guard=guard,
+        )
+
+    assert alias.read_bytes() == target.read_bytes()
+    assert target.read_text(encoding="utf-8").count(
+        '"operation_id":"post-clean-hard-link-proposal"'
+    ) == 1
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        real_complete,
+    )
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "post-clean-hard-link",
+            source="item",
+            operation_id="post-clean-hard-link-proposal",
+            write_guard=guard,
+        )
 
 
 def test_steering_log_bookkeeping_preserves_existing_body_bytes(tmp_path: Path) -> None:
