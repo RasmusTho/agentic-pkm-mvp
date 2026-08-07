@@ -2556,6 +2556,7 @@ def _validate_host_append_inventory_topology(
             witness_is_exact = (
                 slot_pair == ("predecessor", None)
                 and app_state is not None
+                and witness_state is not None
                 and _host_states_match_across_keys(app_state, witness_state)
                 and not swap_record.raw
             )
@@ -2566,6 +2567,7 @@ def _validate_host_append_inventory_topology(
             witness_is_exact = (
                 slot_pair == ("successor", None)
                 and app_state is not None
+                and witness_state is not None
                 and _host_states_match_across_keys(app_state, witness_state)
                 and not swap_record.raw
             )
@@ -2772,14 +2774,21 @@ def _repair_malformed_host_swap_records(
     try:
         inventories = _read_host_append_inventories(fence_fd, authority)
         repairs = _plan_malformed_host_swap_repairs(inventories)
-        if set(repairs) != set(expected_repairs) or any(
-            current.raw != expected_repairs[path_lock_key].raw
-            or current.identity is None
-            or expected_repairs[path_lock_key].identity is None
-            or not _same_file_identity(
-                current.identity,
-                expected_repairs[path_lock_key].identity,
+
+        def repair_matches_snapshot(
+            path_lock_key: str,
+            current: _HostStateRecord,
+        ) -> bool:
+            expected = expected_repairs[path_lock_key]
+            return (
+                current.raw == expected.raw
+                and current.identity is not None
+                and expected.identity is not None
+                and _same_file_identity(current.identity, expected.identity)
             )
+
+        if set(repairs) != set(expected_repairs) or any(
+            not repair_matches_snapshot(path_lock_key, current)
             for path_lock_key, current in repairs.items()
         ):
             raise KnowledgeWriteConflict(
