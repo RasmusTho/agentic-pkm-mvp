@@ -467,7 +467,9 @@ def test_export_runtime_env_import_failure_paths_do_not_leave_unbound_location_h
     script = (Path(__file__).resolve().parents[2] / "scripts/export_runtime_env.sh").read_text(
         encoding="utf-8"
     )
-    blocks = re.findall(r"python3 - <<'PY' >> \"\$runtime_env_path\"\n(.*?)\nPY", script, re.S)
+    blocks = re.findall(
+        r"python3 - <<'PY' >> \"\$runtime_env_output_path\"\n(.*?)\nPY", script, re.S
+    )
     assert len(blocks) == 2
 
     for block in blocks:
