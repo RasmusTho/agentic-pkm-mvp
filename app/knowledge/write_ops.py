@@ -2640,7 +2640,7 @@ def _plan_missing_active_witness_repairs(
         ]
     ],
 ) -> dict[str, dict[str, object]]:
-    """Plan missing temporary-witness repair from authenticated app records.
+    """Plan missing temporary-witness repair from surviving bound records.
 
     The plan is only a provisional in-memory view. Reconciliation must prove
     the recorded mapping, source/proposal phase, latest-original phase, and
@@ -2655,15 +2655,18 @@ def _plan_missing_active_witness_repairs(
     if not missing_keys:
         return {}
 
-    app_states = [
+    surviving_states = [
         state
-        for _path_lock_key, app_record, swap_record, _witness_state in inventories
-        for state in (app_record.state, swap_record.state)
+        for _path_lock_key, app_record, swap_record, witness_state in inventories
+        for state in (app_record.state, swap_record.state, witness_state)
         if state is not None
     ]
-    active_states = [state for state in app_states if state.get("state") == "active"]
+    active_states = [
+        state for state in surviving_states if state.get("state") == "active"
+    ]
     if not active_states or any(
-        state.get("state") not in {"active", "clean"} for state in app_states
+        state.get("state") not in {"active", "clean"}
+        for state in surviving_states
     ):
         return {}
 
@@ -2677,19 +2680,9 @@ def _plan_missing_active_witness_repairs(
     if any(
         state.get("state") == "clean"
         and not _host_clean_is_related_to_active(state, seed)
-        for state in app_states
+        for state in surviving_states
     ):
         return {}
-
-    for _path_lock_key, _app_record, _swap_record, witness_state in inventories:
-        if witness_state is None:
-            continue
-        if witness_state.get("state") != "active" or {
-            key: value
-            for key, value in witness_state.items()
-            if key != "path_lock_key"
-        } != seed:
-            return {}
 
     return {
         path_lock_key: {**seed, "path_lock_key": path_lock_key}

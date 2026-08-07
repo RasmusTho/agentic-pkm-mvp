@@ -220,6 +220,46 @@ def _crash_virgin_resource_state_exchange(
     )
 
 
+def _crash_virgin_second_active_witness_write(
+    vault_root: Path,
+    write_cut: str,
+) -> None:
+    real_write = write_ops_module._write_host_witness_state
+    active_writes = 0
+
+    def interrupt_second_active_witness(
+        witness_fd: int,
+        payload: dict[str, object],
+    ) -> None:
+        nonlocal active_writes
+        if payload.get("state") == "active":
+            active_writes += 1
+            if active_writes == 2:
+                if write_cut == "partial":
+                    raw = (
+                        json.dumps(payload, ensure_ascii=True, sort_keys=True)
+                        + "\n"
+                    ).encode("utf-8")
+                    os.ftruncate(witness_fd, 0)
+                    os.lseek(witness_fd, 0, os.SEEK_SET)
+                    os.write(witness_fd, raw[: len(raw) // 2])
+                    os.fsync(witness_fd)
+                os._exit(201 if write_cut == "missing" else 202)
+        real_write(witness_fd, payload)
+
+    write_ops_module._write_host_witness_state = (  # type: ignore[method-assign]
+        interrupt_second_active_witness
+    )
+    append_steering_log(
+        vault_root,
+        "wrong",
+        f"virgin-active-witness-{write_cut}",
+        source="chat",
+        operation_id=f"virgin-active-witness-{write_cut}",
+        write_guard=_allowing_guard(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC: a hand-edited interests.md weight is explicit intent and outranks
 # inference.
@@ -1208,6 +1248,52 @@ def test_steering_log_virgin_state_exchange_crash_recovers(
         json.loads(path.read_text())["state"] == "clean"
         for path in _host_witness_paths(vault_root)
     )
+
+
+@pytest.mark.parametrize("write_cut", ["missing", "partial"])
+def test_steering_log_virgin_active_witness_prefix_recovers(
+    tmp_path: Path,
+    write_cut: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    witness_paths = _host_witness_paths(vault_root)
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_virgin_second_active_witness_write,
+        args=(vault_root, write_cut),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == (201 if write_cut == "missing" else 202)
+
+    active_witnesses = 0
+    for path in witness_paths:
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        active_witnesses += payload.get("state") == "active"
+    assert active_witnesses == 1
+    assert not list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        f"virgin-active-witness-{write_cut}",
+        source="chat",
+        operation_id=f"virgin-active-witness-{write_cut}",
+        write_guard=_allowing_guard(),
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert len(states) == 2
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+    assert all(
+        json.loads(path.read_text())["state"] == "clean" for path in witness_paths
+    )
+    swaps = list(_host_fence_root().glob(".heimdal-atomic-append-*.swap"))
+    assert len(swaps) == 2
+    assert all(path.stat().st_size == 0 for path in swaps)
 
 
 @pytest.mark.parametrize("crash_before_resource_exchange", [1, 2])
