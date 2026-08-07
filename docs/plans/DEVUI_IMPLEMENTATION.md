@@ -1,11 +1,11 @@
-State: Target-state implementation plan (2026-08-06). No devUI implementation is authorized or claimed by this document. Existing GitHub Issues remain executable backlog truth; no Issues were created or changed by this plan.
+State: Target-state implementation plan (2026-08-07). No devUI implementation is authorized or claimed by this document. Existing GitHub Issues remain executable backlog truth; no Issues were created or changed by this plan.
 Doc role: Builder System implementation and sequencing plan
 Authority: Owns the proposed dependency order for realizing `docs/DEVUI.md`. Subordinate to accepted ADRs, DDO and BuilderOps control-plane specifications, live Issue contracts, and current-state owner docs.
 Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
-Source of truth: accepted ADRs, linked capability specs, and live GitHub remain binding while `docs/DEVUI.md` awaits owner acceptance; after acceptance it owns the owner functions
-Last reviewed: 2026-08-06
+Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
+Last reviewed: 2026-08-07
 
 # devUI implementation plan
 
@@ -14,10 +14,24 @@ Last reviewed: 2026-08-06
 Deliver an owner entry where the following is experienced as one flow:
 
 ```text
-situation → capability → proposal → preview → approval → active delivery → terminal receipt → reassessment
+see → decide → act → verify
 ```
 
 The plan builds no new control plane. It composes existing CKM, BuilderOps, DDO, dispatcher, and GitHub boundaries, and activates writes only when their normal gates are satisfied.
+
+The minimum coherent product is one cockpit with three zones (**Now**, **Needs you**, **Ready to
+try**), one contextual detail surface, and one command/receipt surface. Capability, work, evidence,
+run, and receipt are connected lenses, not separate owner products.
+
+## Complexity budget
+
+1. Build one owner shell, not another authority, registry, graph store, task system, or agent UI.
+2. Reuse the delivered BuilderOps Cockpit and CKM read models; do not rebuild their joins.
+3. Add no top-level mode unless it eliminates a concrete owner reconstruction step.
+4. Keep technical identifiers and source topology behind progressive detail.
+5. Put commands only in the selected item's context; do not create a global command language.
+6. Ship the read-only cockpit before waiting for the authority-bearing command path.
+7. Treat every mechanism dependency below as internal delivery detail, not owner navigation.
 
 ## Fixed design and architecture rules
 
@@ -47,100 +61,78 @@ The plan builds no new control plane. It composes existing CKM, BuilderOps, DDO,
 | Results | `DeliveryReceipt.v2` and attempt-terminal evidence | Receipt seam delivered; complete attempt terminality target |
 | Visual base | Yggdrasil Design System and tested Cockpit patterns | Reusable sources; new handoff required |
 
-## Phase plan
+## Three delivery stages
 
-### Phase 0 — owner contract, name, and design handoff
+### Stage A — see: coherent read-only cockpit
 
-Deliver owner acceptance of `docs/DEVUI.md`; decide a route/package/API name that does not alter existing `dev-ui`; and create a governed Yggdrasil design handoff for overview, capability, work, decision/run, and receipt modes. The handoff covers desktop, narrow width, 200% zoom, keyboard use, many simultaneous items, degraded state, the distinction between a link, deterministic contract call, and agent start, plus a read-only action-boundary fallback.
+Deliver the three cockpit zones and contextual detail by composing two existing sources: CKM for
+capability evidence and BuilderOps Cockpit for live work. Parent #4447 and children #4448–#4453 are
+already delivered inputs; this stage owns only the missing shared contracts, composition, shell,
+navigation, and owner language.
 
-Gate: no visual implementation before a verified design-handoff receipt and token parity.
+Before visual implementation, complete the Yggdrasil design handoff for the three owner surfaces.
+Deliver transport-neutral CKM owner-view, work-registry, and devUI composition-envelope contracts.
+The envelope binds source snapshot identities without copying or reinterpreting authority.
 
-### Phase 1 — versioned read contracts
+Current `ckm-local-access-v1` remains `single_operator_local`. Until its audience, read auth,
+redaction, redistribution, and version-refusal policy is accepted, CKM façade access remains local.
+The read path remains side-effect free, distinguishes partial/refused/stale/zero, preserves each
+source's snapshot and watermark, and never claims an atomic cross-system snapshot.
 
-Deliver transport-neutral contracts for:
+Verify: the three zones answer the owner questions; context survives cockpit-to-detail navigation;
+one or both sources may fail honestly; no technical ID, action endpoint, browser credential, local
+persistence, or new graph store is required; and keyboard, narrow, 200%, many-at-once, print, and
+export states remain usable.
 
-1. CKM owner view: capabilities, proof groups, candidates, findings, watermarks, limitations, and explicit unsupported fields.
-2. Work registry view: version, thread identity, chain position, flaw predicates, per-source freshness, and unread/refused claims.
-3. devUI composition envelope: binds source snapshot identities without copying or reinterpreting authority.
+### Stage B — decide and act: contextual command surface
 
-Access policy gate: current `ckm-local-access-v1` remains `single_operator_local`. Before exposing CKM read outside that boundary, accept effective audience, read authentication/scope, redaction, redistribution, and version-refusal policy. Until then, CKM façade access remains local-only.
+Attach proposal, preview, exact approval, live progress, and lawful controls to the selected item.
+The owner sees **AI can continue**, **Your decision is needed**, or **Blocked by evidence or
+system**. Technical ambiguity never becomes an owner decision without a named Human Exception.
 
-Rules: build on `CkmQueryService`; do not give UI SQL access; provide explicit partial/refusal state; preserve each source snapshot ID, `captured_at`, and watermark; never claim an atomic cross-system snapshot; define state mapping across CKM, registry, and ADR-0064 degradation; block preview/approval on prohibited skew/freshness/authority mismatch; and keep the read path side-effect free.
+Request/preview design may proceed as read-only contracts and fixtures, but authority-bearing
+activation waits for the existing mechanism chain:
 
-Verify: schema refusal, stable IDs, completeness manifest, state matrix, partial-source failure, no CKM-derived ranking, no write transaction, and browser-journey fixtures.
+1. #3603 and #4168 establish the durable BuilderOps service/effect path.
+2. #4169 supplies request, preview, initiation, run view, and dormant authenticated controls.
+3. #3604, #4217, and #4466 close terminality and retry-evidence gaps.
+4. #3793 performs the PostgreSQL authority cutover before controls activate.
+5. #4170 validates deterministic delivery, TCD, and crash recovery; #3690 later enacts the accepted
+   cutover wording.
 
-### Phase 2 — coherent read-only devUI shell
+Do not add `CapabilityDeliveryIntent`; `DeliveryRequest.v1` and `DeliveryPreview.v1` carry the
+proposal semantics. Changed source, scope, acceptance profile, or freshness invalidates preview.
+Read-only cockpit use remains available whenever the action boundary is unavailable.
 
-Deliver shared navigation/context between overview, capability, and work; capability-to-work and work-to-capability navigation without identity loss; the four owner questions; progressive technical detail and source out-links; dated CKM-owned last-good snapshot only where CKM owns it; and static Direction B as export/fallback rather than active app.
+Verify: exact approval/no scope expansion, double submit, stale preview/auth, timeout/restart,
+reattach without duplicate worker/effect, typed pause/resume/cancel/supersede, owner-vs-system
+classification, and unchanged CLI/API delivery without devUI.
 
-This phase may precede control-plane cutover because it is read-only. The shell belongs to Builder System and creates no Product Runtime or client authority. Its physical hosting remains a later topology decision; future action always goes to BuilderOps authenticated API.
+### Stage C — verify: receipt, try, and reassess
 
-Verify: context continuity, no action endpoint/credential/local persistence, keyboard/200%/narrow/print/export/many-at-once, one source dead while the other remains healthy, both unavailable, no dependence on technical IDs, and unchanged CLI/Direction B behavior.
+Return the terminal outcome, exact source/head/acceptance/CI-review-closure evidence, limitations,
+and CKM reassessment to the same selected item. Distinguish merged, delivered, ready to try, and
+tried by owner. Pilot deliberately degraded sources, ambiguous facts, active-run recovery, and
+receipt reassessment before removing transition routes or wording.
 
-Before creating work, reconcile BuilderOps Cockpit parent #4447 and delivered children. New tasks may own only shared façade, contracts, and navigation absent from #4447.
-
-### Phase 3 — request/preview contract design and fixtures
-
-Prepare without runtime or endpoint implementation: an owner-readable `DeliveryRequest.v1` draft from selected capability, confirmed sources, and explicit objective; scope/out-of-scope/acceptance profile/risk/budget/source authority; pure `DeliveryPreview.v1` with waves or typed refusal; and explicit distinction between CKM suggestion, owner choice, and compiler result.
-
-Do not add `CapabilityDeliveryIntent` if request contracts carry the same semantics. Changed source, scope, or acceptance profile invalidates preview. Actual request/preview implementation is Phase 5 in #4169 after its normative DDO-05 dependency. Closure/retry work is a terminal-receipt, activation, and pilot gate, not a new DDO-06 implementation prerequisite.
-
-Verify: preview before approval, zero writes in fixtures/prototype, candidate material cannot choose scope alone, proof groups remain separate, deterministic preview hash and source binding.
-
-### Phase 4 — durable delivery and control-plane prerequisites
-
-Reuse existing Issue contracts; implementation may be parallel only where contracts permit it, while activation remains serial.
-
-1. #3603 / BCP-05: complete the BuilderOps service pilot for API/outbox/review/merge executor and final receipt.
-2. #4168 / DDO-05: durable attempt, generic lane fence, reconcile-first, prepare→claim→activate, unknown-effect readback, active-run projection, terminal release.
-3. #3604: bind merged-but-incomplete closure and exact PR-specific owner-doc receipt to the same attempt.
-4. #4217 and #4466: close fast-lane evidence defect and put CI retry in the same reducer/attempt identity.
-5. #3793 / BCP-06 readiness: continue contracted dependencies, but wait for final client inventory before irreversible activation.
-
-Convergence gate: #4168 creates no new BCP-06 dependency and does not activate cutover. #4169 begins only after declared DDO-05 completion. #3604/#4217/#4466 must complete before terminal receipt, live activation, and DDO-07 pilot. BCP-06 cutover occurs only after dormant #4169 client can be inventoried.
-
-### Phase 5 — authenticated decision and active run
-
-After DDO-05, implement #4169: actual `DeliveryRequest.v1`/`DeliveryPreview.v1`; a separate authenticated action region within the same devUI shell; exact request/preview/acceptance/freshness binding to `DeliveryInitiation.v2`; BuilderOps command/journal admission; reducer-driven effects through outbox/adapters; `DeliveryRunView.v1`; and version-fenced pause/resume/cancel/supersede requests.
-
-The owner sees three states: **AI can continue**, **Your decision is needed**, and **Blocked by evidence or system**. `authority_conflict` and `authority_contract_drift` must not appear as owner decisions unless a named Human Exception category exists.
-
-Activation sequence:
-
-1. Deploy #4169 dormant or against an injected test adapter; do not describe it as live.
-2. Execute #3793/BCP-06 final client inventory, freeze/import, PostgreSQL authority epoch, client switch, Product separation, no-fallback, restore, and reconciliation proof.
-3. Activate authority-bearing controls only after #3793 cutover receipt. Read-only devUI remains usable if the action API is unavailable.
-
-Verify: exact approval/no scope expansion; double submit; stale preview/auth; timeout/restart; owner-vs-technical classification; reattach without duplicate worker; and CLI/API path without devUI. Use the required state-machine/auth/concurrency convergence review.
-
-### Phase 6 — terminal receipt and CKM learning loop
-
-Deliver terminal outcomes (`accepted`, `partial`, `blocked`, `failed`, `cancelled`, `superseded`), exact source references/head/acceptance profile/CI-review-closure/limitations, attempt-terminal evidence, receipt-to-capability reassessment, immutable terminal-evidence TCD routing, and CKM-owned last-good snapshot if regeneration fails. CKM gains better evidence, not new authority.
-
-### Phase 7 — owner pilot and attention decisions
-
-Pilot the owner loop with deliberately degraded sources, ambiguous delivery facts, active-run recovery, and receipt reassessment. Gather only decisions that have actual owner authority. Do not add persistent `done`/`ignore`/`never_show_again` until ADR-0065 prerequisites and its receipt-backed design are accepted.
-
-### Phase 8 — enactment cleanup
-
-After live authority, receipts, and owner pilot prove the replacement, remove transition wording, dead routes, and obsolete owner-surface claims through their normal governed changes. Do not delete a fallback before its replacement has a verified receipt.
+Persistent `done`/`ignore`/`never_show_again` and a durable tried-by-owner receipt remain outside the
+initial target until ADR-0065 and INV-DG-7 decisions are accepted. A fallback is removed only after
+its replacement has a verified receipt.
 
 ## Dependency graph
 
 ```mermaid
 flowchart LR
-  P0["P0 contract + design"] --> P1["P1 read contracts"] --> P2["P2 read-only shell"]
-  P1 --> P3["P3 request/preview fixtures"]
-  B5["BCP-05 #3603"] --> D5["DDO-05 #4168"]
-  D5 --> Close["Closure/retry #3604 #4217 #4466"]
-  D5 --> D6["DDO-06 #4169 dormant"]
-  P2 --> D6
-  P3 --> D6
-  D6 --> Cut["BCP-06 #3793 cutover"]
-  Close --> Cut
-  Cut --> Active["Activate controls"] --> Receipt["Terminal receipts"] --> Pilot["Owner pilot"] --> Cleanup["Enactment cleanup"]
+  A["A · See<br/>read-only cockpit"] --> B["B · Decide and act<br/>contextual command"]
+  B --> C["C · Verify<br/>receipt, try, reassess"]
+  M["Internal mechanism gates<br/>#3603 · #4168 · #4169 · #3604 · #4217 · #4466 · #3793 · #4170"] --> B
 ```
 
 ## Definition of done
 
-The target is complete only when the owner can complete the stated loop in one experience; every write crosses the authenticated BuilderOps/DDO authority boundary; CKM remains non-authoritative; read states fail explicitly; run status and terminal receipts are grounded in delivery truth; no browser/Product/SQLite fallback authority exists; static CKM and CLI/API remain valid independent paths; and each activation phase has the receipts and `Verify:` evidence required by its governing Issue.
+The target is complete only when the owner can see, decide, act, and verify in one experience without
+reconstructing the underlying delivery system; every write crosses the authenticated BuilderOps/DDO
+authority boundary; CKM remains non-authoritative; read states fail explicitly; run status and
+terminal receipts are grounded in delivery truth; no browser/Product/SQLite/graph fallback authority
+exists; static CKM and CLI/API remain valid independent paths; and every mechanism gate has the
+receipts and `Verify:` evidence required by its governing Issue.

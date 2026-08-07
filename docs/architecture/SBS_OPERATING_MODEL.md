@@ -5,7 +5,7 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: this doc for SBS operating process; mixed for everything it points to
-Last reviewed: 2026-08-06
+Last reviewed: 2026-08-07
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_OPERATIONALIZATION_PLAN.md, docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md, docs/architecture/SBS_BOUNDARY_REGISTER.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/architecture/SBS_FITNESS_RULES.md, docs/development/DELIVERY_FEEDBACK_LOOP.md, docs/development/BUILDER_SYSTEM_PROCESS_MAP.md, docs/DEVUI.md, docs/CAPABILITY_KNOWLEDGE_MODEL/README.md, .github/ISSUE_TEMPLATE/task.yml, .github/pull_request_template.md, .github/github-governance.yml
 
 # SBS Operating Model
@@ -61,7 +61,7 @@ The SBS is described across several docs, each with a single owner. Do not dupli
 | PR lifecycle | this doc §8 + `.github/pull_request_template.md` | SBS impact block and owner-doc writeback checklist live in the template. |
 | Review-gate fallback policy | this doc §12 | What to do when a required automated review gate is unavailable. |
 | Builder System boundary, authority model, and artifact map | this doc §3 | Defines the continuous-development enabling system, its relationship to the Product/Runtime SBS and CES, how builder agents classify Product, Builder, and boundary work, and the owner/authority/writeback map for Builder System artifacts and workflows. |
-| Proposed Product Owner development experience (`devUI`) | `docs/DEVUI.md` | Proposes what the Product Owner must be able to understand, decide, initiate, follow, and accept through one Builder System experience; becomes owner authority only after explicit acceptance. CKM, DDO, BuilderOps, and GitHub contracts retain their mechanism and authority ownership. |
+| Product Owner development experience (`devUI`) | `docs/DEVUI.md` | Owns the accepted see → decide → act → verify experience and its cognitive-load guardrails. CKM, DDO, BuilderOps, and GitHub contracts retain their mechanism and authority ownership; the unified surface remains target state. |
 | Builder Learning, evaluation, and TCD governance loop | this doc §3 + `docs/development/DELIVERY_FEEDBACK_LOOP.md` | Defines the allowed inputs, durable destinations, TCD signals, reevaluation inputs, terminal outcomes, and promotion path for builder learning without contaminating Product/Runtime memory. |
 | Cross-repo constituent-surface governance | `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md` | Owns the accepted Bifrost constituent-repo decision and the temporary hub-tracking posture (until Bifrost has its own board); this operating model owns the Builder System's classification and process implications. |
 
