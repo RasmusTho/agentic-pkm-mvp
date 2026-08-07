@@ -756,6 +756,17 @@ jobs:
               - 'app/alembic/versions/e7a2b9c4d1f8_eroj01_entity_review_operations.py'
               - 'tests/heimdal/test_entity_review_operation_journal.py'
               - 'tests/migrations/test_entity_review_operation_journal_schema_parity.py'
+              # Migration-owned Heimdal attached-object convergence (#4598):
+              # the pg-marked proof exercises all six append-only seams and
+              # must run when their shared assertion or any seam changes.
+              - 'app/db/attached_schema.py'
+              - 'app/heimdal/consent_ledger.py'
+              - 'app/heimdal/media_receipts.py'
+              - 'app/heimdal/observation_log.py'
+              - 'app/heimdal/raw_read_gate.py'
+              - 'app/heimdal/raw_store.py'
+              - 'app/heimdal/retention.py'
+              - 'tests/heimdal/test_trigger_ownership.py'
               # Durable table ownership (MVR-05A0 #4543, MVR-05A1 #4560): the
               # adoption, row-survival, rekey, restart and
               # single-vault-equivalence guards for two forward-only migrations

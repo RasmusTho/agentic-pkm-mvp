@@ -806,6 +806,13 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
     """
     workflow = (REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml").read_text(encoding="utf-8")
     guarded_sources = (
+        "app/db/attached_schema.py",
+        "app/heimdal/consent_ledger.py",
+        "app/heimdal/media_receipts.py",
+        "app/heimdal/observation_log.py",
+        "app/heimdal/raw_read_gate.py",
+        "app/heimdal/raw_store.py",
+        "app/heimdal/retention.py",
         f"app/alembic/versions/{_owning_revision_filename(FILE_STATE_OWNING_REVISION)}",
         f"app/alembic/versions/{_owning_revision_filename(OBJECTS_OWNING_REVISION)}",
         "app/db/db.py",
