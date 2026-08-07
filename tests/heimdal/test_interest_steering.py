@@ -185,6 +185,41 @@ def _crash_virgin_active_app_persistence(
     )
 
 
+def _crash_virgin_resource_state_exchange(
+    vault_root: Path,
+    crash_before_resource_exchange: int,
+    operation_id: str = "virgin-state-exchange-crash",
+    rationale: str = "virgin-state-exchange-crash",
+) -> None:
+    real_exchange = write_ops_module._atomic_host_state_exchange_at
+    resource_exchanges = 0
+
+    def crash_on_selected_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal resource_exchanges
+        if first_name.startswith(".heimdal-atomic-append-"):
+            resource_exchanges += 1
+            if resource_exchanges == crash_before_resource_exchange:
+                os._exit(80 + crash_before_resource_exchange)
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    write_ops_module._atomic_host_state_exchange_at = (  # type: ignore[method-assign]
+        crash_on_selected_exchange
+    )
+    append_steering_log(
+        vault_root,
+        "wrong",
+        rationale,
+        source="chat",
+        operation_id=operation_id,
+        write_guard=_allowing_guard(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC: a hand-edited interests.md weight is explicit intent and outranks
 # inference.
@@ -1070,6 +1105,145 @@ def test_steering_log_virgin_missing_app_proof_failure_is_read_only(
         for path in _host_fence_root().glob(".heimdal-atomic-append-*")
     } == app_before
     assert {path.name: path.read_bytes() for path in witnesses} == witness_before
+
+
+@pytest.mark.parametrize("crash_before_resource_exchange", [1, 2, 3, 4])
+def test_steering_log_virgin_state_exchange_crash_recovers(
+    tmp_path: Path,
+    crash_before_resource_exchange: int,
+) -> None:
+    vault_root = _vault(tmp_path)
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_virgin_resource_state_exchange,
+        args=(vault_root, crash_before_resource_exchange),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 80 + crash_before_resource_exchange
+
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "virgin-state-exchange-crash",
+        source="chat",
+        operation_id="virgin-state-exchange-crash",
+        write_guard=_allowing_guard(),
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert len(states) == 2
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+    assert all(
+        json.loads(path.read_text())["state"] == "clean"
+        for path in _host_witness_paths(vault_root)
+    )
+
+
+@pytest.mark.parametrize("crash_before_resource_exchange", [1, 2])
+def test_steering_log_virgin_active_exchange_proof_failure_is_read_only(
+    tmp_path: Path,
+    crash_before_resource_exchange: int,
+) -> None:
+    vault_root = _vault(tmp_path)
+    target = vault_root / note_rel_path(STEERING_LOG)
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_virgin_resource_state_exchange,
+        args=(vault_root, crash_before_resource_exchange),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 80 + crash_before_resource_exchange
+    target.parent.replace(vault_root / "_heimdal-parked")
+    target.parent.mkdir()
+    app_before = {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    }
+    witnesses = _host_witness_paths(vault_root)
+    witness_before = {path.name: path.read_bytes() for path in witnesses}
+
+    with pytest.raises(KnowledgeWriteConflict, match="app-local state is missing"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-state-exchange-crash",
+            source="chat",
+            operation_id="virgin-state-exchange-crash",
+            write_guard=_allowing_guard(),
+        )
+
+    assert not target.exists()
+    assert {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    } == app_before
+    assert {path.name: path.read_bytes() for path in witnesses} == witness_before
+
+
+@pytest.mark.parametrize("proof_failure", [False, True])
+def test_steering_log_virgin_reconstruction_exchange_is_phase_safe(
+    tmp_path: Path,
+    proof_failure: bool,
+) -> None:
+    vault_root = _vault(tmp_path)
+    target = vault_root / note_rel_path(STEERING_LOG)
+    context = multiprocessing.get_context("fork")
+    first = context.Process(
+        target=_crash_virgin_active_app_persistence,
+        args=(vault_root, 1),
+    )
+    first.start()
+    first.join(timeout=10)
+    assert first.exitcode == 77
+    reconstruction = context.Process(
+        target=_crash_virgin_resource_state_exchange,
+        args=(
+            vault_root,
+            1,
+            "virgin-active-crash-1",
+            "virgin-active-crash",
+        ),
+    )
+    reconstruction.start()
+    reconstruction.join(timeout=10)
+    assert reconstruction.exitcode == 81
+
+    if proof_failure:
+        target.parent.replace(vault_root / "_heimdal-parked")
+        target.parent.mkdir()
+    app_before = {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    }
+    witnesses = _host_witness_paths(vault_root)
+    witness_before = {path.name: path.read_bytes() for path in witnesses}
+    if proof_failure:
+        with pytest.raises(KnowledgeWriteConflict, match="app-local state is missing"):
+            append_steering_log(
+                vault_root,
+                "wrong",
+                "virgin-active-crash",
+                source="chat",
+                operation_id="virgin-active-crash-1",
+                write_guard=_allowing_guard(),
+            )
+        assert {
+            path.name: path.read_bytes()
+            for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+        } == app_before
+        assert {path.name: path.read_bytes() for path in witnesses} == witness_before
+        return
+
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "virgin-active-crash",
+        source="chat",
+        operation_id="virgin-active-crash-1",
+        write_guard=_allowing_guard(),
+    )
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
 
 
 def test_steering_log_retry_sweeps_process_crash_stage_to_root_recovery(

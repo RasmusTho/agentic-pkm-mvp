@@ -1519,8 +1519,13 @@ def _validate_host_append_inventories(
         if witness_state is not None and witness_state.get("state") == "active"
     ]
     has_missing_app_state = any(
-        not app_states and witness_state is not None
-        for app_states, witness_state in inventory_records
+        app_record.state is None and witness_state is not None
+        for (
+            _path_lock_key,
+            app_record,
+            _swap_record,
+            witness_state,
+        ) in inventories
     )
     complete_active_witness_set = (
         allow_complete_active_witness_without_app
@@ -1690,7 +1695,7 @@ def _repair_missing_active_app_records(authority: _AtomicAppendAuthority) -> Non
             swap_record,
             witness_state,
         ) in inventories:
-            if app_record.state is not None or swap_record.state is not None:
+            if app_record.state is not None:
                 continue
             if witness_state is None or witness_state.get("state") != "active":
                 raise KnowledgeWriteConflict(
@@ -2035,11 +2040,11 @@ def _reconcile_host_atomic_append_states(
         latest_payload = _latest_original_host_payload(observed_latest)
         inventories = _read_host_append_inventories(fence_fd, authority)
         missing_app_state = any(
-            app_record.state is None and swap_record.state is None
+            app_record.state is None
             for (
                 _path_lock_key,
                 app_record,
-                swap_record,
+                _swap_record,
                 witness_state,
             ) in inventories
             if witness_state is not None
