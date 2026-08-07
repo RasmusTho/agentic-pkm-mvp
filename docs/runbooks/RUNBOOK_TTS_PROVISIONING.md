@@ -20,8 +20,8 @@ enablement — which cannot live in the repo.
   reads the fixed container paths `TTS_MODEL_DIR=/data/tts/models`, `TTS_CACHE_DIR=/data/tts/cache`,
   `TTS_LOG_DIR=/data/tts/logs` (tracked in `docker-compose.yaml`).
 - Machine-specific values originate in `.env.prod.local` (`TTS_HOST_ROOT`, `TTS_ENABLED`), are
-  copied together by the canonical runtime-env generator into the selected untracked runtime-env
-  file, and are never committed.
+  copied together by the canonical runtime-env generator into a same-directory temporary file and
+  atomically published as the selected untracked runtime-env file; they are never committed.
 - TTS stays **off** until a host sets `TTS_ENABLED=true`, so a merged mechanism cannot 503 prod.
 
 ## Provisioning steps (on the runtime host, e.g. Demerzel)
@@ -42,7 +42,8 @@ enablement — which cannot live in the repo.
    release-channel workflow; do not rebuild on the host, substitute a system Piper binary, or create
    a TTS-only image variant. Run `scripts/deploy_channel.sh deploy prod <authorized-sha>` (or the
    promotion workflow that invokes it). The deploy reads the selected generated runtime-env file
-   without sourcing or printing it, accepts only lowercase `true`/`false`, and—when enabled—requires
+   as one immutable snapshot without sourcing or printing it, fail-closes read/parse failures,
+   accepts only lowercase `true`/`false`, and—when enabled—requires
    the host root to be an accessible absolute directory outside the repo before any channel
    mutation. Its redacted status reports only selector names, boolean state, reason code, and path
    class. `false` or unset remains the default and requires no host root; rollback remains available

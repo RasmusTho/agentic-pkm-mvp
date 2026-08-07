@@ -258,8 +258,10 @@ The deploy procedure is the same shape for every channel; only the pin target an
 
 Before the first mutable step—and during `--dry-run`—the deploy entrypoint performs a read-only TTS
 configuration preflight against the generated runtime-env file selected by the channel deploy
-configuration. It never sources, rewrites, or prints that file. `TTS_ENABLED` is pinned over any
-caller-shell value and must be unset or exactly `false`/`true`; an enabled channel also requires
+configuration. The canonical generator builds the whole file in a same-directory temporary and
+atomically replaces the live path; preflight opens and parses one immutable snapshot and fail-closes
+read or parse failures. It never sources, rewrites, or prints that file. `TTS_ENABLED` is pinned over
+any caller-shell value and must be unset or exactly `false`/`true`; an enabled channel also requires
 `TTS_HOST_ROOT` to classify as an accessible absolute directory outside the repository. The same
 validated snapshot is forwarded in the Compose process environment to the existing `/data/tts`
 mount and `TTS_ENABLED` binding, never in command arguments and never by passing the runtime-env

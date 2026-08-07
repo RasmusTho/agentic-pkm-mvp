@@ -51,31 +51,131 @@ deploy_channel_tts_config_preflight() {
   local root="${1:?repo root required}"
   local channel="${2:?channel required}"
   local channel_env_file="${3:?channel env file required}"
-  local runtime_env_file enabled host_root enabled_count host_root_count path_rc=0
+  local runtime_env_file parse_status parse_field path_class host_root parse_output parser_rc
 
   _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
   runtime_env_file="${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}"
-  enabled=""
+  parse_status="blocked"
+  parse_field="validation_failed"
+  path_class="not_evaluated"
   host_root=""
-  enabled_count=0
-  host_root_count=0
-  if [ -f "${runtime_env_file}" ]; then
-    enabled_count="$(awk '/^TTS_ENABLED=/{count += 1} END {print count + 0}' "${runtime_env_file}")"
-    host_root_count="$(awk '/^TTS_HOST_ROOT=/{count += 1} END {print count + 0}' "${runtime_env_file}")"
-    if [ "${enabled_count}" -gt 1 ]; then
-      _deploy_channel_tts_config_blocked duplicate_key not_evaluated
-      return $?
-    fi
-    if [ "${host_root_count}" -gt 1 ]; then
-      _deploy_channel_tts_config_blocked duplicate_key not_evaluated
-      return $?
-    fi
-    enabled="$(_deploy_channel_env_value "${runtime_env_file}" TTS_ENABLED)"
-    host_root="$(_deploy_channel_env_value "${runtime_env_file}" TTS_HOST_ROOT)"
+  parse_output="$(mktemp "${TMPDIR:-/tmp}/tts-config-preflight.XXXXXX" 2>/dev/null)"
+  if [ -z "${parse_output}" ]; then
+    _deploy_channel_tts_config_blocked validation_failed not_evaluated
+    return $?
   fi
+  parser_rc=0
+  ROOT="${root}" RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON:-python3}" - >"${parse_output}" 2>/dev/null <<'PY'
+from __future__ import annotations
 
-  case "${enabled}" in
-    ""|false)
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+def emit(status: str, field: str, path_class: str, host_root: str = "") -> None:
+    sys.stdout.write(f"{status}\n{field}\n{path_class}\n{host_root}\n")
+
+
+try:
+    snapshot = Path(os.environ["RUNTIME_ENV_FILE"]).read_bytes()
+    text = snapshot.decode("utf-8")
+except (OSError, UnicodeError):
+    emit("blocked", "validation_failed", "not_evaluated")
+    raise SystemExit(0)
+
+enabled_values = [
+    line.removeprefix("TTS_ENABLED=")
+    for line in text.splitlines()
+    if line.startswith("TTS_ENABLED=")
+]
+root_values = [
+    line.removeprefix("TTS_HOST_ROOT=")
+    for line in text.splitlines()
+    if line.startswith("TTS_HOST_ROOT=")
+]
+if len(enabled_values) > 1 or len(root_values) > 1:
+    emit("blocked", "duplicate_key", "not_evaluated")
+    raise SystemExit(0)
+
+enabled = enabled_values[0] if enabled_values else ""
+host_root = root_values[0] if root_values else ""
+if enabled in {"", "false"}:
+    emit("ok", "false", "not_required")
+    raise SystemExit(0)
+if enabled != "true":
+    emit("blocked", "invalid_boolean", "not_evaluated")
+    raise SystemExit(0)
+if not host_root:
+    emit("blocked", "missing_enabled_root", "empty_or_unset")
+    raise SystemExit(0)
+
+root = Path(os.environ["ROOT"])
+candidate = Path(host_root)
+if not candidate.is_absolute():
+    emit("blocked", "invalid_enabled_root", "relative")
+    raise SystemExit(0)
+try:
+    metadata = candidate.stat()
+except FileNotFoundError:
+    emit("blocked", "invalid_enabled_root", "missing")
+    raise SystemExit(0)
+except OSError:
+    emit("blocked", "invalid_enabled_root", "inaccessible")
+    raise SystemExit(0)
+if not stat.S_ISDIR(metadata.st_mode):
+    emit("blocked", "invalid_enabled_root", "not_directory")
+    raise SystemExit(0)
+permission_pairs = (
+    stat.S_IRUSR | stat.S_IXUSR,
+    stat.S_IRGRP | stat.S_IXGRP,
+    stat.S_IROTH | stat.S_IXOTH,
+)
+if not any(metadata.st_mode & pair == pair for pair in permission_pairs):
+    emit("blocked", "invalid_enabled_root", "inaccessible")
+    raise SystemExit(0)
+try:
+    with os.scandir(candidate):
+        pass
+    resolved_candidate = candidate.resolve(strict=True)
+    resolved_root = root.resolve(strict=True)
+except OSError:
+    emit("blocked", "invalid_enabled_root", "inaccessible")
+    raise SystemExit(0)
+try:
+    candidate.relative_to(root)
+except ValueError:
+    pass
+else:
+    emit("blocked", "invalid_enabled_root", "repo_contained")
+    raise SystemExit(0)
+try:
+    resolved_candidate.relative_to(resolved_root)
+except ValueError:
+    pass
+else:
+    emit("blocked", "invalid_enabled_root", "repo_contained")
+    raise SystemExit(0)
+
+emit("ok", "true", "absolute_outside_repo_accessible_directory", host_root)
+PY
+  parser_rc=$?
+  if [ "${parser_rc}" -ne 0 ]; then
+    rm -f "${parse_output}"
+    _deploy_channel_tts_config_blocked validation_failed not_evaluated
+    return $?
+  fi
+  {
+    IFS= read -r parse_status || parse_status="blocked"
+    IFS= read -r parse_field || parse_field="validation_failed"
+    IFS= read -r path_class || path_class="not_evaluated"
+    IFS= read -r host_root || host_root=""
+  } < "${parse_output}"
+  rm -f "${parse_output}"
+
+  case "${parse_status}:${parse_field}" in
+    ok:false)
       DEPLOY_TTS_CONFIG_GOVERNED=1
       DEPLOY_TTS_ENABLED=false
       unset DEPLOY_TTS_HOST_ROOT
@@ -83,72 +183,22 @@ deploy_channel_tts_config_preflight() {
       echo "TTS config preflight: ok enabled=false path_class=not_required"
       return 0
       ;;
-    true) ;;
-    *)
-      _deploy_channel_tts_config_blocked invalid_boolean not_evaluated
+    ok:true) ;;
+    blocked:*)
+      _deploy_channel_tts_config_blocked "${parse_field}" "${path_class}"
       return $?
       ;;
-  esac
-
-  if [ -z "${host_root}" ]; then
-    _deploy_channel_tts_config_blocked missing_enabled_root empty_or_unset
-    return $?
-  fi
-
-  ROOT="${root}" TTS_HOST_ROOT="${host_root}" "${PYTHON:-python3}" - <<'PY' || path_rc=$?
-import os
-from pathlib import Path
-import stat
-
-root = Path(os.environ["ROOT"])
-candidate = Path(os.environ["TTS_HOST_ROOT"])
-if not candidate.is_absolute():
-    raise SystemExit(3)
-try:
-    metadata = candidate.stat()
-except FileNotFoundError:
-    raise SystemExit(4)
-except OSError:
-    raise SystemExit(6)
-if not stat.S_ISDIR(metadata.st_mode):
-    raise SystemExit(5)
-if not os.access(candidate, os.R_OK | os.X_OK):
-    raise SystemExit(6)
-try:
-    with os.scandir(candidate):
-        pass
-    resolved_candidate = candidate.resolve(strict=True)
-    resolved_root = root.resolve(strict=True)
-except OSError:
-    raise SystemExit(6)
-try:
-    candidate.relative_to(root)
-except ValueError:
-    pass
-else:
-    raise SystemExit(7)
-try:
-    resolved_candidate.relative_to(resolved_root)
-except ValueError:
-    pass
-else:
-    raise SystemExit(7)
-PY
-  case "${path_rc}" in
-    0) ;;
-    3) _deploy_channel_tts_config_blocked invalid_enabled_root relative; return $? ;;
-    4) _deploy_channel_tts_config_blocked invalid_enabled_root missing; return $? ;;
-    5) _deploy_channel_tts_config_blocked invalid_enabled_root not_directory; return $? ;;
-    6) _deploy_channel_tts_config_blocked invalid_enabled_root inaccessible; return $? ;;
-    7) _deploy_channel_tts_config_blocked invalid_enabled_root repo_contained; return $? ;;
-    *) _deploy_channel_tts_config_blocked invalid_enabled_root validation_failed; return $? ;;
+    *)
+      _deploy_channel_tts_config_blocked validation_failed not_evaluated
+      return $?
+      ;;
   esac
 
   DEPLOY_TTS_CONFIG_GOVERNED=1
   DEPLOY_TTS_ENABLED=true
   DEPLOY_TTS_HOST_ROOT="${host_root}"
   export DEPLOY_TTS_CONFIG_GOVERNED DEPLOY_TTS_ENABLED DEPLOY_TTS_HOST_ROOT
-  echo "TTS config preflight: ok enabled=true path_class=absolute_outside_repo_accessible_directory"
+  echo "TTS config preflight: ok enabled=true path_class=${path_class}"
 }
 
 _deploy_channel_uses_full_host_vault_path() {

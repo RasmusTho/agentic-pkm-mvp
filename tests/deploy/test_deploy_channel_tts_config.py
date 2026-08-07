@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import time
 
 import pytest
 
@@ -177,6 +178,186 @@ def test_tts_config_preflight_is_non_executing_and_redacted(tmp_path: Path) -> N
     assert "do-not-emit-this-value" not in output
     assert "TTS_ENABLED" in output
     assert "path_class=" in output
+
+
+@pytest.mark.parametrize("duplicate_key", ["TTS_ENABLED", "TTS_HOST_ROOT"])
+def test_duplicate_tts_selector_is_rejected_before_mutation(
+    tmp_path: Path, duplicate_key: str
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    tts_root = tmp_path / "tts-root"
+    tts_root.mkdir()
+    lines = ["TTS_ENABLED=true", f"TTS_HOST_ROOT={tts_root}"]
+    lines.append(lines[0] if duplicate_key == "TTS_ENABLED" else lines[1])
+    _write_runtime_env(root, *lines)
+
+    result = _run_deploy(root, env, sha, "--dry-run")
+
+    assert result.returncode == 91
+    assert "reason=duplicate_key" in result.stderr
+    assert str(tts_root) not in result.stdout + result.stderr
+    assert not (root / "config/deploy/dev.env").exists()
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_runtime_env_open_error_is_redacted_and_stops_before_mutation(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    runtime_env = root / "tmp/runtime.env"
+    runtime_env.unlink()
+    runtime_env.mkdir()
+    unrelated_dsn = "postgresql://private-user:private-pass@private-host/private-db"
+    env["DATABASE_URL"] = unrelated_dsn
+
+    result = _run_deploy(root, env, sha, "--dry-run")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 91
+    assert "reason=validation_failed" in result.stderr
+    assert str(runtime_env) not in output
+    assert unrelated_dsn not in output
+    assert not (root / "config/deploy/dev.env").exists()
+    assert not (tmp_path / "docker-called").exists()
+
+
+def test_atomic_export_never_exposes_partial_tts_snapshot(tmp_path: Path) -> None:
+    synthetic_root = tmp_path / "repo"
+    (synthetic_root / "config/deploy").mkdir(parents=True)
+    (synthetic_root / "scripts/lib").mkdir(parents=True)
+    for relative in (
+        "scripts/lib/deploy_channel_compose.sh",
+        "scripts/lib/instance_ownership_host_state.sh",
+        "scripts/lib/signboard_root.sh",
+    ):
+        destination = synthetic_root / relative
+        destination.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
+
+    runtime_env = tmp_path / "generated-runtime.env"
+    runtime_env.write_text("TTS_ENABLED=false\n", encoding="utf-8")
+    channel_env = synthetic_root / "config/deploy/dev.env"
+    channel_env.write_text(
+        f"WATCHER_RUNTIME_ENV_FILE={runtime_env}\n", encoding="utf-8"
+    )
+    tts_root = tmp_path / "machine-local-tts"
+    tts_root.mkdir()
+
+    marker = tmp_path / "publish-blocked"
+    release = tmp_path / "publish-release"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_mv = bin_dir / "mv"
+    fake_mv.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "touch \"${TTS_PUBLISH_MARKER:?}\"\n"
+        "while [ ! -f \"${TTS_PUBLISH_RELEASE:?}\" ]; do sleep 0.01; done\n"
+        "exec /bin/mv \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_mv.chmod(0o755)
+
+    export_env = os.environ.copy()
+    export_env.pop("PYTEST_CURRENT_TEST", None)
+    export_env.pop("PYTEST_VERSION", None)
+    export_env.update(
+        {
+            "PATH": f"{bin_dir}:{export_env['PATH']}",
+            "RUNTIME_ENV_PATH": str(runtime_env),
+            "NO_VAULT_MODE": "1",
+            "LLM_PROVIDER": "mock",
+            "TTS_ENABLED": "true",
+            "TTS_HOST_ROOT": str(tts_root),
+            "TTS_PUBLISH_MARKER": str(marker),
+            "TTS_PUBLISH_RELEASE": str(release),
+        }
+    )
+    exporter = subprocess.Popen(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=REPO_ROOT,
+        env=export_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 5
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert marker.exists()
+
+    preflight_command = (
+        f"source {shlex.quote(str(synthetic_root / 'scripts/lib/deploy_channel_compose.sh'))}; "
+        "deploy_channel_tts_config_preflight "
+        f"{shlex.quote(str(synthetic_root))} dev {shlex.quote(str(channel_env))}"
+    )
+    before_publish = subprocess.run(
+        ["bash", "-c", preflight_command],
+        cwd=synthetic_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert before_publish.returncode == 0
+    assert "enabled=false" in before_publish.stdout
+
+    release.touch()
+    assert exporter.wait(timeout=5) == 0
+    after_publish = subprocess.run(
+        ["bash", "-c", preflight_command],
+        cwd=synthetic_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert after_publish.returncode == 0
+    assert "enabled=true" in after_publish.stdout
+    assert str(tts_root) not in after_publish.stdout + after_publish.stderr
+
+
+@pytest.mark.parametrize("no_vault_mode", [False, True])
+def test_exporter_branches_publish_tts_selectors_together(
+    tmp_path: Path, no_vault_mode: bool
+) -> None:
+    runtime_env = tmp_path / "runtime.env"
+    tts_root = tmp_path / "machine-local-tts"
+    tts_root.mkdir()
+    env = os.environ.copy()
+    env.pop("PYTEST_CURRENT_TEST", None)
+    env.pop("PYTEST_VERSION", None)
+    env.update(
+        {
+            "RUNTIME_ENV_PATH": str(runtime_env),
+            "TTS_ENABLED": "true",
+            "TTS_HOST_ROOT": str(tts_root),
+            "LLM_PROVIDER": "mock",
+        }
+    )
+    if no_vault_mode:
+        env["NO_VAULT_MODE"] = "1"
+        env.pop("VAULT_ROOT", None)
+    else:
+        vault_root = tmp_path / "vault"
+        vault_root.mkdir()
+        env["VAULT_ROOT"] = str(vault_root)
+        env["DATABASE_URL"] = "postgresql+psycopg://fixture:fixture@db/fixture"
+        env.pop("NO_VAULT_MODE", None)
+
+    result = subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    assert result.returncode == 0
+    lines = runtime_env.read_text(encoding="utf-8").splitlines()
+    assert [line for line in lines if line.startswith("TTS_ENABLED=")] == [
+        "TTS_ENABLED=true"
+    ]
+    assert [line for line in lines if line.startswith("TTS_HOST_ROOT=")] == [
+        f"TTS_HOST_ROOT={tts_root}"
+    ]
 
 
 @pytest.mark.parametrize("tts_lines", [(), ("TTS_ENABLED=false",)])

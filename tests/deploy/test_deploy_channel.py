@@ -101,6 +101,8 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "app/release_channels").mkdir(parents=True)
     (root / "config/secrets").mkdir(parents=True)
     (root / "ops/deployments").mkdir(parents=True)
+    (root / "tmp").mkdir(parents=True)
+    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
 
     for relative in (
         "app/release_channels/__init__.py",
