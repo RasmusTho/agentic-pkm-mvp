@@ -1863,6 +1863,19 @@ def _validate_host_append_inventories(
             f"atomic append paired host state payloads conflict across aliases for "
             f"{authority.note_rel_path}; reconciliation is required before retry"
         )
+    if active_transactions:
+        active_seed = next(
+            state for state in states if state.get("state") == "active"
+        )
+        if any(
+            state.get("state") == "clean"
+            and not _host_clean_is_related_to_active(state, active_seed)
+            for state in states
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append clean/active topology conflicts across aliases for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
     return states
 
 
@@ -2154,10 +2167,38 @@ def _host_clean_precedes_active(
 ) -> bool:
     """Prove that a clean record is the exact baseline named by active state."""
 
-    return (
+    if (
         clean_state.get("transaction")
-        == active_state.get("predecessor_transaction")
-        and _host_clean_matches_active_source(clean_state, active_state)
+        != active_state.get("predecessor_transaction")
+    ):
+        return False
+    mapping_keys = (
+        "root_dev",
+        "root_ino",
+        "parent_dev",
+        "parent_ino",
+        "recovery_dev",
+        "recovery_ino",
+    )
+    if any(
+        clean_state.get(key) != active_state.get(key) for key in mapping_keys
+    ):
+        return False
+
+    # Clean records describe the canonical target at the end of the preceding
+    # transaction. A valid external edit may become the next active source, so
+    # predecessor linkage cannot equate the old target bytes with that source.
+    latest_present = active_state.get("latest_original_present")
+    if clean_state.get("latest_original_present") is not latest_present:
+        return False
+    return latest_present is not True or all(
+        clean_state.get(key) == active_state.get(key)
+        for key in (
+            "latest_original_dev",
+            "latest_original_ino",
+            "latest_original_digest",
+            "latest_original_metadata",
+        )
     )
 
 
@@ -2302,17 +2343,6 @@ def _validate_host_append_inventory_topology(
                     f"atomic append active receipt topology is invalid for "
                     f"{authority.note_rel_path}; reconciliation is required before retry"
                 )
-
-        if (
-            app_state is not None
-            and swap_state is not None
-            and app_state.get("state") == swap_state.get("state") == "clean"
-        ):
-            raise KnowledgeWriteConflict(
-                f"atomic append paired clean phase topology is invalid for "
-                f"{authority.note_rel_path}; reconciliation is required before retry"
-            )
-
 
 def _plan_malformed_host_swap_repairs(
     inventories: list[

@@ -1962,6 +1962,319 @@ def test_steering_log_complete_unrelated_active_swap_remains_unchanged(
     assert read_steering_log_body(vault_root) == durable_before
 
 
+def test_steering_log_valid_edit_then_active_persistence_crash_recovers(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    rel_path = note_rel_path(STEERING_LOG)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="edited-source-seed",
+        write_guard=guard,
+    )
+    target = vault_root / rel_path
+    with target.open("ab") as stream:
+        stream.write(b"human annotation\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    target.chmod(0o600)
+
+    def crash_before_first_active_app_write() -> None:
+        real_write = write_ops_module._write_host_append_state
+
+        def stop_before_active_write(
+            fence_fd: int,
+            authority: object,
+            path_lock_key: str,
+            payload: dict[str, object],
+            expected_state: object,
+            expected_swap: object,
+            **kwargs: object,
+        ) -> None:
+            if payload.get("state") == "active":
+                os._exit(124)
+            real_write(
+                fence_fd,
+                authority,  # type: ignore[arg-type]
+                path_lock_key,
+                payload,
+                expected_state,  # type: ignore[arg-type]
+                expected_swap,  # type: ignore[arg-type]
+                **kwargs,
+            )
+
+        write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+            stop_before_active_write
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "after-valid-edit",
+            source="item",
+            operation_id="edited-source-active",
+            write_guard=_allowing_guard(),
+        )
+
+    process = multiprocessing.get_context("fork").Process(
+        target=crash_before_first_active_app_write
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 124
+
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "after-valid-edit",
+        source="item",
+        operation_id="edited-source-active",
+        write_guard=guard,
+    )
+
+    durable_body = read_steering_log_body(vault_root)
+    assert "human annotation\n" in durable_body
+    assert durable_body.count('"operation_id":"edited-source-seed"') == 1
+    assert durable_body.count(durable_line) == 1
+
+
+def test_steering_log_partial_active_then_clean_exchange_crash_recovers(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="clean-exchange-seed",
+        write_guard=guard,
+    )
+
+    def crash_before_second_active_app_write() -> None:
+        real_write = write_ops_module._write_host_append_state
+        active_writes = 0
+
+        def stop_on_second_active_write(
+            fence_fd: int,
+            authority: object,
+            path_lock_key: str,
+            payload: dict[str, object],
+            expected_state: object,
+            expected_swap: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal active_writes
+            if payload.get("state") == "active":
+                active_writes += 1
+                if active_writes == 2:
+                    os._exit(121)
+            real_write(
+                fence_fd,
+                authority,  # type: ignore[arg-type]
+                path_lock_key,
+                payload,
+                expected_state,  # type: ignore[arg-type]
+                expected_swap,  # type: ignore[arg-type]
+                **kwargs,
+            )
+
+        write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+            stop_on_second_active_write
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "clean-exchange",
+            source="item",
+            operation_id="clean-exchange-active",
+            write_guard=_allowing_guard(),
+        )
+
+    context = multiprocessing.get_context("fork")
+    first = context.Process(target=crash_before_second_active_app_write)
+    first.start()
+    first.join(timeout=10)
+    assert first.exitcode == 121
+
+    def crash_before_second_clean_exchange() -> None:
+        real_exchange = write_ops_module._atomic_host_state_exchange_at
+        resource_exchanges = 0
+
+        def stop_on_second_resource_exchange(
+            first_dir_fd: int,
+            first_name: str,
+            second_dir_fd: int,
+            second_name: str,
+        ) -> None:
+            nonlocal resource_exchanges
+            if first_name.startswith(".heimdal-atomic-append-"):
+                resource_exchanges += 1
+                if resource_exchanges == 2:
+                    os._exit(122)
+            real_exchange(
+                first_dir_fd,
+                first_name,
+                second_dir_fd,
+                second_name,
+            )
+
+        write_ops_module._atomic_host_state_exchange_at = (  # type: ignore[method-assign]
+            stop_on_second_resource_exchange
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "clean-exchange",
+            source="item",
+            operation_id="clean-exchange-active",
+            write_guard=_allowing_guard(),
+        )
+
+    second = context.Process(target=crash_before_second_clean_exchange)
+    second.start()
+    second.join(timeout=10)
+    assert second.exitcode == 122
+    observed_clean_exchange = False
+    for state_path in _host_fence_root().glob(
+        ".heimdal-atomic-append-*.state"
+    ):
+        state = json.loads(state_path.read_text())
+        swap_raw = state_path.with_suffix(".swap").read_bytes()
+        swap = json.loads(swap_raw) if swap_raw else None
+        if (
+            state["state"] == "clean"
+            and swap is not None
+            and swap["state"] == "clean"
+            and state["transaction"] != swap["transaction"]
+        ):
+            observed_clean_exchange = True
+    assert observed_clean_exchange
+
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "clean-exchange",
+        source="item",
+        operation_id="clean-exchange-active",
+        write_guard=guard,
+    )
+
+    durable_body = read_steering_log_body(vault_root)
+    assert durable_body.count('"operation_id":"clean-exchange-seed"') == 1
+    assert durable_body.count(durable_line) == 1
+
+
+def test_steering_log_cross_key_unrelated_clean_cohort_blocks_unchanged(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    rel_path = note_rel_path(STEERING_LOG)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="cross-key-clean-seed",
+        write_guard=guard,
+    )
+
+    def crash_before_vault_exchange() -> None:
+        write_ops_module._atomic_exchange_at = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(117)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="cross-key-clean-active",
+            write_guard=_allowing_guard(),
+        )
+
+    process = multiprocessing.get_context("fork").Process(
+        target=crash_before_vault_exchange
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 117
+
+    with write_ops_module._open_atomic_append_authority(
+        vault_root,
+        rel_path,
+    ) as authority:
+        assert len(authority.host_state_keys) == 2
+        changed_key = authority.host_state_keys[-1]
+        state_path = _host_fence_root() / (
+            write_ops_module._host_append_state_name(changed_key)
+        )
+        swap_path = _host_fence_root() / (
+            write_ops_module._host_append_swap_name(changed_key)
+        )
+        active = json.loads(state_path.read_text())
+        assert active["state"] == "active"
+        assert swap_path.read_bytes() == b""
+        foreign_clean: dict[str, object] = {
+            "schema": active["schema"],
+            "path_lock_key": active["path_lock_key"],
+            "locator": active["locator"],
+            "authority_keys": active["authority_keys"],
+            "state": "clean",
+            "transaction": "foreign-complete-clean",
+            "root_dev": active["root_dev"],
+            "root_ino": active["root_ino"],
+            "parent_dev": active["parent_dev"],
+            "parent_ino": active["parent_ino"],
+            "recovery_dev": active["recovery_dev"],
+            "recovery_ino": active["recovery_ino"],
+            "target_present": active["source_present"],
+            "latest_original_present": active["latest_original_present"],
+        }
+        if active["source_present"]:
+            for suffix in ("dev", "ino", "digest", "metadata"):
+                foreign_clean[f"target_{suffix}"] = active[f"source_{suffix}"]
+        if active["latest_original_present"]:
+            for suffix in ("dev", "ino", "digest", "metadata"):
+                foreign_clean[f"latest_original_{suffix}"] = active[
+                    f"latest_original_{suffix}"
+                ]
+        foreign_raw = (
+            json.dumps(foreign_clean, ensure_ascii=True, sort_keys=True) + "\n"
+        ).encode()
+        state_path.write_bytes(foreign_raw)
+        witness_token = steering_module.hashlib.sha256(
+            changed_key.encode("utf-8")
+        ).hexdigest()
+        witness_path = (
+            Path(steering_module.tempfile.gettempdir())
+            / "agentic-pkm-heimdal-locks"
+            / f"{witness_token}.lock"
+        )
+        witness_path.write_bytes(foreign_raw)
+
+    state_before = state_path.read_bytes()
+    witness_before = witness_path.read_bytes()
+    durable_before = (vault_root / rel_path).read_bytes()
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="cross-key-clean-active",
+            write_guard=guard,
+        )
+
+    assert state_path.read_bytes() == state_before
+    assert witness_path.read_bytes() == witness_before
+    assert (vault_root / rel_path).read_bytes() == durable_before
+
+
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
