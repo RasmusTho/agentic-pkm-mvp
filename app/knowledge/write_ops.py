@@ -215,69 +215,6 @@ def _opened_directory_path(fd: int, fallback: Path) -> Path:
     return candidate if candidate.is_absolute() else fallback
 
 
-def _filesystem_reported_lexical_path(path: Path) -> Path:
-    """Canonicalize entry spelling without resolving route components."""
-
-    if not path.is_absolute():
-        return path
-    components = path.parts[1:]
-    directory_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-    )
-    try:
-        parent_fd = os.open(path.anchor, directory_flags)
-    except OSError:
-        return path
-    reported: list[str] = []
-    try:
-        for index, component in enumerate(components):
-            try:
-                observed = os.stat(
-                    component,
-                    dir_fd=parent_fd,
-                    follow_symlinks=False,
-                )
-                entries = os.listdir(parent_fd)
-            except OSError:
-                return path
-            if component in entries:
-                reported_component = component
-            else:
-                matches: list[str] = []
-                for entry in entries:
-                    try:
-                        candidate = os.stat(
-                            entry,
-                            dir_fd=parent_fd,
-                            follow_symlinks=False,
-                        )
-                    except OSError:
-                        continue
-                    if _same_file_identity(candidate, observed):
-                        matches.append(entry)
-                if len(matches) != 1:
-                    return path
-                reported_component = matches[0]
-            reported.append(reported_component)
-            if index == len(components) - 1:
-                continue
-            try:
-                child_fd = os.open(
-                    component,
-                    directory_flags,
-                    dir_fd=parent_fd,
-                )
-            except OSError:
-                return path
-            os.close(parent_fd)
-            parent_fd = child_fd
-    finally:
-        os.close(parent_fd)
-    return Path(path.anchor, *reported)
-
-
 @contextmanager
 def _open_atomic_append_authority(
     vault_root: Path | str,
@@ -294,9 +231,8 @@ def _open_atomic_append_authority(
     try:
         root_stat = os.fstat(root_fd)
         root_path = _opened_directory_path(root_fd, requested_root_path)
-        lexical_route_path = _filesystem_reported_lexical_path(lexical_root_path)
         canonical_path_lock_key = f"{os.fspath(root_path)}:{note_rel_path}"
-        lexical_path_lock_key = f"{os.fspath(lexical_route_path)}:{note_rel_path}"
+        lexical_path_lock_key = f"{os.fspath(lexical_root_path)}:{note_rel_path}"
         path_lock_keys = tuple(
             dict.fromkeys((canonical_path_lock_key, lexical_path_lock_key))
         )

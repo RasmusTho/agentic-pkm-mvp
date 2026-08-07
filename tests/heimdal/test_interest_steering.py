@@ -4984,6 +4984,134 @@ def test_steering_log_intermediate_symlink_retarget_reuses_route_fence(
     assert not (root_b / "_heimdal").exists()
 
 
+@pytest.mark.parametrize(
+    ("stored_a", "stored_b", "requested"),
+    [
+        (("Vault",), ("vault",), ("vAuLt",)),
+        (
+            ("One", "Two", "Vault"),
+            ("one", "two", "vault"),
+            ("oNe", "tWo", "vAuLt"),
+        ),
+    ],
+)
+def test_steering_log_case_variant_intermediate_route_retarget_reuses_fence(
+    tmp_path: Path,
+    stored_a: tuple[str, ...],
+    stored_b: tuple[str, ...],
+    requested: tuple[str, ...],
+) -> None:
+    parent_a = tmp_path / "case-route-parent-a"
+    parent_b = tmp_path / "case-route-parent-b"
+    root_a = parent_a.joinpath(*stored_a)
+    root_b = parent_b.joinpath(*stored_b)
+    root_a.mkdir(parents=True)
+    root_b.mkdir(parents=True)
+    route = tmp_path / "case-route"
+    route.symlink_to(parent_a, target_is_directory=True)
+    lexical_root = route.joinpath(*requested)
+    try:
+        if not lexical_root.samefile(root_a):
+            pytest.skip("filesystem is case-sensitive")
+    except FileNotFoundError:
+        pytest.skip("filesystem is case-sensitive")
+    guard = _allowing_guard()
+
+    durable_line = append_steering_log(
+        lexical_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="case-route-seed",
+        write_guard=guard,
+    )
+    with write_ops_module._open_atomic_append_authority(
+        lexical_root,
+        note_rel_path(STEERING_LOG),
+    ) as authority:
+        original_route_key = authority.route_key
+
+    route.unlink()
+    route.symlink_to(parent_b, target_is_directory=True)
+    with write_ops_module._open_atomic_append_authority(
+        lexical_root,
+        note_rel_path(STEERING_LOG),
+    ) as authority:
+        assert authority.route_key == original_route_key
+
+    with pytest.raises(KnowledgeWriteConflict, match="app-local route changed"):
+        append_steering_log(
+            lexical_root,
+            "mute",
+            "retarget-must-block",
+            source="item",
+            operation_id="case-route-retarget",
+            write_guard=guard,
+        )
+
+    assert read_steering_log_body(root_a).count(durable_line) == 1
+    assert not (root_b / "_heimdal").exists()
+
+
+def test_steering_log_unreadable_intermediate_retarget_reuses_route_fence(
+    tmp_path: Path,
+) -> None:
+    parent_a = tmp_path / "unreadable-route-parent-a"
+    parent_b = tmp_path / "unreadable-route-parent-b"
+    root_a = parent_a / "Vault"
+    root_b = parent_b / "Vault"
+    root_a.mkdir(parents=True)
+    root_b.mkdir(parents=True)
+    route = tmp_path / "unreadable-route"
+    route.symlink_to(parent_a, target_is_directory=True)
+    lexical_root = route / "vAuLt"
+    try:
+        if not lexical_root.samefile(root_a):
+            pytest.skip("filesystem is case-sensitive")
+    except FileNotFoundError:
+        pytest.skip("filesystem is case-sensitive")
+    guard = _allowing_guard()
+
+    durable_line = append_steering_log(
+        lexical_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="unreadable-route-seed",
+        write_guard=guard,
+    )
+    with write_ops_module._open_atomic_append_authority(
+        lexical_root,
+        note_rel_path(STEERING_LOG),
+    ) as authority:
+        original_route_key = authority.route_key
+
+    route.unlink()
+    route.symlink_to(parent_b, target_is_directory=True)
+    parent_b.chmod(0o111)
+    try:
+        with write_ops_module._open_atomic_append_authority(
+            lexical_root,
+            note_rel_path(STEERING_LOG),
+        ) as authority:
+            assert authority.route_key == original_route_key
+
+        with pytest.raises(KnowledgeWriteConflict, match="app-local route changed"):
+            append_steering_log(
+                lexical_root,
+                "mute",
+                "retarget-must-block",
+                source="item",
+                operation_id="unreadable-route-retarget",
+                write_guard=guard,
+            )
+    finally:
+        parent_b.chmod(0o755)
+
+    assert read_steering_log_body(root_a).count(durable_line) == 1
+    assert not (root_b / "_heimdal").exists()
+
+
 @pytest.mark.parametrize("retirement_role", ["recovery", "displaced"])
 def test_steering_log_retirement_never_deletes_substituted_name(
     monkeypatch: pytest.MonkeyPatch,
@@ -5491,12 +5619,21 @@ def test_steering_log_case_aliases_share_one_lock(tmp_path: Path) -> None:
         note_rel_path(STEERING_LOG),
     ) as original_authority:
         original_route_key = original_authority.route_key
+        original_lock_key = original_authority.lock_key
+        original_canonical_key = original_authority.canonical_path_lock_key
+        original_host_keys = original_authority.host_state_keys
     with write_ops_module._open_atomic_append_authority(
         alias_root,
         note_rel_path(STEERING_LOG),
     ) as alias_authority:
         alias_route_key = alias_authority.route_key
-    assert original_route_key == alias_route_key
+        alias_lock_key = alias_authority.lock_key
+        alias_canonical_key = alias_authority.canonical_path_lock_key
+        alias_host_keys = alias_authority.host_state_keys
+    assert original_route_key != alias_route_key
+    assert original_lock_key == alias_lock_key
+    assert original_canonical_key == alias_canonical_key
+    assert original_host_keys == alias_host_keys
 
     context = multiprocessing.get_context("fork")
     barrier = context.Barrier(2)
