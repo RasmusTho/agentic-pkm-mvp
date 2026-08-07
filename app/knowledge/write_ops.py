@@ -2588,15 +2588,40 @@ def _validate_host_append_inventory_topology(
             )
         frontier_ranks.append(ranks)
 
-    previous_rank = 8
+    possible_frontiers: list[tuple[int, ...]] = [()]
     for ranks in frontier_ranks:
-        reachable = [rank for rank in ranks if rank <= previous_rank]
-        if not reachable:
-            raise KnowledgeWriteConflict(
-                f"atomic append stable-key transition frontier is invalid for "
-                f"{authority.note_rel_path}; reconciliation is required before retry"
-            )
-        previous_rank = max(reachable)
+        possible_frontiers = [
+            (*prefix, rank)
+            for prefix in possible_frontiers
+            for rank in ranks
+        ]
+
+    def producer_can_reach(ranks: tuple[int, ...]) -> bool:
+        if any(earlier < later for earlier, later in zip(ranks, ranks[1:])):
+            return False
+        rank_set = set(ranks)
+        if rank_set <= {0, 1}:
+            # Active witnesses are written in key order before any app record.
+            return True
+        if rank_set <= {1, 2, 3, 4}:
+            # At most one app record can be inside its fixed-swap exchange.
+            return sum(rank in {2, 3} for rank in ranks) <= 1
+        if rank_set <= {4, 5, 6}:
+            # Every app record is active before ordered clean exchanges begin.
+            return sum(rank == 5 for rank in ranks) <= 1
+        if rank_set <= {6, 7}:
+            # Every canonical is clean before displaced active swaps are cleared.
+            return True
+        if rank_set <= {7, 8}:
+            # Every active swap is cleared before any clean witness is written.
+            return True
+        return False
+
+    if not any(producer_can_reach(ranks) for ranks in possible_frontiers):
+        raise KnowledgeWriteConflict(
+            f"atomic append stable-key transition frontier is invalid for "
+            f"{authority.note_rel_path}; reconciliation is required before retry"
+        )
 
 
 def _plan_malformed_host_swap_repairs(

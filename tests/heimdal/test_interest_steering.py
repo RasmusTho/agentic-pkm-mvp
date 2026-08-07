@@ -1296,6 +1296,161 @@ def test_steering_log_virgin_active_witness_prefix_recovers(
     assert all(path.stat().st_size == 0 for path in swaps)
 
 
+@pytest.mark.parametrize(
+    "proof_failure",
+    [
+        "route",
+        "mapping",
+        "source",
+        "proposal-name",
+        "proposal-metadata",
+        "latest-original",
+    ],
+)
+def test_steering_log_virgin_active_witness_prefix_proof_failure_is_read_only(
+    tmp_path: Path,
+    proof_failure: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    target = vault_root / note_rel_path(STEERING_LOG)
+    witness_paths = _host_witness_paths(vault_root)
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_virgin_second_active_witness_write,
+        args=(vault_root, "missing"),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 201
+    parent = target.parent
+    stage = next(parent.glob(".atomic-append-*.stage"))
+
+    if proof_failure == "route":
+        route_state, _route_swap, _route_witness = _host_route_paths(vault_root)
+        route_payload = json.loads(route_state.read_text())
+        route_payload["root_ino"] = int(route_payload["root_ino"]) + 1
+        route_state.write_text(
+            json.dumps(route_payload, ensure_ascii=True, sort_keys=True) + "\n"
+        )
+    elif proof_failure == "mapping":
+        parent.replace(vault_root / "_heimdal-parked")
+        parent.mkdir()
+    elif proof_failure == "source":
+        target.write_bytes(b"unrelated source replacement\n")
+    elif proof_failure == "proposal-name":
+        stage.replace(parent / ".parked-proposal-stage")
+    elif proof_failure == "proposal-metadata":
+        stage.chmod(0o640)
+    else:
+        latest_name = write_ops_module._latest_original_recovery_name(
+            note_rel_path(STEERING_LOG)
+        )
+        (vault_root / "_conflicts" / latest_name).write_bytes(
+            b"unrelated latest-original replacement\n"
+        )
+
+    def file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
+        return {
+            path.relative_to(root).as_posix(): (
+                path.read_bytes(),
+                stat.S_IMODE(path.stat().st_mode),
+            )
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    host_before = file_snapshot(_host_fence_root())
+    lock_before = file_snapshot(witness_paths[0].parent)
+    vault_before = file_snapshot(vault_root)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-active-witness-missing",
+            source="chat",
+            operation_id="virgin-active-witness-missing",
+            write_guard=_allowing_guard(),
+        )
+
+    assert file_snapshot(_host_fence_root()) == host_before
+    assert file_snapshot(witness_paths[0].parent) == lock_before
+    assert file_snapshot(vault_root) == vault_before
+
+
+@pytest.mark.parametrize("repair_cut", ["truncated", "partial", "complete"])
+def test_steering_log_virgin_active_witness_prefix_repair_interruption_recovers(
+    tmp_path: Path,
+    repair_cut: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    witness_paths = _host_witness_paths(vault_root)
+    context = multiprocessing.get_context("fork")
+    first = context.Process(
+        target=_crash_virgin_second_active_witness_write,
+        args=(vault_root, "missing"),
+    )
+    first.start()
+    first.join(timeout=10)
+    assert first.exitcode == 201
+
+    def crash_during_missing_witness_repair() -> None:
+        real_write = write_ops_module._write_host_witness_state
+
+        def interrupt_active_witness_repair(
+            witness_fd: int,
+            payload: dict[str, object],
+        ) -> None:
+            if payload.get("state") == "active":
+                raw = (
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+                ).encode("utf-8")
+                os.ftruncate(witness_fd, 0)
+                os.lseek(witness_fd, 0, os.SEEK_SET)
+                if repair_cut == "partial":
+                    os.write(witness_fd, raw[: len(raw) // 2])
+                elif repair_cut == "complete":
+                    os.write(witness_fd, raw)
+                os._exit(211)
+            real_write(witness_fd, payload)
+
+        write_ops_module._write_host_witness_state = (  # type: ignore[method-assign]
+            interrupt_active_witness_repair
+        )
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-active-witness-missing",
+            source="chat",
+            operation_id="virgin-active-witness-missing",
+            write_guard=_allowing_guard(),
+        )
+
+    second = context.Process(target=crash_during_missing_witness_repair)
+    second.start()
+    second.join(timeout=10)
+    assert second.exitcode == 211
+
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "virgin-active-witness-missing",
+        source="chat",
+        operation_id="virgin-active-witness-missing",
+        write_guard=_allowing_guard(),
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    assert all(
+        json.loads(path.read_text())["state"] == "clean"
+        for path in witness_paths
+    )
+    assert all(
+        json.loads(path.read_text())["state"] == "clean"
+        and path.with_suffix(".swap").read_bytes() == b""
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*.state")
+    )
+
+
 @pytest.mark.parametrize("crash_before_resource_exchange", [1, 2])
 def test_steering_log_virgin_active_exchange_proof_failure_is_read_only(
     tmp_path: Path,
@@ -2817,6 +2972,158 @@ def test_steering_log_impossible_cross_key_frontier_blocks_unchanged(
     assert later_state_path.read_bytes() == state_before
     assert later_swap_path.read_bytes() == swap_before
     assert later_witness_path.read_bytes() == witness_before
+    assert (vault_root / rel_path).read_bytes() == durable_before
+
+
+@pytest.mark.parametrize("frontier", [(8, 4), (7, 4), (6, 1)])
+def test_steering_log_cross_key_phase_barriers_block_unchanged(
+    tmp_path: Path,
+    frontier: tuple[int, int],
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    rel_path = note_rel_path(STEERING_LOG)
+    frontier_id = f"{frontier[0]}-{frontier[1]}"
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"phase-barrier-{frontier_id}-seed",
+        write_guard=guard,
+    )
+    with write_ops_module._open_atomic_append_authority(
+        vault_root,
+        rel_path,
+    ) as authority:
+        state_paths = tuple(
+            _host_fence_root()
+            / write_ops_module._host_append_state_name(path_lock_key)
+            for path_lock_key in authority.host_state_keys
+        )
+    witness_paths = _host_witness_paths(vault_root)
+    assert len(state_paths) == len(witness_paths) == len(frontier) == 2
+    predecessor_states = tuple(
+        json.loads(path.read_text()) for path in state_paths
+    )
+
+    def crash_after_publication_before_clean() -> None:
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(210)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id=f"phase-barrier-{frontier_id}-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = multiprocessing.get_context("fork").Process(
+        target=crash_after_publication_before_clean
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 210
+    active_states = tuple(json.loads(path.read_text()) for path in state_paths)
+    assert all(state["state"] == "active" for state in active_states)
+
+    def successor_from_active(active: dict[str, object]) -> dict[str, object]:
+        successor = {
+            key: active[key]
+            for key in (
+                "schema",
+                "path_lock_key",
+                "locator",
+                "authority_keys",
+                "transaction",
+                "root_dev",
+                "root_ino",
+                "parent_dev",
+                "parent_ino",
+                "recovery_dev",
+                "recovery_ino",
+            )
+        }
+        successor.update(
+            {
+                "state": "clean",
+                "target_present": True,
+                "target_dev": active["proposal_dev"],
+                "target_ino": active["proposal_ino"],
+                "target_digest": active["proposal_digest"],
+                "target_metadata": active["proposal_metadata"],
+                "latest_original_present": active[
+                    "next_latest_original_present"
+                ],
+            }
+        )
+        if active["next_latest_original_present"]:
+            for suffix in ("dev", "ino", "digest", "metadata"):
+                successor[f"latest_original_{suffix}"] = active[
+                    f"next_latest_original_{suffix}"
+                ]
+        return successor
+
+    for rank, state_path, witness_path, predecessor, active in zip(
+        frontier,
+        state_paths,
+        witness_paths,
+        predecessor_states,
+        active_states,
+    ):
+        successor = successor_from_active(active)
+        state: dict[str, object]
+        swap: dict[str, object] | None
+        witness: dict[str, object]
+        if rank == 1:
+            state, swap, witness = predecessor, None, active
+        elif rank == 4:
+            state, swap, witness = active, None, active
+        elif rank == 6:
+            state, swap, witness = successor, active, active
+        elif rank == 7:
+            state, swap, witness = successor, None, active
+        elif rank == 8:
+            state, swap, witness = successor, None, successor
+        else:
+            raise AssertionError(f"unsupported injected rank: {rank}")
+        state_path.write_text(
+            json.dumps(state, ensure_ascii=True, sort_keys=True) + "\n"
+        )
+        swap_path = state_path.with_suffix(".swap")
+        swap_path.write_text(
+            ""
+            if swap is None
+            else json.dumps(swap, ensure_ascii=True, sort_keys=True) + "\n"
+        )
+        witness_path.write_text(
+            json.dumps(witness, ensure_ascii=True, sort_keys=True) + "\n"
+        )
+
+    observed_paths = tuple(
+        path
+        for state_path, witness_path in zip(state_paths, witness_paths)
+        for path in (state_path, state_path.with_suffix(".swap"), witness_path)
+    )
+    records_before = {path: path.read_bytes() for path in observed_paths}
+    durable_before = (vault_root / rel_path).read_bytes()
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="stable-key transition frontier is invalid",
+    ):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id=f"phase-barrier-{frontier_id}-proposal",
+            write_guard=guard,
+        )
+
+    assert {path: path.read_bytes() for path in observed_paths} == records_before
     assert (vault_root / rel_path).read_bytes() == durable_before
 
 
