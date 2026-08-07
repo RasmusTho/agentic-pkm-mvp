@@ -1360,7 +1360,11 @@ def _write_host_append_states(
             }
         else:
             inventories = _read_host_append_inventories(fence_fd, authority)
-            _validate_host_append_inventories(authority, inventories)
+            _validate_host_append_inventories(
+                authority,
+                inventories,
+                allow_complete_active_witness_without_app=allow_reconciled_clean,
+            )
             if payload.get("state") == "clean" and not allow_reconciled_clean:
                 transaction = payload.get("transaction")
                 if any(
@@ -1496,6 +1500,8 @@ def _validate_host_append_inventories(
             dict[str, object] | None,
         ]
     ],
+    *,
+    allow_complete_active_witness_without_app: bool = False,
 ) -> list[dict[str, object]]:
     inventory_records = [
         (
@@ -1508,6 +1514,20 @@ def _validate_host_append_inventories(
         )
         for _path_lock_key, app_record, swap_record, witness_state in inventories
     ]
+    normalized_active_witnesses = [
+        {key: value for key, value in witness_state.items() if key != "path_lock_key"}
+        for _app_states, witness_state in inventory_records
+        if witness_state is not None and witness_state.get("state") == "active"
+    ]
+    complete_active_witness_set = (
+        allow_complete_active_witness_without_app
+        and len(normalized_active_witnesses) == len(inventory_records)
+        and bool(normalized_active_witnesses)
+        and all(
+            candidate == normalized_active_witnesses[0]
+            for candidate in normalized_active_witnesses[1:]
+        )
+    )
     if any(app_states or witness_state is not None for app_states, witness_state in inventory_records):
         if any(
             not app_states and witness_state is None
@@ -1526,7 +1546,11 @@ def _validate_host_append_inventories(
                     f"atomic append host witness is missing for "
                     f"{authority.note_rel_path}; reconciliation is required before retry"
                 )
-        if witness_state is not None and not app_states:
+        if (
+            witness_state is not None
+            and not app_states
+            and not complete_active_witness_set
+        ):
             raise KnowledgeWriteConflict(
                 f"atomic append app-local state is missing for "
                 f"{authority.note_rel_path}; reconciliation is required before retry"
@@ -1608,9 +1632,17 @@ def _validate_host_append_inventories(
 def _read_all_host_append_states(
     fence_fd: int,
     authority: _AtomicAppendAuthority,
+    *,
+    allow_complete_active_witness_without_app: bool = False,
 ) -> list[dict[str, object]]:
     inventories = _read_host_append_inventories(fence_fd, authority)
-    return _validate_host_append_inventories(authority, inventories)
+    return _validate_host_append_inventories(
+        authority,
+        inventories,
+        allow_complete_active_witness_without_app=(
+            allow_complete_active_witness_without_app
+        ),
+    )
 
 
 def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> None:
@@ -1618,7 +1650,11 @@ def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> N
 
     fence_fd = _open_durable_host_fence_root(authority)
     try:
-        for state in _read_all_host_append_states(fence_fd, authority):
+        for state in _read_all_host_append_states(
+            fence_fd,
+            authority,
+            allow_complete_active_witness_without_app=True,
+        ):
             if state["state"] == "indeterminate" or (
                 state.get("root_dev") != authority.root_stat.st_dev
                 or state.get("root_ino") != authority.root_stat.st_ino
@@ -1634,7 +1670,13 @@ def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> N
 def _host_append_state_exists(authority: _AtomicAppendAuthority) -> bool:
     fence_fd = _open_durable_host_fence_root(authority)
     try:
-        return bool(_read_all_host_append_states(fence_fd, authority))
+        return bool(
+            _read_all_host_append_states(
+                fence_fd,
+                authority,
+                allow_complete_active_witness_without_app=True,
+            )
+        )
     finally:
         os.close(fence_fd)
 
@@ -1925,7 +1967,22 @@ def _reconcile_host_atomic_append_states(
             authority.note_rel_path,
         )
         latest_payload = _latest_original_host_payload(observed_latest)
-        states = _read_all_host_append_states(fence_fd, authority)
+        inventories = _read_host_append_inventories(fence_fd, authority)
+        missing_app_state = any(
+            app_record.state is None and swap_record.state is None
+            for (
+                _path_lock_key,
+                app_record,
+                swap_record,
+                witness_state,
+            ) in inventories
+            if witness_state is not None
+        )
+        states = _validate_host_append_inventories(
+            authority,
+            inventories,
+            allow_complete_active_witness_without_app=True,
+        )
         if not states and latest_payload["latest_original_present"] is True:
             reason = "latest-original slot has no durable host record"
         matching_clean_transactions = {
@@ -2010,6 +2067,12 @@ def _reconcile_host_atomic_append_states(
             ):
                 reason = "prepared proposal phase evidence is missing"
                 break
+            if missing_app_state and not original_matches:
+                reason = (
+                    "app-local state is missing outside the authenticated "
+                    "prepublication phase"
+                )
+                break
             if _host_uses_present_next_latest_original(
                 state,
                 latest_payload,
@@ -2021,6 +2084,11 @@ def _reconcile_host_atomic_append_states(
                 break
 
     if reason is not None:
+        if reason.startswith("app-local state is missing"):
+            raise KnowledgeWriteConflict(
+                f"atomic append app-local state is missing for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
         _mark_host_atomic_append_indeterminate(authority, transaction, reason)
         raise KnowledgeWriteConflict(
             f"atomic append authority mapping is indeterminate for "

@@ -891,6 +891,83 @@ def test_steering_log_initial_publish_error_preserves_recorded_stage_for_retry(
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
 
 
+@pytest.mark.parametrize("crash_before_active_app_write", [1, 2])
+def test_steering_log_virgin_active_persistence_crash_recovers(
+    tmp_path: Path,
+    crash_before_active_app_write: int,
+) -> None:
+    vault_root = _vault(tmp_path)
+    target = vault_root / note_rel_path(STEERING_LOG)
+    context = multiprocessing.get_context("fork")
+
+    def crash_during_active_app_persistence() -> None:
+        real_write_state = write_ops_module._write_host_append_state
+        active_writes = 0
+
+        def crash_on_selected_active_write(
+            fence_fd: int,
+            authority: object,
+            path_lock_key: str,
+            payload: dict[str, object],
+            expected_state: object,
+            expected_swap: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal active_writes
+            if payload.get("state") == "active":
+                active_writes += 1
+                if active_writes == crash_before_active_app_write:
+                    os._exit(76 + crash_before_active_app_write)
+            real_write_state(
+                fence_fd,
+                authority,  # type: ignore[arg-type]
+                path_lock_key,
+                payload,
+                expected_state,  # type: ignore[arg-type]
+                expected_swap,  # type: ignore[arg-type]
+                **kwargs,  # type: ignore[arg-type]
+            )
+
+        write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+            crash_on_selected_active_write
+        )
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-active-crash",
+            source="chat",
+            operation_id=f"virgin-active-crash-{crash_before_active_app_write}",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_during_active_app_persistence)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 76 + crash_before_active_app_write
+    assert not target.exists()
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert len(states) == crash_before_active_app_write - 1
+    witnesses = _host_witness_paths(vault_root)
+    assert len(witnesses) == 2
+    witness_states = [json.loads(path.read_text()) for path in witnesses]
+    assert all(state["state"] == "active" for state in witness_states)
+    assert len({state["transaction"] for state in witness_states}) == 1
+
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "virgin-active-crash",
+        source="chat",
+        operation_id=f"virgin-active-crash-{crash_before_active_app_write}",
+        write_guard=_allowing_guard(),
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    assert len(states) == 2
+    assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+
+
 def test_steering_log_retry_sweeps_process_crash_stage_to_root_recovery(
     tmp_path: Path,
 ) -> None:
