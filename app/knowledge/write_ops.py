@@ -1720,11 +1720,12 @@ def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> N
 
     fence_fd = _open_durable_host_fence_root(authority)
     try:
-        for state in _read_all_host_append_states(
-            fence_fd,
+        inventories = _read_host_append_inventories(fence_fd, authority)
+        states, _repairs = _validate_inventories_with_planned_witness_repairs(
             authority,
-            allow_complete_active_witness_without_app=True,
-        ):
+            inventories,
+        )
+        for state in states:
             if state["state"] == "indeterminate" or (
                 state.get("root_dev") != authority.root_stat.st_dev
                 or state.get("root_ino") != authority.root_stat.st_ino
@@ -1740,13 +1741,12 @@ def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> N
 def _host_append_state_exists(authority: _AtomicAppendAuthority) -> bool:
     fence_fd = _open_durable_host_fence_root(authority)
     try:
-        return bool(
-            _read_all_host_append_states(
-                fence_fd,
-                authority,
-                allow_complete_active_witness_without_app=True,
-            )
+        inventories = _read_host_append_inventories(fence_fd, authority)
+        states, _repairs = _validate_inventories_with_planned_witness_repairs(
+            authority,
+            inventories,
         )
+        return bool(states)
     finally:
         os.close(fence_fd)
 
@@ -1882,6 +1882,185 @@ def _host_uses_present_next_latest_original(
         state.get("next_latest_original_present") is True
         and _host_next_latest_original_matches(state, payload)
     )
+
+
+def _host_clean_precedes_active(
+    clean_state: dict[str, object],
+    active_state: dict[str, object],
+) -> bool:
+    """Prove that a clean app record is the baseline for one active intent."""
+
+    mapping_keys = (
+        "root_dev",
+        "root_ino",
+        "parent_dev",
+        "parent_ino",
+        "recovery_dev",
+        "recovery_ino",
+    )
+    if any(
+        clean_state.get(key) != active_state.get(key) for key in mapping_keys
+    ):
+        return False
+
+    source_present = active_state.get("source_present")
+    if clean_state.get("target_present") is not source_present:
+        return False
+    if source_present is True and any(
+        clean_state.get(target_key) != active_state.get(source_key)
+        for target_key, source_key in (
+            ("target_dev", "source_dev"),
+            ("target_ino", "source_ino"),
+            ("target_digest", "source_digest"),
+            ("target_metadata", "source_metadata"),
+        )
+    ):
+        return False
+
+    latest_present = active_state.get("latest_original_present")
+    if clean_state.get("latest_original_present") is not latest_present:
+        return False
+    return latest_present is not True or all(
+        clean_state.get(key) == active_state.get(key)
+        for key in (
+            "latest_original_dev",
+            "latest_original_ino",
+            "latest_original_digest",
+            "latest_original_metadata",
+        )
+    )
+
+
+def _plan_missing_active_witness_repairs(
+    inventories: list[
+        tuple[
+            str,
+            _HostStateRecord,
+            _HostStateRecord,
+            dict[str, object] | None,
+        ]
+    ],
+) -> dict[str, dict[str, object]]:
+    """Plan missing temporary-witness repair from authenticated app records.
+
+    The plan is only a provisional in-memory view. Reconciliation must prove
+    the recorded mapping, source/proposal phase, latest-original phase, and
+    access metadata before any witness is written.
+    """
+
+    missing_keys = [
+        path_lock_key
+        for path_lock_key, _app_record, _swap_record, witness_state in inventories
+        if witness_state is None
+    ]
+    if not missing_keys:
+        return {}
+
+    app_states = [
+        state
+        for _path_lock_key, app_record, swap_record, _witness_state in inventories
+        for state in (app_record.state, swap_record.state)
+        if state is not None
+    ]
+    active_states = [state for state in app_states if state.get("state") == "active"]
+    if not active_states or any(
+        state.get("state") not in {"active", "clean"} for state in app_states
+    ):
+        return {}
+
+    normalized_active = [
+        {key: value for key, value in state.items() if key != "path_lock_key"}
+        for state in active_states
+    ]
+    seed = normalized_active[0]
+    if any(candidate != seed for candidate in normalized_active[1:]):
+        return {}
+    if any(
+        state.get("state") == "clean"
+        and not _host_clean_precedes_active(state, seed)
+        for state in app_states
+    ):
+        return {}
+
+    for _path_lock_key, _app_record, _swap_record, witness_state in inventories:
+        if witness_state is None:
+            continue
+        if witness_state.get("state") != "active" or {
+            key: value
+            for key, value in witness_state.items()
+            if key != "path_lock_key"
+        } != seed:
+            return {}
+
+    return {
+        path_lock_key: {**seed, "path_lock_key": path_lock_key}
+        for path_lock_key in missing_keys
+    }
+
+
+def _validate_inventories_with_planned_witness_repairs(
+    authority: _AtomicAppendAuthority,
+    inventories: list[
+        tuple[
+            str,
+            _HostStateRecord,
+            _HostStateRecord,
+            dict[str, object] | None,
+        ]
+    ],
+) -> tuple[list[dict[str, object]], dict[str, dict[str, object]]]:
+    repairs = _plan_missing_active_witness_repairs(inventories)
+    validation_inventories = [
+        (
+            path_lock_key,
+            app_record,
+            swap_record,
+            witness_state
+            if witness_state is not None
+            else repairs.get(path_lock_key),
+        )
+        for path_lock_key, app_record, swap_record, witness_state in inventories
+    ]
+    states = _validate_host_append_inventories(
+        authority,
+        validation_inventories,
+        allow_complete_active_witness_without_app=True,
+    )
+    return states, repairs
+
+
+def _repair_missing_active_witness_records(
+    authority: _AtomicAppendAuthority,
+    expected_repairs: dict[str, dict[str, object]],
+) -> None:
+    """Restore empty temporary witnesses after every durable proof passes."""
+
+    fence_fd = _open_durable_host_fence_root(authority)
+    try:
+        inventories = _read_host_append_inventories(fence_fd, authority)
+        repairs = _plan_missing_active_witness_repairs(inventories)
+        if repairs != expected_repairs:
+            raise KnowledgeWriteConflict(
+                f"atomic append active app state changed for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        witness_fds = dict(authority.host_witness_fds)
+        for path_lock_key in authority.host_state_keys:
+            payload = repairs.get(path_lock_key)
+            if payload is None:
+                continue
+            witness_fd = witness_fds.get(path_lock_key)
+            if witness_fd is None:
+                raise AssertionError("atomic append host witness authority is not bound")
+            authority.assert_host_witness_live()
+            _write_host_witness_state(witness_fd, payload)
+        _read_all_host_append_states(
+            fence_fd,
+            authority,
+            allow_complete_active_witness_without_app=True,
+        )
+    finally:
+        os.close(fence_fd)
 
 
 def _host_prepared_next_latest_original_is_named(
@@ -2032,6 +2211,7 @@ def _reconcile_host_atomic_append_states(
     transaction = "reconciled"
     reason: str | None = None
     missing_app_state = False
+    missing_witness_repairs: dict[str, dict[str, object]] = {}
     try:
         observed_latest = _open_latest_original_snapshot(
             recovery_fd,
@@ -2039,20 +2219,22 @@ def _reconcile_host_atomic_append_states(
         )
         latest_payload = _latest_original_host_payload(observed_latest)
         inventories = _read_host_append_inventories(fence_fd, authority)
+        states, missing_witness_repairs = (
+            _validate_inventories_with_planned_witness_repairs(
+                authority,
+                inventories,
+            )
+        )
         missing_app_state = any(
             app_record.state is None
             for (
-                _path_lock_key,
+                path_lock_key,
                 app_record,
                 _swap_record,
                 witness_state,
             ) in inventories
             if witness_state is not None
-        )
-        states = _validate_host_append_inventories(
-            authority,
-            inventories,
-            allow_complete_active_witness_without_app=True,
+            or path_lock_key in missing_witness_repairs
         )
         if not states and latest_payload["latest_original_present"] is True:
             reason = "latest-original slot has no durable host record"
@@ -2155,9 +2337,12 @@ def _reconcile_host_atomic_append_states(
                 break
 
     if reason is not None:
-        if missing_app_state:
+        if missing_app_state or missing_witness_repairs:
+            missing_resource = (
+                "app-local state" if missing_app_state else "host witness"
+            )
             raise KnowledgeWriteConflict(
-                f"atomic append app-local state is missing for "
+                f"atomic append {missing_resource} is missing for "
                 f"{authority.note_rel_path}; reconciliation is required before retry"
             )
         _mark_host_atomic_append_indeterminate(authority, transaction, reason)
@@ -2166,6 +2351,11 @@ def _reconcile_host_atomic_append_states(
             f"{authority.note_rel_path}; reconciliation is required before retry"
         )
     if saw_active:
+        if missing_witness_repairs:
+            _repair_missing_active_witness_records(
+                authority,
+                missing_witness_repairs,
+            )
         if missing_app_state:
             _repair_missing_active_app_records(authority)
         _write_host_append_states(

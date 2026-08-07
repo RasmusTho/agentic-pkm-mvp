@@ -993,6 +993,10 @@ def test_steering_log_virgin_active_persistence_crash_recovers(
     witness_states = [json.loads(path.read_text()) for path in witnesses]
     assert all(state["state"] == "active" for state in witness_states)
     assert len({state["transaction"] for state in witness_states}) == 1
+    lock_root = witnesses[0].parent
+    for path in lock_root.iterdir():
+        path.unlink()
+    lock_root.rmdir()
 
     durable_line = append_steering_log(
         vault_root,
@@ -1007,6 +1011,10 @@ def test_steering_log_virgin_active_persistence_crash_recovers(
     states = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
     assert len(states) == 2
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
+    assert all(
+        json.loads(path.read_text())["state"] == "clean"
+        for path in _host_witness_paths(vault_root)
+    )
 
 
 def test_steering_log_virgin_missing_app_rejects_foreign_clean_record(
@@ -1105,6 +1113,60 @@ def test_steering_log_virgin_missing_app_proof_failure_is_read_only(
         for path in _host_fence_root().glob(".heimdal-atomic-append-*")
     } == app_before
     assert {path.name: path.read_bytes() for path in witnesses} == witness_before
+
+
+@pytest.mark.parametrize(
+    "proof_failure",
+    ["mapping", "proposal-name", "proposal-metadata"],
+)
+def test_steering_log_missing_active_witness_proof_failure_is_read_only(
+    tmp_path: Path,
+    proof_failure: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    target = vault_root / note_rel_path(STEERING_LOG)
+    process = multiprocessing.get_context("fork").Process(
+        target=_crash_virgin_active_app_persistence,
+        args=(vault_root, 2),
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 78
+    parent = target.parent
+    stage = next(parent.glob(".atomic-append-*.stage"))
+    witnesses = _host_witness_paths(vault_root)
+    lock_root = witnesses[0].parent
+    for path in lock_root.iterdir():
+        path.unlink()
+    lock_root.rmdir()
+    if proof_failure == "mapping":
+        parent.replace(vault_root / "_heimdal-parked")
+        parent.mkdir()
+    elif proof_failure == "proposal-name":
+        stage.replace(parent / ".parked-proposal-stage")
+    else:
+        stage.chmod(0o640)
+    app_before = {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    }
+
+    with pytest.raises(KnowledgeWriteConflict, match="app-local state is missing"):
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-active-crash",
+            source="chat",
+            operation_id="virgin-active-crash-2",
+            write_guard=_allowing_guard(),
+        )
+
+    assert not target.exists()
+    assert {
+        path.name: path.read_bytes()
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    } == app_before
+    assert all(path.exists() and path.stat().st_size == 0 for path in witnesses)
 
 
 @pytest.mark.parametrize("crash_before_resource_exchange", [1, 2, 3, 4])
@@ -1453,7 +1515,7 @@ def test_steering_log_crash_with_app_local_namespace_loss_remains_blocked(
     assert not list(host_root.glob(".heimdal-atomic-append-*.state"))
 
 
-def test_steering_log_crash_with_host_witness_loss_remains_blocked(
+def test_steering_log_active_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
     vault_root = _vault(tmp_path)
@@ -1467,24 +1529,14 @@ def test_steering_log_crash_with_host_witness_loss_remains_blocked(
         write_guard=guard,
     )
     witness_paths = _host_witness_paths(vault_root)
-    parked_witnesses = tuple(
-        tmp_path / f"parked-host-witness-{index}.lock"
-        for index, _path in enumerate(witness_paths)
-    )
     context = multiprocessing.get_context("fork")
 
-    def crash_after_exchange_and_replace_witnesses() -> None:
-        def replace_witnesses_before_clean(*_args: object) -> None:
-            for witness, parked in zip(
-                witness_paths,
-                parked_witnesses,
-                strict=True,
-            ):
-                witness.replace(parked)
+    def crash_after_exchange_before_clean() -> None:
+        def exit_before_clean(*_args: object) -> None:
             os._exit(94)
 
         write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
-            replace_witnesses_before_clean
+            exit_before_clean
         )
         append_steering_log(
             vault_root,
@@ -1495,7 +1547,7 @@ def test_steering_log_crash_with_host_witness_loss_remains_blocked(
             write_guard=_allowing_guard(),
         )
 
-    process = context.Process(target=crash_after_exchange_and_replace_witnesses)
+    process = context.Process(target=crash_after_exchange_before_clean)
     process.start()
     process.join(timeout=10)
     assert process.exitcode == 94
@@ -1504,22 +1556,32 @@ def test_steering_log_crash_with_host_witness_loss_remains_blocked(
     assert all(json.loads(path.read_text())["state"] == "active" for path in states)
     assert all(
         json.loads(path.read_text())["state"] == "active"
-        for path in parked_witnesses
+        for path in witness_paths
     )
+    lock_root = witness_paths[0].parent
+    for path in lock_root.iterdir():
+        path.unlink()
+    lock_root.rmdir()
 
-    with pytest.raises(KnowledgeWriteConflict, match="host witness is missing"):
-        append_steering_log(
-            vault_root,
-            "mute",
-            "crash-after-witness-loss",
-            source="item",
-            operation_id="witness-loss-proposal",
-            write_guard=guard,
-        )
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "crash-after-witness-loss",
+        source="item",
+        operation_id="witness-loss-proposal",
+        write_guard=guard,
+    )
 
     durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
     assert durable.count('"operation_id":"witness-loss-proposal"') == 1
-    assert all(path.exists() and path.stat().st_size == 0 for path in witness_paths)
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    assert all(
+        json.loads(path.read_text())["state"] == "clean"
+        for path in witness_paths
+    )
+    assert all(
+        json.loads(path.read_text())["state"] == "clean" for path in states
+    )
 
 
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
