@@ -61,7 +61,7 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
         "  'host_root': os.environ.get('TTS_HOST_ROOT'),\n"
         "  'argv': sys.argv[1:],\n"
         "}), encoding='utf-8')\n"
-        "print('f' * 64)\n",
+        "print(os.environ.get('TTS_FAKE_STDOUT', 'f' * 64))\n",
         encoding="utf-8",
     )
     docker.chmod(0o755)
@@ -107,6 +107,45 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
     assert exporter.count('"TTS_HOST_ROOT=${TTS_HOST_ROOT}"') == 1
     assert 'printf "TTS_ENABLED=%s\\n"' in exporter
     assert 'printf "TTS_HOST_ROOT=%s\\n"' in exporter
+
+    def run_wrapper(*compose_arguments: str, command_env: dict[str, str] = env) -> subprocess.CompletedProcess[str]:
+        wrapper_command = "\n".join(
+            (
+                "set -euo pipefail",
+                f"source {shlex.quote(str(synthetic_root / 'scripts/lib/deploy_channel_compose.sh'))}",
+                "deploy_channel_tts_config_preflight "
+                f"{shlex.quote(str(synthetic_root))} dev {shlex.quote(str(channel_env))}",
+                "deploy_channel_compose "
+                f"{shlex.quote(str(synthetic_root))} dev docker-compose.dev.yml "
+                f"pkm-dev-tts-test {shlex.quote(str(channel_env))} "
+                + " ".join(shlex.quote(argument) for argument in compose_arguments),
+            )
+        )
+        return subprocess.run(
+            ["bash", "-c", wrapper_command],
+            cwd=synthetic_root,
+            env=command_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    quiet_success = run_wrapper("up", "-d", "api")
+    assert quiet_success.returncode == 0
+    assert "f" * 64 not in quiet_success.stdout + quiet_success.stderr
+    assert str(tts_root) not in quiet_success.stdout + quiet_success.stderr
+
+    blocked_config = run_wrapper("config")
+    assert blocked_config.returncode == 92
+    assert "command=config" in blocked_config.stderr
+    assert str(tts_root) not in blocked_config.stdout + blocked_config.stderr
+
+    malformed_env = env.copy()
+    malformed_env["TTS_FAKE_STDOUT"] = str(tts_root)
+    malformed_ps = run_wrapper("ps", "-q", "api", command_env=malformed_env)
+    assert malformed_ps.returncode == 92
+    assert "output=invalid" in malformed_ps.stderr
+    assert str(tts_root) not in malformed_ps.stdout + malformed_ps.stderr
 
 
 def test_normalized_external_tts_root_is_accepted(tmp_path: Path) -> None:
