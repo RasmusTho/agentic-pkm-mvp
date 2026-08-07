@@ -737,7 +737,11 @@ def test_steering_log_retry_recovers_interrupted_states(
         write_guard=guard,
     )
     assert read_steering_log_body(vault_root).count(seed_recovered) == 1
-    assert not list(log_path.parent.glob(".atomic-append-*"))
+    retained_stages = list(log_path.parent.glob(".atomic-append-*"))
+    assert len(retained_stages) == 1
+    assert retained_stages[0].read_bytes().count(
+        b'"operation_id":"recover-atomic-seed"'
+    ) == 1
 
     # Simulate the legacy split transaction: the durable operation exists in
     # the body while frontmatter bookkeeping still reflects the prior state.
@@ -966,7 +970,11 @@ def test_steering_log_initial_publish_error_preserves_recorded_stage_for_retry(
     )
 
     assert read_steering_log_body(vault_root).count(durable_line) == 1
-    assert not list(target.parent.glob(".atomic-append-*.stage"))
+    retained_stages = list(target.parent.glob(".atomic-append-*.stage"))
+    assert len(retained_stages) == 1
+    assert retained_stages[0].read_bytes().count(
+        b'"operation_id":"initial-publication-error"'
+    ) == 1
     assert all(json.loads(path.read_text())["state"] == "clean" for path in states)
 
 
@@ -1308,7 +1316,7 @@ def test_steering_log_virgin_reconstruction_exchange_is_phase_safe(
     assert read_steering_log_body(vault_root).count(durable_line) == 1
 
 
-def test_steering_log_retry_sweeps_process_crash_stage_to_root_recovery(
+def test_steering_log_retry_retains_process_crash_stage_without_mutation(
     tmp_path: Path,
 ) -> None:
     vault_root = _vault(tmp_path)
@@ -1343,10 +1351,12 @@ def test_steering_log_retry_sweeps_process_crash_stage_to_root_recovery(
         write_guard=_allowing_guard(),
     )
 
-    assert not list(parent.glob(".atomic-append-*"))
+    retained_stages = list(parent.glob(".atomic-append-*"))
+    assert len(retained_stages) == 1
+    assert retained_stages[0].read_bytes().count(
+        b'"operation_id":"crash-stage-retry"'
+    ) == 1
     assert read_steering_log_body(vault_root).count(durable_line) == 1
-    recovery = vault_root / "_conflicts"
-    assert any("owned-stage" in path.name for path in recovery.iterdir())
 
 
 def test_steering_log_first_host_state_namespace_fsyncs_its_parent(
@@ -1882,6 +1892,76 @@ def test_steering_log_valid_wrong_phase_swap_remains_unchanged(
     assert read_steering_log_body(vault_root) == durable_before
 
 
+def test_steering_log_complete_unrelated_active_swap_remains_unchanged(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="complete-wrong-phase-seed",
+        write_guard=guard,
+    )
+    context = multiprocessing.get_context("fork")
+
+    def crash_after_publication_before_clean() -> None:
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(113)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "captured-active",
+            source="item",
+            operation_id="complete-wrong-phase-active",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_after_publication_before_clean)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 113
+    state_path = next(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    active_raw = state_path.read_bytes()
+    assert json.loads(active_raw)["state"] == "active"
+
+    append_steering_log(
+        vault_root,
+        "mute",
+        "captured-active",
+        source="item",
+        operation_id="complete-wrong-phase-active",
+        write_guard=guard,
+    )
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "new-clean-cohort",
+        source="chat",
+        operation_id="complete-wrong-phase-new-clean",
+        write_guard=guard,
+    )
+    swap_path = state_path.with_suffix(".swap")
+    swap_path.write_bytes(active_raw)
+    durable_before = read_steering_log_body(vault_root)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "must-not-consume-active",
+            source="item",
+            operation_id="complete-wrong-phase-proposal",
+            write_guard=guard,
+        )
+
+    assert swap_path.read_bytes() == active_raw
+    assert read_steering_log_body(vault_root) == durable_before
+
+
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
@@ -2190,7 +2270,7 @@ def test_steering_log_paired_clean_state_mismatch_blocks_before_active(
         encoding="utf-8",
     )
 
-    with pytest.raises(KnowledgeWriteConflict, match="paired host state"):
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
         append_steering_log(
             vault_root,
             "mute",
@@ -2237,7 +2317,7 @@ def test_steering_log_app_state_substitution_at_active_transition_blocks(
         "_prepare_host_atomic_append_intent",
         substitute_immediately_before_active,
     )
-    with pytest.raises(KnowledgeWriteConflict, match="paired host state"):
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
         append_steering_log(
             vault_root,
             "mute",
@@ -2267,9 +2347,10 @@ def test_steering_log_app_state_exchange_proves_displaced_record(
     )
     real_exchange = write_ops_module._atomic_host_state_exchange_at
     substituted = False
+    unrelated_raw: bytes | None = None
 
     def substitute_after_snapshot_then_exchange(*args: object) -> None:
-        nonlocal substituted
+        nonlocal substituted, unrelated_raw
         if not substituted:
             substituted = True
             fence_fd = args[0]
@@ -2281,12 +2362,12 @@ def test_steering_log_app_state_exchange_proves_displaced_record(
                 raw = os.read(state_fd, 1024 * 1024)
                 payload = json.loads(raw)
                 payload["transaction"] = "foreign-after-snapshot"
-                replacement = (
+                unrelated_raw = (
                     json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
                 ).encode("utf-8")
                 os.ftruncate(state_fd, 0)
                 os.lseek(state_fd, 0, os.SEEK_SET)
-                os.write(state_fd, replacement)
+                os.write(state_fd, unrelated_raw)
                 os.fsync(state_fd)
             finally:
                 os.close(state_fd)
@@ -2308,6 +2389,27 @@ def test_steering_log_app_state_exchange_proves_displaced_record(
         )
 
     assert substituted
+    assert unrelated_raw is not None
+    durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
+    assert '"operation_id":"state-exchange-proof-proposal"' not in durable
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_host_state_exchange_at",
+        real_exchange,
+    )
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "state-exchange-proof",
+            source="item",
+            operation_id="state-exchange-proof-proposal",
+            write_guard=guard,
+        )
+    assert any(
+        path.read_bytes() == unrelated_raw
+        for path in _host_fence_root().glob(".heimdal-atomic-append-*")
+    )
     durable = (vault_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
     assert '"operation_id":"state-exchange-proof-proposal"' not in durable
 
@@ -3357,7 +3459,11 @@ def test_steering_log_exchange_race_retains_every_version_and_blocks_retry(
         )
 
     recovery = vault_root / "_conflicts"
-    assert any(racing_line in path.read_bytes() for path in recovery.iterdir())
+    retained_paths = [
+        *recovery.iterdir(),
+        *(vault_root / "_heimdal").glob(".atomic-append-*"),
+    ]
+    assert any(racing_line in path.read_bytes() for path in retained_paths)
     monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", real_exchange)
     with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
         append_steering_log(
@@ -3658,7 +3764,7 @@ def test_steering_log_symlinked_root_retarget_cannot_escape_lexical_fence(
     assert durable.count('"operation_id":"symlink-root-proposal"') == 1
 
 
-@pytest.mark.parametrize("retirement_role", ["displaced", "retired"])
+@pytest.mark.parametrize("retirement_role", ["recovery", "displaced"])
 def test_steering_log_retirement_never_deletes_substituted_name(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3674,55 +3780,48 @@ def test_steering_log_retirement_never_deletes_substituted_name(
         operation_id=f"retirement-{retirement_role}-seed",
         write_guard=guard,
     )
-    real_move = write_ops_module._move_entry_to_recovery
+    real_retire = write_ops_module._retire_recovery_entry
     substituted_name: str | None = None
     sentinel = b"must survive retirement race\n"
 
-    def move_then_substitute(
-        source_fd: int,
-        source_name: str,
-        expected: os.stat_result,
-        recovery_fd: int,
-        destination_name: str,
-    ) -> os.stat_result:
+    def substitute_then_retire(
+        directory_fd: int,
+        entry: write_ops_module._RecoveryEntry,
+    ) -> None:
         nonlocal substituted_name
-        retained = real_move(
-            source_fd,
-            source_name,
-            expected,
-            recovery_fd,
-            destination_name,
-        )
         role_matches = (
-            retirement_role == "displaced" and "-displaced-" in destination_name
+            retirement_role == "displaced"
+            and entry.name.startswith(".atomic-append-")
         ) or (
-            retirement_role == "retired" and "-retired-" in destination_name
+            retirement_role == "recovery"
+            and entry.name.startswith(".steering-append-")
         )
         if substituted_name is None and role_matches:
-            substituted_name = destination_name
+            substituted_name = entry.name
             os.rename(
-                destination_name,
+                entry.name,
                 f".parked-{retirement_role}",
-                src_dir_fd=recovery_fd,
-                dst_dir_fd=recovery_fd,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
             )
             sentinel_fd = os.open(
-                destination_name,
+                entry.name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
                 0o600,
-                dir_fd=recovery_fd,
+                dir_fd=directory_fd,
             )
             try:
                 os.write(sentinel_fd, sentinel)
                 os.fsync(sentinel_fd)
             finally:
                 os.close(sentinel_fd)
-        return retained
+            os.fsync(directory_fd)
+        real_retire(directory_fd, entry)
 
     monkeypatch.setattr(
         write_ops_module,
-        "_move_entry_to_recovery",
-        move_then_substitute,
+        "_retire_recovery_entry",
+        substitute_then_retire,
     )
     with pytest.raises(KnowledgeWriteConflict, match="retirement"):
         append_steering_log(
@@ -3735,7 +3834,12 @@ def test_steering_log_retirement_never_deletes_substituted_name(
         )
 
     assert substituted_name is not None
-    assert (vault_root / "_conflicts" / substituted_name).read_bytes() == sentinel
+    retained_parent = (
+        vault_root / "_heimdal"
+        if retirement_role == "displaced"
+        else vault_root / "_conflicts"
+    )
+    assert (retained_parent / substituted_name).read_bytes() == sentinel
 
 
 def test_steering_log_retirement_never_unlinks_a_mutable_recovery_name(
@@ -3773,10 +3877,15 @@ def test_steering_log_retirement_never_unlinks_a_mutable_recovery_name(
     )
 
     assert retired_unlink_attempted is False
+    assert not any(
+        "-retired-" in path.name for path in (vault_root / "_conflicts").iterdir()
+    )
     assert any(
-        "-retired-" in path.name
+        path.name.startswith(".steering-append-")
+        and path.name.endswith(".md.conflict")
         for path in (vault_root / "_conflicts").iterdir()
     )
+    assert len(list((vault_root / "_heimdal").glob(".atomic-append-*.stage"))) == 1
 
 
 @pytest.mark.parametrize("remap", ["target", "parent", "root", "recovery"])
@@ -4482,7 +4591,7 @@ def test_steering_log_racing_aliases_fail_closed(
             write_guard=guard,
         )
     assert list(outside.iterdir()) == []
-    assert not list(parked_parent.glob(".atomic-append-*"))
+    assert len(list(parked_parent.glob(".atomic-append-*"))) == 1
 
 
 def test_steering_log_metadata_clone_failure_fails_closed(
@@ -4742,7 +4851,7 @@ def test_steering_log_snapshot_hard_link_created_before_retirement_is_preserved(
     ) == 1
 
 
-def test_steering_log_retirement_substitution_restores_unrelated_path(
+def test_steering_log_retirement_substitution_leaves_unrelated_path_unchanged(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -4758,49 +4867,39 @@ def test_steering_log_retirement_substitution_restores_unrelated_path(
     )
     recovery = vault_root / "_conflicts"
     unrelated = b"unrelated replacement must keep its pathname\n"
-    real_rename = write_ops_module._atomic_rename_noreplace_at
+    real_retire = write_ops_module._retire_recovery_entry
     changed_name: str | None = None
 
     def substitute_before_retirement(
-        source_fd: int,
-        source_name: str,
-        destination_fd: int,
-        destination_name: str,
+        recovery_fd: int,
+        entry: write_ops_module._RecoveryEntry,
     ) -> None:
         nonlocal changed_name
-        if (
-            changed_name is None
-            and destination_name.startswith(".steering-append-retired-")
-        ):
-            changed_name = source_name
+        if changed_name is None:
+            changed_name = entry.name
             os.rename(
-                source_name,
-                f".steering-append-held-{source_name}",
-                src_dir_fd=source_fd,
-                dst_dir_fd=source_fd,
+                entry.name,
+                f".steering-append-held-{entry.name}",
+                src_dir_fd=recovery_fd,
+                dst_dir_fd=recovery_fd,
             )
             replacement_fd = os.open(
-                source_name,
+                entry.name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL,
                 0o600,
-                dir_fd=source_fd,
+                dir_fd=recovery_fd,
             )
             try:
                 os.write(replacement_fd, unrelated)
                 os.fsync(replacement_fd)
             finally:
                 os.close(replacement_fd)
-            os.fsync(source_fd)
-        real_rename(
-            source_fd,
-            source_name,
-            destination_fd,
-            destination_name,
-        )
+            os.fsync(recovery_fd)
+        real_retire(recovery_fd, entry)
 
     monkeypatch.setattr(
         write_ops_module,
-        "_atomic_rename_noreplace_at",
+        "_retire_recovery_entry",
         substitute_before_retirement,
     )
     with pytest.raises(

@@ -1015,7 +1015,12 @@ def _host_append_state_has_valid_phase_shape(
         return False
     if phase == "active":
         return (
-            has_optional_identity("source")
+            "predecessor_transaction" in state
+            and (
+                state.get("predecessor_transaction") is None
+                or isinstance(state.get("predecessor_transaction"), str)
+            )
+            and has_optional_identity("source")
             and has_identity("proposal", named=True)
             and has_optional_identity("latest_original")
             and has_optional_identity("next_latest_original", named=True)
@@ -1506,10 +1511,17 @@ def _write_host_append_states(
             raise AssertionError("atomic append host witness authority is not bound")
 
         inventories = _read_host_append_inventories(fence_fd, authority)
-        _validate_host_append_inventories(
+        validated_states = _validate_host_append_inventories(
             authority,
             inventories,
         )
+        if payload.get("state") == "indeterminate" and any(
+            state.get("state") == "indeterminate" for state in validated_states
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append indeterminate state already exists for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
         if payload.get("state") == "clean" and not allow_reconciled_clean:
             transaction = payload.get("transaction")
             if any(
@@ -1538,9 +1550,27 @@ def _write_host_append_states(
             ) in inventories
         }
 
+        state_payload = dict(payload)
+        if payload.get("state") == "active":
+            prior_transactions = {
+                str(state.get("transaction"))
+                for state in validated_states
+                if state.get("state") == "clean"
+            }
+            if any(
+                state.get("state") != "clean" for state in validated_states
+            ) or len(prior_transactions) > 1:
+                raise KnowledgeWriteConflict(
+                    f"atomic append active predecessor is inconsistent for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+            state_payload["predecessor_transaction"] = (
+                next(iter(prior_transactions)) if prior_transactions else None
+            )
+
         keyed_payloads = {
             path_lock_key: {
-                **payload,
+                **state_payload,
                 "schema": _HOST_APPEND_STATE_SCHEMA,
                 "path_lock_key": path_lock_key,
                 "locator": authority.note_rel_path,
@@ -1675,6 +1705,7 @@ def _validate_host_append_inventories(
             f"atomic append host state is malformed for {authority.note_rel_path}; "
             "reconciliation is required before retry"
         )
+    _validate_host_append_inventory_topology(authority, inventories)
     inventory_records = [
         (
             [
@@ -2061,12 +2092,21 @@ def _host_uses_present_next_latest_original(
     )
 
 
-def _host_clean_precedes_active(
+def _host_states_match_across_keys(
+    first: dict[str, object],
+    second: dict[str, object],
+) -> bool:
+    return {
+        key: value for key, value in first.items() if key != "path_lock_key"
+    } == {
+        key: value for key, value in second.items() if key != "path_lock_key"
+    }
+
+
+def _host_clean_matches_active_source(
     clean_state: dict[str, object],
     active_state: dict[str, object],
 ) -> bool:
-    """Prove that a clean app record is the baseline for one active intent."""
-
     mapping_keys = (
         "root_dev",
         "root_ino",
@@ -2106,6 +2146,172 @@ def _host_clean_precedes_active(
             "latest_original_metadata",
         )
     )
+
+
+def _host_clean_precedes_active(
+    clean_state: dict[str, object],
+    active_state: dict[str, object],
+) -> bool:
+    """Prove that a clean record is the exact baseline named by active state."""
+
+    return (
+        clean_state.get("transaction")
+        == active_state.get("predecessor_transaction")
+        and _host_clean_matches_active_source(clean_state, active_state)
+    )
+
+
+def _host_clean_succeeds_active(
+    clean_state: dict[str, object],
+    active_state: dict[str, object],
+) -> bool:
+    """Prove clean state is one committed or compensated active outcome."""
+
+    if clean_state.get("transaction") != active_state.get("transaction"):
+        return False
+    if _host_clean_matches_active_source(clean_state, active_state):
+        return True
+    mapping_keys = (
+        "root_dev",
+        "root_ino",
+        "parent_dev",
+        "parent_ino",
+        "recovery_dev",
+        "recovery_ino",
+    )
+    if any(
+        clean_state.get(key) != active_state.get(key) for key in mapping_keys
+    ):
+        return False
+    if clean_state.get("target_present") is not True or any(
+        clean_state.get(target_key) != active_state.get(proposal_key)
+        for target_key, proposal_key in (
+            ("target_dev", "proposal_dev"),
+            ("target_ino", "proposal_ino"),
+            ("target_digest", "proposal_digest"),
+            ("target_metadata", "proposal_metadata"),
+        )
+    ):
+        return False
+    next_present = active_state.get("next_latest_original_present")
+    if clean_state.get("latest_original_present") is not next_present:
+        return False
+    return next_present is not True or all(
+        clean_state.get(clean_key) == active_state.get(active_key)
+        for clean_key, active_key in (
+            ("latest_original_dev", "next_latest_original_dev"),
+            ("latest_original_ino", "next_latest_original_ino"),
+            ("latest_original_digest", "next_latest_original_digest"),
+            ("latest_original_metadata", "next_latest_original_metadata"),
+        )
+    )
+
+
+def _host_clean_is_related_to_active(
+    clean_state: dict[str, object],
+    active_state: dict[str, object],
+) -> bool:
+    return _host_clean_precedes_active(
+        clean_state,
+        active_state,
+    ) or _host_clean_succeeds_active(clean_state, active_state)
+
+
+def _validate_host_append_inventory_topology(
+    authority: _AtomicAppendAuthority,
+    inventories: list[
+        tuple[
+            str,
+            _HostStateRecord,
+            _HostStateRecord,
+            dict[str, object] | None,
+        ]
+    ],
+) -> None:
+    """Reject phase combinations no ordered producer transition can create."""
+
+    for _path_lock_key, app_record, swap_record, witness_state in inventories:
+        app_state = app_record.state
+        swap_state = swap_record.state
+        states = [
+            state
+            for state in (app_state, swap_state, witness_state)
+            if state is not None
+        ]
+        indeterminate = [
+            state for state in states if state.get("state") == "indeterminate"
+        ]
+        if indeterminate:
+            if any(
+                not _host_states_match_across_keys(indeterminate[0], state)
+                for state in states
+                if state is not indeterminate[0]
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append host state phase topology is invalid for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+            continue
+
+        active_states = [
+            state for state in states if state.get("state") == "active"
+        ]
+        clean_states = [
+            state for state in states if state.get("state") == "clean"
+        ]
+        if active_states and any(
+            not _host_states_match_across_keys(active_states[0], state)
+            for state in active_states[1:]
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append active phase topology is mismatched for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        if active_states and any(
+            not _host_clean_is_related_to_active(clean_state, active_states[0])
+            for clean_state in clean_states
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append clean/active phase topology is invalid for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+
+        if witness_state is not None and witness_state.get("state") == "clean":
+            if (
+                app_state is None
+                or app_state.get("state") != "clean"
+                or not _host_states_match_across_keys(app_state, witness_state)
+                or swap_state is not None
+                or bool(swap_record.raw)
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append clean receipt topology is invalid for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+        elif witness_state is not None and witness_state.get("state") == "active":
+            if any(
+                not _host_states_match_across_keys(state, witness_state)
+                for state in (app_state, swap_state)
+                if state is not None and state.get("state") == "active"
+            ) or any(
+                not _host_clean_is_related_to_active(state, witness_state)
+                for state in (app_state, swap_state)
+                if state is not None and state.get("state") == "clean"
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append active receipt topology is invalid for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+
+        if (
+            app_state is not None
+            and swap_state is not None
+            and app_state.get("state") == swap_state.get("state") == "clean"
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append paired clean phase topology is invalid for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
 
 
 def _plan_malformed_host_swap_repairs(
@@ -2185,7 +2391,7 @@ def _plan_missing_active_witness_repairs(
         return {}
     if any(
         state.get("state") == "clean"
-        and not _host_clean_precedes_active(state, seed)
+        and not _host_clean_is_related_to_active(state, seed)
         for state in app_states
     ):
         return {}
@@ -2893,49 +3099,47 @@ def _move_entry_to_recovery(
     recovery_fd: int,
     destination_name: str,
 ) -> os.stat_result:
-    """Atomically retain a named entry under the anchored root recovery dir."""
+    """Authenticate and retain a hidden entry without renaming its pathname."""
 
-    _atomic_rename_noreplace_at(
-        source_fd,
+    del destination_name
+    try:
+        entry_fd = os.open(
+            source_name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=source_fd,
+        )
+    except OSError as exc:
+        raise KnowledgeWriteConflict(
+            "atomic append recovery entry changed before retention"
+        ) from exc
+    try:
+        observed = os.fstat(entry_fd)
+        _read_bound_file(
+            entry_fd,
+            expected,
+            context="atomic append recovery entry retention",
+        )
+    finally:
+        os.close(entry_fd)
+    named = os.stat(
         source_name,
-        recovery_fd,
-        destination_name,
-    )
-    os.fsync(source_fd)
-    os.fsync(recovery_fd)
-    retained = os.stat(
-        destination_name,
-        dir_fd=recovery_fd,
+        dir_fd=source_fd,
         follow_symlinks=False,
     )
-    if not _same_file_identity(retained, expected):
-        try:
-            _atomic_rename_noreplace_at(
-                recovery_fd,
-                destination_name,
-                source_fd,
-                source_name,
-            )
-            os.fsync(recovery_fd)
-            os.fsync(source_fd)
-            restored = os.stat(
-                source_name,
-                dir_fd=source_fd,
-                follow_symlinks=False,
-            )
-        except BaseException as exc:
-            raise KnowledgeWriteConflict(
-                "atomic append recovery entry changed during retention and its "
-                "pathname replacement could not be restored"
-            ) from exc
-        if not _same_file_identity(restored, retained):
-            raise KnowledgeWriteConflict(
-                "atomic append recovery pathname replacement changed during restore"
-            )
+    if (
+        not _same_file_identity(observed, expected)
+        or not _same_file_identity(named, expected)
+        or observed.st_nlink != 1
+        or named.st_nlink != 1
+    ):
         raise KnowledgeWriteConflict(
             "atomic append recovery entry changed during retention"
         )
-    return retained
+    os.fsync(source_fd)
+    os.fsync(recovery_fd)
+    return named
 
 
 def _quarantine_recovery_temp(recovery_fd: int, name: str) -> None:
@@ -2957,7 +3161,7 @@ def _sweep_atomic_append_recovery_temps(recovery_fd: int) -> None:
 
 
 def _sweep_atomic_append_stages(parent_fd: int, recovery_fd: int) -> None:
-    """Move every prior crash-stage out of the canonical parent without deletion."""
+    """Authenticate and retain every scanner-inert prior crash-stage."""
 
     for name in sorted(os.listdir(parent_fd)):
         if not name.startswith(".atomic-append-") or not (
@@ -2998,7 +3202,7 @@ def _sweep_atomic_append_stages(parent_fd: int, recovery_fd: int) -> None:
 
 
 def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
-    """Quarantine one proven entry without deleting through a mutable name."""
+    """Authenticate one already scanner-inert entry without renaming it."""
 
     current = os.fstat(entry.fd)
     payload, metadata = _read_bound_file(
@@ -3008,32 +3212,24 @@ def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
     )
     if (
         not _same_file_identity(current, entry.identity)
+        or current.st_nlink != 1
         or hashlib.sha256(payload).hexdigest() != entry.digest
         or metadata != entry.metadata
     ):
         raise KnowledgeWriteConflict(
             "atomic append recovery snapshot changed before retirement"
         )
-    retirement_name = (
-        f".steering-append-retired-{uuid.uuid4().hex}.md.conflict"
-    )
-    _move_entry_to_recovery(
+    _require_named_recovery_entry_live(
         recovery_fd,
-        entry.name,
-        entry.identity,
-        recovery_fd,
-        retirement_name,
+        entry,
+        context="atomic append recovery snapshot retirement",
     )
-    retired = os.stat(
-        retirement_name,
-        dir_fd=recovery_fd,
-        follow_symlinks=False,
-    )
-    if not _same_file_identity(retired, entry.identity):
-        raise KnowledgeWriteConflict(
-            "atomic append recovery snapshot changed during retirement"
-        )
     os.fsync(recovery_fd)
+    _require_named_recovery_entry_live(
+        recovery_fd,
+        entry,
+        context="atomic append recovery snapshot retirement receipt",
+    )
     bound_after = os.fstat(entry.fd)
     payload_after, metadata_after = _read_bound_file(
         entry.fd,
@@ -3403,6 +3599,7 @@ def _atomic_append_note_relative(
     prior_latest_original_snapshot: _RecoveryEntry | None = None
     prepared_latest_original_snapshot: _RecoveryEntry | None = None
     latest_original_snapshot: _RecoveryEntry | None = None
+    displaced_original_entry: _RecoveryEntry | None = None
     displaced_name: str | None = None
     cleanup_error: BaseException | None = None
 
@@ -3766,42 +3963,20 @@ def _atomic_append_note_relative(
                 or current_raw is None
             ):
                 raise AssertionError("existing target lost displaced-version authority")
-            displaced_name = (
-                f".steering-append-{transaction_id}-displaced-{uuid.uuid4().hex}.md.conflict"
+            if stage_name is None:
+                raise AssertionError("existing target lost its displaced stage name")
+            displaced_name = stage_name
+            displaced_original_entry = _RecoveryEntry(
+                name=displaced_name,
+                identity=source_stat,
+                digest=hashlib.sha256(current_raw).hexdigest(),
+                metadata=source_metadata,
+                fd=source_fd,
             )
-            _move_entry_to_recovery(
-                current_dir_fd,
-                stage_name,
-                source_stat,
-                recovery_fd,
-                displaced_name,
-            )
+            # The exact displaced inode is already under one transaction-random
+            # hidden name. Retain it there instead of renaming through a mutable
+            # pathname; full retained-artifact growth remains the existing P2.
             stage_named = False
-            retained_stat = os.stat(
-                displaced_name,
-                dir_fd=recovery_fd,
-                follow_symlinks=False,
-            )
-            retained_raw, retained_metadata = _read_bound_file(
-                source_fd,
-                source_stat,
-                context=f"atomic append displaced retirement {note_rel_path}",
-            )
-            if (
-                not _same_file_identity(retained_stat, source_stat)
-                or retained_raw != current_raw
-                or retained_metadata != source_metadata
-            ):
-                _mark_atomic_append_indeterminate(
-                    authority,
-                    recovery_fd,
-                    note_rel_path,
-                    transaction_id,
-                    "displaced target changed before clean-success retirement",
-                )
-                raise KnowledgeWriteConflict(
-                    f"atomic append displaced target changed before retirement for {note_rel_path}"
-                )
         try:
             _retire_recovery_entry(recovery_fd, proposal_snapshot)
             retired_proposal = proposal_snapshot
@@ -3841,19 +4016,14 @@ def _atomic_append_note_relative(
                     or source_metadata is None
                     or current_raw is None
                     or displaced_name is None
+                    or displaced_original_entry is None
                 ):
                     raise AssertionError(
                         "existing target lost bounded original retention authority"
                     )
                 _retire_recovery_entry(
-                    recovery_fd,
-                    _RecoveryEntry(
-                        name=displaced_name,
-                        identity=source_stat,
-                        digest=hashlib.sha256(current_raw).hexdigest(),
-                        metadata=source_metadata,
-                        fd=source_fd,
-                    ),
+                    current_dir_fd,
+                    displaced_original_entry,
                 )
                 if latest_original_snapshot is None:
                     raise AssertionError(
@@ -3929,6 +4099,12 @@ def _atomic_append_note_relative(
                     receipt_recovery_fd,
                     latest_original_snapshot,
                     context="atomic append latest-original receipt slot",
+                )
+            if displaced_original_entry is not None:
+                _require_named_recovery_entry_live(
+                    receipt_parent_fd,
+                    displaced_original_entry,
+                    context="atomic append displaced receipt evidence",
                 )
             os.fsync(receipt_parent_fd)
 
