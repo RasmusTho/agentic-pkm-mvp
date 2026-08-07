@@ -359,6 +359,16 @@ Companion docs:
 - Companion TTS is a local-first runtime surface: configured local voices can be selected for clean
   Markdown read-back, mixed-language segments may route to different voices, and production
   deployment still depends on the Mac mini/local model health path.
+- Governed channel deploys obtain `TTS_ENABLED` and `TTS_HOST_ROOT` only from the selected generated
+  runtime-env snapshot. The canonical exporter publishes that file atomically; deploy preflight
+  fail-closes unreadable, malformed, duplicate, or invalid enabled configuration before migration,
+  pin, or Compose mutation. Long-form bind semantics refuse to create a root that disappears after
+  validation, and governed Compose output is reduced to validated internal IDs or fixed redacted
+  status. Rollback bypasses this deploy-only check and clears stale caller selectors before using
+  the tracked disabled fallback, so recovery remains available. The detailed contract and
+  provisioning steps
+  live in `companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md` and
+  `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
 
 ### BuilderOps cockpit live GitHub plane (#4484)
 - The cockpit's `github-live` source reads GitHub REST from **inside the `api` container** via the

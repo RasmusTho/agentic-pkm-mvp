@@ -18,6 +18,183 @@ _deploy_channel_env_value() {
   ' "${file_path}"
 }
 
+_deploy_channel_resolve_runtime_env_file() {
+  local root="${1:?repo root required}"
+  local channel="${2:?channel required}"
+  local channel_env_file="${3:?channel env file required}"
+  local runtime_env_ref
+
+  runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
+  if [ -z "${runtime_env_ref}" ]; then
+    case "${channel}" in
+      test) runtime_env_ref="./tmp-test/runtime.env" ;;
+      *) runtime_env_ref="./tmp/runtime.env" ;;
+    esac
+  fi
+
+  DEPLOY_CHANNEL_RUNTIME_ENV_REF="${runtime_env_ref}"
+  case "${runtime_env_ref}" in
+    /*) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${runtime_env_ref}" ;;
+    ./*) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${root}/${runtime_env_ref#./}" ;;
+    *) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${root}/${runtime_env_ref}" ;;
+  esac
+}
+
+_deploy_channel_tts_config_blocked() {
+  local reason="${1:?reason required}"
+  local path_class="${2:?path class required}"
+  echo "TTS config preflight: blocked reason=${reason} keys=TTS_ENABLED,TTS_HOST_ROOT path_class=${path_class}" >&2
+  return 91
+}
+
+deploy_channel_tts_config_preflight() {
+  local root="${1:?repo root required}"
+  local channel="${2:?channel required}"
+  local channel_env_file="${3:?channel env file required}"
+  local runtime_env_file parse_status parse_field path_class host_root parse_output parser_rc
+
+  _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
+  runtime_env_file="${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}"
+  parse_status="blocked"
+  parse_field="validation_failed"
+  path_class="not_evaluated"
+  host_root=""
+  parse_output="$(mktemp "${TMPDIR:-/tmp}/tts-config-preflight.XXXXXX" 2>/dev/null)"
+  if [ -z "${parse_output}" ]; then
+    _deploy_channel_tts_config_blocked validation_failed not_evaluated
+    return $?
+  fi
+  parser_rc=0
+  ROOT="${root}" RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON:-python3}" - >"${parse_output}" 2>/dev/null <<'PY'
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+def emit(status: str, field: str, path_class: str, host_root: str = "") -> None:
+    sys.stdout.write(f"{status}\n{field}\n{path_class}\n{host_root}\n")
+
+
+try:
+    snapshot = Path(os.environ["RUNTIME_ENV_FILE"]).read_bytes()
+    text = snapshot.decode("utf-8")
+except (OSError, UnicodeError):
+    emit("blocked", "validation_failed", "not_evaluated")
+    raise SystemExit(0)
+
+enabled_values = [
+    line.removeprefix("TTS_ENABLED=")
+    for line in text.splitlines()
+    if line.startswith("TTS_ENABLED=")
+]
+root_values = [
+    line.removeprefix("TTS_HOST_ROOT=")
+    for line in text.splitlines()
+    if line.startswith("TTS_HOST_ROOT=")
+]
+if len(enabled_values) > 1 or len(root_values) > 1:
+    emit("blocked", "duplicate_key", "not_evaluated")
+    raise SystemExit(0)
+
+enabled_present = bool(enabled_values)
+enabled = enabled_values[0] if enabled_present else ""
+host_root = root_values[0] if root_values else ""
+if not enabled_present or enabled == "false":
+    emit("ok", "false", "not_required")
+    raise SystemExit(0)
+if enabled != "true":
+    emit("blocked", "invalid_boolean", "not_evaluated")
+    raise SystemExit(0)
+if not host_root:
+    emit("blocked", "missing_enabled_root", "empty_or_unset")
+    raise SystemExit(0)
+
+root = Path(os.environ["ROOT"])
+candidate = Path(host_root)
+if not candidate.is_absolute():
+    emit("blocked", "invalid_enabled_root", "relative")
+    raise SystemExit(0)
+try:
+    metadata = candidate.stat()
+except FileNotFoundError:
+    emit("blocked", "invalid_enabled_root", "missing")
+    raise SystemExit(0)
+except OSError:
+    emit("blocked", "invalid_enabled_root", "inaccessible")
+    raise SystemExit(0)
+if not stat.S_ISDIR(metadata.st_mode):
+    emit("blocked", "invalid_enabled_root", "not_directory")
+    raise SystemExit(0)
+permission_pairs = (
+    stat.S_IRUSR | stat.S_IXUSR,
+    stat.S_IRGRP | stat.S_IXGRP,
+    stat.S_IROTH | stat.S_IXOTH,
+)
+if not any(metadata.st_mode & pair == pair for pair in permission_pairs):
+    emit("blocked", "invalid_enabled_root", "inaccessible")
+    raise SystemExit(0)
+try:
+    with os.scandir(candidate):
+        pass
+    resolved_candidate = candidate.resolve(strict=True)
+    resolved_root = root.resolve(strict=True)
+except OSError:
+    emit("blocked", "invalid_enabled_root", "inaccessible")
+    raise SystemExit(0)
+try:
+    resolved_candidate.relative_to(resolved_root)
+except ValueError:
+    pass
+else:
+    emit("blocked", "invalid_enabled_root", "repo_contained")
+    raise SystemExit(0)
+
+emit("ok", "true", "absolute_outside_repo_accessible_directory", host_root)
+PY
+  parser_rc=$?
+  if [ "${parser_rc}" -ne 0 ]; then
+    rm -f "${parse_output}"
+    _deploy_channel_tts_config_blocked validation_failed not_evaluated
+    return $?
+  fi
+  {
+    IFS= read -r parse_status || parse_status="blocked"
+    IFS= read -r parse_field || parse_field="validation_failed"
+    IFS= read -r path_class || path_class="not_evaluated"
+    IFS= read -r host_root || host_root=""
+  } < "${parse_output}"
+  rm -f "${parse_output}"
+
+  case "${parse_status}:${parse_field}" in
+    ok:false)
+      DEPLOY_TTS_CONFIG_GOVERNED=1
+      DEPLOY_TTS_ENABLED=false
+      unset DEPLOY_TTS_HOST_ROOT
+      export DEPLOY_TTS_CONFIG_GOVERNED DEPLOY_TTS_ENABLED
+      echo "TTS config preflight: ok enabled=false path_class=not_required"
+      return 0
+      ;;
+    ok:true) ;;
+    blocked:*)
+      _deploy_channel_tts_config_blocked "${parse_field}" "${path_class}"
+      return $?
+      ;;
+    *)
+      _deploy_channel_tts_config_blocked validation_failed not_evaluated
+      return $?
+      ;;
+  esac
+
+  DEPLOY_TTS_CONFIG_GOVERNED=1
+  DEPLOY_TTS_ENABLED=true
+  DEPLOY_TTS_HOST_ROOT="${host_root}"
+  export DEPLOY_TTS_CONFIG_GOVERNED DEPLOY_TTS_ENABLED DEPLOY_TTS_HOST_ROOT
+  echo "TTS config preflight: ok enabled=true path_class=${path_class}"
+}
+
 _deploy_channel_uses_full_host_vault_path() {
   local vault_path="${1:?vault path required}"
   python3 - "${vault_path}" <<'PY'
@@ -248,19 +425,9 @@ deploy_channel_compose() {
   # that would expose its DSNs and other values to Compose interpolation (#3875
   # — a previous dead `env_args` block here looked like it did exactly that; do
   # not reintroduce it).
-  runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
-  if [ -z "${runtime_env_ref}" ]; then
-    case "${channel}" in
-      test) runtime_env_ref="./tmp-test/runtime.env" ;;
-      *) runtime_env_ref="./tmp/runtime.env" ;;
-    esac
-  fi
-  runtime_env_file=""
-  case "${runtime_env_ref}" in
-    /*) runtime_env_file="${runtime_env_ref}" ;;
-    ./*) runtime_env_file="${root}/${runtime_env_ref#./}" ;;
-    *) runtime_env_file="${root}/${runtime_env_ref}" ;;
-  esac
+  _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
+  runtime_env_ref="${DEPLOY_CHANNEL_RUNTIME_ENV_REF}"
+  runtime_env_file="${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}"
 
   llm_provider="$(_deploy_channel_env_value "${channel_env_file}" LLM_PROVIDER)"
   runtime_llm_provider=""
@@ -339,13 +506,15 @@ deploy_channel_compose() {
     # forwards SIGNBOARD_ROOT from this governed shell via the bare `KEY:`
     # form), so a private temp file does not weaken the runtime env ownership
     # boundary the earlier in-memory-only comment protected.
-    local signboard_override_file
+    local signboard_override_file compose_stdout_file compose_stderr_file compose_rc
     signboard_override_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-signboard-override.XXXXXX")"
+    compose_stdout_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stdout.XXXXXX")"
+    compose_stderr_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stderr.XXXXXX")"
     # EXIT here is scoped to this `( ... )` subshell only (traps set inside a
     # subshell do not leak into the parent shell), so this fires exactly once
     # when the subshell running the actual Compose invocation exits, on every
     # path including an early `exit 1` above or a failing Compose command.
-    trap 'rm -f -- "${signboard_override_file}"' EXIT
+    trap 'rm -f -- "${signboard_override_file}" "${compose_stdout_file}" "${compose_stderr_file}"' EXIT
     _deploy_channel_signboard_override_document > "${signboard_override_file}"
     compose_args+=(-f "${signboard_override_file}")
 
@@ -355,6 +524,14 @@ deploy_channel_compose() {
     # runtime env itself stays a service env_file; passing it as a CLI --env-file
     # would expose its DSNs and other values to Compose interpolation.
     export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
+    if [ "${DEPLOY_TTS_CONFIG_GOVERNED:-0}" = "1" ]; then
+      export TTS_ENABLED="${DEPLOY_TTS_ENABLED}"
+      if [ "${DEPLOY_TTS_ENABLED}" = "true" ]; then
+        export TTS_HOST_ROOT="${DEPLOY_TTS_HOST_ROOT}"
+      else
+        unset TTS_HOST_ROOT
+      fi
+    fi
     if [ -n "${llm_provider}" ]; then
       export LLM_PROVIDER="${llm_provider}"
     else
@@ -417,9 +594,37 @@ deploy_channel_compose() {
 
     # fd 0 is left untouched above (the override document is a temp file, not
     # a stdin heredoc), so it still carries whatever the caller attached to
-    # this function call (e.g. a host-produced inventory piped into a
-    # `run -T ...` invocation). The temp file itself is removed by the EXIT
-    # trap set above once this command returns.
+    # this function call. A governed TTS invocation captures child output in
+    # private files: Compose diagnostics and `config` rendering may expand the
+    # machine-local mount root or unrelated env-file values. Only validated
+    # container IDs from the two internal `ps -q` probes cross this boundary;
+    # every other success stays quiet and every failure emits a fixed receipt.
+    if [ "${DEPLOY_TTS_CONFIG_GOVERNED:-0}" = "1" ]; then
+      if [ "${1:-}" = "config" ]; then
+        echo "governed compose output blocked: command=config" >&2
+        return 92
+      fi
+      set +e
+      "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      compose_rc=$?
+      set -e
+      if [ "${compose_rc}" -ne 0 ]; then
+        echo "governed compose command failed: output=redacted" >&2
+        return "${compose_rc}"
+      fi
+      if [ "${1:-}" = "ps" ]; then
+        if [ "${2:-}" != "-q" ] || ! awk '
+          NF && $0 !~ /^[0-9a-f]{12,64}$/ { invalid = 1 }
+          END { exit invalid }
+        ' "${compose_stdout_file}"; then
+          echo "governed compose output blocked: command=ps output=invalid" >&2
+          return 92
+        fi
+        cat "${compose_stdout_file}"
+      fi
+      return 0
+    fi
+
     "${compose_command[@]}"
   )
 }

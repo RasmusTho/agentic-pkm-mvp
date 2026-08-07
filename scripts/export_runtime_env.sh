@@ -61,6 +61,13 @@ fi
 
 runtime_env_dir="$(dirname "$runtime_env_path")"
 mkdir -p "$runtime_env_dir"
+runtime_env_output_path="$(mktemp "${runtime_env_dir}/.runtime.env.XXXXXX")"
+trap 'rm -f "$runtime_env_output_path"' EXIT
+
+publish_runtime_env() {
+  mv -f "$runtime_env_output_path" "$runtime_env_path"
+  trap - EXIT
+}
 
 if [ "${NO_VAULT_MODE:-0}" -eq 1 ]; then
   # Preserve an explicit selector, while retaining the established no-vault
@@ -73,7 +80,7 @@ if [ "${NO_VAULT_MODE:-0}" -eq 1 ]; then
     ./*) ;;
     *) watcher_runtime_env_file="./$watcher_runtime_env_file" ;;
   esac
-  cat > "$runtime_env_path" <<ENV
+  cat > "$runtime_env_output_path" <<ENV
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
 LOCAL_UID=${LOCAL_UID:-$(id -u)}
 LOCAL_GID=${LOCAL_GID:-$(id -g)}
@@ -82,30 +89,34 @@ WATCHER_ENABLE=0
 WATCHER_VAULT_PATH=
 ENV
   if [ -n "${DATABASE_URL:-}" ]; then
-    printf "DATABASE_URL=%s\n" "$DATABASE_URL" >> "$runtime_env_path"
-    printf "DB_DSN=%s\n" "${DB_DSN:-$DATABASE_URL}" >> "$runtime_env_path"
+    printf "DATABASE_URL=%s\n" "$DATABASE_URL" >> "$runtime_env_output_path"
+    printf "DB_DSN=%s\n" "${DB_DSN:-$DATABASE_URL}" >> "$runtime_env_output_path"
   elif [ -n "${DB_DSN:-}" ]; then
-    printf "DATABASE_URL=%s\n" "$DB_DSN" >> "$runtime_env_path"
-    printf "DB_DSN=%s\n" "$DB_DSN" >> "$runtime_env_path"
+    printf "DATABASE_URL=%s\n" "$DB_DSN" >> "$runtime_env_output_path"
+    printf "DB_DSN=%s\n" "$DB_DSN" >> "$runtime_env_output_path"
   fi
   if [ -n "${TTS_ENABLED:-}" ]; then
-    printf "TTS_ENABLED=%s\n" "$TTS_ENABLED" >> "$runtime_env_path"
+    printf "TTS_ENABLED=%s\n" "$TTS_ENABLED" >> "$runtime_env_output_path"
+  fi
+  if [ -n "${TTS_HOST_ROOT:-}" ]; then
+    printf "TTS_HOST_ROOT=%s\n" "$TTS_HOST_ROOT" >> "$runtime_env_output_path"
   fi
   if [ -n "${SIGNBOARD_ROOT:-}" ]; then
-    printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
+    printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_output_path"
   fi
   # heimdal-capture-watch is not gated by no-vault/idle mode (#4362): forward
   # the operator's watch-dir/allowlist config here too, same rule as the
   # vault-bound branch below -- only when explicitly set, never defaulted.
   if [ -n "${HEIMDAL_CAPTURE_WATCH_DIR:-}" ]; then
-    printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=${HEIMDAL_CAPTURE_WATCH_DIR}" >> "$runtime_env_path"
+    printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=${HEIMDAL_CAPTURE_WATCH_DIR}" >> "$runtime_env_output_path"
   fi
   if [ -n "${HEIMDAL_RAW_READ_ALLOWLIST:-}" ]; then
-    printf "%s\n" "HEIMDAL_RAW_READ_ALLOWLIST=${HEIMDAL_RAW_READ_ALLOWLIST}" >> "$runtime_env_path"
+    printf "%s\n" "HEIMDAL_RAW_READ_ALLOWLIST=${HEIMDAL_RAW_READ_ALLOWLIST}" >> "$runtime_env_output_path"
   fi
   if [ -n "${HEIMDAL_CAPTURE_INTERVAL_SECONDS:-}" ]; then
-    printf "%s\n" "HEIMDAL_CAPTURE_INTERVAL_SECONDS=${HEIMDAL_CAPTURE_INTERVAL_SECONDS}" >> "$runtime_env_path"
+    printf "%s\n" "HEIMDAL_CAPTURE_INTERVAL_SECONDS=${HEIMDAL_CAPTURE_INTERVAL_SECONDS}" >> "$runtime_env_output_path"
   fi
+  publish_runtime_env
   echo "Exported no-vault idle runtime env -> $runtime_env_path"
   exit 0
 fi
@@ -161,7 +172,7 @@ if [ -n "${DB_DSN:-}" ] && [ -z "${DATABASE_URL:-}" ]; then
 fi
 export DATABASE_URL DB_DSN
 
-cat > "$runtime_env_path" <<ENV
+cat > "$runtime_env_output_path" <<ENV
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
 DISPATCHER_HOST_STATE_DIR=${DISPATCHER_HOST_STATE_DIR:-$ROOT/runtime/dispatcher}
 VAULT_HOST_ROOT=$vault_host_root
@@ -173,10 +184,10 @@ DB_DSN=$DB_DSN
 ENV
 
 if [ -n "${SIGNBOARD_ROOT:-}" ]; then
-  printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
+  printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_output_path"
 fi
 
-python3 - <<'PY' >> "$runtime_env_path"
+python3 - <<'PY' >> "$runtime_env_output_path"
 from __future__ import annotations
 
 import os
@@ -290,30 +301,33 @@ if base_url:
 PY
 
 if [ -n "${WATCHER_AUTO_EXEC+x}" ]; then
-  printf "%s\n" "WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC}" >> "$runtime_env_path"
+  printf "%s\n" "WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC}" >> "$runtime_env_output_path"
 fi
 
 if [ -n "${VAULT_LAYOUT_NOTE_REL:-}" ]; then
-  printf "%s\n" "VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL}" >> "$runtime_env_path"
+  printf "%s\n" "VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL}" >> "$runtime_env_output_path"
 fi
 
 if [ -n "${VAULT_SYSTEM_DIR_REL:-}" ]; then
-  printf "%s\n" "VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL}" >> "$runtime_env_path"
+  printf "%s\n" "VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL}" >> "$runtime_env_output_path"
 fi
 
 if [ -n "${VAULT_INBOX_DIR_REL:-}" ]; then
-  printf "%s\n" "VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL}" >> "$runtime_env_path"
+  printf "%s\n" "VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL}" >> "$runtime_env_output_path"
 fi
 
 if [ -n "${VAULT_DESK_DIR_REL:-}" ]; then
-  printf "%s\n" "VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL}" >> "$runtime_env_path"
+  printf "%s\n" "VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL}" >> "$runtime_env_output_path"
 fi
 
-# Forward the TTS read-back master switch so compose interpolation of
-# `TTS_ENABLED: ${TTS_ENABLED:-false}` resolves to the operator's value rather
-# than the compose default. Loaded from .env / .env.prod.local above (#2189).
+# Forward both machine-local TTS selectors so governed deploy preflight and
+# Compose interpolation consume one generated snapshot rather than ambient
+# caller-shell state. Loaded from .env / .env.prod.local above (#2189/#4656).
 if [ -n "${TTS_ENABLED:-}" ]; then
-  printf "%s\n" "TTS_ENABLED=${TTS_ENABLED}" >> "$runtime_env_path"
+  printf "%s\n" "TTS_ENABLED=${TTS_ENABLED}" >> "$runtime_env_output_path"
+fi
+if [ -n "${TTS_HOST_ROOT:-}" ]; then
+  printf "%s\n" "TTS_HOST_ROOT=${TTS_HOST_ROOT}" >> "$runtime_env_output_path"
 fi
 
 # Determine whether we are generating a test-channel env file.
@@ -337,12 +351,12 @@ if [ "$_is_test_channel" -eq 1 ]; then
   # env file.  The values are hardcoded to the canonical test-channel paths
   # rather than using ${VAR:-fallback} so that defaults already loaded from
   # config/runtime.defaults.env do not shadow the test-scoped values.
-  printf "%s\n" "WATCHER_STATE_DIR=tmp-test" >> "$runtime_env_path"
-  printf "%s\n" "WATCHER_STOP_FILE=/app/tmp-test/WATCHER_STOP" >> "$runtime_env_path"
-  printf "%s\n" "INDEX_OUTBOX_PATH=/app/tmp-test/index-outbox.jsonl" >> "$runtime_env_path"
-  printf "%s\n" "WATCHER_HEARTBEAT_PATH=/app/tmp-test/watcher_heartbeat.json" >> "$runtime_env_path"
-  printf "%s\n" "WORKER_HEARTBEAT_PATH=/app/tmp-test/worker_heartbeat.json" >> "$runtime_env_path"
-  printf "%s\n" "WATCHER_STATE_PATH=/app/tmp-test/watcher_state.json" >> "$runtime_env_path"
+  printf "%s\n" "WATCHER_STATE_DIR=tmp-test" >> "$runtime_env_output_path"
+  printf "%s\n" "WATCHER_STOP_FILE=/app/tmp-test/WATCHER_STOP" >> "$runtime_env_output_path"
+  printf "%s\n" "INDEX_OUTBOX_PATH=/app/tmp-test/index-outbox.jsonl" >> "$runtime_env_output_path"
+  printf "%s\n" "WATCHER_HEARTBEAT_PATH=/app/tmp-test/watcher_heartbeat.json" >> "$runtime_env_output_path"
+  printf "%s\n" "WORKER_HEARTBEAT_PATH=/app/tmp-test/worker_heartbeat.json" >> "$runtime_env_output_path"
+  printf "%s\n" "WATCHER_STATE_PATH=/app/tmp-test/watcher_state.json" >> "$runtime_env_output_path"
   # heimdal-capture-watch has no real capture client on the test channel, and
   # an absent/empty HEIMDAL_CAPTURE_WATCH_DIR is a fail-loud config error
   # (app.heimdal.capture_runtime.CaptureRuntimeConfig.from_env) -- exactly
@@ -350,14 +364,14 @@ if [ "$_is_test_channel" -eq 1 ]; then
   # Hardcode a test-scoped folder under the same tmp-test artifact root the
   # other test-channel paths above use, unconditionally, so the service
   # always has somewhere valid to watch (it will simply stay empty).
-  printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=/app/tmp-test/heimdal-capture-inbox" >> "$runtime_env_path"
+  printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=/app/tmp-test/heimdal-capture-inbox" >> "$runtime_env_output_path"
 else
   if [ -n "${WATCHER_STATE_DIR:-}" ]; then
-    printf "%s\n" "WATCHER_STATE_DIR=${WATCHER_STATE_DIR}" >> "$runtime_env_path"
+    printf "%s\n" "WATCHER_STATE_DIR=${WATCHER_STATE_DIR}" >> "$runtime_env_output_path"
   fi
 
   if [ -n "${WATCHER_STOP_FILE:-}" ]; then
-    printf "%s\n" "WATCHER_STOP_FILE=${WATCHER_STOP_FILE}" >> "$runtime_env_path"
+    printf "%s\n" "WATCHER_STOP_FILE=${WATCHER_STOP_FILE}" >> "$runtime_env_output_path"
   fi
 
   # heimdal-capture-watch's non-secret operator config (#4362): the watched
@@ -371,13 +385,13 @@ else
   # it is a Keychain-backed secret delivered through the host-secret
   # bootstrap env_file layer, never through this generated file.
   if [ -n "${HEIMDAL_CAPTURE_WATCH_DIR:-}" ]; then
-    printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=${HEIMDAL_CAPTURE_WATCH_DIR}" >> "$runtime_env_path"
+    printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=${HEIMDAL_CAPTURE_WATCH_DIR}" >> "$runtime_env_output_path"
   fi
   if [ -n "${HEIMDAL_RAW_READ_ALLOWLIST:-}" ]; then
-    printf "%s\n" "HEIMDAL_RAW_READ_ALLOWLIST=${HEIMDAL_RAW_READ_ALLOWLIST}" >> "$runtime_env_path"
+    printf "%s\n" "HEIMDAL_RAW_READ_ALLOWLIST=${HEIMDAL_RAW_READ_ALLOWLIST}" >> "$runtime_env_output_path"
   fi
   if [ -n "${HEIMDAL_CAPTURE_INTERVAL_SECONDS:-}" ]; then
-    printf "%s\n" "HEIMDAL_CAPTURE_INTERVAL_SECONDS=${HEIMDAL_CAPTURE_INTERVAL_SECONDS}" >> "$runtime_env_path"
+    printf "%s\n" "HEIMDAL_CAPTURE_INTERVAL_SECONDS=${HEIMDAL_CAPTURE_INTERVAL_SECONDS}" >> "$runtime_env_output_path"
   fi
 fi
 unset _is_test_channel
@@ -388,7 +402,7 @@ scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
 scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
 scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"
 if [ -n "$scope_glob_raw" ]; then
-  printf "%s\n" "WATCHER_SCOPE_GLOB=$scope_glob_raw" >> "$runtime_env_path"
+  printf "%s\n" "WATCHER_SCOPE_GLOB=$scope_glob_raw" >> "$runtime_env_output_path"
 fi
 
 # OPENAI_BASE is the full chat-completions URL used directly by the adapter and health checks.
@@ -397,30 +411,30 @@ fi
 # Otherwise, if OPENAI_BASE_URL is set (OpenAI-compatible base), derive the chat-completions
 # URL by stripping a trailing slash and appending /chat/completions.
 if [ -n "$operator_openai_base" ]; then
-  printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
+  printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_output_path"
 else
   _resolved_openai_base_url="${OPENAI_BASE_URL:-}"
   if [ -z "$_resolved_openai_base_url" ]; then
-    _resolved_openai_base_url="$(awk -F= '/^OPENAI_BASE_URL=/{print substr($0, index($0,$2)); exit}' "$runtime_env_path")"
+    _resolved_openai_base_url="$(awk -F= '/^OPENAI_BASE_URL=/{print substr($0, index($0,$2)); exit}' "$runtime_env_output_path")"
   fi
   if [ -n "$_resolved_openai_base_url" ] && { [ -n "$operator_openai_base_url" ] || [ -z "${OPENAI_BASE:-}" ]; }; then
     _derived_openai_base="${_resolved_openai_base_url%/}/chat/completions"
-    printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+    printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_output_path"
   elif [ -n "${OPENAI_BASE:-}" ]; then
-    printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_path"
+    printf "%s\n" "OPENAI_BASE=${OPENAI_BASE}" >> "$runtime_env_output_path"
   elif [ -n "$_resolved_openai_base_url" ]; then
     _derived_openai_base="${_resolved_openai_base_url%/}/chat/completions"
-    printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_path"
+    printf "%s\n" "OPENAI_BASE=${_derived_openai_base}" >> "$runtime_env_output_path"
   fi
 fi
 
 # Propagate OPENAI_API_KEY if set; required by route health checks for the openai provider.
 if [ -n "${OPENAI_API_KEY:-}" ]; then
-  printf "%s\n" "OPENAI_API_KEY=${OPENAI_API_KEY}" >> "$runtime_env_path"
+  printf "%s\n" "OPENAI_API_KEY=${OPENAI_API_KEY}" >> "$runtime_env_output_path"
 fi
 
-if grep -q '^LLM_PROVIDER=ollama$' "$runtime_env_path"; then
-  python3 - <<'PY' >> "$runtime_env_path"
+if grep -q '^LLM_PROVIDER=ollama$' "$runtime_env_output_path"; then
+  python3 - <<'PY' >> "$runtime_env_output_path"
 from __future__ import annotations
 
 import os
@@ -526,3 +540,5 @@ if embed_model:
     print(f"EMBED_MODEL={embed_model}")
 PY
 fi
+
+publish_runtime_env

@@ -100,7 +100,11 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "app/ops").mkdir(parents=True)
     (root / "app/release_channels").mkdir(parents=True)
     (root / "config/secrets").mkdir(parents=True)
+    (root / "config/tts-disabled").mkdir(parents=True)
+    (root / "config/tts-disabled/.gitkeep").touch()
     (root / "ops/deployments").mkdir(parents=True)
+    (root / "tmp").mkdir(parents=True)
+    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
 
     for relative in (
         "app/release_channels/__init__.py",
@@ -188,7 +192,7 @@ case "$*" in
   *"ps -aq"*"com.docker.compose.service=scalar-rollback-guard"*)
     [ "${{FAKE_SCALAR_CONTAINERS:-0}}" = "1" ] && printf '%s\\n' fake-scalar-guard
     ;;
-  *" ps -q "*) printf '%s\\n' fake-capture-watch ;;
+  *" ps -q "*) printf '%064d\\n' 0 ;;
   inspect*) printf '%s\\n' "${{FAKE_CAPTURE_WATCH_STATUS:-healthy}}" ;;
 esac
 exit 0
