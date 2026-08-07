@@ -1515,8 +1515,13 @@ def test_steering_log_crash_with_app_local_namespace_loss_remains_blocked(
     assert not list(host_root.glob(".heimdal-atomic-append-*.state"))
 
 
+@pytest.mark.parametrize(
+    "repair_cut",
+    [None, "truncated", "partial", "complete"],
+)
 def test_steering_log_active_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
+    repair_cut: str | None,
 ) -> None:
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
@@ -1563,6 +1568,45 @@ def test_steering_log_active_state_recovers_after_temporary_witness_loss(
         path.unlink()
     lock_root.rmdir()
 
+    if repair_cut is not None:
+        def crash_during_active_witness_repair() -> None:
+            real_write = write_ops_module._write_host_witness_state
+
+            def interrupt_active_witness(
+                witness_fd: int,
+                payload: dict[str, object],
+            ) -> None:
+                if payload.get("state") == "active":
+                    raw = (
+                        json.dumps(payload, ensure_ascii=True, sort_keys=True)
+                        + "\n"
+                    ).encode("utf-8")
+                    os.ftruncate(witness_fd, 0)
+                    os.lseek(witness_fd, 0, os.SEEK_SET)
+                    if repair_cut == "partial":
+                        os.write(witness_fd, raw[:13])
+                    elif repair_cut == "complete":
+                        os.write(witness_fd, raw)
+                    os._exit(97)
+                real_write(witness_fd, payload)
+
+            write_ops_module._write_host_witness_state = (  # type: ignore[method-assign]
+                interrupt_active_witness
+            )
+            append_steering_log(
+                vault_root,
+                "mute",
+                "crash-after-witness-loss",
+                source="item",
+                operation_id="witness-loss-proposal",
+                write_guard=_allowing_guard(),
+            )
+
+        repair_process = context.Process(target=crash_during_active_witness_repair)
+        repair_process.start()
+        repair_process.join(timeout=10)
+        assert repair_process.exitcode == 97
+
     durable_line = append_steering_log(
         vault_root,
         "mute",
@@ -1582,6 +1626,130 @@ def test_steering_log_active_state_recovers_after_temporary_witness_loss(
     assert all(
         json.loads(path.read_text())["state"] == "clean" for path in states
     )
+
+
+@pytest.mark.parametrize("repair_cut", ["truncated", "partial", "complete"])
+def test_steering_log_route_witness_repair_interruption_recovers(
+    tmp_path: Path,
+    repair_cut: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"route-repair-{repair_cut}-seed",
+        write_guard=_allowing_guard(),
+    )
+    witness_paths = _host_witness_paths(vault_root)
+    lock_root = witness_paths[0].parent
+    for path in lock_root.iterdir():
+        path.unlink()
+    lock_root.rmdir()
+    context = multiprocessing.get_context("fork")
+
+    def crash_during_route_witness_repair() -> None:
+        real_write = write_ops_module._write_host_witness_state
+
+        def interrupt_route_witness(
+            witness_fd: int,
+            payload: dict[str, object],
+        ) -> None:
+            if payload.get("schema") == "agentic-pkm.heimdal-atomic-append-route.v1":
+                raw = (
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+                ).encode("utf-8")
+                os.ftruncate(witness_fd, 0)
+                os.lseek(witness_fd, 0, os.SEEK_SET)
+                if repair_cut == "partial":
+                    os.write(witness_fd, raw[:10])
+                elif repair_cut == "complete":
+                    os.write(witness_fd, raw)
+                os._exit(98)
+            real_write(witness_fd, payload)
+
+        write_ops_module._write_host_witness_state = (  # type: ignore[method-assign]
+            interrupt_route_witness
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "route-repair-interruption",
+            source="item",
+            operation_id=f"route-repair-{repair_cut}-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_during_route_witness_repair)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 98
+
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "route-repair-interruption",
+        source="item",
+        operation_id=f"route-repair-{repair_cut}-proposal",
+        write_guard=_allowing_guard(),
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+
+
+@pytest.mark.parametrize("repair_cut", ["truncated", "partial", "complete"])
+def test_steering_log_missing_app_swap_repair_interruption_recovers(
+    tmp_path: Path,
+    repair_cut: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    context = multiprocessing.get_context("fork")
+    first = context.Process(
+        target=_crash_virgin_active_app_persistence,
+        args=(vault_root, 1),
+    )
+    first.start()
+    first.join(timeout=10)
+    assert first.exitcode == 77
+
+    def crash_during_missing_app_swap_repair() -> None:
+        real_write_all = write_ops_module._write_all
+
+        def interrupt_active_swap(fd: int, raw: bytes) -> None:
+            if b'"state": "active"' in raw:
+                if repair_cut == "partial":
+                    os.write(fd, raw[:13])
+                elif repair_cut == "complete":
+                    os.write(fd, raw)
+                os._exit(99)
+            real_write_all(fd, raw)
+
+        write_ops_module._write_all = interrupt_active_swap  # type: ignore[method-assign]
+        append_steering_log(
+            vault_root,
+            "wrong",
+            "virgin-active-crash",
+            source="chat",
+            operation_id="virgin-active-crash-1",
+            write_guard=_allowing_guard(),
+        )
+
+    repair = context.Process(target=crash_during_missing_app_swap_repair)
+    repair.start()
+    repair.join(timeout=10)
+    assert repair.exitcode == 99
+
+    durable_line = append_steering_log(
+        vault_root,
+        "wrong",
+        "virgin-active-crash",
+        source="chat",
+        operation_id="virgin-active-crash-1",
+        write_guard=_allowing_guard(),
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
 
 
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(

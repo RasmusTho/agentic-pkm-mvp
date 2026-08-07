@@ -1084,6 +1084,8 @@ def _read_host_witness_state(
     witness_fd: int,
     authority: _AtomicAppendAuthority,
     path_lock_key: str,
+    *,
+    malformed_as_missing: bool = False,
 ) -> dict[str, object] | None:
     duplicate = os.dup(witness_fd)
     try:
@@ -1092,7 +1094,12 @@ def _read_host_witness_state(
         os.close(duplicate)
     if not raw:
         return None
-    return _decode_host_append_state(raw, authority, path_lock_key)
+    try:
+        return _decode_host_append_state(raw, authority, path_lock_key)
+    except KnowledgeWriteConflict:
+        if malformed_as_missing:
+            return None
+        raise
 
 
 def _write_host_witness_state(
@@ -1272,36 +1279,59 @@ def _bind_host_append_route(authority: _AtomicAppendAuthority) -> None:
             route_swap_name,
             decode=False,
         )
-        candidates: list[bytes] = []
-        for raw in (state_record.raw, swap_record.raw):
-            if raw:
-                candidates.append(raw)
-        witness_copy = os.dup(witness_fd)
-        try:
-            witness_raw = _read_all(witness_copy)
-        finally:
-            os.close(witness_copy)
-        all_candidates = [*candidates]
-        if witness_raw:
-            all_candidates.append(witness_raw)
-        if all_candidates:
+        state_exact = False
+        if state_record.raw:
             try:
-                decoded = [json.loads(raw) for raw in all_candidates]
+                decoded_state = json.loads(state_record.raw)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise KnowledgeWriteConflict(
                     f"atomic append app-local route is malformed for "
                     f"{authority.note_rel_path}; reconciliation is required before retry"
                 ) from exc
-            if any(candidate != expected_payload for candidate in decoded):
+            if decoded_state != expected_payload:
                 raise KnowledgeWriteConflict(
                     f"atomic append app-local route changed for "
                     f"{authority.note_rel_path}; reconciliation is required before retry"
                 )
-        if not witness_raw:
-            authority.assert_host_witness_live()
-            _write_host_witness_state(witness_fd, expected_payload)
+            state_exact = True
 
-        if not candidates:
+        if swap_record.raw:
+            try:
+                decoded_swap = json.loads(swap_record.raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            else:
+                if decoded_swap != expected_payload:
+                    raise KnowledgeWriteConflict(
+                        f"atomic append app-local route changed for "
+                        f"{authority.note_rel_path}; reconciliation is required "
+                        "before retry"
+                    )
+        witness_copy = os.dup(witness_fd)
+        try:
+            witness_raw = _read_all(witness_copy)
+        finally:
+            os.close(witness_copy)
+        witness_exact = False
+        if witness_raw:
+            try:
+                decoded_witness = json.loads(witness_raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                decoded_witness = None
+            if decoded_witness is not None:
+                if decoded_witness != expected_payload:
+                    raise KnowledgeWriteConflict(
+                        f"atomic append app-local route changed for "
+                        f"{authority.note_rel_path}; reconciliation is required "
+                        "before retry"
+                    )
+                witness_exact = True
+
+        # Complete the durable app-local binding first. A crash during its
+        # fixed-swap write leaves either exact JSON or a retryable partial swap;
+        # only after canonical app authority is installed do we rewrite the
+        # temporary coordination witness.
+        if not state_exact or swap_record.raw:
             _write_host_append_state(
                 fence_fd,
                 authority,
@@ -1312,6 +1342,9 @@ def _bind_host_append_route(authority: _AtomicAppendAuthority) -> None:
                 state_name=route_state_name,
                 swap_name=route_swap_name,
             )
+        if not witness_exact:
+            authority.assert_host_witness_live()
+            _write_host_witness_state(witness_fd, expected_payload)
         authority.assert_host_witness_live()
     finally:
         os.close(fence_fd)
@@ -1472,11 +1505,27 @@ def _read_host_append_inventories(
             fence_fd,
             authority,
             path_lock_key,
+            decode=False,
         )
+        if swap_record.raw:
+            try:
+                swap_state = _decode_host_append_state(
+                    swap_record.raw,
+                    authority,
+                    path_lock_key,
+                )
+            except KnowledgeWriteConflict:
+                swap_state = None
+            swap_record = _HostStateRecord(
+                identity=swap_record.identity,
+                raw=swap_record.raw,
+                state=swap_state,
+            )
         witness_state = _read_host_witness_state(
             witness_fd,
             authority,
             path_lock_key,
+            malformed_as_missing=True,
         )
         inventories.append(
             (
@@ -1502,6 +1551,15 @@ def _validate_host_append_inventories(
     *,
     allow_complete_active_witness_without_app: bool = False,
 ) -> list[dict[str, object]]:
+    if any(
+        record.raw and record.state is None
+        for _path_lock_key, app_record, swap_record, _witness_state in inventories
+        for record in (app_record, swap_record)
+    ):
+        raise KnowledgeWriteConflict(
+            f"atomic append host state is malformed for {authority.note_rel_path}; "
+            "reconciliation is required before retry"
+        )
     inventory_records = [
         (
             [
@@ -1721,9 +1779,11 @@ def _require_no_host_indeterminate_fence(authority: _AtomicAppendAuthority) -> N
     fence_fd = _open_durable_host_fence_root(authority)
     try:
         inventories = _read_host_append_inventories(fence_fd, authority)
-        states, _repairs = _validate_inventories_with_planned_witness_repairs(
-            authority,
-            inventories,
+        states, _witness_repairs, _swap_repairs = (
+            _validate_inventories_with_planned_witness_repairs(
+                authority,
+                inventories,
+            )
         )
         for state in states:
             if state["state"] == "indeterminate" or (
@@ -1742,9 +1802,11 @@ def _host_append_state_exists(authority: _AtomicAppendAuthority) -> bool:
     fence_fd = _open_durable_host_fence_root(authority)
     try:
         inventories = _read_host_append_inventories(fence_fd, authority)
-        states, _repairs = _validate_inventories_with_planned_witness_repairs(
-            authority,
-            inventories,
+        states, _witness_repairs, _swap_repairs = (
+            _validate_inventories_with_planned_witness_repairs(
+                authority,
+                inventories,
+            )
         )
         return bool(states)
     finally:
@@ -1931,6 +1993,37 @@ def _host_clean_precedes_active(
     )
 
 
+def _plan_malformed_host_swap_repairs(
+    inventories: list[
+        tuple[
+            str,
+            _HostStateRecord,
+            _HostStateRecord,
+            dict[str, object] | None,
+        ]
+    ],
+) -> dict[str, _HostStateRecord]:
+    """Identify partial fixed-swap writes backed by another exact record."""
+
+    active_counterpart_exists = any(
+        state is not None and state.get("state") == "active"
+        for _path_lock_key, app_record, swap_record, witness_state in inventories
+        for state in (app_record.state, swap_record.state, witness_state)
+    )
+    repairs: dict[str, _HostStateRecord] = {}
+    for path_lock_key, app_record, swap_record, witness_state in inventories:
+        if not swap_record.raw or swap_record.state is not None:
+            continue
+        if (
+            app_record.state is None
+            and witness_state is None
+            and not active_counterpart_exists
+        ):
+            return {}
+        repairs[path_lock_key] = swap_record
+    return repairs
+
+
 def _plan_missing_active_witness_repairs(
     inventories: list[
         tuple[
@@ -2008,8 +2101,24 @@ def _validate_inventories_with_planned_witness_repairs(
             dict[str, object] | None,
         ]
     ],
-) -> tuple[list[dict[str, object]], dict[str, dict[str, object]]]:
-    repairs = _plan_missing_active_witness_repairs(inventories)
+) -> tuple[
+    list[dict[str, object]],
+    dict[str, dict[str, object]],
+    dict[str, _HostStateRecord],
+]:
+    swap_repairs = _plan_malformed_host_swap_repairs(inventories)
+    sanitized_inventories = [
+        (
+            path_lock_key,
+            app_record,
+            _HostStateRecord(identity=swap_record.identity, raw=None, state=None)
+            if path_lock_key in swap_repairs
+            else swap_record,
+            witness_state,
+        )
+        for path_lock_key, app_record, swap_record, witness_state in inventories
+    ]
+    repairs = _plan_missing_active_witness_repairs(sanitized_inventories)
     validation_inventories = [
         (
             path_lock_key,
@@ -2019,14 +2128,77 @@ def _validate_inventories_with_planned_witness_repairs(
             if witness_state is not None
             else repairs.get(path_lock_key),
         )
-        for path_lock_key, app_record, swap_record, witness_state in inventories
+        for path_lock_key, app_record, swap_record, witness_state in sanitized_inventories
     ]
     states = _validate_host_append_inventories(
         authority,
         validation_inventories,
         allow_complete_active_witness_without_app=True,
     )
-    return states, repairs
+    return states, repairs, swap_repairs
+
+
+def _repair_malformed_host_swap_records(
+    authority: _AtomicAppendAuthority,
+    expected_repairs: dict[str, _HostStateRecord],
+) -> None:
+    """Clear only unchanged partial swap artifacts before reconstruction."""
+
+    fence_fd = _open_durable_host_fence_root(authority)
+    try:
+        inventories = _read_host_append_inventories(fence_fd, authority)
+        repairs = _plan_malformed_host_swap_repairs(inventories)
+        if set(repairs) != set(expected_repairs) or any(
+            current.raw != expected_repairs[path_lock_key].raw
+            or current.identity is None
+            or expected_repairs[path_lock_key].identity is None
+            or not _same_file_identity(
+                current.identity,
+                expected_repairs[path_lock_key].identity,
+            )
+            for path_lock_key, current in repairs.items()
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append app-local swap changed for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        for path_lock_key in authority.host_state_keys:
+            expected = repairs.get(path_lock_key)
+            if expected is None:
+                continue
+            swap_name = _host_append_swap_name(path_lock_key)
+            swap_fd, created = _open_host_state_slot(fence_fd, swap_name)
+            try:
+                raw, observed = _read_stable_descriptor(swap_fd)
+                if created or not _record_matches_snapshot(
+                    raw,
+                    observed,
+                    created,
+                    expected,
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"atomic append app-local swap changed for "
+                        f"{authority.note_rel_path}; reconciliation is required "
+                        "before retry"
+                    )
+                os.ftruncate(swap_fd, 0)
+                os.fsync(swap_fd)
+                os.fsync(fence_fd)
+                cleared_raw, cleared = _read_stable_descriptor(swap_fd)
+                named = os.stat(swap_name, dir_fd=fence_fd, follow_symlinks=False)
+                if (
+                    cleared_raw
+                    or not _same_file_identity(cleared, observed)
+                    or not _same_file_identity(named, observed)
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"atomic append app-local swap could not be normalized for "
+                        f"{authority.note_rel_path}"
+                    )
+            finally:
+                os.close(swap_fd)
+    finally:
+        os.close(fence_fd)
 
 
 def _repair_missing_active_witness_records(
@@ -2212,6 +2384,7 @@ def _reconcile_host_atomic_append_states(
     reason: str | None = None
     missing_app_state = False
     missing_witness_repairs: dict[str, dict[str, object]] = {}
+    malformed_swap_repairs: dict[str, _HostStateRecord] = {}
     try:
         observed_latest = _open_latest_original_snapshot(
             recovery_fd,
@@ -2219,7 +2392,7 @@ def _reconcile_host_atomic_append_states(
         )
         latest_payload = _latest_original_host_payload(observed_latest)
         inventories = _read_host_append_inventories(fence_fd, authority)
-        states, missing_witness_repairs = (
+        states, missing_witness_repairs, malformed_swap_repairs = (
             _validate_inventories_with_planned_witness_repairs(
                 authority,
                 inventories,
@@ -2335,11 +2508,25 @@ def _reconcile_host_atomic_append_states(
             if not proposal_matches and not original_matches:
                 reason = "active host intent matches neither proposal nor original"
                 break
+    elif reason is None and malformed_swap_repairs:
+        target = _host_target_payload(parent_fd, target_name)
+        if any(
+            state.get("state") == "clean"
+            and any(state.get(key) != value for key, value in target.items())
+            for state in states
+        ):
+            reason = "clean host target changed before swap normalization"
 
     if reason is not None:
-        if missing_app_state or missing_witness_repairs:
+        if (
+            missing_app_state
+            or missing_witness_repairs
+            or malformed_swap_repairs
+        ):
             missing_resource = (
-                "app-local state" if missing_app_state else "host witness"
+                "app-local state"
+                if missing_app_state or malformed_swap_repairs
+                else "host witness"
             )
             raise KnowledgeWriteConflict(
                 f"atomic append {missing_resource} is missing for "
@@ -2349,6 +2536,11 @@ def _reconcile_host_atomic_append_states(
         raise KnowledgeWriteConflict(
             f"atomic append authority mapping is indeterminate for "
             f"{authority.note_rel_path}; reconciliation is required before retry"
+        )
+    if malformed_swap_repairs:
+        _repair_malformed_host_swap_records(
+            authority,
+            malformed_swap_repairs,
         )
     if saw_active:
         if missing_witness_repairs:
