@@ -974,6 +974,59 @@ def _open_durable_host_fence_root(authority: _AtomicAppendAuthority) -> int:
         raise
 
 
+def _host_append_state_has_valid_phase_shape(
+    state: dict[str, object],
+) -> bool:
+    """Require the complete producer-owned field set for each durable phase."""
+
+    def has_ints(*names: str) -> bool:
+        return all(type(state.get(name)) is int for name in names)
+
+    def has_identity(prefix: str, *, named: bool = False) -> bool:
+        required = (
+            isinstance(state.get(f"{prefix}_digest"), str)
+            and isinstance(state.get(f"{prefix}_metadata"), dict)
+            and has_ints(f"{prefix}_dev", f"{prefix}_ino")
+        )
+        return required and (
+            not named or isinstance(state.get(f"{prefix}_name"), str)
+        )
+
+    def has_optional_identity(prefix: str, *, named: bool = False) -> bool:
+        present = state.get(f"{prefix}_present")
+        return type(present) is bool and (
+            present is False or has_identity(prefix, named=named)
+        )
+
+    if (
+        not isinstance(state.get("transaction"), str)
+        or not has_ints("root_dev", "root_ino")
+    ):
+        return False
+    phase = state.get("state")
+    if phase == "indeterminate":
+        return isinstance(state.get("reason"), str)
+    if not has_ints(
+        "parent_dev",
+        "parent_ino",
+        "recovery_dev",
+        "recovery_ino",
+    ):
+        return False
+    if phase == "active":
+        return (
+            has_optional_identity("source")
+            and has_identity("proposal", named=True)
+            and has_optional_identity("latest_original")
+            and has_optional_identity("next_latest_original", named=True)
+        )
+    if phase == "clean":
+        return has_optional_identity("target") and has_optional_identity(
+            "latest_original"
+        )
+    return False
+
+
 def _decode_host_append_state(
     raw: bytes,
     authority: _AtomicAppendAuthority,
@@ -993,6 +1046,7 @@ def _decode_host_append_state(
         or state.get("locator") != authority.note_rel_path
         or state.get("authority_keys") != sorted(authority.host_state_keys)
         or state.get("state") not in {"active", "clean", "indeterminate"}
+        or not _host_append_state_has_valid_phase_shape(state)
     ):
         raise KnowledgeWriteConflict(
             f"atomic append host state is invalid for {authority.note_rel_path}; "
@@ -1252,14 +1306,7 @@ def _bind_host_append_route(authority: _AtomicAppendAuthority) -> None:
 
     route_key = authority.route_key
     route_state_name, route_swap_name = _host_append_route_names(route_key)
-    expected_payload: dict[str, object] = {
-        "schema": _HOST_APPEND_ROUTE_SCHEMA,
-        "route_key": route_key,
-        "locator": authority.note_rel_path,
-        "resource_keys": sorted(authority.host_state_keys),
-        "root_dev": authority.root_stat.st_dev,
-        "root_ino": authority.root_stat.st_ino,
-    }
+    expected_payload = _host_append_route_payload(authority)
     fence_fd = _open_durable_host_fence_root(authority)
     try:
         witness_fd = dict(authority.host_witness_fds).get(route_key)
@@ -1281,13 +1328,10 @@ def _bind_host_append_route(authority: _AtomicAppendAuthority) -> None:
         )
         state_exact = False
         if state_record.raw:
-            try:
-                decoded_state = json.loads(state_record.raw)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise KnowledgeWriteConflict(
-                    f"atomic append app-local route is malformed for "
-                    f"{authority.note_rel_path}; reconciliation is required before retry"
-                ) from exc
+            decoded_state = _decode_host_append_route(
+                state_record.raw,
+                authority,
+            )
             if decoded_state != expected_payload:
                 raise KnowledgeWriteConflict(
                     f"atomic append app-local route changed for "
@@ -1345,6 +1389,94 @@ def _bind_host_append_route(authority: _AtomicAppendAuthority) -> None:
         if not witness_exact:
             authority.assert_host_witness_live()
             _write_host_witness_state(witness_fd, expected_payload)
+        _require_host_append_route_live(authority)
+    finally:
+        os.close(fence_fd)
+
+
+def _host_append_route_payload(
+    authority: _AtomicAppendAuthority,
+) -> dict[str, object]:
+    return {
+        "schema": _HOST_APPEND_ROUTE_SCHEMA,
+        "route_key": authority.route_key,
+        "locator": authority.note_rel_path,
+        "resource_keys": sorted(authority.host_state_keys),
+        "root_dev": authority.root_stat.st_dev,
+        "root_ino": authority.root_stat.st_ino,
+    }
+
+
+def _decode_host_append_route(
+    raw: bytes,
+    authority: _AtomicAppendAuthority,
+) -> dict[str, object]:
+    try:
+        decoded = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise KnowledgeWriteConflict(
+            f"atomic append app-local route is malformed for "
+            f"{authority.note_rel_path}; reconciliation is required before retry"
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise KnowledgeWriteConflict(
+            f"atomic append app-local route changed for "
+            f"{authority.note_rel_path}; reconciliation is required before retry"
+        )
+    return decoded
+
+
+def _require_host_append_route_live(authority: _AtomicAppendAuthority) -> None:
+    """Re-prove both immutable route copies inside the final receipt window."""
+
+    authority.assert_host_state_live()
+    authority.assert_host_witness_live()
+    route_key = authority.route_key
+    route_state_name, route_swap_name = _host_append_route_names(route_key)
+    expected_payload = _host_append_route_payload(authority)
+    fence_fd = _open_durable_host_fence_root(authority)
+    try:
+        witness_fd = dict(authority.host_witness_fds).get(route_key)
+        if witness_fd is None:
+            raise AssertionError("atomic append route witness authority is not bound")
+        state_record = _read_host_state_record(
+            fence_fd,
+            authority,
+            route_key,
+            route_state_name,
+            decode=False,
+        )
+        swap_record = _read_host_state_record(
+            fence_fd,
+            authority,
+            route_key,
+            route_swap_name,
+            decode=False,
+        )
+        if (
+            not state_record.raw
+            or _decode_host_append_route(state_record.raw, authority)
+            != expected_payload
+            or bool(swap_record.raw)
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append app-local route changed for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        witness_copy = os.dup(witness_fd)
+        try:
+            witness_raw = _read_all(witness_copy)
+        finally:
+            os.close(witness_copy)
+        if (
+            not witness_raw
+            or _decode_host_append_route(witness_raw, authority)
+            != expected_payload
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append temporary route changed for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
         authority.assert_host_witness_live()
     finally:
         os.close(fence_fd)
@@ -1373,57 +1505,38 @@ def _write_host_append_states(
         if any(key not in witness_fds for key in path_lock_keys):
             raise AssertionError("atomic append host witness authority is not bound")
 
-        if payload.get("state") == "indeterminate":
-            record_snapshots = {
-                path_lock_key: (
-                    _read_host_append_record(
-                        fence_fd,
-                        authority,
-                        path_lock_key,
-                        decode=False,
-                    ),
-                    _read_host_swap_record(
-                        fence_fd,
-                        authority,
-                        path_lock_key,
-                        decode=False,
-                    ),
-                )
-                for path_lock_key in path_lock_keys
-            }
-        else:
-            inventories = _read_host_append_inventories(fence_fd, authority)
-            _validate_host_append_inventories(
-                authority,
-                inventories,
-            )
-            if payload.get("state") == "clean" and not allow_reconciled_clean:
-                transaction = payload.get("transaction")
-                if any(
-                    record.state is not None
-                    and record.state.get("transaction") != transaction
-                    for (
-                        _path_lock_key,
-                        app_record,
-                        swap_record,
-                        _witness_state,
-                    ) in inventories
-                    for record in (app_record, swap_record)
-                ):
-                    raise KnowledgeWriteConflict(
-                        f"atomic append app-local state transaction changed for "
-                        f"{authority.note_rel_path}; reconciliation is required "
-                        "before retry"
-                    )
-            record_snapshots = {
-                path_lock_key: (app_record, swap_record)
+        inventories = _read_host_append_inventories(fence_fd, authority)
+        _validate_host_append_inventories(
+            authority,
+            inventories,
+        )
+        if payload.get("state") == "clean" and not allow_reconciled_clean:
+            transaction = payload.get("transaction")
+            if any(
+                record.state is not None
+                and record.state.get("transaction") != transaction
                 for (
-                    path_lock_key,
+                    _path_lock_key,
                     app_record,
                     swap_record,
                     _witness_state,
                 ) in inventories
-            }
+                for record in (app_record, swap_record)
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append app-local state transaction changed for "
+                    f"{authority.note_rel_path}; reconciliation is required "
+                    "before retry"
+                )
+        record_snapshots = {
+            path_lock_key: (app_record, swap_record)
+            for (
+                path_lock_key,
+                app_record,
+                swap_record,
+                _witness_state,
+            ) in inventories
+        }
 
         keyed_payloads = {
             path_lock_key: {
@@ -2796,6 +2909,29 @@ def _move_entry_to_recovery(
         follow_symlinks=False,
     )
     if not _same_file_identity(retained, expected):
+        try:
+            _atomic_rename_noreplace_at(
+                recovery_fd,
+                destination_name,
+                source_fd,
+                source_name,
+            )
+            os.fsync(recovery_fd)
+            os.fsync(source_fd)
+            restored = os.stat(
+                source_name,
+                dir_fd=source_fd,
+                follow_symlinks=False,
+            )
+        except BaseException as exc:
+            raise KnowledgeWriteConflict(
+                "atomic append recovery entry changed during retention and its "
+                "pathname replacement could not be restored"
+            ) from exc
+        if not _same_file_identity(restored, retained):
+            raise KnowledgeWriteConflict(
+                "atomic append recovery pathname replacement changed during restore"
+            )
         raise KnowledgeWriteConflict(
             "atomic append recovery entry changed during retention"
         )

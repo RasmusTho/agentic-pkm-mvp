@@ -113,6 +113,7 @@ from app.knowledge.write_ops import (
     _mark_host_atomic_append_indeterminate,
     _open_atomic_append_authority,
     _open_durable_host_fence_root,
+    _require_host_append_route_live,
     _require_no_host_indeterminate_fence,
     append_note_relative,
 )
@@ -558,6 +559,7 @@ def _locked_steering_log(vault_root: Path) -> Iterator[_AtomicAppendAuthority]:
                     bound_authority.assert_host_state_live()
                     bound_authority.assert_host_witness_live()
                     _require_no_host_indeterminate_fence(bound_authority)
+                    _require_host_append_route_live(bound_authority)
                 except KnowledgeWriteConflict:
                     try:
                         _mark_host_atomic_append_indeterminate(

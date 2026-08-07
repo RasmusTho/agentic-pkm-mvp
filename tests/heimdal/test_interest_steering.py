@@ -1046,7 +1046,7 @@ def test_steering_log_virgin_missing_app_rejects_foreign_clean_record(
     witnesses = _host_witness_paths(vault_root)
     witness_before = {path.name: path.read_bytes() for path in witnesses}
 
-    with pytest.raises(KnowledgeWriteConflict, match="partial app-local state"):
+    with pytest.raises(KnowledgeWriteConflict, match="host state is invalid"):
         append_steering_log(
             vault_root,
             "wrong",
@@ -1844,6 +1844,44 @@ def test_steering_log_valid_foreign_recovery_json_remains_blocking(
     )
 
 
+def test_steering_log_valid_wrong_phase_swap_remains_unchanged(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="wrong-phase-swap-seed",
+        write_guard=guard,
+    )
+    state_path = next(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
+    swap_path = state_path.with_suffix(".swap")
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["state"] = "active"
+    payload["transaction"] = "unrelated-valid-active"
+    unrelated_raw = (
+        json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    swap_path.write_bytes(unrelated_raw)
+    durable_before = read_steering_log_body(vault_root)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "wrong-phase-swap",
+            source="item",
+            operation_id="wrong-phase-swap-proposal",
+            write_guard=guard,
+        )
+
+    assert swap_path.read_bytes() == unrelated_raw
+    assert read_steering_log_body(vault_root) == durable_before
+
+
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(
     tmp_path: Path,
 ) -> None:
@@ -2072,6 +2110,60 @@ def test_steering_log_app_state_substitution_before_clean_never_receipts(
     )
 
 
+def test_steering_log_valid_app_state_substitution_before_clean_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="preserved-app-substitution-seed",
+        write_guard=guard,
+    )
+    real_complete = write_ops_module._complete_host_atomic_append_intent
+    changed_path: Path | None = None
+    changed_raw: bytes | None = None
+
+    def substitute_before_clean(*args: object) -> None:
+        nonlocal changed_path, changed_raw
+        changed_path = next(
+            _host_fence_root().glob(".heimdal-atomic-append-*.state")
+        )
+        payload = json.loads(changed_path.read_text(encoding="utf-8"))
+        payload["transaction"] = "unrelated-complete-active"
+        changed_raw = (
+            json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        changed_path.write_bytes(changed_raw)
+        real_complete(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_complete_host_atomic_append_intent",
+        substitute_before_clean,
+    )
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "preserved-app-substitution",
+            source="item",
+            operation_id="preserved-app-substitution-proposal",
+            write_guard=guard,
+        )
+
+    assert changed_path is not None
+    assert changed_raw is not None
+    assert changed_path.read_bytes() == changed_raw
+    assert read_steering_log_body(vault_root).count(
+        '"operation_id":"preserved-app-substitution-proposal"'
+    ) == 1
+
+
 @pytest.mark.parametrize("mismatch", ["transaction", "payload"])
 def test_steering_log_paired_clean_state_mismatch_blocks_before_active(
     tmp_path: Path,
@@ -2271,7 +2363,7 @@ def test_steering_log_live_lock_authority_replacement_never_receipts(
         "_complete_host_atomic_append_intent",
         real_complete,
     )
-    with pytest.raises(KnowledgeWriteConflict, match="host witness is missing"):
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
         append_steering_log(
             vault_root,
             "mute",
@@ -2529,6 +2621,25 @@ def test_steering_log_conflicting_active_transactions_across_aliases_block(
         operation_id="cross-alias-active-seed",
         write_guard=guard,
     )
+    context = multiprocessing.get_context("fork")
+
+    def crash_after_publication_before_clean() -> None:
+        write_ops_module._complete_host_atomic_append_intent = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(112)
+        )
+        append_steering_log(
+            lexical_root,
+            "mute",
+            "cross-alias-active",
+            source="item",
+            operation_id="cross-alias-active-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = context.Process(target=crash_after_publication_before_clean)
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 112
 
     state_paths = list(_host_fence_root().glob(".heimdal-atomic-append-*.state"))
     witness_paths = list(_host_witness_paths(lexical_root))
@@ -2559,7 +2670,7 @@ def test_steering_log_conflicting_active_transactions_across_aliases_block(
             write_guard=guard,
         )
     durable = (real_root / note_rel_path(STEERING_LOG)).read_text(encoding="utf-8")
-    assert '"operation_id":"cross-alias-active-proposal"' not in durable
+    assert durable.count('"operation_id":"cross-alias-active-proposal"') == 1
 
 
 def test_steering_log_nonwritable_original_fails_before_publication(
@@ -4196,6 +4307,62 @@ def test_steering_log_route_binding_recovers_one_copy_and_still_blocks_retarget(
     assert not (root_b / "_heimdal").exists()
 
 
+@pytest.mark.parametrize("route_copy", ["app-local", "temporary"])
+def test_steering_log_route_binding_change_before_receipt_never_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    route_copy: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"route-receipt-{route_copy}-seed",
+        write_guard=guard,
+    )
+    real_append = steering_module.append_note_relative
+    changed_path: Path | None = None
+    changed_raw: bytes | None = None
+
+    def append_then_change_route(*args: object, **kwargs: object) -> object:
+        nonlocal changed_path, changed_raw
+        result = real_append(*args, **kwargs)  # type: ignore[arg-type]
+        route_state, _route_swap, route_witness = _host_route_paths(vault_root)
+        changed_path = route_state if route_copy == "app-local" else route_witness
+        payload = json.loads(changed_path.read_text(encoding="utf-8"))
+        payload["root_ino"] = int(payload["root_ino"]) + 1
+        changed_raw = (
+            json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        changed_path.write_bytes(changed_raw)
+        return result
+
+    monkeypatch.setattr(
+        steering_module,
+        "append_note_relative",
+        append_then_change_route,
+    )
+    with pytest.raises(KnowledgeWriteConflict):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "route-receipt-change",
+            source="item",
+            operation_id=f"route-receipt-{route_copy}-proposal",
+            write_guard=guard,
+        )
+
+    assert changed_path is not None
+    assert changed_raw is not None
+    assert changed_path.read_bytes() == changed_raw
+    assert read_steering_log_body(vault_root).count(
+        f'"operation_id":"route-receipt-{route_copy}-proposal"'
+    ) == 1
+
+
 def test_steering_log_distinct_case_sensitive_roots_remain_independent(
     tmp_path: Path,
 ) -> None:
@@ -4573,6 +4740,84 @@ def test_steering_log_snapshot_hard_link_created_before_retirement_is_preserved(
     assert path.read_text(encoding="utf-8").count(
         '"operation_id":"snapshot-hard-link-proposal"'
     ) == 1
+
+
+def test_steering_log_retirement_substitution_restores_unrelated_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="retirement-substitution-seed",
+        write_guard=guard,
+    )
+    recovery = vault_root / "_conflicts"
+    unrelated = b"unrelated replacement must keep its pathname\n"
+    real_rename = write_ops_module._atomic_rename_noreplace_at
+    changed_name: str | None = None
+
+    def substitute_before_retirement(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal changed_name
+        if (
+            changed_name is None
+            and destination_name.startswith(".steering-append-retired-")
+        ):
+            changed_name = source_name
+            os.rename(
+                source_name,
+                f".steering-append-held-{source_name}",
+                src_dir_fd=source_fd,
+                dst_dir_fd=source_fd,
+            )
+            replacement_fd = os.open(
+                source_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=source_fd,
+            )
+            try:
+                os.write(replacement_fd, unrelated)
+                os.fsync(replacement_fd)
+            finally:
+                os.close(replacement_fd)
+            os.fsync(source_fd)
+        real_rename(
+            source_fd,
+            source_name,
+            destination_fd,
+            destination_name,
+        )
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        substitute_before_retirement,
+    )
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="recovery retirement became indeterminate",
+    ):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "retirement-substitution",
+            source="item",
+            operation_id="retirement-substitution-proposal",
+            write_guard=guard,
+        )
+
+    assert changed_name is not None
+    assert (recovery / changed_name).read_bytes() == unrelated
 
 
 def test_steering_log_operation_id_collision_fails_loud(tmp_path: Path) -> None:
