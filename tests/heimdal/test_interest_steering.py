@@ -2139,21 +2139,18 @@ def test_steering_log_partial_active_then_clean_exchange_crash_recovers(
     second.start()
     second.join(timeout=10)
     assert second.exitcode == 122
-    observed_clean_exchange = False
+    observed_durable_active = False
     for state_path in _host_fence_root().glob(
         ".heimdal-atomic-append-*.state"
     ):
         state = json.loads(state_path.read_text())
         swap_raw = state_path.with_suffix(".swap").read_bytes()
         swap = json.loads(swap_raw) if swap_raw else None
-        if (
-            state["state"] == "clean"
-            and swap is not None
-            and swap["state"] == "clean"
-            and state["transaction"] != swap["transaction"]
+        if state["state"] == "active" or (
+            swap is not None and swap["state"] == "active"
         ):
-            observed_clean_exchange = True
-    assert observed_clean_exchange
+            observed_durable_active = True
+    assert observed_durable_active
 
     durable_line = append_steering_log(
         vault_root,
@@ -2452,6 +2449,289 @@ def test_steering_log_changed_predecessor_record_blocks_unchanged(
 
     assert clean_path.read_bytes() == foreign_raw
     assert read_steering_log_body(vault_root) == durable_before
+
+
+@pytest.mark.parametrize("partial_clean_event", ["third-crash", "witness-loss"])
+def test_steering_log_partial_clean_retains_durable_active_until_complete(
+    tmp_path: Path,
+    partial_clean_event: str,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    operation_id = f"partial-clean-{partial_clean_event}"
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id=f"{operation_id}-seed",
+        write_guard=guard,
+    )
+
+    def crash_before_second_active_app_write() -> None:
+        real_write = write_ops_module._write_host_append_state
+        active_writes = 0
+
+        def stop_on_second_active_write(
+            fence_fd: int,
+            authority: object,
+            path_lock_key: str,
+            payload: dict[str, object],
+            expected_state: object,
+            expected_swap: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal active_writes
+            if payload.get("state") == "active":
+                active_writes += 1
+                if active_writes == 2:
+                    os._exit(121)
+            real_write(
+                fence_fd,
+                authority,  # type: ignore[arg-type]
+                path_lock_key,
+                payload,
+                expected_state,  # type: ignore[arg-type]
+                expected_swap,  # type: ignore[arg-type]
+                **kwargs,
+            )
+
+        write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+            stop_on_second_active_write
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id=operation_id,
+            write_guard=_allowing_guard(),
+        )
+
+    context = multiprocessing.get_context("fork")
+    first = context.Process(target=crash_before_second_active_app_write)
+    first.start()
+    first.join(timeout=10)
+    assert first.exitcode == 121
+
+    def crash_before_second_clean_app_write() -> None:
+        real_write = write_ops_module._write_host_append_state
+        clean_writes = 0
+
+        def stop_on_second_clean_write(
+            fence_fd: int,
+            authority: object,
+            path_lock_key: str,
+            payload: dict[str, object],
+            expected_state: object,
+            expected_swap: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal clean_writes
+            if payload.get("state") == "clean":
+                clean_writes += 1
+                if clean_writes == 2:
+                    os._exit(122)
+            real_write(
+                fence_fd,
+                authority,  # type: ignore[arg-type]
+                path_lock_key,
+                payload,
+                expected_state,  # type: ignore[arg-type]
+                expected_swap,  # type: ignore[arg-type]
+                **kwargs,
+            )
+
+        write_ops_module._write_host_append_state = (  # type: ignore[method-assign]
+            stop_on_second_clean_write
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id=operation_id,
+            write_guard=_allowing_guard(),
+        )
+
+    second = context.Process(target=crash_before_second_clean_app_write)
+    second.start()
+    second.join(timeout=10)
+    assert second.exitcode == 122
+    pairs = []
+    for state_path in _host_fence_root().glob(
+        ".heimdal-atomic-append-*.state"
+    ):
+        state = json.loads(state_path.read_text())
+        swap_raw = state_path.with_suffix(".swap").read_bytes()
+        swap = json.loads(swap_raw) if swap_raw else None
+        pairs.append((state, swap))
+    assert any(
+        state["state"] == "active"
+        or (swap is not None and swap["state"] == "active")
+        for state, swap in pairs
+    )
+
+    if partial_clean_event == "third-crash":
+        def crash_before_remaining_clean_exchange() -> None:
+            write_ops_module._atomic_host_state_exchange_at = (  # type: ignore[method-assign]
+                lambda *_args, **_kwargs: os._exit(123)
+            )
+            append_steering_log(
+                vault_root,
+                "mute",
+                "proposal",
+                source="item",
+                operation_id=operation_id,
+                write_guard=_allowing_guard(),
+            )
+
+        third = context.Process(target=crash_before_remaining_clean_exchange)
+        third.start()
+        third.join(timeout=10)
+        assert third.exitcode == 123
+    else:
+        witness_paths = _host_witness_paths(vault_root)
+        lock_root = witness_paths[0].parent
+        for path in lock_root.iterdir():
+            path.unlink()
+        lock_root.rmdir()
+
+    durable_line = append_steering_log(
+        vault_root,
+        "mute",
+        "proposal",
+        source="item",
+        operation_id=operation_id,
+        write_guard=guard,
+    )
+
+    assert read_steering_log_body(vault_root).count(durable_line) == 1
+    assert all(
+        json.loads(path.read_text())["state"] == "clean"
+        and path.with_suffix(".swap").read_bytes() == b""
+        for path in _host_fence_root().glob(
+            ".heimdal-atomic-append-*.state"
+        )
+    )
+
+
+def test_steering_log_impossible_cross_key_frontier_blocks_unchanged(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    rel_path = note_rel_path(STEERING_LOG)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="frontier-seed",
+        write_guard=guard,
+    )
+
+    def crash_before_first_active_exchange() -> None:
+        write_ops_module._atomic_host_state_exchange_at = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: os._exit(127)
+        )
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="frontier-proposal",
+            write_guard=_allowing_guard(),
+        )
+
+    process = multiprocessing.get_context("fork").Process(
+        target=crash_before_first_active_exchange
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 127
+    with write_ops_module._open_atomic_append_authority(
+        vault_root,
+        rel_path,
+    ) as authority:
+        state_paths = [
+            _host_fence_root()
+            / write_ops_module._host_append_state_name(path_lock_key)
+            for path_lock_key in authority.host_state_keys
+        ]
+    assert len(state_paths) == 2
+    earlier_state = json.loads(state_paths[0].read_text())
+    earlier_swap = json.loads(state_paths[0].with_suffix(".swap").read_text())
+    assert earlier_state["state"] == "clean"
+    assert earlier_swap["state"] == "active"
+
+    later_state_path = state_paths[1]
+    later_swap_path = later_state_path.with_suffix(".swap")
+    later_key = json.loads(later_state_path.read_text())["path_lock_key"]
+    witness_token = steering_module.hashlib.sha256(
+        later_key.encode("utf-8")
+    ).hexdigest()
+    later_witness_path = (
+        Path(steering_module.tempfile.gettempdir())
+        / "agentic-pkm-heimdal-locks"
+        / f"{witness_token}.lock"
+    )
+    active = json.loads(later_witness_path.read_text())
+    successor: dict[str, object] = {
+        "schema": active["schema"],
+        "path_lock_key": later_key,
+        "locator": active["locator"],
+        "authority_keys": active["authority_keys"],
+        "state": "clean",
+        "transaction": active["transaction"],
+        "root_dev": active["root_dev"],
+        "root_ino": active["root_ino"],
+        "parent_dev": active["parent_dev"],
+        "parent_ino": active["parent_ino"],
+        "recovery_dev": active["recovery_dev"],
+        "recovery_ino": active["recovery_ino"],
+        "target_present": active["source_present"],
+        "latest_original_present": active["latest_original_present"],
+        "reason": "reconciled crash-precommitted intent",
+    }
+    if active["source_present"]:
+        for suffix in ("dev", "ino", "digest", "metadata"):
+            successor[f"target_{suffix}"] = active[f"source_{suffix}"]
+    if active["latest_original_present"]:
+        for suffix in ("dev", "ino", "digest", "metadata"):
+            successor[f"latest_original_{suffix}"] = active[
+                f"latest_original_{suffix}"
+            ]
+    successor_raw = (
+        json.dumps(successor, ensure_ascii=True, sort_keys=True) + "\n"
+    ).encode()
+    active_raw = (
+        json.dumps(active, ensure_ascii=True, sort_keys=True) + "\n"
+    ).encode()
+    later_state_path.write_bytes(successor_raw)
+    later_swap_path.write_bytes(active_raw)
+    state_before = later_state_path.read_bytes()
+    swap_before = later_swap_path.read_bytes()
+    witness_before = later_witness_path.read_bytes()
+    durable_before = (vault_root / rel_path).read_bytes()
+
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="stable-key transition frontier is invalid",
+    ):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="frontier-proposal",
+            write_guard=guard,
+        )
+
+    assert later_state_path.read_bytes() == state_before
+    assert later_swap_path.read_bytes() == swap_before
+    assert later_witness_path.read_bytes() == witness_before
+    assert (vault_root / rel_path).read_bytes() == durable_before
 
 
 def test_steering_log_clean_state_recovers_after_temporary_witness_loss(

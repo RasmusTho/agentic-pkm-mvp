@@ -1290,6 +1290,14 @@ def _write_host_append_state(
                 f"{authority.note_rel_path}"
             )
 
+        # A clean transition retains the displaced active record in the fixed
+        # swap until every canonical key is clean. That durable active copy is
+        # the restart authority if the temporary witnesses disappear during a
+        # repeated interruption. The cohort writer clears the proven swaps as
+        # one later phase, before it advances any witness to clean.
+        if payload.get("state") == "clean":
+            return
+
         os.ftruncate(state_fd, 0)
         os.fsync(state_fd)
         os.fsync(fence_fd)
@@ -1493,6 +1501,74 @@ def _require_host_append_route_live(authority: _AtomicAppendAuthority) -> None:
         os.close(fence_fd)
 
 
+def _clear_host_append_clean_swaps(
+    fence_fd: int,
+    authority: _AtomicAppendAuthority,
+    keyed_payloads: dict[str, dict[str, object]],
+) -> None:
+    """Clear displaced active records only after every canonical is clean."""
+
+    inventories = _read_host_append_inventories(fence_fd, authority)
+    states = _validate_host_append_inventories(authority, inventories)
+    active_states = [state for state in states if state.get("state") == "active"]
+    active_seed = active_states[0] if active_states else None
+    swaps: list[tuple[str, _HostStateRecord]] = []
+    for path_lock_key, app_record, swap_record, _witness_state in inventories:
+        if app_record.state != keyed_payloads[path_lock_key]:
+            raise KnowledgeWriteConflict(
+                f"atomic append app-local clean cohort changed for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        if not swap_record.raw:
+            continue
+        if (
+            active_seed is None
+            or swap_record.state is None
+            or swap_record.state.get("state") != "active"
+            or not _host_states_match_across_keys(
+                swap_record.state,
+                active_seed,
+            )
+        ):
+            raise KnowledgeWriteConflict(
+                f"atomic append displaced active state changed for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        swaps.append((path_lock_key, swap_record))
+
+    for path_lock_key, expected in swaps:
+        swap_name = _host_append_swap_name(path_lock_key)
+        swap_fd, created = _open_host_state_slot(fence_fd, swap_name)
+        try:
+            raw, observed = _read_stable_descriptor(swap_fd)
+            if created or not _record_matches_snapshot(
+                raw,
+                observed,
+                created,
+                expected,
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append displaced active state changed for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+            os.ftruncate(swap_fd, 0)
+            os.fsync(swap_fd)
+            os.fsync(fence_fd)
+            cleared_raw, cleared = _read_stable_descriptor(swap_fd)
+            named = os.stat(swap_name, dir_fd=fence_fd, follow_symlinks=False)
+            if (
+                cleared_raw
+                or not _same_file_identity(cleared, observed)
+                or not _same_file_identity(named, observed)
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append displaced active state could not be cleared for "
+                    f"{authority.note_rel_path}"
+                )
+        finally:
+            os.close(swap_fd)
+
+
 def _write_host_append_states(
     authority: _AtomicAppendAuthority,
     payload: dict[str, object],
@@ -1607,6 +1683,11 @@ def _write_host_append_states(
                 )
         for path_lock_key in path_lock_keys:
             expected_state, expected_swap = record_snapshots[path_lock_key]
+            if (
+                payload.get("state") == "clean"
+                and expected_state.state == keyed_payloads[path_lock_key]
+            ):
+                continue
             _write_host_append_state(
                 fence_fd,
                 authority,
@@ -1616,6 +1697,11 @@ def _write_host_append_states(
                 expected_swap,
             )
         if payload.get("state") == "clean":
+            _clear_host_append_clean_swaps(
+                fence_fd,
+                authority,
+                keyed_payloads,
+            )
             # Clean reaches the independent witness last. A crash during the
             # app-local clean writes therefore leaves an active witness.
             for path_lock_key in path_lock_keys:
@@ -1911,35 +1997,78 @@ def _read_all_host_append_states(
     )
 
 
-def _repair_missing_active_app_records(authority: _AtomicAppendAuthority) -> None:
-    """Restore only missing app copies from a complete exact active witness set."""
+def _repair_incomplete_active_app_records(authority: _AtomicAppendAuthority) -> None:
+    """Advance every predecessor or missing app copy to exact active state."""
 
     fence_fd = _open_durable_host_fence_root(authority)
     try:
         inventories = _read_host_append_inventories(fence_fd, authority)
-        _validate_host_append_inventories(
+        states = _validate_host_append_inventories(
             authority,
             inventories,
             allow_complete_active_witness_without_app=True,
         )
+        active_states = [
+            state for state in states if state.get("state") == "active"
+        ]
+        if not active_states:
+            return
+        active_seed = active_states[0]
         for (
             path_lock_key,
             app_record,
             swap_record,
             witness_state,
         ) in inventories:
-            if app_record.state is not None:
+            expected_active = {
+                **{
+                    key: value
+                    for key, value in active_seed.items()
+                    if key != "path_lock_key"
+                },
+                "path_lock_key": path_lock_key,
+            }
+            if (
+                app_record.state is not None
+                and app_record.state.get("state") == "active"
+                and _host_states_match_across_keys(
+                    app_record.state,
+                    expected_active,
+                )
+            ):
                 continue
-            if witness_state is None or witness_state.get("state") != "active":
+            if (
+                app_record.state is not None
+                and app_record.state.get("state") == "clean"
+                and _host_clean_succeeds_active(
+                    app_record.state,
+                    expected_active,
+                )
+            ):
+                continue
+            if (
+                app_record.state is not None
+                and not _host_clean_precedes_active(
+                    app_record.state,
+                    expected_active,
+                )
+            ) or (
+                witness_state is not None
+                and witness_state.get("state") == "active"
+                and not _host_states_match_across_keys(
+                    witness_state,
+                    expected_active,
+                )
+            ):
                 raise KnowledgeWriteConflict(
-                    f"atomic append active witness set changed for "
+                    f"atomic append active app state changed for "
                     f"{authority.note_rel_path}; reconciliation is required before retry"
                 )
             _write_host_append_state(
                 fence_fd,
                 authority,
                 path_lock_key,
-                witness_state,
+                expected_active,
                 app_record,
                 swap_record,
             )
@@ -2267,6 +2396,20 @@ def _host_clean_succeeds_active(
         )
     ):
         return False
+    prior_present = active_state.get("latest_original_present")
+    if clean_state.get("latest_original_present") is prior_present and (
+        prior_present is not True
+        or all(
+            clean_state.get(key) == active_state.get(key)
+            for key in (
+                "latest_original_dev",
+                "latest_original_ino",
+                "latest_original_digest",
+                "latest_original_metadata",
+            )
+        )
+    ):
+        return True
     next_present = active_state.get("next_latest_original_present")
     if clean_state.get("latest_original_present") is not next_present:
         return False
@@ -2364,19 +2507,16 @@ def _validate_host_append_inventory_topology(
             f"{authority.note_rel_path}; reconciliation is required before retry"
         )
 
-    allowed_active_slot_pairs = {
-        (None, None),
-        (None, "active"),
-        ("predecessor", None),
-        ("predecessor", "active"),
-        ("predecessor", "successor"),
-        ("active", None),
-        ("active", "predecessor"),
-        ("active", "successor"),
-        ("successor", None),
-        ("successor", "active"),
-        ("successor", "predecessor"),
+    fixed_active_slot_ranks = {
+        (None, None): 1,
+        (None, "active"): 2,
+        ("predecessor", "active"): 2,
+        ("active", "predecessor"): 3,
+        ("active", None): 4,
+        ("active", "successor"): 5,
+        ("successor", "active"): 6,
     }
+    frontier_ranks: list[set[int]] = []
     for _path_lock_key, app_record, swap_record, witness_state in inventories:
         app_state = app_record.state
         swap_state = swap_record.state
@@ -2408,28 +2548,55 @@ def _validate_host_append_inventory_topology(
 
         app_relation = relation_to_active(app_state)
         swap_relation = relation_to_active(swap_state)
-        if (app_relation, swap_relation) not in allowed_active_slot_pairs:
+        witness_relation = relation_to_active(witness_state)
+        slot_pair = (app_relation, swap_relation)
+        ranks: set[int]
+        if witness_relation == "predecessor":
+            ranks = {0}
+            witness_is_exact = (
+                slot_pair == ("predecessor", None)
+                and app_state is not None
+                and _host_states_match_across_keys(app_state, witness_state)
+                and not swap_record.raw
+            )
+            if not witness_is_exact:
+                ranks = set()
+        elif witness_relation == "successor":
+            ranks = {8}
+            witness_is_exact = (
+                slot_pair == ("successor", None)
+                and app_state is not None
+                and _host_states_match_across_keys(app_state, witness_state)
+                and not swap_record.raw
+            )
+            if not witness_is_exact:
+                ranks = set()
+        elif witness_relation in {None, "active"}:
+            if slot_pair == ("predecessor", None):
+                ranks = {1} if witness_relation == "active" else {0, 1}
+            elif slot_pair == ("successor", None):
+                ranks = {7} if witness_relation == "active" else {7, 8}
+            else:
+                rank = fixed_active_slot_ranks.get(slot_pair)
+                ranks = {rank} if rank is not None else set()
+        else:
+            ranks = set()
+        if not ranks:
             raise KnowledgeWriteConflict(
                 f"atomic append app-local slot topology is invalid for "
                 f"{authority.note_rel_path}; reconciliation is required before retry"
             )
-        if witness_state is None:
-            continue
-        witness_relation = relation_to_active(witness_state)
-        if witness_relation == "active":
-            continue
-        if (
-            witness_relation in {"predecessor", "successor"}
-            and app_state is not None
-            and _host_states_match_across_keys(app_state, witness_state)
-            and swap_state is None
-            and not swap_record.raw
-        ):
-            continue
-        raise KnowledgeWriteConflict(
-            f"atomic append witness topology is invalid for "
-            f"{authority.note_rel_path}; reconciliation is required before retry"
-        )
+        frontier_ranks.append(ranks)
+
+    previous_rank = 8
+    for ranks in frontier_ranks:
+        reachable = [rank for rank in ranks if rank <= previous_rank]
+        if not reachable:
+            raise KnowledgeWriteConflict(
+                f"atomic append stable-key transition frontier is invalid for "
+                f"{authority.note_rel_path}; reconciliation is required before retry"
+            )
+        previous_rank = max(reachable)
 
 
 def _plan_malformed_host_swap_repairs(
@@ -2665,6 +2832,74 @@ def _repair_missing_active_witness_records(
                 raise AssertionError("atomic append host witness authority is not bound")
             authority.assert_host_witness_live()
             _write_host_witness_state(witness_fd, payload)
+        _read_all_host_append_states(
+            fence_fd,
+            authority,
+            allow_complete_active_witness_without_app=True,
+        )
+    finally:
+        os.close(fence_fd)
+
+
+def _repair_incomplete_active_witness_records(
+    authority: _AtomicAppendAuthority,
+) -> None:
+    """Advance predecessor witnesses before app-local active normalization."""
+
+    fence_fd = _open_durable_host_fence_root(authority)
+    try:
+        inventories = _read_host_append_inventories(fence_fd, authority)
+        states = _validate_host_append_inventories(
+            authority,
+            inventories,
+            allow_complete_active_witness_without_app=True,
+        )
+        active_states = [
+            state for state in states if state.get("state") == "active"
+        ]
+        if not active_states:
+            return
+        active_seed = active_states[0]
+        witness_fds = dict(authority.host_witness_fds)
+        for path_lock_key, _app_record, _swap_record, witness_state in inventories:
+            expected_active = {
+                **{
+                    key: value
+                    for key, value in active_seed.items()
+                    if key != "path_lock_key"
+                },
+                "path_lock_key": path_lock_key,
+            }
+            if witness_state is not None and (
+                (
+                    witness_state.get("state") == "active"
+                    and _host_states_match_across_keys(
+                        witness_state,
+                        expected_active,
+                    )
+                )
+                or (
+                    witness_state.get("state") == "clean"
+                    and _host_clean_succeeds_active(
+                        witness_state,
+                        expected_active,
+                    )
+                )
+            ):
+                continue
+            if witness_state is not None and not _host_clean_precedes_active(
+                witness_state,
+                expected_active,
+            ):
+                raise KnowledgeWriteConflict(
+                    f"atomic append active witness changed for "
+                    f"{authority.note_rel_path}; reconciliation is required before retry"
+                )
+            witness_fd = witness_fds.get(path_lock_key)
+            if witness_fd is None:
+                raise AssertionError("atomic append host witness authority is not bound")
+            authority.assert_host_witness_live()
+            _write_host_witness_state(witness_fd, expected_active)
         _read_all_host_append_states(
             fence_fd,
             authority,
@@ -2987,8 +3222,8 @@ def _reconcile_host_atomic_append_states(
                 authority,
                 missing_witness_repairs,
             )
-        if missing_app_state:
-            _repair_missing_active_app_records(authority)
+        _repair_incomplete_active_witness_records(authority)
+        _repair_incomplete_active_app_records(authority)
         _write_host_append_states(
             authority,
             {
@@ -2997,7 +3232,6 @@ def _reconcile_host_atomic_append_states(
                 **mapping,
                 **target,
                 **latest_payload,
-                "reason": "reconciled crash-precommitted intent",
             },
             allow_reconciled_clean=True,
         )
