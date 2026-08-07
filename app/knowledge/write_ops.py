@@ -216,23 +216,66 @@ def _opened_directory_path(fd: int, fallback: Path) -> Path:
 
 
 def _filesystem_reported_lexical_path(path: Path) -> Path:
-    """Preserve a route while using the filesystem's entry spelling."""
+    """Canonicalize entry spelling without resolving route components."""
 
-    flags = getattr(os, "O_CLOEXEC", 0)
-    if sys.platform == "darwin":
-        flags |= getattr(os, "O_SYMLINK", 0)
-    elif sys.platform.startswith("linux") and hasattr(os, "O_PATH"):
-        flags |= os.O_PATH | getattr(os, "O_NOFOLLOW", 0)
-    else:
+    if not path.is_absolute():
         return path
+    components = path.parts[1:]
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
-        route_fd = os.open(path, flags)
+        parent_fd = os.open(path.anchor, directory_flags)
     except OSError:
         return path
+    reported: list[str] = []
     try:
-        return _opened_directory_path(route_fd, path)
+        for index, component in enumerate(components):
+            try:
+                observed = os.stat(
+                    component,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                entries = os.listdir(parent_fd)
+            except OSError:
+                return path
+            if component in entries:
+                reported_component = component
+            else:
+                matches: list[str] = []
+                for entry in entries:
+                    try:
+                        candidate = os.stat(
+                            entry,
+                            dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                    except OSError:
+                        continue
+                    if _same_file_identity(candidate, observed):
+                        matches.append(entry)
+                if len(matches) != 1:
+                    return path
+                reported_component = matches[0]
+            reported.append(reported_component)
+            if index == len(components) - 1:
+                continue
+            try:
+                child_fd = os.open(
+                    component,
+                    directory_flags,
+                    dir_fd=parent_fd,
+                )
+            except OSError:
+                return path
+            os.close(parent_fd)
+            parent_fd = child_fd
     finally:
-        os.close(route_fd)
+        os.close(parent_fd)
+    return Path(path.anchor, *reported)
 
 
 @contextmanager

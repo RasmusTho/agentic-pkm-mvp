@@ -4932,6 +4932,58 @@ def test_steering_log_symlinked_root_retarget_cannot_escape_lexical_fence(
     assert durable.count('"operation_id":"symlink-root-proposal"') == 1
 
 
+def test_steering_log_intermediate_symlink_retarget_reuses_route_fence(
+    tmp_path: Path,
+) -> None:
+    parent_a = tmp_path / "route-parent-a"
+    parent_b = tmp_path / "route-parent-b"
+    parent_a.mkdir()
+    parent_b.mkdir()
+    root_a = parent_a / "vault"
+    root_b = parent_b / "vault"
+    root_a.mkdir()
+    root_b.mkdir()
+    route = tmp_path / "route"
+    route.symlink_to(parent_a, target_is_directory=True)
+    lexical_root = route / "vault"
+    guard = _allowing_guard()
+
+    durable_line = append_steering_log(
+        lexical_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="intermediate-route-seed",
+        write_guard=guard,
+    )
+    with write_ops_module._open_atomic_append_authority(
+        lexical_root,
+        note_rel_path(STEERING_LOG),
+    ) as authority:
+        original_route_key = authority.route_key
+
+    route.unlink()
+    route.symlink_to(parent_b, target_is_directory=True)
+    with write_ops_module._open_atomic_append_authority(
+        lexical_root,
+        note_rel_path(STEERING_LOG),
+    ) as authority:
+        assert authority.route_key == original_route_key
+
+    with pytest.raises(KnowledgeWriteConflict, match="app-local route changed"):
+        append_steering_log(
+            lexical_root,
+            "mute",
+            "retarget-must-block",
+            source="item",
+            operation_id="intermediate-route-retarget",
+            write_guard=guard,
+        )
+
+    assert read_steering_log_body(root_a).count(durable_line) == 1
+    assert not (root_b / "_heimdal").exists()
+
+
 @pytest.mark.parametrize("retirement_role", ["recovery", "displaced"])
 def test_steering_log_retirement_never_deletes_substituted_name(
     monkeypatch: pytest.MonkeyPatch,
