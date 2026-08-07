@@ -99,9 +99,10 @@ if len(enabled_values) > 1 or len(root_values) > 1:
     emit("blocked", "duplicate_key", "not_evaluated")
     raise SystemExit(0)
 
-enabled = enabled_values[0] if enabled_values else ""
+enabled_present = bool(enabled_values)
+enabled = enabled_values[0] if enabled_present else ""
 host_root = root_values[0] if root_values else ""
-if enabled in {"", "false"}:
+if not enabled_present or enabled == "false":
     emit("ok", "false", "not_required")
     raise SystemExit(0)
 if enabled != "true":

@@ -259,6 +259,7 @@ def test_disappearing_tts_root_fails_with_compose_output_redacted(
 @pytest.mark.parametrize(
     ("enabled", "root_kind"),
     [
+        ("", "valid"),
         ("TRUE", "valid"),
         ("true", "relative"),
         ("true", "missing"),
@@ -300,6 +301,8 @@ def test_invalid_enabled_tts_config_stops_before_channel_mutation(
 
     assert result.returncode != 0
     assert "TTS_" in result.stderr
+    if enabled == "":
+        assert "reason=invalid_boolean" in result.stderr
     assert not (root / "config/deploy/dev.env").exists()
     assert not (tmp_path / "docker-called").exists()
 
