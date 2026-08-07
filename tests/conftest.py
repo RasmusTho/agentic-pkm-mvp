@@ -160,20 +160,9 @@ def force_memory_store_for_non_pg(request: pytest.FixtureRequest, monkeypatch: p
 
 
 @pytest.fixture(autouse=True)
-def default_pg_dsn_for_pg_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
-    """Provide the standard local Postgres DSN for pg-marked tests when unset."""
-
-    if (
-        request.node.get_closest_marker("pg") is not None
-        and os.getenv("DATABASE_URL") is None
-        and os.getenv("DB_DSN") is None
-    ):
-        monkeypatch.setenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
-    yield monkeypatch
-
-
-@pytest.fixture(autouse=True)
-def store_schema_autocreate_for_pg_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+def store_schema_autocreate_for_pg_tests(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
     """Explicit create-on-demand opt-in for pg-marked tests (KERNEL-04, #2766).
 
     Production store schema is migration-owned; ``_ensure_tables()`` is
@@ -274,9 +263,7 @@ def pytest_configure(config) -> None:
     # build, not quietly disarm the watchdog.
     requested = getattr(config.option, "timeout", None)
     plugins = config.pluginmanager
-    has_real_timeout = plugins.hasplugin("timeout") or plugins.hasplugin(
-        "pytest_timeout"
-    )
+    has_real_timeout = plugins.hasplugin("timeout") or plugins.hasplugin("pytest_timeout")
     if requested and not has_real_timeout:
         raise pytest.UsageError(
             f"--timeout={requested} was requested but the pytest-timeout plugin "
@@ -284,3 +271,327 @@ def pytest_configure(config) -> None:
             "pytest-timeout (see dev-requirements.txt) or remove the --timeout "
             "flag. Refusing to run unguarded — see #2259."
         )
+
+    # Must run here, before the first test module is imported (#4573).
+    _refuse_prod_dsn_before_any_import()
+    _install_pg_connection_guard()
+
+
+# --------------------------------------------------------------------------
+# pg-lane database resolution guard (#4573)
+#
+# The pg lane runs destructive DDL, TRUNCATE, and CREATE/DROP DATABASE against
+# whatever DATABASE_URL/DB_DSN resolves to. It used to carry an autouse default
+# of `postgresql://app:app@127.0.0.1:15432/app` — a DSN the repo's own
+# `app.db.dsn.looks_like_prod_dsn` classifies as production on both criteria —
+# so a bare `pytest -m pg` targeted prod. The resolution contract is now
+# explicit-or-nothing.
+#
+# The prod refusal lives in `pytest_configure`, NOT in a collection hook. Test
+# modules run connection probes at import time (`tests/stores/
+# test_capabilities_matrix.py` evaluates `pg_available()` in a `skipif`, which
+# opens a real connection), and every import happens *after* collection starts.
+# A collection-time check therefore refuses only after the suite has already
+# dialled production. `pytest_configure` runs before the first test module is
+# imported, and it does not depend on which items were collected — so it also
+# behaves under pytest-xdist, where the controller never collects.
+#
+# Every scratch-database factory under tests/ derives its admin DSN from
+# `app.db.dsn.resolve_dsn()`, i.e. from exactly the environment checked here, so
+# this single gate also stops CREATE/DROP DATABASE against a prod server.
+# --------------------------------------------------------------------------
+
+_PG_LANE_SCRATCH_HINT = "DATABASE_URL=postgresql://app:app@127.0.0.1:15434/app_test"
+
+_PG_DSN_UNSET_REASON = (
+    "no database configured for the pg lane: set DATABASE_URL or DB_DSN to an "
+    "explicit non-production Postgres before running pg-marked tests, e.g. "
+    f"{_PG_LANE_SCRATCH_HINT}. This lane has no default target on purpose "
+    "(#4573) — it runs destructive DDL, TRUNCATE, and CREATE/DROP DATABASE."
+)
+
+
+def _looks_like_prod_test_dsn(dsn: str) -> bool:
+    """Classify the effective libpq target without changing the shared guard.
+
+    Issue #4573 requires the existing ``looks_like_prod_dsn`` guard to remain
+    unchanged. Psycopg's parser closes the test-only gap for URI query options,
+    percent encoding, and whitespace around keyword assignments.
+    """
+
+    from app.db.dsn import looks_like_prod_dsn, resolve_dsn
+
+    if looks_like_prod_dsn(dsn):
+        return True
+    try:
+        from psycopg.conninfo import conninfo_to_dict
+
+        effective = conninfo_to_dict(resolve_dsn(dsn))
+    except Exception:
+        # A configured target the guard cannot understand is not safe enough
+        # for a destructive test lane.
+        return True
+
+    # A libpq service can supply host, port, database, and credentials from an
+    # external file. Its effective target is not visible in conninfo, so a
+    # destructive lane must treat service indirection as unsafe rather than
+    # accepting an apparently harmless explicit DSN.
+    if str(effective.get("service", "") or "").strip():
+        return True
+
+    dbname = str(effective.get("dbname", "") or "").strip()
+    ports = str(effective.get("port", "") or "").split(",")
+    return dbname == "app" or any(port.strip() == "15432" for port in ports)
+
+
+def _prod_dsn_abort_message(*, variable: str = "DATABASE_URL/DB_DSN") -> str:
+    return (
+        f"Refusing to run pg-marked tests: {variable} resolves to a "
+        "production-looking database. The configured connection value is "
+        "not echoed because it may contain credentials. "
+        "app.db.dsn.looks_like_prod_dsn flags a DSN whose database name is "
+        "exactly 'app' or whose port is the prod-published 15432. The pg lane "
+        "runs destructive DDL, TRUNCATE, and CREATE/DROP DATABASE against the "
+        f"resolved server. Point it at a scratch database, e.g. "
+        f"{_PG_LANE_SCRATCH_HINT} (#4573)."
+    )
+
+
+def _refuse_prod_dsn_before_any_import() -> None:
+    """Abort the session if any configured DSN points at production.
+
+    Three writers, not one. `DATABASE_URL`/`DB_DSN` is the documented pair, but
+    `app/config/database.py :: resolve_runtime_database_url` is a *second*
+    resolver behind `app/db/db.py :: conn_rw`, fed by `PKM_DB_HOST`,
+    `PKM_DB_PORT`, `PKM_DB_NAME_*` and `POSTGRES_*`. A run with
+    `PKM_DB_HOST=127.0.0.1 PKM_DB_PORT=15432` and no `DATABASE_URL` reaches
+    production through `conn_rw()` while the first pair looks unconfigured.
+    `BUILDEROPS_DATABASE_URL` is a third, with its own CREATE SCHEMA path.
+    """
+
+    from app.config.database import explicit_runtime_database_url
+    from app.db.dsn import resolve_dsn
+
+    control_plane = os.getenv("BUILDEROPS_DATABASE_URL", "").strip()
+    if control_plane and _looks_like_prod_test_dsn(control_plane):
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="BUILDEROPS_DATABASE_URL"))
+
+    dsn = resolve_dsn()
+    if dsn and _looks_like_prod_test_dsn(dsn):
+        raise pytest.UsageError(_prod_dsn_abort_message())
+
+    runtime_env = {
+        key: value for key, value in os.environ.items() if key not in {"DATABASE_URL", "DB_DSN"}
+    }
+    runtime_dsn = explicit_runtime_database_url(runtime_env)
+    if runtime_dsn and _looks_like_prod_test_dsn(runtime_dsn):
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="PKM_DB_* / POSTGRES_*"))
+
+    if os.getenv("PGSERVICE", "").strip() or os.getenv("PGSERVICEFILE", "").strip():
+        raise pytest.UsageError(
+            "Refusing to run pg-marked tests: PGSERVICE/PGSERVICEFILE configures "
+            "libpq service indirection whose effective target cannot be inspected "
+            "safely before test imports. The service name and file are not echoed "
+            "because they may lead to credential material. Unset both variables "
+            "and name an explicit "
+            f"non-production DATABASE_URL instead, e.g. {_PG_LANE_SCRATCH_HINT} "
+            "(#4573)."
+        )
+
+    # A safe primary/runtime DSN does not neutralise callers that pass an empty
+    # conninfo and therefore consume libpq's ambient variables.
+    ambient = _ambient_libpq_target()
+    if ambient and _looks_like_prod_test_dsn(ambient):
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="PGHOST/PGPORT/PGDATABASE"))
+
+
+_PSYCOPG_CLIENT_ONLY_KWARGS = {
+    "autocommit",
+    "prepare_threshold",
+    "context",
+    "row_factory",
+    "cursor_factory",
+}
+
+
+def _guard_pg_connection_target(
+    conninfo: object = "", connection_kwargs: dict[str, object] | None = None
+) -> None:
+    """Refuse production again at the connection side-effect boundary.
+
+    The pre-import check protects inherited configuration, but a test can
+    mutate environment variables or assemble conninfo after pytest_configure.
+    Re-evaluating every writer immediately before psycopg connects makes those
+    late and dynamic values safe without pretending a static AST census can
+    model arbitrary Python control flow.
+    """
+
+    _refuse_prod_dsn_before_any_import()
+
+    # Psycopg accepts every libpq connection parameter as a keyword argument;
+    # those parameters augment or override the positional conninfo. Classify
+    # the same effective target psycopg will use, not only the first argument.
+    try:
+        from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+        target = make_conninfo(str(conninfo or ""), **(connection_kwargs or {}))
+        effective = conninfo_to_dict(target)
+    except Exception:
+        # An indeterminate target is never safe for a destructive test lane.
+        raise pytest.UsageError(
+            _prod_dsn_abort_message(variable="psycopg connection target")
+        ) from None
+
+    host = str(effective.get("host", "") or "").strip()
+    hostaddr = str(effective.get("hostaddr", "") or "").strip()
+    hosts = host.split(",") if host else []
+    hostaddrs = hostaddr.split(",") if hostaddr else []
+
+    # Empty members are significant in libpq multi-host lists: a position with
+    # neither host nor hostaddr selects the platform default (a Unix socket on
+    # Unix). Keep list positions aligned instead of filtering empty strings.
+    mismatched_lists = bool(hosts and hostaddrs and len(hosts) != len(hostaddrs))
+    implicit_or_socket_target = not hosts and not hostaddrs
+    for index in range(max(len(hosts), len(hostaddrs))):
+        candidate_host = hosts[index].strip() if index < len(hosts) else ""
+        candidate_hostaddr = hostaddrs[index].strip() if index < len(hostaddrs) else ""
+        if candidate_host.startswith(("/", "@")) or (
+            not candidate_host and not candidate_hostaddr
+        ):
+            implicit_or_socket_target = True
+            break
+
+    if mismatched_lists or implicit_or_socket_target or _looks_like_prod_test_dsn(target):
+        raise pytest.UsageError(_prod_dsn_abort_message(variable="psycopg connection target"))
+
+
+def _install_pg_connection_guard() -> None:
+    """Guard all three distinct psycopg connection entry points once."""
+
+    import psycopg
+
+    if getattr(psycopg, "_pkm_test_connection_guard_installed", False):
+        return
+
+    module_connect = psycopg.connect
+    sync_connect = psycopg.Connection.connect.__func__
+    async_connect = psycopg.AsyncConnection.connect.__func__
+
+    def connection_kwargs(kwargs: dict[str, object]) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key not in _PSYCOPG_CLIENT_ONLY_KWARGS
+        }
+
+    def guarded_module_connect(conninfo: str = "", *args, **kwargs):
+        _guard_pg_connection_target(conninfo, connection_kwargs(kwargs))
+        return module_connect(conninfo, *args, **kwargs)
+
+    def guarded_sync_connect(owner, conninfo: str = "", *args, **kwargs):
+        _guard_pg_connection_target(conninfo, connection_kwargs(kwargs))
+        return sync_connect(owner, conninfo, *args, **kwargs)
+
+    def guarded_async_connect(owner, conninfo: str = "", *args, **kwargs):
+        _guard_pg_connection_target(conninfo, connection_kwargs(kwargs))
+        return async_connect(owner, conninfo, *args, **kwargs)
+
+    psycopg.connect = guarded_module_connect
+    psycopg.Connection.connect = classmethod(guarded_sync_connect)
+    psycopg.AsyncConnection.connect = classmethod(guarded_async_connect)
+    psycopg._pkm_test_connection_guard_installed = True
+
+
+def _ambient_libpq_target() -> str:
+    """The DSN libpq would synthesise from its own environment, if any.
+
+    `psycopg.connect("")` is not "no target": libpq fills the blanks from
+    `PGHOST`/`PGPORT`/`PGDATABASE`. A run with those exported at the production
+    values reaches production through any caller that hands an empty conninfo
+    down, without `DATABASE_URL` ever being set.
+
+    `PGHOSTADDR` is independent of `PGHOST`, and an unset host still permits a
+    Unix-socket connection. Therefore every explicitly named ambient target
+    field participates: host, hostaddr, port, database, or user (whose value is
+    also libpq's default database name). An entirely absent ambient target is
+    the only case that returns "".
+    """
+
+    host = os.getenv("PGHOST", "").strip()
+    hostaddr = os.getenv("PGHOSTADDR", "").strip()
+    port = os.getenv("PGPORT", "").strip()
+    dbname = os.getenv("PGDATABASE", "").strip()
+    user = os.getenv("PGUSER", "").strip()
+    if not any((host, hostaddr, port, dbname, user)):
+        return ""
+    try:
+        from psycopg.conninfo import make_conninfo
+
+        fields = {
+            key: value
+            for key, value in {
+                "host": host,
+                "hostaddr": hostaddr,
+                "port": port,
+                "user": user,
+                "dbname": dbname or user,
+            }.items()
+            if value
+        }
+        return make_conninfo(**fields)
+    except Exception:
+        # Malformed configured ambient state is indeterminate, never safe for
+        # a destructive lane. A schemeless value fails closed in the classifier.
+        return "configured ambient libpq target could not be parsed"
+
+
+def _is_builderops_dsn_consumer(item: object) -> bool:
+    path = getattr(item, "path", None)
+    if path is None:
+        return False
+    resolved = Path(path).resolve()
+    try:
+        resolved.relative_to(ROOT / "tests" / "builderops" / "control_plane")
+    except ValueError:
+        return (
+            resolved == ROOT / "tests" / "ops" / "test_builderops_backup_restore.py"
+            and "recovery_store" in getattr(item, "fixturenames", ())
+        )
+    return True
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """Skip pg-marked tests when no database was named, with a stated reason."""
+
+    from app.db.dsn import resolve_dsn
+
+    primary_configured = bool(resolve_dsn())
+    builderops_configured = bool(os.getenv("BUILDEROPS_DATABASE_URL", "").strip())
+    skip_pg = pytest.mark.skip(reason=_PG_DSN_UNSET_REASON)
+    for item in items:
+        if item.get_closest_marker("pg") is None:
+            continue
+        if primary_configured:
+            continue
+        if builderops_configured and _is_builderops_dsn_consumer(item):
+            continue
+        else:
+            item.add_marker(skip_pg)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Make an unconfigured pg lane loud rather than a silent run of 's'.
+
+    Driven by the skip reports themselves rather than by state stashed during
+    collection: under pytest-xdist the collection hook runs in the workers while
+    this summary runs in the controller, so anything stashed on the worker's
+    config is invisible here. Reports cross that boundary; config stashes do
+    not. Reading the reports also means no banner is printed for a run that
+    simply had no pg tests in it.
+    """
+
+    skipped = terminalreporter.stats.get("skipped", [])
+    if not any(_PG_DSN_UNSET_REASON in str(report.longrepr) for report in skipped):
+        return
+    terminalreporter.write_sep("=", "pg lane skipped", red=True, bold=True)
+    terminalreporter.write_line(_PG_DSN_UNSET_REASON)

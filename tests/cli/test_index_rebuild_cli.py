@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -208,7 +207,7 @@ def test_index_rebuild_sets_pg_meta(monkeypatch) -> None:
 
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    dsn = resolve_dsn()
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
@@ -245,7 +244,7 @@ def test_index_rebuild_resets_missing_meta(monkeypatch) -> None:
 
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    dsn = resolve_dsn()
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")

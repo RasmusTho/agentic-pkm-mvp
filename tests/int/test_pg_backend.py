@@ -1,4 +1,3 @@
-import os
 
 import psycopg
 import pytest
@@ -10,7 +9,7 @@ pytestmark = pytest.mark.pg
 
 
 def _pg_available() -> bool:
-    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = resolve_dsn()
     try:
         conn = psycopg.connect(url, connect_timeout=1)
         conn.close()
@@ -22,7 +21,7 @@ def _pg_available() -> bool:
 def test_pg_roundtrip(monkeypatch):
     if not _pg_available():
         pytest.skip("Postgres backend not available")
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app"))
+    monkeypatch.setenv("DATABASE_URL", resolve_dsn())
     monkeypatch.setenv("STORE_BACKEND", "pg")
     objects, decisions = get_stores()
     obj = objects.upsert(kind="note", payload={"title": "pg"})

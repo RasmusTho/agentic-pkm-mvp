@@ -69,11 +69,10 @@ def _sanitize_external_env(
     monkeypatch.setenv("LLM_EMBED_MODEL", "mock-embed")
 
     # pg-marked tests must see the environment-provided DATABASE_URL (CI
-    # service container, local dev DB); stripping it here made every pg test
-    # in CI fall through to the machine-local 127.0.0.1:15432 default in
-    # tests/conftest.py::default_pg_dsn_for_pg_tests and skip or fail
-    # (#2818). Same guard pattern as
-    # tests/conftest.py::force_memory_store_for_non_pg.
+    # service container, local scratch DB); stripping it here made every pg
+    # test in CI skip or fail (#2818). There is no fallback to strip through
+    # any more — the pg lane is explicit-or-nothing (#4573). Same guard pattern
+    # as tests/conftest.py::force_memory_store_for_non_pg.
     if request.node.get_closest_marker("pg") is None:
         monkeypatch.setenv("STORE_BACKEND", "memory")
         monkeypatch.delenv("DATABASE_URL", raising=False)

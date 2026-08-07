@@ -31,7 +31,6 @@ embedding client, exactly like the existing reconcile suite.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict
 from uuid import uuid4
 
@@ -47,7 +46,7 @@ def _pg_available() -> bool:
 
     from app.db.dsn import resolve_dsn
 
-    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = resolve_dsn()
     try:
         conn = psycopg.connect(url, connect_timeout=1)
         conn.close()
@@ -277,7 +276,7 @@ def test_doctor_flags_old_identity_rows(tmp_path, monkeypatch) -> None:
     from app.stores import reset_store_backends
 
     def _dsn() -> str:
-        return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+        return resolve_dsn()
 
     monkeypatch.setenv("DATABASE_URL", _dsn())
     monkeypatch.setenv("STORE_BACKEND", "pg")
@@ -342,7 +341,7 @@ def test_reconcile_converges(tmp_path, monkeypatch) -> None:
     from app.stores import reset_store_backends
 
     def _dsn() -> str:
-        return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+        return resolve_dsn()
 
     monkeypatch.setenv("DATABASE_URL", _dsn())
     monkeypatch.setenv("STORE_BACKEND", "pg")

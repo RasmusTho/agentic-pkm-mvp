@@ -8,9 +8,8 @@ patch in #2091.
 
 Tests must set process env only via pytest's ``monkeypatch`` fixture (function
 scoped, auto-restored) or the autouse fixtures in ``tests/conftest.py``
-(``force_memory_store_for_non_pg`` / ``default_pg_dsn_for_pg_tests`` /
-``default_vault_layout_env``). This guard pins the files remediated under #2101 so
-they cannot regress to raw mutation.
+(``force_memory_store_for_non_pg`` / ``default_vault_layout_env``). This guard
+pins the files remediated under #2101 so they cannot regress to raw mutation.
 """
 
 from __future__ import annotations

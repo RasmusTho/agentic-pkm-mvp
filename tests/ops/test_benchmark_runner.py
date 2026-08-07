@@ -295,8 +295,8 @@ class TestSubprocessEnvHermetic:
     def test_subprocess_env_drops_leaked_contamination(self, monkeypatch) -> None:
         # Simulate the leak: a prior test left these in the process env.
         monkeypatch.setenv("VAULT_ROOT", "/nonexistent/leaked/vault/path")
-        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15432/app")
-        monkeypatch.setenv("DB_DSN", "postgresql://app:app@127.0.0.1:15432/app")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://app:app@127.0.0.1:15434/app_test")
+        monkeypatch.setenv("DB_DSN", "postgresql://app:app@127.0.0.1:15434/app_test")
         monkeypatch.setenv("LLM_FORCE_PROVIDER", "ollama")
         monkeypatch.setenv("EMBED_PROFILE", "local")
         monkeypatch.setenv("LLM_MOCK_RESPONSE", '{"type":"note","trust":"external"}')

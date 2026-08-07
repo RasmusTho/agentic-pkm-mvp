@@ -714,7 +714,7 @@ jobs:
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
-          POSTGRES_DB: app
+          POSTGRES_DB: app_test
         ports:
           - 5432:5432
         options: >-
@@ -723,8 +723,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://app:app@localhost:5432/app
-      DB_DSN: postgresql://app:app@localhost:5432/app
+      DATABASE_URL: postgresql://app:app@localhost:5432/app_test
+      DB_DSN: postgresql://app:app@localhost:5432/app_test
       PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/companion-ui/companion-app
       STORE_BACKEND: pg
       LLM_PROVIDER: mock

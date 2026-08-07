@@ -75,6 +75,70 @@ Practical rule:
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
+### Pointing the PG lane at a scratch database
+
+The `pg` lane has **no default database** (#4573). It runs destructive DDL, `TRUNCATE`, and
+`CREATE DATABASE` / `DROP DATABASE` against whatever `DATABASE_URL` / `DB_DSN` resolves to, so it
+refuses to guess:
+
+- Nothing configured → every `pg`-marked test **skips**, with a terminal banner naming what to set.
+  A skipped PG lane is never silent, including under `pytest-xdist` (`make smoke`, `CI Smoke`).
+- A DSN that `app/db/dsn.py :: looks_like_prod_dsn` flags → the run **aborts in `pytest_configure`,
+  before the first test module is imported**, so nothing opens a connection. That classifier flags a
+  DSN whose database name is exactly `app` or whose port is the prod-published `15432`.
+
+The same classification runs again at all three psycopg connection entry points during pytest. That
+side-effect-boundary guard classifies positional conninfo together with libpq keyword parameters, so
+late overrides cannot hide a production target. It also refuses implicit or explicit local-socket
+targets and service indirection, whose server cannot be proven safe. The AST census under
+`tests/architecture/` deliberately checks only hard-coded defaults; it is not a Python dataflow analyzer.
+
+The gate checks **four** ways this repo can name a database, not just the obvious one:
+
+| Writer | Reached through | Checked |
+|---|---|---|
+| `DATABASE_URL` / `DB_DSN` | `app/db/dsn.py :: resolve_dsn` | always |
+| `PKM_DB_HOST` / `PKM_DB_PORT` / `PKM_DB_NAME_*` / `POSTGRES_*` | `app/config/database.py :: resolve_runtime_database_url` → `app/db/db.py :: conn_rw` | always when explicitly configured |
+| `PGHOST` / `PGHOSTADDR` / `PGPORT` / `PGDATABASE` / `PGUSER` | libpq's own defaults, whenever an empty conninfo is passed | always when any target field is explicitly configured |
+| `PGSERVICE` / `PGSERVICEFILE` | libpq service indirection | fail closed whenever either is configured because its effective target cannot be inspected safely before imports |
+| `BUILDEROPS_DATABASE_URL` | the control plane's own `CREATE SCHEMA` path | always |
+
+Service indirection is fail-closed whether selected through `PGSERVICE` / `PGSERVICEFILE` or embedded
+as a `service` option in an explicit conninfo/URI: the service file can supply a target the pre-import
+guard cannot inspect safely.
+
+The second and third are the reason `DATABASE_URL` alone is not sufficient: a run with
+`PKM_DB_HOST=127.0.0.1 PKM_DB_PORT=15432` and no `DATABASE_URL` reaches production through
+`conn_rw()` while the documented pair still looks unconfigured. Each writer is checked independently:
+a safe primary DSN cannot hide a production runtime or ambient libpq target. The unconditional
+compose-internal fallback is ignored only when no runtime writer was explicitly configured.
+
+Collection authorization stays consumer-specific. `DATABASE_URL` / `DB_DSN` authorizes the ordinary
+`pg` lane; `BUILDEROPS_DATABASE_URL` authorizes only the control-plane tests and BuilderOps recovery
+test that consume it. Runtime and ambient libpq variables never globally unskip destructive tests
+that consume the documented pair.
+
+The refusal is deliberately placed before imports rather than after collection: several test modules
+probe Postgres at import time (`tests/stores/test_capabilities_matrix.py` evaluates `pg_available()`
+inside a `skipif`), and every import happens after collection begins. A collection-time check
+refuses only *after* the suite has already dialled the server. The consequence is that the check
+reads the environment, not the selected test set: a run whose marker expression happens to exclude
+`pg` still aborts if a prod-looking DSN is exported, unless the expression contains the literal
+`not pg`, which makes `tests/conftest.py` drop both variables up front. Unset the variable, or use
+`-m "not pg"`, when you want that run to proceed.
+
+Name a non-production target explicitly:
+
+```bash
+DATABASE_URL=postgresql://app:app@127.0.0.1:15434/app_test python3 -m pytest -q -m pg
+```
+
+Per `docs/ENVIRONMENTS.md`, `dev` publishes `15433` / `app_dev` and `test` publishes `15434` /
+`app_test`; `15432` / `app` is production and is exactly what the guard exists to refuse. The
+scratch-database factories under `tests/migrations/**` derive their admin DSN from the same
+resolution, so this one setting also decides where `CREATE DATABASE` lands. CI supplies its own
+`app_test` service DSN and is unaffected.
+
 Escalate to the repo-wide non-PG suite only when the governing Issue/owner document names it or the
 change has cross-system blast radius that focused subsystem tests cannot cover:
 

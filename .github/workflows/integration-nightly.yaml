@@ -180,7 +180,7 @@ jobs:
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
-          POSTGRES_DB: app
+          POSTGRES_DB: app_test
         ports:
           - 5432:5432
         options: >-
@@ -189,7 +189,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
+      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app_test
       PYTHONPATH: ${{ github.workspace }}
       STORE_BACKEND: pg
       LLM_PROVIDER: mock
@@ -268,7 +268,7 @@ jobs:
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
-          POSTGRES_DB: app
+          POSTGRES_DB: app_test
         ports:
           - 5432:5432
         options: >-
@@ -277,7 +277,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql://app:app@localhost:5432/app
+      DATABASE_URL: postgresql://app:app@localhost:5432/app_test
       PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4

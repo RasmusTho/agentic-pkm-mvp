@@ -26,7 +26,7 @@ def test_panel_runtime_enqueues_db_outbox(monkeypatch, tmp_path) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    dsn = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    dsn = resolve_dsn()
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     audit_path = tmp_path / "index-outbox.jsonl"

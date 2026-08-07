@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 
 import psycopg
 import pytest
@@ -10,7 +9,14 @@ from app.stores import reset_store_backends, resolve_store_backend, resolved_sto
 
 
 def _pg_available() -> bool:
-    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    url = resolve_dsn()
+    if not url:
+        # An empty conninfo is not "no target": libpq then supplies its own
+        # from PGHOST/PGPORT/PGDATABASE or the local socket. This module is not
+        # pg-marked, so force_memory_store_for_non_pg has already cleared
+        # DATABASE_URL/DB_DSN and `url` is always empty here — dialling would
+        # mean silently picking whatever the ambient environment names (#4573).
+        return False
     try:
         conn = psycopg.connect(url, connect_timeout=1)
         conn.close()
@@ -41,7 +47,12 @@ def _reset_between_tests():
 
 def test_store_backend_override_wins(monkeypatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    # Must not be a reachable production address (#4573): this module's autouse
+    # teardown calls reset_store_backends() -> truncate_pg_tables(), and that
+    # finalizer runs BEFORE monkeypatch restores the environment. With the prod
+    # DSN still installed, the teardown issued DELETE against production on any
+    # host publishing it on 15432. The assertion only needs *some* DSN present.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15434/app_test")
     assert resolve_store_backend() == "memory"
 
 
@@ -69,11 +80,24 @@ def test_store_backend_auto_detects_pg_postgresql_dsn(monkeypatch):
 
 
 def test_store_backend_auto_detects_pg(monkeypatch):
-    if not _pg_available():
-        pytest.skip("Postgres backend not available")
+    """A reachable DSN and no override auto-detects the pg backend.
+
+    Driven through the fake connector rather than a live server (#4573). This
+    module is not pg-marked, so `force_memory_store_for_non_pg` clears
+    DATABASE_URL/DB_DSN before the body runs and `resolve_dsn()` is always
+    empty here — the previous form asked a real Postgres whether it was up,
+    which meant dialling whatever the environment named, and on this repo's
+    hosts that was production. Skipping instead would trade a prod dial for a
+    permanently silent `s`, so the assertion is kept and the server removed.
+    """
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(psycopg, "connect", _fake_connect(captured))
     monkeypatch.delenv("STORE_BACKEND", raising=False)
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn() or "postgresql://app:app@127.0.0.1:15432/app")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15434/app_test")
+
     assert resolve_store_backend() == "pg"
+    assert captured["dsn"] == "postgresql://app:app@127.0.0.1:15434/app_test"
 
 
 def test_store_backend_without_config_raises(monkeypatch):

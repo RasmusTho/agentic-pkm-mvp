@@ -9,7 +9,6 @@ Requires a live Postgres backend; skipped when unavailable.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict
 from uuid import uuid4
 
@@ -32,7 +31,7 @@ GEMINI = EmbeddingIdentity(provider="gemini", model="gemini-embedding-001", dim=
 
 
 def _dsn() -> str:
-    return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    return resolve_dsn()
 
 
 def _pg_available() -> bool:
