@@ -955,6 +955,15 @@ if [ "${action}" = "rollback" ] && [ "${dry_run}" = "1" ]; then
 fi
 if [ "${action}" = "deploy" ]; then
   deploy_channel_tts_config_preflight "${ROOT}" "${channel}" "${pin_file}" || exit $?
+else
+  # Rollback must remain reachable even when the caller carries a stale TTS
+  # selector whose host directory no longer exists. Bypass deploy validation,
+  # pin the tracked disabled fallback, and clear the machine-local root before
+  # the first Compose parse so fail-closed bind semantics cannot block recovery.
+  DEPLOY_TTS_CONFIG_GOVERNED=1
+  DEPLOY_TTS_ENABLED=false
+  unset DEPLOY_TTS_HOST_ROOT
+  export DEPLOY_TTS_CONFIG_GOVERNED DEPLOY_TTS_ENABLED
 fi
 migration_from_sha="${current_sha:-}"
 if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then

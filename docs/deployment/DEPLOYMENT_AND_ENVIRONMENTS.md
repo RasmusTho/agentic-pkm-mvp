@@ -271,8 +271,9 @@ captured privately: only validated container IDs needed by internal probes may c
 while other successes stay quiet and failures emit a fixed redacted receipt. Status and failure
 output therefore contains selector names, boolean state, reason code, path class, and fixed command
 result only. Disabled/unset channels use the tracked empty `config/tts-disabled` fallback and require
-no machine-local TTS root. The check is deploy-only: rollback remains unconditionally reachable
-through its existing contract.
+no machine-local TTS root. The check is deploy-only: rollback clears stale caller TTS selectors,
+pins the disabled fallback without validating the missing root, and remains unconditionally
+reachable through its existing contract.
 
 1. **Pin the ref.** Resolve the commit SHA to deploy and its already-built image tag (`ghcr.io/<owner>/pkm-app:<sha>`). For `prod`, the SHA must be the one authorized by the promotion-plan contract in `docs/RELEASE_CHANNELS/README.md` (the `stable`-ref decision; see also #2527). Update the channel's deploy-pin file to that tag.
 2. **Migration gate (forward-only surfaced + operator ack).** Diff the migrations between the currently-running SHA and the target SHA. Classify each per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`. **Surface every forward-only (irreversible) migration explicitly and require operator acknowledgement before proceeding** — a forward-only migration is the one thing that makes a deploy not cleanly rollback-able. Reversible migrations proceed under the standard gate; forward-only migrations are an `agent:needs-human` stop.

@@ -49,7 +49,8 @@ enablement — which cannot live in the repo.
    class. The long-form bind refuses to create a root that disappears after validation, and governed
    Compose output is suppressed behind a fixed redacted failure receipt. `false` or unset remains
    the default, uses the tracked empty disabled fallback, and requires no machine-local host root;
-   rollback remains available without this deploy-only preflight.
+   rollback remains available without this deploy-only preflight and explicitly clears stale caller
+   selectors before Compose parses the tracked disabled fallback.
 5. Verify: `curl -s http://127.0.0.1:18000/api/companion/tts/status | jq '.environment, .providers'`
    → `TTS_ENABLED=true`, providers `available=true`. Post the receipt to #1699 (this is AC4) and close it.
 

@@ -533,6 +533,33 @@ def test_disabled_tts_and_rollback_bypass_enabled_root_requirement(
     assert "tts config preflight" not in (rollback.stdout + rollback.stderr).lower()
 
 
+def test_non_dry_rollback_clears_stale_caller_tts_root(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n" f"APP_IMAGE_TAG={sha}\n",
+        encoding="utf-8",
+    )
+    stale_root = tmp_path / "stale-machine-local-tts"
+    env["TTS_ENABLED"] = "true"
+    env["TTS_HOST_ROOT"] = str(stale_root)
+
+    result = subprocess.run(
+        ["bash", "scripts/deploy_channel.sh", "rollback", "dev", sha],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert str(stale_root) not in output
+    assert not stale_root.exists()
+    assert (root / "config/tts-disabled/.gitkeep").is_file()
+
+
 def test_deploy_channel_invokes_tts_preflight_before_mutation() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     run_block = script.split('echo "deploy plan:', 1)[1]

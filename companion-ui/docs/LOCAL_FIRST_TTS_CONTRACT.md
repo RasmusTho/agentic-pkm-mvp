@@ -109,7 +109,8 @@ bind-mounted to a fixed container path and the `TTS_*_DIR` values above are the 
   instead of being recreated; disabled/non-deploy consumers bind the tracked empty
   `config/tts-disabled` fallback. Governed Compose child output is private and suppressed, except
   validated container IDs needed internally; failures emit a fixed redacted status. Rollback
-  deliberately bypasses this deploy-only preflight. The ordinary
+  deliberately bypasses this deploy-only preflight and clears stale caller selectors so it always
+  uses the tracked disabled fallback. The ordinary
   SHA-tagged app image bakes the `piper` command and importable `kokoro_onnx` dependency from one
   shared manifest on both `linux/amd64` and `linux/arm64`; the main image workflow verifies Piper
   CLI loading, Kokoro importability, application import, and health behavior on each platform. Its
