@@ -1,5 +1,5 @@
-State: Active capability specification + owner doc. v1 first increment delivered (#4438); parent
-feature issue #4447 is the live validation hub; children #4448-#4453 filed.
+State: Active capability specification + owner doc. All seven v1 slices in the task table are
+delivered; parent feature issue #4447 remains the live validation hub.
 Doc role: Capability specification directory README and owner doc for the cockpit surface.
 
 # BuilderOps Cockpit
@@ -32,14 +32,27 @@ Design provenance: the 2026-07-30 `builderops-cockpit` design exploration (Yggdr
 explicit decision in `DESIGN_DECISIONS.md`. This directory is the normalized authority; the design
 pack is supporting input.
 
+## Relationship to the devUI target
+
+`docs/DEVUI.md` proposes the target Product Owner experience across capability evidence, work in
+motion, delivery decisions, active runs, and receipts; it becomes owner authority after explicit
+acceptance. This cockpit remains the delivered read-only work
+register and a source view for that target. Its registry, freshness, chain, and lens contracts should
+be reused by devUI; its no-decision, no-persistence, and no-authority boundaries do not move.
+
+The planned authenticated delivery controls are not added to this static/read-time join. They appear
+inside the owner-perceived devUI flow through a separately authenticated action boundary owned by
+DDO-06. One experience therefore does not make this registry a control plane.
+
 ## What the delivered increment renders (#4438)
 
 - **Four bands in locked order plus a needs-you band**, derivation fail-closed. #4438 derived the
   band from the dispatcher status word; BOPS-COCKPIT-04 (#4452) replaced that mapping with
   **chain-position** derivation (`derive_position` in `app/builderops/cockpit_chain.py`) over the
   joined planes: a thread whose position cannot be computed lands in the explicit `unclassified`
-  list, never guessed. `agent:needs-human` routes to the needs-you band — label routing reads the
-  sync mirror's `sync_state`, which production sync has populated with labels and URLs since #4441
+  list, never guessed. A canonically classified `agent:needs-human` authority exception routes to
+  the needs-you band; ambiguous or unmapped technical state stays unclassified/flawed. Label
+  routing reads the sync mirror's `sync_state`, which production sync has populated with labels and URLs since #4441
   (=#4456, audit F9) merged; each mirror-derived field now names its own `sync_state.last_pull_at`
   watermark rather than borrowing the dispatcher-store read instant (BOPS-COCKPIT-03, #4450).
 - **An eight-rung evidence spine per thread** — intention · capability · epic · slice · PR ·

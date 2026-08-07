@@ -38,6 +38,16 @@ The page remains a non-authoritative BuilderOps projection. All source data is c
 rendering, content and ordering are deterministic for the same bound inputs, and no cockpit
 affordance can mutate CKM, GitHub, repo docs, Product/Runtime state, or BuilderOps authority.
 
+## Relationship to the devUI target
+
+`docs/DEVUI.md` proposes the target Product Owner experience that connects capability understanding
+to governed delivery; it becomes owner authority after explicit acceptance. Direction B remains
+the delivered static evidence snapshot/export and fallback
+inside that architecture. devUI may reuse its owner-readable trust, change, attention, and
+progressive-detail patterns, but it must read CKM through a versioned read contract and keep every
+approval or lifecycle control in a separately authenticated action boundary. Nothing in the devUI
+target turns this generated artifact into a hosted or mutating cockpit.
+
 ## Explicitly out of scope
 
 - automatic ranking, gating, prioritization, agent scoring, prediction, causal diagnosis, trend

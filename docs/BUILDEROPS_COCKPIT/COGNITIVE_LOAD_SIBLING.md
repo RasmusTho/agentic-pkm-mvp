@@ -31,8 +31,10 @@ Creates `docs/BUILDEROPS_COCKPIT/COGNITIVE_LOAD_REBINDING.md` (docs-only slice) 
 - Adds the **rebinding table**: each CLPL term bound to its Builder equivalent (user → owner-as-
   operator; note surface → register card; resurfacing budget → needs-you band admission; why-now
   contract → the gate's own phrasing on the card; decision modes → the tri-state gate banding:
-  typed gate status decides *whether* something may demand attention, fail-closed to "needs your
-  decision" on ambiguity; TCD orders only *within* the band).
+  typed gate status decides *whether* something may demand attention; ambiguous or unmapped
+  technical state fails closed to unclassified/flawed and "blocked by evidence/system". "Needs
+  your decision" requires an explicit canonical Human Exception authority category; TCD orders
+  only *within* the band).
 - Adds the **three button classes** as the only genuinely new normative content: `contract`
   (typed call — deterministic, idempotent, receipt of known shape) and `agent` (agent start with a
   prepared prompt — non-deterministic, prose in/out, receipt created by the agent's flow), both

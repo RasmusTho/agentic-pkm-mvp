@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: this directory for the capability contract; live GitHub, dispatcher, CI, PR, review, merge, and closure evidence for delivery truth
-Last reviewed: 2026-08-05
+Last reviewed: 2026-08-06
 
 # Deterministic Delivery Orchestration
 
@@ -113,18 +113,22 @@ envelope but no transport or storage shape becomes contract authority.
 | --- | --- |
 | Strict contract validation, dependency waves, concurrency cap, claim eligibility, effect identity, retries, wait scheduling, severity routing from a valid structured verdict, closure eligibility, and receipt construction | Deterministic code |
 | Implementation, novel failure diagnosis after deterministic classification is exhausted, and independent review producing a structured verdict | Bounded model worker |
-| Scope or authority conflict, override of a blocking invariant, irreversible external policy, or a requested Product/Runtime boundary change | Owner |
+| Explicit owner-reserved scope choice, irreversible external policy, requested Product/Runtime boundary change, or another named canonical Human Exception category | Owner |
 
 The owner-facing language is deliberately narrower than the internal state machine:
 
 - **AI can continue** means an explicit authority rule and every deterministic gate authorize the
   next bounded effect;
-- **Needs your decision** means a named rule reserves the decision for the owner, or contradictory
-  source authority requires owner resolution; and
+- **Needs your decision** means a named canonical Human Exception rule reserves the decision for
+  the owner; and
 - **Blocked by evidence/system** means neither a model nor the owner can legitimately skip missing
-  proof, unavailable dependencies, technical ambiguity, or a fail-closed recovery gap.
+  proof, unavailable dependencies, conflicting or ambiguous technical authority, or a fail-closed
+  recovery gap.
 
-The renderer does not infer which label applies.
+The renderer does not infer which label applies. DDO-04's delivered
+`authority_conflict`/`authority_contract_drift -> owner_decision` behavior is a known divergence;
+DDO-06/#4169 must bind each case to a canonical Human Exception or reclassify it as system-blocked
+before exposing owner language.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -301,8 +305,9 @@ resolves the seam between the delivered contracts/compiler and the remaining run
    session, heartbeat/reattachment, and structured result;
 4. BuilderOps owns durable execution, fencing, unknown-state reconciliation, active-run projection,
    and receipts without replacing GitHub/dispatcher authority;
-5. the static CKM cockpit stays inert; a separate authenticated console/CLI owns approval and typed
-   lifecycle controls; and
+5. the static CKM cockpit stays inert; the owner-perceived devUI flow uses a separately
+   authenticated action region (also available through CLI/API) for approval and typed lifecycle
+   controls, preserving one experience without merging the trust boundaries; and
 6. no external agent operating system is adopted wholesale. A durable carrier such as DBOS may be
    evaluated only after DDO-05 through a bounded conformance proof showing replay-safe start,
    unknown-start recovery, fencing, cancellation, and no second effect authority.
@@ -427,8 +432,9 @@ follow-up decision; it does not justify weakening quality gates.
   detached worktree bootstrap and concurrent ticks, and releases each lane only after the exact
   terminal closure chain.
   Verify: `autonomous_bug_delivery_pilot.v1` receipt linked from the parent.
-- [ ] CKM can draft and preview initiation, an authenticated boundary can start the same immutable
-  payload, and a receipt projects back without giving CKM delivery authority.
+- [ ] CKM can draft and preview initiation, an authenticated boundary can admit the same immutable
+  payload into BuilderOps command/journal handling, the reducer/outbox can start the permitted
+  effect, and a receipt projects back without giving CKM delivery authority.
   Verify: `tests/builderops/ckm/test_delivery_bridge.py`.
 - [ ] Measured coordination reaches the staged targets without quality regression.
   Verify: acceptance report and TCD ledger attached to the parent.
@@ -470,8 +476,11 @@ specification publication.
 - `docs/architecture/SBS_OPERATING_MODEL.md`
 - `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`
 - `docs/development/BUILDER_CONTROL_PLANE.md`
+- `docs/DEVUI.md`
 - `docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md`
 - `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md`
 - `docs/CKM_COCKPIT_DIRECTION_B/README.md`
 - `docs/audits/BUILDER_DELIVERY_AGENT_OS_2026-07-28.md`
 - `docs/audits/AUTONOMOUS_BUG_DELIVERY_ARCHITECTURE_2026-08-05.md`
+- `docs/audits/DEVUI_ARCHITECTURE_2026-08-06.md`
+- `docs/plans/DEVUI_IMPLEMENTATION.md`
