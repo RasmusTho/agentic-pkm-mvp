@@ -180,9 +180,13 @@ def test_each_reject_mutation_trigger_has_one_owner() -> None:
     versions = REPO_ROOT / "app" / "alembic" / "versions"
     for seam in TRIGGER_SEAMS:
         owner = next(versions.glob(f"{seam.migration}_*.py"))
-        owner_source = owner.read_text(encoding="utf-8").lower()
         declaration = f"create trigger {seam.trigger}".lower()
-        assert owner_source.count(declaration) == 1, (seam.trigger, owner)
+        declarations = [
+            (candidate, candidate.read_text(encoding="utf-8").lower().count(declaration))
+            for candidate in versions.glob("*.py")
+        ]
+        declarations = [(candidate, count) for candidate, count in declarations if count]
+        assert declarations == [(owner, 1)], (seam.trigger, declarations)
 
 
 def test_seam_issues_no_ddl_when_objects_are_present(

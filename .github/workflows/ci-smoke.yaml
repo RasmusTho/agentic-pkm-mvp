@@ -808,6 +808,7 @@ jobs:
             tests/indexer/test_outbox_roundtrip_pg.py \
             tests/knowledge_acquisition/test_youtube_api_quota_pg.py \
             tests/heimdal/test_entity_review_operation_journal.py \
+            tests/heimdal/test_trigger_ownership.py \
             tests/migrations/test_entity_review_operation_journal_schema_parity.py \
             tests/migrations/test_file_state_adoption.py \
             tests/migrations/test_objects_adoption.py \
