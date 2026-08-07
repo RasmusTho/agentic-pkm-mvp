@@ -190,7 +190,7 @@ case "$*" in
   *"ps -aq"*"com.docker.compose.service=scalar-rollback-guard"*)
     [ "${{FAKE_SCALAR_CONTAINERS:-0}}" = "1" ] && printf '%s\\n' fake-scalar-guard
     ;;
-  *" ps -q "*) printf '%s\\n' fake-capture-watch ;;
+  *" ps -q "*) printf '%064d\\n' 0 ;;
   inspect*) printf '%s\\n' "${{FAKE_CAPTURE_WATCH_STATUS:-healthy}}" ;;
 esac
 exit 0

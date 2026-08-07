@@ -104,8 +104,12 @@ bind-mounted to a fixed container path and the `TTS_*_DIR` values above are the 
   when enabled, a readable/executable absolute directory outside the repo before any pin, migration,
   or Compose mutation. It forwards the two selectors through the Compose process environment so
   stale caller-shell values cannot win; it never sources or prints the runtime-env file and never
-  passes that file as Compose's CLI `--env-file`. Rollback deliberately bypasses this deploy-only
-  preflight. The ordinary
+  passes that file as Compose's CLI `--env-file`. The bind uses
+  `create_host_path: false`, so a validated external root that disappears before Compose fails
+  instead of being recreated; disabled/non-deploy consumers bind the tracked empty
+  `config/tts-disabled` fallback. Governed Compose child output is private and suppressed, except
+  validated container IDs needed internally; failures emit a fixed redacted status. Rollback
+  deliberately bypasses this deploy-only preflight. The ordinary
   SHA-tagged app image bakes the `piper` command and importable `kokoro_onnx` dependency from one
   shared manifest on both `linux/amd64` and `linux/arm64`; the main image workflow verifies Piper
   CLI loading, Kokoro importability, application import, and health behavior on each platform. Its

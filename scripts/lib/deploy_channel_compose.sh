@@ -144,13 +144,6 @@ except OSError:
     emit("blocked", "invalid_enabled_root", "inaccessible")
     raise SystemExit(0)
 try:
-    candidate.relative_to(root)
-except ValueError:
-    pass
-else:
-    emit("blocked", "invalid_enabled_root", "repo_contained")
-    raise SystemExit(0)
-try:
     resolved_candidate.relative_to(resolved_root)
 except ValueError:
     pass
@@ -512,13 +505,15 @@ deploy_channel_compose() {
     # forwards SIGNBOARD_ROOT from this governed shell via the bare `KEY:`
     # form), so a private temp file does not weaken the runtime env ownership
     # boundary the earlier in-memory-only comment protected.
-    local signboard_override_file
+    local signboard_override_file compose_stdout_file compose_stderr_file compose_rc
     signboard_override_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-signboard-override.XXXXXX")"
+    compose_stdout_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stdout.XXXXXX")"
+    compose_stderr_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stderr.XXXXXX")"
     # EXIT here is scoped to this `( ... )` subshell only (traps set inside a
     # subshell do not leak into the parent shell), so this fires exactly once
     # when the subshell running the actual Compose invocation exits, on every
     # path including an early `exit 1` above or a failing Compose command.
-    trap 'rm -f -- "${signboard_override_file}"' EXIT
+    trap 'rm -f -- "${signboard_override_file}" "${compose_stdout_file}" "${compose_stderr_file}"' EXIT
     _deploy_channel_signboard_override_document > "${signboard_override_file}"
     compose_args+=(-f "${signboard_override_file}")
 
@@ -598,9 +593,37 @@ deploy_channel_compose() {
 
     # fd 0 is left untouched above (the override document is a temp file, not
     # a stdin heredoc), so it still carries whatever the caller attached to
-    # this function call (e.g. a host-produced inventory piped into a
-    # `run -T ...` invocation). The temp file itself is removed by the EXIT
-    # trap set above once this command returns.
+    # this function call. A governed TTS invocation captures child output in
+    # private files: Compose diagnostics and `config` rendering may expand the
+    # machine-local mount root or unrelated env-file values. Only validated
+    # container IDs from the two internal `ps -q` probes cross this boundary;
+    # every other success stays quiet and every failure emits a fixed receipt.
+    if [ "${DEPLOY_TTS_CONFIG_GOVERNED:-0}" = "1" ]; then
+      if [ "${1:-}" = "config" ]; then
+        echo "governed compose output blocked: command=config" >&2
+        return 92
+      fi
+      set +e
+      "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      compose_rc=$?
+      set -e
+      if [ "${compose_rc}" -ne 0 ]; then
+        echo "governed compose command failed: output=redacted" >&2
+        return "${compose_rc}"
+      fi
+      if [ "${1:-}" = "ps" ]; then
+        if [ "${2:-}" != "-q" ] || ! awk '
+          NF && $0 !~ /^[0-9a-f]{12,64}$/ { invalid = 1 }
+          END { exit invalid }
+        ' "${compose_stdout_file}"; then
+          echo "governed compose output blocked: command=ps output=invalid" >&2
+          return 92
+        fi
+        cat "${compose_stdout_file}"
+      fi
+      return 0
+    fi
+
     "${compose_command[@]}"
   )
 }

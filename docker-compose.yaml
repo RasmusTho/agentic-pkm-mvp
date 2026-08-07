@@ -168,8 +168,14 @@ services:
       - "/Volumes:/Volumes"
       # External-SSD TTS store (models/cache/logs) bind-mounted to a fixed container path.
       # Host root is machine-local. Governed deploys pin it from the selected generated runtime env;
-      # disabled/non-deploy compose consumers retain the dev scratch fallback.
-      - "${TTS_HOST_ROOT:-./tmp/tts}:/data/tts"
+      # disabled/non-deploy compose consumers use the tracked empty fallback. Long syntax with
+      # create_host_path=false makes disappearance after preflight fail closed instead of creating
+      # a new empty host directory.
+      - type: bind
+        source: ${TTS_HOST_ROOT:-./config/tts-disabled}
+        target: /data/tts
+        bind:
+          create_host_path: false
       # Shared runtime-artifact volume (#2991): api/worker/watcher each did their
       # own `mkdir -p /app/tmp`, so the three containers had NO shared filesystem
       # surface even though they all resolve the identical absolute heartbeat

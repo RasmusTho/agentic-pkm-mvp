@@ -8,6 +8,7 @@ import subprocess
 import time
 
 import pytest
+import yaml
 
 from tests.deploy.test_deploy_channel import _deploy_harness, _run_deploy
 
@@ -59,7 +60,8 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
         "  'enabled': os.environ.get('TTS_ENABLED'),\n"
         "  'host_root': os.environ.get('TTS_HOST_ROOT'),\n"
         "  'argv': sys.argv[1:],\n"
-        "}), encoding='utf-8')\n",
+        "}), encoding='utf-8')\n"
+        "print('f' * 64)\n",
         encoding="utf-8",
     )
     docker.chmod(0o755)
@@ -72,7 +74,7 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
             f"{shlex.quote(str(synthetic_root))} dev {shlex.quote(str(channel_env))}",
             "deploy_channel_compose "
             f"{shlex.quote(str(synthetic_root))} dev docker-compose.dev.yml "
-            f"pkm-dev-tts-test {shlex.quote(str(channel_env))} config",
+            f"pkm-dev-tts-test {shlex.quote(str(channel_env))} ps -q api",
         )
     )
     env = os.environ.copy()
@@ -105,6 +107,114 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
     assert exporter.count('"TTS_HOST_ROOT=${TTS_HOST_ROOT}"') == 1
     assert 'printf "TTS_ENABLED=%s\\n"' in exporter
     assert 'printf "TTS_HOST_ROOT=%s\\n"' in exporter
+
+
+def test_normalized_external_tts_root_is_accepted(tmp_path: Path) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    resolved_root = tmp_path / "tts-root"
+    resolved_root.mkdir()
+    selector = root / ".." / "tts-root"
+    _write_runtime_env(root, "TTS_ENABLED=true", f"TTS_HOST_ROOT={selector}")
+
+    result = _run_deploy(root, env, sha, "--dry-run")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "enabled=true" in result.stdout
+    assert str(selector) not in result.stdout + result.stderr
+
+
+def test_tts_bind_disables_host_path_creation() -> None:
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8"))
+    volumes = compose["services"]["api"]["volumes"]
+    tts_mounts = [
+        volume
+        for volume in volumes
+        if isinstance(volume, dict) and volume.get("target") == "/data/tts"
+    ]
+
+    assert tts_mounts == [
+        {
+            "type": "bind",
+            "source": "${TTS_HOST_ROOT:-./config/tts-disabled}",
+            "target": "/data/tts",
+            "bind": {"create_host_path": False},
+        }
+    ]
+    assert (REPO_ROOT / "config/tts-disabled/.gitkeep").is_file()
+
+
+def test_disappearing_tts_root_fails_with_compose_output_redacted(
+    tmp_path: Path,
+) -> None:
+    synthetic_root = tmp_path / "repo"
+    (synthetic_root / "config/deploy").mkdir(parents=True)
+    (synthetic_root / "scripts/lib").mkdir(parents=True)
+    for relative in (
+        "scripts/lib/deploy_channel_compose.sh",
+        "scripts/lib/instance_ownership_host_state.sh",
+        "scripts/lib/signboard_root.sh",
+    ):
+        destination = synthetic_root / relative
+        destination.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
+
+    tts_root = tmp_path / "machine-local-tts"
+    tts_root.mkdir()
+    _write_runtime_env(
+        synthetic_root,
+        "TTS_ENABLED=true",
+        f"TTS_HOST_ROOT={tts_root}",
+    )
+    channel_env = synthetic_root / "config/deploy/dev.env"
+    channel_env.write_text("WATCHER_RUNTIME_ENV_FILE=./tmp/runtime.env\n", encoding="utf-8")
+
+    private_dsn = "postgresql://private-user:private-pass@private-host/private-db"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo \"compose failed for ${TTS_HOST_ROOT:?}\" >&2\n"
+        "echo \"unrelated=${PRIVATE_DSN:?}\"\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    command = "\n".join(
+        (
+            "set -u",
+            f"source {shlex.quote(str(synthetic_root / 'scripts/lib/deploy_channel_compose.sh'))}",
+            "deploy_channel_tts_config_preflight "
+            f"{shlex.quote(str(synthetic_root))} dev {shlex.quote(str(channel_env))}",
+            f"rmdir {shlex.quote(str(tts_root))}",
+            "deploy_channel_compose "
+            f"{shlex.quote(str(synthetic_root))} dev docker-compose.dev.yml "
+            f"pkm-dev-tts-test {shlex.quote(str(channel_env))} up -d api",
+        )
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "PRIVATE_DSN": private_dsn,
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path / "instance-ownership"),
+        }
+    )
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=synthetic_root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 23
+    assert "output=redacted" in result.stderr
+    assert str(tts_root) not in output
+    assert private_dsn not in output
+    assert not tts_root.exists()
 
 
 @pytest.mark.parametrize(

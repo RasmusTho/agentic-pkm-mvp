@@ -265,10 +265,14 @@ any caller-shell value and must be unset or exactly `false`/`true`; an enabled c
 `TTS_HOST_ROOT` to classify as an accessible absolute directory outside the repository. The same
 validated snapshot is forwarded in the Compose process environment to the existing `/data/tts`
 mount and `TTS_ENABLED` binding, never in command arguments and never by passing the runtime-env
-file as Compose's CLI `--env-file`. Status and failure output contains selector names, boolean state,
-reason code, and path class only. Disabled/unset channels preserve the existing scratch/default
-posture. The check is deploy-only: rollback remains unconditionally reachable through its existing
-contract.
+file as Compose's CLI `--env-file`. The bind sets `create_host_path: false`, so disappearance after
+validation fails instead of creating an empty host directory. Governed Compose child output is
+captured privately: only validated container IDs needed by internal probes may cross the wrapper,
+while other successes stay quiet and failures emit a fixed redacted receipt. Status and failure
+output therefore contains selector names, boolean state, reason code, path class, and fixed command
+result only. Disabled/unset channels use the tracked empty `config/tts-disabled` fallback and require
+no machine-local TTS root. The check is deploy-only: rollback remains unconditionally reachable
+through its existing contract.
 
 1. **Pin the ref.** Resolve the commit SHA to deploy and its already-built image tag (`ghcr.io/<owner>/pkm-app:<sha>`). For `prod`, the SHA must be the one authorized by the promotion-plan contract in `docs/RELEASE_CHANNELS/README.md` (the `stable`-ref decision; see also #2527). Update the channel's deploy-pin file to that tag.
 2. **Migration gate (forward-only surfaced + operator ack).** Diff the migrations between the currently-running SHA and the target SHA. Classify each per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`. **Surface every forward-only (irreversible) migration explicitly and require operator acknowledgement before proceeding** — a forward-only migration is the one thing that makes a deploy not cleanly rollback-able. Reversible migrations proceed under the standard gate; forward-only migrations are an `agent:needs-human` stop.

@@ -362,8 +362,10 @@ Companion docs:
 - Governed channel deploys obtain `TTS_ENABLED` and `TTS_HOST_ROOT` only from the selected generated
   runtime-env snapshot. The canonical exporter publishes that file atomically; deploy preflight
   fail-closes unreadable, malformed, duplicate, or invalid enabled configuration before migration,
-  pin, or Compose mutation and emits only boolean/reason/path-class status. Rollback bypasses this
-  deploy-only check so recovery remains available. The detailed contract and provisioning steps
+  pin, or Compose mutation. Long-form bind semantics refuse to create a root that disappears after
+  validation, and governed Compose output is reduced to validated internal IDs or fixed redacted
+  status. Rollback bypasses this deploy-only check so recovery remains available. The detailed
+  contract and provisioning steps
   live in `companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md` and
   `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
 

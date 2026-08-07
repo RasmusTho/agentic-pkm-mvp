@@ -46,8 +46,10 @@ enablement — which cannot live in the repo.
    accepts only lowercase `true`/`false`, and—when enabled—requires
    the host root to be an accessible absolute directory outside the repo before any channel
    mutation. Its redacted status reports only selector names, boolean state, reason code, and path
-   class. `false` or unset remains the default and requires no host root; rollback remains available
-   without this deploy-only preflight.
+   class. The long-form bind refuses to create a root that disappears after validation, and governed
+   Compose output is suppressed behind a fixed redacted failure receipt. `false` or unset remains
+   the default, uses the tracked empty disabled fallback, and requires no machine-local host root;
+   rollback remains available without this deploy-only preflight.
 5. Verify: `curl -s http://127.0.0.1:18000/api/companion/tts/status | jq '.environment, .providers'`
    → `TTS_ENABLED=true`, providers `available=true`. Post the receipt to #1699 (this is AC4) and close it.
 
