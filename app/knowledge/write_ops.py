@@ -2299,7 +2299,7 @@ def _sweep_atomic_append_stages(parent_fd: int, recovery_fd: int) -> None:
 
 
 def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
-    """Retire through the published snapshot fd; never delete by later name."""
+    """Unlink one proven recovery name without mutating its bound inode."""
 
     current = os.fstat(entry.fd)
     payload, metadata = _read_bound_file(
@@ -2334,19 +2334,19 @@ def _retire_recovery_entry(recovery_fd: int, entry: _RecoveryEntry) -> None:
         raise KnowledgeWriteConflict(
             "atomic append recovery snapshot changed during retirement"
         )
-    os.ftruncate(entry.fd, 0)
-    os.fsync(entry.fd)
+    os.unlink(retirement_name, dir_fd=recovery_fd)
     os.fsync(recovery_fd)
-    retired_after = os.stat(
-        retirement_name,
-        dir_fd=recovery_fd,
-        follow_symlinks=False,
-    )
     bound_after = os.fstat(entry.fd)
+    payload_after, metadata_after = _read_bound_file(
+        entry.fd,
+        entry.identity,
+        context="atomic append recovery descriptor retirement",
+    )
     if (
-        not _same_file_identity(retired_after, entry.identity)
-        or not _same_file_identity(bound_after, entry.identity)
-        or bound_after.st_size != 0
+        not _same_file_identity(bound_after, entry.identity)
+        or bound_after.st_nlink != 0
+        or hashlib.sha256(payload_after).hexdigest() != entry.digest
+        or metadata_after != entry.metadata
     ):
         raise KnowledgeWriteConflict(
             "atomic append recovery snapshot changed during descriptor retirement"
@@ -3131,29 +3131,23 @@ def _atomic_append_note_relative(
                 if (
                     source_fd is None
                     or source_stat is None
+                    or source_metadata is None
+                    or current_raw is None
                     or displaced_name is None
                 ):
                     raise AssertionError(
                         "existing target lost bounded original retention authority"
                     )
-                os.ftruncate(source_fd, 0)
-                os.fsync(source_fd)
-                os.fsync(recovery_fd)
-                retained_after = os.stat(
-                    displaced_name,
-                    dir_fd=recovery_fd,
-                    follow_symlinks=False,
+                _retire_recovery_entry(
+                    recovery_fd,
+                    _RecoveryEntry(
+                        name=displaced_name,
+                        identity=source_stat,
+                        digest=hashlib.sha256(current_raw).hexdigest(),
+                        metadata=source_metadata,
+                        fd=source_fd,
+                    ),
                 )
-                bound_after = os.fstat(source_fd)
-                if (
-                    not _same_file_identity(retained_after, source_stat)
-                    or not _same_file_identity(bound_after, source_stat)
-                    or bound_after.st_size != 0
-                ):
-                    raise KnowledgeWriteConflict(
-                        f"atomic append displaced target changed during "
-                        f"retirement for {note_rel_path}"
-                    )
                 if latest_original_snapshot is None:
                     raise AssertionError(
                         "existing target lost latest-original retention authority"

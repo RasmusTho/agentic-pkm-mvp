@@ -3508,6 +3508,129 @@ def test_steering_log_rejects_hard_link_alias_before_replacement(tmp_path: Path)
     assert alias.read_bytes() == before
 
 
+def test_steering_log_hard_link_created_during_exchange_preserves_alias_and_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    path = vault_root / note_rel_path(STEERING_LOG)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="late-hard-link-seed",
+        write_guard=guard,
+    )
+    before = path.read_bytes()
+    alias = path.with_name("steering-late-hard-link.md")
+    real_exchange = write_ops_module._atomic_exchange_at
+
+    def link_then_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        os.link(
+            first_name,
+            alias.name,
+            src_dir_fd=first_dir_fd,
+            dst_dir_fd=first_dir_fd,
+            follow_symlinks=False,
+        )
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", link_then_exchange)
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="recovery retirement became indeterminate",
+    ):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="late-hard-link-proposal",
+            write_guard=guard,
+        )
+
+    assert alias.read_bytes() == before
+    assert path.read_text(encoding="utf-8").count(
+        '"operation_id":"late-hard-link-proposal"'
+    ) == 1
+    monkeypatch.setattr(write_ops_module, "_atomic_exchange_at", real_exchange)
+    with pytest.raises(KnowledgeWriteConflict, match="reconciliation is required"):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="late-hard-link-proposal",
+            write_guard=guard,
+        )
+
+
+def test_steering_log_snapshot_hard_link_created_before_retirement_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    path = vault_root / note_rel_path(STEERING_LOG)
+    append_steering_log(
+        vault_root,
+        "wrong",
+        "seed",
+        source="chat",
+        operation_id="snapshot-hard-link-seed",
+        write_guard=guard,
+    )
+    alias = tmp_path / "snapshot-hard-link.md"
+    linked_payload: bytes | None = None
+    real_retire = write_ops_module._retire_recovery_entry
+
+    def link_then_retire(
+        recovery_fd: int,
+        entry: write_ops_module._RecoveryEntry,
+    ) -> None:
+        nonlocal linked_payload
+        if linked_payload is None:
+            os.link(
+                entry.name,
+                alias,
+                src_dir_fd=recovery_fd,
+                follow_symlinks=False,
+            )
+            linked_payload = alias.read_bytes()
+        real_retire(recovery_fd, entry)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_retire_recovery_entry",
+        link_then_retire,
+    )
+    with pytest.raises(
+        KnowledgeWriteConflict,
+        match="recovery retirement became indeterminate",
+    ):
+        append_steering_log(
+            vault_root,
+            "mute",
+            "proposal",
+            source="item",
+            operation_id="snapshot-hard-link-proposal",
+            write_guard=guard,
+        )
+
+    assert linked_payload is not None
+    assert alias.read_bytes() == linked_payload
+    assert path.read_text(encoding="utf-8").count(
+        '"operation_id":"snapshot-hard-link-proposal"'
+    ) == 1
+
+
 def test_steering_log_operation_id_collision_fails_loud(tmp_path: Path) -> None:
     vault_root = _vault(tmp_path)
     guard = _allowing_guard()
