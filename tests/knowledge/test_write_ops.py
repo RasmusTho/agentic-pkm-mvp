@@ -13,7 +13,7 @@ from app.knowledge import write_ops
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
-from app.write_guard import WriteGuard, WritesBlockedError
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 from tests.knowledge.candidate_create_oracles import (
     FdOracle as _FdOracle,
     assert_cleanup_fence as _assert_cleanup_fence,
@@ -340,6 +340,24 @@ def test_append_note_relative_rejects_unhealthy_write_guard(monkeypatch, tmp_pat
             vault_root=tmp_path,
             write_guard=guard,
         )
+
+
+def test_append_note_relative_enforces_default_guard(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        write_ops,
+        "resolve_knowledge_port",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("port should not resolve")),
+    )
+    monkeypatch.setattr(
+        DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "safe_mode", "reason": "test-induced default block"},
+    )
+
+    with pytest.raises(WritesBlockedError) as exc_info:
+        write_ops.append_note_relative("Inbox/log.md", "line\n", vault_root=tmp_path)
+
+    assert exc_info.value.action == write_ops.KNOWLEDGE_WRITE_ACTION
 
 
 def test_append_note_relative_allows_healthy_write_guard(monkeypatch, tmp_path: Path) -> None:
