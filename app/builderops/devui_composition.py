@@ -139,6 +139,12 @@ def _valid_cockpit_contract(payload: Mapping[str, Any]) -> bool:
     dispatcher_state = source_states.get("dispatcher-store")
     if (
         dispatcher_state is None
+        or next(
+            source["configured"]
+            for source in sources
+            if source["name"] == "dispatcher-store"
+        )
+        is not True
         or (claim["kind"] == "refused" and dispatcher_state != "unavailable")
         or (claim["kind"] == "counted" and dispatcher_state not in {"fresh", "empty"})
     ):

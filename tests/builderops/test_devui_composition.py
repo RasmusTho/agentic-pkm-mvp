@@ -322,6 +322,17 @@ def test_contradictory_cockpit_evidence_is_refused() -> None:
     missing_dispatcher["sources"] = []
     variants.append(missing_dispatcher)
 
+    unconfigured_dispatcher = deepcopy(_cockpit_payload())
+    unconfigured_dispatcher["claim"]["kind"] = "refused"
+    unconfigured_dispatcher["sources"][0].update(
+        {
+            "state": "unavailable",
+            "last_successful_read": None,
+            "configured": False,
+        }
+    )
+    variants.append(unconfigured_dispatcher)
+
     for payload in variants:
         result = compose_owner_snapshot(
             cockpit_reader=lambda payload=payload: payload,
