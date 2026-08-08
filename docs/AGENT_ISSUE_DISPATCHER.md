@@ -929,6 +929,11 @@ loopback/API-key protected and invoke dispatcher service operations (`move`, `bl
 that store write *is* the durable change, so nothing is exported afterwards and the next read already
 reflects it. The UI never writes the SQLite database itself.
 
+`/signboard` is an operational and diagnostic dispatcher surface, not a separate long-term owner
+product. The accepted `docs/DEVUI.md` target composes its queue, claim, lease, and activity evidence
+inside one owner experience without embedding Signboard as a destination or transferring dispatcher
+authority to devUI. Direct Signboard access may remain available for repair and low-level operations.
+
 There is no board root on this path. `/api/signboard/board` carries no `root` field, its `authority`
 is `dispatcher_store`, and `SIGNBOARD_ROOT` has no effect on it — the route reads the store resolved
 by `app/dispatcher/config.py :: load_paths`, exactly like every other dispatcher caller. A projection
