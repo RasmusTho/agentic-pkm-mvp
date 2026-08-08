@@ -176,6 +176,35 @@ def test_lint_detects_retired_phrase(tmp_path: Path) -> None:
     assert any("retired phrase" in e for e in errors), errors
 
 
+def test_lint_detects_bash4_only_builtin(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + (
+            "\nmapfile in prose is allowed.\n"
+            "```python\n"
+            "mapfile = []\n"
+            "```\n"
+            "```bash\n"
+            "# mapfile in a shell comment is allowed.\n"
+            "mapfile -t values < input\n"
+            "readarray -t more < input\n"
+            "declare -A lookup\n"
+            "lower=${name,,}\n"
+            "upper=${name^^}\n"
+            "```\n"
+        ),
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    for construct in ("mapfile", "readarray", "declare -A", "${var,,}", "${var^^}"):
+        assert any(f"`{construct}`" in error for error in errors), errors
+    assert len([error for error in errors if "bash-4-only construct" in error]) == 5
+
+
 def test_sbs_impact_fields_consistent_on_real_repo() -> None:
     """The four real SBS Impact copies must agree (issue #4188)."""
     errors = run_lint(REPO_ROOT)

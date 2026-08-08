@@ -104,6 +104,14 @@ KEBAB_TOKEN_RE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
 ROUTING_ENTRY_RE = re.compile(r"^- `([a-z][a-z0-9-]+)`\s*$", re.MULTILINE)
 LABEL_ITEM_RE = re.compile(r"^\s*[-*]\s+`((?:type|prio|agent):[a-z-]+)`\s*\|?\s*$")
 BLOCK_SCALAR_DESCRIPTION_RE = re.compile(r"^[|>](?:[+-]?\d*|\d+[+-]?)$")
+BASH_FENCE_RE = re.compile(r"^\s*```(?:bash|sh)\s*$", re.IGNORECASE)
+BASH4_ONLY_CONSTRUCTS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("mapfile", re.compile(r"\bmapfile\b")),
+    ("readarray", re.compile(r"\breadarray\b")),
+    ("declare -A", re.compile(r"\bdeclare\s+-A\b")),
+    ("${var,,}", re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*,,\}")),
+    ("${var^^}", re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\^\^\}")),
+)
 FULL_TAXONOMY_MIN_ITEMS = 6
 
 
@@ -276,6 +284,40 @@ def check_feature_breakdown_docs_index(skills_root: Path) -> list[str]:
             f"{rel}: missing the DOCS_INDEX registration instruction "
             "(must reference 'docs/DOCS_INDEX.md'; see #3559)"
         )
+    return errors
+
+
+def check_bash4_only_builtins(skills_root: Path) -> list[str]:
+    """Check 8: skill bash fences must remain compatible with macOS bash 3.2.
+
+    Only fenced ``bash`` and ``sh`` blocks are scanned so prose and examples in
+    other languages can mention these constructs without becoming lint errors.
+    """
+    errors: list[str] = []
+    for skill_dir in _skill_dirs(skills_root):
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        rel = skill_md.relative_to(skills_root.parent.parent)
+        in_bash_fence = False
+        for lineno, line in enumerate(
+            skill_md.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if in_bash_fence:
+                if line.strip().startswith("```"):
+                    in_bash_fence = False
+                    continue
+                if line.lstrip().startswith("#"):
+                    continue
+                for construct, pattern in BASH4_ONLY_CONSTRUCTS:
+                    if pattern.search(line):
+                        errors.append(
+                            f"{rel}:{lineno}: bash-4-only construct `{construct}` "
+                            "in fenced shell block (macOS bash 3.2 is supported)"
+                        )
+                continue
+            if BASH_FENCE_RE.match(line):
+                in_bash_fence = True
     return errors
 
 
@@ -721,6 +763,7 @@ def run_lint(repo_root: Path) -> list[str]:
     errors += check_label_taxonomy(skills_root)
     errors += check_retired_phrases(skills_root)
     errors += check_feature_breakdown_docs_index(skills_root)
+    errors += check_bash4_only_builtins(skills_root)
     errors += check_sbs_impact_fields_consistent(repo_root)
     errors += check_required_sections_consistent(repo_root)
     errors += check_pr_contract_validator_matches_workflow(repo_root)
