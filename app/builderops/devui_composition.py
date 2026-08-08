@@ -60,6 +60,7 @@ def _json_object(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     _require_string_mapping_keys(payload)
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    encoded.encode("utf-8", errors="strict")
     decoded = json.loads(encoded)
     if not isinstance(decoded, dict):
         raise TypeError("provider returned a non-object JSON payload")

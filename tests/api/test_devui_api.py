@@ -16,6 +16,7 @@ from app.builderops.ckm.contracts import (
     CompletenessManifest,
     ErrorEnvelope,
     ObjectClassCompleteness,
+    ResourceDto,
     ResultEnvelope,
     SnapshotManifest,
     canonical_digest,
@@ -45,6 +46,40 @@ def _empty_ckm_envelope() -> ResultEnvelope:
         ),
         snapshot=snapshot,
         resources=(),
+    )
+
+
+def _ckm_envelope_with_display(display_name: str) -> ResultEnvelope:
+    resource = ResourceDto(
+        public_id="ckm_capability_example",
+        resource_type="capability",
+        display_name=display_name,
+        lifecycle="confirmed",
+        provenance=({"kind": "fixture"},),
+        values={},
+        candidate=False,
+    )
+    completeness = CompletenessManifest(
+        object_classes=(
+            ObjectClassCompleteness(object_class="capability", included=1),
+        ),
+        complete=True,
+    )
+    snapshot = SnapshotManifest.build(
+        state=CkmStateIdentity(epoch="epoch-1", state_revision=1),
+        taxonomy_digest=canonical_digest({"taxonomy": "fixture"}),
+        watermarks={},
+        provenance=(),
+        completeness=completeness,
+        read_set={"capability": (resource.public_id,)},
+    )
+    return ResultEnvelope(
+        resource_type="capability",
+        query_digest=canonical_query_digest(
+            {"operation": "list_capabilities", "public_id": None}
+        ),
+        snapshot=snapshot,
+        resources=(resource,),
     )
 
 
@@ -243,3 +278,60 @@ def test_devui_composition_isolates_unserializable_cockpit_payload(
     assert response.status_code == 200
     assert response.json()["providers"]["work"]["status"] == "refused"
     assert response.json()["providers"]["capabilities"]["status"] == "available"
+
+
+def test_devui_composition_isolates_non_utf8_provider_strings(monkeypatch) -> None:
+    healthy_cockpit = {
+        "authority": "read_time_join",
+        "generated_at": "2026-08-08T21:00:00+00:00",
+        "claim": {"kind": "counted", "text": "one thread"},
+        "sources": [],
+        "unread_planes": [],
+        "withdrawn_counts": [],
+        "bands": {},
+    }
+    malformed_cockpit = {
+        **healthy_cockpit,
+        "bands": {"label": "bad\ud800"},
+    }
+
+    class Ckm:
+        envelope = _empty_ckm_envelope()
+
+        def __init__(self, db_path: Path) -> None:
+            self.db_path = db_path
+
+        def list_capabilities(self):
+            return self.envelope
+
+    monkeypatch.setattr(
+        devui_route,
+        "load_builderops_paths",
+        lambda: SimpleNamespace(db_path=Path("/state/builderops.sqlite3")),
+    )
+    monkeypatch.setattr(devui_route, "CkmQueryService", Ckm)
+
+    monkeypatch.setattr(
+        devui_route,
+        "read_cockpit_registry",
+        lambda: malformed_cockpit,
+    )
+    response = TestClient(app, raise_server_exceptions=False).get(
+        "/api/devui/composition"
+    )
+    assert response.status_code == 200
+    assert response.json()["providers"]["work"]["status"] == "refused"
+    assert response.json()["providers"]["capabilities"]["status"] == "available"
+
+    monkeypatch.setattr(
+        devui_route,
+        "read_cockpit_registry",
+        lambda: healthy_cockpit,
+    )
+    Ckm.envelope = _ckm_envelope_with_display("bad\ud800")
+    response = TestClient(app, raise_server_exceptions=False).get(
+        "/api/devui/composition"
+    )
+    assert response.status_code == 200
+    assert response.json()["providers"]["work"]["status"] == "available"
+    assert response.json()["providers"]["capabilities"]["status"] == "refused"
