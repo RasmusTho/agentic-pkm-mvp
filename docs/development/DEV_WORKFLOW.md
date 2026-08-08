@@ -144,6 +144,34 @@ change has cross-system blast radius that focused subsystem tests cannot cover:
 
 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -p xdist.plugin -q -m "not pg" -n auto --dist=loadfile`
 
+### Resource-bounded local `not pg` fallback
+
+Use the canonical command above first. When it cannot execute on the local host because its
+single pytest process exhausts a host resource (for example file descriptors), run the following
+sanctioned fallback instead. It retains the same `not pg` marker selection, runs every top-level
+test directory and root-level `test_*.py` file, and holds the same host-global lease for the whole
+run. It is a local execution fallback, not a way to narrow the required validation standard.
+
+```bash
+export PYTHONPATH="${PWD}:${PWD}/companion-ui/companion-app${PYTHONPATH:+:${PYTHONPATH}}"
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py \
+  --resource pytest-not-pg \
+  --execution-id <issue-or-pr>:<sha> \
+  -- zsh -c 'find tests -mindepth 1 -maxdepth 1 \
+    \( -type d -name "__pycache__" -prune \) -o \
+    \( -type d -o \( -type f -name "test_*.py" \) \) -print0 | \
+    LC_ALL=C sort -z | \
+    xargs -0 -n 1 python3 -m pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin \
+      -p xdist.plugin -q -m "not pg"'
+```
+
+The explicit `PYTHONPATH` is part of this one sanctioned command because tests outside
+`tests/companion_ui` import the nested `companion_ui` package during collection. Do not add
+one-off path exports to Issue or PR handoffs. Record the canonical command's host-resource failure,
+the fallback command, and every failed shard. A fallback run is complete only when every shard
+passes; if a shard cannot run, record the uncovered shard as a validation gap rather than claiming
+the full `not pg` selection passed.
+
 The full non-PG suite is host-global. The wrapper above holds an atomic repo-common kernel lock for
 the entire child process and releases it automatically when the process exits. A chat handshake,
 process census, or quiet-period check is useful diagnosis but is not mutual exclusion. If the lock
