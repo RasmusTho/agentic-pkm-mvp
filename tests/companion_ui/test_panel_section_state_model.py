@@ -40,7 +40,7 @@ _PROPOSAL_FIXTURE = {
     "artifact_id": "art-001",
     "description": "Add a section on agentic systems",
     "status": "staged",
-    "agent": "hugin",
+    "agent": "agent",
     "created_at": "2026-05-26T14:18",
     "confidence": "0.82",
     "affordances": {"confirm": True, "reject": True, "correct": True},

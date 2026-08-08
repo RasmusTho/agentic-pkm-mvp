@@ -4,6 +4,7 @@ from __future__ import annotations
 from html.parser import HTMLParser
 from pathlib import Path
 
+from companion_ui.workspace.serve_dev_page import render_index_html
 from tests.companion_ui._visible_text import visible_text
 
 
@@ -50,6 +51,30 @@ def test_active_companion_ui_has_no_hugin_agent_label() -> None:
     assert "Reserved and inactive." in term_map
     assert "| **Munin** | Historical design label;" in term_map
     assert "Dated handoff history may retain it with historical status." in term_map
+
+
+def test_production_workspace_proposal_fallback_uses_agent_label() -> None:
+    """The production renderer must not reintroduce a reserved agent name."""
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="Notes/test.md",
+        fields={
+            "panel_proposal_count": 1,
+            "panel_state": "proposals-staged",
+            "panel_proposals": [{
+                "proposal_id": "prop-test-001",
+                "artifact_id": "art-001",
+                "description": "Add a section on agentic systems",
+                "status": "staged",
+                "created_at": "2026-05-26T14:18",
+                "confidence": "0.82",
+                "affordances": {"confirm": True, "reject": True, "correct": True},
+            }],
+        },
+    )
+
+    assert "hugin" not in visible_text(html)
+    assert "agent&nbsp;&middot;&nbsp;2026-05-26t14:18" in html.casefold()
 
 
 def test_canvas_copy_uses_chat_surface_terms() -> None:
