@@ -18,9 +18,13 @@ from app.builderops.ckm.contracts import (
     ENVELOPE_SCHEMA_VERSION,
     RESOURCE_SCHEMA_VERSION,
     CkmStateIdentity,
+    CompletenessManifest,
     ErrorEnvelope,
+    ObjectClassCompleteness,
+    ResourceDto,
     ResultEnvelope,
     SnapshotManifest,
+    TaggedValue,
     canonical_query_digest,
     validate_contract_request,
 )
@@ -52,6 +56,7 @@ def _cockpit_payload(reader: CockpitReader) -> Mapping[str, Any]:
 def _json_object(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return a detached JSON-safe object or refuse before API serialization."""
 
+    _require_string_mapping_keys(payload)
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
     decoded = json.loads(encoded)
     if not isinstance(decoded, dict):
@@ -59,10 +64,31 @@ def _json_object(payload: Mapping[str, Any]) -> dict[str, Any]:
     return decoded
 
 
+def _require_string_mapping_keys(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("provider JSON objects require string keys")
+            _require_string_mapping_keys(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _require_string_mapping_keys(item)
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
 def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
     """Re-run current CKM policy and snapshot invariants at the adapter boundary."""
 
+    if type(result) is not ResultEnvelope:
+        raise TypeError("CKM result must use the exact public envelope type")
     snapshot = result.snapshot
+    if type(snapshot) is not SnapshotManifest:
+        raise TypeError("CKM snapshot must use the exact public manifest type")
+    if type(snapshot.completeness) is not CompletenessManifest:
+        raise TypeError("CKM completeness must use the exact public manifest type")
     versions = (
         (result.schema_version, ENVELOPE_SCHEMA_VERSION),
         (snapshot.ckm_schema_version, CKM_SCHEMA_VERSION),
@@ -77,7 +103,7 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
         raise ValueError("unsupported CKM schema version")
     if result.query_digest != _LIST_CAPABILITIES_QUERY_DIGEST:
         raise ValueError("CKM query identity does not match list_capabilities")
-    if not isinstance(snapshot.epoch, str) or not snapshot.epoch:
+    if not _nonempty_string(snapshot.epoch):
         raise ValueError("CKM snapshot epoch must be a non-empty string")
     if type(snapshot.state_revision) is not int or snapshot.state_revision < 0:
         raise ValueError("CKM state revision must be a non-negative integer")
@@ -88,6 +114,8 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
     if type(snapshot.completeness.complete) is not bool:
         raise ValueError("CKM completeness marker must be boolean")
     for accounting in snapshot.completeness.object_classes:
+        if type(accounting) is not ObjectClassCompleteness:
+            raise TypeError("CKM accounting must use the exact public contract type")
         counts = (
             accounting.included,
             accounting.filtered,
@@ -96,6 +124,44 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
         )
         if any(type(count) is not int or count < 0 for count in counts):
             raise ValueError("CKM completeness counts must be non-negative integers")
+    if not isinstance(snapshot.watermarks, Mapping) or any(
+        not _nonempty_string(key) or not _nonempty_string(value)
+        for key, value in snapshot.watermarks.items()
+    ):
+        raise ValueError("CKM watermarks must use non-empty string keys and values")
+    if not isinstance(snapshot.read_set, Mapping):
+        raise TypeError("CKM read set must be a mapping")
+    for object_class, public_ids in snapshot.read_set.items():
+        if not _nonempty_string(object_class) or isinstance(public_ids, (str, bytes)):
+            raise ValueError("CKM read set identity is malformed")
+        if not isinstance(public_ids, (list, tuple)) or any(
+            not _nonempty_string(public_id) for public_id in public_ids
+        ):
+            raise ValueError("CKM read set public IDs must be non-empty strings")
+    if not isinstance(snapshot.provenance, (list, tuple)) or any(
+        not isinstance(item, Mapping) for item in snapshot.provenance
+    ):
+        raise ValueError("CKM snapshot provenance must contain mappings")
+
+    for resource in result.resources:
+        if type(resource) is not ResourceDto:
+            raise TypeError("CKM resources must use the exact public DTO type")
+        if not all(
+            _nonempty_string(value)
+            for value in (resource.public_id, resource.display_name, resource.lifecycle)
+        ):
+            raise ValueError("CKM resource identity fields must be non-empty strings")
+        if type(resource.candidate) is not bool:
+            raise ValueError("CKM resource candidate marker must be boolean")
+        if not isinstance(resource.provenance, (list, tuple)) or any(
+            not isinstance(item, Mapping) for item in resource.provenance
+        ):
+            raise ValueError("CKM resource provenance must contain mappings")
+        if not isinstance(resource.values, Mapping) or any(
+            not _nonempty_string(key) or type(value) is not TaggedValue
+            for key, value in resource.values.items()
+        ):
+            raise ValueError("CKM resource values must be typed and string-keyed")
     validate_contract_request(
         ckm_schema_version=snapshot.ckm_schema_version,
         envelope_schema_version=result.schema_version,
@@ -210,7 +276,8 @@ def _ckm_contribution(reader: CkmReader) -> dict[str, Any]:
         result = reader()
         if isinstance(result, ErrorEnvelope):
             if (
-                type(result.schema_version) is not int
+                type(result) is not ErrorEnvelope
+                or type(result.schema_version) is not int
                 or result.schema_version != ENVELOPE_SCHEMA_VERSION
             ):
                 raise ValueError("unsupported CKM refusal envelope version")

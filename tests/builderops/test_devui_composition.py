@@ -16,6 +16,7 @@ from app.builderops.ckm.contracts import (
     ResourceDto,
     ResultEnvelope,
     SnapshotManifest,
+    TaggedValue,
     canonical_digest,
     canonical_query_digest,
 )
@@ -83,21 +84,25 @@ def _rebuilt_ckm_envelope(
     state_revision: int = 42,
     taxonomy_digest: str | None = None,
     completeness: CompletenessManifest | None = None,
+    watermarks: dict | None = None,
+    provenance: tuple[dict, ...] | None = None,
+    resource: ResourceDto | None = None,
 ) -> ResultEnvelope:
     original = _ckm_envelope()
+    selected_resource = resource or original.resources[0]
     rebuilt_snapshot = SnapshotManifest.build(
         state=CkmStateIdentity(epoch=epoch, state_revision=state_revision),
         taxonomy_digest=taxonomy_digest or canonical_digest({"taxonomy": "fixture"}),
-        watermarks=original.snapshot.watermarks,
-        provenance=original.snapshot.provenance,
+        watermarks=watermarks if watermarks is not None else original.snapshot.watermarks,
+        provenance=provenance if provenance is not None else original.snapshot.provenance,
         completeness=completeness or original.snapshot.completeness,
-        read_set=original.snapshot.read_set,
+        read_set={"capability": (selected_resource.public_id,)},
     )
     return ResultEnvelope(
         resource_type=original.resource_type,
         query_digest=original.query_digest,
         snapshot=rebuilt_snapshot,
-        resources=original.resources,
+        resources=(selected_resource,),
     )
 
 
@@ -340,6 +345,47 @@ def test_ckm_query_identity_must_match_list_capabilities() -> None:
     ],
 )
 def test_malformed_typed_ckm_snapshot_scalars_are_refused(
+    malformed_envelope: ResultEnvelope,
+) -> None:
+    contribution = compose_owner_snapshot(
+        cockpit_reader=_cockpit_payload,
+        ckm_reader=lambda: malformed_envelope,
+        now=lambda: NOW,
+    )["providers"]["capabilities"]
+
+    assert contribution["status"] == "refused"
+    assert contribution["snapshot"] is None
+    assert contribution["refusal"]["code"] == "provider_unavailable"
+    assert "payload" not in contribution
+
+
+@pytest.mark.parametrize(
+    "malformed_envelope",
+    [
+        _rebuilt_ckm_envelope(watermarks={1: "value"}),
+        _rebuilt_ckm_envelope(watermarks={"capability": 123}),
+        _rebuilt_ckm_envelope(
+            resource=replace(_ckm_envelope().resources[0], public_id=123)
+        ),
+        _rebuilt_ckm_envelope(
+            resource=replace(_ckm_envelope().resources[0], display_name=123)
+        ),
+        _rebuilt_ckm_envelope(
+            resource=replace(_ckm_envelope().resources[0], lifecycle=123)
+        ),
+        _rebuilt_ckm_envelope(
+            resource=replace(_ckm_envelope().resources[0], candidate=0)
+        ),
+        _rebuilt_ckm_envelope(provenance=({1: "fixture"},)),
+        _rebuilt_ckm_envelope(
+            resource=replace(
+                _ckm_envelope().resources[0],
+                values={1: TaggedValue.measured("x")},
+            )
+        ),
+    ],
+)
+def test_malformed_typed_ckm_public_shape_is_refused(
     malformed_envelope: ResultEnvelope,
 ) -> None:
     contribution = compose_owner_snapshot(
