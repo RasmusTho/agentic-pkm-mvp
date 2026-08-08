@@ -109,8 +109,10 @@ def _valid_cockpit_contract(payload: Mapping[str, Any]) -> bool:
         or not isinstance(withdrawn_counts, list)
     ):
         return False
-    if "as_of" in claim and not _aware_iso_timestamp(claim.get("as_of")):
+    generated_at = payload["generated_at"]
+    if claim.get("as_of") != generated_at:
         return False
+    source_states: dict[str, str] = {}
     for source in sources:
         if (
             not isinstance(source, Mapping)
@@ -122,17 +124,36 @@ def _valid_cockpit_contract(payload: Mapping[str, Any]) -> bool:
             or source["stale_after_days"] < 0
         ):
             return False
-        read_at = source.get("last_successful_read")
-        if read_at is not None and not _aware_iso_timestamp(read_at):
+        name = source["name"]
+        if name in source_states:
             return False
+        source_states[name] = source["state"]
+        read_at = source.get("last_successful_read")
+        if source["state"] == "unavailable":
+            if read_at is not None:
+                return False
+        elif not _aware_iso_timestamp(read_at):
+            return False
+        if source["configured"] is False and source["state"] != "unavailable":
+            return False
+    withdrawn_sources: set[str] = set()
     for withdrawal in withdrawn_counts:
+        withdrawal_source = (
+            withdrawal.get("source") if isinstance(withdrawal, Mapping) else None
+        )
         if (
             not isinstance(withdrawal, Mapping)
-            or not _nonempty_string(withdrawal.get("source"))
+            or not isinstance(withdrawal_source, str)
+            or not withdrawal_source
+            or withdrawal_source in withdrawn_sources
+            or source_states.get(withdrawal_source) != "stale"
             or not isinstance(withdrawal.get("counts"), list)
+            or not withdrawal["counts"]
+            or len(withdrawal["counts"]) != len(set(withdrawal["counts"]))
             or any(not _nonempty_string(item) for item in withdrawal["counts"])
         ):
             return False
+        withdrawn_sources.add(withdrawal_source)
     return True
 
 

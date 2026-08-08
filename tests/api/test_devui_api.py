@@ -87,7 +87,11 @@ def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
     cockpit = {
         "authority": "read_time_join",
         "generated_at": "2026-08-08T21:00:00+00:00",
-        "claim": {"kind": "counted", "text": "one thread"},
+        "claim": {
+            "kind": "counted",
+            "text": "one thread",
+            "as_of": "2026-08-08T21:00:00+00:00",
+        },
         "sources": [],
         "unread_planes": [],
         "withdrawn_counts": [],
@@ -198,7 +202,11 @@ def test_devui_composition_sanitizes_ckm_refusal_diagnostics(
     cockpit = {
         "authority": "read_time_join",
         "generated_at": "2026-08-08T21:00:00+00:00",
-        "claim": {"kind": "refused", "text": "source unavailable"},
+        "claim": {
+            "kind": "refused",
+            "text": "source unavailable",
+            "as_of": "2026-08-08T21:00:00+00:00",
+        },
         "sources": [],
         "unread_planes": [],
         "withdrawn_counts": [],
@@ -247,7 +255,11 @@ def test_devui_composition_isolates_unserializable_cockpit_payload(
     malformed_cockpit = {
         "authority": "read_time_join",
         "generated_at": "2026-08-08T21:00:00+00:00",
-        "claim": {"kind": "counted", "text": "one thread"},
+        "claim": {
+            "kind": "counted",
+            "text": "one thread",
+            "as_of": "2026-08-08T21:00:00+00:00",
+        },
         "sources": [],
         "unread_planes": [],
         "withdrawn_counts": [],
@@ -284,7 +296,11 @@ def test_devui_composition_isolates_non_utf8_provider_strings(monkeypatch) -> No
     healthy_cockpit = {
         "authority": "read_time_join",
         "generated_at": "2026-08-08T21:00:00+00:00",
-        "claim": {"kind": "counted", "text": "one thread"},
+        "claim": {
+            "kind": "counted",
+            "text": "one thread",
+            "as_of": "2026-08-08T21:00:00+00:00",
+        },
         "sources": [],
         "unread_planes": [],
         "withdrawn_counts": [],

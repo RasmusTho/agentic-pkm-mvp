@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
@@ -45,7 +46,11 @@ def _cockpit_payload() -> dict:
     return {
         "authority": "read_time_join",
         "generated_at": "2026-08-08T20:59:58+00:00",
-        "claim": {"kind": "counted", "text": "2 threads in motion."},
+        "claim": {
+            "kind": "counted",
+            "text": "2 threads in motion.",
+            "as_of": "2026-08-08T20:59:58+00:00",
+        },
         "sources": [
             {
                 "name": "dispatcher-store",
@@ -272,6 +277,45 @@ def test_semantically_malformed_cockpit_payload_is_isolated() -> None:
     assert result["providers"]["work"]["status"] == "refused"
     assert result["providers"]["work"]["captured_at"] is None
     assert result["providers"]["capabilities"]["status"] == "available"
+
+
+def test_contradictory_cockpit_evidence_is_refused() -> None:
+    variants: list[dict] = []
+
+    missing_as_of = deepcopy(_cockpit_payload())
+    del missing_as_of["claim"]["as_of"]
+    variants.append(missing_as_of)
+
+    mismatched_as_of = deepcopy(_cockpit_payload())
+    mismatched_as_of["claim"]["as_of"] = "2025-01-01T00:00:00+00:00"
+    variants.append(mismatched_as_of)
+
+    missing_read_time = deepcopy(_cockpit_payload())
+    missing_read_time["sources"][0]["last_successful_read"] = None
+    variants.append(missing_read_time)
+
+    unconfigured_fresh = deepcopy(_cockpit_payload())
+    unconfigured_fresh["sources"][0]["configured"] = False
+    variants.append(unconfigured_fresh)
+
+    duplicate_source = deepcopy(_cockpit_payload())
+    duplicate_source["sources"].append(deepcopy(duplicate_source["sources"][0]))
+    variants.append(duplicate_source)
+
+    orphaned_withdrawal = deepcopy(_cockpit_payload())
+    orphaned_withdrawal["withdrawn_counts"] = [
+        {"source": "missing-source", "counts": []}
+    ]
+    variants.append(orphaned_withdrawal)
+
+    for payload in variants:
+        result = compose_owner_snapshot(
+            cockpit_reader=lambda payload=payload: payload,
+            ckm_reader=_ckm_envelope,
+            now=lambda: NOW,
+        )
+        assert result["providers"]["work"]["status"] == "refused"
+        assert result["providers"]["capabilities"]["status"] == "available"
 
 
 @pytest.mark.parametrize(
