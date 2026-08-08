@@ -30,6 +30,7 @@ from app.builderops.ckm.schema import CKM_SCHEMA_VERSION
 CONTRACT_VERSION = "devui.composition.v1"
 logger = logging.getLogger(__name__)
 _CKM_REFUSAL_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_CKM_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _CKM_REFUSAL_MESSAGE = "CKM refused the read request"
 _LIST_CAPABILITIES_QUERY_DIGEST = canonical_query_digest(
     {"operation": "list_capabilities", "public_id": None}
@@ -76,6 +77,25 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
         raise ValueError("unsupported CKM schema version")
     if result.query_digest != _LIST_CAPABILITIES_QUERY_DIGEST:
         raise ValueError("CKM query identity does not match list_capabilities")
+    if not isinstance(snapshot.epoch, str) or not snapshot.epoch:
+        raise ValueError("CKM snapshot epoch must be a non-empty string")
+    if type(snapshot.state_revision) is not int or snapshot.state_revision < 0:
+        raise ValueError("CKM state revision must be a non-negative integer")
+    if not isinstance(snapshot.taxonomy_digest, str) or not _CKM_DIGEST.fullmatch(
+        snapshot.taxonomy_digest
+    ):
+        raise ValueError("CKM taxonomy identity must be a canonical digest")
+    if type(snapshot.completeness.complete) is not bool:
+        raise ValueError("CKM completeness marker must be boolean")
+    for accounting in snapshot.completeness.object_classes:
+        counts = (
+            accounting.included,
+            accounting.filtered,
+            accounting.omitted,
+            accounting.truncated,
+        )
+        if any(type(count) is not int or count < 0 for count in counts):
+            raise ValueError("CKM completeness counts must be non-negative integers")
     validate_contract_request(
         ckm_schema_version=snapshot.ckm_schema_version,
         envelope_schema_version=result.schema_version,
