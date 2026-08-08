@@ -70,11 +70,12 @@ capability evidence and BuilderOps Cockpit for live work. Parent #4447 and child
 already delivered inputs; this stage owns only the missing shared contracts, composition, shell,
 navigation, and owner language.
 
-Use the decision-support model in `docs/DEVUI.md`: a calm trust frame; an asymmetric cockpit with a
-wide **Now** situation field and compact **Needs you** / **Ready to try** rails; then one persistent
-focus canvas for situation, meaning, next step, evidence, action, and receipt. The four information
-depths — glance, understand, verify, inspect — reveal more of the same source-bound item rather than
-creating separate overview, decision, and audit products.
+Use the decision-support model in `docs/DEVUI.md` as a design brief: a calm trust frame; a candidate
+asymmetric cockpit with a wide **Now** situation field and compact **Needs you** / **Ready to try**
+rails; then one persistent focus canvas for situation, meaning, next step, evidence, action, and
+receipt. Yggdrasil must validate or revise the visual composition before implementation. The four
+information depths — glance, understand, verify, inspect — reveal more of the same source-bound item
+rather than creating separate overview, decision, and audit products.
 
 Before visual implementation, complete the Yggdrasil design handoff for the three owner surfaces.
 Deliver transport-neutral CKM owner-view, work-registry, and devUI composition-envelope contracts.
@@ -99,10 +100,11 @@ Attach proposal, preview, exact approval, live progress, and lawful controls to 
 The owner sees **AI can continue**, **Your decision is needed**, or **Blocked by evidence or
 system**. Technical ambiguity never becomes an owner decision without a named Human Exception.
 
-Render a genuine owner escalation as one decision brief in the stable focus-canvas command region:
-recommendation, viable alternatives, consequence of each, consequence of waiting, and the exact
-request/preview/evidence scope that approval binds. Do not present routine agent choices or
-technical recovery paths as owner options.
+Render a genuine owner escalation as one canonical owner-decision brief in the stable focus-canvas
+command region: the decision, **Why you** (why no agent can take it), two or three viable options
+with the consequence of each, a recommendation, and **If you don't answer** (what stays blocked and
+the safe default). Keep the exact request/preview/evidence scope that approval binds alongside the
+brief. Do not present routine agent choices or technical recovery paths as owner options.
 
 Request/preview design may proceed as read-only contracts and fixtures, but authority-bearing
 activation waits for the existing mechanism chain:

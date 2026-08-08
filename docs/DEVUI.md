@@ -274,10 +274,17 @@ Capabilities, work, evidence, and receipts are lenses within these surfaces, not
 top-level modes. Moving from cockpit to detail to command and receipt preserves the selected item,
 goal, scope, evidence, and owner-facing state.
 
-### Visual composition
+### Visual composition hypothesis (pre-handoff)
 
-The cockpit is intentionally asymmetric rather than three equal dashboard columns. **Now** is the
-wide situation field because it carries the system model. **Needs you** is a compact, high-salience
+The following is a candidate composition brief for the governed Yggdrasil design handoff, not an
+accepted visual contract. The binding contract is the information behavior: preserve the selected
+subject and goal, expose situation → meaning → next step, keep evidence and provenance reachable,
+and make authority-bearing actions visually distinct. The handoff may revise geometry, proportions,
+components, typography, motion, or responsive treatment while preserving those behaviors. No visual
+implementation may treat this sketch as final before the handoff receipt exists.
+
+The candidate cockpit is asymmetric rather than three equal dashboard columns. **Now** is the wide
+situation field because it carries the system model. **Needs you** is a compact, high-salience
 decision rail. **Ready to try** is a compact result rail below it. A calm trust frame spans the top
 and states when the picture was assembled, which sources are degraded, and which claims have been
 withdrawn. Source health must not compete visually with actual owner decisions.
@@ -294,20 +301,20 @@ withdrawn. Source health must not compete visually with actual owner decisions.
 └───────────────────────────────────────────────┴──────────────────────┘
 ```
 
-Selecting any row opens one focus canvas inside the same shell. The selected subject remains named
-in a persistent context header. The main region explains situation, meaning, and next step; an
-adjacent evidence region exposes capability evidence, work chain, receipts, provenance, and then
-technical detail. This avoids making the owner alternate between a summary screen, a decision
-screen, and a source screen to understand one choice.
+In the candidate interaction, selecting any row opens one focus canvas inside the same shell. The
+selected subject remains named in a persistent context header. The main region explains situation,
+meaning, and next step; an adjacent evidence region exposes capability evidence, work chain,
+receipts, provenance, and then technical detail. This avoids making the owner alternate between a
+summary screen, a decision screen, and a source screen to understand one choice.
 
 The contextual command region occupies one stable place in the focus canvas and changes role
 without changing context: no lawful owner action → proposal/preview → exact approval → live run and
 legal controls → terminal receipt and try guidance. Read-only analysis and source links remain
 visually distinct from authority-bearing actions.
 
-On narrow layouts the same regions stack and keep the same names, item identity, information depth,
-and evidence order. Narrow mode must not collapse into a technically different product or require a
-horizontal delivery graph.
+The candidate narrow-layout behavior stacks the same regions and keeps the same names, item
+identity, information depth, and evidence order. Narrow mode must not collapse into a technically
+different product or require a horizontal delivery graph.
 
 ## Current state and target
 
