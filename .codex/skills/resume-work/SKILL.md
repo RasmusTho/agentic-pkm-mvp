@@ -79,11 +79,14 @@ From that, classify into one of the four situations and act.
 Treat rescue-stash material as untrusted recovery input, not as a plan or an
 authority record. Before replaying, applying, or copying any rescue-stash
 change, fetch `origin/main` and compare the material with the current
-repository contracts and their focused tests. For dispatcher-related material,
-that comparison must include the current dispatcher claim and stale-takeover
-semantics; a stale local rescue plan cannot authorize a label mutation, claim,
-takeover, or contract rewrite.
+repository contracts and their focused tests. The authoritative dispatcher
+pickup rules remain `.codex/skills/issue-to-code/SKILL.md :: Dispatcher
+Integration`; recovery must use that current contract rather than promoting a
+stale local rescue plan into claim, takeover, label-mutation, or contract
+authority.
 
+If a fresh fetch is unavailable, continue ordinary read-only reconstruction,
+but do not replay rescue-stash material on the strength of a cached ref alone.
 If the rescue material no longer matches the current contract, do not apply it
 blindly. Reconstruct the needed bounded delta from current `origin/main`, or
 escalate through the normal contract/SoT ambiguity path when the intended

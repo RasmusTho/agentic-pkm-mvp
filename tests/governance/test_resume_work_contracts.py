@@ -21,7 +21,8 @@ def test_stale_rescue_material_must_match_current_dispatcher_contracts() -> None
 
     assert "### Rescue-stash contract gate" in resume_work
     assert "fetch `origin/main`" in resume_work
-    assert "current dispatcher claim and stale-takeover semantics" in resume_work_flat
+    assert ".codex/skills/issue-to-code/SKILL.md :: Dispatcher Integration" in resume_work_flat
+    assert "cached ref alone" in resume_work_flat
     assert "do not apply it blindly" in resume_work_flat
     assert "Never apply or delete a rescue stash" in resume_work
 
