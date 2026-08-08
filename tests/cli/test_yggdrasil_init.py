@@ -20,8 +20,10 @@ def test_yggdrasil_init_scaffolds_directories(tmp_path):
     assert (mimer_root / "🛠️ Workbench").is_dir()
     assert (mimer_root / "⚙️ System" / "vault.layout.md").exists()
 
-    for name in ["Hugin", "Munin", "Ratatosk", "Brokkr", "Tyr", "Heimdall"]:
+    for name in ["Ratatosk", "Brokkr", "Tyr"]:
         assert (tmp_path / name).is_dir()
+    for name in ["Hugin", "Munin", "Heimdall"]:
+        assert not (tmp_path / name).exists()
 
 
 def test_yggdrasil_init_uses_scaffolder(monkeypatch, tmp_path) -> None:

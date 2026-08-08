@@ -31,12 +31,9 @@ class MimerScaffolder:
         mimer_root_dir = self.root.expanduser()
         module_paths = {
             "Mimer": mimer_root_dir / "Mimer",
-            "Hugin": mimer_root_dir / "Hugin",
-            "Munin": mimer_root_dir / "Munin",
             "Ratatosk": mimer_root_dir / "Ratatosk",
             "Brokkr": mimer_root_dir / "Brokkr",
             "Tyr": mimer_root_dir / "Tyr",
-            "Heimdall": mimer_root_dir / "Heimdall",
         }
 
         created: list[Path] = []
