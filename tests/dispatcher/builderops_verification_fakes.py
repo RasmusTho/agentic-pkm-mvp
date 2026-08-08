@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -202,7 +203,7 @@ class FakeVerificationOutbox:
             "effect_eligible": True,
             "task_id": effect_call["task_id"],
             "effect_type": effect_call["outbox"]["effect_type"],
-            "payload": effect_call["outbox"]["payload"],
+            "payload": deepcopy(effect_call["outbox"]["payload"]),
         }
         self.claims[operation_key] = claim
         return dict(claim)
@@ -234,7 +235,13 @@ class FakeVerificationOutbox:
 
     def status(self, operation_key: str):
         self.calls.append("status")
+        claim = self.claims.get(operation_key, {})
         return {
+            "repository": claim.get("repository"),
+            "operation_key": operation_key,
+            "task_id": claim.get("task_id"),
+            "effect_type": claim.get("effect_type"),
+            "payload": deepcopy(claim.get("payload")),
             "status": self.states.get(operation_key, "missing"),
             "reconciliation_evidence": self.evidence.get(operation_key),
             "reconciliation_receipt_sequence": (

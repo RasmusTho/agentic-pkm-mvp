@@ -2803,8 +2803,10 @@ class CodexExecLauncher:
             command += ["resume", resume_session_id]
         fenced_instruction = (
             "\nThis run uses host_fenced_executor mode. Perform no GitHub "
-            "mutation and return verdict verified after the local "
-            "verification/review gates."
+            "mutation. The working directory is installed main, not the PR "
+            "head. Read review_source in the immutable dispatch context and "
+            "review its exact patch_path, verifying patch_sha256 and head_sha, "
+            "before returning a verdict after the local gates."
             if host_fenced_merge
             else ""
         )

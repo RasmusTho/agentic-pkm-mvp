@@ -1421,6 +1421,16 @@ class BuilderOpsVerificationLedger:
         outbox = self.effect_outbox.status(operation_key)
         return {
             **dict(pending),
+            "outbox_intent": {
+                key: outbox.get(key)
+                for key in (
+                    "repository",
+                    "operation_key",
+                    "task_id",
+                    "effect_type",
+                    "payload",
+                )
+            },
             "outbox_status": outbox.get("status"),
             "reconciliation_evidence": outbox.get(
                 "reconciliation_evidence"
@@ -1593,6 +1603,19 @@ class BuilderOpsVerificationLedger:
                     "pending verification effect binding is malformed or conflicting"
                 )
             existing = self.effect_outbox.status(pending_key)
+            existing_payload = existing.get("payload")
+            if (
+                existing.get("repository") != self.repository
+                or existing.get("operation_key") != pending_key
+                or existing.get("task_id") != run_id
+                or existing.get("effect_type") != pending_type
+                or not isinstance(existing_payload, Mapping)
+                or not isinstance(pending_payload, Mapping)
+                or dict(existing_payload) != dict(pending_payload)
+            ):
+                raise ValueError(
+                    "pending verification effect conflicts with durable outbox intent"
+                )
             if existing.get("status") in {"claimed", "unknown"}:
                 raise ValueError(
                     "verification effect requires reconciliation before retry"
@@ -1689,6 +1712,7 @@ class BuilderOpsVerificationLedger:
             run_id=run_id,
             effect_type=effect_type,
             require_eligible=True,
+            expected_payload=effect_payload,
         )
         self._effect_claims[operation_key] = claim
         return operation_key
@@ -1701,6 +1725,7 @@ class BuilderOpsVerificationLedger:
         run_id: str,
         effect_type: str,
         require_eligible: bool,
+        expected_payload: Mapping[str, object] | None = None,
     ) -> None:
         expires_at = claim.get("expires_at")
         fencing_token = claim.get("fencing_token")
@@ -1712,11 +1737,20 @@ class BuilderOpsVerificationLedger:
             raise ValueError(
                 "verification outbox claim expiry is malformed"
             ) from exc
+        claim_payload = claim.get("payload")
+        payload_matches = (
+            expected_payload is None
+            or (
+                isinstance(claim_payload, Mapping)
+                and dict(claim_payload) == dict(expected_payload)
+            )
+        )
         if (
             claim.get("repository") != self.repository
             or claim.get("operation_key") != operation_key
             or claim.get("effect_type") != effect_type
             or claim.get("task_id") != run_id
+            or not payload_matches
             or (
                 require_eligible
                 and claim.get("effect_eligible") is not True
@@ -1793,6 +1827,7 @@ class BuilderOpsVerificationLedger:
         *,
         run_id: str,
         effect_type: str,
+        expected_payload: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         if self.effect_outbox is None:
             raise ValueError("verification effect outbox is unavailable")
@@ -1803,6 +1838,7 @@ class BuilderOpsVerificationLedger:
             run_id=run_id,
             effect_type=effect_type,
             require_eligible=False,
+            expected_payload=expected_payload,
         )
         self._effect_claims[operation_key] = claim
         self._unknown_effects.add(operation_key)

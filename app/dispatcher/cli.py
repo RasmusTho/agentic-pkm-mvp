@@ -10,12 +10,16 @@ suitable for agent parsing.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit
 
 from app.dispatcher import leases as lease_module
 from app.dispatcher import queue as queue_module
@@ -401,6 +405,43 @@ def _compact_verification_run(
     }
 
 
+_PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS = frozenset(
+    {
+        "contract",
+        "governing_issue",
+        "repository",
+        "pr_number",
+        "head_sha",
+        "run_id",
+        "terminal_outcome",
+        "operation_key",
+        "readback",
+        "merge_authority",
+        "raw_secret_count",
+    }
+)
+
+
+def _public_verification_cycle_receipt(
+    receipt: Mapping[str, object],
+) -> dict[str, object]:
+    """Return only the exact, secret-free BCP-05 receipt contract."""
+
+    if (
+        set(receipt) != _PUBLIC_VERIFICATION_CYCLE_RECEIPT_KEYS
+        or receipt.get("contract") != "bcp05_demerzel_cycle.v1"
+        or receipt.get("raw_secret_count") != 0
+        or not isinstance(receipt.get("readback"), Mapping)
+        or not isinstance(receipt.get("merge_authority"), Mapping)
+    ):
+        raise ValueError("verification cycle receipt is malformed")
+    from app.dispatcher.verification_runtime import (
+        validated_cycle_receipt_shape,
+    )
+
+    return validated_cycle_receipt_shape(receipt)
+
+
 def _cmd_verification_ingest(
     args: argparse.Namespace, store: SqliteStore | None
 ) -> int:
@@ -490,6 +531,329 @@ def _cmd_verification_status(
         },
         args.json,
     )
+    return 0
+
+
+def _make_verification_client() -> Any:
+    from app.builderops.control_plane.client import (
+        BuilderOpsControlPlaneClient,
+        ClientConfig,
+    )
+
+    return BuilderOpsControlPlaneClient(ClientConfig.from_env())
+
+
+def _canonical_github_remote(remote: str) -> str:
+    from app.builderops.control_plane.routing import RepoRef
+
+    if remote.startswith("git@github.com:"):
+        slug = remote.removeprefix("git@github.com:")
+    else:
+        parsed = urlsplit(remote)
+        if parsed.hostname != "github.com":
+            raise ValueError("verification worktree origin is not GitHub")
+        slug = parsed.path.lstrip("/")
+    if slug.endswith(".git"):
+        slug = slug[:-4]
+    return RepoRef.parse(slug).canonical
+
+
+def _assert_installed_main_worktree(
+    worktree: Path, repository: str
+) -> None:
+    from app.builderops.control_plane.routing import RepoRef
+
+    def _git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(worktree), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise ValueError("verification worktree identity is unavailable")
+        return result.stdout.strip()
+
+    top_level = Path(_git("rev-parse", "--show-toplevel")).resolve()
+    branch = _git("symbolic-ref", "--short", "HEAD")
+    head_sha = _git("rev-parse", "HEAD")
+    origin_main_sha = _git("rev-parse", "refs/remotes/origin/main")
+    origin_repository = _canonical_github_remote(
+        _git("remote", "get-url", "origin")
+    )
+    dirty = _git("status", "--porcelain")
+    source_root = Path(__file__).resolve().parents[2]
+    if (
+        top_level != worktree
+        or source_root != worktree
+        or origin_repository != RepoRef.parse(repository).canonical
+        or branch != "main"
+        or head_sha != origin_main_sha
+        or dirty
+    ):
+        raise ValueError(
+            "verification worktree must be exact clean origin/main"
+        )
+
+
+def _new_verification_ledger(
+    client: Any,
+    *,
+    repository: str,
+    effect_outbox: Any,
+) -> Any:
+    from app.dispatcher.verification_api import BuilderOpsVerificationLedger
+
+    return BuilderOpsVerificationLedger(
+        client,
+        repository=repository,
+        effect_outbox=effect_outbox,
+    )
+
+
+class _InstalledMainExactHeadLauncher:
+    """Supply immutable PR-head source while executing installed-main code."""
+
+    def __init__(
+        self,
+        launcher: Any,
+        *,
+        installed_main: Path,
+        context_path: Path,
+        git_runner: Callable[..., Any] = subprocess.run,
+    ) -> None:
+        self.launcher = launcher
+        self.config = launcher.config
+        self.installed_main = installed_main
+        self.context_path = context_path
+        self.git_runner = git_runner
+
+    def launch(self, context_pack: Mapping[str, object], **kwargs: Any) -> Any:
+        head_sha = context_pack.get("head_sha")
+        if (
+            not isinstance(head_sha, str)
+            or len(head_sha) != 40
+            or any(char not in "0123456789abcdef" for char in head_sha.lower())
+        ):
+            raise ValueError("verification review head is malformed")
+        exists = self.git_runner(
+            [
+                "git",
+                "-C",
+                str(self.installed_main),
+                "cat-file",
+                "-e",
+                f"{head_sha}^{{commit}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if exists.returncode != 0:
+            raise ValueError("verification review head is unavailable")
+        patch = self.git_runner(
+            [
+                "git",
+                "-C",
+                str(self.installed_main),
+                "diff",
+                "--binary",
+                "--no-ext-diff",
+                f"refs/remotes/origin/main...{head_sha}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        patch_bytes = patch.stdout.encode("utf-8")
+        if patch.returncode != 0 or not patch_bytes or len(patch_bytes) > 10_000_000:
+            raise ValueError("verification review patch is unavailable")
+        patch_path = self.context_path.with_name("review-head.patch")
+        patch_path.write_bytes(patch_bytes)
+        bound_pack = {
+            **dict(context_pack),
+            "review_source": {
+                "contract": "verification_review_source.v1",
+                "head_sha": head_sha.lower(),
+                "base_ref": "refs/remotes/origin/main",
+                "patch_path": str(patch_path),
+                "patch_sha256": hashlib.sha256(patch_bytes).hexdigest(),
+            },
+        }
+        try:
+            return self.launcher.launch(bound_pack, **kwargs)
+        finally:
+            patch_path.unlink(missing_ok=True)
+
+
+def _build_host_fenced_verification_cycle(
+    client: Any,
+    *,
+    repository: str,
+    holder: str,
+    worktree: Path,
+    context_path: Path,
+) -> tuple[Any, Callable[[], None]]:
+    from app.dispatcher.verification_consumer import (
+        CANONICAL_RECEIPT_SCHEMA_PATH,
+        CodexChatGPTAuthPreflight,
+        CodexExecLauncher,
+        GhCliVerificationSource,
+        VerificationConsumer,
+    )
+    from app.dispatcher.verification_github import (
+        GitHubProtectedRepositoryAuthority,
+        HostCredentialManifestResolver,
+    )
+    from app.dispatcher.verification_merge import (
+        BuilderOpsOutboxExecutor,
+        VerificationMergeExecutor,
+    )
+    from app.dispatcher.verification_runtime import (
+        HostFencedVerificationCycle,
+    )
+
+    credentials = HostCredentialManifestResolver.from_env()
+    read_token = credentials.resolve_repository_read_token(repository)
+    repository_authority = GitHubProtectedRepositoryAuthority(read_token)
+    try:
+        outbox = BuilderOpsOutboxExecutor(
+            client,
+            repository=repository,
+            worker_id=holder,
+        )
+        ledger = _new_verification_ledger(
+            client,
+            repository=repository,
+            effect_outbox=outbox,
+        )
+        codex_home = Path(
+            os.environ.get("CODEX_HOME")
+            or Path(os.environ.get("HOME", "")) / ".codex"
+        )
+        raw_launcher = CodexExecLauncher(
+            worktree,
+            CANONICAL_RECEIPT_SCHEMA_PATH,
+            context_path,
+        )
+        launcher = _InstalledMainExactHeadLauncher(
+            raw_launcher,
+            installed_main=worktree,
+            context_path=context_path,
+        )
+        consumer = VerificationConsumer(
+            ledger,
+            GhCliVerificationSource(),
+            CodexChatGPTAuthPreflight(codex_home / "config.toml"),
+            launcher,
+            holder,
+        )
+        executor = VerificationMergeExecutor(
+            ledger,
+            outbox,
+            repository_authority,
+            credentials,
+        )
+        runtime = HostFencedVerificationCycle(
+            ledger,
+            consumer,
+            executor,
+            holder=holder,
+        )
+    except Exception:
+        repository_authority.close()
+        raise
+    return runtime, repository_authority.close
+
+
+def _cmd_verification_cycle(
+    args: argparse.Namespace, store: SqliteStore | None
+) -> int:
+    del store
+    try:
+        if bool(args.request) == bool(args.recover_run_id):
+            raise ValueError(
+                "provide exactly one request file or --recover-run-id"
+            )
+        request: dict[str, object] | None = None
+        repository = (args.repo or "").strip()
+        if args.request:
+            loaded = json.loads(
+                Path(args.request).read_text(encoding="utf-8")
+            )
+            if not isinstance(loaded, dict):
+                raise ValueError("verification request JSON must be an object")
+            request = loaded
+            request_repository = request.get("repository")
+            if not isinstance(request_repository, str) or not request_repository:
+                raise ValueError(
+                    "verification request repository is required"
+                )
+            if repository and repository.lower() != request_repository.lower():
+                raise ValueError(
+                    "--repo does not match the verification request"
+                )
+            repository = request_repository
+        if not repository:
+            repository = os.getenv(
+                "BUILDEROPS_VERIFICATION_REPOSITORY", ""
+            ).strip()
+        if not repository:
+            raise ValueError(
+                "--repo or BUILDEROPS_VERIFICATION_REPOSITORY is required "
+                "for recovery"
+            )
+        worktree = Path(args.worktree or Path.cwd()).resolve()
+        if not (worktree / ".git").exists():
+            raise ValueError("verification worktree is unavailable")
+        _assert_installed_main_worktree(worktree, repository)
+        with tempfile.TemporaryDirectory(
+            prefix="yggdrasil-verification-cycle-"
+        ) as scratch:
+            with _make_verification_client() as client:
+                runtime, close_repository = (
+                    _build_host_fenced_verification_cycle(
+                        client,
+                        repository=repository,
+                        holder=args.holder,
+                        worktree=worktree,
+                        context_path=Path(scratch) / "context.json",
+                    )
+                )
+                try:
+                    receipt = (
+                        runtime.run_dry_cycle(request)
+                        if request is not None
+                        else runtime.recover_dry_cycle(args.recover_run_id)
+                    )
+                finally:
+                    close_repository()
+    except Exception as exc:
+        return _emit_payload(
+            {
+                "ok": False,
+                "error": "verification cycle failed closed",
+                "error_type": type(exc).__name__,
+            },
+            args.json,
+            1,
+        )
+    try:
+        public_receipt = _public_verification_cycle_receipt(receipt)
+    except Exception as exc:
+        return _emit_payload(
+            {
+                "ok": False,
+                "error": "verification cycle failed closed",
+                "error_type": type(exc).__name__,
+            },
+            args.json,
+            1,
+        )
+    _emit({"ok": True, "receipt": public_receipt}, args.json)
     return 0
 
 
@@ -700,6 +1064,7 @@ _COMMAND_MAP = {
     "status": _cmd_status,
     "verification-ingest": _cmd_verification_ingest,
     "verification-status": _cmd_verification_status,
+    "verification-cycle": _cmd_verification_cycle,
     "pull": _cmd_pull,
     "export-signboard": _cmd_export_signboard,
     "signboard-validate": _cmd_signboard_validate,
@@ -821,6 +1186,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default=None, help="Explicit owner/repo authority")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser(
+        "verification-cycle",
+        help="Run or recover one API-backed host-fenced dry verification cycle",
+    )
+    p.add_argument(
+        "request",
+        nargs="?",
+        help="Path to verification_dispatch_request.v3 JSON",
+    )
+    p.add_argument("--recover-run-id", default=None)
+    p.add_argument("--repo", default=None, help="Explicit owner/repo authority")
+    p.add_argument("--holder", default="verification-host")
+    p.add_argument("--worktree", default=None)
+    p.add_argument("--json", action="store_true")
+
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
     p.add_argument(
         "--repo",
@@ -931,6 +1311,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_verification_ingest(args, None)
     if args.command == "verification-status":
         return _cmd_verification_status(args, None)
+    if args.command == "verification-cycle":
+        return _cmd_verification_cycle(args, None)
 
     store = _make_store()
     return handler(args, store)

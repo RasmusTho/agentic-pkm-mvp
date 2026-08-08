@@ -33,6 +33,17 @@ class MergeAuthorityError(RuntimeError):
     """The protected repository did not authorize the privileged effect."""
 
 
+def verification_authority_digest(value: Mapping[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            dict(value),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
+
+
 @dataclass(frozen=True)
 class ProtectedDeliveryManifest:
     repository: str
@@ -176,6 +187,7 @@ class EffectIntentLedger(Protocol):
         *,
         run_id: str,
         effect_type: str,
+        expected_payload: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]: ...
 
     def finish_effect(
@@ -338,14 +350,7 @@ class VerificationMergeExecutor:
 
     @staticmethod
     def _authority_digest(value: Mapping[str, object]) -> str:
-        return hashlib.sha256(
-            json.dumps(
-                dict(value),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode()
-        ).hexdigest()
+        return verification_authority_digest(value)
 
     @staticmethod
     def _same_manifest(
@@ -389,6 +394,8 @@ class VerificationMergeExecutor:
         operation_key: str,
         effect_type: str,
         run_id: str,
+        repository: str,
+        expected_payload: Mapping[str, object],
     ) -> None:
         expires_at = claim.get("expires_at")
         fencing_token = claim.get("fencing_token")
@@ -396,11 +403,17 @@ class VerificationMergeExecutor:
             expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
         except ValueError as exc:
             raise MergeAuthorityError("outbox claim expiry is malformed") from exc
+        claim_payload = claim.get("payload")
+        payload_matches = isinstance(claim_payload, Mapping) and dict(
+            claim_payload
+        ) == dict(expected_payload)
         if (
-            claim.get("operation_key") != operation_key
+            claim.get("repository") != repository
+            or claim.get("operation_key") != operation_key
             or claim.get("effect_type") != effect_type
             or claim.get("task_id") != run_id
             or claim.get("effect_eligible") is not True
+            or not payload_matches
             or not isinstance(fencing_token, int)
             or isinstance(fencing_token, bool)
             or fencing_token < 1
@@ -514,28 +527,27 @@ class VerificationMergeExecutor:
                     "verified-merge prepared authority does not match the run"
                 )
 
+        effect_payload: dict[str, object] = {
+            "repository": canonical,
+            "governing_issue": run.request["linked_issue"],
+            "pr_number": run.pr_number,
+            "head_sha": run.current_head_sha,
+            "base_sha": base_sha,
+            "manifest_blob_sha": manifest.blob_sha,
+            "manifest_sha256": manifest.content_sha256,
+            "credential_id": manifest.credential_id,
+            "rotation_generation": manifest.credential_generation,
+            "fixed_commit_title": commit_title,
+            "fixed_commit_message": commit_message,
+            "verified_merge_prepared": (
+                dict(prepared_gate) if prepared_gate is not None else None
+            ),
+        }
         try:
             operation_key = self.ledger.begin_effect(
                 run.run_id,
                 effect_type=effect_type,
-                payload={
-                    "repository": canonical,
-                    "governing_issue": run.request["linked_issue"],
-                    "pr_number": run.pr_number,
-                    "head_sha": run.current_head_sha,
-                    "base_sha": base_sha,
-                    "manifest_blob_sha": manifest.blob_sha,
-                    "manifest_sha256": manifest.content_sha256,
-                    "credential_id": manifest.credential_id,
-                    "rotation_generation": manifest.credential_generation,
-                    "fixed_commit_title": commit_title,
-                    "fixed_commit_message": commit_message,
-                    "verified_merge_prepared": (
-                        dict(prepared_gate)
-                        if prepared_gate is not None
-                        else None
-                    ),
-                },
+                payload=effect_payload,
                 holder=holder,
                 lease_id=lease_id,
                 idempotency_key=(
@@ -607,6 +619,11 @@ class VerificationMergeExecutor:
             operation_key=operation_key,
             effect_type=effect_type,
             run_id=run.run_id,
+            repository=canonical,
+            expected_payload={
+                **effect_payload,
+                "review_authority_sha256": verification_authority_digest(marker),
+            },
         )
         credential = self.credentials.resolve(
             repository=canonical,
@@ -700,25 +717,53 @@ class VerificationMergeExecutor:
         operation_key = str(pending["operation_key"])
         payload = pending["payload"]
         assert isinstance(payload, Mapping)
+        outbox_intent = pending.get("outbox_intent")
+        if not isinstance(outbox_intent, Mapping):
+            raise MergeAuthorityError(
+                "merge recovery outbox authority is unavailable"
+            )
         base_sha = payload.get("base_sha")
         if not isinstance(base_sha, str):
             raise MergeAuthorityError("merge recovery base identity is malformed")
         manifest = self.repository.delivery_manifest(canonical, base_sha)
+        prepared_gate: Mapping[str, object] | None = None
+        if not dry_run:
+            prepared_gate = self.repository.verified_merge_prepared(
+                canonical,
+                run.pr_number,
+                run_id=run.run_id,
+                head_sha=run.current_head_sha,
+                expected_repair_budget=(
+                    self.ledger.repair_budget_projection(run.run_id)
+                ),
+            )
+        expected_payload: dict[str, object] = {
+            "repository": canonical,
+            "governing_issue": run.request.get("linked_issue"),
+            "pr_number": run.pr_number,
+            "head_sha": run.current_head_sha,
+            "base_sha": base_sha,
+            "manifest_blob_sha": manifest.blob_sha,
+            "manifest_sha256": manifest.content_sha256,
+            "credential_id": manifest.credential_id,
+            "rotation_generation": manifest.credential_generation,
+            "fixed_commit_title": fixed_verified_merge_commit_title(
+                run.pr_number
+            ),
+            "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+            "verified_merge_prepared": (
+                dict(prepared_gate) if prepared_gate is not None else None
+            ),
+            "review_authority_sha256": verification_authority_digest(marker),
+        }
         if (
-            payload.get("repository") != canonical
-            or payload.get("pr_number") != run.pr_number
-            or payload.get("head_sha") != run.current_head_sha
-            or payload.get("manifest_blob_sha") != manifest.blob_sha
-            or payload.get("manifest_sha256") != manifest.content_sha256
-            or payload.get("credential_id") != manifest.credential_id
-            or payload.get("rotation_generation")
-            != manifest.credential_generation
-            or payload.get("fixed_commit_title")
-            != fixed_verified_merge_commit_title(run.pr_number)
-            or payload.get("fixed_commit_message")
-            != FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
-            or payload.get("review_authority_sha256")
-            != self._authority_digest(marker)
+            dict(payload) != expected_payload
+            or outbox_intent.get("repository") != canonical
+            or outbox_intent.get("operation_key") != operation_key
+            or outbox_intent.get("task_id") != run.run_id
+            or outbox_intent.get("effect_type") != effect_type
+            or not isinstance(outbox_intent.get("payload"), Mapping)
+            or dict(outbox_intent["payload"]) != expected_payload
         ):
             raise MergeAuthorityError(
                 "merge recovery manifest binding is inconsistent"
@@ -734,6 +779,20 @@ class VerificationMergeExecutor:
             and isinstance(reconciliation_sequence, int)
             and not isinstance(reconciliation_sequence, bool)
         )
+        if dry_run and durable_reconciliation:
+            assert isinstance(reconciliation_evidence, Mapping)
+            if (
+                reconciliation_evidence.get("merged") is not False
+                or reconciliation_evidence.get("head_sha")
+                != run.current_head_sha
+                or any(
+                    key.startswith("merge_commit")
+                    for key in reconciliation_evidence
+                )
+            ):
+                raise MergeAuthorityError(
+                    "dry-run recovery reconciliation is contradictory"
+                )
         if (
             not dry_run
             and durable_reconciliation
@@ -748,6 +807,7 @@ class VerificationMergeExecutor:
             pending.get("outbox_status") == "succeeded"
             and durable_reconciliation
         ):
+            self._resolve_recovery_credential(canonical, manifest)
             assert isinstance(reconciliation_evidence, Mapping)
             if dry_run:
                 outcome = "dry_run_no_merge"
@@ -771,6 +831,7 @@ class VerificationMergeExecutor:
             pending.get("outbox_status") == "pending"
             and durable_reconciliation
         ):
+            self._resolve_recovery_credential(canonical, manifest)
             assert isinstance(reconciliation_evidence, Mapping)
             return self._receipt(
                 "retry_after_readback",
@@ -784,11 +845,13 @@ class VerificationMergeExecutor:
                 operation_key,
                 run_id=run.run_id,
                 effect_type=effect_type,
+                expected_payload=payload,
             )
         except ValueError as exc:
             raise MergeAuthorityError(
                 "merge recovery could not acquire current fenced authority"
             ) from exc
+        self._resolve_recovery_credential(canonical, manifest)
         if dry_run:
             readback: Mapping[str, object] = {
                 "merged": False,
@@ -865,6 +928,19 @@ class VerificationMergeExecutor:
             readback,
         )
 
+    def _resolve_recovery_credential(
+        self,
+        repository: str,
+        manifest: ProtectedDeliveryManifest,
+    ) -> None:
+        """Re-prove exact host binding after durable effect authority."""
+
+        self.credentials.resolve(
+            repository=repository,
+            credential_id=manifest.credential_id,
+            rotation_generation=manifest.credential_generation,
+        )
+
     @staticmethod
     def _merged_exactly(
         readback: Mapping[str, object], run: VerificationRun
@@ -912,4 +988,5 @@ __all__ = [
     "ProtectedRepositoryAuthority",
     "OutboxExecutorAuthority",
     "VerificationMergeExecutor",
+    "verification_authority_digest",
 ]

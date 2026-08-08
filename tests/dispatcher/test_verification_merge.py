@@ -217,13 +217,23 @@ class CrashOnceReadbackRepository(RepositoryAuthority):
 
 class Outbox:
     def __init__(
-        self, run_id: str, effect_type: str = "github.merge"
+        self,
+        run_id: str,
+        effect_type: str = "github.merge",
+        payload_loader=None,
     ) -> None:
         self.run_id = run_id
         self.effect_type = effect_type
         self.calls = []
         self.state = "missing"
         self.evidence = None
+        self.payload_loader = payload_loader
+        self.intent_payload_override = None
+
+    def _payload(self):
+        if self.intent_payload_override is not None:
+            return dict(self.intent_payload_override)
+        return dict(self.payload_loader()) if self.payload_loader else {}
 
     def claim(self, operation_key: str):
         self.calls.append("claim")
@@ -242,7 +252,7 @@ class Outbox:
             "effect_eligible": True,
             "task_id": self.run_id,
             "effect_type": self.effect_type,
-            "payload": {},
+            "payload": self._payload(),
         }
 
     def recover(self, operation_key: str):
@@ -252,6 +262,11 @@ class Outbox:
     def status(self, operation_key: str):
         self.calls.append("status")
         return {
+            "repository": REPO.lower(),
+            "operation_key": operation_key,
+            "task_id": self.run_id,
+            "effect_type": self.effect_type,
+            "payload": self._payload(),
             "status": self.state,
             "reconciliation_evidence": self.evidence,
             "reconciliation_receipt_sequence": (
@@ -374,7 +389,16 @@ def claimed_run(
         holder="verification-host",
         lease_id=claimed.lease_id,
     )
-    outbox = Outbox(ready.run_id, effect_type)
+    def _pending_payload():
+        snapshot = ledger._snapshot(ready.run_id)["payload"]
+        pending = snapshot.get("pending_privileged_effect")
+        return pending["payload"] if isinstance(pending, Mapping) else {}
+
+    outbox = Outbox(
+        ready.run_id,
+        effect_type,
+        payload_loader=_pending_payload,
+    )
     ledger.effect_outbox = outbox
     return ledger, ready, outbox
 
@@ -472,7 +496,6 @@ def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> N
             "rotation_generation": 7,
         }
     ]
-
     stale_ledger, stale_run, stale_outbox = claimed_run()
     stale = replace(stale_run, current_head_sha="e" * 40)
     with pytest.raises(MergeAuthorityError, match="merge-ready receipt"):
@@ -509,6 +532,31 @@ def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> N
             lease_id=missing_run.lease_id or "",
         )
     assert missing_ci.calls == []
+
+
+def test_merge_rejects_divergent_outbox_intent_before_credential_or_effect() -> None:
+    ledger, run, outbox = claimed_run()
+    outbox.intent_payload_override = {
+        "repository": "someone/unrelated",
+        "head_sha": HEAD,
+    }
+    repository = RepositoryAuthority()
+    credentials = Credentials()
+
+    with pytest.raises(
+        MergeAuthorityError,
+        match="outbox claim is not an eligible current fenced merge intent",
+    ):
+        VerificationMergeExecutor(
+            ledger, outbox, repository, credentials
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert credentials.calls == []
+    assert repository.calls == []
 
 
 @pytest.mark.parametrize(
@@ -963,7 +1011,15 @@ def test_merge_recovers_exact_readback_after_transport_return_crash() -> None:
 
 def test_merge_reconstructs_receipt_after_durable_reconciliation_crash() -> None:
     ledger, run, original_outbox = claimed_run()
-    outbox = CrashAfterReconcileOutbox(run.run_id)
+    def _pending_payload():
+        snapshot = ledger._snapshot(run.run_id)["payload"]
+        pending = snapshot.get("pending_privileged_effect")
+        return pending["payload"] if isinstance(pending, Mapping) else {}
+
+    outbox = CrashAfterReconcileOutbox(
+        run.run_id,
+        payload_loader=_pending_payload,
+    )
     ledger.effect_outbox = outbox
     repository = RepositoryAuthority(
         base_reads=[BASE, BASE, BASE],
