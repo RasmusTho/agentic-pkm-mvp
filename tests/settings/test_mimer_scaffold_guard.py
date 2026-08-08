@@ -28,7 +28,8 @@ from app.write_guard import DEFAULT_WRITE_GUARD
 
 pytestmark = pytest.mark.not_pg
 
-MODULES = ("Mimer", "Hugin", "Munin", "Ratatosk", "Brokkr", "Tyr", "Heimdall")
+MODULES = ("Mimer", "Ratatosk", "Brokkr", "Tyr")
+LEGACY_MODULES = ("Hugin", "Munin", "Heimdall")
 
 
 def _all_paths(root: Path) -> set[Path]:
@@ -100,9 +101,11 @@ def test_bootstrap_escape_provisions_under_health_block(
 
     assert result.exit_code == 0, result.output
 
-    # Full module + Mimer layout provisioned despite the health block.
+    # The active module layout + Mimer layout provision despite the health block.
     for module in MODULES:
         assert (root / module).is_dir(), f"missing module {module}"
+    for legacy_module in LEGACY_MODULES:
+        assert not (root / legacy_module).exists(), f"unexpected legacy module {legacy_module}"
     settings_dir = root / "Mimer" / "settings"
     assert (settings_dir / "global.md").is_file()
     assert (settings_dir / "system-settings.md").is_file()
@@ -142,3 +145,25 @@ def test_scaffold_output_unchanged_when_allowed(
 
     assert tree_after_second == tree_after_first
     assert contents_after_second == contents_after_first
+
+
+def test_rerun_preserves_legacy_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rerun leaves existing legacy directories and their user data untouched."""
+    root = tmp_path / "Yggdrasil"
+    legacy_files = {
+        root / "Hugin" / "user-note.md": b"keep hugin\n",
+        root / "Munin" / "user-note.md": b"keep munin\n",
+        root / "Heimdall" / "user-note.md": b"keep heimdall\n",
+    }
+    for path, contents in legacy_files.items():
+        path.parent.mkdir(parents=True)
+        path.write_bytes(contents)
+
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    result = CliRunner().invoke(cli, ["yggdrasil-init", "--root", str(root)])
+
+    assert result.exit_code == 0, result.output
+    for path, contents in legacy_files.items():
+        assert path.read_bytes() == contents
