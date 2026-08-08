@@ -130,3 +130,54 @@ def test_devui_composition_refuses_other_forwarded_identity_headers() -> None:
             "/api/devui/composition",
             headers={name: value},
         ).status_code == 403
+
+
+def test_devui_composition_sanitizes_ckm_refusal_diagnostics(
+    monkeypatch,
+) -> None:
+    secret = "/private/ckm.sqlite3"
+    cockpit = {
+        "authority": "read_time_join",
+        "generated_at": "2026-08-08T21:00:00+00:00",
+        "claim": {"kind": "refused", "text": "source unavailable"},
+        "sources": [],
+        "unread_planes": [],
+        "withdrawn_counts": [],
+    }
+    refusal = {
+        "schema_version": 1,
+        "error": {
+            "code": "unsupported_store",
+            "message": f"SQLite could not open {secret}",
+            "details": {
+                "path": secret,
+                "reason": f"OperationalError while reading {secret}",
+            },
+        },
+    }
+
+    class RefusingCkm:
+        def __init__(self, db_path: Path) -> None:
+            self.db_path = db_path
+
+        def list_capabilities(self):
+            return SimpleNamespace(to_dict=lambda: refusal)
+
+    monkeypatch.setattr(devui_route, "read_cockpit_registry", lambda: cockpit)
+    monkeypatch.setattr(
+        devui_route,
+        "load_builderops_paths",
+        lambda: SimpleNamespace(db_path=Path(secret)),
+    )
+    monkeypatch.setattr(devui_route, "CkmQueryService", RefusingCkm)
+
+    payload = TestClient(app).get("/api/devui/composition").json()
+    contribution = payload["providers"]["capabilities"]
+
+    assert contribution["refusal"] == {
+        "code": "unsupported_store",
+        "message": "CKM refused the read request",
+        "details": {},
+    }
+    assert secret not in repr(payload)
+    assert "OperationalError" not in repr(payload)

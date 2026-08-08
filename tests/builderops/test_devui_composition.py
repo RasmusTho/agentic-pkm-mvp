@@ -160,5 +160,10 @@ def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
     )["providers"]["capabilities"]
 
     assert refused_ckm["status"] == "refused"
-    assert refused_ckm["refusal"]["code"] == "missing_store"
+    assert refused_ckm["refusal"] == {
+        "code": "missing_store",
+        "message": "CKM refused the read request",
+        "details": {},
+    }
+    assert "/unavailable/ckm.sqlite3" not in repr(refused_ckm)
     assert "payload" not in refused_ckm

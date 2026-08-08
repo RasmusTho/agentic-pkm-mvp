@@ -8,6 +8,7 @@ does not turn provider refusals into empty results.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -15,6 +16,8 @@ from typing import Any, Protocol
 
 CONTRACT_VERSION = "devui.composition.v1"
 logger = logging.getLogger(__name__)
+_CKM_REFUSAL_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_CKM_REFUSAL_MESSAGE = "CKM refused the read request"
 
 
 class _Envelope(Protocol):
@@ -116,7 +119,7 @@ def _ckm_contribution(reader: ProviderReader) -> dict[str, Any]:
             details = error.get("details")
             if (
                 isinstance(code, str)
-                and code
+                and _CKM_REFUSAL_CODE.fullmatch(code)
                 and isinstance(message, str)
                 and message
                 and isinstance(details, Mapping)
@@ -125,8 +128,12 @@ def _ckm_contribution(reader: ProviderReader) -> dict[str, Any]:
                     provider=provider,
                     authority=authority,
                     code=code,
-                    message=message,
-                    details=details,
+                    # CKM's local read contract may include filesystem paths
+                    # and raw SQLite/OSError text in message/details. The
+                    # unified owner projection preserves the typed code, but
+                    # never republishes that diagnostic material.
+                    message=_CKM_REFUSAL_MESSAGE,
+                    details={},
                 )
             raise ValueError("malformed CKM refusal envelope")
 
