@@ -40,6 +40,17 @@ The Builder System has these layers:
    [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220].
 9. Exception layer: `agent:needs-human`, blocker receipts, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing; CI/review/merge gates remain non-waivable [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
+### Authority-crossing rule for research and design
+
+Research findings and external design handoffs are supporting inputs until they receive an explicit
+disposition: accepted, rejected, deferred, or requiring an owner decision. When accepted material
+crosses into a normative owner document or specification, the route must use the existing BuilderOps
+`PromotionIntent` boundary with source references, target authority surface/ref, intended output, and
+the resulting receipt. `PromotionIntent` is proposal and provenance material only; the target repo
+document or specification becomes authoritative through the normal PR workflow. A research note,
+design package, or chat transcript alone cannot define implementation scope or create an executable
+Issue.
+
 ## Evidence Legend
 
 Statuses in this document use the requested terms:

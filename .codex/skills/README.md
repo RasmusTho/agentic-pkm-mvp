@@ -186,7 +186,7 @@ workflow — see `## App-agent skill family (product-lane)` below for the full d
 - Docs backlog path:
   `docs-governance -> (docs-authoring | docs-to-issue | feature-breakdown)`
 - Design handoff path:
-  `yggdrasil-design-handoff -> governed exploration/handoff -> (Companion UI: Crossing B -> normalized spec | other surface: local owner doc/spec) -> docs-to-issue`
+  `yggdrasil-design-handoff -> governed exploration/handoff -> disposition (PromotionIntent when crossing authority classes) -> (Companion UI: Crossing B -> normalized spec | other surface: local owner doc/spec) -> docs-to-issue`
 - Architecture research path:
   `architecture-research -> feature-breakdown -> issue-to-code` (audit doc publishes via `publish-pr`; findings reconcile against open epics instead of creating parallel hubs)
 - Maintenance-learning intake path:
