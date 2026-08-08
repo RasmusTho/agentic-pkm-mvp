@@ -10,7 +10,10 @@ from app.dispatcher.verification_consumer import VerificationConsumer
 from app.dispatcher.verification_dispatch import (
     VerificationSubscriptionBusy,
 )
-from app.dispatcher.verification_merge import VerificationMergeExecutor
+from app.dispatcher.verification_merge import (
+    MergeAuthorityError,
+    VerificationMergeExecutor,
+)
 from app.dispatcher.verification_runtime import HostFencedVerificationCycle
 from tests.dispatcher.builderops_verification_fakes import (
     FakeBuilderOpsClient,
@@ -70,8 +73,47 @@ def test_host_cycle_is_api_only_and_emits_terminal_dry_run_receipt() -> None:
     assert replay == receipt
     assert repository.calls == []
 
+    terminal = api.tasks[str(receipt["run_id"])]["payload"]["run"][
+        "terminal_receipt"
+    ]
+    terminal["merge_authority"]["credential_generation"] = 999
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+    terminal["merge_authority"]["credential_generation"] = 7
 
-def test_pending_dry_recovery_stays_deferred_and_replayable() -> None:
+    pending = api.tasks[str(receipt["run_id"])]["payload"][
+        "pending_privileged_effect"
+    ]
+    pending["head_sha"] = "e" * 40
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+    pending["head_sha"] = "a" * 40
+
+    payload = pending["payload"]
+    payload["repository"] = "someone/unrelated"
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+    payload["repository"] = REPO.lower()
+
+    original_status = outbox.status
+
+    def _boolean_sequence(operation_key: str):
+        status = original_status(operation_key)
+        return {**status, "reconciliation_receipt_sequence": True}
+
+    outbox.status = _boolean_sequence  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+    outbox.status = original_status  # type: ignore[method-assign]
+
+    operation_key = str(receipt["operation_key"])
+    outbox.states[operation_key] = "pending"
+    with pytest.raises(ValueError, match="receipt is malformed"):
+        runtime.recover_dry_cycle(str(receipt["run_id"]))
+    outbox.states[operation_key] = "succeeded"
+
+
+def test_pending_dry_recovery_rejects_contradictory_merge_evidence() -> None:
     api = FakeBuilderOpsClient()
     outbox = FakeVerificationOutbox(api)
     ledger = BuilderOpsVerificationLedger(
@@ -88,8 +130,9 @@ def test_pending_dry_recovery_stays_deferred_and_replayable() -> None:
         base_reads=["b" * 40] * 6,
         manifest_blobs=["blob-1"] * 6,
     )
+    credentials = Credentials()
     executor = VerificationMergeExecutor(
-        ledger, outbox, repository, Credentials()
+        ledger, outbox, repository, credentials
     )
     runtime = HostFencedVerificationCycle(
         ledger, consumer, executor, holder="verification-host"
@@ -111,17 +154,13 @@ def test_pending_dry_recovery_stays_deferred_and_replayable() -> None:
     task = api.tasks[run.run_id]
     assert task["lease"] is not None
     task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    credentials.calls.clear()
 
-    receipt = runtime.recover_dry_cycle(run.run_id)
-    deferred = ledger.get(run.run_id)
-    assert deferred is not None
-    assert receipt["terminal_outcome"] == "retry_after_readback"
-    assert deferred.status == "backoff"
-
-    replay = runtime.recover_dry_cycle(run.run_id)
-
-    assert replay == receipt
-    assert ledger.get(run.run_id).status == "backoff"  # type: ignore[union-attr]
+    with pytest.raises(
+        MergeAuthorityError, match="reconciliation is contradictory"
+    ):
+        runtime.recover_dry_cycle(run.run_id)
+    assert credentials.calls == []
 
 
 def test_recovery_refuses_a_live_task_owner_before_outbox_access() -> None:
@@ -167,11 +206,12 @@ def test_recovery_rebinds_expired_task_lease_after_merge_readiness() -> None:
         holder="verification-host",
     )
     repository = RepositoryAuthority()
+    recovery_credentials = Credentials()
     runtime = HostFencedVerificationCycle(
         ledger,
         consumer,
         VerificationMergeExecutor(
-            ledger, outbox, repository, Credentials()
+            ledger, outbox, repository, recovery_credentials
         ),
         holder="verification-host",
     )
@@ -187,6 +227,13 @@ def test_recovery_rebinds_expired_task_lease_after_merge_readiness() -> None:
     assert completed is not None
     assert completed.status == "completed"
     assert receipt["terminal_outcome"] == "dry_run_no_merge"
+    assert recovery_credentials.calls == [
+        {
+            "repository": REPO.lower(),
+            "credential_id": "github-repo-merge",
+            "rotation_generation": 7,
+        }
+    ]
     claim_calls = [
         values for name, values in api.calls if name == "claim_task"
     ]
@@ -256,11 +303,12 @@ def test_recovery_waits_for_live_outbox_owner_then_converges() -> None:
         base_reads=["b" * 40] * 6,
         manifest_blobs=["blob-1"] * 6,
     )
+    recovery_credentials = Credentials()
     runtime = HostFencedVerificationCycle(
         ledger,
         consumer,
         VerificationMergeExecutor(
-            ledger, outbox, repository, Credentials()
+            ledger, outbox, repository, recovery_credentials
         ),
         holder="verification-host",
     )
@@ -292,8 +340,47 @@ def test_recovery_waits_for_live_outbox_owner_then_converges() -> None:
         "expires_at"
     ] = "2000-01-01T00:00:00+00:00"
 
+    original_outbox_payload = dict(outbox.claims[operation_key]["payload"])
+    outbox.claims[operation_key]["payload"] = {
+        **original_outbox_payload,
+        "repository": "someone/unrelated",
+    }
+    with pytest.raises(
+        MergeAuthorityError, match="manifest binding is inconsistent"
+    ):
+        runtime.recover_dry_cycle(run.run_id)
+    assert recovery_credentials.calls == []
+    outbox.claims[operation_key]["payload"] = original_outbox_payload
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+
+    class _UnavailableCredentials(Credentials):
+        def resolve(self, **values):
+            raise MergeAuthorityError(
+                "exact recovery credential generation is unavailable"
+            )
+
+    runtime.merge_executor.credentials = _UnavailableCredentials()
+    with pytest.raises(
+        MergeAuthorityError, match="credential generation is unavailable"
+    ):
+        runtime.recover_dry_cycle(run.run_id)
+    assert ledger.get(run.run_id).status != "completed"  # type: ignore[union-attr]
+
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    outbox.claims[operation_key][
+        "expires_at"
+    ] = "2000-01-01T00:00:00+00:00"
+    runtime.merge_executor.credentials = recovery_credentials
+
     receipt = runtime.recover_dry_cycle(run.run_id)
 
     assert receipt["terminal_outcome"] == "dry_run_no_merge"
+    assert recovery_credentials.calls == [
+        {
+            "repository": REPO.lower(),
+            "credential_id": "github-repo-merge",
+            "rotation_generation": 7,
+        }
+    ]
     assert ledger.get(run.run_id).status == "completed"  # type: ignore[union-attr]
     assert outbox.states[operation_key] == "succeeded"

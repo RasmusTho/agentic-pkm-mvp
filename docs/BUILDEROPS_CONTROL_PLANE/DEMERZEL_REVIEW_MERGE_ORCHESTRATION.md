@@ -174,6 +174,41 @@ weaken them and does not enter Product Runtime.
 - verify REST-vs-GraphQL budget behavior; and
 - run one Demerzel acceptance receipt before BCP-06.
 
+The installed-main composition root is:
+
+```bash
+python -m app.dispatcher.cli verification-cycle \
+  <verification_dispatch_request.v3.json> \
+  --holder verification-host \
+  --worktree <installed-main-checkout> \
+  --json
+```
+
+It resolves the BuilderOps API connection from `BUILDEROPS_API_URL` plus exactly one of
+`BUILDEROPS_API_TOKEN_FILE` or `BUILDEROPS_API_TOKEN`, and resolves GitHub effect credentials only
+through `BUILDEROPS_EXECUTOR_CREDENTIAL_MANIFEST_FILE`. The addressed repository must have exactly
+one bootstrap binding in that host manifest; the executor then re-resolves the protected delivery
+manifest's exact credential ID and generation before any effect. Raw credential material is never a
+command argument or output field.
+
+Recover an interrupted durable run without relaunching its completed work:
+
+```bash
+python -m app.dispatcher.cli verification-cycle \
+  --recover-run-id <run-id> \
+  --repo <owner/repo> \
+  --holder verification-host \
+  --worktree <installed-main-checkout> \
+  --json
+```
+
+Both forms are dry-run-safe and API/PostgreSQL-only. A successful command emits the existing
+`bcp05_demerzel_cycle.v1` receipt; repository delivery is not accepted until a real installed-main
+Demerzel invocation posts that receipt to #3603. The command itself does not satisfy that parent
+gate or activate BCP-06. Before constructing any client or effect adapter, the command requires the
+selected worktree to be clean `main` at the exact locally fetched `origin/main`; a detached, dirty,
+stale, or feature-branch checkout fails closed.
+
 ## Related Docs
 
 - issue #3603 / merged PR #3620

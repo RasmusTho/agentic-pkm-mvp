@@ -37,6 +37,12 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 **Verification dispatch consumer: API MIGRATION SHIPPED IN REPO (installed-main pilot pending)**
 
+- `python -m app.dispatcher.cli verification-cycle` is the installed-main composition root for one
+  dry-run-safe API-backed run or durable recovery. It wires the existing BuilderOps client/outbox,
+  verification ledger, GitHub truth, ChatGPT/keyring auth preflight, Codex launcher, protected-repo
+  authority, exact host credential resolver, merge executor, and `HostFencedVerificationCycle`.
+  It never constructs dispatcher SQLite and does not make the still-pending Demerzel receipt true.
+
 - The artifact-only producer, ledger, and host-local consumer authenticate the same `CI Smoke`
   pull-request source workflow at `.github/workflows/ci-smoke.yaml`; a retired `CI` identity or
   mismatched path is rejected before verification work can start.

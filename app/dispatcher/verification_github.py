@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -974,6 +975,61 @@ class HostCredentialManifestResolver:
     def __init__(self, manifest_file: str | Path) -> None:
         self.manifest_file = Path(manifest_file)
 
+    def _entries(self) -> list[Mapping[str, object]]:
+        try:
+            document = json.loads(
+                self.manifest_file.read_text(encoding="utf-8")
+            )
+            entries = document["credentials"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise MergeAuthorityError(
+                "host credential manifest is unavailable"
+            ) from exc
+        if not isinstance(entries, list) or any(
+            not isinstance(entry, Mapping) for entry in entries
+        ):
+            raise MergeAuthorityError("host credential manifest is malformed")
+        for entry in entries:
+            repository = entry.get("repository")
+            credential_id = entry.get("credential_id")
+            generation = entry.get("rotation_generation")
+            secret_file = entry.get("secret_file")
+            try:
+                RepoRef.parse(repository if isinstance(repository, str) else None)
+            except Exception as exc:
+                raise MergeAuthorityError(
+                    "host credential manifest is malformed"
+                ) from exc
+            if (
+                not isinstance(credential_id, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", credential_id)
+                is None
+                or not isinstance(generation, int)
+                or isinstance(generation, bool)
+                or generation <= 0
+                or not isinstance(secret_file, str)
+                or not secret_file
+            ):
+                raise MergeAuthorityError("host credential manifest is malformed")
+        return list(entries)
+
+    @staticmethod
+    def _read_secret(entry: Mapping[str, object]) -> str:
+        secret_file = entry.get("secret_file")
+        if not isinstance(secret_file, str) or not secret_file:
+            raise MergeAuthorityError(
+                "host credential secret reference is missing"
+            )
+        try:
+            token = Path(secret_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise MergeAuthorityError(
+                "host credential secret is unavailable"
+            ) from exc
+        if not token:
+            raise MergeAuthorityError("host credential secret is empty")
+        return token
+
     @classmethod
     def from_env(
         cls, env: Mapping[str, str] | None = None
@@ -996,22 +1052,10 @@ class HostCredentialManifestResolver:
         rotation_generation: int,
     ) -> object:
         canonical = RepoRef.parse(repository).canonical
-        try:
-            document = json.loads(
-                self.manifest_file.read_text(encoding="utf-8")
-            )
-            entries = document["credentials"]
-        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-            raise MergeAuthorityError(
-                "host credential manifest is unavailable"
-            ) from exc
-        if not isinstance(entries, list):
-            raise MergeAuthorityError("host credential manifest is malformed")
         matches = [
             entry
-            for entry in entries
-            if isinstance(entry, Mapping)
-            and str(entry.get("repository", "")).lower() == canonical
+            for entry in self._entries()
+            if str(entry.get("repository", "")).lower() == canonical
             and entry.get("credential_id") == credential_id
             and entry.get("rotation_generation") == rotation_generation
         ]
@@ -1019,18 +1063,29 @@ class HostCredentialManifestResolver:
             raise MergeAuthorityError(
                 "host credential binding is missing or ambiguous"
             )
-        secret_file = matches[0].get("secret_file")
-        if not isinstance(secret_file, str) or not secret_file:
-            raise MergeAuthorityError("host credential secret reference is missing")
-        try:
-            token = Path(secret_file).read_text(encoding="utf-8").strip()
-        except OSError as exc:
+        return self._read_secret(matches[0])
+
+    def resolve_repository_read_token(self, repository: str) -> str:
+        """Bootstrap protected-repository reads from one host binding.
+
+        The protected delivery manifest supplies the exact credential ID and
+        generation used by the effect path.  This bootstrap read is allowed
+        only when the host manifest has one unambiguous binding for the
+        addressed repository; the merge executor later calls ``resolve`` to
+        re-check the exact protected-manifest identity before any effect.
+        """
+
+        canonical = RepoRef.parse(repository).canonical
+        matches = [
+            entry
+            for entry in self._entries()
+            if str(entry.get("repository", "")).lower() == canonical
+        ]
+        if len(matches) != 1:
             raise MergeAuthorityError(
-                "host credential secret is unavailable"
-            ) from exc
-        if not token:
-            raise MergeAuthorityError("host credential secret is empty")
-        return token
+                "repository credential binding is missing or ambiguous"
+            )
+        return self._read_secret(matches[0])
 
 
 __all__ = [
