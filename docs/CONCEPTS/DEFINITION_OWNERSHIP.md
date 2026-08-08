@@ -48,6 +48,33 @@ When two Core SoT docs define overlapping aspects of the same concept:
 
 Conflicts should be resolved by clarifying one of the owning docs, not by allowing silent divergence to persist.
 
+### Cognitive Ontology and Functional Ontology
+
+`docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` and
+`docs/architecture/functional-ontology.md` are complementary owner surfaces, not interchangeable
+ontology entry points:
+
+- the Cognitive Ontology owns human-first domain meaning: what kinds of actors, contexts,
+  artifacts, commitments, operations, metacognitive structures, and accountability concepts exist;
+- specialist concept contracts under `docs/CONCEPTS/` own narrower human/domain semantics they
+  explicitly declare;
+- the Functional Ontology is the architecture specialization for Mimer functional objects. Within
+  that scope it owns the canonical architecture object name, forbidden conflations, Level-2 control
+  boundary allocation, metadata/dimension consequences, and verification links; and
+- the Functional Ontology may identify the system-represented subset or realization of a broader
+  cognitive concept, but it does not redefine the broader human/domain concept or imply that an
+  unrepresented concept does not exist.
+
+For a shared term, first read the Cognitive Ontology and any explicitly narrower concept contract to
+establish domain meaning. Then read the Functional Ontology to determine whether and how Mimer
+represents that concept as a functional object. Inside the latter's declared architecture scope its
+system consequences govern; outside that scope the human-first definition governs. If the two
+surfaces still make incompatible meaning claims, the domain owner is clarified first and the
+Functional Ontology is reconciled to it in the same change.
+
+This pair-specific rule records ownership and reading order only. It creates no new concept,
+runtime field, control boundary, or implementation requirement.
+
 ## Rule 3 — Downstream reference convention
 
 Downstream docs must not silently introduce local redefinitions of terms already defined in Core SoT concept docs.

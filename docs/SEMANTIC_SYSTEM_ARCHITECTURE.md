@@ -5,8 +5,8 @@ Owner: Semantic architecture map
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-29
-Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md, docs/CONCEPTS/LAYERING_MODEL.md, docs/CONCEPTS/ONTOLOGY_VOCABULARY.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/ARCHITECTURE.md, docs/EVENTS.md, docs/FRONTMATTER.md, epic #1363, issue #1364.
+Last reviewed: 2026-08-08
+Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md, docs/CONCEPTS/COGNITIVE_ONTOLOGY.md, docs/CONCEPTS/DEFINITION_OWNERSHIP.md, docs/CONCEPTS/LAYERING_MODEL.md, docs/CONCEPTS/ONTOLOGY_VOCABULARY.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md, docs/architecture/functional-ontology.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/ARCHITECTURE.md, docs/EVENTS.md, docs/FRONTMATTER.md, epic #1363, issue #1364.
 
 # Semantic System Architecture — Map
 
@@ -42,7 +42,7 @@ The layers below are **orthogonal concerns**, not a storage stack. A single Mark
 - **Question it answers:** What kinds of things exist, and how are they related?
 - **What it is:** The entity and relation vocabulary — actors, context structures, artifacts, commitments, operations, and the relations among them. It says what a "note", "source", "commitment", "agent", or "relation" *is*.
 - **What it is not:** It does **not** decide authority, admissibility, or write permission. Ontology says a thing can exist and can relate to another thing; it does not say which instance is authoritative or who may change it.
-- **Owner docs:** `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` (canonical ontology), `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` (normalized term set + drift map), `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` (agent/role/delegation ontology), `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` (commitment structures). Relation semantics are owned by the relation taxonomy: `docs/CONCEPTS/RELATION_TAXONOMY.md` (#1367).
+- **Owner docs:** `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` owns general human-first domain meaning; `docs/architecture/functional-ontology.md` is the Mimer architecture specialization and owns functional-object system consequences. Their explicit reading and precedence rule is `docs/CONCEPTS/DEFINITION_OWNERSHIP.md`. `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md` owns the normalized term set and drift map; `docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md` owns agent/role/delegation ontology; `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` owns human commitment structures. Relation semantics are owned by `docs/CONCEPTS/RELATION_TAXONOMY.md` (#1367).
 
 ### Layer 2 — Artifact model
 
