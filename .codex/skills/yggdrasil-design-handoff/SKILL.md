@@ -64,7 +64,12 @@ invent a replacement token set, or continue with an unverified similarly named s
    degraded, and blocked states when relevant. Confirm that colors, type, spacing, radii, icons,
    and components are grounded in the design system. Name any proposed extension in
    `open-questions.md`; do not use it silently in the prototype.
-7. **Archive and cross deliberately.** For Companion UI, preserve the package under
+7. **Dispose and cross deliberately.** Record whether the research/design result is accepted,
+   rejected, deferred, or requires an owner decision. When accepted material crosses an authority
+   class into a normative owner document or specification, create or consume the existing
+   BuilderOps `PromotionIntent` boundary with source refs, target surface/ref, intended output, and
+   its receipt. `PromotionIntent` is proposal/provenance material; it does not write the target.
+   For Companion UI, preserve the package under
    `companion-ui/design_handoff/<YYYY-MM-DD>-<slug>/` only when requested and route implementation
    intent through Crossing B. For other Product or Builder surfaces, keep the external package as
    supporting design input and normalize accepted intent through that surface's local owner
