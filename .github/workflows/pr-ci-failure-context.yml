@@ -10,6 +10,7 @@ on:
       - settings-ci
       - harness-selfverify
       - Companion UI Browser Runtime
+      - App Image Build
     types: [completed]
 
 permissions:
