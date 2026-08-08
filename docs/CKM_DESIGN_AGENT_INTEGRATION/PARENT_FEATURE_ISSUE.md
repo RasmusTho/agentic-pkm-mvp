@@ -47,17 +47,17 @@ acceptance. Preserve the CKM/Builder System/BuilderOps authority split.
 
 ## Acceptance Criteria
 
-- [ ] Every child has a terminal PR/SHA/Verify receipt and owner-doc/transition-debt result.
+- [x] Every child has a terminal PR/SHA/Verify receipt and owner-doc/transition-debt result.
   Verify: `runtime receipt: ckm_design_hub.child_ledger.v1`
-- [ ] Production acceptance proves exact provider success/refusal semantics and no authority
+- [x] Production acceptance proves exact provider success/refusal semantics and no authority
   leakage or fallback.
   Verify: `tests/builderops/test_design_hub_acceptance.py::test_design_hub_production_matrix_is_fail_closed`
-- [ ] The final read-only cockpit has a passing Yggdrasil Design Handoff receipt and preserves
+- [x] The final read-only cockpit has a passing Yggdrasil Design Handoff receipt and preserves
   Direction B deterministic, print, JS-off, and non-execution guarantees.
   Verify: `tests/builderops/ckm/test_design_cockpit.py::test_design_hub_projection_preserves_direction_b_authority`
-- [ ] The exact live Yggdrasil design-system ID and matching live/repo token hashes are accepted.
+- [x] The exact live Yggdrasil design-system ID and matching live/repo token hashes are accepted.
   Verify: `runtime receipt: ckm_design_hub.yggdrasil_handoff.v1`
-- [ ] Conditional independent parent acceptance authorizes a docs-only promotion PR; a fresh audit
+- [x] Conditional independent parent acceptance authorizes a docs-only promotion PR; a fresh audit
   after merge verifies the exact CKM and Builder System owner-doc diff before closure.
   Verify: `runtime receipt: ckm_design_hub.terminal_acceptance.v1`
 

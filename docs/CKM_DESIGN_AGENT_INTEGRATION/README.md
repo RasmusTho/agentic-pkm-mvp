@@ -179,20 +179,20 @@ zero-provider-call, no-fallback refusal, and the shipped production posture gran
 `builderops-design-run` secret, so the dormant registry must refuse every route including the
 headless-registered ones.
 
-- [ ] All six task Issues are closed with exact PR/SHA/Verify receipts on parent #4131.
+- [x] All six task Issues are closed with exact PR/SHA/Verify receipts on parent #4131.
   Verify: `runtime receipt: ckm_design_hub.child_ledger.v1`
-- [ ] The production path proves one governed success per headless-registered adapter, an exact
+- [x] The production path proves one governed success per headless-registered adapter, an exact
   zero-provider-call `interactive_subscription_only` refusal for every interactive-only registered
   adapter, and distinct unknown, unavailable, denied, pending, malformed, timed-out, and failed
   states with no fallback.
   Verify: `tests/builderops/test_design_hub_acceptance.py::test_design_hub_production_matrix_is_fail_closed`
-- [ ] Cockpit output remains projection-only, deterministic, JavaScript-off complete, printable,
+- [x] Cockpit output remains projection-only, deterministic, JavaScript-off complete, printable,
   and incapable of starting a run.
   Verify: `tests/builderops/ckm/test_design_cockpit.py::test_design_hub_projection_preserves_direction_b_authority`
-- [ ] The final cockpit visual has a passing Yggdrasil Design Handoff receipt with matching live
+- [x] The final cockpit visual has a passing Yggdrasil Design Handoff receipt with matching live
   and repo token SHA-256.
   Verify: `runtime receipt: ckm_design_hub.yggdrasil_handoff.v1`
-- [ ] A conditional independent parent audit authorizes owner-doc promotion only after all child
+- [x] A conditional independent parent audit authorizes owner-doc promotion only after all child
   evidence passes; the subsequent docs PR updates the exact CKM and Builder System owners, and a
   fresh terminal audit verifies that merged diff before closure.
   Verify: `runtime receipt: ckm_design_hub.terminal_acceptance.v1`
