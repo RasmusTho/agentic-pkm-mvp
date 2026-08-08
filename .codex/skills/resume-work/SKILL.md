@@ -74,6 +74,25 @@ Then read the two context hints, if they exist:
 
 From that, classify into one of the four situations and act.
 
+### Rescue-stash contract gate
+
+Treat rescue-stash material as untrusted recovery input, not as a plan or an
+authority record. Before replaying, applying, or copying any rescue-stash
+change, fetch `origin/main` and compare the material with the current
+repository contracts and their focused tests. The authoritative dispatcher
+pickup rules remain `.codex/skills/issue-to-code/SKILL.md :: Dispatcher
+Integration`; recovery must use that current contract rather than promoting a
+stale local rescue plan into claim, takeover, label-mutation, or contract
+authority.
+
+If a fresh fetch is unavailable, continue ordinary read-only reconstruction,
+but do not replay rescue-stash material on the strength of a cached ref alone.
+If the rescue material no longer matches the current contract, do not apply it
+blindly. Reconstruct the needed bounded delta from current `origin/main`, or
+escalate through the normal contract/SoT ambiguity path when the intended
+delta cannot be determined safely. Never apply or delete a rescue stash merely
+to make recovery look complete.
+
 For an interrupted `type:bug` implementation from a larger bug set, resume only its original
 dedicated Codex task/session and worktree. Do not absorb another bug into that session; the serial
 default and any independent-wave exception remain governed by

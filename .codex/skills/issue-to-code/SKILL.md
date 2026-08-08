@@ -193,6 +193,13 @@ task id, issue number, status, owner, lease id, lease resource, holder, expiry, 
 before removing `agent:ready`. Database or singleton existence alone never produces a
 dispatcher-backed pickup receipt.
 
+Rescue-stash notes, stale local pickup plans, and prior-session handoffs are
+non-authoritative context. Before using any of them to resume issue pickup,
+fetch and compare against current `origin/main`, this pickup contract, and the
+relevant dispatcher tests. They cannot bypass the wrapper, its verified claim,
+or current stale-takeover semantics; when they conflict, preserve the material
+for diagnosis and follow the current contract instead.
+
 If dispatcher claim verification fails, the wrapper exits without changing the Issue label. If the
 lease was verified but label removal fails, it releases the lease before failing. The success receipt
 contains `task_id`, `lease_id`, `holder`, and `evidence=verified-dispatcher-lease`.
