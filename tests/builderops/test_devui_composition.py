@@ -308,6 +308,20 @@ def test_contradictory_cockpit_evidence_is_refused() -> None:
     ]
     variants.append(orphaned_withdrawal)
 
+    counted_unavailable = deepcopy(_cockpit_payload())
+    counted_unavailable["sources"][0].update(
+        {"state": "unavailable", "last_successful_read": None}
+    )
+    variants.append(counted_unavailable)
+
+    refused_fresh = deepcopy(_cockpit_payload())
+    refused_fresh["claim"]["kind"] = "refused"
+    variants.append(refused_fresh)
+
+    missing_dispatcher = deepcopy(_cockpit_payload())
+    missing_dispatcher["sources"] = []
+    variants.append(missing_dispatcher)
+
     for payload in variants:
         result = compose_owner_snapshot(
             cockpit_reader=lambda payload=payload: payload,

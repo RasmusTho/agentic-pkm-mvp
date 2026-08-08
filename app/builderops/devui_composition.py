@@ -136,6 +136,13 @@ def _valid_cockpit_contract(payload: Mapping[str, Any]) -> bool:
             return False
         if source["configured"] is False and source["state"] != "unavailable":
             return False
+    dispatcher_state = source_states.get("dispatcher-store")
+    if (
+        dispatcher_state is None
+        or (claim["kind"] == "refused" and dispatcher_state != "unavailable")
+        or (claim["kind"] == "counted" and dispatcher_state not in {"fresh", "empty"})
+    ):
+        return False
     withdrawn_sources: set[str] = set()
     for withdrawal in withdrawn_counts:
         withdrawal_source = (

@@ -24,6 +24,17 @@ from app.builderops.ckm.contracts import (
 )
 
 
+def _dispatcher_source(read_at: str) -> dict:
+    return {
+        "name": "dispatcher-store",
+        "state": "fresh",
+        "last_successful_read": read_at,
+        "detail": "read succeeded",
+        "stale_after_days": 7,
+        "configured": True,
+    }
+
+
 def _empty_ckm_envelope() -> ResultEnvelope:
     completeness = CompletenessManifest(
         object_classes=(
@@ -92,7 +103,7 @@ def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
             "text": "one thread",
             "as_of": "2026-08-08T21:00:00+00:00",
         },
-        "sources": [],
+        "sources": [_dispatcher_source("2026-08-08T21:00:00+00:00")],
         "unread_planes": [],
         "withdrawn_counts": [],
     }
@@ -207,7 +218,14 @@ def test_devui_composition_sanitizes_ckm_refusal_diagnostics(
             "text": "source unavailable",
             "as_of": "2026-08-08T21:00:00+00:00",
         },
-        "sources": [],
+        "sources": [
+            {
+                **_dispatcher_source("2026-08-08T21:00:00+00:00"),
+                "state": "unavailable",
+                "last_successful_read": None,
+                "detail": "read failed",
+            }
+        ],
         "unread_planes": [],
         "withdrawn_counts": [],
     }
@@ -260,7 +278,7 @@ def test_devui_composition_isolates_unserializable_cockpit_payload(
             "text": "one thread",
             "as_of": "2026-08-08T21:00:00+00:00",
         },
-        "sources": [],
+        "sources": [_dispatcher_source("2026-08-08T21:00:00+00:00")],
         "unread_planes": [],
         "withdrawn_counts": [],
         "bands": {"moving": object()},
@@ -301,7 +319,7 @@ def test_devui_composition_isolates_non_utf8_provider_strings(monkeypatch) -> No
             "text": "one thread",
             "as_of": "2026-08-08T21:00:00+00:00",
         },
-        "sources": [],
+        "sources": [_dispatcher_source("2026-08-08T21:00:00+00:00")],
         "unread_planes": [],
         "withdrawn_counts": [],
         "bands": {},
