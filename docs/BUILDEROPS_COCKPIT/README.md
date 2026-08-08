@@ -40,6 +40,12 @@ read-only work register and a source view for that target. Its registry, freshne
 contracts should be reused by devUI; its no-decision, no-persistence, and no-authority boundaries do
 not move.
 
+The standalone `/cockpit` route is therefore a current transitional and diagnostic surface, not a
+separate long-term owner product or primary navigation destination. The owner-facing target is one
+devUI shell organised around owner intent and selected subject. devUI may compose this registry with
+CKM and dispatcher/Signboard evidence, while provider names and raw routes remain progressive
+provenance or repair detail.
+
 The planned authenticated delivery controls are not added to this static/read-time join. They appear
 inside the owner-perceived devUI flow through a separately authenticated action boundary owned by
 DDO-06. One experience therefore does not make this registry a control plane.

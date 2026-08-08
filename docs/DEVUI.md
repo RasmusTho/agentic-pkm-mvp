@@ -12,8 +12,8 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-08-07
-Last verified against: `origin/main` `8cbf80b9cfa2b0ba71a28e991b5340bfa3cb97a3`, ADR-0057,
+Last reviewed: 2026-08-08
+Last verified against: `origin/main` `da85670ce0f9f1ba55eb7a5423967407a9c639ad`, ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, and the Deterministic
 Delivery Orchestration specification.
 
@@ -32,6 +32,11 @@ meaning because of this document.
 devUI is where the Product Owner makes development and build decisions from one coherent picture.
 The owner should not have to reconstruct the situation from documents, Issues, PRs, CI, agent
 threads, and receipts.
+
+devUI is the sole normal owner-facing umbrella for Builder System interaction. BuilderOps Cockpit,
+CKM views, and Signboard are internal capability providers and transitional or diagnostic surfaces,
+not products the owner must choose between. Their names, routes, stores, and source topologies must
+not define primary navigation or split one owner journey across subsystem UIs.
 
 Its primary success criterion is reduced cognitive load: the owner can keep directing the project
 without first rebuilding an internal model of the delivery machinery.
@@ -54,7 +59,7 @@ boundary approves exact scope. GitHub, CI, review, merge, and closure prove what
 
 ## Cognitive-load contract
 
-The cockpit home has three stable zones:
+The devUI home has three stable zones:
 
 1. **Now** — what is moving, what is safely continuing, and what is blocked by the system.
 2. **Needs you** — only decisions that genuinely require Product Owner authority.
@@ -239,13 +244,14 @@ The facade is not one atomic cross-system snapshot. Each source retains its own 
 preview/approval. Last-good applies only to a source that owns a dated snapshot, primarily CKM;
 devUI must not create a durable cache over BuilderOps Cockpit live reads.
 
-## One experience, separate internal responsibilities
+## One owner experience, internal capability providers
 
 | Owner experience | Internal responsibility |
 | --- | --- |
-| Shared navigation, context, and owner language | devUI shell |
+| The complete owner-facing shell, navigation, context, and language | devUI |
 | Capabilities, evidence, gaps, candidates, freshness | CKM; always derived and non-authoritative |
-| Work in motion, delivered, flawed, forgotten | BuilderOps Cockpit read-time join and its sources |
+| Work in motion, delivered, flawed, forgotten | BuilderOps Cockpit read-time join and its sources; internal provider, not owner destination |
+| Queue, claim, lease, and activity evidence | Dispatcher and Signboard data contracts; Signboard UI remains operational/diagnostic, not owner navigation |
 | Proposal and exact preview | DDO request and plan compiler |
 | Approval, initiation request, typed lifecycle-command admission | Separately authenticated action boundary within devUI |
 | Legal transitions and next effect | DDO reducer |
@@ -259,19 +265,27 @@ action API is unavailable, reading stays available and clearly read-only. If CKM
 active delivery does not change lifecycle. A UI failure must never create, repeat, or assume an
 external effect.
 
+This separation is an implementation and authority concern, not an owner mental model. devUI
+composes the providers into one subject-centred experience and translates their technical states
+into the shared owner language above. Provider identity remains reachable under **Inspect** for
+provenance, repair, and diagnostics, but normal use never requires opening a CKM, Cockpit, or
+Signboard product. A provider failure degrades only the claims it owns and remains visible in the
+same devUI context; it does not redirect the owner to another subsystem.
+
 ## Information architecture
 
 The detailed visual design must go through Yggdrasil design handoff before implementation. devUI has
-three connected owner surfaces, not separate capability, work, agent, and receipt products:
+three connected owner views, not separate capability, work, agent, Cockpit, CKM, Signboard, and
+receipt products:
 
-1. **Cockpit** — the three zones: Now, Needs you, and Ready to try.
-2. **Detail** — one selected item with its capability context, work chain, evidence, gaps, sources,
+1. **Overview** — the three zones: Now, Needs you, and Ready to try.
+2. **Focus** — one selected item with its capability context, work chain, evidence, gaps, sources,
    and progressive technical detail.
 3. **Command and receipt** — exact proposal/preview, lawful owner controls, live progress, terminal
    result, and reassessment, all attached to the same selected item.
 
-Capabilities, work, evidence, and receipts are lenses within these surfaces, not additional
-top-level modes. Moving from cockpit to detail to command and receipt preserves the selected item,
+Capabilities, work, evidence, and receipts are lenses within these views, not additional top-level
+modes. Moving from overview to focus to command and receipt preserves the selected item,
 goal, scope, evidence, and owner-facing state.
 
 ### Visual composition hypothesis (pre-handoff)
@@ -331,15 +345,19 @@ approval in one owner experience; PostgreSQL authority cutover; full live run co
 CKM reassessment in the unified surface; owner pilot and tried-by-owner acceptance; and ADR-0065
 dispositions.
 
-The target turns the current cockpits from competing owner products into sources: Direction B stays
-an exportable/static evidence fallback, BuilderOps Cockpit supplies the work view, and the planned
-delivery console becomes devUI's authenticated decision/run mode behind a separate trust boundary.
+The target turns the current cockpits and Signboard from competing owner destinations into internal
+providers: Direction B stays an exportable/static evidence fallback, BuilderOps Cockpit supplies
+the work view, Signboard supplies dispatcher-owned operational evidence, and the planned delivery
+console becomes devUI's authenticated decision/run mode behind a separate trust boundary. Their raw
+routes may remain available for diagnostics and recovery, but devUI is the normal owner entry.
 
 ## Owner-experience acceptance criteria
 
 - [ ] The first view answers Now, Needs you, and Ready to try without owner-side reconstruction.
-- [ ] One selected item can be followed from cockpit to terminal receipt without product switching
+- [ ] One selected item can be followed from overview to terminal receipt without product switching
       or recreating context.
+- [ ] Normal owner use never requires choosing or navigating to Cockpit, CKM, or Signboard; their
+      source identity remains available only as progressive provenance and diagnostic detail.
 - [ ] Each item shows one owner-facing state, why it is shown, what happens next, and whether owner
       action is legal.
 - [ ] Glance, understand, verify, and inspect reveal progressively deeper information about the
