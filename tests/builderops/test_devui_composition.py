@@ -4,6 +4,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
+from app.builderops.ckm.contracts import (
+    CkmContractError,
+    CkmStateIdentity,
+    CompletenessManifest,
+    ErrorEnvelope,
+    ObjectClassCompleteness,
+    ResourceDto,
+    ResultEnvelope,
+    SnapshotManifest,
+    canonical_digest,
+    canonical_query_digest,
+)
 from app.builderops.devui_composition import compose_owner_snapshot
 
 
@@ -28,55 +42,48 @@ def _cockpit_payload() -> dict:
     }
 
 
-def _ckm_payload() -> dict:
-    return {
-        "schema_version": 1,
-        "resource_type": "capability",
-        "query_digest": "1" * 64,
-        "projection": {"status": "derived_projection", "authoritative": False},
-        "snapshot": {
-            "epoch": "epoch-7",
-            "state_revision": 42,
-            "ckm_schema_version": 5,
-            "envelope_schema_version": 1,
-            "resource_schema_version": 1,
-            "taxonomy_digest": "2" * 64,
-            "effective_audience": "single_operator_local",
-            "access_policy_version": "ckm-local-access-v1",
-            "redaction_profile": "none",
-            "read_set_digest": "3" * 64,
-            "snapshot_digest": "4" * 64,
-            "watermarks": {"capability": "2026-08-08T20:58:00+00:00"},
-            "provenance": [{"kind": "fixture"}],
-            "completeness": {
-                "complete": True,
-                "object_classes": [
-                    {
-                        "object_class": "capability",
-                        "included": 1,
-                        "filtered": 0,
-                        "omitted": 0,
-                        "truncated": 0,
-                    }
-                ],
-            },
-        },
-        "resources": [
-            {
-                "public_id": "ckm_capability_example",
-                "resource_type": "capability",
-            }
-        ],
-    }
+def _ckm_envelope() -> ResultEnvelope:
+    resource = ResourceDto(
+        public_id="ckm_capability_example",
+        resource_type="capability",
+        display_name="Example capability",
+        lifecycle="confirmed",
+        provenance=({"kind": "fixture"},),
+        values={},
+        candidate=False,
+    )
+    completeness = CompletenessManifest(
+        object_classes=(
+            ObjectClassCompleteness(object_class="capability", included=1),
+        ),
+        complete=True,
+    )
+    snapshot = SnapshotManifest.build(
+        state=CkmStateIdentity(epoch="epoch-7", state_revision=42),
+        taxonomy_digest=canonical_digest({"taxonomy": "fixture"}),
+        watermarks={"capability": "2026-08-08T20:58:00+00:00"},
+        provenance=({"kind": "fixture"},),
+        completeness=completeness,
+        read_set={"capability": (resource.public_id,)},
+    )
+    return ResultEnvelope(
+        resource_type="capability",
+        query_digest=canonical_query_digest(
+            {"operation": "list_capabilities", "public_id": None}
+        ),
+        snapshot=snapshot,
+        resources=(resource,),
+    )
 
 
 def test_composition_preserves_provider_snapshot_and_authority() -> None:
     cockpit = _cockpit_payload()
-    ckm = _ckm_payload()
+    ckm_envelope = _ckm_envelope()
+    ckm = ckm_envelope.to_dict()
 
     result = compose_owner_snapshot(
         cockpit_reader=lambda: cockpit,
-        ckm_reader=lambda: ckm,
+        ckm_reader=lambda: ckm_envelope,
         now=lambda: NOW,
     )
 
@@ -103,9 +110,9 @@ def test_composition_preserves_provider_snapshot_and_authority() -> None:
     assert capabilities["status"] == "available"
     assert capabilities["authority"] == ckm["projection"]
     assert capabilities["captured_at"] is None
-    assert capabilities["snapshot"] is ckm["snapshot"]
-    assert capabilities["completeness"] is ckm["snapshot"]["completeness"]
-    assert capabilities["payload"] is ckm
+    assert capabilities["snapshot"] == ckm["snapshot"]
+    assert capabilities["completeness"] == ckm["snapshot"]["completeness"]
+    assert capabilities["payload"] == ckm
 
 
 def test_composition_uses_existing_read_only_provider_contracts() -> None:
@@ -115,14 +122,13 @@ def test_composition_uses_existing_read_only_provider_contracts() -> None:
         reads.append("cockpit")
         return _cockpit_payload()
 
-    class CkmEnvelope:
-        def to_dict(self) -> dict:
-            reads.append("ckm")
-            return _ckm_payload()
+    def read_ckm() -> ResultEnvelope:
+        reads.append("ckm")
+        return _ckm_envelope()
 
     result = compose_owner_snapshot(
         cockpit_reader=read_cockpit,
-        ckm_reader=CkmEnvelope,
+        ckm_reader=read_ckm,
         now=lambda: NOW,
     )
 
@@ -137,7 +143,7 @@ def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
 
     result = compose_owner_snapshot(
         cockpit_reader=broken_cockpit,
-        ckm_reader=lambda: _ckm_payload(),
+        ckm_reader=_ckm_envelope,
         now=lambda: NOW,
     )
 
@@ -162,14 +168,13 @@ def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
 
     refused_ckm = compose_owner_snapshot(
         cockpit_reader=lambda: _cockpit_payload(),
-        ckm_reader=lambda: {
-            "schema_version": 1,
-            "error": {
-                "code": "missing_store",
-                "message": "CKM database does not exist",
-                "details": {"path": "/unavailable/ckm.sqlite3"},
-            },
-        },
+        ckm_reader=lambda: ErrorEnvelope(
+            CkmContractError(
+                code="missing_store",
+                message="CKM database does not exist",
+                details={"path": "/unavailable/ckm.sqlite3"},
+            )
+        ),
         now=lambda: NOW,
     )["providers"]["capabilities"]
 
@@ -183,13 +188,43 @@ def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
     assert "payload" not in refused_ckm
 
 
-def test_malformed_ckm_snapshot_is_refused() -> None:
-    malformed = _ckm_payload()
-    malformed["snapshot"] = {"completeness": {}}
-
+@pytest.mark.parametrize(
+    "unvalidated_payload",
+    [
+        {"snapshot": {"completeness": {}}},
+        {
+            "contract_version": True,
+            "schema_version": True,
+            "snapshot": {"completeness": {"complete": True}},
+        },
+        {
+            "snapshot": {
+                "snapshot_digest": "forged",
+                "read_set_digest": "forged",
+                "completeness": {"complete": True},
+            },
+            "resources": [],
+        },
+        {
+            "snapshot": {
+                "completeness": {
+                    "complete": True,
+                    "object_classes": [
+                        {"object_class": "capability", "included": 0},
+                        {"object_class": "capability", "included": 0},
+                    ],
+                }
+            },
+            "resources": [],
+        },
+    ],
+)
+def test_unvalidated_ckm_mapping_is_refused(
+    unvalidated_payload: dict,
+) -> None:
     contribution = compose_owner_snapshot(
         cockpit_reader=lambda: _cockpit_payload(),
-        ckm_reader=lambda: malformed,
+        ckm_reader=lambda: unvalidated_payload,  # type: ignore[return-value]
         now=lambda: NOW,
     )["providers"]["capabilities"]
 

@@ -10,6 +10,42 @@ from fastapi.testclient import TestClient
 import app.auth as auth_module
 from app.api.app import app
 from app.api.routes import devui as devui_route
+from app.builderops.ckm.contracts import (
+    CkmContractError,
+    CkmStateIdentity,
+    CompletenessManifest,
+    ErrorEnvelope,
+    ObjectClassCompleteness,
+    ResultEnvelope,
+    SnapshotManifest,
+    canonical_digest,
+    canonical_query_digest,
+)
+
+
+def _empty_ckm_envelope() -> ResultEnvelope:
+    completeness = CompletenessManifest(
+        object_classes=(
+            ObjectClassCompleteness(object_class="capability", included=0),
+        ),
+        complete=True,
+    )
+    snapshot = SnapshotManifest.build(
+        state=CkmStateIdentity(epoch="epoch-1", state_revision=1),
+        taxonomy_digest=canonical_digest({"taxonomy": "fixture"}),
+        watermarks={},
+        provenance=(),
+        completeness=completeness,
+        read_set={"capability": ()},
+    )
+    return ResultEnvelope(
+        resource_type="capability",
+        query_digest=canonical_query_digest(
+            {"operation": "list_capabilities", "public_id": None}
+        ),
+        snapshot=snapshot,
+        resources=(),
+    )
 
 
 def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
@@ -21,40 +57,8 @@ def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
         "unread_planes": [],
         "withdrawn_counts": [],
     }
-    ckm = {
-        "schema_version": 1,
-        "resource_type": "capability",
-        "query_digest": "1" * 64,
-        "projection": {"status": "derived_projection", "authoritative": False},
-        "snapshot": {
-            "epoch": "epoch-1",
-            "state_revision": 1,
-            "ckm_schema_version": 5,
-            "envelope_schema_version": 1,
-            "resource_schema_version": 1,
-            "taxonomy_digest": "2" * 64,
-            "effective_audience": "single_operator_local",
-            "access_policy_version": "ckm-local-access-v1",
-            "redaction_profile": "none",
-            "read_set_digest": "3" * 64,
-            "snapshot_digest": "4" * 64,
-            "watermarks": {},
-            "provenance": [],
-            "completeness": {
-                "complete": True,
-                "object_classes": [
-                    {
-                        "object_class": "capability",
-                        "included": 0,
-                        "filtered": 0,
-                        "omitted": 0,
-                        "truncated": 0,
-                    }
-                ],
-            },
-        },
-        "resources": [],
-    }
+    ckm_envelope = _empty_ckm_envelope()
+    ckm = ckm_envelope.to_dict()
     seen: list[Path] = []
 
     class ReadOnlyCkm:
@@ -62,7 +66,7 @@ def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
             seen.append(db_path)
 
         def list_capabilities(self):
-            return SimpleNamespace(to_dict=lambda: ckm)
+            return ckm_envelope
 
     monkeypatch.setattr(devui_route, "read_cockpit_registry", lambda: cockpit)
     monkeypatch.setattr(
@@ -164,24 +168,23 @@ def test_devui_composition_sanitizes_ckm_refusal_diagnostics(
         "unread_planes": [],
         "withdrawn_counts": [],
     }
-    refusal = {
-        "schema_version": 1,
-        "error": {
-            "code": "unsupported_store",
-            "message": f"SQLite could not open {secret}",
-            "details": {
+    refusal = ErrorEnvelope(
+        CkmContractError(
+            code="unsupported_store",
+            message=f"SQLite could not open {secret}",
+            details={
                 "path": secret,
                 "reason": f"OperationalError while reading {secret}",
             },
-        },
-    }
+        )
+    )
 
     class RefusingCkm:
         def __init__(self, db_path: Path) -> None:
             self.db_path = db_path
 
         def list_capabilities(self):
-            return SimpleNamespace(to_dict=lambda: refusal)
+            return refusal
 
     monkeypatch.setattr(devui_route, "read_cockpit_registry", lambda: cockpit)
     monkeypatch.setattr(

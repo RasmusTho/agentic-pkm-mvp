@@ -11,37 +11,24 @@ import logging
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any
 
-from app.builderops.ckm.contracts import (
-    ACCESS_POLICY_VERSION,
-    EFFECTIVE_AUDIENCE,
-    ENVELOPE_SCHEMA_VERSION,
-    REDACTION_PROFILE,
-    RESOURCE_SCHEMA_VERSION,
-)
-from app.builderops.ckm.schema import CKM_SCHEMA_VERSION
+from app.builderops.ckm.contracts import ErrorEnvelope, ResultEnvelope
 
 
 CONTRACT_VERSION = "devui.composition.v1"
 logger = logging.getLogger(__name__)
 _CKM_REFUSAL_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _CKM_REFUSAL_MESSAGE = "CKM refused the read request"
-_CKM_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
-class _Envelope(Protocol):
-    def to_dict(self) -> dict[str, Any]: ...
-
-
-ProviderReader = Callable[[], Mapping[str, Any] | _Envelope]
+CockpitReader = Callable[[], Mapping[str, Any]]
+CkmReader = Callable[[], ResultEnvelope | ErrorEnvelope]
 Now = Callable[[], datetime]
 
 
-def _payload(reader: ProviderReader) -> Mapping[str, Any]:
+def _cockpit_payload(reader: CockpitReader) -> Mapping[str, Any]:
     result = reader()
-    if hasattr(result, "to_dict"):
-        result = result.to_dict()
     if not isinstance(result, Mapping):
         raise TypeError("provider returned a non-object payload")
     return result
@@ -70,11 +57,11 @@ def _refusal(
     }
 
 
-def _cockpit_contribution(reader: ProviderReader) -> dict[str, Any]:
+def _cockpit_contribution(reader: CockpitReader) -> dict[str, Any]:
     provider = "builderops_cockpit"
     authority = "read_time_join"
     try:
-        payload = _payload(reader)
+        payload = _cockpit_payload(reader)
         generated_at = payload.get("generated_at")
         claim = payload.get("claim")
         sources = payload.get("sources")
@@ -117,82 +104,15 @@ def _cockpit_contribution(reader: ProviderReader) -> dict[str, Any]:
         )
 
 
-def _is_nonnegative_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
-def _valid_ckm_snapshot(
-    snapshot: Mapping[str, Any],
-    resources: list[Any],
-) -> bool:
-    completeness = snapshot.get("completeness")
-    object_classes = (
-        completeness.get("object_classes")
-        if isinstance(completeness, Mapping)
-        else None
-    )
-    capability_accounting = None
-    if isinstance(object_classes, list):
-        capability_accounting = next(
-            (
-                item
-                for item in object_classes
-                if isinstance(item, Mapping)
-                and item.get("object_class") == "capability"
-            ),
-            None,
-        )
-    digests = (
-        snapshot.get("taxonomy_digest"),
-        snapshot.get("read_set_digest"),
-        snapshot.get("snapshot_digest"),
-    )
-    watermarks = snapshot.get("watermarks")
-    provenance = snapshot.get("provenance")
-    return bool(
-        isinstance(snapshot.get("epoch"), str)
-        and snapshot["epoch"]
-        and _is_nonnegative_int(snapshot.get("state_revision"))
-        and snapshot.get("ckm_schema_version") == CKM_SCHEMA_VERSION
-        and snapshot.get("envelope_schema_version") == ENVELOPE_SCHEMA_VERSION
-        and snapshot.get("resource_schema_version") == RESOURCE_SCHEMA_VERSION
-        and all(
-            isinstance(digest, str) and _CKM_DIGEST.fullmatch(digest)
-            for digest in digests
-        )
-        and snapshot.get("effective_audience") == EFFECTIVE_AUDIENCE
-        and snapshot.get("access_policy_version") == ACCESS_POLICY_VERSION
-        and snapshot.get("redaction_profile") == REDACTION_PROFILE
-        and isinstance(watermarks, Mapping)
-        and all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in watermarks.items()
-        )
-        and isinstance(provenance, list)
-        and all(isinstance(item, Mapping) for item in provenance)
-        and isinstance(completeness, Mapping)
-        and completeness.get("complete") is True
-        and isinstance(capability_accounting, Mapping)
-        and capability_accounting.get("included") == len(resources)
-        and all(
-            _is_nonnegative_int(capability_accounting.get(field))
-            for field in ("included", "filtered", "omitted", "truncated")
-        )
-        and capability_accounting.get("omitted") == 0
-        and capability_accounting.get("truncated") == 0
-    )
-
-
-def _ckm_contribution(reader: ProviderReader) -> dict[str, Any]:
+def _ckm_contribution(reader: CkmReader) -> dict[str, Any]:
     provider = "ckm"
     authority = {"status": "derived_projection", "authoritative": False}
     try:
-        payload = _payload(reader)
-        error = payload.get("error")
-        if isinstance(error, Mapping):
-            code = error.get("code")
-            message = error.get("message")
-            details = error.get("details")
+        result = reader()
+        if isinstance(result, ErrorEnvelope):
+            code = result.error.code
+            message = result.error.message
+            details = result.error.details
             if (
                 isinstance(code, str)
                 and _CKM_REFUSAL_CODE.fullmatch(code)
@@ -213,21 +133,15 @@ def _ckm_contribution(reader: ProviderReader) -> dict[str, Any]:
                 )
             raise ValueError("malformed CKM refusal envelope")
 
-        projection = payload.get("projection")
-        snapshot = payload.get("snapshot")
-        resources = payload.get("resources")
+        if not isinstance(result, ResultEnvelope):
+            raise ValueError("CKM reader returned an unvalidated envelope")
+        payload = result.to_dict()
+        projection = payload["projection"]
+        snapshot = payload["snapshot"]
         if (
-            payload.get("schema_version") != ENVELOPE_SCHEMA_VERSION
-            or payload.get("resource_type") != "capability"
-            or not isinstance(payload.get("query_digest"), str)
-            or not payload["query_digest"]
-            or not isinstance(projection, Mapping)
+            result.resource_type != "capability"
             or projection.get("status") != "derived_projection"
             or projection.get("authoritative") is not False
-            or not isinstance(snapshot, Mapping)
-            or not isinstance(resources, list)
-            or not all(isinstance(resource, Mapping) for resource in resources)
-            or not _valid_ckm_snapshot(snapshot, resources)
         ):
             raise ValueError("malformed CKM result envelope")
         return {
@@ -255,8 +169,8 @@ def _ckm_contribution(reader: ProviderReader) -> dict[str, Any]:
 
 def compose_owner_snapshot(
     *,
-    cockpit_reader: ProviderReader,
-    ckm_reader: ProviderReader,
+    cockpit_reader: CockpitReader,
+    ckm_reader: CkmReader,
     now: Now | None = None,
 ) -> dict[str, Any]:
     """Capture independent provider reads beneath one projection envelope."""
