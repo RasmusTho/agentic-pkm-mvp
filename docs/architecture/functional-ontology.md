@@ -5,8 +5,8 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (ontology terms); subordinate to doctrine and SBS
-Last reviewed: 2026-06-26
-Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_BOUNDARY_REGISTER.md
+Last reviewed: 2026-08-08
+Last verified against: docs/CONCEPTS/COGNITIVE_ONTOLOGY.md, docs/CONCEPTS/DEFINITION_OWNERSHIP.md, docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md, docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md, docs/foundation/00-yggdrasil-doctrine.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_BOUNDARY_REGISTER.md
 
 # Mimer Functional Ontology
 
@@ -17,6 +17,18 @@ does not invent parallel terms for scope, memory, artifact, claim, provenance, p
 and authority. It is **not a glossary-only cleanup**: every term carries system consequences —
 an owning control boundary, key metadata, the semantic dimensions it must preserve, and a
 forbidden conflation.
+
+### Relationship to the Cognitive Ontology
+
+The [`Cognitive Ontology`](../CONCEPTS/COGNITIVE_ONTOLOGY.md) and its specialist concept contracts
+own human-first domain meaning. This document is the architecture specialization: it identifies the
+Mimer functional objects that represent selected domain concepts and owns their system consequences.
+A functional-object row may therefore describe a durable or governed system-represented subset of a
+broader cognitive concept; it does not redefine that broader concept or imply that unrepresented
+human meaning does not exist.
+
+The pair-specific ownership and reading rule is defined in
+[`Definition Ownership`](../CONCEPTS/DEFINITION_OWNERSHIP.md#cognitive-ontology-and-functional-ontology).
 
 Read first: the [doctrine](../foundation/00-yggdrasil-doctrine.md) and the
 [context packet](../foundation/yggdrasil-architecture-context-packet.md). The owning boundaries
@@ -95,7 +107,7 @@ representation & indexing).
 | `Claim` | A semantic assertion stated or extracted, carrying its provenance and standing. | True by virtue of existing; canonical because it was extracted. A claim's standing is its `authority_state`/`evidence_role`. | SIP (semantic identity); GOV (standing) | `claim_id`, statement, `provenance_ref`, subject refs | `authority_state`, `evidence_role`, `source_role` | TBD ([#2551](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2551)) |
 | `Concept` | A named semantic entity in the identity/ontology graph that artifacts and claims refer to. | A storage key; a folder; an authority. | SIP | `concept_id`, label, aliases | `scope_binding` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
 | `Relation` | A typed semantic edge between concepts, artifacts, or claims. | A retrieval similarity score; a permission; a flow. Similarity is not a relation, and a relation is not permission. | SIP | `relation_id`, type, endpoints, `provenance_ref` | `scope_binding`, `evidence_role` | TBD ([#2551](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2551)) |
-| `Source` | The origin an artifact/claim derives from (internal artifact, external document, provider feed). | The segment or projection derived from it; evidence standing by itself. External-source adapters are EBF; provenance is SIP. | SIP (provenance/attribution); EBF (external adapter facet) | `source_id`, kind, locator, `provenance_ref` | `source_role`, `sensitivity` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
+| `Source` | An origin entity or locator represented for provenance: the internal artifact, external document, or provider feed from which an artifact or claim derives. This is distinct from the epistemic `Source Role` an artifact plays in a particular context. | An intrinsic class that every source-role artifact must acquire; the segment or projection derived from it; evidence standing by itself. External-source adapters are EBF; provenance is SIP. | SIP (provenance/attribution); EBF (external adapter facet) | `source_id`, kind, locator, `provenance_ref` | `source_role`, `sensitivity` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
 | `Episode` | A durable, note-serialized record of a bounded, observer-relative lived situation (a meeting, a walk, a work session) that observations are the context of, indexed on time/space/causation/goal/protagonist. | A Heimdal sensor `event` (a discrete sensing act; many compose into one Episode); a `Context` (present-tense frame — the Episode is the durable record that a Context was active during); a `Workspace` (ephemeral); a `moment` (which surfaces it). Grouping observations is not sensing them, and belonging to an Episode is context, not evidence. | HKA (durable artifact); SIP (situation identity/relations) | `episode_id`, `time{start,end,closed}`, `space`, `protagonists`, `goal`, `causation`, `parent_episode`, `scope_binding`, `authority_state` | `episode_ref` (as anchor target), `scope_binding`, `source_role`, `authority_state` | TBD (ADR-0051) |
 
 ## 4. Memory, cognition, and capability terms
@@ -108,7 +120,7 @@ policy, authority & receipts), **HKA** (for accepted commitments).
 | --- | --- | --- | --- | --- | --- | --- |
 | `MemoryItem` | An inspectable, revisable machine-memory record that aids recall and reasoning. | Canonical human knowledge; evidence by default. It is noncanonical until promoted into HKA via governance. | MEM (lifecycle); GOV (promotion); HKA (target of promotion) | `memory_id`, `source_role: agent_memory`, `memory_state`, `provenance_ref` | `source_role`, `authority_state`, `evidence_role`, `memory_state` | TBD ([#2551](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2551)) |
 | `Proposal` | A non-side-effecting suggestion produced by cognition/agents for the human to accept, reject, or revise. | A commitment; an authorized change; durable knowledge. A proposal mutates nothing until governed acceptance. | CAO (production); GOV (disposition) | `proposal_id`, content, target ref, rationale | `authority_state: proposed`, `evidence_role` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
-| `Commitment` | A durable obligation/decision the human has accepted (a decision record, promise, or deadline). | A proposal; an agent memory. A commitment is the accepted form, reached through governance. | HKA (durable state); GOV (acceptance) | `commitment_id`, statement, `authority_receipt_ref`, due/lifecycle | `authority_state: accepted`, `evidence_role: evidence` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
+| `Commitment` | A durable, accepted Mimer representation of a human commitment as defined by the Cognitive Ontology and Commitment Layer Contract. Governance establishes the accepted standing of this representation; it does not determine whether the human commitment exists. | The full human commitment itself; an unaccepted proposal; an agent memory. Not every lived commitment is already represented or governance-recorded. | HKA (durable state); GOV (acceptance) | `commitment_id`, statement, `authority_receipt_ref`, due/lifecycle | `authority_state: accepted`, `evidence_role: evidence` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
 | `CapabilityGrant` | A scoped, revocable grant permitting a principal/agent role to perform classes of operations. | An execution; an authority transition; a universal bypass. A grant is bounded and auditable. | GOV | `grant_id`, principal ref, allowed operations, scope, `expiry` | `authority_state`, `scope_binding` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
 | `CrossScopeFlow` | A typed, directional, operation-specific grant permitting movement/use of material across a scope boundary. | A boolean; a default; a consequence of similarity. See [cross-scope-flow](cross-scope-flow.md). | GOV | `flow_id`, `source_scope`, `target_scope`, `allowed_operations`, `provenance_requirements`, `expiry` | `scope_binding`, `source_role`, `authority_state`, `evidence_role` | TBD ([#2551](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2551)) |
 
@@ -139,3 +151,6 @@ These describe *accountability*, *lineage*, *derivation*, and *side effects*. Ow
 - [System Breakdown Structure](../SYSTEM_BREAKDOWN_STRUCTURE.md) — the owning control boundaries
 - [Architecture context packet](../foundation/yggdrasil-architecture-context-packet.md) — full synthesis
 - Pending schema: metadata bundle ([#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544)); `MemoryItem` ([#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546)); `AuthorityTransition` ([#2547](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2547)); `RetrievalResult` ([#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548))
+
+Changed: `Source` and `Commitment` — clarified their architecture-functional relationship to the
+human-first `Source Role` and commitment concepts without renaming either object. 2026-08-08.

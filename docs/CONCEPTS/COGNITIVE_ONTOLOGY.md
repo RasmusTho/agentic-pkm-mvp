@@ -15,6 +15,19 @@ It exists to answer questions of meaning before questions of representation:
 
 This is a domain contract, not a schema document.
 
+### Relationship to the Mimer Functional Ontology
+
+This document owns human-first domain meaning. The
+[`Mimer Functional Ontology`](../architecture/functional-ontology.md) is the architecture
+specialization that identifies which concepts are represented as Mimer functional objects and owns
+their system consequences: forbidden conflations, Level-2 boundary allocation, metadata/dimension
+requirements, and verification links. It may describe a system-represented subset of a broader
+cognitive concept, but it does not redefine the broader concept or make representation a condition
+for that concept to exist.
+
+Read the pair using the explicit overlap rule in
+[`Definition Ownership`](DEFINITION_OWNERSHIP.md#cognitive-ontology-and-functional-ontology).
+
 Related documents:
 - `docs/PROJECT_KERNEL.md`
 - `docs/CONCEPTS/COGNITIVE_AXES_AND_SPHERES.md`
@@ -36,6 +49,8 @@ Related documents:
 - `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
 - `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`
 - `docs/CONCEPTS/CREATIVE_PROCESS_CONTRACT.md`
+- `docs/CONCEPTS/DEFINITION_OWNERSHIP.md`
+- `docs/architecture/functional-ontology.md`
 
 ## Current ontology posture
 
