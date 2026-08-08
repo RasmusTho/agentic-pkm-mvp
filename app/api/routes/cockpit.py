@@ -63,8 +63,7 @@ def _matrix_path() -> Path:
     return _REPO_ROOT / "docs" / "architecture" / "traceability-matrix.md"
 
 
-@router.get("/registry")
-async def registry() -> dict[str, Any]:
+def read_registry() -> dict[str, Any]:
     """Recompute the registry from the authorities. Nothing is cached."""
     paths = load_paths()
     return build_registry(
@@ -77,4 +76,9 @@ async def registry() -> dict[str, Any]:
     )
 
 
-__all__ = ["router"]
+@router.get("/registry")
+async def registry() -> dict[str, Any]:
+    return read_registry()
+
+
+__all__ = ["read_registry", "router"]
