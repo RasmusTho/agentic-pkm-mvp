@@ -77,6 +77,31 @@ def test_review_uses_mock_result_when_provider_is_unconfigured(
     assert run.result["summary"].startswith("Summary:")
 
 
+def test_review_honors_forced_real_provider_before_mock_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("REASONING_PROVIDER", "llm")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "ollama")
+    monkeypatch.delenv("CI", raising=False)
+    reset_store_backends()
+    object_id = _store_note()
+    calls = []
+
+    def _chat(**_kwargs: object) -> str:
+        calls.append(_kwargs)
+        return '{"summary": "routed review", "issues": [], "suggestions": []}'
+
+    monkeypatch.setattr(provider_module, "_call_chat", _chat)
+
+    run = run_reasoning(ReasoningMode.REVIEW, [object_id])
+
+    assert run.status == "ok"
+    assert run.result["summary"] == "routed review"
+    assert len(calls) == 1
+
+
 def test_ranking_uses_mock_result_when_provider_is_unconfigured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -96,3 +121,32 @@ def test_ranking_uses_mock_result_when_provider_is_unconfigured(
 
     assert run.status == "ok"
     assert run.result["ranking"]
+
+
+def test_ranking_honors_forced_real_provider_before_mock_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("REASONING_PROVIDER", "llm")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "ollama")
+    monkeypatch.delenv("CI", raising=False)
+    reset_store_backends()
+    object_id = _store_note()
+    calls = []
+
+    def _chat(**_kwargs: object) -> str:
+        calls.append(_kwargs)
+        return (
+            '{"ranking": [{"object_uuid": "'
+            + object_id
+            + '", "score": 0.9, "reason": "routed ranking"}]}'
+        )
+
+    monkeypatch.setattr(provider_module, "_call_chat", _chat)
+
+    run = run_reasoning(ReasoningMode.RANKING, [object_id], question="Rank this")
+
+    assert run.status == "ok"
+    assert run.result["ranking"][0]["reason"] == "routed ranking"
+    assert len(calls) == 1

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
-from app.components.llm.fabric import LLMBackendTimeout, LLMTaskIntent, get_chat_client
+from app.components.llm.fabric import LLMBackendTimeout, LLMRouter, LLMTaskIntent, get_chat_client
 from app.components.llm.router import LLMRoute
 from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
@@ -178,6 +178,16 @@ def _reasoning_backend() -> str:
     return backend
 
 
+def _reasoning_uses_mock_route() -> bool:
+    if _reasoning_backend() == "mock":
+        return True
+    try:
+        route = LLMRouter().route(LLMTaskIntent(task_kind="reasoning", risk="high"))
+    except Exception:
+        return False
+    return route.provider == "mock"
+
+
 def _simple_preview(text: str, limit: int = 120) -> str:
     text = text or ""
     return text[:limit] + ("..." if len(text) > limit else "")
@@ -295,10 +305,7 @@ def run_reasoning(
                 error="object missing or has no text",
                 result={"summary": "", "issues": [], "suggestions": []},
             )
-        backend = _reasoning_backend()
-        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
-        provider = "mock" if provider in {"", "fake"} else provider
-        if backend == "mock" or provider == "mock":
+        if _reasoning_uses_mock_route():
             summary = f"Summary: {_simple_preview(text, 90)}"
             issues = ["needs review for clarity"]
             suggestions = ["Clarify objectives", "Add sources"]
@@ -352,10 +359,7 @@ def run_reasoning(
                 error="no candidate texts found",
                 result={"ranking": []},
             )
-        backend = _reasoning_backend()
-        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
-        provider = "mock" if provider in {"", "fake"} else provider
-        if backend == "mock" or provider == "mock":
+        if _reasoning_uses_mock_route():
             ranking = []
             for idx, (oid, text) in enumerate(texts):
                 score = max(0.0, 1.0 - 0.05 * idx)
