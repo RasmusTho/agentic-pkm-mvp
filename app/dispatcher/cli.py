@@ -10,6 +10,7 @@ suitable for agent parsing.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -611,6 +612,83 @@ def _new_verification_ledger(
     )
 
 
+class _InstalledMainExactHeadLauncher:
+    """Supply immutable PR-head source while executing installed-main code."""
+
+    def __init__(
+        self,
+        launcher: Any,
+        *,
+        installed_main: Path,
+        context_path: Path,
+        git_runner: Callable[..., Any] = subprocess.run,
+    ) -> None:
+        self.launcher = launcher
+        self.config = launcher.config
+        self.installed_main = installed_main
+        self.context_path = context_path
+        self.git_runner = git_runner
+
+    def launch(self, context_pack: Mapping[str, object], **kwargs: Any) -> Any:
+        head_sha = context_pack.get("head_sha")
+        if (
+            not isinstance(head_sha, str)
+            or len(head_sha) != 40
+            or any(char not in "0123456789abcdef" for char in head_sha.lower())
+        ):
+            raise ValueError("verification review head is malformed")
+        exists = self.git_runner(
+            [
+                "git",
+                "-C",
+                str(self.installed_main),
+                "cat-file",
+                "-e",
+                f"{head_sha}^{{commit}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if exists.returncode != 0:
+            raise ValueError("verification review head is unavailable")
+        patch = self.git_runner(
+            [
+                "git",
+                "-C",
+                str(self.installed_main),
+                "diff",
+                "--binary",
+                "--no-ext-diff",
+                f"refs/remotes/origin/main...{head_sha}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        patch_bytes = patch.stdout.encode("utf-8")
+        if patch.returncode != 0 or not patch_bytes or len(patch_bytes) > 10_000_000:
+            raise ValueError("verification review patch is unavailable")
+        patch_path = self.context_path.with_name("review-head.patch")
+        patch_path.write_bytes(patch_bytes)
+        bound_pack = {
+            **dict(context_pack),
+            "review_source": {
+                "contract": "verification_review_source.v1",
+                "head_sha": head_sha.lower(),
+                "base_ref": "refs/remotes/origin/main",
+                "patch_path": str(patch_path),
+                "patch_sha256": hashlib.sha256(patch_bytes).hexdigest(),
+            },
+        }
+        try:
+            return self.launcher.launch(bound_pack, **kwargs)
+        finally:
+            patch_path.unlink(missing_ok=True)
+
+
 def _build_host_fenced_verification_cycle(
     client: Any,
     *,
@@ -656,10 +734,15 @@ def _build_host_fenced_verification_cycle(
             os.environ.get("CODEX_HOME")
             or Path(os.environ.get("HOME", "")) / ".codex"
         )
-        launcher = CodexExecLauncher(
+        raw_launcher = CodexExecLauncher(
             worktree,
             CANONICAL_RECEIPT_SCHEMA_PATH,
             context_path,
+        )
+        launcher = _InstalledMainExactHeadLauncher(
+            raw_launcher,
+            installed_main=worktree,
+            context_path=context_path,
         )
         consumer = VerificationConsumer(
             ledger,

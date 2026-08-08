@@ -207,7 +207,11 @@ Both forms are dry-run-safe and API/PostgreSQL-only. A successful command emits 
 Demerzel invocation posts that receipt to #3603. The command itself does not satisfy that parent
 gate or activate BCP-06. Before constructing any client or effect adapter, the command requires the
 selected worktree to be clean `main` at the exact locally fetched `origin/main`; a detached, dirty,
-stale, or feature-branch checkout fails closed.
+stale, or feature-branch checkout fails closed. That checkout supplies the installed composition
+code only: before launching the network-fenced reviewer, the host materializes an immutable
+`origin/main...current_head_sha` patch, binds its SHA-256 digest and PR head into the dispatch
+context, and requires the reviewer to inspect that exact source evidence rather than treating the
+installed-main working tree as the reviewed candidate.
 
 ## Related Docs
 

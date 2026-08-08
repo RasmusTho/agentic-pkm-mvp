@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,6 +93,7 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     truth = object()
     auth = object()
     launcher = object()
+    exact_launcher = object()
     consumer = object()
     repository = SimpleNamespace(close=lambda: None)
     executor = object()
@@ -147,6 +149,18 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
                 context_path=context_path,
             )
             or launcher
+        ),
+    )
+    monkeypatch.setattr(
+        dispatcher_cli,
+        "_InstalledMainExactHeadLauncher",
+        lambda actual_launcher, *, installed_main, context_path: (
+            seen.update(
+                raw_launcher=actual_launcher,
+                installed_main=installed_main,
+                exact_context_path=context_path,
+            )
+            or exact_launcher
         ),
     )
     monkeypatch.setattr(
@@ -209,6 +223,8 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     assert seen["ledger_client"] is client
     assert seen["ledger_outbox"] is outbox
     assert seen["consumer_ledger"] is ledger
+    assert seen["raw_launcher"] is launcher
+    assert seen["launcher"] is exact_launcher
     assert seen["executor_ledger"] is ledger
     assert seen["executor_outbox"] is outbox
     assert seen["runtime_ledger"] is ledger
@@ -216,6 +232,52 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     assert seen["read_token"] == "github-secret"
     assert seen["consumer_holder"] == "verification-host"
     assert seen["runtime_holder"] == "verification-host"
+
+
+def test_exact_head_launcher_supplies_immutable_review_patch(
+    tmp_path: Path,
+) -> None:
+    head_sha = "a" * 40
+    context_path = tmp_path / "context.json"
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    class _Inner:
+        config = SimpleNamespace(adapter_name="verification_closer")
+
+        def launch(self, context_pack, **kwargs):
+            source = context_pack["review_source"]
+            patch_path = Path(source["patch_path"])
+            assert patch_path.read_text(encoding="utf-8") == "diff --git exact\n"
+            calls.append((["inner"], {**kwargs, "source": source}))
+            return "session", {"verdict": "verified"}
+
+    def _git(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        if command[3:5] == ["cat-file", "-e"]:
+            return SimpleNamespace(returncode=0, stdout="")
+        assert command[3:6] == ["diff", "--binary", "--no-ext-diff"]
+        return SimpleNamespace(returncode=0, stdout="diff --git exact\n")
+
+    launcher = dispatcher_cli._InstalledMainExactHeadLauncher(
+        _Inner(),
+        installed_main=tmp_path,
+        context_path=context_path,
+        git_runner=_git,
+    )
+    result = launcher.launch(
+        {
+            "head_sha": head_sha,
+            "merge_execution_mode": "host_fenced_executor",
+        },
+        resume_session_id="session-prior",
+    )
+
+    assert result[0] == "session"
+    source = calls[0][1]["source"]
+    assert source["head_sha"] == head_sha
+    assert source["patch_sha256"] == hashlib.sha256(
+        b"diff --git exact\n"
+    ).hexdigest()
+    assert not Path(source["patch_path"]).exists()
 
 
 def test_cycle_command_runs_and_recovers_dry_cycle(
