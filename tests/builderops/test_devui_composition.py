@@ -32,13 +32,22 @@ def _ckm_payload() -> dict:
     return {
         "schema_version": 1,
         "resource_type": "capability",
-        "query_digest": "query-digest",
+        "query_digest": "1" * 64,
         "projection": {"status": "derived_projection", "authoritative": False},
         "snapshot": {
             "epoch": "epoch-7",
             "state_revision": 42,
-            "snapshot_digest": "snapshot-digest",
+            "ckm_schema_version": 5,
+            "envelope_schema_version": 1,
+            "resource_schema_version": 1,
+            "taxonomy_digest": "2" * 64,
+            "effective_audience": "single_operator_local",
+            "access_policy_version": "ckm-local-access-v1",
+            "redaction_profile": "none",
+            "read_set_digest": "3" * 64,
+            "snapshot_digest": "4" * 64,
             "watermarks": {"capability": "2026-08-08T20:58:00+00:00"},
+            "provenance": [{"kind": "fixture"}],
             "completeness": {
                 "complete": True,
                 "object_classes": [
@@ -52,7 +61,12 @@ def _ckm_payload() -> dict:
                 ],
             },
         },
-        "resources": [{"public_id": "ckm_capability_example"}],
+        "resources": [
+            {
+                "public_id": "ckm_capability_example",
+                "resource_type": "capability",
+            }
+        ],
     }
 
 
@@ -167,3 +181,23 @@ def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
     }
     assert "/unavailable/ckm.sqlite3" not in repr(refused_ckm)
     assert "payload" not in refused_ckm
+
+
+def test_malformed_ckm_snapshot_is_refused() -> None:
+    malformed = _ckm_payload()
+    malformed["snapshot"] = {"completeness": {}}
+
+    contribution = compose_owner_snapshot(
+        cockpit_reader=lambda: _cockpit_payload(),
+        ckm_reader=lambda: malformed,
+        now=lambda: NOW,
+    )["providers"]["capabilities"]
+
+    assert contribution["status"] == "refused"
+    assert contribution["snapshot"] is None
+    assert contribution["refusal"] == {
+        "code": "provider_unavailable",
+        "message": "CKM could not provide its read snapshot",
+        "details": {"reason": "provider read failed"},
+    }
+    assert "payload" not in contribution

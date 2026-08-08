@@ -24,14 +24,34 @@ def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
     ckm = {
         "schema_version": 1,
         "resource_type": "capability",
-        "query_digest": "digest",
+        "query_digest": "1" * 64,
         "projection": {"status": "derived_projection", "authoritative": False},
         "snapshot": {
             "epoch": "epoch-1",
             "state_revision": 1,
-            "snapshot_digest": "snapshot-1",
+            "ckm_schema_version": 5,
+            "envelope_schema_version": 1,
+            "resource_schema_version": 1,
+            "taxonomy_digest": "2" * 64,
+            "effective_audience": "single_operator_local",
+            "access_policy_version": "ckm-local-access-v1",
+            "redaction_profile": "none",
+            "read_set_digest": "3" * 64,
+            "snapshot_digest": "4" * 64,
             "watermarks": {},
-            "completeness": {"complete": True, "object_classes": []},
+            "provenance": [],
+            "completeness": {
+                "complete": True,
+                "object_classes": [
+                    {
+                        "object_class": "capability",
+                        "included": 0,
+                        "filtered": 0,
+                        "omitted": 0,
+                        "truncated": 0,
+                    }
+                ],
+            },
         },
         "resources": [],
     }
