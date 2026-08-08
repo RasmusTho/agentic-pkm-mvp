@@ -31,9 +31,10 @@ Research questions:
 ## 2. Executive verdict
 
 Builder System is structurally mature but not yet cognitively unified. The missing piece is not another
-agent, graph database, dashboard, or central orchestrator. The missing piece is a small **promotion
-and traceability kernel** that makes the existing authority boundaries legible from owner intent to
-accepted outcome.
+agent, graph database, dashboard, or central orchestrator. The missing piece is a small **traceability
+and routing kernel** that makes the existing authority boundaries legible from owner intent to
+accepted outcome. A promotion mechanism already exists; the gap is consistent use of it at the
+research/design → normative-doc boundary.
 
 The current architecture already has the correct broad separation:
 
@@ -154,31 +155,41 @@ more truthful than “one database” or “one graph.”
 
 ## 6. Main weaknesses and contradictions
 
-### F1 — The lifecycle has no explicit research/design promotion boundary
+### F1 — The existing promotion boundary is not consistently used by research/design routes
 
-Research, design handoff, docs authoring, and issue generation are individually defined, but the
-system does not expose one canonical record saying: “this research/design result was accepted as the
-source for this normative doc/spec.” The existing process map calls docs/spec authority a layer and
-Issues a contract layer, but leaves the crossing implicit (`docs/development/BUILDER_SYSTEM_PROCESS_MAP.md:27-35`).
+Research, design handoff, docs authoring, and issue generation are individually defined, and
+`PromotionIntent` already provides a governed staging path for crossing authority classes. The
+remaining gap is that research/design adapters and routing guidance do not consistently expose a
+canonical disposition saying: “this result was accepted, rejected, deferred, or promoted as the
+source for this normative doc/spec.” The process map calls docs/spec authority a layer and Issues a
+contract layer, but leaves this particular crossing implicit (`docs/development/BUILDER_SYSTEM_PROCESS_MAP.md:27-35`;
+`docs/architecture/SBS_OPERATING_MODEL.md:270-313`; `app/builderops/promotion_gateway.py:88-109,174-240`).
 
 Consequence: agents can start from a plausible design artifact or conversation and skip the precise
 moment where owner intent becomes normative scope.
 
-Recommendation: add a small promotion reference/receipt, not a new graph store. It should name the
-source artifact, disposition, accepted target doc/spec, owner/authority class, and date. It can be a
-BuilderOps `PromotionIntent` until accepted; the accepted repo doc/spec remains the authority.
+Recommendation: reuse `PromotionIntent` and its existing receipt/gateway. Add only the missing
+research/design routing rule or adapter shape if evidence shows it is needed. It should name the
+source artifact, disposition, target doc/spec, owner/authority class, and date; the accepted repo
+doc/spec remains the authority. Do not create another promotion record.
 
-### F2 — The middle of the graph is machine-joinable; the ends are not
+### F2 — The graph's remaining gaps are narrower than the prior snapshot
 
-The delivery graph audit found that PR ↔ Issue is the only CI-enforced machine edge, while parent/child
-edges are prose, task-doc `github_issue:` is often empty, needs have no stable IDs, and owner
-acceptance has no general receipt (`docs/audits/DELIVERY_GRAPH_JOIN_SUBSTRATE_2026-07-30.md:38-102,129-148`).
+The prior delivery graph audit found that PR ↔ Issue was the only CI-enforced machine edge, while
+parent/child edges were prose, task-doc `github_issue:` was often empty, needs had no stable IDs, and
+owner acceptance had no general receipt (`docs/audits/DELIVERY_GRAPH_JOIN_SUBSTRATE_2026-07-30.md:38-102,129-148`).
+On this audit's baseline, three repairs are already delivered: the pickup wrapper imports the single
+`github_issue_task_id` implementation, readiness validates the child-to-parent declaration, and the
+spec frontmatter test pins the filing join (`scripts/issue_pickup_claim.sh:104-125`,
+`scripts/validate_issue_readiness.py:372-455`,
+`tests/architecture/test_spec_dir_github_issue_frontmatter.py:1-62`).
 
-Consequence: a cockpit can render the delivery middle, but cannot honestly answer where an Issue came
-from, whether all children are represented, or whether the owner actually accepted the result.
+Consequence: a cockpit can render the delivery middle and some repaired joins, but cannot honestly
+answer whether all children are represented, whether each source has been read successfully, or
+whether the owner actually accepted the result.
 
-Recommendation: repair the existing join keys in dependency order. Do not introduce a universal graph
-authority.
+Recommendation: retain the delivered repairs, then address only the remaining ledger, freshness,
+needs/intent ownership, and acceptance gaps. Do not introduce a universal graph authority.
 
 ### F3 — “Everything is traceable” is an aspiration, not current truth
 
@@ -247,7 +258,7 @@ canonical workflow entrypoints and specialist mechanisms.
 | Routing/meta | AGENTS, skill README, process map, TCD | The most implicit area: model choice, context assembly, and research-to-delivery promotion are distributed across prose |
 
 The recommended skill change is therefore small: document one canonical **Builder System lifecycle
-route and promotion receipt shape** in the existing routing surfaces. Do not create `wayfinder`,
+route and PromotionIntent usage rule** in the existing routing surfaces. Do not create `wayfinder`,
 `requirement-grilling`, or a generic “orchestrator” merely because an earlier audit suggested them;
 promote those only if repeated work demonstrates a measurable routing failure
 (`docs/audits/BUILDER_SYSTEM_SKILL_REVIEW_2026-07-09.md:53-205`).
@@ -395,8 +406,8 @@ and contracts; it does not create a competing invariant registry.
 |---|---|---|---|
 | BST-01 | MUST | A projection, chat transcript, worker session, CKM score, or BuilderOps record cannot grant Product/Runtime or GitHub effect authority. | Existing doctrine; retain and test at action boundaries. |
 | BST-02 | MUST | Every projected claim names one source owner, source version/freshness, and relationship status. | New read-model doctor; no new authority. |
-| BST-03 | GATE | A filed specification task carries its GitHub Issue identity, and parent/child edges are machine-parseable. | Partly existing; extend `feature-breakdown`/readiness validation. |
-| BST-04 | MUST | One task identity derivation exists; dispatcher, claim scripts, and projections cannot silently disagree. | Violated today per `INV-DG-2`; consolidate implementation. |
+| BST-03 | GATE | A filed specification task carries its GitHub Issue identity, and parent/child edges are machine-parseable. | Filing and child-line checks exist; parent-child enumeration/ledger remains incomplete. |
+| BST-04 | MUST | One task identity derivation exists; dispatcher, claim scripts, and projections cannot silently disagree. | Exists on this baseline; retain the shared implementation and regression test. |
 | BST-05 | GATE | PR/verification/merge evidence binds repository, Issue set, PR, exact head SHA, and acceptance profile. | Middle spine largely exists; preserve exact-head gates. |
 | BST-06 | MUST | Research/design material cannot authorize implementation until its disposition and normative target are explicit. | New promotion boundary; initially doc/receipt enforced. |
 | BST-07 | MUST | Merge, release, and owner acceptance are distinct terminal meanings. | Delivery profiles exist; general owner acceptance remains future. |
@@ -441,25 +452,25 @@ views would increase routing and cognitive load without fixing the missing join/
 3. Treat `docs/DEVUI.md`'s geometry as a design hypothesis until the Yggdrasil handoff is accepted.
 4. Continue Stage A as a read-only composition of existing CKM and BuilderOps views.
 
-### P1 — Repair the existing traceability kernel
+### P1 — Repair the remaining traceability kernel
 
 Reconcile with existing work; do not create a parallel epic:
 
-1. Consolidate `task_id` derivation (`INV-DG-2`).
-2. Make parent/child Issue edges machine-parseable and enumerable (`INV-DG-3`, `INV-DG-4`).
-3. Enforce and backfill `github_issue:` in filed task specifications (`INV-DG-5`).
-4. Expose per-source last-successful-read/freshness in the read-time join (`INV-DG-6`).
-5. Keep the work aligned with DDO parent #4163 and children #4167–#4170, and with the existing
+1. Retain the delivered single `task_id` implementation, child-line readiness check, and filing-time
+   `github_issue:` test; do not re-file those repairs (`INV-DG-2`, `INV-DG-3`, `INV-DG-5`).
+2. Post or otherwise make the existing parent/child delivery ledger enumerable (`INV-DG-4`).
+3. Expose per-source last-successful-read/freshness in the read-time join (`INV-DG-6`).
+4. Keep the work aligned with DDO parent #4163 and children #4167–#4170, and with the existing
    BuilderOps/devUI work rather than filing a new architecture epic
    (`docs/audits/DELIVERY_GRAPH_JOIN_SUBSTRATE_2026-07-30.md:213-225`; current open issues include
    #4163, #4168, #4169, and #4170).
 
-### P2 — Add the promotion boundary
+### P2 — Make the existing promotion boundary usable end-to-end
 
-Draft one ADR only after the owner accepts the boundary question: “what does it mean for research or
-design material to become normative Builder/System delivery intent?” The ADR should define the
-promotion record/receipt, not a graph schema. Then update the smallest existing owner docs and routing
-skill to use it.
+Use the existing `PromotionIntent`/gateway and add only the smallest research/design routing rule or
+adapter needed to connect a disposition to the target owner doc/spec. Draft an ADR only if a real
+authority ambiguity remains after that reconciliation; the promotion record/receipt already exists
+and must not be duplicated by this analysis.
 
 ### P3 — Define owner acceptance separately
 
@@ -495,9 +506,10 @@ Adopt **one Builder System lifecycle map, one promotion boundary, and one read-t
 projection over existing authorities**. Do not adopt a Delivery Knowledge Graph as a second source of
 truth.
 
-The next architectural artifact should be a narrowly scoped ADR for the research/design → normative
-intent boundary. The next product artifact should be the Yggdrasil-validated, read-only Stage A
-cockpit. The next implementation governance work should repair the already identified join-key gaps.
+The next architectural action should be a narrow reconciliation of research/design routing with the
+existing `PromotionIntent` boundary; an ADR is conditional, not automatic. The next product artifact
+should be the Yggdrasil-validated, read-only Stage A cockpit. The next implementation governance work
+should repair only the remaining join-key, freshness, and acceptance gaps.
 
 That sequence improves the owner's overview while preserving the system's strongest property: agents
 can accelerate delivery without becoming the owners of meaning, authority, or truth.
