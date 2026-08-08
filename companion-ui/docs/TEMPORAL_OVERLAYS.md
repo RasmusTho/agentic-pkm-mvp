@@ -158,7 +158,7 @@ Provenance allows the user to answer:
 - *How did I arrive at this claim?*
 - *What was I uncertain about here, and did I resolve it?*
 - *This looks odd — when did I change this, and why?*
-- *What would I lose if I accepted Hugin's suggestion here?*
+- *What would I lose if I accepted the agent's suggestion here?*
 
 ### Provenance in the Surface
 

@@ -67,7 +67,7 @@ tags: [arch, q2-planning]
       <h1>Decision capture scaffold</h1>
 
       <h2>Context</h2>
-      <p>We need a way for Hugin to propose body edits in this note without violating the gated
+      <p>We need a way for Chat to propose body edits in this note without violating the gated
          execution invariant. Anything beyond the note body must enter the governance pipeline.</p>
 
       <!-- SuggestedInsertion — in-document preview marker -->
@@ -91,17 +91,17 @@ tags: [arch, q2-planning]
     </main>
 
     <!-- ===========================================================
-         HUGIN RAIL — conversation thread + action surface
+         CHAT RAIL — conversation thread + action surface
          =========================================================== -->
     <aside class="hugin-rail"
            data-testid="margin-rail"
            data-sheet="peek"
-           aria-label="Hugin conversation rail"
+           aria-label="Chat conversation rail"
            id="rail">
 
       <!-- Collapsed strip (landscape) -->
       <div class="rail-collapsed-strip"
-           aria-label="Expand Hugin rail"
+           aria-label="Expand Chat rail"
            role="button"
            tabindex="0"
            id="collapsed-strip">
@@ -112,7 +112,7 @@ tags: [arch, q2-planning]
       <!-- Rail header -->
       <div class="rail-header">
         <span class="hugin-dot" aria-hidden="true"></span>
-        <span style="color:var(--fg-2); letter-spacing:var(--tracking-wider);">HUGIN</span>
+        <span style="color:var(--fg-2); letter-spacing:var(--tracking-wider);">CHAT</span>
         <span class="turn-meta" id="turn-count">14 turns</span>
       </div>
 
@@ -133,17 +133,17 @@ tags: [arch, q2-planning]
         <div class="thinking-indicator"
              data-testid="thinking-indicator"
              data-thinking="inactive"
-             aria-label="Hugin is thinking"
+             aria-label="Chat is thinking"
              id="thinking"
              style="display:none;">
-          <span>HUGIN</span>
+          <span>CHAT</span>
           <span class="ddot" aria-hidden="true"></span>
           <span class="ddot" aria-hidden="true"></span>
           <span class="ddot" aria-hidden="true"></span>
           <button class="thinking-cancel"
                   type="button"
                   data-intent="canvas.cancelTurn"
-                  aria-label="Cancel Hugin reasoning"
+                  aria-label="Cancel Chat reasoning"
                   id="btn-cancel">Cancel</button>
         </div>
 
@@ -153,7 +153,7 @@ tags: [arch, q2-planning]
              data-variant="body"
              data-suggestion-id="suggestion-001"
              id="card-body">
-          <span class="card-label">HUGIN · PROPOSED ADDITION</span>
+          <span class="card-label">AGENT · PROPOSED ADDITION</span>
           <span>Introduce explicit staged-suggestion actions with no direct persistence side effects.</span>
           <span class="diff-hint">+3 lines after <code>## Current state</code></span>
           <div class="card-actions">
@@ -192,7 +192,7 @@ tags: [arch, q2-planning]
              data-suggestion-id="suggestion-002"
              id="card-gov"
              style="display:none;">
-          <span class="card-label">HUGIN · GOVERNANCE-BEARING PROPOSAL</span>
+          <span class="card-label">AGENT · GOVERNANCE-BEARING PROPOSAL</span>
           <span>Promote <code>maturity: draft → committed</code> and add tag <code>#arch/decision</code>.</span>
           <span class="card-classification"
                 data-testid="suggestion-card-classification"
@@ -271,8 +271,8 @@ tags: [arch, q2-planning]
       <!-- ---- Composer ---- -->
       <div class="composer-wrap">
         <input type="text"
-               placeholder="Message Hugin…"
-               aria-label="Message Hugin"
+               placeholder="Message Chat…"
+               aria-label="Message Chat"
                data-testid="composer-input"
                id="composer-input" />
         <button class="btn primary"
@@ -284,7 +284,7 @@ tags: [arch, q2-planning]
         </button>
       </div>
 
-    </aside><!-- /hugin-rail -->
+    </aside><!-- /chat-rail -->
 
   </div><!-- /canvas-stage -->
 
@@ -397,16 +397,16 @@ tags: [arch, q2-planning]
     composerInput.disabled = !composerEnabled;
     btnSend.disabled = !composerEnabled;
     composerInput.placeholder = {
-      'idle':                   'Message Hugin…',
-      'thinking':               'Hugin is thinking…',
+      'idle':                   'Message Chat…',
+      'thinking':               'Chat is thinking…',
       'suggestion-staged:body': 'Apply or discard to continue',
       'suggestion-staged:gov':  'Queue or discard to continue',
       'apply-pending':          'Applying edit…',
       'governance-pending':     'Routing to governance…',
-      'applied':                'Message Hugin…',
-      'discarded':              'Message Hugin…',
+      'applied':                'Message Chat…',
+      'discarded':              'Message Chat…',
       'blocked':                'Canvas disabled in this environment',
-    }[s] || 'Message Hugin…';
+    }[s] || 'Message Chat…';
 
     console.log('[canvas-shell] state →', s);
 
@@ -443,7 +443,7 @@ tags: [arch, q2-planning]
     if (tab === 'body') {
       cardBody.style.display = 'flex';
       cardBody.dataset.variant = 'body';
-      cardBody.querySelector('.card-label').textContent = 'HUGIN · PROPOSED ADDITION';
+      cardBody.querySelector('.card-label').textContent = 'AGENT · PROPOSED ADDITION';
       cardBody.querySelector('.card-actions').style.display = 'flex';
       btnApply.disabled = false;
       btnDiscard.disabled = false;
@@ -499,7 +499,7 @@ tags: [arch, q2-planning]
     setTimeout(() => {
       thinking.style.display = 'none';
       thinking.querySelector('.thinking-cancel').style.display = '';
-      thinking.querySelector('span').textContent = 'HUGIN';
+      thinking.querySelector('span').textContent = 'CHAT';
 
       const receiptId = 'body_edit#a' + Math.random().toString(16).slice(2, 6);
       lastApplied = receiptId;
@@ -543,7 +543,7 @@ tags: [arch, q2-planning]
     insertion.dataset.state = 'staged';
     insertion.removeAttribute('data-receipt');
     cardBody.dataset.variant = 'body';
-    cardBody.querySelector('.card-label').textContent = 'HUGIN · PROPOSED ADDITION';
+    cardBody.querySelector('.card-label').textContent = 'AGENT · PROPOSED ADDITION';
     cardBody.querySelector('.card-actions').style.display = 'flex';
     btnApply.disabled = false;
     btnDiscard.disabled = false;

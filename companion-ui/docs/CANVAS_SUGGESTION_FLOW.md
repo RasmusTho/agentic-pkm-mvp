@@ -9,7 +9,7 @@
 
 ## Purpose and scope
 
-The Canvas Suggestion Flow is the interaction pattern for the moment Hugin proposes a change to the active note:
+The Canvas Suggestion Flow is the interaction pattern for the moment Chat proposes a change to the active note:
 
 1. A proposal arrives from the server with a pre-declared classification (body-edit or governance-bearing).
 2. The user previews the proposal and decides to apply, queue, or discard it.
@@ -163,7 +163,7 @@ Forbidden: no transition may skip `apply_pending` or `governance_pending` to jum
 |---|---|---|
 | `canvas-shell` | Root container | Carries `data-suggestion-state` (DOM name) |
 | `document-pane` | Active note render area | |
-| `margin-rail` | Hugin conversation rail | |
+| `margin-rail` | Chat conversation rail | |
 | `conversation-thread` | Thread scroll container | |
 | `suggestion-card` | SuggestionCard | Carries `data-variant` |
 | `suggestion-card-classification` | Classification label (governance variant) | |

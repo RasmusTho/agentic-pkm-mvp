@@ -1,11 +1,11 @@
 """Portrait/mobile bottom sheet model for the bounded suggestion rail (#873).
 
-At viewport widths < 900 px, the Hugin rail becomes a bottom sheet replacing
+At viewport widths < 900 px, the Chat rail becomes a bottom sheet replacing
 the side rail.  This module models the snap state and transition rules without
 any CSS, React, DOM, localStorage, or gesture handling.
 
 Snap points (from issue #873 §Snap points):
-  PEEK             60 px  Default / collapsed; shows Hugin dot + turn count.
+  PEEK             60 px  Default / collapsed; shows agent dot + turn count.
   HALF             50vh   Expanded conversation; document still visible above.
   FULL_MINUS_CHROME calc(100vh - 64px)  Full conversation.
   CLOSED           Not visible at all.

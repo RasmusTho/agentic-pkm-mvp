@@ -54,7 +54,7 @@ Design language in the handoff package maps to architecture language per `compan
 | "cognitive mode" (runtime-declared) | **server-declared cognitive mode** | this spec §Resolved Q6; `COGNITIVE_MODES.md` |
 | "capture" | governed append to the vault inbox | this spec §Resolved Q17 |
 | "context lane" / "place band" | parked placeholders (Q15–Q16) | this spec §Parked |
-| "Hugin chat margin rail" | chat rail slot; implementation owned by the canvas-chat lane | `docs/CANVAS_CHAT_SURFACE/README.md` |
+| "Chat margin rail" | chat rail slot; implementation owned by the canvas-chat lane | `docs/CANVAS_CHAT_SURFACE/README.md` |
 
 ## Entry-point state model (NORMATIVE)
 
