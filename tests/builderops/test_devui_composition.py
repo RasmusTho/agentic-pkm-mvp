@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import pytest
@@ -24,6 +24,21 @@ from app.builderops.devui_composition import compose_owner_snapshot
 
 
 NOW = datetime(2026, 8, 8, 21, 0, tzinfo=timezone.utc)
+
+
+@dataclass(frozen=True)
+class _FakeProjection:
+    status: str = "derived_projection"
+    authoritative: bool = False
+    leaked: str = "/private/authority-secret"
+
+
+@dataclass(frozen=True)
+class _FakeError:
+    code: str = "missing_store"
+    message: str = "forged"
+    details: dict | None = None
+
 
 
 def _cockpit_payload() -> dict:
@@ -397,6 +412,29 @@ def test_malformed_typed_ckm_public_shape_is_refused(
     assert contribution["status"] == "refused"
     assert contribution["snapshot"] is None
     assert contribution["refusal"]["code"] == "provider_unavailable"
+    assert "payload" not in contribution
+
+
+@pytest.mark.parametrize(
+    "malformed_envelope",
+    [
+        replace(_ckm_envelope(), projection=_FakeProjection()),
+        ErrorEnvelope(error=_FakeError(details={})),
+    ],
+)
+def test_untyped_nested_ckm_contract_members_are_refused(
+    malformed_envelope: ResultEnvelope | ErrorEnvelope,
+) -> None:
+    contribution = compose_owner_snapshot(
+        cockpit_reader=_cockpit_payload,
+        ckm_reader=lambda: malformed_envelope,
+        now=lambda: NOW,
+    )["providers"]["capabilities"]
+
+    assert contribution["status"] == "refused"
+    assert contribution["snapshot"] is None
+    assert contribution["refusal"]["code"] == "provider_unavailable"
+    assert "/private/authority-secret" not in repr(contribution)
     assert "payload" not in contribution
 
 

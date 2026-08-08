@@ -17,10 +17,12 @@ from typing import Any
 from app.builderops.ckm.contracts import (
     ENVELOPE_SCHEMA_VERSION,
     RESOURCE_SCHEMA_VERSION,
+    CkmContractError,
     CkmStateIdentity,
     CompletenessManifest,
     ErrorEnvelope,
     ObjectClassCompleteness,
+    ProjectionMarker,
     ResourceDto,
     ResultEnvelope,
     SnapshotManifest,
@@ -89,6 +91,8 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
         raise TypeError("CKM snapshot must use the exact public manifest type")
     if type(snapshot.completeness) is not CompletenessManifest:
         raise TypeError("CKM completeness must use the exact public manifest type")
+    if type(result.projection) is not ProjectionMarker:
+        raise TypeError("CKM projection must use the exact public marker type")
     versions = (
         (result.schema_version, ENVELOPE_SCHEMA_VERSION),
         (snapshot.ckm_schema_version, CKM_SCHEMA_VERSION),
@@ -277,6 +281,7 @@ def _ckm_contribution(reader: CkmReader) -> dict[str, Any]:
         if isinstance(result, ErrorEnvelope):
             if (
                 type(result) is not ErrorEnvelope
+                or type(result.error) is not CkmContractError
                 or type(result.schema_version) is not int
                 or result.schema_version != ENVELOPE_SCHEMA_VERSION
             ):
