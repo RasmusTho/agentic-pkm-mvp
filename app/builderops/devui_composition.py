@@ -21,14 +21,19 @@ from app.builderops.ckm.contracts import (
     ErrorEnvelope,
     ResultEnvelope,
     SnapshotManifest,
+    canonical_query_digest,
     validate_contract_request,
 )
+from app.builderops.ckm.schema import CKM_SCHEMA_VERSION
 
 
 CONTRACT_VERSION = "devui.composition.v1"
 logger = logging.getLogger(__name__)
 _CKM_REFUSAL_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _CKM_REFUSAL_MESSAGE = "CKM refused the read request"
+_LIST_CAPABILITIES_QUERY_DIGEST = canonical_query_digest(
+    {"operation": "list_capabilities", "public_id": None}
+)
 
 
 CockpitReader = Callable[[], Mapping[str, Any]]
@@ -57,6 +62,20 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
     """Re-run current CKM policy and snapshot invariants at the adapter boundary."""
 
     snapshot = result.snapshot
+    versions = (
+        (result.schema_version, ENVELOPE_SCHEMA_VERSION),
+        (snapshot.ckm_schema_version, CKM_SCHEMA_VERSION),
+        (snapshot.envelope_schema_version, ENVELOPE_SCHEMA_VERSION),
+        (snapshot.resource_schema_version, RESOURCE_SCHEMA_VERSION),
+        *(
+            (resource.schema_version, RESOURCE_SCHEMA_VERSION)
+            for resource in result.resources
+        ),
+    )
+    if any(type(value) is not int or value != expected for value, expected in versions):
+        raise ValueError("unsupported CKM schema version")
+    if result.query_digest != _LIST_CAPABILITIES_QUERY_DIGEST:
+        raise ValueError("CKM query identity does not match list_capabilities")
     validate_contract_request(
         ckm_schema_version=snapshot.ckm_schema_version,
         envelope_schema_version=result.schema_version,
@@ -66,11 +85,6 @@ def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
         access_policy_version=snapshot.access_policy_version,
         redaction_profile=snapshot.redaction_profile,
     )
-    if snapshot.envelope_schema_version != ENVELOPE_SCHEMA_VERSION:
-        raise ValueError("unsupported CKM snapshot envelope schema version")
-    if any(resource.schema_version != RESOURCE_SCHEMA_VERSION for resource in result.resources):
-        raise ValueError("unsupported CKM resource schema version")
-
     rebuilt_snapshot = SnapshotManifest.build(
         state=CkmStateIdentity(
             epoch=snapshot.epoch,
@@ -175,7 +189,10 @@ def _ckm_contribution(reader: CkmReader) -> dict[str, Any]:
     try:
         result = reader()
         if isinstance(result, ErrorEnvelope):
-            if result.schema_version != ENVELOPE_SCHEMA_VERSION:
+            if (
+                type(result.schema_version) is not int
+                or result.schema_version != ENVELOPE_SCHEMA_VERSION
+            ):
                 raise ValueError("unsupported CKM refusal envelope version")
             code = result.error.code
             message = result.error.message

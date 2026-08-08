@@ -208,6 +208,8 @@ def test_unserializable_cockpit_payload_is_isolated_from_healthy_ckm() -> None:
     "unsupported_envelope",
     [
         replace(_ckm_envelope(), schema_version=999),
+        replace(_ckm_envelope(), schema_version=True),
+        replace(_ckm_envelope(), schema_version=1.0),
         replace(
             _ckm_envelope(),
             snapshot=replace(
@@ -217,11 +219,44 @@ def test_unserializable_cockpit_payload_is_isolated_from_healthy_ckm() -> None:
         ),
         replace(
             _ckm_envelope(),
+            snapshot=replace(
+                _ckm_envelope().snapshot,
+                ckm_schema_version=5.0,
+            ),
+        ),
+        replace(
+            _ckm_envelope(),
+            snapshot=replace(
+                _ckm_envelope().snapshot,
+                envelope_schema_version=True,
+            ),
+        ),
+        replace(
+            _ckm_envelope(),
+            snapshot=replace(
+                _ckm_envelope().snapshot,
+                resource_schema_version=True,
+            ),
+        ),
+        replace(
+            _ckm_envelope(),
             resources=(replace(_ckm_envelope().resources[0], schema_version=999),),
+        ),
+        replace(
+            _ckm_envelope(),
+            resources=(replace(_ckm_envelope().resources[0], schema_version=True),),
         ),
         ErrorEnvelope(
             CkmContractError(code="missing_store", message="missing", details={}),
             schema_version=999,
+        ),
+        ErrorEnvelope(
+            CkmContractError(code="missing_store", message="missing", details={}),
+            schema_version=True,
+        ),
+        ErrorEnvelope(
+            CkmContractError(code="missing_store", message="missing", details={}),
+            schema_version=1.0,
         ),
     ],
 )
@@ -231,6 +266,21 @@ def test_unsupported_typed_ckm_versions_are_refused(
     contribution = compose_owner_snapshot(
         cockpit_reader=_cockpit_payload,
         ckm_reader=lambda: unsupported_envelope,
+        now=lambda: NOW,
+    )["providers"]["capabilities"]
+
+    assert contribution["status"] == "refused"
+    assert contribution["snapshot"] is None
+    assert contribution["refusal"]["code"] == "provider_unavailable"
+    assert "payload" not in contribution
+
+
+def test_ckm_query_identity_must_match_list_capabilities() -> None:
+    forged = replace(_ckm_envelope(), query_digest="forged")
+
+    contribution = compose_owner_snapshot(
+        cockpit_reader=_cockpit_payload,
+        ckm_reader=lambda: forged,
         now=lambda: NOW,
     )["providers"]["capabilities"]
 
