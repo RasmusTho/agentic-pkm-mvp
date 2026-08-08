@@ -164,7 +164,7 @@
   .suggested-insertion::before { transition: none; }
 }
 
-/* ---- Hugin rail ---- */
+/* ---- Chat rail ---- */
 .hugin-rail {
   background: var(--bg-surface);
   display: grid;

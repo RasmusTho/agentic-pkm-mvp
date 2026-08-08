@@ -6046,7 +6046,7 @@ def _render_panel_proposal_rows(
         proposal_id = _e(proposal.get("proposal_id", ""))
         artifact_id = _e(proposal.get("artifact_id", ""))
         # Provenance line: agent · ISO-timestamp · confidence N (AC4)
-        prov_agent = _e(str(proposal.get("agent") or proposal.get("author") or "hugin"))
+        prov_agent = _e(str(proposal.get("agent") or proposal.get("author") or "agent"))
         prov_ts_raw = str(proposal.get("created_at") or proposal.get("timestamp") or "")
         prov_ts = _e(prov_ts_raw[:16]) if prov_ts_raw else _e(datetime.now().strftime("%Y-%m-%dT%H:%M"))
         prov_conf = _e(str(proposal.get("confidence") or "—"))

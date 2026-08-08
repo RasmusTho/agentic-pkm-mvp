@@ -105,7 +105,7 @@ def test_suggestion_card_mirrors_proposal_identity_cues() -> None:
 
     assert 'data-testid="suggestion-card"' in html_text
     assert 'data-testid="suggestion-card-label"' in html_text
-    assert "HUGIN · PROPOSED ADDITION" in html_text
+    assert "AGENT · PROPOSED ADDITION" in html_text
     assert 'data-testid="suggestion-card-diff-hint"' in html_text
     assert 'data-suggestion-id="suggestion-001"' in html_text
     assert 'data-proposal-id="suggestion-001"' in html_text
