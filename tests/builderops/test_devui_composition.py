@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -104,7 +105,7 @@ def test_composition_preserves_provider_snapshot_and_authority() -> None:
         "unread_planes": cockpit["unread_planes"],
         "withdrawn_counts": cockpit["withdrawn_counts"],
     }
-    assert work["payload"] is cockpit
+    assert work["payload"] == cockpit
 
     capabilities = result["providers"]["capabilities"]
     assert capabilities["status"] == "available"
@@ -186,6 +187,57 @@ def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
     }
     assert "/unavailable/ckm.sqlite3" not in repr(refused_ckm)
     assert "payload" not in refused_ckm
+
+
+def test_unserializable_cockpit_payload_is_isolated_from_healthy_ckm() -> None:
+    malformed_cockpit = _cockpit_payload()
+    malformed_cockpit["bands"] = {"moving": object()}
+
+    result = compose_owner_snapshot(
+        cockpit_reader=lambda: malformed_cockpit,
+        ckm_reader=_ckm_envelope,
+        now=lambda: NOW,
+    )
+
+    assert result["providers"]["work"]["status"] == "refused"
+    assert result["providers"]["work"]["snapshot"] is None
+    assert result["providers"]["capabilities"]["status"] == "available"
+
+
+@pytest.mark.parametrize(
+    "unsupported_envelope",
+    [
+        replace(_ckm_envelope(), schema_version=999),
+        replace(
+            _ckm_envelope(),
+            snapshot=replace(
+                _ckm_envelope().snapshot,
+                envelope_schema_version=999,
+            ),
+        ),
+        replace(
+            _ckm_envelope(),
+            resources=(replace(_ckm_envelope().resources[0], schema_version=999),),
+        ),
+        ErrorEnvelope(
+            CkmContractError(code="missing_store", message="missing", details={}),
+            schema_version=999,
+        ),
+    ],
+)
+def test_unsupported_typed_ckm_versions_are_refused(
+    unsupported_envelope: ResultEnvelope | ErrorEnvelope,
+) -> None:
+    contribution = compose_owner_snapshot(
+        cockpit_reader=_cockpit_payload,
+        ckm_reader=lambda: unsupported_envelope,
+        now=lambda: NOW,
+    )["providers"]["capabilities"]
+
+    assert contribution["status"] == "refused"
+    assert contribution["snapshot"] is None
+    assert contribution["refusal"]["code"] == "provider_unavailable"
+    assert "payload" not in contribution
 
 
 @pytest.mark.parametrize(

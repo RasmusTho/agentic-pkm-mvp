@@ -204,3 +204,42 @@ def test_devui_composition_sanitizes_ckm_refusal_diagnostics(
     }
     assert secret not in repr(payload)
     assert "OperationalError" not in repr(payload)
+
+
+def test_devui_composition_isolates_unserializable_cockpit_payload(
+    monkeypatch,
+) -> None:
+    malformed_cockpit = {
+        "authority": "read_time_join",
+        "generated_at": "2026-08-08T21:00:00+00:00",
+        "claim": {"kind": "counted", "text": "one thread"},
+        "sources": [],
+        "unread_planes": [],
+        "withdrawn_counts": [],
+        "bands": {"moving": object()},
+    }
+
+    class HealthyCkm:
+        def __init__(self, db_path: Path) -> None:
+            self.db_path = db_path
+
+        def list_capabilities(self):
+            return _empty_ckm_envelope()
+
+    monkeypatch.setattr(
+        devui_route,
+        "read_cockpit_registry",
+        lambda: malformed_cockpit,
+    )
+    monkeypatch.setattr(
+        devui_route,
+        "load_builderops_paths",
+        lambda: SimpleNamespace(db_path=Path("/state/builderops.sqlite3")),
+    )
+    monkeypatch.setattr(devui_route, "CkmQueryService", HealthyCkm)
+
+    response = TestClient(app).get("/api/devui/composition")
+
+    assert response.status_code == 200
+    assert response.json()["providers"]["work"]["status"] == "refused"
+    assert response.json()["providers"]["capabilities"]["status"] == "available"

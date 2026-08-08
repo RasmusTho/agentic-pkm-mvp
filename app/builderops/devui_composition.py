@@ -8,12 +8,21 @@ does not turn provider refusals into empty results.
 from __future__ import annotations
 
 import logging
+import json
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from app.builderops.ckm.contracts import ErrorEnvelope, ResultEnvelope
+from app.builderops.ckm.contracts import (
+    ENVELOPE_SCHEMA_VERSION,
+    RESOURCE_SCHEMA_VERSION,
+    CkmStateIdentity,
+    ErrorEnvelope,
+    ResultEnvelope,
+    SnapshotManifest,
+    validate_contract_request,
+)
 
 
 CONTRACT_VERSION = "devui.composition.v1"
@@ -31,7 +40,63 @@ def _cockpit_payload(reader: CockpitReader) -> Mapping[str, Any]:
     result = reader()
     if not isinstance(result, Mapping):
         raise TypeError("provider returned a non-object payload")
-    return result
+    return _json_object(result)
+
+
+def _json_object(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a detached JSON-safe object or refuse before API serialization."""
+
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    decoded = json.loads(encoded)
+    if not isinstance(decoded, dict):
+        raise TypeError("provider returned a non-object JSON payload")
+    return decoded
+
+
+def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
+    """Re-run current CKM policy and snapshot invariants at the adapter boundary."""
+
+    snapshot = result.snapshot
+    validate_contract_request(
+        ckm_schema_version=snapshot.ckm_schema_version,
+        envelope_schema_version=result.schema_version,
+        resource_schema_version=snapshot.resource_schema_version,
+        resource_type=result.resource_type,
+        effective_audience=snapshot.effective_audience,
+        access_policy_version=snapshot.access_policy_version,
+        redaction_profile=snapshot.redaction_profile,
+    )
+    if snapshot.envelope_schema_version != ENVELOPE_SCHEMA_VERSION:
+        raise ValueError("unsupported CKM snapshot envelope schema version")
+    if any(resource.schema_version != RESOURCE_SCHEMA_VERSION for resource in result.resources):
+        raise ValueError("unsupported CKM resource schema version")
+
+    rebuilt_snapshot = SnapshotManifest.build(
+        state=CkmStateIdentity(
+            epoch=snapshot.epoch,
+            state_revision=snapshot.state_revision,
+            schema_version=snapshot.ckm_schema_version,
+        ),
+        taxonomy_digest=snapshot.taxonomy_digest,
+        watermarks=snapshot.watermarks,
+        provenance=snapshot.provenance,
+        completeness=snapshot.completeness,
+        read_set=snapshot.read_set,
+    )
+    if rebuilt_snapshot.to_dict() != snapshot.to_dict():
+        raise ValueError("CKM snapshot identity does not match its declared read set")
+
+    # Re-instantiation re-runs ResultEnvelope's resource ordering, completeness,
+    # and exact read-set checks even if a frozen dataclass was copied/replaced.
+    ResultEnvelope(
+        resource_type=result.resource_type,
+        query_digest=result.query_digest,
+        snapshot=result.snapshot,
+        resources=result.resources,
+        projection=result.projection,
+        schema_version=result.schema_version,
+    )
+    return _json_object(result.to_dict())
 
 
 def _refusal(
@@ -110,6 +175,8 @@ def _ckm_contribution(reader: CkmReader) -> dict[str, Any]:
     try:
         result = reader()
         if isinstance(result, ErrorEnvelope):
+            if result.schema_version != ENVELOPE_SCHEMA_VERSION:
+                raise ValueError("unsupported CKM refusal envelope version")
             code = result.error.code
             message = result.error.message
             details = result.error.details
@@ -135,7 +202,7 @@ def _ckm_contribution(reader: CkmReader) -> dict[str, Any]:
 
         if not isinstance(result, ResultEnvelope):
             raise ValueError("CKM reader returned an unvalidated envelope")
-        payload = result.to_dict()
+        payload = _validated_ckm_payload(result)
         projection = payload["projection"]
         snapshot = payload["snapshot"]
         if (
