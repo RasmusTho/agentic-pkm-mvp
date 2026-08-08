@@ -2,38 +2,54 @@
 
 from __future__ import annotations
 
+from ipaddress import ip_address
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.routes.cockpit import read_registry as read_cockpit_registry
-from app.auth import (
-    SUBJECT_TRUSTED_LOOPBACK,
-    api_key_header,
-    resolve_auth_subject,
-)
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.config import load_paths as load_builderops_paths
 from app.builderops.devui_composition import compose_owner_snapshot
 
 
 _LOCAL_ONLY_DETAIL = "devUI composition is available only to a local caller"
+_FORWARDED_IDENTITY_HEADERS = frozenset(
+    {
+        "cf-connecting-ip",
+        "forwarded",
+        "true-client-ip",
+        "x-client-ip",
+        "x-real-ip",
+    }
+)
+
+
+def _has_forwarded_identity(request: Request) -> bool:
+    return any(
+        name.startswith("x-forwarded-") or name in _FORWARDED_IDENTITY_HEADERS
+        for name in request.headers
+    )
+
+
+def _is_immediate_loopback(request: Request) -> bool:
+    host = request.client.host if request.client is not None else None
+    if host in {"localhost", "testclient"}:
+        return True
+    if not host:
+        return False
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _require_local_caller(
     request: Request,
-    api_key: str | None = Depends(api_key_header),
 ) -> None:
-    """Keep CKM's single-operator-local audience narrower than API auth."""
+    """Admit only a direct loopback peer with no forwarded identity."""
 
-    try:
-        subject = resolve_auth_subject(request, api_key)
-    except HTTPException:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=_LOCAL_ONLY_DETAIL,
-        ) from None
-    if subject != SUBJECT_TRUSTED_LOOPBACK:
+    if not _is_immediate_loopback(request) or _has_forwarded_identity(request):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_LOCAL_ONLY_DETAIL,

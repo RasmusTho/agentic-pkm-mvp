@@ -44,6 +44,7 @@ grep-guards this file for exactly that reason).
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -51,6 +52,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CapabilityNode",
@@ -397,7 +400,7 @@ def read_docs_plane(
         capabilities = _read_capabilities(capabilities_yaml_path, mtimes)
         matrix_edges = _read_matrix(matrix_path, mtimes)
         task_docs, spec_dirs = _read_spec_dirs(docs_root, mtimes)
-    except Exception as exc:  # noqa: BLE001 - any reader failure degrades to refusal
+    except Exception:  # noqa: BLE001 - any reader failure degrades to refusal
         # Broad on purpose, matching cockpit_github_plane.fetch_github_live:
         # the caller must never see an exception from this function. A
         # DocsPlaneReadError covers the read helpers' own OSError wrapping,
@@ -405,11 +408,12 @@ def read_docs_plane(
         # Path.iterdir()) or a malformed capabilities.yaml (e.g. parsing to
         # a non-list, raising TypeError) must degrade the same way — a
         # single source's failure must never crash the whole registry.
+        logger.exception("Cockpit docs-plane read failed")
         return DocsPlaneResult(
             snapshot=None,
             state="unavailable",
             last_successful_read=None,
-            detail=f"read failed: {exc}",
+            detail="read failed",
         )
     if not mtimes:
         watermark = datetime.now(timezone.utc).isoformat(timespec="seconds")

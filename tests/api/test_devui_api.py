@@ -100,3 +100,33 @@ def test_devui_composition_refuses_forwarded_remote_caller(monkeypatch) -> None:
     )
 
     assert response.status_code == 403
+
+
+def test_devui_composition_refuses_trusted_proxy_forwarding_loopback(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        auth_module.settings,
+        "companion_trusted_proxy_hosts",
+        "172.18.0.1",
+    )
+    response = TestClient(app, client=("172.18.0.1", 50000)).get(
+        "/api/devui/composition",
+        headers={"X-Forwarded-For": "127.0.0.1"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_devui_composition_refuses_other_forwarded_identity_headers() -> None:
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    for name, value in (
+        ("Forwarded", "for=127.0.0.1"),
+        ("X-Real-IP", "127.0.0.1"),
+        ("CF-Connecting-IP", "127.0.0.1"),
+    ):
+        assert client.get(
+            "/api/devui/composition",
+            headers={name: value},
+        ).status_code == 403
