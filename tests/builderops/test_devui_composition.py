@@ -119,7 +119,7 @@ def test_composition_uses_existing_read_only_provider_contracts() -> None:
 
 def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
     def broken_cockpit() -> dict:
-        raise OSError("dispatcher store is unreadable")
+        raise OSError("secret path: /private/dispatcher.sqlite3")
 
     result = compose_owner_snapshot(
         cockpit_reader=broken_cockpit,
@@ -138,10 +138,11 @@ def test_provider_failure_is_isolated_and_never_rendered_as_zero() -> None:
         "refusal": {
             "code": "provider_unavailable",
             "message": "BuilderOps Cockpit could not provide its read snapshot",
-            "details": {"reason": "dispatcher store is unreadable"},
+            "details": {"reason": "provider read failed"},
         },
     }
     assert "payload" not in work
+    assert "/private/dispatcher.sqlite3" not in repr(work)
     assert result["providers"]["capabilities"]["status"] == "available"
     assert result["providers"]["capabilities"]["payload"]["resources"]
 

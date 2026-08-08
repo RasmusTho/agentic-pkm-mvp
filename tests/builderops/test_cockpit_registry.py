@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import app.builderops.cockpit_registry as cockpit_registry
 from app.builderops.cockpit_registry import BANDS, RUNG_ORDER, build_registry
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.store import SqliteStore
@@ -119,6 +120,23 @@ def test_band_derivation_fail_closed(tmp_path: Path) -> None:
         item for item in _band(payload, "flawed")["items"] if item["issue_number"] == 3
     )
     assert flawed_item["why_now"] == "blocked: upstream"
+
+
+def test_chain_derivation_failure_does_not_expose_exception_details(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store, db_path = _make_store(tmp_path)
+    store.upsert_task(_task(status="in_progress", issue_number=7))
+
+    def fail_derivation(*args, **kwargs):
+        raise RuntimeError("secret path: /private/dispatcher.sqlite3")
+
+    monkeypatch.setattr(cockpit_registry, "derive_position", fail_derivation)
+    payload = _registry(db_path, tmp_path)
+
+    assert payload["unclassified"][0]["reason"] == "chain-position derivation failed"
+    assert "/private/dispatcher.sqlite3" not in repr(payload)
 
 
 def test_refused_emptiness_on_dead_source(tmp_path: Path) -> None:

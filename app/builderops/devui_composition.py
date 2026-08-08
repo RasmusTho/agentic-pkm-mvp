@@ -7,12 +7,14 @@ does not turn provider refusals into empty results.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 
 CONTRACT_VERSION = "devui.composition.v1"
+logger = logging.getLogger(__name__)
 
 
 class _Envelope(Protocol):
@@ -91,13 +93,14 @@ def _cockpit_contribution(reader: ProviderReader) -> dict[str, Any]:
             },
             "payload": payload,
         }
-    except Exception as exc:
+    except Exception:
+        logger.exception("BuilderOps Cockpit devUI provider read failed")
         return _refusal(
             provider=provider,
             authority=authority,
             code="provider_unavailable",
             message="BuilderOps Cockpit could not provide its read snapshot",
-            details={"reason": str(exc)},
+            details={"reason": "provider read failed"},
         )
 
 
@@ -151,13 +154,14 @@ def _ckm_contribution(reader: ProviderReader) -> dict[str, Any]:
             "completeness": snapshot["completeness"],
             "payload": payload,
         }
-    except Exception as exc:
+    except Exception:
+        logger.exception("CKM devUI provider read failed")
         return _refusal(
             provider=provider,
             authority=authority,
             code="provider_unavailable",
             message="CKM could not provide its read snapshot",
-            details={"reason": str(exc)},
+            details={"reason": "provider read failed"},
         )
 
 

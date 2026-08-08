@@ -26,6 +26,7 @@ Honesty rules this module enforces (owner doc: docs/BUILDEROPS_COCKPIT/README.md
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -61,6 +62,8 @@ from app.builderops.cockpit_github_plane import (
     default_github_reader,
     fetch_github_live,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BANDS",
@@ -984,17 +987,21 @@ def build_registry(
                     evaluated_predicates,
                     now,
                 )
-            except Exception as exc:  # noqa: BLE001 - one thread's derivation
+            except Exception:  # noqa: BLE001 - one thread's derivation
                 # failure must never crash the whole render (the #4451-class
                 # bug this exact pattern exists to prevent, applied per task
                 # rather than per source): the thread renders as explicitly
                 # unclassified instead of taking bands/tasks/everything down.
+                logger.exception(
+                    "Cockpit chain-position derivation failed for task_id=%s",
+                    task.get("task_id"),
+                )
                 unclassified.append(
                     {
                         "id": task.get("task_id"),
                         "title": task.get("title"),
                         "status": status,
-                        "reason": f"chain-position derivation failed: {exc}",
+                        "reason": "chain-position derivation failed",
                     }
                 )
                 continue

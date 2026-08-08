@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+import app.auth as auth_module
 from app.api.app import app
 from app.api.routes import devui as devui_route
 
@@ -67,3 +68,35 @@ def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
         if getattr(route, "path", None) == "/api/devui/composition"
     )
     assert route.methods == {"GET"}
+
+
+def test_devui_composition_refuses_non_loopback_even_with_api_key(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(auth_module.settings, "api_key", "valid-key")
+
+    def must_not_read() -> dict:
+        raise AssertionError("local providers must not be read for a remote caller")
+
+    monkeypatch.setattr(devui_route, "read_cockpit_registry", must_not_read)
+    remote = TestClient(app, client=("203.0.113.10", 50000))
+
+    response = remote.get(
+        "/api/devui/composition",
+        headers={"X-API-Key": "valid-key"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "devUI composition is available only to a local caller"
+    }
+
+
+def test_devui_composition_refuses_forwarded_remote_caller(monkeypatch) -> None:
+    monkeypatch.setattr(auth_module.settings, "api_key", None)
+    response = TestClient(app).get(
+        "/api/devui/composition",
+        headers={"X-Forwarded-For": "203.0.113.10"},
+    )
+
+    assert response.status_code == 403
