@@ -5,8 +5,8 @@ Owner: Companion UI / interaction model
 Temporal class: stable
 Review cadence: event-driven
 Source of truth: authoritative for term normalization
-Last reviewed: 2026-05-15
-Last verified against: companion-ui/docs/CANVAS_SUGGESTION_FLOW.md, companion-ui/docs/UI_RUNTIME_BOUNDARIES.md, companion-ui/design_handoff/2026-05-14-claude-design-package/, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, companion-ui/design_handoff/2026-05-14-handoff-governance-pack/, issue #901
+Last reviewed: 2026-08-08
+Last verified against: ADR-0044, docs/GLOSSARY.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md, companion-ui/docs/CANVAS_SUGGESTION_FLOW.md, companion-ui/docs/UI_RUNTIME_BOUNDARIES.md, docs/COMPANION_UI_PRODUCT_SPEC.md
 
 # Core Term Mapping
 
@@ -26,16 +26,16 @@ Use this mapping when:
 | Design language | Yggdrasil / implementation language | Authority source | Notes |
 |---|---|---|---|
 | **Companion UI** | Companion UI (same) | `docs/COMPANION_UI_PRODUCT_SPEC.md` | The human-facing product shell. Not a fourth interaction authority surface; it hosts Panel, Chat, and Automation. |
-| **Yggdrasil** | Yggdrasil (same) | `docs/ARCHITECTURE.md`, `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` | The local-first cognitive prosthesis and agentic PKM runtime. The full system, not just the UI. |
-| **Panel** | Panel | `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md` | Command-oriented authority surface. Governance receipts surface here. |
+| **Yggdrasil** | Yggdrasil (same) | ADR-0044; `docs/GLOSSARY.md` | Ecosystem apex / whole. Use **Mimer** for the knowledge-and-cognition product/runtime constituent. |
+| **Panel** | Panel | `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md` | Artifact-intent-oriented surface; command/receipt-oriented at the execution boundary. Governance receipts surface here. |
 | **Chat** | Chat | Same as Panel source | Canvas-like conversation surface. Subordinate to document context. Not a source of truth. |
 | **Automation** | Automation | Same as Panel source | Background-execution lane. Separate from Panel and Chat. |
 | **vault** | vault / Obsidian vault | `docs/ARCHITECTURE.md` | The Obsidian Markdown vault that is the primary persistence layer. |
 | **note** / **document** | vault note / Markdown note | `docs/ARCHITECTURE.md` | A Markdown file in the vault. The document is the primary cognitive anchor. |
 | **companion note** | companion note | `docs/ARCHITECTURE.md` | A system-managed note that co-resides with its primary note. Not produced by a user. |
-| **Hugin** | Hugin (same) | `docs/COMPONENTS.md`, `docs/ARCHITECTURE.md` | The Panel agent. Command-oriented. Authority surface for governance-bearing mutations. |
-| **Munin** | Munin (same) | `docs/COMPONENTS.md` | Background/automation agent. Not a UI-facing agent by default. |
-| **margin rail** | margin rail / overlay rail | `companion-ui/docs/OVERLAY_GRAMMAR.md` | The right-margin conversation strip in document-first layouts. Hugin is "a margin voice" in this model. |
+| **Hugin** | Historical design label; normalize to **Panel**, **Chat**, or **agent rail** according to the owning interaction contract | ADR-0044; `docs/GLOSSARY.md`; interaction-surface owner | Reserved and inactive. Do not introduce it as an active agent or module name. Dated handoff history may retain it with historical status. |
+| **Munin** | Historical design label; normalize to **Mimer** or **Automation** according to meaning | ADR-0044; `docs/GLOSSARY.md`; interaction-surface owner | Reserved and inactive. Do not introduce it as an active agent or module name. Dated handoff history may retain it with historical status. |
+| **margin rail** | margin rail / agent rail / chat rail | `companion-ui/docs/OVERLAY_GRAMMAR.md`; `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md` | The right-margin interaction strip in document-first layouts. Its active name follows the hosted Panel or Chat surface; it is not a separate authority surface or named constituent. |
 | **bottom sheet** | bottom sheet | `companion-ui/docs/OVERLAY_GRAMMAR.md` | Portrait-mode slide-up overlay for suggestions. 3 snap points. |
 | **split pane** | split pane | `companion-ui/docs/` | Left conversation + right document layout. One of several layout modes. |
 
@@ -133,5 +133,5 @@ These design terms from the 2026-05-14 package lack a corresponding owner-doc en
 - `docs/COMPANION_UI_PRODUCT_SPEC.md` — product model; mode and surface authority
 - `docs/INTERACTION_SURFACES_AND_AUTHORITY/NAME_THE_THREE_INTERACTION_SURFACES.md` — Panel / Chat / Automation authority
 - `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` — architecture spine
-- `docs/COMPONENTS.md` — Hugin, Munin, and component definitions
+- ADR-0044 and `docs/GLOSSARY.md` — ecosystem names and reserved-name lifecycle
 - `companion-ui/design_handoff/2026-05-14-claude-design-package/README.md` — 2026-05-14 design session intake table

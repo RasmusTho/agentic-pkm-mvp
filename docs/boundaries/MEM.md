@@ -55,10 +55,14 @@ without ever becoming hidden authority.
 
 ## Required metadata
 
-MEM **owns `memory_state`** (`unreviewed`→`reviewed`→`promoted`/`corrected`/`decayed`/`forgotten`)
-and carries `source_role: agent_memory`, `authority_state: noncanonical` (default),
-`evidence_role: background`/`non_evidence`, `scope_binding`, `suppression_state`, `provenance_ref`.
-`promoted` reflects a GOV transition — it does not itself confer canonical authority.
+MEM **owns `memory_state`** (`unreviewed`, `reviewed`, `active`, `corrected`, `decayed`,
+`invalidated`, `forgotten`, `purged_stub`) and carries the separate `promotion_state`
+(`not_requested`, `promotion_requested`, `promoted`, `rejected`), as defined by the canonical
+[`MemoryItem` contract](../architecture/memory-model.md). It also carries
+`source_role: agent_memory`, `authority_state: noncanonical` (default),
+`evidence_role: background` / `non_evidence`, `scope_binding`, `suppression_state`, and
+`provenance_ref`. Promotion reflects a GOV transition and HKA materialization; it never becomes a
+`memory_state` value and does not itself confer canonical authority on the source memory.
 
 ## Policy obligations
 
@@ -80,7 +84,7 @@ and carries `source_role: agent_memory`, `authority_state: noncanonical` (defaul
 ## Failure modes
 
 - **Shadow knowledge:** memory influencing decisions as if canonical.
-- **Silent promotion:** `memory_state: promoted` without a GOV transition/receipt.
+- **Silent promotion:** `promotion_state: promoted` without a GOV transition and receipt.
 - **Forgetting leak:** suppressed/forgotten memory resurfacing in retrieval/context.
 
 ## Required tests
