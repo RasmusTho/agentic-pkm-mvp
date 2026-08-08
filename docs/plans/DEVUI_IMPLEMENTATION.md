@@ -70,6 +70,13 @@ capability evidence and BuilderOps Cockpit for live work. Parent #4447 and child
 already delivered inputs; this stage owns only the missing shared contracts, composition, shell,
 navigation, and owner language.
 
+Use the decision-support model in `docs/DEVUI.md` as a design brief: a calm trust frame; a candidate
+asymmetric cockpit with a wide **Now** situation field and compact **Needs you** / **Ready to try**
+rails; then one persistent focus canvas for situation, meaning, next step, evidence, action, and
+receipt. Yggdrasil must validate or revise the visual composition before implementation. The four
+information depths — glance, understand, verify, inspect — reveal more of the same source-bound item
+rather than creating separate overview, decision, and audit products.
+
 Before visual implementation, complete the Yggdrasil design handoff for the three owner surfaces.
 Deliver transport-neutral CKM owner-view, work-registry, and devUI composition-envelope contracts.
 The envelope binds source snapshot identities without copying or reinterpreting authority.
@@ -82,13 +89,22 @@ source's snapshot and watermark, and never claims an atomic cross-system snapsho
 Verify: the three zones answer the owner questions; context survives cockpit-to-detail navigation;
 one or both sources may fail honestly; no technical ID, action endpoint, browser credential, local
 persistence, or new graph store is required; and keyboard, narrow, 200%, many-at-once, print, and
-export states remain usable.
+export states remain usable. Verify that **Needs you** has no false-positive technical blocks; a
+selected item retains its full evidence path through all four information depths; quantified claims
+retain counts or denominators; and the first view directly supports perception, comprehension, and
+the next legal step without exposing subsystem topology.
 
 ### Stage B — decide and act: contextual command surface
 
 Attach proposal, preview, exact approval, live progress, and lawful controls to the selected item.
 The owner sees **AI can continue**, **Your decision is needed**, or **Blocked by evidence or
 system**. Technical ambiguity never becomes an owner decision without a named Human Exception.
+
+Render a genuine owner escalation as one canonical owner-decision brief in the stable focus-canvas
+command region: the decision, **Why you** (why no agent can take it), two or three viable options
+with the consequence of each, a recommendation, and **If you don't answer** (what stays blocked and
+the safe default). Keep the exact request/preview/evidence scope that approval binds alongside the
+brief. Do not present routine agent choices or technical recovery paths as owner options.
 
 Request/preview design may proceed as read-only contracts and fixtures, but authority-bearing
 activation waits for the existing mechanism chain:
@@ -115,6 +131,10 @@ and CKM reassessment to the same selected item. Distinguish merged, delivered, r
 tried by owner. Pilot deliberately degraded sources, ambiguous facts, active-run recovery, and
 receipt reassessment before removing transition routes or wording.
 
+Keep the receipt in the command region that previously held the decision and live run. Lead with
+what changed, how to try it, and material limitations; preserve the complete verification and
+source evidence through the verify/inspect depths.
+
 Persistent `done`/`ignore`/`never_show_again` and a durable tried-by-owner receipt remain outside the
 initial target until ADR-0065 and INV-DG-7 decisions are accepted. A fallback is removed only after
 its replacement has a verified receipt.
@@ -135,4 +155,6 @@ reconstructing the underlying delivery system; every write crosses the authentic
 authority boundary; CKM remains non-authoritative; read states fail explicitly; run status and
 terminal receipts are grounded in delivery truth; no browser/Product/SQLite/graph fallback authority
 exists; static CKM and CLI/API remain valid independent paths; and every mechanism gate has the
-receipts and `Verify:` evidence required by its governing Issue.
+receipts and `Verify:` evidence required by its governing Issue. Low cognitive load is accepted only
+when owner-critical information remains reachable in the same selected context and the surface
+reduces reconstruction work rather than reducing evidence.
