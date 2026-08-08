@@ -82,6 +82,60 @@ def _nonempty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
 
 
+def _aware_iso_timestamp(value: Any) -> bool:
+    if not _nonempty_string(value):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _valid_cockpit_contract(payload: Mapping[str, Any]) -> bool:
+    claim = payload.get("claim")
+    sources = payload.get("sources")
+    unread_planes = payload.get("unread_planes")
+    withdrawn_counts = payload.get("withdrawn_counts")
+    if (
+        payload.get("authority") != "read_time_join"
+        or not _aware_iso_timestamp(payload.get("generated_at"))
+        or not isinstance(claim, Mapping)
+        or claim.get("kind") not in {"counted", "refused"}
+        or not _nonempty_string(claim.get("text"))
+        or not isinstance(sources, list)
+        or not isinstance(unread_planes, list)
+        or any(not _nonempty_string(item) for item in unread_planes)
+        or not isinstance(withdrawn_counts, list)
+    ):
+        return False
+    if "as_of" in claim and not _aware_iso_timestamp(claim.get("as_of")):
+        return False
+    for source in sources:
+        if (
+            not isinstance(source, Mapping)
+            or not _nonempty_string(source.get("name"))
+            or source.get("state") not in {"fresh", "stale", "empty", "unavailable"}
+            or not _nonempty_string(source.get("detail"))
+            or type(source.get("configured")) is not bool
+            or type(source.get("stale_after_days")) is not int
+            or source["stale_after_days"] < 0
+        ):
+            return False
+        read_at = source.get("last_successful_read")
+        if read_at is not None and not _aware_iso_timestamp(read_at):
+            return False
+    for withdrawal in withdrawn_counts:
+        if (
+            not isinstance(withdrawal, Mapping)
+            or not _nonempty_string(withdrawal.get("source"))
+            or not isinstance(withdrawal.get("counts"), list)
+            or any(not _nonempty_string(item) for item in withdrawal["counts"])
+        ):
+            return False
+    return True
+
+
 def _validated_ckm_payload(result: ResultEnvelope) -> dict[str, Any]:
     """Re-run current CKM policy and snapshot invariants at the adapter boundary."""
 
@@ -237,15 +291,7 @@ def _cockpit_contribution(reader: CockpitReader) -> dict[str, Any]:
         sources = payload.get("sources")
         unread_planes = payload.get("unread_planes")
         withdrawn_counts = payload.get("withdrawn_counts")
-        if (
-            payload.get("authority") != authority
-            or not isinstance(generated_at, str)
-            or not generated_at
-            or not isinstance(claim, Mapping)
-            or not isinstance(sources, list)
-            or not isinstance(unread_planes, list)
-            or not isinstance(withdrawn_counts, list)
-        ):
+        if not _valid_cockpit_contract(payload):
             raise ValueError("malformed BuilderOps Cockpit registry envelope")
         return {
             "provider": provider,

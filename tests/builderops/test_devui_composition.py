@@ -50,7 +50,10 @@ def _cockpit_payload() -> dict:
             {
                 "name": "dispatcher-store",
                 "state": "fresh",
-                "read_at": "2026-08-08T20:59:58+00:00",
+                "last_successful_read": "2026-08-08T20:59:58+00:00",
+                "detail": "read succeeded",
+                "stale_after_days": 7,
+                "configured": True,
             }
         ],
         "unread_planes": ["github-review-threads"],
@@ -245,6 +248,29 @@ def test_unserializable_cockpit_payload_is_isolated_from_healthy_ckm() -> None:
 
     assert result["providers"]["work"]["status"] == "refused"
     assert result["providers"]["work"]["snapshot"] is None
+    assert result["providers"]["capabilities"]["status"] == "available"
+
+
+def test_semantically_malformed_cockpit_payload_is_isolated() -> None:
+    malformed_cockpit = _cockpit_payload()
+    malformed_cockpit.update(
+        {
+            "generated_at": "not-a-timestamp",
+            "claim": {"kind": "counted", "text": 7},
+            "sources": [None],
+            "unread_planes": [7],
+            "withdrawn_counts": [{"source": 7, "counts": [None]}],
+        }
+    )
+
+    result = compose_owner_snapshot(
+        cockpit_reader=lambda: malformed_cockpit,
+        ckm_reader=_ckm_envelope,
+        now=lambda: NOW,
+    )
+
+    assert result["providers"]["work"]["status"] == "refused"
+    assert result["providers"]["work"]["captured_at"] is None
     assert result["providers"]["capabilities"]["status"] == "available"
 
 
