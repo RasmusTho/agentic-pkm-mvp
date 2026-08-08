@@ -8,10 +8,11 @@ Source of truth: the docs indexed below + owner decision session 2026-07-04.
 
 # Heimdal — Event Capture & Attribution (groundwork)
 
-**Heimdal** is a proposed new constituent of the personal agentic ecosystem: continuous observation
+**Heimdal** is the sensor / event-capture constituent of the personal agentic ecosystem: continuous observation
 of reality, converted into **attributed, timestamped events** with **confidence** and **provenance**.
-Its responsibility ends at a **published event**; downstream constituents (Munin = knowledge/memory,
-Hugin = agent-runtime) are read-models of that stream.
+Its responsibility ends at a **published event**; **Mimer**, the undivided knowledge-and-cognition
+constituent, consumes that stream as candidate evidence. Hugin and Munin are reserved, inactive
+names under ADR-0044.
 
 This directory began as the **"A" artifacts** — docs-only groundwork that fixed the container and
 handed a Fable-5 architecture window a bounded problem. Those original briefs remain advisory design
@@ -42,12 +43,13 @@ Read order: **A1 → A2 → A4 → A3 → A5 → FABLE_COMPANION** (container �
 ## Fixed direction (do not relitigate)
 
 - The ecosystem is an **acknowledged System-of-Systems**; **Yggdrasil = the whole**; Heimdal is a
-  **sibling constituent**, not a subsystem of Munin. (A1 §1)
+  **sibling of Mimer**, not a Mimer subsystem. (ADR-0044; historical A1 §1)
 - Heimdal owns the **append-only fact stream**; everything downstream is a projection. (A1 §2)
-- Naming: **Yggdrasil** (whole), **Munin** (knowledge/memory), **Hugin** (agent-runtime),
-  **Heimdal** (sensor); observability alias → **OEF**. (A2)
-- This is a `reshape` relative to the current single-system framing (ADR-0041) and routes through
-  CES/ADR at enactment. Not bundled with ADR-0041/0042 (#2855/#2856).
+- Current naming: **Yggdrasil** (whole), **Mimer** (knowledge and cognition), **Heimdal** (sensor),
+  **Hugin/Munin** (reserved); observability keeps the boundary code **OEF**. ADR-0044 supersedes the
+  historical A2 constituent split.
+- The historical reshape was enacted through ADR-0044 and subsequent Mimer/Heimdal delivery. The A
+  artifacts remain provenance, not current naming authority.
 
 ## Status
 
