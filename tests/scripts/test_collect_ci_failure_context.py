@@ -262,3 +262,11 @@ def test_comment_mode_uses_stable_marker_when_enabled() -> None:
     assert "pull-requests: write" not in workflow
     assert "github.rest.issues.createComment" not in workflow
     assert "<!-- ci-failure-context" not in workflow
+
+
+def test_app_image_build_failure_is_collected() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/pr-ci-failure-context.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "- App Image Build" in workflow
