@@ -5,12 +5,22 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-07-30
+Last reviewed: 2026-08-09
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
+
+2026-08-09 devUI read-model writeback (verified against `docs/DEVUI.md`,
+`docs/plans/DEVUI_IMPLEMENTATION.md`, and `app/builderops/devui_overview.py`):
+
+- The pure `devui-overview-view.v1` server-side composer derives the nonvisual Overview from
+  `devui.composition.v1`, explicit producer evidence, and typed root references. It preserves
+  unsupported owner and ready classification as withdrawal rather than an empty list; it performs
+  no source I/O, persistence, mutation, task/session operation, inferred correlation, or browser
+  classification. Producer enrichment, a local Overview route, and every visual or command surface
+  remain undelivered.
 
 Roadmap reset note: `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` is the accepted strategic reset
 input for sequencing, not a runtime-promotion document. This status file remains the current-state
