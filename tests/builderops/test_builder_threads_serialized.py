@@ -55,8 +55,12 @@ def _writer(tmp_path: Path) -> SerializedThreadWriter:
 
 def test_serialized_writer_round_trip(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
-    codex = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="codex:desktop")
-    claude = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="claude:mac")
+    codex = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    claude = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="claude:mac"), client_id="claude:mac"
+    )
 
     created = codex.create(
         request_id="create-4708",
@@ -101,7 +105,7 @@ def test_serialized_writer_round_trip(tmp_path: Path) -> None:
 
 def test_clients_cannot_bypass_serialized_writer(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
-    endpoint = InProcessWriterEndpoint(writer)
+    endpoint = InProcessWriterEndpoint(writer, client_id="codex:desktop")
     client = BuilderThreadClient(endpoint, client_id="codex:desktop")
 
     assert not hasattr(client, "artifact_root")
@@ -121,7 +125,10 @@ def test_clients_cannot_bypass_serialized_writer(tmp_path: Path) -> None:
 
 
 def test_create_refuses_an_existing_durable_capture(tmp_path: Path) -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop"),
+        client_id="codex:desktop",
+    )
     create = dict(
         actor="codex:desktop",
         recipient="claude:mac",
@@ -136,7 +143,10 @@ def test_create_refuses_an_existing_durable_capture(tmp_path: Path) -> None:
 
 
 def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance(tmp_path: Path) -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop"),
+        client_id="codex:desktop",
+    )
 
     with pytest.raises(ValueError, match="named identity"):
         client.create(
@@ -193,6 +203,7 @@ def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance(tm
         "Inspect (/etc/shadow)",
         "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
         "AKIAIOSFODNN7EXAMPLE",
+        "github_pat_abcdefghijklmnopqrstuvwxyz0123456789",
         "-----BEGIN OPENSSH PRIVATE KEY-----",
         "Authorization: Basic abc123",
         "const deploy = () => deploy_unreviewed_change()",
@@ -200,12 +211,17 @@ def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance(tm
         "package main\nfunc main() {}",
         "console.log(process.env)",
         "git diff --cached",
+        "lambda x: x + 1",
+        "if enabled:\n    deploy()",
     ),
 )
 def test_capture_rejects_private_host_and_product_code_forms(
     tmp_path: Path, content: str
 ) -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop"),
+        client_id="codex:desktop",
+    )
 
     with pytest.raises(ValueError, match="shared_non_sensitive"):
         client.create(
@@ -219,7 +235,10 @@ def test_capture_rejects_private_host_and_product_code_forms(
 
 
 def test_capture_rejects_private_path_provenance(tmp_path: Path) -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop"),
+        client_id="codex:desktop",
+    )
 
     with pytest.raises(ValueError, match="shared_non_sensitive"):
         client.create(
@@ -233,7 +252,10 @@ def test_capture_rejects_private_path_provenance(tmp_path: Path) -> None:
 
 
 def test_close_requires_the_named_recipient_reply_and_keeps_unanswered_thread_discoverable(tmp_path: Path) -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop"),
+        client_id="codex:desktop",
+    )
     created = client.create(
         request_id="unanswered-create-4708",
         actor="codex:desktop",
@@ -255,9 +277,13 @@ def test_close_requires_the_named_recipient_reply_and_keeps_unanswered_thread_di
 
 
 def test_thread_and_inbox_reads_remain_bounded(tmp_path: Path) -> None:
-    endpoint = InProcessWriterEndpoint(_writer(tmp_path))
-    client = BuilderThreadClient(endpoint, client_id="codex:desktop")
-    recipient = BuilderThreadClient(endpoint, client_id="claude:mac")
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    recipient = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="claude:mac"), client_id="claude:mac"
+    )
     created = client.create(
         request_id="bounded-create-4708",
         actor="codex:desktop",
@@ -305,7 +331,7 @@ def test_writer_rejects_unknown_mutation_kind_without_state_change(tmp_path: Pat
 
 def test_serialized_request_id_retry_converges(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
-    endpoint = InProcessWriterEndpoint(writer)
+    endpoint = InProcessWriterEndpoint(writer, client_id="codex:desktop")
     client = BuilderThreadClient(
         _AcknowledgementDroppingEndpoint(endpoint), client_id="codex:desktop"
     )
@@ -332,8 +358,12 @@ def test_serialized_request_id_retry_converges(tmp_path: Path) -> None:
 
 def test_two_client_round_trip_and_writer_unavailable_state(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
-    mac = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="codex:mac")
-    mac_mini = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="claude:mac-mini")
+    mac = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:mac"), client_id="codex:mac"
+    )
+    mac_mini = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="claude:mac-mini"), client_id="claude:mac-mini"
+    )
     created = mac.create(
         request_id="mac-create-4708",
         actor="codex:mac",
@@ -352,7 +382,10 @@ def test_two_client_round_trip_and_writer_unavailable_state(tmp_path: Path) -> N
 
 
 def test_external_writer_state_survives_restart_and_replays_exact_request(tmp_path: Path) -> None:
-    first = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    first = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop"),
+        client_id="codex:desktop",
+    )
     request = dict(
         request_id="restart-retry-4708",
         actor="codex:desktop",
@@ -363,15 +396,22 @@ def test_external_writer_state_survives_restart_and_replays_exact_request(tmp_pa
     )
     created = first.create(**request)
 
-    restarted = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    restarted = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop"),
+        client_id="codex:desktop",
+    )
     assert restarted.read(created.thread.thread_id).thread_id == created.thread.thread_id
     assert restarted.create(**request).replayed is True
 
 
 def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Path) -> None:
-    endpoint = InProcessWriterEndpoint(_writer(tmp_path))
-    first = BuilderThreadClient(endpoint, client_id="codex:desktop")
-    recipient = BuilderThreadClient(endpoint, client_id="claude:mac")
+    writer = _writer(tmp_path)
+    first = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    recipient = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="claude:mac"), client_id="claude:mac"
+    )
     created = first.create(
         request_id="z-create-4708",
         actor="codex:desktop",
@@ -389,15 +429,21 @@ def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Pa
         source_refs=("github:4708",),
     )
 
-    restarted = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="claude:mac")
+    restarted = BuilderThreadClient(
+        InProcessWriterEndpoint(_writer(tmp_path), client_id="claude:mac"),
+        client_id="claude:mac",
+    )
     assert len(restarted.read(created.thread.thread_id).entries) == 2
 
 
 def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
-    endpoint = InProcessWriterEndpoint(writer)
-    client = BuilderThreadClient(endpoint, client_id="codex:desktop")
-    recipient = BuilderThreadClient(endpoint, client_id="claude:mac")
+    client = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="codex:desktop"), client_id="codex:desktop"
+    )
+    recipient = BuilderThreadClient(
+        InProcessWriterEndpoint(writer, client_id="claude:mac"), client_id="claude:mac"
+    )
     threads = []
     for thread_index in range(4):
         threads.append(
@@ -434,7 +480,8 @@ def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
 
 
 def test_client_cannot_forge_another_actor(tmp_path: Path) -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    endpoint = InProcessWriterEndpoint(_writer(tmp_path), client_id="codex:desktop")
+    client = BuilderThreadClient(endpoint, client_id="codex:desktop")
 
     with pytest.raises(ValueError, match="actor must match the endpoint client identity"):
         client.create(
@@ -444,6 +491,19 @@ def test_client_cannot_forge_another_actor(tmp_path: Path) -> None:
             subject="Forged actor",
             content="This must not be attributed to another client.",
             source_refs=("github:4708",),
+        )
+
+    with pytest.raises(ValueError, match="actor must match the endpoint client identity"):
+        endpoint.mutate(
+            ThreadMutation(
+                request_id="forged-direct-actor-4708",
+                kind="create",
+                actor="claude:mac",
+                recipient="claude:mac",
+                subject="Forged direct actor",
+                content="The endpoint owns the actor identity.",
+                source_refs=("github:4708",),
+            )
         )
 
 

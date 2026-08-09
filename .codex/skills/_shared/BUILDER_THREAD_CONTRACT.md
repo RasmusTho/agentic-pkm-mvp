@@ -10,8 +10,8 @@ Builder Threads are attributed, bounded questions to a named recipient when a
 reply is expected and no durable representation already exists. `AgentWorklog`
 remains the home for monologic notes. Every create, reply, close, and archive
 command goes through the one designated serialized writer endpoint operated on
-the BuilderOps/Mac mini host. Codex and Claude clients receive only that
-endpoint capability: they have no artifact-root or direct mutation API.
+the BuilderOps/Mac mini host. Each Codex or Claude endpoint capability is bound
+to that client's identity: clients have no artifact-root or direct mutation API.
 
 The external BuilderOps Vault is never the repository `vault/` fixture. The
 writer host owns an explicitly initialized, pinned external root and its

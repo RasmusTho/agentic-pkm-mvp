@@ -28,13 +28,14 @@ _PRIVATE_CONTENT = re.compile(
     r"(?:~/.ssh|/(?:Users|home|private|etc|var|opt)/)|"
     r"^aws_(?:access_key_id|secret_access_key)\s*=|"
     r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----|"
-    r"\bAKIA[0-9A-Z]{16}\b)"
+    r"\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b)"
 )
 _CODE_OR_PATCH = re.compile(
     r"(?im)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|"
     r"\s*(?:def|class|function|const|let|var|import|from|package|func)\b|"
     r"\s*console\.(?:log|error|warn)\s*\(|\s*git diff(?:\s|$)|"
     r"\s*(?:print|return|throw|await|yield)\b\s*(?:\(|[a-z_$])|"
+    r"\s*lambda\s+[^:\n]+:|\s*if\s+[^:\n]+:\s*$|"
     r"\s*[a-z_$][a-z0-9_$]*\s*=\s*(?:\([^)]*\)|[a-z_$][a-z0-9_$]*)\s*=>)"
 )
 _MAX_TEXT = 500
@@ -380,11 +381,15 @@ class SerializedThreadWriter:
 class InProcessWriterEndpoint:
     """Test/development endpoint adapter; production clients use a remote adapter."""
 
-    def __init__(self, writer: SerializedThreadWriter) -> None:
+    def __init__(self, writer: SerializedThreadWriter, *, client_id: str) -> None:
         self._writer = writer
+        _validate_identity(client_id, field="client_id")
+        self._client_id = client_id
         self.mutation_count = 0
 
     def mutate(self, command: ThreadMutation) -> ThreadMutationResult:
+        if command.actor != self._client_id:
+            raise BuilderThreadError("actor must match the endpoint client identity")
         self.mutation_count += 1
         return self._writer.mutate(command)
 
