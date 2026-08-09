@@ -376,6 +376,56 @@ class DarwinLaunchdCoalitionContainment:
         self._assert_baseline_only()
         return dict(base)
 
+    def _assert_orphaned_launch_tree(
+        self,
+        stable: CoalitionSnapshot,
+    ) -> None:
+        """Prove all new tasks descend from one now-absent launch root.
+
+        The coordinator must fail when its Popen root disappears before attach,
+        but its error path still has to reap a detached descendant.  That is
+        safe only when every non-baseline member closes at one absent parent
+        unique ID; a baseline parent or multiple missing roots is foreign or
+        ambiguous and remains fail-closed.
+        """
+
+        members = stable.members
+        by_unique_id = {member.unique_id: member for member in members}
+        if len(by_unique_id) != len(members):
+            raise ValueError("Darwin containment process identities are ambiguous")
+        orphan_root_ids: set[int] = set()
+        for member in members - self._baseline:
+            cursor = member
+            visited: set[int] = set()
+            while True:
+                if cursor.unique_id in visited:
+                    raise ValueError("Darwin containment launch ancestry cycled")
+                visited.add(cursor.unique_id)
+                parent = by_unique_id.get(cursor.parent_unique_id)
+                if parent is None:
+                    if cursor.parent_unique_id <= 0:
+                        raise ValueError(
+                            "Darwin containment launch ancestry escaped root"
+                        )
+                    orphan_root_ids.add(cursor.parent_unique_id)
+                    break
+                if parent in self._baseline:
+                    raise ValueError(
+                        "Darwin containment launch ancestry escaped root"
+                    )
+                cursor = parent
+        if len(orphan_root_ids) != 1:
+            raise ValueError("Darwin containment launch root is unproven")
+        orphan_root_id = next(iter(orphan_root_ids))
+        outside_matches = [
+            identity
+            for pid in self._kernel.list_pids()
+            if (identity := self._kernel.inspect(pid)) is not None
+            and identity.unique_id == orphan_root_id
+        ]
+        if outside_matches:
+            raise ValueError("Darwin containment launch root is unproven")
+
     def attach(self, root_pid: int) -> None:
         stable = _stable_snapshot(self._kernel, self._coalition_id)
         if not self._baseline.issubset(stable.members):
@@ -384,7 +434,17 @@ class DarwinLaunchdCoalitionContainment:
             (member for member in stable.members if member.pid == root_pid),
             None,
         )
-        if root is None or root in self._baseline:
+        if root is None:
+            # Keep the verification cycle fail-closed, but establish only the
+            # narrowly proven cleanup authority before reporting the raced
+            # attach.  Its caller's failure path then cannot strand a detached
+            # same-coalition descendant.
+            if self._kernel.inspect(root_pid) is not None:
+                raise ValueError("Darwin containment launch root is unproven")
+            self._assert_orphaned_launch_tree(stable)
+            self._attached = True
+            raise ValueError("Darwin containment launch root exited before attach")
+        if root in self._baseline:
             raise ValueError("Darwin containment launch root is unproven")
         by_unique_id = {
             member.unique_id: member for member in stable.members
