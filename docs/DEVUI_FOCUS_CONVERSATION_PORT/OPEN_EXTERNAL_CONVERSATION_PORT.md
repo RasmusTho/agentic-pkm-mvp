@@ -22,11 +22,13 @@ through immutable context rather than inferred or globally discovered sessions.
 ## What This Task Does
 
 - Defines canonical serialization and SHA-256 validation for `ConversationContextPack.v1`.
+- Binds every material source to a fresh, watermarked read and caps pack expiry at the earliest
+  source freshness deadline.
 - Defines the read-only pack-preview data needed to show purpose, exact includes/excludes, sources,
   limitations, expiry, and hash without selecting a visual treatment.
 - Adds bounded export/open adapters with explicit available/unavailable/unsupported states.
-- Accepts a non-authoritative `ConversationDisposition.v1` with one allowed outcome and optional
-  typed-proposal payload.
+- Accepts a non-authoritative `ConversationDisposition.v1` with one allowed outcome; a non-null
+  typed-proposal payload remains refused until FCP-04 owns its complete validator.
 - Keeps provider transcript/session/model/usage fields as optional provenance only and persists no
   devUI transcript, session inventory, disposition, task, or effect.
 
