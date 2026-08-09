@@ -1,0 +1,128 @@
+{
+  "schema_version": "devui.soi_evidence_view.v0",
+  "immutable": true,
+  "scope": {
+    "subject_ref": "mimer-product-runtime-soi",
+    "source": {
+      "source_owned": true,
+      "ref": "docs/architecture/system-context-overlay.md#system-of-interest-soi",
+      "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+      "authority_class": "product-architecture"
+    }
+  },
+  "denominator": {
+    "status": "known",
+    "scope_ref": "mimer-product-runtime-soi",
+    "source": {
+      "source_owned": true,
+      "ref": "docs/architecture/system-context-overlay.md#system-of-interest-soi",
+      "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+      "authority_class": "product-architecture"
+    },
+    "observed_at": "2026-08-09T19:20:04+00:00",
+    "expected_subject_refs": [
+      "finding-reorienting-capability",
+      "context-bundles-capability"
+    ],
+    "required_responsibilities": ["requirements", "nfr", "verification"],
+    "expected_children": [
+      {"subject_ref": "finding-reorienting-capability", "coverage": "complete"},
+      {"subject_ref": "context-bundles-capability", "coverage": "complete"}
+    ],
+    "horizon": "current",
+    "requested_coverage": "complete"
+  },
+  "subjects": [
+    {
+      "subject_ref": "mimer-product-runtime-soi",
+      "source": {
+        "source_owned": true,
+        "ref": "docs/architecture/system-context-overlay.md#system-of-interest-soi",
+        "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+        "authority_class": "product-architecture"
+      }
+    },
+    {
+      "subject_ref": "finding-reorienting-capability",
+      "source": {
+        "source_owned": true,
+        "ref": "docs/FINDING_AND_REORIENTING/README.md#finding-reorienting-and-resurfacing",
+        "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+        "authority_class": "capability-specification"
+      }
+    },
+    {
+      "subject_ref": "context-bundles-capability",
+      "source": {
+        "source_owned": true,
+        "ref": "docs/CONTEXT_BUNDLES/README.md#capability-boundary",
+        "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+        "authority_class": "capability-specification"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "finding-current-delivery",
+      "subject_ref": "finding-reorienting-capability",
+      "responsibility": "delivery",
+      "horizon": "current",
+      "source": {
+        "source_owned": true,
+        "ref": "docs/FINDING_AND_REORIENTING/README.md#finding-reorienting-and-resurfacing",
+        "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+        "authority_class": "capability-specification"
+      },
+      "source_state": {
+        "availability": "available",
+        "freshness": "fresh",
+        "coverage": "complete",
+        "cardinality": "nonempty",
+        "linkage": "unlinked"
+      },
+      "evidence": {
+        "delivery": "delivered-docs-specification",
+        "availability": "not_asserted",
+        "ready_to_try": "not_asserted",
+        "owner_tried": "unsupported",
+        "owner_accepted": "unsupported"
+      }
+    },
+    {
+      "claim_id": "context-bundles-target-nfr",
+      "subject_ref": "context-bundles-capability",
+      "responsibility": "nfr",
+      "horizon": "target",
+      "source": {
+        "source_owned": true,
+        "ref": "docs/CONTEXT_BUNDLES/README.md#capability-boundary",
+        "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+        "authority_class": "capability-specification"
+      },
+      "source_state": {
+        "availability": "available",
+        "freshness": "fresh",
+        "coverage": "missing",
+        "cardinality": "not_countable",
+        "linkage": "unlinked"
+      },
+      "evidence": {"document_index_coverage": "indexed"}
+    }
+  ],
+  "relations": [],
+  "unlinked_subject_refs": [
+    "mimer-product-runtime-soi",
+    "finding-reorienting-capability",
+    "context-bundles-capability"
+  ],
+  "diagnostics": {"source_aggregate": {"maturity": "illustrative-only"}},
+  "expected_result": {
+    "scope": "mimer-product-runtime-soi",
+    "denominator_coverage": "complete",
+    "unlinked_subject_refs": [
+      "mimer-product-runtime-soi",
+      "finding-reorienting-capability",
+      "context-bundles-capability"
+    ]
+  }
+}

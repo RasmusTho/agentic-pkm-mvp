@@ -206,9 +206,10 @@ unsupported until a separately authorized receipt model exists.
 ## Current-to-target status
 
 This target contract is accepted documentation only. The delivered `devui.composition.v1` remains a
-per-request projection over its existing providers; it does not provide whole-SoI coverage. The SoI
-Evidence View composer, its source manifest, proof fixtures, UI, visual handoff, and any owner
-outcome receipt authority are not delivered.
+per-request projection over its existing providers; it does not provide whole-SoI coverage. The
+bounded SoI Evidence View proof composer, source manifest, and proof fixtures are delivered through
+the governing implementation lane for issue #4710. A UI, visual handoff, generalized hierarchy, and
+any owner-outcome receipt authority are not delivered.
 
 ## Sources and routing
 
