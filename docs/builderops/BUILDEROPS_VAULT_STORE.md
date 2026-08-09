@@ -280,7 +280,8 @@ target; the external BuilderOps Vault is separate.
 
 The writer accepts create, reply, close, and archive commands, all constrained to
 `shared_non_sensitive` material, named recipients where applicable, bounded
-content and provenance, and caller-retained request IDs. Its external root is
+content and provenance, endpoint-bound actor identities, and caller-retained
+request IDs. Its external root is
 explicitly initialized with the stable vault identity, then records one immutable,
 writer-sequenced command envelope per request so exact retries survive a writer
 restart; changed semantics under the same request ID fail closed. A thread is capped at 32 entries

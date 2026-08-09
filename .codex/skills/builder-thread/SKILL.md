@@ -19,11 +19,11 @@ this repository.
 
 ## Allowed Operations
 
-- `create`: require caller-retained request ID, named actor, named recipient,
-  bounded subject/content, and typed source references.
+- `create`: require caller-retained request ID, endpoint-bound actor identity,
+  named recipient, bounded subject/content, and typed source references.
 - `read`: read one bounded thread projection through the endpoint.
-- `reply`: require a caller-retained request ID, named actor and recipient,
-  bounded content, and source references.
+- `reply`: require a caller-retained request ID, endpoint-bound actor identity
+  and named recipient, bounded content, and source references.
 - `close` and `archive`: require explicit task/user authorization; close only
   answered threads and archive only closed threads.
 

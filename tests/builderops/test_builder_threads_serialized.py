@@ -190,11 +190,16 @@ def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance(tm
     (
         "~/.ssh/id_rsa",
         "/etc/shadow",
+        "Inspect (/etc/shadow)",
         "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+        "AKIAIOSFODNN7EXAMPLE",
         "-----BEGIN OPENSSH PRIVATE KEY-----",
         "Authorization: Basic abc123",
         "const deploy = () => deploy_unreviewed_change()",
         "import os\nos.unlink('state')",
+        "package main\nfunc main() {}",
+        "console.log(process.env)",
+        "git diff --cached",
     ),
 )
 def test_capture_rejects_private_host_and_product_code_forms(
@@ -210,6 +215,20 @@ def test_capture_rejects_private_host_and_product_code_forms(
             subject="Rejected boundary form",
             content=content,
             source_refs=("github:4708",),
+        )
+
+
+def test_capture_rejects_private_path_provenance(tmp_path: Path) -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+
+    with pytest.raises(ValueError, match="shared_non_sensitive"):
+        client.create(
+            request_id="private-provenance-4708",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Rejected provenance",
+            content="This request has invalid provenance.",
+            source_refs=("doc:/etc/shadow",),
         )
 
 
@@ -236,7 +255,9 @@ def test_close_requires_the_named_recipient_reply_and_keeps_unanswered_thread_di
 
 
 def test_thread_and_inbox_reads_remain_bounded(tmp_path: Path) -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    endpoint = InProcessWriterEndpoint(_writer(tmp_path))
+    client = BuilderThreadClient(endpoint, client_id="codex:desktop")
+    recipient = BuilderThreadClient(endpoint, client_id="claude:mac")
     created = client.create(
         request_id="bounded-create-4708",
         actor="codex:desktop",
@@ -246,7 +267,7 @@ def test_thread_and_inbox_reads_remain_bounded(tmp_path: Path) -> None:
         source_refs=("github:4708",),
     )
     for index in range(1, 32):
-        client.reply(
+        recipient.reply(
             request_id=f"bounded-reply-{index}-4708",
             thread_id=created.thread.thread_id,
             actor="claude:mac",
@@ -257,7 +278,7 @@ def test_thread_and_inbox_reads_remain_bounded(tmp_path: Path) -> None:
 
     assert len(client.read(created.thread.thread_id).entries) == 32
     with pytest.raises(ValueError, match="thread contribution bound"):
-        client.reply(
+        recipient.reply(
             request_id="bounded-reply-overflow-4708",
             thread_id=created.thread.thread_id,
             actor="claude:mac",
@@ -342,13 +363,15 @@ def test_external_writer_state_survives_restart_and_replays_exact_request(tmp_pa
     )
     created = first.create(**request)
 
-    restarted = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="claude:mac")
+    restarted = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
     assert restarted.read(created.thread.thread_id).thread_id == created.thread.thread_id
     assert restarted.create(**request).replayed is True
 
 
 def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Path) -> None:
-    first = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    endpoint = InProcessWriterEndpoint(_writer(tmp_path))
+    first = BuilderThreadClient(endpoint, client_id="codex:desktop")
+    recipient = BuilderThreadClient(endpoint, client_id="claude:mac")
     created = first.create(
         request_id="z-create-4708",
         actor="codex:desktop",
@@ -357,7 +380,7 @@ def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Pa
         content="The immutable sequence is owned by the serialized writer.",
         source_refs=("github:4708",),
     )
-    first.reply(
+    recipient.reply(
         request_id="a-reply-4708",
         thread_id=created.thread.thread_id,
         actor="claude:mac",
@@ -372,7 +395,9 @@ def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Pa
 
 def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
-    client = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="codex:desktop")
+    endpoint = InProcessWriterEndpoint(writer)
+    client = BuilderThreadClient(endpoint, client_id="codex:desktop")
+    recipient = BuilderThreadClient(endpoint, client_id="claude:mac")
     threads = []
     for thread_index in range(4):
         threads.append(
@@ -387,7 +412,7 @@ def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
         )
     for reply_index in range(96):
         thread = threads[reply_index % len(threads)]
-        client.reply(
+        recipient.reply(
             request_id=f"global-reply-{reply_index}-4708",
             thread_id=thread.thread_id,
             actor="claude:mac",
@@ -398,7 +423,7 @@ def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
 
     assert writer.accepted_mutation_count == 100
     with pytest.raises(ValueError, match="serialized writer contribution bound"):
-        client.reply(
+        recipient.reply(
             request_id="global-reply-overflow-4708",
             thread_id=threads[0].thread_id,
             actor="claude:mac",
@@ -406,3 +431,27 @@ def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
             content="This contribution exceeds the global bound.",
             source_refs=("github:4708",),
         )
+
+
+def test_client_cannot_forge_another_actor(tmp_path: Path) -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+
+    with pytest.raises(ValueError, match="actor must match the endpoint client identity"):
+        client.create(
+            request_id="forged-actor-4708",
+            actor="claude:mac",
+            recipient="claude:mac",
+            subject="Forged actor",
+            content="This must not be attributed to another client.",
+            source_refs=("github:4708",),
+        )
+
+
+def test_repository_vault_fixture_cannot_be_a_writer_root() -> None:
+    fixture_root = Path(__file__).resolve().parents[2] / "vault"
+
+    with pytest.raises(ValueError, match="repository vault fixture"):
+        initialize_external_writer_root(fixture_root, vault_id="builderops-mac-mini")
+
+    with pytest.raises(ValueError, match="repository vault fixture"):
+        SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=fixture_root)

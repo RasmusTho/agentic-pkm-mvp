@@ -25,13 +25,16 @@ _SOURCE_REF = re.compile(
 )
 _PRIVATE_CONTENT = re.compile(
     r"(?im)(password|secret|credential|token|api[_-]?key|bearer\s+|"
-    r"(?:^|\s)(?:~/.ssh|/(?:Users|home|private|etc|var|opt)/)|"
+    r"(?:~/.ssh|/(?:Users|home|private|etc|var|opt)/)|"
     r"^aws_(?:access_key_id|secret_access_key)\s*=|"
-    r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----)"
+    r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----|"
+    r"\bAKIA[0-9A-Z]{16}\b)"
 )
 _CODE_OR_PATCH = re.compile(
     r"(?im)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|"
-    r"\s*(?:def|class|function|const|let|var|import|from)\b|"
+    r"\s*(?:def|class|function|const|let|var|import|from|package|func)\b|"
+    r"\s*console\.(?:log|error|warn)\s*\(|\s*git diff(?:\s|$)|"
+    r"\s*(?:print|return|throw|await|yield)\b\s*(?:\(|[a-z_$])|"
     r"\s*[a-z_$][a-z0-9_$]*\s*=\s*(?:\([^)]*\)|[a-z_$][a-z0-9_$]*)\s*=>)"
 )
 _MAX_TEXT = 500
@@ -39,6 +42,7 @@ _MAX_THREAD_ENTRIES = 32
 _MAX_TOTAL_ENTRIES = 100
 _ROOT_IDENTITY = "builder-thread-writer.json"
 _ENTRY_DIRECTORY = "builder-thread-entries"
+_REPOSITORY_VAULT_ROOT = (Path(__file__).resolve().parents[2] / "vault").resolve()
 
 
 class BuilderThreadError(ValueError):
@@ -64,6 +68,7 @@ class ThreadAlreadyRepresentedError(BuilderThreadError):
 def initialize_external_writer_root(root: Path, *, vault_id: str) -> None:
     """Explicitly initialise the external writer-owned root for one vault ID."""
     _validate_identifier(vault_id, field="vault_id")
+    _reject_repository_fixture_root(root)
     root.mkdir(parents=True, exist_ok=True)
     identity = root / _ROOT_IDENTITY
     expected = _canonical_json({"schema": "builder-thread-writer.v1", "vault_id": vault_id})
@@ -156,6 +161,7 @@ class SerializedThreadWriter:
 
     def __init__(self, *, vault_id: str, state_root: Path) -> None:
         _validate_identifier(vault_id, field="vault_id")
+        _reject_repository_fixture_root(state_root)
         self._vault_id = vault_id
         self._state_root = state_root
         self._entries_root = state_root / _ENTRY_DIRECTORY
@@ -407,6 +413,7 @@ class BuilderThreadClient:
         content: str,
         source_refs: tuple[str, ...],
     ) -> ThreadMutationResult:
+        self._validate_actor(actor)
         return self._endpoint.mutate(
             ThreadMutation(
                 request_id=request_id,
@@ -429,6 +436,7 @@ class BuilderThreadClient:
         content: str,
         source_refs: tuple[str, ...],
     ) -> ThreadMutationResult:
+        self._validate_actor(actor)
         return self._endpoint.mutate(
             ThreadMutation(
                 request_id=request_id,
@@ -444,6 +452,7 @@ class BuilderThreadClient:
     def close(
         self, *, request_id: str, thread_id: str, actor: str, reason: str
     ) -> ThreadMutationResult:
+        self._validate_actor(actor)
         return self._endpoint.mutate(
             ThreadMutation(
                 request_id=request_id,
@@ -457,6 +466,7 @@ class BuilderThreadClient:
     def archive(
         self, *, request_id: str, thread_id: str, actor: str
     ) -> ThreadMutationResult:
+        self._validate_actor(actor)
         return self._endpoint.mutate(
             ThreadMutation(
                 request_id=request_id,
@@ -471,6 +481,16 @@ class BuilderThreadClient:
 
     def inbox(self, recipient: str, *, limit: int) -> BuilderInbox:
         return self._endpoint.inbox(recipient, limit=limit)
+
+    def _validate_actor(self, actor: str) -> None:
+        if actor != self.client_id:
+            raise BuilderThreadError("actor must match the endpoint client identity")
+
+
+def _reject_repository_fixture_root(root: Path) -> None:
+    resolved_root = root.resolve()
+    if resolved_root == _REPOSITORY_VAULT_ROOT or _REPOSITORY_VAULT_ROOT in resolved_root.parents:
+        raise BuilderThreadError("repository vault fixture cannot be a writer root")
 
 
 def _validate_command(command: ThreadMutation) -> None:

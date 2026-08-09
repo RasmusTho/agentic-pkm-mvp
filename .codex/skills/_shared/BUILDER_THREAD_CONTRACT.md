@@ -17,9 +17,10 @@ The external BuilderOps Vault is never the repository `vault/` fixture. The
 writer host owns an explicitly initialized, pinned external root and its
 deployment; clients cannot configure or discover that root. The writer records
 one immutable, writer-sequenced command envelope per request and rebuilds its
-bounded state after a host restart. A client request is bounded and attributed with its
-caller-retained request ID, actor, named recipient where applicable, source
-references, and the only permitted privacy class, `shared_non_sensitive`.
+bounded state after a host restart. A client request is bounded and attributed
+with its caller-retained request ID, endpoint client identity (which must match
+the recorded actor), named recipient where applicable, source references, and
+the only permitted privacy class, `shared_non_sensitive`.
 
 An exact retry of an accepted request ID returns the original result. Reusing
 that ID with changed semantics fails closed. Writer unavailability is a bounded
