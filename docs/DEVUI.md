@@ -214,6 +214,19 @@ The home view uses the three stable zones from the cognitive-load contract. Tech
 an agent or deterministic rule can handle remains in **Now**; it must not inflate **Needs you**. The
 first view uses owner language and freshness. A dead or unread source must never look like zero.
 
+### Orient the Product/Runtime SoI evidence
+
+Overview may include the target **SoI Evidence View v0** lens defined in
+`docs/DEVUI_SOI_EVIDENCE_VIEW/README.md`. It lets the owner inspect a named Product/Runtime SoI
+scope through a source-owned evidence vector from intent through owner outcome. It is complete only
+relative to an owner-declared denominator and does not claim whole-Yggdrasil ecosystem coverage.
+
+This is neither a Focus subject nor Builder System Control. Product/Runtime SoI and Builder System
+Control are separate roots that share source-state presentation semantics but not identity,
+denominator, authority, maturity semantics, or command scope. Unknown, missing, stale,
+unavailable, refused, and measured-empty material remains explicit. The lens must never create a
+new graph, task, lifecycle, registry, score, writer, or owner-acceptance inference.
+
 ### Understand a capability
 
 For each capability, devUI shows what the system should do, what is confirmed or only candidate,
@@ -323,7 +336,8 @@ The detailed visual design must go through Yggdrasil design handoff before imple
 three connected owner views, not separate capability, work, agent, Cockpit, CKM, Signboard, and
 receipt products:
 
-1. **Overview** — the three zones: Now, Needs you, and Ready to try.
+1. **Overview** — the three zones: Now, Needs you, and Ready to try, including the optional
+   read-only SoI Evidence View lens over a named Product/Runtime SoI scope.
 2. **Focus** — one selected item with its capability context, work chain, evidence, gaps, sources,
    and progressive technical detail.
 3. **Command and receipt** — exact proposal/preview, lawful owner controls, live progress, terminal
@@ -487,8 +501,8 @@ Delivered now:
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
 surface; the Focus/Conversation Port and its `ConversationContextPack.v1` / command-preview target
-contracts; the Builder System Control lens; owner pilot and tried-by-owner acceptance; and ADR-0065
-dispositions.
+contracts; the Builder System Control lens; the SoI Evidence View v0 composer, proof fixtures, and
+UI; owner pilot and tried-by-owner acceptance; and ADR-0065 dispositions.
 
 The target turns the current cockpits and Signboard from competing owner destinations into internal
 providers: Direction B stays an exportable/static evidence fallback, BuilderOps Cockpit supplies
@@ -513,6 +527,9 @@ routes may remain available for diagnostics and recovery, but devUI is the norma
       terminal receipt or an honest ambiguous outcome, and performs no GitHub/repository mutation.
 - [ ] Builder System Control is a separate governance lens and cannot become a policy engine,
       workflow engine, task system, capability policy owner, or source of truth.
+- [ ] The SoI Evidence View, when delivered, is a read-only Overview lens over an explicit
+      Product/Runtime SoI denominator; it preserves typed source ownership, current/target horizon,
+      independent source states, and evidence-vector components without a scalar maturity authority.
 - [ ] Normal owner use never requires choosing or navigating to Cockpit, CKM, or Signboard; their
       source identity remains available only as progressive provenance and diagnostic detail.
 - [ ] Each item shows one owner-facing state, why it is shown, what happens next, and whether owner
