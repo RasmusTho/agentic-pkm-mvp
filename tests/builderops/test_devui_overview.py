@@ -30,13 +30,17 @@ def _composition() -> dict:
         "providers": {
             "work": {
                 "status": "available",
+                "authority": "read_time_join",
                 "captured_at": "2026-08-09T21:00:00+00:00",
+                "snapshot": {"watermark": "work:42"},
                 "completeness": {"claim": {"kind": "counted"}},
                 "refusal": None,
             },
             "capabilities": {
                 "status": "refused",
+                "authority": "projection_marker",
                 "captured_at": None,
+                "snapshot": {"watermark": "ckm:9"},
                 "completeness": None,
                 "refusal": {"code": "unavailable"},
             },
@@ -107,6 +111,8 @@ def test_overview_production_composer_is_projection_only_and_has_no_io_or_state_
     assert result["authority"] == "projection_only"
     assert result["composed_at"] == composition["captured_at"]
     assert result["trust_frame"]["provider_states"][0]["provider"] == "work"
+    assert result["trust_frame"]["provider_states"][0]["authority"] == "read_time_join"
+    assert result["trust_frame"]["provider_states"][0]["snapshot"] == {"watermark": "work:42"}
     assert result["now"][0]["subject_ref"] == candidates["now"][0]["subject_ref"]
     assert "cache" not in result
     assert "store" not in result

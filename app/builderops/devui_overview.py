@@ -363,7 +363,9 @@ def compose_overview_view(
             {
                 "provider": name,
                 "status": provider["status"],
+                "authority": _detached(provider.get("authority"), label="provider authority"),
                 "captured_at": provider.get("captured_at"),
+                "snapshot": _detached(provider.get("snapshot"), label="provider snapshot"),
                 "completeness": _detached(provider.get("completeness"), label="provider completeness"),
                 "refusal": _detached(provider.get("refusal"), label="provider refusal"),
             }
