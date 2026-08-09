@@ -55,7 +55,10 @@ BMI-02 stores its durable record graph under
 
 BMI-03 adds `builderops inquiry run`. Its `--dry-run` mode is deterministic and read-only;
 provider-enabled mode uses explicit per-role adapters, strict response validation, durable terminal
-receipts, and no provider fallback.
+receipts, and no provider fallback on the declared provider-API path. The sanctioned subscription
+path may use the other already-configured subscription adapter as one bounded alternate candidate
+inside the same runner invocation; every failed candidate and actual effective target remains in
+the trace.
 
 BMI-04 adds Codex and portable Claude bridge skills that transfer the question to a configured
 remote-host launcher. The configured remote host owns the BuilderOps command, configured role
@@ -88,9 +91,14 @@ is delivered. No task is ready to make a Product/Runtime write.
    never relies on a chat transcript as sole state.
 3. **No silent promotion.** An inquiry may produce a synthesis but cannot create an Issue, PR, or
    owner-doc change without a recorded PromotionIntent and receipt.
-4. **Bounded autonomy.** Provider refusal, malformed structured output, exhausted rounds, or
-   unresolved blocking questions terminally record `needs_input` or `not_ready`; no model invents
-   missing requirements to reach Issue-ready.
+4. **Bounded autonomy.** Provider refusal, exhausted candidates, exhausted rounds, or unresolved
+   blocking questions terminally record `needs_input` or `not_ready`; no model invents missing
+   requirements to reach Issue-ready. An eligible unavailable, timed-out, empty, or malformed
+   subscription turn may try the one alternate configured adapter. Explicit refusal, unsafe output,
+   credential or session failure, and persistence failure never fall back. The owner-controlled
+   host launcher selects this fixed bridge only with
+   `BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1`; that boolean cannot name targets or
+   secrets, and the provider-API launcher refuses to start if it is present or inherited.
 5. **Traceability survives partial failure.** Each completed turn is persisted before a successor
    call. A worker restart can resume from the latest committed turn without replaying an accepted
    provider call. Duplicate command retries use idempotency keys.
@@ -101,6 +109,9 @@ Partial failure examples:
   an untraceable run.
 - If a provider call succeeds but receipt persistence fails, the run remains incomplete and the
   provider output is not treated as an accepted turn.
+- If one subscription provider/model is unavailable but the other completes both complementary logical
+  lanes, the report ends `degraded_consensus`. It retains each effective provider/model identity and
+  cannot satisfy independent-consensus readiness or promotion.
 - If the models reach their round limit without a common accepted artifact hash, the inquiry ends
   `not_ready` and produces no Issue.
 
@@ -122,6 +133,10 @@ Partial failure examples:
   desktop-launch JSON result without fallback or retry; operational desktop skills never invoke
   that mechanism. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_local_launcher_emits_terminal_provider_error_json`.
+- [x] The operational subscription runner can use one configured adapter for both complementary
+  lanes after a bounded, sanitized failure, while reporting `degraded_consensus` and refusing Issue
+  promotion. Verify:
+  `tests/builderops/test_model_inquiry_runner.py::test_single_available_adapter_completes_truthful_degraded_consensus`.
 
 ## Relationship To GitHub Issues
 

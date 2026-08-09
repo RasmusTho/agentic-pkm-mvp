@@ -23,6 +23,7 @@ from app.builderops.model_inquiry import (
 from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.model_inquiry_adapters import (
     ADAPTER_FAILURE_CLASSES,
+    OPERATIONAL_SUBSCRIPTION_MODE_ENV,
     AdapterExecutionError,
     AdapterUnavailableError,
     CredentialUnavailableError,
@@ -110,6 +111,10 @@ def launch(
     if not question:
         raise LauncherError("question must not be empty")
     source_env = dict(os.environ if env is None else env)
+    if source_env.get(OPERATIONAL_SUBSCRIPTION_MODE_ENV, "").strip():
+        raise LauncherError(
+            "provider-API launcher refuses operational subscription mode"
+        )
     root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
     cli = root / "scripts" / "builderops_cli.sh"
     if not cli.is_file() or not os.access(cli, os.X_OK):

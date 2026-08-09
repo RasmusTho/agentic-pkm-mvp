@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -137,8 +138,11 @@ def _response_from_text(text: str) -> dict[str, Any]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--role", choices=("fable", "gpt_codex"))
+    args = parser.parse_args()
     request = json.load(sys.stdin)
-    role = os.environ.get("INQUIRY_ROLE", "")
+    role = args.role or os.environ.get("INQUIRY_ROLE", "")
     print(json.dumps(run_role(request, role), ensure_ascii=False, sort_keys=True), flush=True)
     return 0
 

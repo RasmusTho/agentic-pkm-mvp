@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from app.builderops.config import load_paths
 from app.builderops.model_inquiry_contract import (
+    MODEL_TURN_SYSTEM_PROMPT,
     canonical_hash,
     github_issue_url_matches,
     initial_context_packet,
@@ -52,6 +53,7 @@ TERMINAL_TURN_OUTCOMES = frozenset({"accepted", "completed", "failed", "not_read
 RUN_TERMINAL_OUTCOMES = frozenset(
     {
         "consensus",
+        "degraded_consensus",
         "max_rounds_exhausted",
         "provider_refused",
         "malformed_output",
@@ -1289,23 +1291,38 @@ class ModelInquiryService:
                     raise BuilderOpsValidationError(
                         f"provider turn context hash mismatch: {turn['turn_id']}"
                     )
-                expected_request = model_turn_request_hash(
-                    inquiry_id=str(turn["inquiry_id"]),
-                    role=str(turn["role"]),
-                    phase=str(turn["phase"]),
-                    round_index=int(turn["round_index"]),
-                    context_hash=str(turn["context_hash"]),
-                    input_hash=str(turn["input_hash"]),
-                    input_artifact_refs=list(turn["input_artifact_refs"]),
-                    adapter_id=str(turn["adapter_id"]),
-                    provider=str(turn["provider"]),
-                    model=str(turn["model"]),
-                )
-                if turn["request_hash"] != expected_request:
+                expected_requests = {
+                    model_turn_request_hash(
+                        inquiry_id=str(turn["inquiry_id"]),
+                        role=str(turn["role"]),
+                        phase=str(turn["phase"]),
+                        round_index=int(turn["round_index"]),
+                        context_hash=str(turn["context_hash"]),
+                        input_hash=str(turn["input_hash"]),
+                        input_artifact_refs=list(turn["input_artifact_refs"]),
+                        adapter_id=str(turn["adapter_id"]),
+                        provider=str(turn["provider"]),
+                        model=str(turn["model"]),
+                    ),
+                    model_turn_request_hash(
+                        inquiry_id=str(turn["inquiry_id"]),
+                        role=str(turn["role"]),
+                        phase=str(turn["phase"]),
+                        round_index=int(turn["round_index"]),
+                        context_hash=str(turn["context_hash"]),
+                        input_hash=str(turn["input_hash"]),
+                        input_artifact_refs=list(turn["input_artifact_refs"]),
+                        adapter_id=str(turn["adapter_id"]),
+                        provider=str(turn["provider"]),
+                        model=str(turn["model"]),
+                        system_prompt=MODEL_TURN_SYSTEM_PROMPT,
+                    ),
+                }
+                if turn["request_hash"] not in expected_requests:
                     raise BuilderOpsValidationError(
                         f"provider turn request hash mismatch: {turn['turn_id']}"
                     )
-                if turn["adapter_request_id"] != f"adapter_req_{expected_request[:32]}":
+                if turn["adapter_request_id"] != f"adapter_req_{turn['request_hash'][:32]}":
                     raise BuilderOpsValidationError(
                         f"provider turn adapter request id mismatch: {turn['turn_id']}"
                     )
@@ -1394,7 +1411,7 @@ class ModelInquiryService:
             return
         outcome = terminal["outcome"]
         details = terminal["details"]
-        if outcome == "consensus":
+        if outcome in {"consensus", "degraded_consensus"}:
             accepted_hash = details.get("accepted_artifact_hash")
             round_index = details.get("round_index")
             if not isinstance(round_index, int) or isinstance(round_index, bool) or round_index < 0:
@@ -1411,6 +1428,14 @@ class ModelInquiryService:
                 and turn.get("stance") == "accept"
                 and turn.get("accepted_artifact_hash") == accepted_hash
             ]
+            effective_targets = {
+                (turn.get("provider"), turn.get("model"))
+                for turn in accept_turns
+            }
+            degraded = len(effective_targets) != 2
+            expected_detail_fields = {"accepted_artifact_hash", "round_index"}
+            if outcome == "degraded_consensus":
+                expected_detail_fields.add("degradation_reason")
             if (
                 accepted_turn is None
                 or round_index > 19
@@ -1419,6 +1444,13 @@ class ModelInquiryService:
                 or synthesis is None
                 or synthesis.get("input_artifact_refs") != [accepted_turn["turn_id"]]
                 or synthesis.get("content") != accepted_turn["content"]
+                or set(details) != expected_detail_fields
+                or (outcome == "consensus" and degraded)
+                or (outcome == "degraded_consensus" and not degraded)
+                or (
+                    outcome == "degraded_consensus"
+                    and details.get("degradation_reason") != "operational adapter fallback used"
+                )
             ):
                 raise BuilderOpsValidationError("consensus terminal is not linked to accepted graph")
             return
@@ -1984,7 +2016,11 @@ def _validate_provider_attempt_receipt(
 ) -> None:
     request_id = _safe_id(str(receipt.get("adapter_request_id", "")), "adapter_request_id")
     outcome = receipt.get("outcome")
-    allowed = RUN_TERMINAL_OUTCOMES - {"consensus", "max_rounds_exhausted"}
+    allowed = RUN_TERMINAL_OUTCOMES - {
+        "consensus",
+        "degraded_consensus",
+        "max_rounds_exhausted",
+    }
     expected_target = [
         {
             "ref_type": "builderops_inquiry",
@@ -2048,9 +2084,11 @@ def _validate_provider_attempt_receipt(
         "output_hash",
         "classification",
     }
-    allowed_fields = {frozenset(expected_fields)}
+    candidate_fields = {*expected_fields, "candidate_adapter_id"}
+    allowed_fields = {frozenset(expected_fields), frozenset(candidate_fields)}
     if outcome == "provider_error":
         allowed_fields.add(frozenset({*expected_fields, "diagnostic"}))
+        allowed_fields.add(frozenset({*candidate_fields, "diagnostic"}))
     if (
         frozenset(details) not in allowed_fields
         or details.get("classification") != expected_classifications.get(str(outcome))
@@ -2058,6 +2096,15 @@ def _validate_provider_attempt_receipt(
         raise BuilderOpsValidationError("provider attempt details do not match outcome contract")
     if "diagnostic" in details:
         _validate_adapter_failure_diagnostic(details["diagnostic"])
+    candidate_adapter_id = details.get("candidate_adapter_id")
+    if candidate_adapter_id is not None:
+        _safe_id(str(candidate_adapter_id), "candidate_adapter_id")
+        candidate_diagnostic = details.get("diagnostic")
+        if (
+            isinstance(candidate_diagnostic, Mapping)
+            and candidate_diagnostic.get("adapter_id") != candidate_adapter_id
+        ):
+            raise BuilderOpsValidationError("candidate adapter identity does not match diagnostic")
     for field in ("request_hash", "context_hash", "input_hash"):
         _validate_sha256(details.get(field), f"attempt {field}")
     output_hash = details.get("output_hash")
