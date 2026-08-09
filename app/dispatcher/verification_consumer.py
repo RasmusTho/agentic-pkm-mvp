@@ -27,7 +27,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
+from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -2863,9 +2863,11 @@ class CodexExecLauncher:
             )
         try:
             containment = self.containment_factory()
+            barrier_factory = getattr(containment, "launch_barrier", None)
+            has_darwin_barrier = callable(barrier_factory)
             cleanup_tracker = (
                 containment
-                if isinstance(containment, TaggedProcessTreeCleanup)
+                if has_darwin_barrier or isinstance(containment, TaggedProcessTreeCleanup)
                 else self.cleanup_tracker_factory()
             )
             env = containment.environment(base_env)
@@ -2886,6 +2888,7 @@ class CodexExecLauncher:
         process_group_id: int | None = None
         containment_proven = False
         process_lock = threading.Lock()
+        barrier: Any | None = None
         lines: Iterable[str | bytes]
 
         def signal_process_group(sig: int) -> bool:
@@ -2921,10 +2924,58 @@ class CodexExecLauncher:
             except Exception:
                 return False
 
+        def reap_direct_root() -> bool:
+            if process is None:
+                return False
+            try:
+                if process.poll() is not None:
+                    return True
+            except Exception:
+                return False
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            except Exception:
+                return False
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                    process.wait(timeout=5)
+                except Exception:
+                    return False
+            except Exception:
+                return False
+            return True
+
+        def cleanup_darwin_barrier_after_release() -> bool:
+            if not reap_direct_root():
+                return False
+            try:
+                return bool(containment.cleanup())
+            except Exception:
+                return False
+
         def terminate_and_reap_child() -> None:
             nonlocal containment_proven, process_group_id
             with process_lock:
                 if process is None:
+                    return
+                if barrier is not None:
+                    if not bool(getattr(barrier, "may_have_released", False)):
+                        try:
+                            barrier.close()
+                        except Exception:
+                            pass
+                        reap_direct_root()
+                    else:
+                        containment_proven = (
+                            cleanup_darwin_barrier_after_release()
+                            or containment_proven
+                        )
+                    process_group_id = None
                     return
                 try:
                     if process_group_id is not None:
@@ -2995,8 +3046,7 @@ class CodexExecLauncher:
                 resume_session_id,
                 host_fenced_merge=host_fenced_merge,
             )
-            barrier_factory = getattr(containment, "launch_barrier", None)
-            barrier = barrier_factory(command) if callable(barrier_factory) else None
+            barrier = cast(Any, barrier_factory)(command) if has_darwin_barrier else None
             try:
                 if barrier is None:
                     process = subprocess.Popen(
@@ -3211,7 +3261,10 @@ class CodexExecLauncher:
                     # coordinator authority: descendants can detach their stdio
                     # yet remain in the private process group. Remove any such
                     # residual without accepting a terminal receipt early.
-                    if process_group_is_alive():
+                    if barrier is not None:
+                        process_group_id = None
+                        containment_proven = cleanup_darwin_barrier_after_release()
+                    elif process_group_is_alive():
                         terminate_and_reap_child()
                     else:
                         process_group_id = None

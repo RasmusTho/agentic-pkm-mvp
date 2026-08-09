@@ -875,6 +875,80 @@ def test_darwin_launch_barrier_execs_with_same_pid_after_release() -> None:
     assert stdout.strip() == str(process.pid)
 
 
+def test_darwin_launch_barrier_release_is_one_shot_and_conservative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    barrier = darwin_containment.DarwinLaunchBarrier(["coordinator"])
+    barrier.after_spawn()
+    try:
+        monkeypatch.setattr(darwin_containment.os, "write", lambda *_args: 0)
+        with pytest.raises(OSError, match="partial"):
+            barrier.release()
+        assert barrier.may_have_released is False
+        with pytest.raises(ValueError, match="unavailable"):
+            barrier.release()
+    finally:
+        barrier.close()
+
+
+def test_darwin_launch_barrier_marks_unknown_write_failure_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    barrier = darwin_containment.DarwinLaunchBarrier(["coordinator"])
+    barrier.after_spawn()
+    try:
+        monkeypatch.setattr(
+            darwin_containment.os,
+            "write",
+            lambda *_args: (_ for _ in ()).throw(OSError("unknown write")),
+        )
+        with pytest.raises(OSError, match="unknown write"):
+            barrier.release()
+        assert barrier.may_have_released is True
+    finally:
+        barrier.close()
+
+
+def test_darwin_launch_barrier_uses_absolute_isolated_wrapper() -> None:
+    barrier = darwin_containment.DarwinLaunchBarrier(["coordinator"])
+    try:
+        assert barrier.command[1:3] == ["-I", "-S"]
+        assert Path(barrier.command[3]).is_absolute()
+        assert Path(barrier.command[3]).name == "darwin_launch_barrier.py"
+        assert "-m" not in barrier.command
+    finally:
+        barrier.close()
+
+
+def test_darwin_launch_barrier_ignores_hostile_site_and_app_hooks(
+    tmp_path: Path,
+) -> None:
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    marker = tmp_path / "hook-ran"
+    (hostile / "sitecustomize.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('site')",
+        encoding="utf-8",
+    )
+    app_dir = hostile / "app"
+    app_dir.mkdir()
+    (app_dir / "__init__.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('app')",
+        encoding="utf-8",
+    )
+    barrier = darwin_containment.DarwinLaunchBarrier(["coordinator"])
+    process = subprocess.Popen(
+        barrier.command,
+        pass_fds=barrier.pass_fds,
+        env={**os.environ, "PYTHONPATH": str(hostile)},
+    )
+    barrier.after_spawn()
+    barrier.close()
+
+    assert process.wait(timeout=5) == 1
+    assert not marker.exists()
+
+
 def test_containment_refuses_pid_reuse_between_snapshot_and_signal() -> None:
     class ReusingKernel(_FakeDarwinKernel):
         def __init__(self) -> None:

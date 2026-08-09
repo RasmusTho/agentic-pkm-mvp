@@ -5988,7 +5988,11 @@ def test_barrier_capture_failure_closes_without_coordinator_release(
         "Popen",
         lambda *args, **kwargs: process,
     )
-    monkeypatch.setattr(verification_consumer.os, "killpg", process.killpg)
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not use PGID")),
+    )
 
     with pytest.raises(RuntimeError, match="verification coordinator setup failed"):
         _authority_loss_launcher(
@@ -5997,12 +6001,9 @@ def test_barrier_capture_failure_closes_without_coordinator_release(
             cleanup_tracker_factory=_ProvenContainment,
         ).launch({"head_sha": HEAD})
 
-    assert events == ["barrier", "after_spawn", "capture", "close"]
-    assert process.group_signals == [
-        (process.pid, verification_consumer.signal.SIGTERM),
-        (process.pid, 0),
-        (process.pid, verification_consumer.signal.SIGKILL),
-    ]
+    assert events[:3] == ["barrier", "after_spawn", "capture"]
+    assert events[3:] == ["close", "close"]
+    assert process.group_signals == []
 
 
 class _EscapedDescendantContainment(_ProvenContainment):
