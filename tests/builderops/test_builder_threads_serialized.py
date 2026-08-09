@@ -345,3 +345,64 @@ def test_external_writer_state_survives_restart_and_replays_exact_request(tmp_pa
     restarted = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="claude:mac")
     assert restarted.read(created.thread.thread_id).thread_id == created.thread.thread_id
     assert restarted.create(**request).replayed is True
+
+
+def test_external_writer_restores_causal_order_not_request_id_order(tmp_path: Path) -> None:
+    first = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    created = first.create(
+        request_id="z-create-4708",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Causal recovery",
+        content="The immutable sequence is owned by the serialized writer.",
+        source_refs=("github:4708",),
+    )
+    first.reply(
+        request_id="a-reply-4708",
+        thread_id=created.thread.thread_id,
+        actor="claude:mac",
+        recipient="codex:desktop",
+        content="This reply has a lexically earlier caller request ID.",
+        source_refs=("github:4708",),
+    )
+
+    restarted = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="claude:mac")
+    assert len(restarted.read(created.thread.thread_id).entries) == 2
+
+
+def test_global_contribution_bound_applies_to_replies(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    client = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="codex:desktop")
+    threads = []
+    for thread_index in range(4):
+        threads.append(
+            client.create(
+                request_id=f"global-create-{thread_index}-4708",
+                actor="codex:desktop",
+                recipient="claude:mac",
+                subject=f"Global contribution bound {thread_index}",
+                content="A bounded contribution budget protects discovery reads.",
+                source_refs=(f"github:4708/{thread_index}",),
+            ).thread
+        )
+    for reply_index in range(96):
+        thread = threads[reply_index % len(threads)]
+        client.reply(
+            request_id=f"global-reply-{reply_index}-4708",
+            thread_id=thread.thread_id,
+            actor="claude:mac",
+            recipient="codex:desktop",
+            content=f"Bounded global reply {reply_index}.",
+            source_refs=("github:4708",),
+        )
+
+    assert writer.accepted_mutation_count == 100
+    with pytest.raises(ValueError, match="serialized writer contribution bound"):
+        client.reply(
+            request_id="global-reply-overflow-4708",
+            thread_id=threads[0].thread_id,
+            actor="claude:mac",
+            recipient="codex:desktop",
+            content="This contribution exceeds the global bound.",
+            source_refs=("github:4708",),
+        )

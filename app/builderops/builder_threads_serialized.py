@@ -187,12 +187,18 @@ class SerializedThreadWriter:
                     thread=self._request_results[command.request_id], replayed=True
                 )
 
+            if self._accepted_mutation_count >= _MAX_TOTAL_ENTRIES:
+                raise BuilderThreadError("serialized writer contribution bound reached")
             if command.kind == "create":
                 thread = self._create(command)
             else:
                 thread = self._append(command)
             try:
-                self._persist(command, request_digest)
+                self._persist(
+                    command,
+                    request_digest,
+                    sequence=self._accepted_mutation_count + 1,
+                )
             except OSError as exc:
                 self._restore_external_state()
                 raise WriterUnavailableError("serialized writer persistence is unavailable") from exc
@@ -230,8 +236,6 @@ class SerializedThreadWriter:
         capture_key = _capture_key(command.recipient, command.subject, command.source_refs)
         if capture_key in self._capture_index:
             raise ThreadAlreadyRepresentedError("capture already has a durable Builder Thread")
-        if len(self._request_digests) >= _MAX_TOTAL_ENTRIES:
-            raise BuilderThreadError("serialized writer contribution bound reached")
         thread_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self._vault_id}:{capture_key}"))
         entry = ThreadEntry(
             request_id=command.request_id,
@@ -318,14 +322,25 @@ class SerializedThreadWriter:
         self._request_results = {}
         self._capture_index = {}
         self._accepted_mutation_count = 0
-        paths = sorted(self._entries_root.glob("*.json"))
+        paths = tuple(self._entries_root.glob("*.json"))
         if len(paths) > _MAX_TOTAL_ENTRIES:
             raise BuilderThreadError("external writer contribution bound exceeded")
+        records: list[tuple[int, Any]] = []
         for path in paths:
             if path.is_symlink():
                 raise BuilderThreadError("external writer entry is unavailable")
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
+                sequence = payload["sequence"]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise BuilderThreadError("external writer entry is invalid") from exc
+            if not isinstance(sequence, int) or isinstance(sequence, bool):
+                raise BuilderThreadError("external writer entry is invalid")
+            records.append((sequence, payload))
+        for expected_sequence, (sequence, payload) in enumerate(sorted(records), start=1):
+            if sequence != expected_sequence:
+                raise BuilderThreadError("external writer entry order conflicts")
+            try:
                 command = _command_from_record(payload, vault_id=self._vault_id)
                 digest = str(payload["request_digest"])
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -336,11 +351,12 @@ class SerializedThreadWriter:
             thread = self._create(command) if command.kind == "create" else self._append(command)
             self._record(command, digest, thread)
 
-    def _persist(self, command: ThreadMutation, request_digest: str) -> None:
+    def _persist(self, command: ThreadMutation, request_digest: str, *, sequence: int) -> None:
         path = self._entries_root / f"{command.request_id}.json"
         payload = {
             "command": _command_record(command),
             "request_digest": request_digest,
+            "sequence": sequence,
             "schema": "builder-thread-command.v1",
             "vault_id": self._vault_id,
         }

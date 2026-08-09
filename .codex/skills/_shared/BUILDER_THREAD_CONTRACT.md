@@ -16,8 +16,8 @@ endpoint capability: they have no artifact-root or direct mutation API.
 The external BuilderOps Vault is never the repository `vault/` fixture. The
 writer host owns an explicitly initialized, pinned external root and its
 deployment; clients cannot configure or discover that root. The writer records
-one immutable command envelope per request and rebuilds its bounded state after
-a host restart. A client request is bounded and attributed with its
+one immutable, writer-sequenced command envelope per request and rebuilds its
+bounded state after a host restart. A client request is bounded and attributed with its
 caller-retained request ID, actor, named recipient where applicable, source
 references, and the only permitted privacy class, `shared_non_sensitive`.
 
