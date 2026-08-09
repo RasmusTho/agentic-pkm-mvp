@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 
@@ -82,6 +83,17 @@ def _string(value: Any, *, label: str) -> str:
     return value
 
 
+def _timestamp(value: Any, *, label: str) -> str:
+    raw = _string(value, label=label)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise OverviewContractError(f"{label} must be an RFC3339 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise OverviewContractError(f"{label} must be an RFC3339 timestamp")
+    return raw
+
+
 def _keys(
     value: Mapping[str, Any], *, allowed: set[str], required: set[str], label: str
 ) -> None:
@@ -144,7 +156,9 @@ def _evidence(value: Any, *, label: str) -> dict[str, Any]:
     )
     _string(evidence["evidence_id"], label=f"{label}.evidence_id")
     evidence["source_ref"] = _source_ref(evidence["source_ref"], label=f"{label}.source_ref")
-    _string(evidence["captured_at"], label=f"{label}.captured_at")
+    evidence["captured_at"] = _timestamp(
+        evidence["captured_at"], label=f"{label}.captured_at"
+    )
     for field, allowed in (
         ("availability", _AVAILABILITY),
         ("freshness", _FRESHNESS),
@@ -359,7 +373,9 @@ def compose_overview_view(
         raise OverviewContractError("composition contract version is unsupported")
     if envelope["authority"] != "projection_only":
         raise OverviewContractError("composition must remain projection_only")
-    _string(envelope["captured_at"], label="composition.captured_at")
+    envelope["captured_at"] = _timestamp(
+        envelope["captured_at"], label="composition.captured_at"
+    )
     providers = _mapping(envelope["providers"], label="composition.providers")
     trust_providers: list[dict[str, Any]] = []
     for name, provider in providers.items():
@@ -390,6 +406,11 @@ def compose_overview_view(
         )
         if provider.get("status") not in {"available", "refused"}:
             raise OverviewContractError(f"composition.providers.{name}.status is unsupported")
+        captured_at = provider["captured_at"]
+        if captured_at is not None:
+            captured_at = _timestamp(
+                captured_at, label=f"composition.providers.{name}.captured_at"
+            )
         trust_providers.append(
             {
                 "role": name,
@@ -399,7 +420,7 @@ def compose_overview_view(
                 ),
                 "status": provider["status"],
                 "authority": _detached(provider.get("authority"), label="provider authority"),
-                "captured_at": provider.get("captured_at"),
+                "captured_at": captured_at,
                 "snapshot": _detached(provider.get("snapshot"), label="provider snapshot"),
                 "completeness": _detached(provider.get("completeness"), label="provider completeness"),
                 "refusal": _detached(provider.get("refusal"), label="provider refusal"),

@@ -292,6 +292,29 @@ def test_measured_empty_requires_fresh_source_evidence() -> None:
             )
 
 
+@pytest.mark.parametrize("zone", ("needs_you", "ready_to_try"))
+def test_malformed_timestamps_cannot_support_classification(zone: str) -> None:
+    candidate = _candidate()
+    candidate["evidence"][0 if zone == "needs_you" else 1]["captured_at"] = "not-rfc3339"
+
+    with pytest.raises(OverviewContractError, match="RFC3339"):
+        compose_overview_view(
+            composition=_composition(), candidates={zone: [candidate]}
+        )
+
+
+def test_composition_and_provider_timestamps_must_be_rfc3339() -> None:
+    malformed_composition = _composition()
+    malformed_composition["captured_at"] = "not-rfc3339"
+    with pytest.raises(OverviewContractError, match="RFC3339"):
+        compose_overview_view(composition=malformed_composition)
+
+    malformed_provider = _composition()
+    malformed_provider["providers"]["work"]["captured_at"] = "not-rfc3339"
+    with pytest.raises(OverviewContractError, match="RFC3339"):
+        compose_overview_view(composition=malformed_provider)
+
+
 def test_withdrawal_preserves_producer_limitations() -> None:
     candidate = _candidate()
     candidate["owner_authority"]["category"] = "ci_failure"
