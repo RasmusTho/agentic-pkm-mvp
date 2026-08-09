@@ -1429,7 +1429,7 @@ class ModelInquiryService:
                 and turn.get("accepted_artifact_hash") == accepted_hash
             ]
             effective_targets = {
-                (turn.get("adapter_id"), turn.get("provider"), turn.get("model"))
+                (turn.get("provider"), turn.get("model"))
                 for turn in accept_turns
             }
             degraded = len(effective_targets) != 2

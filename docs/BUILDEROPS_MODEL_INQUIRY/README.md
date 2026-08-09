@@ -95,7 +95,10 @@ is delivered. No task is ready to make a Product/Runtime write.
    blocking questions terminally record `needs_input` or `not_ready`; no model invents missing
    requirements to reach Issue-ready. An eligible unavailable, timed-out, empty, or malformed
    subscription turn may try the one alternate configured adapter. Explicit refusal, unsafe output,
-   credential failure, and persistence failure never fall back.
+   credential or session failure, and persistence failure never fall back. The owner-controlled
+   host launcher selects this fixed bridge only with
+   `BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1`; that boolean cannot name targets or
+   secrets, and the provider-API launcher never sets it.
 5. **Traceability survives partial failure.** Each completed turn is persisted before a successor
    call. A worker restart can resume from the latest committed turn without replaying an accepted
    provider call. Duplicate command retries use idempotency keys.
@@ -106,7 +109,7 @@ Partial failure examples:
   an untraceable run.
 - If a provider call succeeds but receipt persistence fails, the run remains incomplete and the
   provider output is not treated as an accepted turn.
-- If one subscription adapter is unavailable but the other completes both complementary logical
+- If one subscription provider/model is unavailable but the other completes both complementary logical
   lanes, the report ends `degraded_consensus`. It retains each effective provider/model identity and
   cannot satisfy independent-consensus readiness or promotion.
 - If the models reach their round limit without a common accepted artifact hash, the inquiry ends

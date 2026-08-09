@@ -18,6 +18,8 @@ from app.builderops.model_inquiry_adapters import (
     ModelTurnAdapter,
     load_adapter_descriptors,
     load_adapters,
+    load_operational_subscription_adapters,
+    operational_subscription_requested,
     sanitized_adapter_failure,
     sanitized_adapter_identity,
 )
@@ -150,7 +152,12 @@ class ModelInquiryRunner:
             if terminal is not None:
                 return self._finalize_terminal(inquiry_id, terminal, replayed=True)
             try:
-                adapters = self._adapters if self._adapters is not None else load_adapters(self._env, resolver=self._resolver)
+                if self._adapters is not None:
+                    adapters = self._adapters
+                elif operational_subscription_requested(self._env):
+                    adapters = load_operational_subscription_adapters(self._env)
+                else:
+                    adapters = load_adapters(self._env, resolver=self._resolver)
             except CredentialUnavailableError as exc:
                 # Fail closed before any adapter call. No subscription CLI, no
                 # ambient environment, and no other provider is attempted.
@@ -328,12 +335,16 @@ class ModelInquiryRunner:
                 adapter_identity=sanitized_adapter_identity(adapter),
                 context_hash=context_hash,
             )
+            accepted_attempt_ids = {
+                f"adapter_req_{request_hash[:32]}"
+                for request_hash in _request_lineage_hashes(request, adapter=adapter)
+            }
             prior_attempt = next(
                 (
                     receipt
                     for receipt in trace["receipts"]
                     if receipt.get("event_type") == "inquiry_provider_attempt_terminal"
-                    and receipt.get("adapter_request_id") == request["adapter_request_id"]
+                    and receipt.get("adapter_request_id") in accepted_attempt_ids
                 ),
                 None,
             )
@@ -596,8 +607,6 @@ class ModelInquiryRunner:
         role: str,
     ) -> tuple[ModelTurnAdapter, ...]:
         primary = adapters[role]
-        if self._adapters is None:
-            return (primary,)
         if not all(isinstance(adapter, LocalCommandAdapter) for adapter in adapters.values()):
             return (primary,)
         allow_fallback = self._allow_operational_fallback
@@ -762,7 +771,6 @@ def _attempt_receipt_allows_fallback(outcome: str, details: Mapping[str, Any]) -
 def _fallback_was_used(reviews: Sequence[TurnExecution]) -> bool:
     effective_targets = {
         (
-            item.turn.get("adapter_id"),
             item.turn.get("provider"),
             item.turn.get("model"),
         )
@@ -809,20 +817,7 @@ def _existing_turn_mismatch(
     }
     if any(turn.get(field) != value for field, value in expected.items()):
         return "persisted deterministic turn does not match the configured request"
-    legacy_request_hash = model_turn_request_hash(
-        inquiry_id=str(request["inquiry_id"]),
-        role=role,
-        phase=phase,
-        round_index=round_index,
-        context_hash=str(request["context_hash"]),
-        input_hash=str(request["input_hash"]),
-        input_artifact_refs=input_refs,
-        adapter_id=adapter.adapter_id,
-        provider=adapter.provider,
-        model=adapter.model,
-        system_prompt=MODEL_TURN_SYSTEM_PROMPT,
-    )
-    accepted_request_hashes = {str(request["request_hash"]), legacy_request_hash}
+    accepted_request_hashes = _request_lineage_hashes(request, adapter=adapter)
     persisted_request_hash = str(turn.get("request_hash", ""))
     if (
         persisted_request_hash not in accepted_request_hashes
@@ -831,6 +826,28 @@ def _existing_turn_mismatch(
     ):
         return "persisted deterministic turn does not match current or legacy request lineage"
     return None
+
+
+def _request_lineage_hashes(
+    request: Mapping[str, Any], *, adapter: ModelTurnAdapter
+) -> set[str]:
+    legacy_request_hash = model_turn_request_hash(
+        inquiry_id=str(request["inquiry_id"]),
+        role=str(request["role"]),
+        phase=str(request["phase"]),
+        round_index=int(request["round_index"]),
+        context_hash=str(request["context_hash"]),
+        input_hash=str(request["input_hash"]),
+        input_artifact_refs=[
+            str(item["artifact_id"])
+            for item in request["input_artifacts"]
+        ],
+        adapter_id=adapter.adapter_id,
+        provider=adapter.provider,
+        model=adapter.model,
+        system_prompt=MODEL_TURN_SYSTEM_PROMPT,
+    )
+    return {str(request["request_hash"]), legacy_request_hash}
 
 
 __all__ = ["ModelInquiryRunner"]

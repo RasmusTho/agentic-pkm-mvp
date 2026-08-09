@@ -21,8 +21,11 @@ from app.builderops.model_inquiry_adapters import (
     ScriptedAdapter,
 )
 from app.builderops.model_inquiry_contract import (
+    MODEL_TURN_SYSTEM_PROMPT,
     RESPONSE_SCHEMA_VERSION,
     canonical_hash,
+    initial_context_packet,
+    model_turn_request_hash,
     model_turn_system_prompt,
 )
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
@@ -605,6 +608,91 @@ def test_recovered_distinct_targets_remain_genuine_consensus(tmp_path: Path) -> 
         receipt["event_type"] == "inquiry_provider_attempt_terminal"
         for receipt in trace["receipts"]
     )
+
+
+def test_distinct_adapter_ids_for_same_model_remain_degraded(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_same_model_ids")
+    first = ConsensusAdapter("sol-fable-lane", "openai", "gpt-5.6-sol", [])
+    second = ConsensusAdapter("sol-codex-lane", "openai", "gpt-5.6-sol", [])
+
+    result = ModelInquiryRunner(
+        service,
+        _subscription_adapters(first, second),
+        allow_operational_fallback=True,
+    ).run("inq_runner_same_model_ids", max_rounds=1)
+
+    assert result["outcome"] == "degraded_consensus"
+
+
+def test_legacy_failed_attempt_is_not_retried_on_resume(tmp_path: Path) -> None:
+    inquiry_id = "inq_runner_legacy_attempt_resume"
+    service, _ = _start(tmp_path, inquiry_id)
+    trace = service.trace(inquiry_id)
+    source_refs = trace["source_refs"]
+    context_hash = canonical_hash(
+        initial_context_packet(
+            inquiry_id=inquiry_id,
+            workflow="fable-gpt-architecture",
+            question_artifact_id="question",
+            question_artifact_hash=trace["question"]["artifact_hash"],
+            source_refs=source_refs,
+        )
+    )
+    input_hash = canonical_hash(
+        [
+            {
+                "artifact_id": "question",
+                "artifact_hash": trace["question"]["artifact_hash"],
+            }
+        ]
+    )
+    legacy_hash = model_turn_request_hash(
+        inquiry_id=inquiry_id,
+        role="fable",
+        phase="draft",
+        round_index=0,
+        context_hash=context_hash,
+        input_hash=input_hash,
+        input_artifact_refs=["question"],
+        adapter_id="fable-adapter",
+        provider="anthropic",
+        model="claude-fable-5",
+        system_prompt=MODEL_TURN_SYSTEM_PROMPT,
+    )
+    legacy_request_id = f"adapter_req_{legacy_hash[:32]}"
+    service.commit_provider_attempt_receipt(
+        inquiry_id,
+        adapter_request_id=legacy_request_id,
+        outcome="provider_error",
+        details={
+            "adapter_request_id": legacy_request_id,
+            "candidate_adapter_id": "fable-adapter",
+            "request_hash": legacy_hash,
+            "context_hash": context_hash,
+            "input_hash": input_hash,
+            "output_hash": None,
+            "classification": "provider adapter execution failed",
+            "diagnostic": {
+                "adapter_id": "fable-adapter",
+                "adapter_failure_class": "command_exit_nonzero",
+                "adapter_exit_code": 17,
+            },
+        },
+        source_refs=source_refs,
+    )
+    primary = CountingFailureAdapter(
+        "fable-adapter", "anthropic", "claude-fable-5", []
+    )
+    alternate = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+
+    result = ModelInquiryRunner(
+        service,
+        _subscription_adapters(primary, alternate),
+        allow_operational_fallback=True,
+    ).run(inquiry_id, max_rounds=1)
+
+    assert result["outcome"] == "degraded_consensus"
+    assert [call["phase"] for call in primary.calls] == ["review"]
 
 
 def test_resume_and_persistence_failure_fail_closed(tmp_path: Path, monkeypatch) -> None:

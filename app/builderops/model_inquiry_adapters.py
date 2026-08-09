@@ -12,6 +12,7 @@ import tempfile
 import time
 from ctypes import CDLL, Structure, byref, c_char, c_int32, c_uint32, c_uint64, sizeof
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Never
 
 import requests  # type: ignore[import-untyped]  # third-party lib ships no type stubs
@@ -42,6 +43,8 @@ SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE = 125
 CLEANUP_TIMEOUT_SECONDS = 2.0
 HTTP_ADAPTER_KIND = "http"
 MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS = 1200.0
+MODEL_INQUIRY_SUBSCRIPTION_TIMEOUT_SECONDS = 1500.0
+OPERATIONAL_SUBSCRIPTION_MODE_ENV = "BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION"
 
 # Conventional exit codes the still-permitted interactive command path uses to
 # report the real cause. Without them an expired session and a genuine command
@@ -573,6 +576,48 @@ def load_adapters(
             timeout_seconds=MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS,
         )
     return adapters
+
+
+def operational_subscription_requested(env: Mapping[str, str] | None = None) -> bool:
+    source = dict(os.environ if env is None else env)
+    value = source.get(OPERATIONAL_SUBSCRIPTION_MODE_ENV, "").strip()
+    if not value:
+        return False
+    if value != "1":
+        raise BuilderOpsValidationError(
+            f"{OPERATIONAL_SUBSCRIPTION_MODE_ENV} must be exactly 1 when enabled"
+        )
+    return True
+
+
+def load_operational_subscription_adapters(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, ModelTurnAdapter]:
+    """Build the fixed Model Inquiry-only host subscription adapter pair."""
+    source = dict(os.environ if env is None else env)
+    if not operational_subscription_requested(source):
+        raise BuilderOpsValidationError("operational subscription mode is not enabled")
+    home = source.get("HOME", "").strip()
+    if not home:
+        raise AdapterUnavailableError("operational subscription home is unavailable")
+    bridge = Path(__file__).resolve().parents[2] / "scripts" / "model_inquiry_subscription_adapter.py"
+    if not bridge.is_file():
+        raise AdapterUnavailableError("operational subscription bridge is unavailable")
+    targets = {
+        "fable": ("anthropic", "claude-fable-5"),
+        "gpt_codex": ("openai", "gpt-5.6-sol"),
+    }
+    return {
+        role: LocalCommandAdapter(
+            adapter_id=f"{role}-subscription",
+            provider=provider,
+            model=model,
+            argv=(sys.executable, str(bridge), "--role", role),
+            timeout_seconds=MODEL_INQUIRY_SUBSCRIPTION_TIMEOUT_SECONDS,
+            environment={"HOME": home},
+        )
+        for role, (provider, model) in targets.items()
+    }
 
 
 def sanitized_adapter_identity(adapter: ModelTurnAdapter) -> dict[str, str]:

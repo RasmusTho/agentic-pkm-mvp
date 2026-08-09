@@ -92,6 +92,13 @@ immutable question, and the effective brief is part of request lineage. This is 
 Inquiry-only exception to the general headless subscription prohibition, not a fallback selected by
 the declared provider-API resolver. CKM cannot select or reuse it.
 
+The owner-controlled `yggdrasil-model-inquiry` launcher enables this fixed path by exporting
+`BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1` for its BuilderOps `inquiry run` child only.
+That exact boolean selects the repo-owned bridge and its fixed Fable/Sol identities; it cannot carry
+a provider, model, command, credential, or endpoint. The dormant provider-API launcher never sets
+it. The bridge receives its role as an argv value and only the host home directory needed by the
+interactive subscription clients is allowlisted into the child environment.
+
 ## Host role-entrypoint lifecycle
 
 The repository also owns the distinct provider-API launcher
@@ -168,7 +175,7 @@ and persistence failure remain terminal. `session_expired` is an authentication-
 is therefore terminal rather than fallback-eligible. The desktop caller still invokes the fixed
 host launcher exactly once and never retries the inquiry.
 
-When fallback means the same effective adapter produced both accepting review turns, matching
+When fallback means the same effective provider/model produced both accepting review turns, matching
 acceptance is stored as `degraded_consensus`, not `consensus`. A safely receipted earlier attempt
 does not degrade a later accepting review pair that again has two distinct effective targets. The
 readable report shows the effective provider/model for every turn. Degraded synthesis is useful
