@@ -32,6 +32,11 @@ Default mode is proposal-only: do not execute edits unless the human explicitly 
 Run when the human requests a retrospective, or after approximately 10 delivery-learning
 `LearningSignal` records have accumulated since the last retrospective receipt.
 
+When this cold-path pass runs, also check whether `builder-vault-review` is due by its configured
+weekly/open-thread threshold or has an immediate conflict/orphan trigger. Keep the two inputs
+separate: deliberation context is not a `LearningSignal`, and no health projection is learning or
+promotion authority.
+
 This is a cold-path repair step, not a hot-path delivery routine.
 
 ## Workflow

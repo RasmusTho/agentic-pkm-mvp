@@ -578,6 +578,13 @@ receipt states none) for any divergence, docs-freshness finding, operational roa
 proposed authority crossing, or processed/promoted/superseded/discarded material noticed during
 delivery.
 
+For a multi-issue/Tier 3 delivery, or whenever the current Issue/PR/docs/design refs already match a
+shared deliberation, run the read-only discovery path in `builder-vault-deliberation`. Reply or
+resolve useful outstanding context through that skill; route every authority crossing through its
+existing owner workflow. Deliberation absence never blocks closure. An unresolved thread blocks only
+when the governing Issue/PR/owner contract independently names that exact question or promoted target
+as required acceptance evidence.
+
 If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. On Tier 1
 PRs (`docs/development/GOVERNANCE_PROPORTIONALITY.md`), an absent `## BuilderOps Routing` section is
 read as `none` — do not block closure on its absence. Do not use `docs/learning-log.md` as the
@@ -613,6 +620,9 @@ the parent's child set enumerable in both directions (INV-DG-4, #4442):
 A parent AC of the form "Verify: child ledger on this Issue" (for example #4163) is discharged by
 this block.
 - if the parent feature is the final child slice or an explicit closure task, close the parent after repo-verifiable acceptance is satisfied and the parent-closure handoff or explicit parent-closure issue is resolved
+- before parent/epic closure, discover matching shared deliberations and either disposition useful
+  residual context or leave it explicitly open with its existing non-authoritative standing; never
+  keep a repo-verifiable parent open merely because an unrelated deliberation remains
 - future adoption or retro work should move to a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work; it should not block delivered repo-verifiable scope
 
 ## Dependent Issue Unblocking

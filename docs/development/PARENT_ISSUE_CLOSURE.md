@@ -20,6 +20,9 @@ Close the parent issue when all of the following are true:
 4. Future adoption, retro notes, or observation work has moved to the right BuilderOps surface:
    `LearningSignal` for operational learning, `PromotionIntent` for boundary-crossing proposals,
    `BuilderOpsReceipt` for discard/supersession, or a follow-up GitHub Issue when it is executable work.
+5. A read-only `builder-vault-deliberation` discovery for the parent/child/PR/docs refs has surfaced
+   any matching asynchronous context. Useful residual context is replied to or dispositioned through
+   that skill; unrelated or still-open deliberation does not replace the repo-verifiable closure gate.
 
 ## Boundary Rules
 
