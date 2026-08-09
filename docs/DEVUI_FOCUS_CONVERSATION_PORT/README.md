@@ -180,6 +180,12 @@ purpose: string
 owner_intent_ref: SourceRef.v1
 source_refs: [SourceRef.v1]
 evidence_snapshot_refs: [SourceRef.v1]
+source_states:
+  - source_ref: SourceRef.v1
+    freshness: fresh
+    captured_at: RFC3339
+    fresh_until: RFC3339
+    read_watermark: string
 scope:
   includes: [string]
   excludes: [string]
@@ -203,6 +209,11 @@ specified and tested before implementation. The pack is context and provenance, 
 work authority. It excludes credentials, hidden system prompts, provider session material, broad
 repository history, and sources not needed for the stated purpose.
 
+`source_states` binds one fresh, watermarked read to every material source, including the subject
+authority, owner-intent source, source references, and evidence snapshots. The pack expiry may not
+outlive any `fresh_until`; stale, unknown, missing, or incompletely bound source state refuses pack
+creation instead of being hidden behind a newly created pack timestamp.
+
 ### External-first interaction
 
 1. The owner opens Conversation Port from a valid Focus subject.
@@ -212,7 +223,9 @@ repository history, and sources not needed for the stated purpose.
 4. devUI exports/opens the immutable pack. It does not require or discover an existing provider
    session and does not ingest a global session list.
 5. The provider may reason and return `ConversationDisposition.v1`: one allowed dialogue outcome,
-   rationale, source references, limitations, and optionally a proposed command payload.
+   rationale, source references, limitations, and optionally a proposed command payload. Until
+   FCP-04 supplies the complete `TypedCommandProposal.v1` validator, a non-null command payload is
+   refused rather than partially accepted.
 6. Without a typed command proposal, the conversation ends with no durable effect.
 7. With a typed proposal, devUI validates it against the exact pack and renders a new preview. The
    provider transcript is only provenance for why it was proposed.
