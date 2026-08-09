@@ -18,6 +18,14 @@ _FRESHNESS = {"fresh", "stale", "unknown"}
 _COVERAGE = {"complete", "partial", "unread", "missing", "not_applicable"}
 _CARDINALITY = {"nonempty", "measured_empty", "not_measured", "not_countable"}
 _LINKAGE = {"linked", "unlinked", "not_assessed", "not_applicable"}
+_LIMITATION_KEYS = (
+    "excluded_subject_refs",
+    "unknown_subject_refs",
+    "unread_subject_refs",
+    "unavailable_subject_refs",
+    "refused_subject_refs",
+    "not_applicable_subject_refs",
+)
 
 
 class SoIEvidenceContractError(ValueError):
@@ -44,12 +52,12 @@ def _nonempty(value: Any) -> bool:
 def _require_source_ref(value: Any, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise SoIEvidenceContractError(f"{label} must name a source-owned reference")
-    required = ("ref", "revision", "authority_class")
+    required = ("ref", "revision", "authority_class", "category")
     if value.get("source_owned") is not True or any(
         not _nonempty(value.get(key)) for key in required
     ):
         raise SoIEvidenceContractError(
-            f"{label} must include source ownership, reference, revision, and authority"
+            f"{label} must include source ownership, category, reference, revision, and authority"
         )
     return value
 
@@ -81,6 +89,20 @@ def _rendered_state(state: dict[str, str]) -> dict[str, str]:
     return rendered
 
 
+def _require_limitations(value: Any) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        raise SoIEvidenceContractError("denominator must name its limitations")
+    limitations: dict[str, list[str]] = {}
+    for key in _LIMITATION_KEYS:
+        entries = value.get(key)
+        if not isinstance(entries, list) or any(not _nonempty(entry) for entry in entries):
+            raise SoIEvidenceContractError(
+                "denominator limitation entries must be stable references"
+            )
+        limitations[key] = entries
+    return limitations
+
+
 def _validate_manifest(
     manifest: dict[str, Any],
 ) -> tuple[dict[str, Any], set[str], set[str]]:
@@ -96,6 +118,7 @@ def _validate_manifest(
         raise SoIEvidenceContractError("manifest must name denominator status")
     if denominator.get("horizon") not in _HORIZONS:
         raise SoIEvidenceContractError("denominator must name a claim horizon")
+    _require_limitations(denominator.get("limitations"))
     if denominator["status"] == "known":
         _require_source_ref(denominator.get("source"), label="denominator source")
         for key in ("scope_ref", "observed_at"):
@@ -178,12 +201,17 @@ def _validate_manifest(
         if not isinstance(relation, dict):
             raise SoIEvidenceContractError("relation must be an object")
         _require_source_ref(relation.get("source"), label="relation source")
-        endpoints = (relation.get("from_subject_ref"), relation.get("to_subject_ref"))
-        if not _nonempty(relation.get("relation_ref")) or any(
-            endpoint not in subject_refs for endpoint in endpoints
+        from_subject_ref = relation.get("from_subject_ref")
+        to_subject_ref = relation.get("to_subject_ref")
+        if (
+            not _nonempty(relation.get("relation_ref"))
+            or not isinstance(from_subject_ref, str)
+            or not isinstance(to_subject_ref, str)
+            or from_subject_ref not in subject_refs
+            or to_subject_ref not in subject_refs
         ):
             raise SoIEvidenceContractError("relation endpoints must be source-owned subjects")
-        linked_subjects.update(endpoints)
+        linked_subjects.update((from_subject_ref, to_subject_ref))
     if any(ref not in subject_refs for ref in unlinked) or linked_subjects.intersection(unlinked):
         raise SoIEvidenceContractError("unlinked subjects must be known and cannot also be linked")
     if subject_refs != linked_subjects.union(unlinked):
@@ -250,16 +278,19 @@ def _can_render_complete(
 
 
 def _proof_receipt(result: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the compact result that an immutable proof manifest must predict."""
+    """Return the complete read result that an immutable proof manifest predicts."""
 
     return {
-        "scope_ref": result["scope"]["subject_ref"],
-        "denominator": {
-            "status": result["denominator"]["status"],
-            "coverage": result["denominator"]["coverage"],
-        },
+        "contract_version": result["contract_version"],
+        "authority": result["authority"],
+        "scope": result["scope"],
+        "denominator": result["denominator"],
+        "claims": result["claims"],
         "current_claim_ids": result["current_claim_ids"],
+        "relations": result["relations"],
         "unlinked_subject_refs": result["unlinked_subject_refs"],
+        "diagnostics": result["diagnostics"],
+        "presentation": result["presentation"],
     }
 
 
@@ -297,6 +328,11 @@ def compose_soi_evidence_view(manifest: Mapping[str, Any]) -> dict[str, Any]:
             "coverage": "complete" if can_render_complete else "partial",
             "source": denominator.get("source"),
             "scope_ref": denominator.get("scope_ref"),
+            "observed_at": denominator.get("observed_at"),
+            "horizon": denominator["horizon"],
+            "expected_subject_refs": denominator.get("expected_subject_refs", []),
+            "required_responsibilities": denominator.get("required_responsibilities", []),
+            "limitations": denominator["limitations"],
         },
         "claims": claims,
         "current_claim_ids": current_claim_ids,

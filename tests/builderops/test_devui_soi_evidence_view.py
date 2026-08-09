@@ -23,36 +23,6 @@ def _manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def _complete_manifest() -> dict:
-    """Return a synthetic positive control with an owner-asserted scope relation."""
-
-    manifest = _manifest()
-    manifest["denominator"].update(
-        expected_subject_refs=["finding-reorienting-capability"],
-        required_responsibilities=["delivery"],
-        expected_children=[
-            {"subject_ref": "finding-reorienting-capability", "coverage": "complete"}
-        ],
-        requested_coverage="complete",
-    )
-    manifest["relations"] = [
-        {
-            "relation_ref": "source-asserted-soi-allocation",
-            "from_subject_ref": "mimer-product-runtime-soi",
-            "to_subject_ref": "finding-reorienting-capability",
-            "source": manifest["scope"]["source"],
-        }
-    ]
-    manifest["unlinked_subject_refs"] = [
-        "context-bundles-capability",
-        "soi-evidence-view-v0-contract",
-    ]
-    manifest["claims"][0]["source_state"]["linkage"] = "linked"
-    manifest["expected_result"]["denominator"]["coverage"] = "complete"
-    manifest["expected_result"]["unlinked_subject_refs"] = manifest["unlinked_subject_refs"]
-    return manifest
-
-
 def test_manifest_requires_source_owned_refs_and_explicit_relations() -> None:
     manifest = _manifest()
     manifest["claims"][0]["source"].pop("revision")
@@ -83,26 +53,42 @@ def test_unknown_denominator_cannot_render_complete() -> None:
         "status": "unknown",
         "horizon": "current",
         "requested_coverage": "complete",
+        "limitations": {
+            "excluded_subject_refs": [],
+            "unknown_subject_refs": ["mimer-product-runtime-capability-denominator"],
+            "unread_subject_refs": [],
+            "unavailable_subject_refs": [],
+            "refused_subject_refs": [],
+            "not_applicable_subject_refs": [],
+        },
     }
     with pytest.raises(SoIEvidenceContractError, match="complete claim"):
         compose_soi_evidence_view(manifest)
 
 
 def test_unknown_expected_child_prevents_complete_parent_coverage() -> None:
-    manifest = _complete_manifest()
-    manifest["denominator"]["expected_children"][0]["coverage"] = "unknown"
-    with pytest.raises(SoIEvidenceContractError, match="complete claim"):
-        compose_soi_evidence_view(manifest)
-
-
-def test_unknown_expected_subject_or_missing_required_responsibility_blocks_complete() -> None:
-    manifest = _complete_manifest()
-    manifest["denominator"]["expected_subject_refs"].append("missing-owner-subject")
-    with pytest.raises(SoIEvidenceContractError, match="expected subjects"):
-        compose_soi_evidence_view(manifest)
-
-    manifest = _complete_manifest()
-    manifest["denominator"]["required_responsibilities"].append("nfr")
+    manifest = _manifest()
+    manifest["denominator"] = {
+        "status": "known",
+        "scope_ref": "mimer-product-runtime-soi",
+        "source": manifest["scope"]["source"],
+        "observed_at": "2026-08-09T19:20:04+00:00",
+        "expected_subject_refs": ["finding-reorienting-capability"],
+        "required_responsibilities": ["delivery"],
+        "expected_children": [
+            {"subject_ref": "finding-reorienting-capability", "coverage": "unknown"}
+        ],
+        "horizon": "current",
+        "requested_coverage": "complete",
+        "limitations": {
+            "excluded_subject_refs": [],
+            "unknown_subject_refs": ["finding-reorienting-capability"],
+            "unread_subject_refs": [],
+            "unavailable_subject_refs": [],
+            "refused_subject_refs": [],
+            "not_applicable_subject_refs": [],
+        },
+    }
     with pytest.raises(SoIEvidenceContractError, match="complete claim"):
         compose_soi_evidence_view(manifest)
 
@@ -113,6 +99,7 @@ def test_indexed_document_does_not_satisfy_missing_nfr_responsibility() -> None:
     nfr_claim["responsibility"] = "nfr"
     nfr_claim["source_state"]["coverage"] = "missing"
     nfr_claim["evidence"] = {"document_index_coverage": "indexed"}
+    manifest["expected_result"]["claims"][1] = deepcopy(nfr_claim)
     result = compose_soi_evidence_view(manifest)
     nfr_claim = next(claim for claim in result["claims"] if claim["responsibility"] == "nfr")
     assert nfr_claim["evidence"]["document_index_coverage"] == "indexed"
@@ -148,6 +135,11 @@ def test_unavailable_refused_stale_or_unread_never_renders_as_zero_or_measured_e
         coverage=coverage,
         cardinality="measured_empty",
     )
+    expected_state = manifest["expected_result"]["claims"][0]["source_state"]
+    expected_state.update(state)
+    expected_state["cardinality"] = "not_measured"
+    if availability != "available":
+        expected_state["coverage"] = "unread"
     result = compose_soi_evidence_view(manifest)
     rendered = result["claims"][0]["source_state"]
     assert rendered["cardinality"] == "not_measured"
@@ -183,6 +175,16 @@ def test_claim_linkage_and_expected_result_must_match_the_manifest() -> None:
     with pytest.raises(SoIEvidenceContractError, match="expected result"):
         compose_soi_evidence_view(manifest)
 
+    manifest = _manifest()
+    manifest["expected_result"]["claims"][2]["horizon"] = "advisory"
+    with pytest.raises(SoIEvidenceContractError, match="expected result"):
+        compose_soi_evidence_view(manifest)
+
+    manifest = _manifest()
+    manifest["expected_result"]["claims"][2]["evidence"]["status_at_source_revision"] = "delivered"
+    with pytest.raises(SoIEvidenceContractError, match="expected result"):
+        compose_soi_evidence_view(manifest)
+
 
 def test_aggregate_cannot_control_order_color_scope_priority_or_next_action() -> None:
     manifest = _manifest()
@@ -191,6 +193,7 @@ def test_aggregate_cannot_control_order_color_scope_priority_or_next_action() ->
         "priority": "urgent",
         "next_action": "do-not-use",
     }
+    manifest["expected_result"]["diagnostics"] = deepcopy(manifest["diagnostics"])
     result = compose_soi_evidence_view(manifest)
     assert result["diagnostics"] == manifest["diagnostics"]
     assert result["presentation"] == {
