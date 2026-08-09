@@ -1495,6 +1495,67 @@ def test_concurrent_exact_entry_retry_reserves_one_physical_artifact(
     assert service.health()["artifact_count"] == 2
 
 
+def test_concurrent_exact_retry_converges_distinct_generated_timestamps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Converge generated retry timestamps",
+        content="Can one caller identity choose one durable contribution timestamp?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    stamps = iter(("2026-08-09T12:03:00Z", "2026-08-09T12:03:01Z"))
+    stamp_lock = Lock()
+    claim_barrier = Barrier(2)
+    real_reserve_claim = ProductionBuilderThreadService._reserve_entry_claim
+
+    def next_stamp() -> str:
+        with stamp_lock:
+            return next(stamps)
+
+    def synchronized_claim(
+        current: ProductionBuilderThreadService, entry: dict[str, Any]
+    ) -> bool:
+        created = real_reserve_claim(current, entry)
+        claim_barrier.wait(timeout=2)
+        return created
+
+    monkeypatch.setattr(builder_thread_module, "_stamp", next_stamp)
+    monkeypatch.setattr(
+        ProductionBuilderThreadService,
+        "_reserve_entry_claim",
+        synchronized_claim,
+    )
+    kwargs = {
+        "thread_id": opened["thread_id"],
+        "recipient_id": ACTOR,
+        "content": "One request with independently generated timestamps.",
+        "actor_id": RECIPIENT,
+        "parent_hash": opened["entry_hash"],
+        "source_refs": SOURCE_REFS,
+        "entry_id": "14141414-1414-4414-8414-141414141414",
+    }
+
+    def exact_retry(_index: int) -> dict[str, Any] | Exception:
+        try:
+            return BuilderThreadService(
+                service.root, expected_vault_id=VAULT_ID
+            ).reply(**kwargs)
+        except Exception as exc:  # noqa: BLE001 - convergence asserted below
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(exact_retry, (1, 2)))
+
+    assert all(isinstance(item, dict) for item in outcomes), outcomes
+    results = [item for item in outcomes if isinstance(item, dict)]
+    assert len({item["entry_hash"] for item in results}) == 1
+    assert len(_entry_files(vault, opened["thread_id"])) == 2
+    assert service.health()["ok"] is True
+
+
 def test_initial_thread_tree_is_atomically_visible_to_readers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

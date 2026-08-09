@@ -103,7 +103,8 @@ receiver-visible conflicts.
 
 Every mutation caller retains one UUIDv4 entry ID until readback. Its immutable claim binds the
 thread plus a digest of all semantic retry fields; the generated timestamp is excluded only from
-retry comparison, and the original installed timestamp is returned. Each thread has 128 immutable
+retry comparison, while the winning claim timestamp becomes canonical before contribution hashing
+and is returned by every exact retry. Each thread has 128 immutable
 entry slots. An identity marker makes a claim-plus-slot process-death window recoverable only by the
 exact writer. Reservation precedes durable JSON publication, so one of two concurrent boundary
 writers succeeds and the other fails without writing contribution bytes; every later 129th append
@@ -201,6 +202,13 @@ repo paths, treats any `.git` file or directory in root ancestry as checkout evi
 only a genuinely privacy-unsafe quarantine contribution to be redacted while preserving its
 original target disposition.
 
+Final review of SHA `82c4062edbdd3fc62614e35aba5c35be5b34f0d0` then reproduced a
+timestamp race: exact concurrent retries with one entry ID but independently generated timestamps
+could publish two different content hashes into one reserved slot and leave health permanently
+incomplete. That SHA is rejected publication evidence. The immutable entry claim now records the
+winning generated timestamp, and every exact retry adopts it before contribution hashing or
+publication.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
 | Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |
@@ -208,7 +216,7 @@ original target disposition.
 | Unknown, partial, conflict-copy, symlink, hash, and SQLite refusal | `test_validator_rejects_unknown_partial_conflict_and_sqlite_artifacts` |
 | Every envelope field is typed; hostile filenames are not echoed | `test_malformed_field_types_and_hostile_filenames_fail_typed_and_redacted` |
 | Concurrent identical capture and independent reply convergence; entry replay | `test_concurrent_writers_and_replay_conflicts_converge_fail_closed` |
-| Concurrent exact entry-ID retry installs one physical envelope | `test_concurrent_exact_entry_retry_reserves_one_physical_artifact` |
+| Concurrent exact entry-ID retry installs one physical envelope and adopts one claim timestamp | `test_concurrent_exact_entry_retry_reserves_one_physical_artifact`, `test_concurrent_exact_retry_converges_distinct_generated_timestamps` |
 | Reader cannot observe a partial final initial tree; pre-existing destination is untouched | `test_initial_thread_tree_is_atomically_visible_to_readers`, `test_preexisting_empty_thread_destination_is_untouched` |
 | Late activity, superseding close/archive, incompatible disposition retry | `test_stale_dispositions_can_be_superseded_and_retries_conflict` |
 | File/link/fsync ordering and final cleanup-sync failure | `test_atomic_publication_uses_fsynced_temp_and_no_overwrite_link`, `test_atomic_publication_reports_final_directory_sync_failure_and_retries` |

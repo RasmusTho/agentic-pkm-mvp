@@ -49,8 +49,10 @@ Each contribution is one canonical JSON envelope at:
 Before publishing that envelope, the writer atomically claims its vault-wide entry UUID with one
 immutable visible manifest at `builder-threads/entry-claims/<entry-id>.json`. The manifest binds the
 entry ID, thread ID, and canonical semantic-request digest (all envelope fields except the generated
-timestamp) and is validated one-to-one with represented contributions. It is a concurrency guard
-and recovery artifact, not a mutable index, sequence, backlog, or authority.
+timestamp), plus the winning generated timestamp used for canonical contribution bytes, and is
+validated one-to-one with represented contributions. Exact concurrent retries adopt that immutable
+claim timestamp before hashing or publishing. The claim is a concurrency guard and recovery artifact,
+not a mutable index, sequence, backlog, or authority.
 
 Canonical bytes are UTF-8 JSON with object keys sorted lexicographically, no whitespace outside
 strings, comma/colon separators, JSON Unicode characters emitted directly, and one terminal LF.

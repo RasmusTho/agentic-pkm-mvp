@@ -83,7 +83,15 @@ ENTRY_KEYS = frozenset(
 )
 GENESIS_KEYS = frozenset({"created_at", "privacy_class", "schema", "vault_id"})
 ENTRY_CLAIM_KEYS = frozenset(
-    {"entry_id", "privacy_class", "request_hash", "schema", "thread_id", "vault_id"}
+    {
+        "created_at",
+        "entry_id",
+        "privacy_class",
+        "request_hash",
+        "schema",
+        "thread_id",
+        "vault_id",
+    }
 )
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1181,6 +1189,7 @@ class BuilderThreadService:
                 claim is None
                 or claim["thread_id"] != payload.get("thread_id")
                 or claim["request_hash"] != _request_hash(payload)
+                or claim["created_at"] != payload.get("created_at")
             ):
                 raise BuilderThreadConflictError("entry reservation does not match its claim")
             marker.unlink()
@@ -1518,7 +1527,13 @@ class BuilderThreadService:
         if not isinstance(request_hash, str):
             raise BuilderThreadValidationError("request_hash must be a SHA-256 digest")
         self._hash(request_hash, field="request_hash")
-        return {**payload, "entry_id": entry_id, "thread_id": thread_id}
+        created_at = _validate_timestamp(payload.get("created_at"))
+        return {
+            **payload,
+            "created_at": created_at,
+            "entry_id": entry_id,
+            "thread_id": thread_id,
+        }
 
     def _slot_reservation_entry_id(self, slot: Path) -> str:
         marker = slot / SLOT_RESERVATION_NAME
@@ -1570,6 +1585,13 @@ class BuilderThreadService:
                 raise BuilderThreadConflictError(
                     f"entry claim request mismatch: {entry_id}"
                 )
+            if claim["created_at"] != item["entry"]["created_at"] and not (
+                item["quarantined"]
+                or item["entry_hash"] == allow_claim_mismatch_hash
+            ):
+                raise BuilderThreadConflictError(
+                    f"entry claim timestamp mismatch: {entry_id}"
+                )
         orphaned = set(claims) - set(contributions)
         if allow_pending_claim_id is not None:
             orphaned.discard(allow_pending_claim_id)
@@ -1578,6 +1600,7 @@ class BuilderThreadService:
 
     def _reserve_entry_claim(self, entry: dict[str, Any]) -> bool:
         payload = {
+            "created_at": entry["created_at"],
             "entry_id": entry["entry_id"],
             "privacy_class": PRIVACY_CLASS,
             "request_hash": _request_hash(entry),
@@ -1593,21 +1616,35 @@ class BuilderThreadService:
         else:
             if stat.S_ISLNK(claim_info.st_mode) or not stat.S_ISREG(claim_info.st_mode):
                 raise BuilderThreadValidationError("entry claim must be a regular file")
-            existing, raw = self._read_canonical_json(claim_path)
-            if _canonical_bytes(payload) == raw and existing == payload:
-                return False
-            raise BuilderThreadConflictError(
-                f"vault-wide entry_id replay conflict: {entry['entry_id']}"
-            )
+            return self._adopt_entry_claim_timestamp(entry, payload, claim_path)
         try:
             return _atomic_publish(
                 claim_path,
                 _canonical_bytes(payload),
             )
         except BuilderThreadConflictError as exc:
+            try:
+                return self._adopt_entry_claim_timestamp(entry, payload, claim_path)
+            except BuilderThreadError:
+                raise BuilderThreadConflictError(
+                    f"vault-wide entry_id replay conflict: {entry['entry_id']}"
+                ) from exc
+
+    def _adopt_entry_claim_timestamp(
+        self,
+        entry: dict[str, Any],
+        requested_claim: dict[str, Any],
+        claim_path: Path,
+    ) -> bool:
+        existing, _raw = self._read_canonical_json(claim_path)
+        normalized = self._normalize_entry_claim(existing)
+        expected = {**requested_claim, "created_at": normalized["created_at"]}
+        if normalized != expected:
             raise BuilderThreadConflictError(
                 f"vault-wide entry_id replay conflict: {entry['entry_id']}"
-            ) from exc
+            )
+        entry["created_at"] = normalized["created_at"]
+        return False
 
     def _release_unrepresented_entry_claim(self, entry_id: str) -> None:
         claim = self.entry_claims_root / f"{entry_id}.json"
@@ -2046,8 +2083,6 @@ class BuilderThreadService:
         self._validate_entry_shape(entry, thread_id=entry["thread_id"])
         _privacy_check(entry.get("subject"), field="subject")
         _privacy_check(entry.get("content"), field="content")
-        raw = _canonical_bytes(entry)
-        entry_hash = _sha256(raw)
         try:
             current = self._load_thread(
                 entry["thread_id"],
@@ -2077,6 +2112,8 @@ class BuilderThreadService:
                 raise BuilderThreadConflictError("thread already has an open entry")
         if current is None:
             claim_created = self._reserve_entry_claim(entry)
+            raw = _canonical_bytes(entry)
+            entry_hash = _sha256(raw)
             try:
                 return self._publish_new_thread(
                     entry,
@@ -2114,6 +2151,8 @@ class BuilderThreadService:
         thread_dir = self.threads_root / entry["thread_id"]
         entries_dir = thread_dir / "entries"
         self._reserve_entry_claim(entry)
+        raw = _canonical_bytes(entry)
+        entry_hash = _sha256(raw)
         try:
             slot = self._reserve_entry_slot(entries_dir, entry["entry_id"])
         except BuilderThreadConflictError:

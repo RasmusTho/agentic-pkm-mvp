@@ -342,8 +342,10 @@ Create, reply, close, archive, and quarantine require a caller-retained `--entry
 semantic retry with that ID returns the installed contribution even when the helper generates a later
 timestamp; changed semantics under one ID are refused. Before contribution publication, an immutable
 visible manifest at `builder-threads/entry-claims/<entry-id>.json` atomically binds that vault-wide ID,
-thread ID, and canonical semantic-request digest (excluding only the generated timestamp). It is a
-create-if-absent concurrency/recovery guard, not a mutable index or authority. A claim-only crash is
+thread ID, canonical semantic-request digest (excluding only the generated timestamp), and the
+winning generated timestamp used for canonical contribution bytes. Exact concurrent retries adopt
+that immutable timestamp before hashing or publishing. The claim is a create-if-absent
+concurrency/recovery guard, not a mutable index or authority. A claim-only crash is
 incomplete to readers and only an exact writer retry may finish it. The same exact claim permits
 recovery when process death leaves the deterministic thread directory empty before `entries` is
 created; a foreign empty directory remains an untouched typed conflict. An empty numeric slot
