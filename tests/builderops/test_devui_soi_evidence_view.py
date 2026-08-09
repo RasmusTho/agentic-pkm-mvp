@@ -23,6 +23,36 @@ def _manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
+def _complete_manifest() -> dict:
+    """Return a synthetic positive control with an owner-asserted scope relation."""
+
+    manifest = _manifest()
+    manifest["denominator"].update(
+        expected_subject_refs=["finding-reorienting-capability"],
+        required_responsibilities=["delivery"],
+        expected_children=[
+            {"subject_ref": "finding-reorienting-capability", "coverage": "complete"}
+        ],
+        requested_coverage="complete",
+    )
+    manifest["relations"] = [
+        {
+            "relation_ref": "source-asserted-soi-allocation",
+            "from_subject_ref": "mimer-product-runtime-soi",
+            "to_subject_ref": "finding-reorienting-capability",
+            "source": manifest["scope"]["source"],
+        }
+    ]
+    manifest["unlinked_subject_refs"] = [
+        "context-bundles-capability",
+        "soi-evidence-view-v0-contract",
+    ]
+    manifest["claims"][0]["source_state"]["linkage"] = "linked"
+    manifest["expected_result"]["denominator"]["coverage"] = "complete"
+    manifest["expected_result"]["unlinked_subject_refs"] = manifest["unlinked_subject_refs"]
+    return manifest
+
+
 def test_manifest_requires_source_owned_refs_and_explicit_relations() -> None:
     manifest = _manifest()
     manifest["claims"][0]["source"].pop("revision")
@@ -42,7 +72,9 @@ def test_unowned_relation_remains_unlinked() -> None:
         "mimer-product-runtime-soi",
         "finding-reorienting-capability",
         "context-bundles-capability",
+        "soi-evidence-view-v0-contract",
     ]
+    assert result["denominator"]["coverage"] == "partial"
 
 
 def test_unknown_denominator_cannot_render_complete() -> None:
@@ -57,14 +89,31 @@ def test_unknown_denominator_cannot_render_complete() -> None:
 
 
 def test_unknown_expected_child_prevents_complete_parent_coverage() -> None:
-    manifest = _manifest()
-    manifest["denominator"]["expected_children"][1]["coverage"] = "unknown"
+    manifest = _complete_manifest()
+    manifest["denominator"]["expected_children"][0]["coverage"] = "unknown"
+    with pytest.raises(SoIEvidenceContractError, match="complete claim"):
+        compose_soi_evidence_view(manifest)
+
+
+def test_unknown_expected_subject_or_missing_required_responsibility_blocks_complete() -> None:
+    manifest = _complete_manifest()
+    manifest["denominator"]["expected_subject_refs"].append("missing-owner-subject")
+    with pytest.raises(SoIEvidenceContractError, match="expected subjects"):
+        compose_soi_evidence_view(manifest)
+
+    manifest = _complete_manifest()
+    manifest["denominator"]["required_responsibilities"].append("nfr")
     with pytest.raises(SoIEvidenceContractError, match="complete claim"):
         compose_soi_evidence_view(manifest)
 
 
 def test_indexed_document_does_not_satisfy_missing_nfr_responsibility() -> None:
-    result = compose_soi_evidence_view(_manifest())
+    manifest = _manifest()
+    nfr_claim = manifest["claims"][1]
+    nfr_claim["responsibility"] = "nfr"
+    nfr_claim["source_state"]["coverage"] = "missing"
+    nfr_claim["evidence"] = {"document_index_coverage": "indexed"}
+    result = compose_soi_evidence_view(manifest)
     nfr_claim = next(claim for claim in result["claims"] if claim["responsibility"] == "nfr")
     assert nfr_claim["evidence"]["document_index_coverage"] == "indexed"
     assert nfr_claim["source_state"]["coverage"] == "missing"
@@ -72,8 +121,11 @@ def test_indexed_document_does_not_satisfy_missing_nfr_responsibility() -> None:
 
 def test_target_claim_never_counts_as_current_evidence() -> None:
     result = compose_soi_evidence_view(_manifest())
-    assert result["current_claim_ids"] == ["finding-current-delivery"]
-    assert "context-bundles-target-nfr" not in result["current_claim_ids"]
+    assert result["current_claim_ids"] == [
+        "finding-current-delivery",
+        "context-bundles-current-delivery",
+    ]
+    assert "soi-evidence-view-target-proof" not in result["current_claim_ids"]
 
 
 @pytest.mark.parametrize(
@@ -97,7 +149,11 @@ def test_unavailable_refused_stale_or_unread_never_renders_as_zero_or_measured_e
         cardinality="measured_empty",
     )
     result = compose_soi_evidence_view(manifest)
-    assert result["claims"][0]["source_state"]["cardinality"] == "not_measured"
+    rendered = result["claims"][0]["source_state"]
+    assert rendered["cardinality"] == "not_measured"
+    if availability != "available":
+        assert rendered["coverage"] == "unread"
+    assert rendered["coverage"] != "missing"
 
 
 def test_delivery_availability_ready_to_try_trial_and_acceptance_remain_distinct() -> None:
@@ -110,6 +166,22 @@ def test_delivery_availability_ready_to_try_trial_and_acceptance_remain_distinct
         "owner_tried": "unsupported",
         "owner_accepted": "unsupported",
     }
+    manifest = _manifest()
+    manifest["claims"][0]["evidence"]["owner_accepted"] = "accepted"
+    with pytest.raises(SoIEvidenceContractError, match="owner outcomes"):
+        compose_soi_evidence_view(manifest)
+
+
+def test_claim_linkage_and_expected_result_must_match_the_manifest() -> None:
+    manifest = _manifest()
+    manifest["claims"][0]["source_state"]["linkage"] = "linked"
+    with pytest.raises(SoIEvidenceContractError, match="explicit owned relation"):
+        compose_soi_evidence_view(manifest)
+
+    manifest = _manifest()
+    manifest["expected_result"]["denominator"]["coverage"] = "complete"
+    with pytest.raises(SoIEvidenceContractError, match="expected result"):
+        compose_soi_evidence_view(manifest)
 
 
 def test_aggregate_cannot_control_order_color_scope_priority_or_next_action() -> None:

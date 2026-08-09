@@ -24,13 +24,13 @@
       "finding-reorienting-capability",
       "context-bundles-capability"
     ],
-    "required_responsibilities": ["requirements", "nfr", "verification"],
+    "required_responsibilities": ["delivery"],
     "expected_children": [
       {"subject_ref": "finding-reorienting-capability", "coverage": "complete"},
       {"subject_ref": "context-bundles-capability", "coverage": "complete"}
     ],
     "horizon": "current",
-    "requested_coverage": "complete"
+    "requested_coverage": "partial"
   },
   "subjects": [
     {
@@ -58,6 +58,15 @@
         "ref": "docs/CONTEXT_BUNDLES/README.md#capability-boundary",
         "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
         "authority_class": "capability-specification"
+      }
+    },
+    {
+      "subject_ref": "soi-evidence-view-v0-contract",
+      "source": {
+        "source_owned": true,
+        "ref": "docs/DEVUI_SOI_EVIDENCE_VIEW/README.md#current-to-target-status",
+        "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+        "authority_class": "builder-system-governance"
       }
     }
   ],
@@ -89,10 +98,10 @@
       }
     },
     {
-      "claim_id": "context-bundles-target-nfr",
+      "claim_id": "context-bundles-current-delivery",
       "subject_ref": "context-bundles-capability",
-      "responsibility": "nfr",
-      "horizon": "target",
+      "responsibility": "delivery",
+      "horizon": "current",
       "source": {
         "source_owned": true,
         "ref": "docs/CONTEXT_BUNDLES/README.md#capability-boundary",
@@ -102,27 +111,59 @@
       "source_state": {
         "availability": "available",
         "freshness": "fresh",
-        "coverage": "missing",
+        "coverage": "complete",
+        "cardinality": "nonempty",
+        "linkage": "unlinked"
+      },
+      "evidence": {
+        "delivery": "implemented-slices",
+        "availability": "not_asserted",
+        "ready_to_try": "not_asserted",
+        "owner_tried": "unsupported",
+        "owner_accepted": "unsupported"
+      }
+    },
+    {
+      "claim_id": "soi-evidence-view-target-proof",
+      "subject_ref": "soi-evidence-view-v0-contract",
+      "responsibility": "proof-composer",
+      "horizon": "target",
+      "source": {
+        "source_owned": true,
+        "ref": "docs/DEVUI_SOI_EVIDENCE_VIEW/README.md#current-to-target-status",
+        "revision": "040090fcaa43fe21b3780104beb492945f356d1a",
+        "authority_class": "builder-system-governance"
+      },
+      "source_state": {
+        "availability": "available",
+        "freshness": "fresh",
+        "coverage": "partial",
         "cardinality": "not_countable",
         "linkage": "unlinked"
       },
-      "evidence": {"document_index_coverage": "indexed"}
+      "evidence": {"status_at_source_revision": "not-delivered"}
     }
   ],
   "relations": [],
   "unlinked_subject_refs": [
     "mimer-product-runtime-soi",
     "finding-reorienting-capability",
-    "context-bundles-capability"
+    "context-bundles-capability",
+    "soi-evidence-view-v0-contract"
   ],
   "diagnostics": {"source_aggregate": {"maturity": "illustrative-only"}},
   "expected_result": {
-    "scope": "mimer-product-runtime-soi",
-    "denominator_coverage": "complete",
+    "scope_ref": "mimer-product-runtime-soi",
+    "denominator": {"status": "known", "coverage": "partial"},
+    "current_claim_ids": [
+      "finding-current-delivery",
+      "context-bundles-current-delivery"
+    ],
     "unlinked_subject_refs": [
       "mimer-product-runtime-soi",
       "finding-reorienting-capability",
-      "context-bundles-capability"
+      "context-bundles-capability",
+      "soi-evidence-view-v0-contract"
     ]
   }
 }

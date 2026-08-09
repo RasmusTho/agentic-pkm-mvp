@@ -70,19 +70,20 @@ def _require_state(value: Any, *, label: str) -> dict[str, str]:
 
 
 def _rendered_state(state: dict[str, str]) -> dict[str, str]:
-    """Withdraw a cardinality claim whenever the source cannot support one."""
+    """Withdraw coverage and cardinality claims when their source cannot support them."""
 
     rendered = dict(state)
-    if (
-        rendered["availability"] != "available"
-        or rendered["freshness"] != "fresh"
-        or rendered["coverage"] == "unread"
-    ):
+    if rendered["availability"] != "available":
+        rendered["coverage"] = "unread"
+        rendered["cardinality"] = "not_measured"
+    elif rendered["freshness"] != "fresh" or rendered["coverage"] == "unread":
         rendered["cardinality"] = "not_measured"
     return rendered
 
 
-def _validate_manifest(manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _validate_manifest(
+    manifest: dict[str, Any],
+) -> tuple[dict[str, Any], set[str], set[str]]:
     if manifest.get("schema_version") != CONTRACT_VERSION or manifest.get("immutable") is not True:
         raise SoIEvidenceContractError("manifest must be an immutable v0 source manifest")
     scope = manifest.get("scope")
@@ -104,6 +105,14 @@ def _validate_manifest(manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[s
             denominator.get("required_responsibilities"), list
         ):
             raise SoIEvidenceContractError("known denominator requires its expected sets")
+        if any(
+            not _nonempty(value)
+            for value in (
+                *denominator["expected_subject_refs"],
+                *denominator["required_responsibilities"],
+            )
+        ):
+            raise SoIEvidenceContractError("known denominator expected sets require stable values")
 
     subjects = manifest.get("subjects")
     if not isinstance(subjects, list) or not subjects:
@@ -119,10 +128,18 @@ def _validate_manifest(manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[s
         subject_refs.add(subject_ref)
     if scope["subject_ref"] not in subject_refs:
         raise SoIEvidenceContractError("scope must occur in the source-owned subject set")
+    if denominator.get("status") == "known":
+        if denominator["scope_ref"] != scope["subject_ref"]:
+            raise SoIEvidenceContractError("known denominator must belong to the named scope")
+        if not set(denominator["expected_subject_refs"]).issubset(subject_refs):
+            raise SoIEvidenceContractError(
+                "known denominator expected subjects must be source-owned"
+            )
 
     claims = manifest.get("claims")
     if not isinstance(claims, list) or not claims:
         raise SoIEvidenceContractError("manifest must contain claims")
+    claim_ids: set[str] = set()
     for claim in claims:
         if (
             not isinstance(claim, dict)
@@ -136,6 +153,19 @@ def _validate_manifest(manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[s
             )
         _require_source_ref(claim.get("source"), label="claim source")
         _require_state(claim.get("source_state"), label="claim source state")
+        if claim["claim_id"] in claim_ids:
+            raise SoIEvidenceContractError("claim identities must be unique")
+        claim_ids.add(claim["claim_id"])
+        evidence = claim.get("evidence")
+        if not isinstance(evidence, dict):
+            raise SoIEvidenceContractError("claim evidence must be an object")
+        if any(
+            evidence.get(key) not in {None, "unsupported"}
+            for key in ("owner_tried", "owner_accepted")
+        ):
+            raise SoIEvidenceContractError(
+                "owner outcomes remain unsupported without an authorized receipt model"
+            )
 
     relations = manifest.get("relations")
     unlinked = manifest.get("unlinked_subject_refs")
@@ -149,35 +179,101 @@ def _validate_manifest(manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[s
             raise SoIEvidenceContractError("relation must be an object")
         _require_source_ref(relation.get("source"), label="relation source")
         endpoints = (relation.get("from_subject_ref"), relation.get("to_subject_ref"))
-        if any(endpoint not in subject_refs for endpoint in endpoints):
+        if not _nonempty(relation.get("relation_ref")) or any(
+            endpoint not in subject_refs for endpoint in endpoints
+        ):
             raise SoIEvidenceContractError("relation endpoints must be source-owned subjects")
         linked_subjects.update(endpoints)
     if any(ref not in subject_refs for ref in unlinked) or linked_subjects.intersection(unlinked):
         raise SoIEvidenceContractError("unlinked subjects must be known and cannot also be linked")
     if subject_refs != linked_subjects.union(unlinked):
         raise SoIEvidenceContractError("every subject must be explicitly linked or unlinked")
+    for claim in claims:
+        linkage = claim["source_state"]["linkage"]
+        if linkage == "linked" and claim["subject_ref"] not in linked_subjects:
+            raise SoIEvidenceContractError("linked claim requires an explicit owned relation")
+        if linkage == "unlinked" and claim["subject_ref"] not in unlinked:
+            raise SoIEvidenceContractError("unlinked claim must match the manifest relation set")
     if not isinstance(manifest.get("expected_result"), dict):
         raise SoIEvidenceContractError("manifest must retain an expected read result")
-    return denominator, {"subject_refs": subject_refs}
+    return denominator, subject_refs, linked_subjects
 
 
-def _can_render_complete(denominator: dict[str, Any]) -> bool:
+def _can_render_complete(
+    denominator: dict[str, Any],
+    *,
+    claims: list[dict[str, Any]],
+    linked_subjects: set[str],
+    relations: list[dict[str, Any]],
+) -> bool:
     if denominator.get("status") != "known":
         return False
     children = denominator.get("expected_children")
     if not isinstance(children, list):
         return False
-    return all(
-        isinstance(child, dict) and child.get("coverage") == "complete" for child in children
-    )
+    expected_subjects = denominator["expected_subject_refs"]
+    if len(expected_subjects) != len(set(expected_subjects)) or {
+        child.get("subject_ref") for child in children if isinstance(child, dict)
+    } != set(expected_subjects):
+        return False
+    scope_ref = denominator["scope_ref"]
+    scope_children = {
+        relation["to_subject_ref"]
+        if relation["from_subject_ref"] == scope_ref
+        else relation["from_subject_ref"]
+        for relation in relations
+        if scope_ref in (relation["from_subject_ref"], relation["to_subject_ref"])
+    }
+    if (
+        not all(
+            isinstance(child, dict) and child.get("coverage") == "complete" for child in children
+        )
+        or not set(expected_subjects).issubset(linked_subjects)
+        or not set(expected_subjects).issubset(scope_children)
+    ):
+        return False
+    required = set(denominator["required_responsibilities"])
+    for subject_ref in expected_subjects:
+        current_responsibilities = {
+            claim["responsibility"]
+            for claim in claims
+            if claim["subject_ref"] == subject_ref
+            and claim["horizon"] == denominator["horizon"]
+            and claim["source_state"]["availability"] == "available"
+            and claim["source_state"]["freshness"] == "fresh"
+            and claim["source_state"]["coverage"] == "complete"
+            and claim["source_state"]["linkage"] == "linked"
+        }
+        if not required.issubset(current_responsibilities):
+            return False
+    return True
+
+
+def _proof_receipt(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the compact result that an immutable proof manifest must predict."""
+
+    return {
+        "scope_ref": result["scope"]["subject_ref"],
+        "denominator": {
+            "status": result["denominator"]["status"],
+            "coverage": result["denominator"]["coverage"],
+        },
+        "current_claim_ids": result["current_claim_ids"],
+        "unlinked_subject_refs": result["unlinked_subject_refs"],
+    }
 
 
 def compose_soi_evidence_view(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """Build one disposable evidence view from a supplied immutable manifest."""
 
     detached = _json_object(manifest)
-    denominator, _ = _validate_manifest(detached)
-    can_render_complete = _can_render_complete(denominator)
+    denominator, _subject_refs, linked_subjects = _validate_manifest(detached)
+    can_render_complete = _can_render_complete(
+        denominator,
+        claims=detached["claims"],
+        linked_subjects=linked_subjects,
+        relations=detached["relations"],
+    )
     if denominator.get("requested_coverage") == "complete" and not can_render_complete:
         raise SoIEvidenceContractError(
             "a complete claim requires a known denominator and complete expected children"
@@ -192,7 +288,7 @@ def compose_soi_evidence_view(manifest: Mapping[str, Any]) -> dict[str, Any]:
         if claim["horizon"] == "current":
             current_claim_ids.append(claim["claim_id"])
 
-    return {
+    result = {
         "contract_version": CONTRACT_VERSION,
         "authority": "projection_only",
         "scope": detached["scope"],
@@ -212,6 +308,9 @@ def compose_soi_evidence_view(manifest: Mapping[str, Any]) -> dict[str, Any]:
             "aggregate_controls": [],
         },
     }
+    if detached["expected_result"] != _proof_receipt(result):
+        raise SoIEvidenceContractError("manifest expected result does not match the proof read")
+    return result
 
 
 __all__ = ["CONTRACT_VERSION", "SoIEvidenceContractError", "compose_soi_evidence_view"]
