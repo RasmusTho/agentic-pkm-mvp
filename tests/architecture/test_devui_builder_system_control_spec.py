@@ -70,6 +70,8 @@ def test_spec_separates_current_target_and_authority_questions() -> None:
     assert "## Open implementation dependencies" in spec
     assert "## Open authority questions" in spec
     assert "Current delivered input" in spec
+    assert "BSC-01 governing-document inventory composer" in spec
+    assert "Delivered partial input; no route, UI, or remaining composer is delivered" in spec
     assert "Target contract; not delivered" in spec
     assert "No owner decision blocks this docs-only specification." in spec
 
