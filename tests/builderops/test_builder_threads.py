@@ -6,9 +6,10 @@ import os
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Barrier, Event
+from threading import Barrier, Event, Lock
 from typing import Any
 
 import pytest
@@ -826,7 +827,8 @@ def test_all_append_mutations_recover_exactly_after_claim_and_slot_crash(
         operations[entry_type]()
     claim = vault / "builder-threads" / "entry-claims" / f"{request_id}.json"
     assert claim.exists()
-    assert list(vault.rglob(f".reservation-{request_id}"))
+    reservations = list(vault.rglob(".reservation"))
+    assert any(json.loads(path.read_bytes())["entry_id"] == request_id for path in reservations)
     before_changed = _vault_snapshot(vault)
     with pytest.raises(BuilderThreadConflictError, match="vault-wide entry_id replay conflict"):
         changed_operations[entry_type]()
@@ -835,7 +837,7 @@ def test_all_append_mutations_recover_exactly_after_claim_and_slot_crash(
     monkeypatch.setattr(builder_thread_module, "_atomic_publish", real_publish)
     recovered = operations[entry_type]()
     assert recovered["state"] in {"answered", "closed", "archived", "quarantined"}
-    assert not list(vault.rglob(f".reservation-{request_id}"))
+    assert not list(vault.rglob(".reservation"))
     assert service.health()["ok"] is True
 
 
@@ -876,17 +878,17 @@ def test_empty_slot_crash_before_identity_marker_is_exactly_recoverable(
             source_refs=SOURCE_REFS,
             entry_id=request_id,
         )
-    real_open = os.open
+    real_link = os.link
     crashed = False
 
-    def crash_before_marker(path: os.PathLike[str] | str, flags: int, mode: int = 0o777) -> int:
+    def crash_before_marker(src: Path | str, dst: Path | str) -> None:
         nonlocal crashed
-        if Path(path).name == f".reservation-{request_id}" and not crashed:
+        if Path(dst).name == ".reservation" and not crashed:
             crashed = True
             raise KeyboardInterrupt("injected death before slot identity marker")
-        return real_open(path, flags, mode)
+        real_link(src, dst)
 
-    monkeypatch.setattr(os, "open", crash_before_marker)
+    monkeypatch.setattr(os, "link", crash_before_marker)
     with pytest.raises(KeyboardInterrupt, match="before slot identity"):
         invoke()
     claim = vault / "builder-threads" / "entry-claims" / f"{request_id}.json"
@@ -898,7 +900,7 @@ def test_empty_slot_crash_before_identity_marker_is_exactly_recoverable(
     ]
     assert empty_slots
 
-    monkeypatch.setattr(os, "open", real_open)
+    monkeypatch.setattr(os, "link", real_link)
     recovered = invoke()
     assert recovered["state"] in {"open", "answered"}
     assert service.health()["ok"] is True
@@ -1796,6 +1798,55 @@ def test_claim_only_crash_is_recovered_by_exact_create_retry(
     assert service.health()["thread_count"] == 1
 
 
+def test_empty_thread_destination_crash_is_recovered_by_exact_create_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    request_id = "30303030-3030-4030-8030-303030303030"
+    kwargs = {
+        "recipient_id": RECIPIENT,
+        "subject": "Recover an empty deterministic destination",
+        "content": "Can the exact claimed writer finish the initial thread scaffold?",
+        "actor_id": ACTOR,
+        "source_refs": SOURCE_REFS,
+        "entry_id": request_id,
+    }
+    real_safe_mkdir = builder_thread_module._safe_mkdir
+    crashed = False
+
+    def crash_before_entries(path: Path) -> None:
+        nonlocal crashed
+        if path.name == "entries" and not crashed:
+            crashed = True
+            raise KeyboardInterrupt("injected process death before entries mkdir")
+        real_safe_mkdir(path)
+
+    monkeypatch.setattr(builder_thread_module, "_safe_mkdir", crash_before_entries)
+    with pytest.raises(KeyboardInterrupt, match="before entries mkdir"):
+        service.create_thread(**kwargs)
+
+    claim = vault / "builder-threads" / "entry-claims" / f"{request_id}.json"
+    thread_id = builder_thread_module._capture_thread_id(
+        VAULT_ID,
+        builder_thread_module._capture_key(RECIPIENT, SOURCE_REFS, kwargs["subject"]),
+    )
+    destination = vault / "builder-threads" / "threads" / thread_id
+    assert claim.exists()
+    assert destination.is_dir()
+    assert list(destination.iterdir()) == []
+
+    before_changed = _vault_snapshot(vault)
+    with pytest.raises(BuilderThreadConflictError, match="replay conflict"):
+        service.create_thread(**{**kwargs, "content": "Changed retry semantics."})
+    assert _vault_snapshot(vault) == before_changed
+
+    monkeypatch.setattr(builder_thread_module, "_safe_mkdir", real_safe_mkdir)
+    recovered = service.create_thread(**kwargs)
+    assert recovered["state"] == "open"
+    assert recovered["entry"]["entry_id"] == request_id
+    assert service.health()["ok"] is True
+
+
 def test_temp_unlink_failure_is_recovered_by_exact_writer_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1909,6 +1960,157 @@ def test_two_writers_converge_when_cleaning_the_same_committed_temp(
         outcomes = list(pool.map(append, (1, 2)))
     assert all(isinstance(item, dict) for item in outcomes)
     assert not transient.exists()
+    assert service.health()["ok"] is True
+
+
+def test_two_cleaners_converge_when_recognized_temp_vanishes_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Converge a committed-temp read race",
+        content="Can one exact cleaner finish while another is about to read the twin?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    final = _entry_files(vault, opened["thread_id"])[0]
+    transient = final.with_name(f".tmp-{final.stem}-{'f' * 32}")
+    os.link(final, transient)
+    first_reader_waiting = Event()
+    temp_removed = Event()
+    ordinal_lock = Lock()
+    temp_reads = 0
+    real_read_bytes = Path.read_bytes
+    real_unlink = Path.unlink
+
+    def synchronized_read(path: Path) -> bytes:
+        nonlocal temp_reads
+        if path == transient:
+            with ordinal_lock:
+                temp_reads += 1
+                ordinal = temp_reads
+            if ordinal == 1:
+                first_reader_waiting.set()
+                assert temp_removed.wait(timeout=2)
+        return real_read_bytes(path)
+
+    def observed_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        real_unlink(path, *args, **kwargs)
+        if path == transient:
+            temp_removed.set()
+
+    monkeypatch.setattr(Path, "read_bytes", synchronized_read)
+    monkeypatch.setattr(Path, "unlink", observed_unlink)
+
+    def clean() -> bool:
+        BuilderThreadService(service.root, expected_vault_id=VAULT_ID)._prepare_write()
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(clean)
+        assert first_reader_waiting.wait(timeout=2)
+        second = pool.submit(clean)
+        assert first.result(timeout=5) is True
+        assert second.result(timeout=5) is True
+
+    assert temp_reads == 2
+    assert not transient.exists()
+    assert service.health()["ok"] is True
+
+
+def test_separate_inode_temp_cannot_hide_by_vanishing_before_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Reject a false committed-temp twin",
+        content="Can a recognized name hide unrelated partial bytes?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    final = _entry_files(vault, opened["thread_id"])[0]
+    transient = final.with_name(f".tmp-{final.stem}-{'a' * 32}")
+    transient.write_bytes(b"partial-not-a-hard-link-twin\n")
+    original = transient.read_bytes()
+    real_read_bytes = Path.read_bytes
+    vanished = False
+
+    def vanish_before_read(path: Path) -> bytes:
+        nonlocal vanished
+        if path == transient:
+            vanished = True
+            path.unlink()
+            raise FileNotFoundError(path)
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", vanish_before_read)
+    with pytest.raises(BuilderThreadValidationError, match="before twin validation"):
+        service._prepare_write()
+
+    assert vanished is True
+    assert original == b"partial-not-a-hard-link-twin\n"
+
+
+def test_full_bound_claim_unlink_race_converges_during_claim_type_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    monkeypatch.setattr(service, "MAX_ENTRIES_PER_THREAD", 2)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Converge full-bound claim cleanup",
+        content="Can a reader tolerate the exact overflow claim disappearing?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    service.reply(
+        opened["thread_id"],
+        recipient_id=ACTOR,
+        content="Fill the final available contribution slot.",
+        actor_id=RECIPIENT,
+        parent_hash=opened["entry_hash"],
+        source_refs=SOURCE_REFS,
+    )
+    request_id = "31313131-3131-4131-8131-313131313131"
+    pending = service._entry_payload(
+        thread_id=opened["thread_id"],
+        entry_id=request_id,
+        entry_type="reply",
+        actor_id=RECIPIENT,
+        recipient_id=ACTOR,
+        content="This overflow request cannot claim a contribution slot.",
+        parent_hash=opened["entry_hash"],
+        source_refs=SOURCE_REFS,
+    )
+    assert service._reserve_entry_claim(pending) is True
+    claim = vault / "builder-threads" / "entry-claims" / f"{request_id}.json"
+    claim_enumerated = Event()
+    claim_removed = Event()
+    real_iterdir = Path.iterdir
+
+    def synchronized_iterdir(path: Path) -> Iterator[Path]:
+        children = list(real_iterdir(path))
+        if path == service.entry_claims_root and claim in children:
+            claim_enumerated.set()
+            assert claim_removed.wait(timeout=2)
+        return iter(children)
+
+    def release() -> None:
+        assert claim_enumerated.wait(timeout=2)
+        service._release_unrepresented_entry_claim(request_id)
+        claim_removed.set()
+
+    monkeypatch.setattr(Path, "iterdir", synchronized_iterdir)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        cleanup = pool.submit(release)
+        health = pool.submit(service.health)
+        assert health.result(timeout=5)["ok"] is True
+        cleanup.result(timeout=5)
+
+    assert claim_enumerated.is_set()
+    assert not claim.exists()
     assert service.health()["ok"] is True
 
 
@@ -2095,7 +2297,10 @@ def test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating(
     assert service.read_thread(opened["thread_id"])["entry_count"] == 127
 
     reserve_barrier = Barrier(2)
+    reservation_publish_barrier = Barrier(2)
     real_reserve = BuilderThreadService._reserve_entry_slot
+    real_open = os.open
+    real_link = os.link
 
     def synchronized_reserve(
         current: BuilderThreadService, entries_dir: Path, entry_id: str
@@ -2103,7 +2308,23 @@ def test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating(
         reserve_barrier.wait(timeout=2)
         return real_reserve(current, entries_dir, entry_id)
 
+    def synchronized_open(
+        path: os.PathLike[str] | str, flags: int, mode: int = 0o777
+    ) -> int:
+        # Synchronize both the rejected per-entry marker implementation and
+        # the fixed-name marker implementation used by the repaired code.
+        if Path(path).name.startswith(".reservation-"):
+            reservation_publish_barrier.wait(timeout=2)
+        return real_open(path, flags, mode)
+
+    def synchronized_link(src: Path | str, dst: Path | str) -> None:
+        if Path(dst).name == ".reservation":
+            reservation_publish_barrier.wait(timeout=2)
+        real_link(src, dst)
+
     monkeypatch.setattr(BuilderThreadService, "_reserve_entry_slot", synchronized_reserve)
+    monkeypatch.setattr(os, "open", synchronized_open)
+    monkeypatch.setattr(os, "link", synchronized_link)
 
     def overflow_reply(index: int) -> Exception | None:
         try:
@@ -2124,6 +2345,8 @@ def test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating(
     assert outcomes.count(None) == 1
     assert sum(isinstance(item, BuilderThreadConflictError) for item in outcomes) == 1
     monkeypatch.setattr(BuilderThreadService, "_reserve_entry_slot", real_reserve)
+    monkeypatch.setattr(os, "open", real_open)
+    monkeypatch.setattr(os, "link", real_link)
 
     full = service.read_thread(opened["thread_id"])
     assert full["entry_count"] == service.MAX_ENTRIES_PER_THREAD

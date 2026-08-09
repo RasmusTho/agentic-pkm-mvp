@@ -62,8 +62,11 @@ there is no mutable sequence, latest pointer, database, distributed lock, or hid
 The initial thread UUID is deterministically derived from the pinned vault ID and capture key. Its
 destination directory is claimed with create-if-absent semantics and is never replaced or
 overwritten. Readers wait for the bounded live-install window and accept the tree only after its
-entries directory, reserved slot, and complete content-addressed entry exist. A pre-existing empty
-destination is a typed conflict and remains untouched.
+entries directory, reserved slot, and complete content-addressed entry exist. If a process dies
+after creating the deterministic destination but before creating `entries`, only a retry whose
+retained entry ID, thread ID, and semantic-request digest match the already-durable claim may finish
+that empty directory. Any other pre-existing empty destination is a typed conflict and remains
+untouched.
 
 Every mutation (create, reply, close, archive, and quarantine) requires a caller-retained entry UUID.
 Reusing it for the same semantic request is an idempotent acknowledgement-loss retry even when the
@@ -72,10 +75,16 @@ conflict. The claim uses create-if-absent publication, so concurrent cross-threa
 before either thread envelope can publish. A claim-only crash is incomplete to readers and recoverable
 only by an exact writer retry. An empty numeric slot directory is unowned reusable capacity, not a
 contribution or reservation. Slot ownership begins only when its identity marker is durably created;
-an exact retry may reuse an empty slot or finish its own marked reservation after process death. A
+the marker has one fixed create-if-absent name and is a hard link to the immutable vault-wide claim,
+so two different entries cannot reserve one empty slot. An exact retry may reuse an empty slot or
+finish its own marked reservation after process death. A
 committed temp hard-link twin or installed-final reservation left by failed cleanup is
 removed only by a mutation retry after the claim, bytes, and content-addressed final agree. Read-only
-health exposes unmatched claims, reservations, and orphaned temps as incomplete.
+health exposes unmatched claims, reservations, and orphaned temps as incomplete. A reader or writer
+may tolerate a canonical claim disappearing at a filesystem inspection/read boundary. A recognized
+committed-temp twin may disappear before content read only when the prior device/inode observation
+proves hard-link identity; a synchronized separate inode must survive byte comparison. Arbitrary
+vanished names and partial artifacts still fail closed.
 
 Stale close/archive snapshots may be superseded through immutable hash lineage. Each thread has 128
 immutable, create-if-absent entry slots. A writer must reserve one before publishing contribution

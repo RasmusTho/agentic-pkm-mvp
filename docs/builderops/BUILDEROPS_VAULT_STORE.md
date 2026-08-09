@@ -344,11 +344,19 @@ timestamp; changed semantics under one ID are refused. Before contribution publi
 visible manifest at `builder-threads/entry-claims/<entry-id>.json` atomically binds that vault-wide ID,
 thread ID, and canonical semantic-request digest (excluding only the generated timestamp). It is a
 create-if-absent concurrency/recovery guard, not a mutable index or authority. A claim-only crash is
-incomplete to readers and only an exact writer retry may finish it. An empty numeric slot directory
-is unowned reusable capacity; ownership begins only with the durable entry-ID marker. An exact retry
-may reuse an empty slot or finish its own marked reservation. If final publication succeeded but
-temp or reservation cleanup failed, a later mutation retry removes it only after the claim, bytes, and
-content-addressed final agree. Read-only health never performs cleanup.
+incomplete to readers and only an exact writer retry may finish it. The same exact claim permits
+recovery when process death leaves the deterministic thread directory empty before `entries` is
+created; a foreign empty directory remains an untouched typed conflict. An empty numeric slot
+directory is unowned reusable capacity; ownership begins only with the durable entry-ID marker. An
+identity marker has one fixed create-if-absent filename and hard-links the immutable vault-wide
+claim, so competing entry IDs cannot both own the same empty slot. An exact retry may reuse an empty
+slot or finish its own marked reservation. If final publication
+succeeded but temp or reservation cleanup failed, a later mutation retry removes it only after the
+claim, bytes, and content-addressed final agree. A canonical claim may disappear at an inspection
+boundary when another validated cleanup wins. A recognized committed-temp twin may disappear before
+content read only when prior device/inode identity proves it is the final hard link; a synchronized
+separate inode must survive byte comparison. Arbitrary names and partial artifacts remain hard
+refusals. Read-only health never performs cleanup.
 
 Publication uses a same-directory exclusive temporary file, file `fsync`, a no-overwrite hard
 link, directory `fsync`, readback, temp unlink, and a second directory `fsync`. There is no
@@ -356,7 +364,8 @@ sequence, mutable head, database, shared lock, reminder entry, or hidden client 
 is idempotent. Initial thread destinations use create-if-absent/no-overwrite directory creation;
 readers accept them only after the entries directory, one reserved slot, and a complete
 content-addressed open contribution exist. A pre-existing empty destination is left untouched and
-reported as a typed conflict. Stale dispositions use immutable supersession lineage. An explicit
+reported as a typed conflict unless it is the exact semantic-claim-matched crash residue described
+above. Stale dispositions use immutable supersession lineage. An explicit
 hash-bound quarantine contribution can preserve and redact a structurally valid unsafe or conflicting
 artifact; it never masks structural corruption. Each thread has exactly 128 possible immutable
 entry slots. A writer reserves one before publishing contribution bytes, so a concurrent or

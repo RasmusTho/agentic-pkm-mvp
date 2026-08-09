@@ -92,9 +92,11 @@ entry. Read-only operations never clean it.
 Initial thread publication uses `create deterministic destination if absent -> parent fsync ->
 create entries directory -> parent fsync -> reserve one of 128 slots if absent -> parent fsync ->
 atomic entry publication`. Readers wait only for the bounded live-install/temp window, never accept
-a partial tree, and reject an orphan after that window. A pre-existing empty destination is left
-untouched. Two identical captures converge on one deterministic destination; one wins and the other
-returns a typed already-represented conflict. Different captures have independent destinations.
+a partial tree, and reject an orphan after that window. If process death leaves the deterministic
+destination empty before `entries`, only the exact semantic-claim-matched retained-ID retry may
+finish it; a foreign empty destination is left untouched. Two identical captures converge on one
+deterministic destination; one wins and the other returns a typed already-represented conflict.
+Different captures have independent destinations.
 There is deliberately no cross-device lock:
 iCloud conflict copies, duplicate capture keys, and incompatible current dispositions remain
 receiver-visible conflicts.
@@ -167,6 +169,24 @@ unowned reusable capacity, makes exact bound cleanup retryable, tolerates only r
 writer artifacts, validates every sibling before exact operations, and uses active disposition
 lineage for `concurrent_conflict`.
 
+Review of SHA `eeb1360fbdc7f8fc2ccbce3b6c20779a7620c893` accepted the workflow,
+authority, sibling-health, active-lineage, caller-identity, and bounded privacy posture, but one
+storage review reproduced three remaining ordinary crash/race windows: an empty deterministic
+thread directory before `entries`, a canonical claim disappearing between enumeration and type
+inspection, and a recognized committed-temp twin disappearing between `lstat` and `read_bytes`.
+That SHA is rejected publication evidence. The bounded repair permits only exact semantic-claim
+recovery of the empty destination, canonical claim disappearance, and recognized temp disappearance
+whose prior device/inode identity proves it is the installed final hard link. A synchronized
+separate inode must survive byte comparison; foreign empty directories, recognized-name false twins,
+and arbitrary vanished artifacts still fail closed.
+
+Review of SHA `0d52bc75ddf08e06f360f057d7a2a33323c11775` confirmed the three bounded
+repairs and workflow/authority surface, then deterministically reproduced a last-slot race: two
+different entry IDs could create different marker filenames in one empty numeric directory and both
+publish. That SHA is rejected publication evidence. The repaired slot has one fixed
+create-if-absent marker name hard-linked to the immutable global claim; the link is complete when it
+becomes visible, one writer wins, and a process death before it leaves only unowned empty capacity.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
 | Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |
@@ -184,12 +204,14 @@ lineage for `concurrent_conflict`.
 | Claim-plus-slot process death and changed-semantics retry for each append mutation | `test_all_append_mutations_recover_exactly_after_claim_and_slot_crash` |
 | Process death after numeric slot creation but before identity marker, for create and append | `test_empty_slot_crash_before_identity_marker_is_exactly_recoverable` |
 | Concurrent cross-thread ID reuse has one claim winner; claim-only crash supports exact recovery | `test_concurrent_cross_thread_entry_id_claim_allows_one_winner`, `test_claim_only_crash_is_recovered_by_exact_create_retry` |
+| Process death after deterministic thread mkdir but before `entries`; foreign empty destination remains untouched | `test_empty_thread_destination_crash_is_recovered_by_exact_create_retry`, `test_preexisting_empty_thread_destination_is_untouched` |
 | Temp-unlink failure, exact twin cleanup, later writer retry, and vanishing recognized-temp race | `test_temp_unlink_failure_is_recovered_by_exact_writer_retry`, `test_reader_tolerates_only_a_recognized_temp_that_vanishes_during_walk` |
-| Two-writer committed-temp cleanup and unrecognized vanishing-temp refusal | `test_two_writers_converge_when_cleaning_the_same_committed_temp`, `test_disappearing_unrecognized_temp_name_still_fails_closed` |
+| Two-writer committed-temp cleanup, same-inode pre-read disappearance, false-twin refusal, and unrecognized vanishing-temp refusal | `test_two_writers_converge_when_cleaning_the_same_committed_temp`, `test_two_cleaners_converge_when_recognized_temp_vanishes_before_read`, `test_separate_inode_temp_cannot_hide_by_vanishing_before_read`, `test_disappearing_unrecognized_temp_name_still_fails_closed` |
 | Concurrent contradictory quarantine decisions and decision quarantine recovery | `test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable` |
 | A lone quarantine decision cannot be neutralized as a concurrent conflict | `test_single_quarantine_decision_cannot_be_neutralized_as_concurrent` |
-| Concurrent 128-entry boundary reservation and non-mutating 129th refusal | `test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating` |
+| Concurrent 128-entry boundary reservation has one fixed-marker winner; 129th refusal is non-mutating | `test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating` |
 | Interrupted full-bound claim cleanup and exact-retry recovery | `test_full_bound_claim_cleanup_crash_is_recovered_by_exact_retry` |
+| Full-bound claim unlink racing canonical type inspection | `test_full_bound_claim_unlink_race_converges_during_claim_type_inspection` |
 | Privacy patterns, actor identity, capture gate, bounds | `test_capture_gate_and_shared_non_sensitive_privacy_boundary` |
 | Recipient-bound answer plus immutable/idempotent inbox | `test_inbox_is_bounded_read_only_and_idempotent` |
 | Exact reads/mutations validate unhealthy sibling threads | `test_exact_thread_operations_reject_an_unhealthy_sibling_thread` |
