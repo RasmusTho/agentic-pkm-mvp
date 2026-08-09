@@ -883,6 +883,84 @@ def test_cleanup_accepts_child_reparented_after_parent_signal() -> None:
     assert signalled == [200, 201]
 
 
+def test_cleanup_reaps_detached_child_when_root_exits_before_attach() -> None:
+    """A vanished Popen root must not strand its proven coalition child."""
+
+    kernel = _FakeDarwinKernel()
+    signalled: list[int] = []
+
+    def signaler(pid: int, _sig: int) -> None:
+        signalled.append(pid)
+        kernel.identities.pop(pid, None)
+
+    kernel.signal_callback = signaler
+    containment = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+        sleeper=lambda _seconds: None,
+    )()
+    containment.environment({})
+    # PID 200 was the Popen root but exited after creating this detached
+    # same-coalition child.  Its unique identity remains the child's parent.
+    kernel.identities[201] = darwin_containment.ProcessIdentity(
+        201, 4, 201, 200, 7
+    )
+
+    with pytest.raises(ValueError, match="root exited before attach"):
+        containment.attach(200)
+
+    assert containment.cleanup() is True
+    assert signalled == [201]
+    assert 201 not in kernel.identities
+
+
+def test_containment_rejects_unrelated_member_when_root_exits_before_attach() -> None:
+    kernel = _FakeDarwinKernel()
+    containment = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+    )()
+    containment.environment({})
+    kernel.identities[201] = darwin_containment.ProcessIdentity(
+        201, 4, 201, 200, 7
+    )
+    # This member is not descended from the exited launch root: its parent is
+    # part of the protected baseline and must never become a cleanup target.
+    kernel.identities[300] = darwin_containment.ProcessIdentity(
+        300, 4, 300, 100, 7
+    )
+
+    with pytest.raises(ValueError, match="ancestry escaped root"):
+        containment.attach(200)
+
+
+def test_containment_rejects_root_pid_reuse_before_orphan_cleanup() -> None:
+    kernel = _FakeDarwinKernel()
+    containment = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+    )()
+    containment.environment({})
+    kernel.identities[201] = darwin_containment.ProcessIdentity(
+        201, 4, 201, 200, 7
+    )
+    # A reused Popen PID outside the resource coalition invalidates the
+    # vanished-root proof before cleanup authority can be established.
+    kernel.identities[200] = darwin_containment.ProcessIdentity(
+        200, 5, 999, 100, 99
+    )
+
+    with pytest.raises(ValueError, match="launch root is unproven"):
+        containment.attach(200)
+    assert containment.cleanup() is False
+
+
 def test_containment_rejects_unrelated_member_appearing_before_attach() -> None:
     kernel = _FakeDarwinKernel()
     containment = darwin_containment.select_verification_containment(
