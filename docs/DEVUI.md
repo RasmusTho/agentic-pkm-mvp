@@ -13,7 +13,7 @@ Source of truth: This document owns the owner experience. Accepted ADRs and link
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
 Last reviewed: 2026-08-09
-Last verified against: `origin/main` `6f4fb5e2cdd1c05b8905f55b25b671c583c76a7e`, ADR-0057,
+Last verified against: `origin/main` `c938e7371148df34be3e2d3d896579e79ed449a4`, ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
 Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
 the advisory Builder System devUI execution audit in PR #4689, and the merged Focus and Conversation
@@ -347,6 +347,58 @@ Capabilities, work, evidence, and receipts are lenses within these views, not ad
 modes. Moving from overview to focus to command and receipt preserves the selected item,
 goal, scope, evidence, and owner-facing state.
 
+### DEVUI-OVERVIEW-BOUNDARY — server-declared read model
+
+The first usable devUI increment is a server-declared, read-only Overview projection. It is a pure
+adapter over `devui.composition.v1`, not a source reader or a browser classification layer. Its
+contract version is `devui-overview-view.v1` and its output is rebuilt per request:
+
+```yaml
+contract_version: devui-overview-view.v1
+authority: projection_only
+composed_at: RFC3339
+trust_frame:
+  provider_states: [SourceState.v1]
+  limitations: [Limitation.v1]
+now: [OverviewItem.v1]
+needs_you: [OverviewItem.v1]
+ready_to_try: [OverviewItem.v1]
+soi_evidence_lens: SoIEvidenceReference.v1 | null
+limitations: [Limitation.v1]
+```
+
+`OverviewItem.v1` carries one typed subject reference, a server-declared zone, a source-backed
+reason for that placement, independent source freshness/completeness/cardinality/linkage/refusal
+or withdrawal evidence, and typed navigation references only. It does not copy a Focus payload, a
+SoI payload, a delivery run, or a Builder System Control payload into a shared object.
+
+The three zones have strict eligibility:
+
+- **Needs you** requires an explicit named owner-authority category and its governing source
+  reference. Missing, stale, unread, unavailable, refused, unsupported, or unlinked authority
+  evidence withdraws the classification; it is not an empty decision list or a technical decision.
+- **Ready to try** requires a receipt-backed ready-to-try fact. Delivery, merge, Issue closure,
+  availability, ready-to-try, owner trial, and owner acceptance remain independent facts; none is
+  inferred from another.
+- **Now** presents the remaining server-declared read situation without promoting technical blocks
+  into owner decisions or treating degraded input as zero/empty.
+
+The composer performs no source reads, I/O, network access, cache lookup, persistence, task/graph
+or session operation, mutation, or browser-state classification. It preserves producer-exact
+withdrawals and each evidence axis through composition. Inferred correlations are refused. Focus,
+Product/Runtime SoI Evidence, delivery execution, and Builder System Control are separate roots:
+links are typed navigation references, never joins or inherited state. A failed or unsupported root
+withdraws only the dependent reference and leaves the remaining read view usable.
+
+The optional `soi_evidence_lens` is a reference to the delivered bounded SoI Evidence View v0 proof;
+it retains that proof's explicit Product/Runtime denominator and current/target claim horizons. It
+does not classify Overview items or become a maturity, priority, or lifecycle authority.
+
+This contract is a nonvisual prerequisite. A local GET-only route may expose it after its own
+bounded implementation proof. A visual shell remains separately gated by the governed Yggdrasil
+design handoff; neither a browser nor a shell may reclassify the server result or add durable
+selection state.
+
 ### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
 
 The first Focus slice is subject-centred. Its subject is exactly one stable GitHub Issue or one
@@ -495,14 +547,21 @@ Delivered now:
 - `devui.composition.v1` at GET `/api/devui/composition`, a per-request projection that preserves
   independent Cockpit and CKM authority, snapshots, completeness, and typed refusals without
   persistence or mutation;
+- `FocusView.v1` / `focus-view.v1`, a pure subject-centred projection with explicit correlation,
+  delivered by #4694 / PR #4703;
+- `conversation-context-pack.v1` and its non-authoritative external disposition composer, delivered
+  by #4696 / PR #4704; and
+- the bounded, read-only SoI Evidence View v0 proof composer and immutable fixtures, delivered by
+  #4710 / PR #4711;
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; the Focus/Conversation Port and its `ConversationContextPack.v1` / command-preview target
-contracts; the Builder System Control lens; the SoI Evidence View v0 composer, proof fixtures, and
-UI; owner pilot and tried-by-owner acceptance; and ADR-0065 dispositions.
+surface; the server-declared Overview composer and local Overview route; Focus route/UI and
+Overview-to-Focus navigation; provider conversation runtime; authenticated command preview/Start/Hold;
+the Builder System Control lens; visual shell; owner pilot and tried-by-owner acceptance; and
+ADR-0065 dispositions.
 
 The target turns the current cockpits and Signboard from competing owner destinations into internal
 providers: Direction B stays an exportable/static evidence fallback, BuilderOps Cockpit supplies
