@@ -85,9 +85,12 @@ generic 60-second HTTP posture cannot truncate a production inquiry turn.
 `scripts/model_inquiry_subscription_adapter.py` remains the sanctioned operational auth path for
 host-local Builder model inquiry under ADR-0064's 2026-07-30 owner-cost ruling. Its versioned profile
 uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 1200-second inner command deadline,
-and a 1500-second host adapter deadline. This is an explicit Model Inquiry-only exception to the
-general headless subscription prohibition, not a fallback selected by the declared provider-API
-resolver. CKM cannot select or reuse it.
+and a 1500-second host adapter deadline. Each compatibility lane also receives a distinct role
+brief: `fable` is the context-and-systems synthesizer, while `gpt_codex` is the failure-mode and
+delivery verifier. Both briefs direct the model to select the domain lens most relevant to the
+immutable question, and the effective brief is part of request lineage. This is an explicit Model
+Inquiry-only exception to the general headless subscription prohibition, not a fallback selected by
+the declared provider-API resolver. CKM cannot select or reuse it.
 
 ## Host role-entrypoint lifecycle
 
@@ -152,7 +155,23 @@ and audit evidence explicit.
 Provider output must be exactly one `builderops.model-turn-response.v1` JSON object. Extra or
 missing fields fail validation. The object carries stance, content, claims, risks, blocking
 questions, reviewed artifact refs, and an optional accepted artifact hash. Consensus exists only
-when both reviewer roles explicitly accept the same prior persisted artifact hash.
+when both reviewer roles explicitly accept the same prior persisted artifact hash through distinct
+effective adapter targets.
+
+The sanctioned subscription runner owns one ordered, at-most-two-candidate chain per logical lane:
+the lane's configured adapter first, then the other already-configured subscription adapter. It may
+advance only after `provider_unavailable`, an allowlisted command availability/timeout/empty-output
+failure, or strictly malformed structured output. Every failed candidate is committed as a
+sanitized attempt receipt before the next candidate starts, and resume skips that exact failed
+request. Explicit refusal, credential failure, suspicious/unsafe output, unexpected exceptions,
+and persistence failure remain terminal. The desktop caller still invokes the fixed host launcher
+exactly once and never retries the inquiry.
+
+When fallback means the same effective adapter produced both logical lanes, matching acceptance is
+stored as `degraded_consensus`, not `consensus`. The readable report shows the effective
+provider/model for every turn. Degraded synthesis is useful decision support but the BMI-05
+readiness and promotion boundary accepts only a genuine `consensus` terminal receipt. The dormant
+declared provider-API resolver retains `fallback_forbidden` and never enters this chain.
 
 Dry-run is a deterministic, read-only plan: it performs no adapter call and creates no vault or
 receipt file. Provider-enabled execution serializes one runner per inquiry on the host, persists a
@@ -169,7 +188,8 @@ receipts or trace.
 
 ## Out of Scope
 
-- silent fallback from one provider to another;
+- silent or unreceipted fallback from one provider to another;
+- any fallback on the dormant declared provider-API path;
 - direct automation of a desktop UI;
 - external browsing or product/runtime writes.
 - metered provider-API parent acceptance or API-key provisioning under the current owner-cost ruling;

@@ -81,6 +81,10 @@ def _render_turn(turn: Mapping[str, Any]) -> list[str]:
     if isinstance(phase, str) and phase:
         title += f" — {phase}"
     lines = [title, ""]
+    provider = turn.get("provider")
+    model = turn.get("model")
+    if isinstance(provider, str) and provider and isinstance(model, str) and model:
+        lines.extend([f"Effective target: `{provider}` / `{model}`", ""])
     content = _text(turn, "content")
     try:
         response = parse_model_turn_response(content)

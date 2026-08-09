@@ -77,6 +77,13 @@ move its model or adapter configuration into the local workspace.
 
 ## Failure Handling
 
+The desktop skill never retries a provider or starts a second inquiry. Within the one fixed launcher
+invocation, the sanctioned operational runner may try the other already-configured subscription
+adapter after an eligible, durably receipted candidate failure. Its two logical lanes carry
+complementary question-focused roles. If one effective target fills both lanes, the valid terminal
+result is `degraded_consensus`; report it as degraded and never treat it as independent-model or
+promotion evidence.
+
 - If `scp` fails after acquiring the lock, run the pre-launch remote cleanup first, then report the
   original failure. Include any cleanup failure without masking the original error.
 - Treat every launcher SSH failure as ambiguous. Delete only the local temporary file, report the
@@ -88,7 +95,8 @@ move its model or adapter configuration into the local workspace.
   whether the remote launcher completed; do not make that decision from this skill.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
   the configured remote host.
-- Do not retry a provider, inspect credentials, or route around the sanctioned host launcher.
+- Do not retry a provider from the desktop skill, inspect credentials, or route around the
+  sanctioned host launcher. Its bounded internal candidate chain is the only fallback authority.
 - Do not overlap invocations that use the fixed remote question path; acquire and release its
   exclusive remote lock around each launch.
 - Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.

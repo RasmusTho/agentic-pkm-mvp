@@ -195,6 +195,13 @@ move its model or adapter configuration into the local workspace.
 
 ## Failure Handling
 
+The desktop skill never retries a provider or starts a second inquiry. Within the one fixed launcher
+invocation, the sanctioned operational runner may try the other already-configured subscription
+adapter after an eligible, durably receipted candidate failure. Its two logical lanes carry
+complementary question-focused roles. If one effective target fills both lanes, the valid terminal
+result is `degraded_consensus`; report it as degraded and never treat it as independent-model or
+promotion evidence.
+
 - Treat every launcher SSH failure and every proven-local launcher failure after step 5 starts as
   ambiguous.
 - Treat every nonzero launcher status, empty stdout, malformed JSON, non-object JSON, or invalid
@@ -205,7 +212,8 @@ move its model or adapter configuration into the local workspace.
 - Do not release the remote lock after an ambiguous launcher outcome.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
   the configured host.
-- Do not retry a provider, inspect credentials, or route around the sanctioned host launcher.
+- Do not retry a provider from the desktop skill, inspect credentials, or route around the
+  sanctioned host launcher. Its bounded internal candidate chain is the only fallback authority.
 - Do not overlap invocations that use the fixed question path; both routes use the same exclusive
   lock.
 - Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.

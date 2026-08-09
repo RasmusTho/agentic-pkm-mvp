@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -16,9 +17,14 @@ from app.builderops.model_inquiry_adapters import (
     AdapterExecutionError,
     AdapterResult,
     CredentialUnavailableError,
+    LocalCommandAdapter,
     ScriptedAdapter,
 )
-from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION, canonical_hash
+from app.builderops.model_inquiry_contract import (
+    RESPONSE_SCHEMA_VERSION,
+    canonical_hash,
+    model_turn_system_prompt,
+)
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
 from app.builderops.models import BuilderOpsValidationError
 from tests.builderops.inquiry_intent import (
@@ -211,6 +217,57 @@ class FailingAdapter:
 
 
 @dataclass
+class CountingFailureAdapter:
+    adapter_id: str
+    provider: str
+    model: str
+    calls: list[dict[str, Any]]
+    failure_class: str = "command_exit_nonzero"
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        self.calls.append(dict(request))
+        raise AdapterExecutionError(
+            "classified fixture failure",
+            failure_class=self.failure_class,
+            exit_code=17,
+        )
+
+
+@dataclass
+class CrashOnceConsensusAdapter(ConsensusAdapter):
+    crash: bool = True
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        if self.crash:
+            self.crash = False
+            raise KeyboardInterrupt("injected crash after durable primary failure")
+        return super().execute(request)
+
+
+class LocalCommandFixtureAdapter(LocalCommandAdapter):
+    """Exercise subscription fallback policy without spawning a subprocess."""
+
+    def __init__(self, delegate: Any) -> None:
+        super().__init__(
+            adapter_id=delegate.adapter_id,
+            provider=delegate.provider,
+            model=delegate.model,
+            argv=("fixture-local-command",),
+        )
+        object.__setattr__(self, "delegate", delegate)
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        return self.delegate.execute(request)
+
+
+def _subscription_adapters(first: Any, second: Any) -> dict[str, LocalCommandAdapter]:
+    return {
+        "fable": LocalCommandFixtureAdapter(first),
+        "gpt_codex": LocalCommandFixtureAdapter(second),
+    }
+
+
+@dataclass
 class UnexpectedSecretAdapter:
     provider_request_secret: bool = False
     adapter_id: str = "unexpected"
@@ -287,6 +344,198 @@ def test_runner_records_all_terminal_conditions(tmp_path: Path) -> None:
         trace = ModelInquiryService(tmp_path / inquiry_id).trace(inquiry_id)
         terminals = [r for r in trace["receipts"] if r.get("event_type") == "inquiry_run_terminal"]
         assert len(terminals) == 1
+
+
+def test_single_available_adapter_completes_truthful_degraded_consensus(
+    tmp_path: Path,
+) -> None:
+    service, vault = _start(tmp_path, "inq_runner_degraded")
+    fable = CountingFailureAdapter("fable-adapter", "anthropic", "claude-fable-5", [])
+    sol = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+
+    result = ModelInquiryRunner(
+        service,
+        _subscription_adapters(fable, sol),
+        allow_operational_fallback=True,
+    ).run("inq_runner_degraded", max_rounds=1)
+
+    assert result["outcome"] == "degraded_consensus"
+    assert result["details"]["degradation_reason"] == "operational adapter fallback used"
+    trace = ModelInquiryService(vault).trace("inq_runner_degraded")
+    assert len(trace["turns"]) == 4
+    assert {turn["adapter_id"] for turn in trace["turns"]} == {"sol-adapter"}
+    assert {turn["provider"] for turn in trace["turns"]} == {"openai"}
+    assert {turn["model"] for turn in trace["turns"]} == {"gpt-5.6-sol"}
+    attempts = [
+        receipt
+        for receipt in trace["receipts"]
+        if receipt["event_type"] == "inquiry_provider_attempt_terminal"
+    ]
+    assert len(attempts) == 2
+    assert {attempt["details"]["candidate_adapter_id"] for attempt in attempts} == {
+        "fable-adapter"
+    }
+    assert {call["phase"] for call in fable.calls} == {"draft", "review"}
+
+
+def test_local_command_subscription_adapters_enable_fallback_automatically(
+    tmp_path: Path,
+) -> None:
+    service, _ = _start(tmp_path, "inq_runner_local_command_fallback")
+    response_program = """
+import json
+import sys
+
+request = json.load(sys.stdin)
+reviewed = request["reviewed_artifact_refs"]
+is_draft = request["phase"] == "draft"
+payload = {
+    "schema_version": "builderops.model-turn-response.v1",
+    "stance": "draft" if is_draft else "accept",
+    "content": "bounded local-command response",
+    "claims": [],
+    "risks": [],
+    "blocking_questions": [],
+    "reviewed_artifact_refs": reviewed,
+    "accepted_artifact_hash": None if is_draft else request["input_artifacts"][0]["artifact_hash"],
+}
+print(json.dumps(payload))
+"""
+    fable = LocalCommandAdapter(
+        adapter_id="fable-local",
+        provider="anthropic",
+        model="claude-fable-5",
+        argv=(sys.executable, "-c", "import sys; sys.exit(17)"),
+        timeout_seconds=5,
+    )
+    sol = LocalCommandAdapter(
+        adapter_id="sol-local",
+        provider="openai",
+        model="gpt-5.6-sol",
+        argv=(sys.executable, "-c", response_program),
+        timeout_seconds=5,
+    )
+
+    result = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": sol},
+    ).run("inq_runner_local_command_fallback", max_rounds=1)
+
+    assert result["outcome"] == "degraded_consensus"
+    assert {turn["adapter_id"] for turn in service.trace(result["inquiry_id"])["turns"]} == {
+        "sol-local"
+    }
+
+
+def test_explicit_fallback_flag_cannot_enable_non_subscription_adapters(
+    tmp_path: Path,
+) -> None:
+    service, _ = _start(tmp_path, "inq_runner_non_subscription_boundary")
+    primary = CountingFailureAdapter("api-primary", "openai", "gpt-api", [])
+    alternate = ConsensusAdapter("api-alternate", "anthropic", "claude-api", [])
+
+    result = ModelInquiryRunner(
+        service,
+        {"fable": primary, "gpt_codex": alternate},
+        allow_operational_fallback=True,
+    ).run("inq_runner_non_subscription_boundary", max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert len(primary.calls) == 1
+    assert alternate.calls == []
+
+
+def test_role_focused_prompts_are_distinct_and_hashed_per_candidate(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_role_prompts")
+    fable = CountingFailureAdapter("fable-adapter", "anthropic", "claude-fable-5", [])
+    sol = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+
+    ModelInquiryRunner(
+        service,
+        _subscription_adapters(fable, sol),
+        allow_operational_fallback=True,
+    ).run("inq_runner_role_prompts", max_rounds=1)
+
+    fable_lane = next(call for call in sol.calls if call["role"] == "fable")
+    codex_lane = next(call for call in sol.calls if call["role"] == "gpt_codex")
+    assert fable_lane["system_prompt"] == model_turn_system_prompt("fable")
+    assert codex_lane["system_prompt"] == model_turn_system_prompt("gpt_codex")
+    assert fable_lane["system_prompt"] != codex_lane["system_prompt"]
+    assert "most relevant to the supplied question" in fable_lane["system_prompt"]
+    assert "most relevant to the supplied question" in codex_lane["system_prompt"]
+    assert fable_lane["request_hash"] != codex_lane["request_hash"]
+    assert fable_lane["adapter_identity"] == codex_lane["adapter_identity"]
+
+
+def test_candidate_fallback_is_durable_bounded_and_resume_safe(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_fallback_resume")
+    primary = CountingFailureAdapter("fable-adapter", "anthropic", "claude-fable-5", [])
+    alternate = CrashOnceConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+    runner = ModelInquiryRunner(
+        service,
+        _subscription_adapters(primary, alternate),
+        allow_operational_fallback=True,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        runner.run("inq_runner_fallback_resume", max_rounds=1)
+    interrupted = service.trace("inq_runner_fallback_resume")
+    assert not any(
+        receipt["event_type"] == "inquiry_run_terminal"
+        for receipt in interrupted["receipts"]
+    )
+    assert len(primary.calls) == 1
+
+    resumed = runner.run("inq_runner_fallback_resume", max_rounds=1)
+    assert resumed["outcome"] == "degraded_consensus"
+    assert [(call["role"], call["phase"]) for call in primary.calls] == [
+        ("fable", "draft"),
+        ("fable", "review"),
+    ]
+
+    bounded_service, _ = _start(tmp_path, "inq_runner_fallback_bounded")
+    first = CountingFailureAdapter("first", "anthropic", "claude-fable-5", [])
+    second = CountingFailureAdapter("second", "openai", "gpt-5.6-sol", [])
+    bounded = ModelInquiryRunner(
+        bounded_service,
+        _subscription_adapters(first, second),
+        allow_operational_fallback=True,
+    ).run("inq_runner_fallback_bounded", max_rounds=1)
+    assert bounded["outcome"] == "provider_error"
+    assert len(first.calls) == 1
+    assert len(second.calls) == 1
+
+
+def test_refusal_and_persistence_failure_do_not_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refusal_service, _ = _start(tmp_path, "inq_runner_no_refusal_fallback")
+    refusal = _scripted("fable", [_response("refuse")])
+    unused = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+    refused = ModelInquiryRunner(
+        refusal_service,
+        _subscription_adapters(refusal, unused),
+        allow_operational_fallback=True,
+    ).run("inq_runner_no_refusal_fallback", max_rounds=1)
+    assert refused["outcome"] == "provider_refused"
+    assert unused.calls == []
+
+    persistence_service, _ = _start(tmp_path, "inq_runner_no_persistence_fallback")
+
+    def fail_commit(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise BuilderOpsValidationError("injected persistence failure")
+
+    monkeypatch.setattr(persistence_service, "commit_turn", fail_commit)
+    first = ConsensusAdapter("fable-adapter", "anthropic", "claude-fable-5", [])
+    second = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+    persisted = ModelInquiryRunner(
+        persistence_service,
+        _subscription_adapters(first, second),
+        allow_operational_fallback=True,
+    ).run("inq_runner_no_persistence_fallback", max_rounds=1)
+    assert persisted["outcome"] == "persistence_failed"
+    assert len(first.calls) == 1
+    assert second.calls == []
 
 
 def test_resume_and_persistence_failure_fail_closed(tmp_path: Path, monkeypatch) -> None:

@@ -2,13 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+from typing import Any, Mapping
 
 import pytest
 
 from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.models import BuilderOpsValidationError, normalize_record
-from app.builderops.model_inquiry_adapters import ScriptedAdapter
-from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION, canonical_hash
+from app.builderops.model_inquiry_adapters import (
+    AdapterExecutionError,
+    AdapterResult,
+    LocalCommandAdapter,
+    ScriptedAdapter,
+)
+from app.builderops.model_inquiry_contract import (
+    MODEL_TURN_SYSTEM_PROMPT,
+    RESPONSE_SCHEMA_VERSION,
+    canonical_hash,
+    initial_context_packet,
+    model_turn_request_hash,
+)
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
 from tests.builderops.inquiry_intent import (
     DECLARED_TEST_CREDENTIALS,
@@ -316,6 +328,65 @@ def test_trace_includes_provider_request_id_and_output_hash(tmp_path: Path) -> N
         assert turn["source_refs"] == refs
 
 
+def test_degraded_consensus_report_exposes_effective_targets(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault-degraded-report"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    service.start(
+        question="Keep a report when Fable is unavailable",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_degraded_report",
+        source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
+    )
+
+    class UnavailableFable(LocalCommandAdapter):
+        def __init__(self) -> None:
+            super().__init__(
+                adapter_id="fable-adapter",
+                provider="anthropic",
+                model="claude-fable-5",
+                argv=("fixture-local-command",),
+            )
+
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            raise AdapterExecutionError(
+                "provider unavailable",
+                failure_class="command_exit_nonzero",
+                exit_code=17,
+            )
+
+    class AvailableSol(LocalCommandAdapter):
+        def __init__(self) -> None:
+            super().__init__(
+                adapter_id="sol-adapter",
+                provider="openai",
+                model="gpt-5.6-sol",
+                argv=("fixture-local-command",),
+            )
+
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            if request["phase"] == "draft":
+                return AdapterResult(_credential_trace_response("draft"))
+            return AdapterResult(
+                _credential_trace_response(
+                    "accept",
+                    reviewed=list(request["reviewed_artifact_refs"]),
+                    accepted_hash=request["input_artifacts"][0]["artifact_hash"],
+                )
+            )
+
+    result = ModelInquiryRunner(
+        service,
+        {"fable": UnavailableFable(), "gpt_codex": AvailableSol()},
+        allow_operational_fallback=True,
+    ).run("inq_test_degraded_report", max_rounds=1)
+
+    report = Path(result["human_readable_report"]).read_text(encoding="utf-8")
+    assert result["outcome"] == "degraded_consensus"
+    assert report.count("Effective target: `openai` / `gpt-5.6-sol`") == 4
+    assert "Outcome: **degraded_consensus**" in report
+
+
 def test_trace_recomputes_provider_context_and_request_hashes(tmp_path: Path) -> None:
     vault = tmp_path / "shared-vault-forged-provider"
     vault.mkdir()
@@ -373,6 +444,110 @@ def test_trace_recomputes_provider_context_and_request_hashes(tmp_path: Path) ->
 
     with pytest.raises(BuilderOpsValidationError, match="context hash mismatch"):
         service.trace("inq_test_forged_provider")
+
+
+def test_trace_accepts_legacy_prompt_lineage_after_role_prompts(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault-legacy-prompt"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#3291"}]
+    started = service.start(
+        question="Keep historical request lineage readable",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_legacy_prompt",
+        source_refs=refs,
+    )
+    response = {
+        "schema_version": RESPONSE_SCHEMA_VERSION,
+        "stance": "draft",
+        "content": "legacy prompt lineage",
+        "claims": [],
+        "risks": [],
+        "blocking_questions": [],
+        "reviewed_artifact_refs": [],
+        "accepted_artifact_hash": None,
+    }
+    content = json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    input_hash = canonical_hash(
+        [
+            {
+                "artifact_id": "question",
+                "artifact_hash": started["question"]["artifact_hash"],
+            }
+        ]
+    )
+    context_hash = canonical_hash(
+        initial_context_packet(
+            inquiry_id="inq_test_legacy_prompt",
+            workflow="fable-gpt-architecture",
+            question_artifact_id="question",
+            question_artifact_hash=started["question"]["artifact_hash"],
+            source_refs=refs,
+        )
+    )
+    request_hash = model_turn_request_hash(
+        inquiry_id="inq_test_legacy_prompt",
+        role="fable",
+        phase="draft",
+        round_index=0,
+        context_hash=context_hash,
+        input_hash=input_hash,
+        input_artifact_refs=["question"],
+        adapter_id="fable-adapter",
+        provider="anthropic",
+        model="claude-fable-5",
+        system_prompt=MODEL_TURN_SYSTEM_PROMPT,
+    )
+    service.commit_turn(
+        "inq_test_legacy_prompt",
+        turn_id="draft-fable",
+        sequence=0,
+        role="fable",
+        content=content,
+        input_artifact_refs=["question"],
+        source_refs=refs,
+        provider_metadata={
+            "adapter_request_id": f"adapter_req_{request_hash[:32]}",
+            "provider_request_id": "legacy-request",
+            "adapter_id": "fable-adapter",
+            "provider": "anthropic",
+            "model": "claude-fable-5",
+            "context_hash": context_hash,
+            "request_hash": request_hash,
+            "input_hash": input_hash,
+            "output_hash": canonical_hash(response),
+            "phase": "draft",
+            "round_index": 0,
+            "stance": "draft",
+            "accepted_artifact_hash": None,
+        },
+    )
+
+    trace = ModelInquiryService(vault).trace("inq_test_legacy_prompt")
+    assert trace["turns"][0]["request_hash"] == request_hash
+
+    fable = ScriptedAdapter(
+        adapter_id="fable-adapter",
+        provider="anthropic",
+        model="claude-fable-5",
+        responses=["not-json"],
+        calls=[],
+    )
+    gpt = ScriptedAdapter(
+        adapter_id="gpt-adapter",
+        provider="openai",
+        model="gpt-5.6-sol",
+        responses=[_credential_trace_response("draft")],
+        calls=[],
+    )
+    resumed = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": gpt},
+    ).run("inq_test_legacy_prompt", max_rounds=1)
+
+    assert resumed["outcome"] == "malformed_output"
+    assert [call["phase"] for call in fable.calls] == ["review"]
+    assert [call["phase"] for call in gpt.calls] == ["draft"]
 
 
 def test_trace_rejects_forged_canonical_run_terminal_receipt(tmp_path: Path) -> None:

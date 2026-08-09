@@ -19,7 +19,11 @@ from app.builderops.model_inquiry_promotion import (
 )
 from app.builderops.models import BuilderOpsValidationError
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
-from app.builderops.model_inquiry_adapters import AdapterResult
+from app.builderops.model_inquiry_adapters import (
+    AdapterExecutionError,
+    AdapterResult,
+    LocalCommandAdapter,
+)
 
 
 def _issue_body() -> str:
@@ -192,6 +196,60 @@ def _consensus_service(
     result = ModelInquiryRunner(service, adapters).run("inq_promotion_test", max_rounds=1)
     assert result["outcome"] == "consensus"
     return service
+
+
+def test_degraded_consensus_is_not_issue_ready(tmp_path: Path) -> None:
+    vault = tmp_path / "degraded" / "vault"
+    vault.mkdir(parents=True)
+    service = ModelInquiryService(vault)
+    service.start(
+        question="Do not promote one-model agreement",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_degraded_promotion",
+        source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
+    )
+
+    class FailedFable(ProposalAdapter):
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            raise AdapterExecutionError(
+                "provider unavailable",
+                failure_class="command_exit_nonzero",
+                exit_code=17,
+            )
+
+    class LocalCommandProposalAdapter(LocalCommandAdapter):
+        def __init__(self, delegate: ProposalAdapter) -> None:
+            super().__init__(
+                adapter_id=delegate.adapter_id,
+                provider=delegate.provider,
+                model=delegate.model,
+                argv=("fixture-local-command",),
+            )
+            object.__setattr__(self, "delegate", delegate)
+
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            return self.delegate.execute(request)
+
+    result = ModelInquiryRunner(
+        service,
+        {
+            "fable": LocalCommandProposalAdapter(FailedFable("fable")),
+            "gpt_codex": LocalCommandProposalAdapter(ProposalAdapter("gpt_codex")),
+        },
+        allow_operational_fallback=True,
+    ).run("inq_degraded_promotion", max_rounds=1)
+    assert result["outcome"] == "degraded_consensus"
+
+    gateway = ModelInquiryPromotionGateway(
+        service,
+        repository="example/repo",
+        client=FakeIssueClient(),
+    )
+    evaluation = gateway.evaluate("inq_degraded_promotion")
+    assert evaluation["readiness"]["outcome"] == "not_ready"
+    assert "consensus terminal" in evaluation["readiness"]["rationale"]
+    with pytest.raises(ModelInquiryPromotionError, match="consensus terminal receipt"):
+        gateway.promote("inq_degraded_promotion")
 
 
 def test_issue_promotion_requires_ready_receipt(tmp_path: Path) -> None:
