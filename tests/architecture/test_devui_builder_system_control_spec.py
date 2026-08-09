@@ -84,7 +84,8 @@ def test_spec_separates_current_target_and_authority_questions() -> None:
     assert "Current delivered input" in spec
     assert "BSC-01 governing-document inventory composer" in spec
     assert "BSC-02 workflow-adapter and capability-binding composer" in spec
-    assert "BSC-03 coverage/deviations, routes, UI, command previews, and the whole lens" in spec
+    assert "BSC-03 coverage/deviation and governed-route composer" in spec
+    assert "BSC-04 design, BSC-05 previews, route/UI, commands, and the whole lens remain undelivered" in spec
     assert "Target contract; partially delivered" in spec
     assert "No owner decision blocks this docs-only specification." in spec
 
@@ -104,3 +105,14 @@ def test_spec_has_bounded_sequenced_follow_up() -> None:
         "No follow-up creates a policy engine, workflow engine, task system, or source registry."
         in normalized
     )
+
+
+def test_spec_records_bsc03_as_delivered_nonvisual_partial_input() -> None:
+    spec = _spec()
+    normalized = _normalized_spec()
+
+    assert "Delivered partial input by issue #4725" in spec
+    assert "BSC-03 — compose coverage and route deviations (delivered by #4725)." in spec
+    assert "BSC-04 — governed visual design handoff" in spec
+    assert "BSC-05 — route previews over existing workflows" in spec
+    assert "BSC-01 through BSC-03 are nonvisual" in normalized
