@@ -44,7 +44,7 @@ Never put product code, patches, binaries, secrets, or machine-local state in a 
 
 Each contribution is one canonical JSON envelope at:
 
-    builder-threads/threads/<thread-id>/entries/<sha256>.json
+    builder-threads/threads/<thread-id>/entries/<slot>/<sha256>.json
 
 Canonical bytes are UTF-8 JSON with object keys sorted lexicographically, no whitespace outside
 strings, comma/colon separators, JSON Unicode characters emitted directly, and one terminal LF.
@@ -54,14 +54,23 @@ unlink, and a second directory fsync. Readers reconstruct state from all validat
 there is no mutable sequence, latest pointer, database, distributed lock, or hidden local index.
 
 The initial thread UUID is deterministically derived from the pinned vault ID and capture key. Its
-complete entry tree is built beneath a hidden staging directory and installed at that destination
-with a no-overwrite rename plus directory fsync, so another reader never accepts a partial final
-thread scaffold and concurrent identical captures converge on one represented destination.
+destination directory is claimed with create-if-absent semantics and is never replaced or
+overwritten. Readers wait for the bounded live-install window and accept the tree only after its
+entries directory, reserved slot, and complete content-addressed entry exist. A pre-existing empty
+destination is a typed conflict and remains untouched.
 
-Exact replay and acknowledgement-loss recovery are idempotent. Stale close/archive snapshots may be
-superseded through immutable hash lineage. The same entry ID with different bytes, concurrent
-incompatible dispositions, conflict-copy siblings, partial temp artifacts, and uncertain lineage
-fail closed.
+Create/reply require a caller-retained entry UUID. Reusing it for the same semantic request is an
+idempotent acknowledgement-loss retry even when the new invocation has a later generated timestamp;
+changed content under that ID is a replay conflict. A committed temp hard-link twin left by failed
+cleanup is removed only by a mutation retry after its bytes and content-addressed final match.
+Read-only health continues to expose unmatched or orphaned temps as incomplete.
+
+Stale close/archive snapshots may be superseded through immutable hash lineage. Each thread has 128
+immutable, create-if-absent entry slots. A writer must reserve one before publishing contribution
+bytes, so a concurrent or sequential 129th append fails without changing the thread. Concurrent
+incompatible quarantine decisions for one target fail closed, and one decision can be quarantined
+with `concurrent_conflict` to preserve the other while a slot remains. The same entry ID with changed
+semantics, conflict-copy siblings, partial temp artifacts, and uncertain lineage fail closed.
 An explicit quarantine contribution may disposition a structurally valid unsafe artifact by exact
 hash. It preserves the original bytes, redacts them from normal output, and never hides structural
 corruption. Incident handling is explicit; no free-form session capture or automatic quarantine is
@@ -91,3 +100,5 @@ Mutation requires a separately authorized builder-thread command.
 Report the safe failure class, thread or artifact ID, and bounded next action. Never print rejected
 content, absolute vault paths, credentials, raw stderr, argv, or environment values. Hash/root/
 identity/conflict failures stop the operation rather than returning an empty or healthy result.
+When `--json` is requested, operation, configuration, and command-usage refusals return one bounded
+typed JSON error envelope rather than Click prose.

@@ -31,7 +31,8 @@ Create a represented question:
 
     scripts/builderops_cli.sh builderops builder-thread create \
       --recipient <named-id> --subject <bounded-subject> --content <bounded-question> \
-      --actor <named-id> --source-ref <type:value> --json
+      --actor <named-id> --entry-id <caller-retained-uuidv4> \
+      --source-ref <type:value> --json
 
 Read/list:
 
@@ -42,7 +43,8 @@ Reply by exact parent hash:
 
     scripts/builderops_cli.sh builderops builder-thread reply <thread-id> \
       --recipient <named-id> --content <bounded-reply> --actor <named-id> \
-      --parent-hash <sha256> --source-ref <type:value> --json
+      --parent-hash <sha256> --entry-id <caller-retained-uuidv4> \
+      --source-ref <type:value> --json
 
 Close or archive only by explicit authorization:
 
@@ -62,6 +64,10 @@ Create only after the capture gate passes. Reply, close, archive, and quarantine
 require explicit task/user authorization; workflow discovery never authorizes them. An exact retry
 may return the existing artifact. A typed refusal or conflict is terminal until the source problem
 is resolved.
+
+Retain the create/reply `--entry-id` with the calling task until readback succeeds. Reuse it only for
+an exact semantic retry; the helper returns the already-installed entry even when the retry occurs
+in a later UTC second, and rejects changed content under the same ID.
 
 First adoption is also a mutation and requires explicit operator authorization. Never add
 `--adopt-existing` merely because routine init reports an unattested root.

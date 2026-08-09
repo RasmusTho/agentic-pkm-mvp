@@ -7,7 +7,6 @@ thread state from content-addressed contribution envelopes.
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import os
@@ -81,31 +80,28 @@ ENTRY_KEYS = frozenset(
     }
 )
 GENESIS_KEYS = frozenset({"created_at", "privacy_class", "schema", "vault_id"})
-UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
-IDENTITY_RE = re.compile(
-    r"^(?:agent|automation|human):[A-Za-z0-9][A-Za-z0-9._:-]{1,119}$"
-)
+IDENTITY_RE = re.compile(r"^(?:agent|automation|human):[A-Za-z0-9][A-Za-z0-9._:-]{1,119}$")
 REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_. -]+)*(?::[1-9][0-9]*)?$")
 REF_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#@+-]{0,255}$")
 BUILDEROPS_REF_RE = re.compile(r"^[a-z][a-z0-9_:-]{2,127}$")
-CODEX_THREAD_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-)
+CODEX_THREAD_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$")
 GITHUB_NUMBER_RE = re.compile(r"^#?[1-9][0-9]*$")
 CONFLICT_COPY_RE = re.compile(r"conflicted copy", re.IGNORECASE)
+TEMP_FILE_RE = re.compile(r"^\.tmp-(?P<stem>.+)-[0-9a-f]{32}$")
 PRIVATE_PATH_RE = re.compile(
-    r"(?:file:(?://)?|~[/\\]|/(?:Users|home|Volumes|private|var/folders)/|"
-    r"[A-Za-z]:\\Users\\|%2f(?:Users|home|Volumes|private)%2f)",
+    r"(?:file:(?://)?|~[/\\]|"
+    r"(?:^|[\s=(\[\{\"'])/(?!/)[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~ -]+)+|"
+    r"[A-Za-z]:\\Users\\|%2f(?:Users|home|root|Volumes|private)%2f)",
     re.IGNORECASE,
 )
 SECRET_RE = re.compile(
     r"(?:authorization\s*:\s*bearer|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"\b(?:api[_-]?key|access[_-]?token|password|client[_-]?secret)\s*[:=]|"
-    r"\b(?:gh[pousr]_[A-Za-z0-9]{12,}|sk-[A-Za-z0-9]{12,}))",
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|"
+    r"sk-(?:proj-)?[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16}))",
     re.IGNORECASE,
 )
 ENV_RE = re.compile(
@@ -113,7 +109,8 @@ ENV_RE = re.compile(
     re.IGNORECASE,
 )
 ARGV_STDERR_RE = re.compile(
-    r"(?:\b(?:argv|stderr)\s*(?:[:=]|\[)|Traceback \(most recent call last\))",
+    r"(?:\b(?:sys\.)?argv(?:\s+was)?\s*(?:[:=]|\[)|"
+    r"\bstderr\s*(?:[:=]|\[)|Traceback \(most recent call last\))",
     re.IGNORECASE,
 )
 
@@ -134,10 +131,12 @@ class BuilderThreadPrivacyError(BuilderThreadError):
     """Content does not fit the shared-non-sensitive boundary."""
 
 
+class _ExistingEntryReservation(RuntimeError):
+    """Another writer reserved this entry identity after our read snapshot."""
+
+
 def _stamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z"
-    )
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
@@ -160,6 +159,12 @@ def _snapshot_hash(hashes: Iterable[str]) -> str:
     return _sha256(_canonical_bytes({"artifact_hashes": sorted(set(hashes))}))
 
 
+def _same_idempotent_request(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    return left.get("entry_id") == right.get("entry_id") and {
+        key: value for key, value in left.items() if key != "created_at"
+    } == {key: value for key, value in right.items() if key != "created_at"}
+
+
 def _capture_thread_id(vault_id: str, capture_key: str) -> str:
     """Derive one UUIDv4-shaped path identity for one represented capture."""
 
@@ -167,6 +172,18 @@ def _capture_thread_id(vault_id: str, capture_key: str) -> str:
     raw[6] = (raw[6] & 0x0F) | 0x40
     raw[8] = (raw[8] & 0x3F) | 0x80
     return str(uuid.UUID(bytes=bytes(raw)))
+
+
+def _capture_key(recipient_id: str, source_refs: list[dict[str, str]], subject: str) -> str:
+    return _sha256(
+        _canonical_bytes(
+            {
+                "recipient_id": recipient_id,
+                "source_refs": source_refs,
+                "subject": subject.casefold(),
+            }
+        )
+    )
 
 
 def _uuid4(value: Any, *, field: str) -> str:
@@ -178,15 +195,14 @@ def _uuid4(value: Any, *, field: str) -> str:
     return normalized
 
 
-def _identity(value: Any, *, field: str) -> str:
+def _identity(value: Any, *, field: str, enforce_privacy: bool = True) -> str:
     if not isinstance(value, str):
-        raise BuilderThreadValidationError(
-            f"{field} requires a named recipient/actor identity"
-        )
+        raise BuilderThreadValidationError(f"{field} requires a named recipient/actor identity")
     normalized = value.strip()
     if not IDENTITY_RE.fullmatch(normalized):
         raise BuilderThreadValidationError(f"{field} requires a named recipient/actor identity")
-    _privacy_check(normalized, field=field)
+    if enforce_privacy:
+        _privacy_check(normalized, field=field)
     return normalized
 
 
@@ -236,7 +252,7 @@ def _privacy_check(value: str | None, *, field: str) -> None:
         raise BuilderThreadPrivacyError(f"{field} contains argv/env/stderr material")
 
 
-def _source_refs(values: Any) -> list[dict[str, str]]:
+def _source_refs(values: Any, *, enforce_privacy: bool = True) -> list[dict[str, str]]:
     if not isinstance(values, (list, tuple)):
         raise BuilderThreadValidationError("source refs must be a bounded array")
     result: list[dict[str, str]] = []
@@ -261,7 +277,8 @@ def _source_refs(values: Any) -> list[dict[str, str]]:
         }.get(ref_type, REF_VALUE_RE)
         if not matcher.fullmatch(value) or value.startswith(("/", "~")):
             raise BuilderThreadValidationError(f"unsafe source ref: {ref_type}")
-        _privacy_check(value, field="source_ref")
+        if enforce_privacy:
+            _privacy_check(value, field="source_ref")
         result.append({"type": ref_type, "value": value})
     deduplicated = sorted(
         {json.dumps(item, sort_keys=True): item for item in result}.values(),
@@ -319,9 +336,7 @@ def _atomic_publish(path: Path, data: bytes) -> bool:
         except FileExistsError:
             existing = path.read_bytes()
             if existing != data:
-                raise BuilderThreadConflictError(
-                    f"no-overwrite replay conflict at {path.name}"
-                )
+                raise BuilderThreadConflictError(f"no-overwrite replay conflict at {path.name}")
             return False
         if path.read_bytes() != data:
             raise BuilderThreadConflictError("published artifact readback mismatch")
@@ -339,6 +354,9 @@ class BuilderThreadService:
     MAX_SOURCE_REFS = 8
     MAX_ENTRIES_PER_THREAD = 128
     MAX_LIST_THREADS = 100
+    INCIDENT_SOURCE_REFS = [
+        {"type": "repo_path", "value": "docs/builderops/BUILDEROPS_VAULT_STORE.md"}
+    ]
 
     def __init__(self, root: Path, *, expected_vault_id: str):
         self.root = Path(root)
@@ -357,22 +375,34 @@ class BuilderThreadService:
     ) -> BuilderThreadService:
         service = cls(root, expected_vault_id=vault_id)
         service._validate_root(require_genesis=False)
-        service._validate_pre_genesis_tree()
         vault_genesis_path = service.root / ".builderops" / VAULT_GENESIS_NAME
-        if vault_genesis_path.exists():
-            service._read_genesis_at(vault_genesis_path, label="vault genesis")
-        else:
-            if not adopt_existing:
-                raise BuilderThreadValidationError(
-                    "unattested BuilderOps vault; explicit adopt_existing is required"
+        genesis_path = service.builder_root / GENESIS_NAME
+        root_exists = vault_genesis_path.exists()
+        subsystem_exists = genesis_path.exists()
+        if root_exists != subsystem_exists:
+            raise BuilderThreadConflictError(
+                "partial vault/subsystem genesis pair; incident disposition required"
+            )
+        if root_exists:
+            root_payload = service._read_genesis_at(vault_genesis_path, label="vault genesis")
+            if service._read_genesis() != root_payload:
+                raise BuilderThreadConflictError(
+                    "vault and Builder Thread genesis envelopes differ"
                 )
-            payload = {
-                "created_at": _validate_timestamp(created_at or _stamp()),
-                "privacy_class": PRIVACY_CLASS,
-                "schema": GENESIS_SCHEMA,
-                "vault_id": service.expected_vault_id,
-            }
-            _atomic_publish(vault_genesis_path, _canonical_bytes(payload))
+            service.health()
+            return service
+
+        service._validate_pre_genesis_tree()
+        if not adopt_existing:
+            raise BuilderThreadValidationError(
+                "unattested BuilderOps vault; explicit adopt_existing is required"
+            )
+        payload = {
+            "created_at": _validate_timestamp(created_at or _stamp()),
+            "privacy_class": PRIVACY_CLASS,
+            "schema": GENESIS_SCHEMA,
+            "vault_id": service.expected_vault_id,
+        }
         if not service.builder_root.exists():
             _safe_mkdir(service.builder_root)
         else:
@@ -381,12 +411,7 @@ class BuilderThreadService:
             _safe_mkdir(service.threads_root)
         else:
             _real_directory(service.threads_root, label="builder-threads/threads")
-        genesis_path = service.builder_root / GENESIS_NAME
-        if genesis_path.exists():
-            service._read_genesis()
-            service.health()
-            return service
-        payload = service._read_genesis_at(vault_genesis_path, label="vault genesis")
+        _atomic_publish(vault_genesis_path, _canonical_bytes(payload))
         _atomic_publish(genesis_path, _canonical_bytes(payload))
         service.health()
         return service
@@ -404,9 +429,7 @@ class BuilderThreadService:
             _real_directory(children[0], label="builder-threads/threads")
             if not any(children[0].iterdir()):
                 return
-        raise BuilderThreadValidationError(
-            "unrecognized pre-genesis Builder Thread artifacts"
-        )
+        raise BuilderThreadValidationError("unrecognized pre-genesis Builder Thread artifacts")
 
     def create_thread(
         self,
@@ -421,33 +444,21 @@ class BuilderThreadService:
         entry_id: str | None = None,
         created_at: str | None = None,
     ) -> dict[str, Any]:
-        self._validate_all()
+        self._prepare_write()
         recipient = _identity(recipient_id, field="recipient_id")
         actor = _identity(actor_id, field="actor_id")
         if reply_expected is not True:
             raise BuilderThreadValidationError(
                 "capture requires reply_expected=true; monologic notes are AgentWorklog"
             )
-        normalized_subject = _bounded_text(
-            subject, field="subject", maximum=self.MAX_SUBJECT_CHARS
-        )
-        normalized_content = _bounded_text(
-            content, field="content", maximum=self.MAX_CONTENT_CHARS
-        )
+        normalized_subject = _bounded_text(subject, field="subject", maximum=self.MAX_SUBJECT_CHARS)
+        normalized_content = _bounded_text(content, field="content", maximum=self.MAX_CONTENT_CHARS)
         assert isinstance(normalized_subject, str)
         assert isinstance(normalized_content, str)
         _privacy_check(normalized_subject, field="subject")
         _privacy_check(normalized_content, field="content")
         refs = _source_refs(source_refs)
-        capture_key = _sha256(
-            _canonical_bytes(
-                {
-                    "recipient_id": recipient,
-                    "source_refs": refs,
-                    "subject": normalized_subject.casefold(),
-                }
-            )
-        )
+        capture_key = _capture_key(recipient, refs, normalized_subject)
         derived_thread_id = _capture_thread_id(self.expected_vault_id, capture_key)
         if thread_id is not None and _uuid4(thread_id, field="thread_id") != derived_thread_id:
             raise BuilderThreadValidationError(
@@ -466,17 +477,20 @@ class BuilderThreadService:
             source_refs=refs,
             capture_key=capture_key,
         )
+        self._validate_root()
+        destination = self.threads_root / derived_thread_id
+        if destination.exists() and destination.is_dir() and not any(destination.iterdir()):
+            raise BuilderThreadConflictError(
+                f"question destination already exists: {derived_thread_id}"
+            )
         for represented in self._load_all_threads():
             for item in represented["entries"]:
-                if (
-                    item.get("quarantined")
-                    or item["entry"].get("capture_key") != capture_key
-                ):
+                if item.get("quarantined") or item["entry"].get("capture_key") != capture_key:
                     continue
-                if item["entry"] == entry:
+                if _same_idempotent_request(item["entry"], entry):
                     return self._result(
                         represented,
-                        entry=entry,
+                        entry=item["entry"],
                         entry_hash=item["entry_hash"],
                     )
                 raise BuilderThreadConflictError(
@@ -497,19 +511,16 @@ class BuilderThreadService:
         entry_id: str | None = None,
         created_at: str | None = None,
     ) -> dict[str, Any]:
+        self._prepare_write()
         thread = self._load_thread(_uuid4(thread_id, field="thread_id"))
         if not isinstance(reply_expected, bool):
             raise BuilderThreadValidationError("reply_expected must be boolean")
         if parent_hash not in thread["artifact_hashes"]:
             raise BuilderThreadValidationError("reply parent hash is missing")
-        parent = next(
-            item for item in thread["entries"] if item["entry_hash"] == parent_hash
-        )
+        parent = next(item for item in thread["entries"] if item["entry_hash"] == parent_hash)
         actor = _identity(actor_id, field="actor_id")
         if parent["entry"].get("recipient_id") != actor:
-            raise BuilderThreadValidationError(
-                "reply actor must match the named parent recipient"
-            )
+            raise BuilderThreadValidationError("reply actor must match the named parent recipient")
         entry = self._entry_payload(
             thread_id=thread_id,
             entry_id=entry_id,
@@ -518,9 +529,7 @@ class BuilderThreadService:
             actor_id=actor,
             recipient_id=_identity(recipient_id, field="recipient_id"),
             reply_expected=reply_expected,
-            content=_bounded_text(
-                content, field="content", maximum=self.MAX_CONTENT_CHARS
-            ),
+            content=_bounded_text(content, field="content", maximum=self.MAX_CONTENT_CHARS),
             source_refs=_source_refs(source_refs),
             parent_hash=self._hash(parent_hash, field="parent_hash"),
         )
@@ -535,14 +544,14 @@ class BuilderThreadService:
         reason: str,
         source_refs: Iterable[Mapping[str, str]] | None = None,
     ) -> dict[str, Any]:
+        self._prepare_write()
         thread = self._load_thread(_uuid4(thread_id, field="thread_id"))
         actor = _identity(actor_id, field="actor_id")
-        content = _bounded_text(
-            reason, field="reason", maximum=self.MAX_CONTENT_CHARS
-        )
+        content = _bounded_text(reason, field="reason", maximum=self.MAX_CONTENT_CHARS)
         _privacy_check(content, field="reason")
         refs = _source_refs(source_refs or thread["source_refs"])
         active_closes = self._active_dispositions(thread, "close")
+        active_archives = self._active_dispositions(thread, "archive")
         if thread["state"] in {"closed", "archived"}:
             if len(active_closes) != 1:
                 raise BuilderThreadConflictError("current close is ambiguous")
@@ -562,21 +571,18 @@ class BuilderThreadService:
             content=content,
             source_refs=refs,
             basis_hashes=basis,
-            target_hash=(
-                active_closes[0]["entry_hash"] if len(active_closes) == 1 else None
-            ),
+            parent_hash=(active_archives[0]["entry_hash"] if len(active_archives) == 1 else None),
+            target_hash=(active_closes[0]["entry_hash"] if len(active_closes) == 1 else None),
         )
         return self._append(entry)
 
     def archive_thread(self, thread_id: str, *, actor_id: str) -> dict[str, Any]:
+        self._prepare_write()
         thread = self._load_thread(_uuid4(thread_id, field="thread_id"))
         actor = _identity(actor_id, field="actor_id")
         active_archives = self._active_dispositions(thread, "archive")
         if thread["state"] == "archived":
-            if (
-                len(active_archives) == 1
-                and active_archives[0]["entry"]["actor_id"] == actor
-            ):
+            if len(active_archives) == 1 and active_archives[0]["entry"]["actor_id"] == actor:
                 return self._result(thread)
             raise BuilderThreadConflictError("incompatible archive retry")
         close_entries = self._active_dispositions(thread, "close")
@@ -592,11 +598,7 @@ class BuilderThreadService:
             source_refs=thread["source_refs"],
             basis_hashes=thread["artifact_hashes"],
             target_hash=close_entries[0]["entry_hash"],
-            parent_hash=(
-                active_archives[0]["entry_hash"]
-                if len(active_archives) == 1
-                else None
-            ),
+            parent_hash=(active_archives[0]["entry_hash"] if len(active_archives) == 1 else None),
         )
         return self._append(entry)
 
@@ -608,9 +610,8 @@ class BuilderThreadService:
         actor_id: str,
         reason_code: str,
     ) -> dict[str, Any]:
-        thread = self._load_thread(
-            _uuid4(thread_id, field="thread_id"), structural_only=True
-        )
+        self._prepare_write()
+        thread = self._load_thread(_uuid4(thread_id, field="thread_id"), structural_only=True)
         target = self._hash(artifact_hash, field="artifact_hash")
         if target not in thread["artifact_hashes"]:
             raise BuilderThreadValidationError("quarantine target is missing")
@@ -629,19 +630,18 @@ class BuilderThreadService:
                     return self.read_thread(thread_id)
                 raise BuilderThreadConflictError("incompatible quarantine retry")
         target_entry = next(
-            item["entry"]
-            for item in thread["entries"]
-            if item["entry_hash"] == target
+            item["entry"] for item in thread["entries"] if item["entry_hash"] == target
         )
         if target_entry["entry_type"] == "quarantine":
-            raise BuilderThreadValidationError(
-                "quarantine cannot target another quarantine disposition"
-            )
+            if reason_code != "concurrent_conflict":
+                raise BuilderThreadValidationError(
+                    "quarantine-disposition recovery requires concurrent_conflict"
+                )
         entry = self._entry_payload(
             thread_id=thread_id,
             entry_type="quarantine",
             actor_id=_identity(actor_id, field="actor_id"),
-            source_refs=thread["source_refs"],
+            source_refs=_source_refs(self.INCIDENT_SOURCE_REFS),
             basis_hashes=thread["artifact_hashes"],
             target_hash=target,
             reason_code=reason_code,
@@ -649,9 +649,7 @@ class BuilderThreadService:
         return self._append(entry)
 
     def read_thread(self, thread_id: str) -> dict[str, Any]:
-        return self._render_thread(
-            self._load_thread(_uuid4(thread_id, field="thread_id"))
-        )
+        return self._render_thread(self._load_thread(_uuid4(thread_id, field="thread_id")))
 
     def list_threads(
         self,
@@ -661,9 +659,7 @@ class BuilderThreadService:
         limit: int | None = None,
     ) -> dict[str, Any]:
         exact_recipient = (
-            _identity(recipient_id, field="recipient_id")
-            if recipient_id is not None
-            else None
+            _identity(recipient_id, field="recipient_id") if recipient_id is not None else None
         )
         bounded_limit = self._limit(limit)
         threads = []
@@ -672,8 +668,7 @@ class BuilderThreadService:
             if thread["state"] == "archived" and not include_archived:
                 continue
             if exact_recipient is not None and not any(
-                item["entry"].get("recipient_id") == exact_recipient
-                and not item["quarantined"]
+                item["entry"].get("recipient_id") == exact_recipient and not item["quarantined"]
                 for item in thread["entries"]
             ):
                 continue
@@ -682,17 +677,13 @@ class BuilderThreadService:
         selected = threads[-bounded_limit:]
         return {
             "count": len(selected),
-            "snapshot_hash": _snapshot_hash(
-                item["snapshot_hash"] for item in selected
-            ),
+            "snapshot_hash": _snapshot_hash(item["snapshot_hash"] for item in selected),
             "threads": selected,
             "truncated": len(threads) > len(selected),
             "vault_id": self.expected_vault_id,
         }
 
-    def inbox(
-        self, *, recipient_id: str, limit: int | None = None
-    ) -> dict[str, Any]:
+    def inbox(self, *, recipient_id: str, limit: int | None = None) -> dict[str, Any]:
         recipient = _identity(recipient_id, field="recipient_id")
         bounded_limit = self._limit(limit)
         items: list[dict[str, Any]] = []
@@ -709,9 +700,7 @@ class BuilderThreadService:
         return {
             "count": len(selected),
             "recipient_id": recipient,
-            "snapshot_hash": _snapshot_hash(
-                item["snapshot_hash"] for item in selected
-            ),
+            "snapshot_hash": _snapshot_hash(item["snapshot_hash"] for item in selected),
             "threads": selected,
             "truncated": len(items) > len(selected),
             "vault_id": self.expected_vault_id,
@@ -726,9 +715,7 @@ class BuilderThreadService:
             "artifact_count": sum(len(item["entries"]) for item in threads),
             "ok": True,
             "snapshot_hash": _snapshot_hash(
-                hash_value
-                for thread in threads
-                for hash_value in thread["artifact_hashes"]
+                hash_value for thread in threads for hash_value in thread["artifact_hashes"]
             ),
             "state_counts": dict(sorted(counts.items())),
             "thread_count": len(threads),
@@ -743,12 +730,15 @@ class BuilderThreadService:
             or selected <= 0
             or selected > self.MAX_LIST_THREADS
         ):
-            raise BuilderThreadValidationError(
-                f"limit must be 1..{self.MAX_LIST_THREADS}"
-            )
+            raise BuilderThreadValidationError(f"limit must be 1..{self.MAX_LIST_THREADS}")
         return selected
 
-    def _validate_root(self, *, require_genesis: bool = True) -> None:
+    def _validate_root(
+        self,
+        *,
+        require_genesis: bool = True,
+        allow_committed_temps: bool = False,
+    ) -> None:
         if not self.root.is_absolute():
             raise BuilderThreadValidationError("BUILDEROPS_VAULT_ROOT must be absolute")
         if ".." in self.root.parts:
@@ -759,9 +749,7 @@ class BuilderThreadService:
             try:
                 component_info = current.lstat()
             except FileNotFoundError as exc:
-                raise BuilderThreadValidationError(
-                    "BuilderOps vault root is missing"
-                ) from exc
+                raise BuilderThreadValidationError("BuilderOps vault root is missing") from exc
             if stat.S_ISLNK(component_info.st_mode):
                 raise BuilderThreadValidationError(
                     "symlinked BuilderOps vault ancestor is forbidden"
@@ -778,17 +766,14 @@ class BuilderThreadService:
             raise BuilderThreadValidationError(
                 "Mimer/human vault control tree is forbidden for Builder Threads"
             )
-        if (
-            self.root.name == "vault"
-            and (self.root.parent / ".git").exists()
-            and (self.root.parent / "pyproject.toml").exists()
-        ):
-            raise BuilderThreadValidationError(
-                "repository vault fixture is forbidden for Builder Threads"
-            )
+        for ancestor in (self.root, *self.root.parents):
+            if (ancestor / ".git").exists() and (ancestor / "pyproject.toml").exists():
+                raise BuilderThreadValidationError(
+                    "repository-nested vault root is forbidden for Builder Threads"
+                )
         for relative in SCAFFOLD_DIRS:
             _real_directory(self.root / relative, label=relative)
-        self._reject_symlinks_and_sqlite()
+        self._reject_symlinks_and_sqlite(allow_committed_temps=allow_committed_temps)
         if require_genesis:
             vault_genesis = self._read_genesis_at(
                 self.root / ".builderops" / VAULT_GENESIS_NAME,
@@ -799,18 +784,13 @@ class BuilderThreadService:
                     "vault and Builder Thread genesis envelopes differ"
                 )
 
-    def _reject_symlinks_and_sqlite(self) -> None:
+    def _reject_symlinks_and_sqlite(self, *, allow_committed_temps: bool = False) -> None:
         for current, directories, files in os.walk(self.root, followlinks=False):
             current_path = Path(current)
             for name in [*directories, *files]:
                 path = current_path / name
                 if CONFLICT_COPY_RE.search(name):
-                    raise BuilderThreadConflictError(
-                        "conflict-copy artifact detected"
-                    )
-                if name.startswith(".tmp-vault-genesis-"):
-                    self._reject_conflict_or_temp(path)
-                    continue
+                    raise BuilderThreadConflictError("conflict-copy artifact detected")
                 try:
                     info = path.lstat()
                 except FileNotFoundError as exc:
@@ -818,18 +798,18 @@ class BuilderThreadService:
                         "artifact changed during validation"
                     ) from exc
                 if stat.S_ISLNK(info.st_mode):
-                    raise BuilderThreadValidationError(
-                        "symlink forbidden beneath BuilderOps vault"
-                    )
+                    raise BuilderThreadValidationError("symlink forbidden beneath BuilderOps vault")
+                if name.startswith(".tmp-vault-genesis-"):
+                    if not allow_committed_temps:
+                        self._reject_conflict_or_temp(path)
+                    continue
                 if stat.S_ISREG(info.st_mode):
                     lower = name.casefold()
                     if lower.endswith((".sqlite", ".sqlite3", ".db")):
                         raise BuilderThreadValidationError(
                             "SQLite artifact forbidden in shared vault"
                         )
-                    if not _content_is_local(info) and not _may_be_sqlite_image(
-                        info.st_size
-                    ):
+                    if not _content_is_local(info) and not _may_be_sqlite_image(info.st_size):
                         continue
                     try:
                         with path.open("rb") as handle:
@@ -842,6 +822,58 @@ class BuilderThreadService:
                         raise BuilderThreadValidationError(
                             "SQLite artifact forbidden in shared vault"
                         )
+
+    def _prepare_write(self) -> None:
+        self._validate_root(
+            require_genesis=False,
+            allow_committed_temps=True,
+        )
+        self._recover_committed_temps()
+
+    def _recover_committed_temps(self) -> None:
+        """Remove only exact temp twins whose final artifact is already installed."""
+
+        candidates = list((self.root / ".builderops").glob(".tmp-vault-genesis-*"))
+        if self.builder_root.exists():
+            candidates.extend(self.builder_root.glob(".tmp-genesis-*"))
+        if self.threads_root.exists():
+            for thread_dir in self.threads_root.iterdir():
+                if not UUID_RE.fullmatch(thread_dir.name) or thread_dir.is_symlink():
+                    continue
+                entries_dir = thread_dir / "entries"
+                if entries_dir.is_dir() and not entries_dir.is_symlink():
+                    for slot in entries_dir.iterdir():
+                        if slot.is_dir() and not slot.is_symlink():
+                            candidates.extend(slot.glob(".tmp-*"))
+        for temp in sorted(set(candidates)):
+            match = TEMP_FILE_RE.fullmatch(temp.name)
+            if match is None:
+                continue
+            info = temp.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise BuilderThreadValidationError(
+                    "committed-temp recovery requires a regular file"
+                )
+            final = temp.parent / f"{match.group('stem')}.json"
+            try:
+                final_info = final.lstat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(final_info.st_mode):
+                raise BuilderThreadValidationError(
+                    "committed-temp recovery final is not a regular file"
+                )
+            temp_bytes = temp.read_bytes()
+            if final.read_bytes() != temp_bytes:
+                raise BuilderThreadConflictError(
+                    "temporary artifact conflicts with installed final"
+                )
+            if re.fullmatch(r"[0-9]{3}", temp.parent.name) and _sha256(temp_bytes) != final.stem:
+                raise BuilderThreadConflictError(
+                    "temporary artifact hash does not match installed final"
+                )
+            temp.unlink()
+            _fsync_directory(temp.parent)
 
     def _read_genesis(self) -> dict[str, Any]:
         return self._read_genesis_at(
@@ -873,17 +905,13 @@ class BuilderThreadService:
             if self._reject_conflict_or_temp(path):
                 continue
             if path.name not in allowed_root:
-                raise BuilderThreadValidationError(
-                    "unknown artifact beneath builder-threads"
-                )
+                raise BuilderThreadValidationError("unknown artifact beneath builder-threads")
         _real_directory(self.threads_root, label="builder-threads/threads")
         for thread_path in self.threads_root.iterdir():
             if self._reject_conflict_or_temp(thread_path):
                 continue
             if not thread_path.is_dir() or not UUID_RE.fullmatch(thread_path.name):
-                raise BuilderThreadValidationError(
-                    "unknown artifact beneath threads"
-                )
+                raise BuilderThreadValidationError("unknown artifact beneath threads")
             children = list(thread_path.iterdir())
             if len(children) != 1 or children[0].name != "entries":
                 raise BuilderThreadValidationError(
@@ -891,28 +919,45 @@ class BuilderThreadService:
                 )
             entries_dir = children[0]
             _real_directory(entries_dir, label=f"{thread_path.name}/entries")
-            entries = list(entries_dir.iterdir())
-            if not entries:
-                raise BuilderThreadValidationError(
-                    f"incomplete artifact tree for thread {thread_path.name}"
-                )
-            if len(entries) > self.MAX_ENTRIES_PER_THREAD:
-                raise BuilderThreadValidationError(
-                    f"thread {thread_path.name} exceeds entry bound"
-                )
-            for entry_path in entries:
-                if self._reject_conflict_or_temp(entry_path):
-                    continue
+            entry_paths = self._complete_slot_entry_paths(entries_dir)
+            result.extend((thread_path.name, path) for path in entry_paths)
+        return result
+
+    def _complete_slot_entry_paths(self, entries_dir: Path) -> list[Path]:
+        for attempt in range(21):
+            complete: list[Path] = []
+            incomplete = False
+            slots = list(entries_dir.iterdir())
+            if len(slots) > self.MAX_ENTRIES_PER_THREAD:
+                raise BuilderThreadConflictError("thread entry slot bound exceeded")
+            if not slots:
+                incomplete = True
+            for slot in slots:
                 if (
-                    not entry_path.is_file()
+                    slot.is_symlink()
+                    or not slot.is_dir()
+                    or not re.fullmatch(r"[0-9]{3}", slot.name)
+                    or int(slot.name) >= self.MAX_ENTRIES_PER_THREAD
+                ):
+                    raise BuilderThreadValidationError("unknown artifact beneath entries")
+                children = list(slot.iterdir())
+                if len(children) != 1 or children[0].name.startswith(".tmp-"):
+                    incomplete = True
+                    continue
+                entry_path = children[0]
+                if (
+                    entry_path.is_symlink()
+                    or not entry_path.is_file()
                     or not entry_path.name.endswith(".json")
                     or not HASH_RE.fullmatch(entry_path.stem)
                 ):
-                    raise BuilderThreadValidationError(
-                        "unknown artifact beneath entries"
-                    )
-                result.append((thread_path.name, entry_path))
-        return result
+                    raise BuilderThreadValidationError("unknown artifact beneath entry slot")
+                complete.append(entry_path)
+            if not incomplete:
+                return complete
+            if attempt < 20:
+                time.sleep(0.05)
+        raise BuilderThreadValidationError("incomplete artifact tree")
 
     def _reject_conflict_or_temp(self, path: Path) -> bool:
         if CONFLICT_COPY_RE.search(path.name):
@@ -927,9 +972,7 @@ class BuilderThreadService:
                 except FileNotFoundError:
                     return True
                 time.sleep(0.05)
-            raise BuilderThreadValidationError(
-                "incomplete artifact detected"
-            )
+            raise BuilderThreadValidationError("incomplete artifact detected")
         return False
 
     def _validate_all(self) -> None:
@@ -938,21 +981,14 @@ class BuilderThreadService:
     def _load_all_threads(self) -> list[dict[str, Any]]:
         paths = self._validate_structure()
         thread_ids = sorted({thread_id for thread_id, _ in paths})
-        threads = [
-            self._load_thread_from_paths(thread_id, paths)
-            for thread_id in thread_ids
-        ]
+        threads = [self._load_thread_from_paths(thread_id, paths) for thread_id in thread_ids]
         captures: dict[str, str] = {}
         for thread in threads:
             open_entry = next(
-                item["entry"]
-                for item in thread["entries"]
-                if item["entry"]["entry_type"] == "open"
+                item["entry"] for item in thread["entries"] if item["entry"]["entry_type"] == "open"
             )
             capture_key = open_entry["capture_key"]
-            if thread["thread_id"] != _capture_thread_id(
-                self.expected_vault_id, capture_key
-            ):
+            if thread["thread_id"] != _capture_thread_id(self.expected_vault_id, capture_key):
                 raise BuilderThreadConflictError(
                     "thread path does not match deterministic capture identity"
                 )
@@ -962,15 +998,11 @@ class BuilderThreadService:
             captures[capture_key] = thread["thread_id"]
         return threads
 
-    def _load_thread(
-        self, thread_id: str, *, structural_only: bool = False
-    ) -> dict[str, Any]:
+    def _load_thread(self, thread_id: str, *, structural_only: bool = False) -> dict[str, Any]:
         paths = self._validate_structure()
         if thread_id not in {item[0] for item in paths}:
             raise BuilderThreadValidationError(f"thread not found: {thread_id}")
-        return self._load_thread_from_paths(
-            thread_id, paths, structural_only=structural_only
-        )
+        return self._load_thread_from_paths(thread_id, paths, structural_only=structural_only)
 
     def _load_thread_from_paths(
         self,
@@ -987,16 +1019,16 @@ class BuilderThreadService:
             payload, raw = self._read_canonical_json(path)
             observed_hash = _sha256(raw)
             if observed_hash != path.stem:
-                raise BuilderThreadValidationError(
-                    f"artifact hash mismatch: {path.name}"
-                )
-            self._validate_entry_shape(payload, thread_id=thread_id)
+                raise BuilderThreadValidationError(f"artifact hash mismatch: {path.name}")
+            self._validate_entry_shape(
+                payload,
+                thread_id=thread_id,
+                structural_only=True,
+            )
             entry_id = payload["entry_id"]
             previous = entry_ids.get(entry_id)
-            if previous is not None and previous != observed_hash:
-                raise BuilderThreadConflictError(
-                    f"duplicate entry_id conflict: {entry_id}"
-                )
+            if previous is not None:
+                raise BuilderThreadConflictError(f"duplicate entry_id: {entry_id}")
             entry_ids[entry_id] = observed_hash
             entries.append(
                 {
@@ -1006,11 +1038,32 @@ class BuilderThreadService:
                 }
             )
         hashes = {item["entry_hash"] for item in entries}
-        quarantined = {
+        quarantine_entries = [
+            item for item in entries if item["entry"]["entry_type"] == "quarantine"
+        ]
+        targeted_quarantine_hashes = {
             item["entry"]["target_hash"]
-            for item in entries
-            if item["entry"]["entry_type"] == "quarantine"
+            for item in quarantine_entries
+            if item["entry"]["target_hash"]
+            in {candidate["entry_hash"] for candidate in quarantine_entries}
         }
+        active_quarantines = [
+            item
+            for item in quarantine_entries
+            if item["entry_hash"] not in targeted_quarantine_hashes
+        ]
+        quarantine_targets: dict[str, list[str]] = {}
+        for item in active_quarantines:
+            target_hash = item["entry"]["target_hash"]
+            quarantine_targets.setdefault(target_hash, []).append(item["entry_hash"])
+        quarantine_conflicts = {
+            target: decisions
+            for target, decisions in quarantine_targets.items()
+            if len(decisions) > 1
+        }
+        if quarantine_conflicts and not structural_only:
+            raise BuilderThreadConflictError("multiple active quarantine decisions for one target")
+        quarantined = set(quarantine_targets)
         if None in quarantined:
             raise BuilderThreadValidationError("quarantine target is required")
         if not quarantined.issubset(hashes):
@@ -1026,6 +1079,11 @@ class BuilderThreadService:
             for item in entries:
                 if item["quarantined"]:
                     continue
+                self._validate_entry_shape(
+                    item["entry"],
+                    thread_id=thread_id,
+                    structural_only=False,
+                )
                 _privacy_check(item["entry"].get("subject"), field="subject")
                 _privacy_check(item["entry"].get("content"), field="content")
         opens = [item for item in entries if item["entry"]["entry_type"] == "open"]
@@ -1033,8 +1091,17 @@ class BuilderThreadService:
             raise BuilderThreadValidationError(
                 f"thread requires exactly one structural open entry: {thread_id}"
             )
-        source_refs = opens[0]["entry"]["source_refs"]
-        state = self._derive_state(entries)
+        open_entry = opens[0]["entry"]
+        source_refs = open_entry["source_refs"]
+        if open_entry["capture_key"] != _capture_key(
+            open_entry["recipient_id"], source_refs, open_entry["subject"]
+        ):
+            raise BuilderThreadConflictError("open capture key does not match its fields")
+        state = (
+            "conflicted"
+            if structural_only and quarantine_conflicts
+            else self._derive_state(entries)
+        )
         return {
             "artifact_hashes": sorted(hashes),
             "entries": sorted(
@@ -1044,12 +1111,12 @@ class BuilderThreadService:
                     item["entry_hash"],
                 ),
             ),
-            "source_refs": source_refs,
+            "source_refs": (
+                _source_refs(self.INCIDENT_SOURCE_REFS) if opens[0]["quarantined"] else source_refs
+            ),
             "state": state,
             "subject": (
-                "[quarantined]"
-                if opens[0]["quarantined"]
-                else opens[0]["entry"]["subject"]
+                "[quarantined]" if opens[0]["quarantined"] else opens[0]["entry"]["subject"]
             ),
             "thread_id": thread_id,
         }
@@ -1074,36 +1141,51 @@ class BuilderThreadService:
             basis_hashes = entry["basis_hashes"]
             if any(value not in hashes for value in basis_hashes):
                 raise BuilderThreadValidationError("dangling basis hash")
-            if entry["basis_hash"] != (
-                _snapshot_hash(basis_hashes) if basis_hashes else None
-            ):
+            if entry["basis_hash"] != (_snapshot_hash(basis_hashes) if basis_hashes else None):
                 raise BuilderThreadValidationError("basis snapshot hash mismatch")
             if item["entry_hash"] in basis_hashes:
                 raise BuilderThreadValidationError("disposition basis contains itself")
             if entry_type == "reply" and parent is None:
                 raise BuilderThreadValidationError("reply parent hash is required")
+            if entry_type == "reply" and (
+                by_hash[parent]["entry"].get("recipient_id") != entry["actor_id"]
+            ):
+                raise BuilderThreadValidationError(
+                    "reply actor does not match the named parent recipient"
+                )
             if entry_type == "close":
                 closes.append(item)
+                if parent is not None:
+                    if parent not in basis_hashes:
+                        raise BuilderThreadValidationError(
+                            "superseding close is missing archive from its basis"
+                        )
+                    if by_hash[parent]["entry"]["entry_type"] != "archive":
+                        raise BuilderThreadValidationError(
+                            "close can supersede only an archive parent"
+                        )
                 if target is not None:
                     if target not in hashes or target not in basis_hashes:
                         raise BuilderThreadValidationError(
                             "superseding close target is missing from its basis"
                         )
                     if by_hash[target]["entry"]["entry_type"] != "close":
-                        raise BuilderThreadValidationError(
-                            "close can supersede only a close"
-                        )
+                        raise BuilderThreadValidationError("close can supersede only a close")
             if entry_type == "archive":
                 archives.append(item)
                 if target not in hashes:
                     raise BuilderThreadValidationError("archive target is missing")
                 if target not in basis_hashes:
-                    raise BuilderThreadValidationError(
-                        "archive basis does not contain its target"
-                    )
+                    raise BuilderThreadValidationError("archive basis does not contain its target")
                 if by_hash[target]["entry"]["entry_type"] != "close":
+                    raise BuilderThreadValidationError("archive must target a close")
+                basis_entries = [
+                    candidate for candidate in entries if candidate["entry_hash"] in basis_hashes
+                ]
+                active_basis_closes = self._active_from_entries(basis_entries, "close")
+                if len(active_basis_closes) != 1 or active_basis_closes[0]["entry_hash"] != target:
                     raise BuilderThreadValidationError(
-                        "archive must target a close"
+                        "archive must target the active close in its basis"
                     )
                 if parent is not None:
                     if parent not in basis_hashes:
@@ -1111,9 +1193,7 @@ class BuilderThreadService:
                             "superseding archive is missing from its basis"
                         )
                     if by_hash[parent]["entry"]["entry_type"] != "archive":
-                        raise BuilderThreadValidationError(
-                            "archive can supersede only an archive"
-                        )
+                        raise BuilderThreadValidationError("archive can supersede only an archive")
             if entry_type == "quarantine":
                 if target not in hashes:
                     raise BuilderThreadValidationError("quarantine target is missing")
@@ -1129,23 +1209,20 @@ class BuilderThreadService:
             raise BuilderThreadConflictError("multiple active close entries")
         if len(active_archives) > 1:
             raise BuilderThreadConflictError("multiple active archive entries")
+        if active_archives and (
+            len(active_closes) != 1
+            or active_archives[0]["entry"]["target_hash"] != active_closes[0]["entry_hash"]
+        ):
+            raise BuilderThreadValidationError("active archive must target the active close")
 
     def _derive_state(self, entries: list[dict[str, Any]]) -> str:
         active = [item for item in entries if not item["quarantined"]]
         archives = self._active_from_entries(entries, "archive")
         if archives:
-            return (
-                "archived"
-                if self._snapshot_is_current(entries, archives[0])
-                else "needs_review"
-            )
+            return "archived" if self._snapshot_is_current(entries, archives[0]) else "needs_review"
         closes = self._active_from_entries(entries, "close")
         if closes:
-            return (
-                "closed"
-                if self._snapshot_is_current(entries, closes[0])
-                else "needs_review"
-            )
+            return "closed" if self._snapshot_is_current(entries, closes[0]) else "needs_review"
         if any(item["quarantined"] for item in entries):
             return "quarantined"
         if any(item["entry"]["entry_type"] == "reply" for item in active):
@@ -1153,13 +1230,19 @@ class BuilderThreadService:
         return "open"
 
     def _validate_entry_shape(
-        self, payload: dict[str, Any], *, thread_id: str
+        self,
+        payload: dict[str, Any],
+        *,
+        thread_id: str,
+        structural_only: bool = False,
     ) -> None:
         if set(payload) != ENTRY_KEYS:
             raise BuilderThreadValidationError("unknown or missing contribution fields")
         if payload["schema"] != ENTRY_SCHEMA:
             raise BuilderThreadValidationError("unknown contribution schema")
-        if payload["privacy_class"] != PRIVACY_CLASS:
+        if not isinstance(payload["privacy_class"], str):
+            raise BuilderThreadValidationError("privacy_class must be text")
+        if not structural_only and payload["privacy_class"] != PRIVACY_CLASS:
             raise BuilderThreadPrivacyError("privacy_class must be shared_non_sensitive")
         if payload["vault_id"] != self.expected_vault_id:
             raise BuilderThreadValidationError("contribution vault identity mismatch")
@@ -1167,13 +1250,17 @@ class BuilderThreadService:
             raise BuilderThreadValidationError("cross-thread contribution")
         _uuid4(payload["entry_id"], field="entry_id")
         _validate_timestamp(payload["created_at"])
-        _identity(payload["actor_id"], field="actor_id")
+        _identity(
+            payload["actor_id"],
+            field="actor_id",
+            enforce_privacy=not structural_only,
+        )
         entry_type = payload["entry_type"]
         if not isinstance(entry_type, str) or entry_type not in ENTRY_TYPES:
             raise BuilderThreadValidationError("unknown contribution entry_type")
         if not isinstance(payload["reply_expected"], bool):
             raise BuilderThreadValidationError("reply_expected must be boolean")
-        refs = _source_refs(payload["source_refs"])
+        refs = _source_refs(payload["source_refs"], enforce_privacy=not structural_only)
         if refs != payload["source_refs"]:
             raise BuilderThreadValidationError("source refs are not canonical")
         for field in ("parent_hash", "basis_hash", "target_hash", "capture_key"):
@@ -1188,11 +1275,13 @@ class BuilderThreadService:
         if basis_hashes != sorted(set(basis_hashes)):
             raise BuilderThreadValidationError("basis_hashes must be bounded and sorted")
         if entry_type in {"open", "reply"}:
-            _identity(payload["recipient_id"], field="recipient_id")
-        elif payload["recipient_id"] is not None:
-            raise BuilderThreadValidationError(
-                f"{entry_type} recipient_id must be null"
+            _identity(
+                payload["recipient_id"],
+                field="recipient_id",
+                enforce_privacy=not structural_only,
             )
+        elif payload["recipient_id"] is not None:
+            raise BuilderThreadValidationError(f"{entry_type} recipient_id must be null")
         subject = payload["subject"]
         content = payload["content"]
         if entry_type == "open":
@@ -1221,8 +1310,7 @@ class BuilderThreadService:
             _bounded_text(content, field="content", maximum=self.MAX_CONTENT_CHARS)
         elif entry_type == "close":
             if any(
-                payload[field] is not None
-                for field in ("subject", "capture_key", "parent_hash", "reason_code")
+                payload[field] is not None for field in ("subject", "capture_key", "reason_code")
             ):
                 raise BuilderThreadValidationError("close shape is invalid")
             if payload["reply_expected"]:
@@ -1298,7 +1386,10 @@ class BuilderThreadService:
         raw = _canonical_bytes(entry)
         entry_hash = _sha256(raw)
         try:
-            current = self._load_thread(entry["thread_id"], structural_only=True)
+            current = self._load_thread(
+                entry["thread_id"],
+                structural_only=entry["entry_type"] == "quarantine",
+            )
         except BuilderThreadValidationError as exc:
             if entry["entry_type"] != "open" or "thread not found" not in str(exc):
                 raise
@@ -1306,8 +1397,12 @@ class BuilderThreadService:
         if current is not None:
             for item in current["entries"]:
                 if item["entry"]["entry_id"] == entry["entry_id"]:
-                    if item["entry_hash"] == entry_hash and item["entry"] == entry:
-                        return self._result(current, entry=entry, entry_hash=entry_hash)
+                    if _same_idempotent_request(item["entry"], entry):
+                        return self._result(
+                            current,
+                            entry=item["entry"],
+                            entry_hash=item["entry_hash"],
+                        )
                     raise BuilderThreadConflictError(
                         f"entry_id replay conflict: {entry['entry_id']}"
                     )
@@ -1317,45 +1412,106 @@ class BuilderThreadService:
             return self._publish_new_thread(entry, raw, entry_hash)
         thread_dir = self.threads_root / entry["thread_id"]
         entries_dir = thread_dir / "entries"
-        path = entries_dir / f"{entry_hash}.json"
-        _atomic_publish(path, raw)
+        try:
+            slot = self._reserve_entry_slot(entries_dir, entry["entry_id"])
+        except _ExistingEntryReservation:
+            reloaded = self._load_thread(entry["thread_id"])
+            represented = next(
+                (
+                    item
+                    for item in reloaded["entries"]
+                    if item["entry"]["entry_id"] == entry["entry_id"]
+                ),
+                None,
+            )
+            if represented is None:
+                raise BuilderThreadConflictError(
+                    "entry reservation changed during reconciliation"
+                )
+            if _same_idempotent_request(represented["entry"], entry):
+                return self._result(
+                    reloaded,
+                    entry=represented["entry"],
+                    entry_hash=represented["entry_hash"],
+                )
+            raise BuilderThreadConflictError(
+                f"entry_id replay conflict: {entry['entry_id']}"
+            ) from None
+        try:
+            _atomic_publish(slot / f"{entry_hash}.json", raw)
+        except Exception:
+            if not any(slot.iterdir()):
+                slot.rmdir()
+                _fsync_directory(entries_dir)
+            raise
         reloaded = self._load_thread(entry["thread_id"])
         return self._result(reloaded, entry=entry, entry_hash=entry_hash)
 
     def _publish_new_thread(
         self, entry: dict[str, Any], raw: bytes, entry_hash: str
     ) -> dict[str, Any]:
-        """Publish the initial entry as one atomically visible directory tree."""
+        """Claim the deterministic destination without overwriting any existing tree."""
 
         thread_dir = self.threads_root / entry["thread_id"]
-        staging = self.threads_root / f".tmp-thread-{uuid.uuid4().hex}"
-        _safe_mkdir(staging)
-        entries_dir = staging / "entries"
-        _safe_mkdir(entries_dir)
         try:
-            _atomic_publish(entries_dir / f"{entry_hash}.json", raw)
-            _fsync_directory(entries_dir)
-            _fsync_directory(staging)
+            thread_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
+        except FileExistsError as exc:
+            raise BuilderThreadConflictError(
+                f"question destination already exists: {entry['thread_id']}"
+            ) from exc
+        _fsync_directory(self.threads_root)
+        entries_dir = thread_dir / "entries"
+        _safe_mkdir(entries_dir)
+        slot = self._reserve_entry_slot(entries_dir, entry["entry_id"])
+        _atomic_publish(slot / f"{entry_hash}.json", raw)
+        reloaded = self._load_thread(entry["thread_id"])
+        return self._result(reloaded, entry=entry, entry_hash=entry_hash)
+
+    def _reserve_entry_slot(self, entries_dir: Path, entry_id: str) -> Path:
+        start = int(hashlib.sha256(entry_id.encode()).hexdigest(), 16) % self.MAX_ENTRIES_PER_THREAD
+        for offset in range(self.MAX_ENTRIES_PER_THREAD):
+            slot = entries_dir / f"{(start + offset) % self.MAX_ENTRIES_PER_THREAD:03d}"
             try:
-                os.rename(staging, thread_dir)
-            except OSError as exc:
-                if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
-                    raise
-                raise BuilderThreadConflictError(
-                    f"question already represented by thread {entry['thread_id']}"
-                ) from exc
-            _fsync_directory(self.threads_root)
-            reloaded = self._load_thread(entry["thread_id"])
-            return self._result(reloaded, entry=entry, entry_hash=entry_hash)
-        finally:
-            staged_entry = entries_dir / f"{entry_hash}.json"
-            if staged_entry.exists():
-                staged_entry.unlink()
-            if entries_dir.exists():
-                entries_dir.rmdir()
-            if staging.exists():
-                staging.rmdir()
-            _fsync_directory(self.threads_root)
+                slot.mkdir(mode=0o700, parents=False, exist_ok=False)
+            except FileExistsError:
+                _real_directory(slot, label="entry slot")
+                if self._reserved_slot_entry_id(slot) == entry_id:
+                    raise _ExistingEntryReservation(entry_id)
+                continue
+            _fsync_directory(entries_dir)
+            return slot
+        raise BuilderThreadConflictError(
+            f"thread entry bound reached ({self.MAX_ENTRIES_PER_THREAD})"
+        )
+
+    def _reserved_slot_entry_id(self, slot: Path) -> str:
+        for attempt in range(21):
+            children = list(slot.iterdir())
+            finals = [
+                path
+                for path in children
+                if path.is_file()
+                and not path.is_symlink()
+                and path.name.endswith(".json")
+                and HASH_RE.fullmatch(path.stem)
+            ]
+            if len(finals) == 1:
+                payload, raw = self._read_canonical_json(finals[0])
+                if _sha256(raw) != finals[0].stem:
+                    raise BuilderThreadValidationError("artifact hash mismatch")
+                self._validate_entry_shape(
+                    payload,
+                    thread_id=slot.parent.parent.name,
+                    structural_only=True,
+                )
+                return payload["entry_id"]
+            if attempt < 20 and (
+                not children or all(path.name.startswith(".tmp-") for path in children)
+            ):
+                time.sleep(0.05)
+                continue
+            raise BuilderThreadValidationError("incomplete artifact tree")
+        raise BuilderThreadValidationError("incomplete artifact tree")
 
     def _read_canonical_json(self, path: Path) -> tuple[dict[str, Any], bytes]:
         try:
@@ -1385,20 +1541,24 @@ class BuilderThreadService:
         candidates = [
             item
             for item in entries
-            if not item["quarantined"]
-            and item["entry"]["entry_type"] == entry_type
+            if not item["quarantined"] and item["entry"]["entry_type"] == entry_type
         ]
         superseded = {
             item["entry"]["target_hash" if entry_type == "close" else "parent_hash"]
             for item in candidates
-            if item["entry"]["target_hash" if entry_type == "close" else "parent_hash"]
-            is not None
+            if item["entry"]["target_hash" if entry_type == "close" else "parent_hash"] is not None
         }
+        if entry_type == "archive":
+            superseded.update(
+                item["entry"]["parent_hash"]
+                for item in entries
+                if not item["quarantined"]
+                and item["entry"]["entry_type"] == "close"
+                and item["entry"]["parent_hash"] is not None
+            )
         return [item for item in candidates if item["entry_hash"] not in superseded]
 
-    def _active_dispositions(
-        self, thread: dict[str, Any], entry_type: str
-    ) -> list[dict[str, Any]]:
+    def _active_dispositions(self, thread: dict[str, Any], entry_type: str) -> list[dict[str, Any]]:
         return self._active_from_entries(thread["entries"], entry_type)
 
     def _snapshot_is_current(
@@ -1412,8 +1572,7 @@ class BuilderThreadService:
         state_hashes = {
             item["entry_hash"]
             for item in entries
-            if not item["quarantined"]
-            and item["entry"]["entry_type"] != "quarantine"
+            if not item["quarantined"] and item["entry"]["entry_type"] != "quarantine"
         }
         expected = state_hashes - {disposition["entry_hash"]}
         effective_basis = set(disposition["entry"]["basis_hashes"]) - ignored_hashes
@@ -1427,8 +1586,7 @@ class BuilderThreadService:
             if item["entry"]["entry_type"] == "reply"
             and any(
                 parent["entry_hash"] == item["entry"]["parent_hash"]
-                and parent["entry"].get("recipient_id")
-                == item["entry"]["actor_id"]
+                and parent["entry"].get("recipient_id") == item["entry"]["actor_id"]
                 for parent in active
             )
         }
@@ -1444,9 +1602,7 @@ class BuilderThreadService:
         active = [item for item in thread["entries"] if not item["quarantined"]]
         return {
             "entry_count": len(thread["entries"]),
-            "last_activity": max(
-                item["entry"]["created_at"] for item in thread["entries"]
-            ),
+            "last_activity": max(item["entry"]["created_at"] for item in thread["entries"]),
             "snapshot_hash": _snapshot_hash(thread["artifact_hashes"]),
             "source_refs": thread["source_refs"],
             "state": thread["state"],
@@ -1457,7 +1613,8 @@ class BuilderThreadService:
 
     def _render_thread(self, thread: dict[str, Any]) -> dict[str, Any]:
         entries = []
-        for item in thread["entries"]:
+        selected = thread["entries"][-self.MAX_ENTRIES_PER_THREAD :]
+        for item in selected:
             if item["quarantined"]:
                 entries.append(
                     {
@@ -1475,7 +1632,11 @@ class BuilderThreadService:
                         "quarantined": False,
                     }
                 )
-        return {**self._summary(thread), "entries": entries}
+        return {
+            **self._summary(thread),
+            "entries": entries,
+            "entries_truncated": len(thread["entries"]) > len(selected),
+        }
 
     def _result(
         self,

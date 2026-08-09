@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-29
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-07-15
+Last reviewed: 2026-08-09
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/builderops/BUILDEROPS_VAULT_STORE.md, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/builderops/builder_threads.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-08-09
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -399,6 +399,20 @@ Companion docs:
 - Check it with `curl -s localhost:18001/api/cockpit/registry | jq '.sources[] |
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
+
+### BuilderOps shared thread exchange (#4702)
+
+- `scripts/builderops_cli.sh builderops builder-thread ...` is the supported mutation/read surface
+  for one bounded `shared_non_sensitive` question to a named recipient; create and reply require a
+  caller-retained `--entry-id` UUID so a lost acknowledgement can be retried idempotently.
+- `scripts/builderops_cli.sh builderops builder-inbox ...` is read-only and never gates runtime,
+  Issue, PR, Verify, merge, closure, or promotion state.
+- Routine init verifies the pinned `BUILDEROPS_VAULT_ID`. First adoption is an explicit
+  `builder-thread init --adopt-existing` operator action after `builderops vault validate`; no
+  create/read/review request may infer it.
+- Builder Threads are Builder System artifacts, not Product/Runtime state. The complete file,
+  privacy, quarantine, and recovery contract lives in
+  `docs/builderops/BUILDEROPS_VAULT_STORE.md :: Builder Thread artifact exchange`.
 
 ### Karakeep managed source service (KMA-02)
 - `docker-compose.karakeep.yml` is the repo-owned deployment for the self-hosted Karakeep

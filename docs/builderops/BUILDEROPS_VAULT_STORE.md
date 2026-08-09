@@ -331,21 +331,32 @@ Monologic work notes remain `AgentWorklog`; Builder Threads are never Issue, PR,
 self-attest a root. Every client must pin the UUID through `BUILDEROPS_VAULT_ID`; a mismatched,
 missing, or divergent identity fails before artifact use. Contributions are canonical
 `shared_non_sensitive` JSON envelopes at
-`builder-threads/threads/<thread-id>/entries/<sha256>.json`, where the filename binds the complete
+`builder-threads/threads/<thread-id>/entries/<slot>/<sha256>.json`, where the filename binds the complete
 file bytes. Canonical encoding is UTF-8 with lexicographically sorted object keys, compact
 comma/colon separators, direct JSON Unicode, and one terminal LF. Strict bounds and scanners reject
 obvious credentials, argv/env/stderr, raw private host
 paths, unsafe refs, symlinks, SQLite, conflict-copy names, partial/temp artifacts, unknown schemas or
 paths, duplicate IDs, hash mismatches, and replay conflicts.
 
+Create and reply require a caller-retained `--entry-id` UUIDv4. An exact semantic retry with that ID
+returns the installed contribution even when the helper generates a later timestamp; changed
+semantics under one ID are refused. If final publication succeeded but temp cleanup failed, a later
+mutation retry removes the temp only after its bytes and content-addressed final match. Read-only
+health never performs cleanup.
+
 Publication uses a same-directory exclusive temporary file, file `fsync`, a no-overwrite hard
 link, directory `fsync`, readback, temp unlink, and a second directory `fsync`. There is no
 sequence, mutable head, database, shared lock, reminder entry, or hidden client index. Exact replay
-is idempotent. Initial thread trees are staged completely and renamed to a deterministic
-vault/capture-derived UUID before the threads directory is synced; concurrent identical captures
-therefore converge on one destination without exposing a partial final scaffold. Stale dispositions
-use immutable supersession lineage. An explicit hash-bound quarantine contribution can preserve and
-redact a structurally valid unsafe or conflicting artifact; it never masks structural corruption.
+is idempotent. Initial thread destinations use create-if-absent/no-overwrite directory creation;
+readers accept them only after the entries directory, one reserved slot, and a complete
+content-addressed open contribution exist. A pre-existing empty destination is left untouched and
+reported as a typed conflict. Stale dispositions use immutable supersession lineage. An explicit
+hash-bound quarantine contribution can preserve and redact a structurally valid unsafe or conflicting
+artifact; it never masks structural corruption. Each thread has exactly 128 possible immutable
+entry slots. A writer reserves one before publishing contribution bytes, so a concurrent or
+sequential 129th append fails without changing the tree. Multiple active quarantine decisions for
+one target are themselves a conflict; `concurrent_conflict` can disposition one exact decision
+without deleting either envelope while a slot remains.
 
 Use the production operator surfaces:
 

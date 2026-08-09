@@ -88,6 +88,7 @@ def test_builder_thread_contract_is_executable_and_discoverable() -> None:
     thread_skill = _read(".codex/skills/builder-thread/SKILL.md")
     inbox_skill = _read(".codex/skills/builder-inbox/SKILL.md")
     cli = _read("app/builderops/cli.py")
+    implementation = _read("app/builderops/builder_threads.py")
 
     for skill_name in ("builder-thread", "builder-inbox"):
         assert f"- `{skill_name}`" in index
@@ -119,12 +120,25 @@ def test_builder_thread_contract_is_executable_and_discoverable() -> None:
     assert "explicit" in verification and "Builder-Thread-Ref" in verification
     assert "read-only" in verification
     assert "never mutates or gates" in verification
-    assert "builder-inbox" not in _read(
-        ".codex/skills/learning-retrospective/SKILL.md"
+    for authority_term in ("verify", "merge", "closure", "promotion"):
+        assert authority_term in contract.casefold()
+    assert "cannot create or certify" in contract
+    assert "no free-form session capture or automatic quarantine" in contract
+    assert "os.rename" not in implementation
+    assert "create_issue" not in implementation
+    devui_sources = "\n".join(
+        _read(path)
+        for path in (
+            "app/api/routes/devui.py",
+            "app/builderops/devui_composition.py",
+            "app/builderops/devui_conversation_port.py",
+            "app/builderops/devui_focus.py",
+        )
     )
-    assert "builder-thread" not in _read(
-        "docs/development/PARENT_ISSUE_CLOSURE.md"
-    )
+    assert "builder-thread" not in devui_sources.casefold()
+    assert "builder_threads" not in devui_sources.casefold()
+    assert "builder-inbox" not in _read(".codex/skills/learning-retrospective/SKILL.md")
+    assert "builder-thread" not in _read("docs/development/PARENT_ISSUE_CLOSURE.md")
     assert "builder-vault-deliberation" not in index
     assert "builder-vault-review" not in index
 

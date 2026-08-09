@@ -1,4 +1,4 @@
-State: Advisory architecture and red-team snapshot, 2026-08-09. Evidence baseline: origin/main at 8b72d1bc3edca895eaa2c88759a23b47c84b5abc. Subordinate to ADR-0010, ADR-0062, the BuilderOps vault-store owner, and live GitHub/delivery authority.
+State: Advisory architecture and red-team snapshot, 2026-08-09. Evidence baseline: origin/main at d0eb93a149fe2075d673ba09a91921dd4bd0243d. Subordinate to ADR-0010, ADR-0062, the BuilderOps vault-store owner, and live GitHub/delivery authority.
 Doc role: Reference (implementation boundary and convergence review)
 Authority: Evidence-based Builder System analysis only; Issue #4702 governs delivery. Draft PR
 #4701 is the rejected prose-only predecessor and is not acceptance evidence.
@@ -51,9 +51,9 @@ surface.
 | Privacy | Only shared_non_sensitive; strict subject/content/ref/entry/output bounds and obvious credential, argv/env/stderr, and raw-private-path refusals. |
 | Capture | Named recipient, reply_expected=true, typed authority-safe refs, and deterministic duplicate representation refusal. |
 | Publication | Same-directory exclusive temp, file fsync, no-overwrite hard link, directory fsync, readback, temp unlink, second directory fsync. |
-| Concurrency | No sequence, mutable head, shared lock, SQLite, or hidden index. A new thread is staged as a complete hidden tree and renamed to its deterministic no-overwrite identity. Independent contributions converge by set; duplicate IDs or incompatible dispositions fail closed. |
+| Concurrency | No sequence, mutable head, shared lock, SQLite, or hidden index. A new deterministic thread destination and each of its 128 entry slots are claimed create-if-absent and never overwritten. Independent contributions converge by set; duplicate IDs or incompatible dispositions fail closed. |
 | Validation | Root/scaffold/genesis confinement plus no symlink, SQLite, conflict copy, temp/partial, unknown field/schema/path, hash mismatch, dangling lineage, or replay conflict. |
-| Recovery | Exact replay and acknowledgement-loss retry are idempotent. Stale close/archive entries are superseded through immutable lineage. A structurally valid unsafe or conflicting disposition can receive an explicit hash-bound quarantine contribution; bytes remain immutable and normal output redacts them. Structural corruption remains a hard refusal. |
+| Recovery | Caller-retained create/reply entry IDs make semantic acknowledgement-loss retries idempotent. Exact committed temp twins are cleanup-recoverable by writers. Stale close/archive entries are superseded through immutable lineage. A structurally valid privacy-unsafe or conflicting disposition can receive an explicit hash-bound quarantine contribution; bytes remain immutable and normal output redacts them. Structural corruption remains a hard refusal. |
 | Derived state | open, answered, closed, archived, needs_review, or quarantined, rebuilt from validated contributions. Inbox/health has a deterministic snapshot hash and no write path. |
 
 Stable mechanism/domain key: `builder-thread/artifact-publication-and-reduction-v1`. The protected
@@ -66,14 +66,15 @@ archive disposition. No artifact grants delivery authority.
 - Valid working states are `open`, `answered`, `needs_review`, and `quarantined`. Valid terminal
   states are `closed` and `archived`; late activity deterministically returns a terminal snapshot to
   `needs_review`.
-- Indeterminate states are wrong/missing genesis, active or orphaned temp artifacts, unknown paths
+- Indeterminate states are wrong/missing genesis, active or unmatched orphaned temp artifacts, unknown paths
   or fields, non-canonical or partial JSON, bad hashes, duplicate capture/entry identity, dangling
   lineage, and multiple current dispositions. Reads fail closed rather than projecting an empty or
   healthy inbox.
 - Compensated state is an explicit quarantine contribution targeting one exact structurally valid
-  artifact. It can remove unsafe bytes or one conflicting disposition from normal reduction without
-  deleting history. It cannot compensate for structural corruption, wrong identity, or an
-  incomplete directory tree.
+  artifact. It can remove unsafe bytes or one conflicting disposition
+  from normal reduction without deleting history. A `concurrent_conflict` disposition may target
+  one quarantine decision so its sibling remains effective. It cannot compensate for structural
+  corruption, wrong identity, or an incomplete directory tree.
 - `create` is the only writer of an open contribution. `reply` requires the actor to equal the named
   recipient on its parent. `close` snapshots all prior hashes and may target the current close to
   supersede it. `archive` targets the current fresh close and may parent the current archive to
@@ -83,17 +84,27 @@ archive disposition. No artifact grants delivery authority.
 
 Genesis and ordinary contributions use `exclusive temp -> bytes -> file fsync -> no-overwrite hard
 link -> parent fsync -> final readback -> temp unlink -> parent fsync`. Any failed sync, unlink, link,
-or readback returns failure even when the final name may already exist; an exact retry revalidates
-the installed bytes and repeats the sync boundary.
+or readback returns failure even when the final name may already exist. Before a mutation retry, the
+writer may remove a leftover temp only when it is a regular file whose installed final has identical
+bytes (and, for a contribution, the expected content hash); the retry then revalidates the installed
+entry. Read-only operations never clean it.
 
-Initial thread publication uses `hidden staging directory -> entries directory -> atomic entry
-publication -> entries/staging fsync -> no-overwrite rename to deterministic thread ID -> threads
-directory fsync`. Readers wait only for the bounded active-temp window, never accept a visible
-partial final tree, and reject an orphan temp after that window. Two identical captures converge on
-one deterministic destination; one wins and the other returns a typed already-represented conflict.
-Different captures have independent destinations. There is deliberately no cross-device lock:
+Initial thread publication uses `create deterministic destination if absent -> parent fsync ->
+create entries directory -> parent fsync -> reserve one of 128 slots if absent -> parent fsync ->
+atomic entry publication`. Readers wait only for the bounded live-install/temp window, never accept
+a partial tree, and reject an orphan after that window. A pre-existing empty destination is left
+untouched. Two identical captures converge on one deterministic destination; one wins and the other
+returns a typed already-represented conflict. Different captures have independent destinations.
+There is deliberately no cross-device lock:
 iCloud conflict copies, duplicate capture keys, and incompatible current dispositions remain
 receiver-visible conflicts.
+
+Create/reply callers retain one UUIDv4 entry ID until readback. That ID binds semantic retry fields;
+the generated timestamp is excluded only from retry comparison, and the original installed
+timestamp is returned. Each thread has 128 immutable entry slots. Reservation precedes durable JSON
+publication, so one of two concurrent boundary writers succeeds and the other fails without writing
+contribution bytes; every later 129th append is likewise non-mutating. Quarantine entries do not
+recursively grow on ordinary review and remain one explicit mutation per target/incident.
 
 Startup and every operation revalidate all existing path components for symlinks, the two genesis
 envelopes, the strict artifact tree, privacy/type/size bounds, content hashes, capture uniqueness,
@@ -111,19 +122,33 @@ suppressed cleanup-sync failure, self-attested root, and incompatible retry acce
 rejected evidence. The repaired publishable SHA must receive a fresh independent convergence review
 before affected-surface validation.
 
+The next convergence review rejected SHA `3e1c9e26cb42277585396b1239e7569cabbc5a67`
+for missing CLI idempotency input, unrecoverable committed-temp cleanup residue, concurrent
+active-bound overflow, concurrent quarantine-decision conflicts, receiver-side reply binding gaps,
+two privacy variants, and a plain docs-guard failure. That SHA is also rejected evidence. The next
+review must reproduce the new CLI retries, cleanup recovery, pre-publication entry bound,
+quarantine-conflict recovery, receiver validation, privacy variants, and plain docs guard on the
+exact repaired SHA.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
-| Pinned root and subsystem genesis; explicit adoption; symlink ancestors | `test_root_and_genesis_validation_fail_closed` |
+| Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |
 | Unknown, partial, conflict-copy, symlink, hash, and SQLite refusal | `test_validator_rejects_unknown_partial_conflict_and_sqlite_artifacts` |
 | Every envelope field is typed; hostile filenames are not echoed | `test_malformed_field_types_and_hostile_filenames_fail_typed_and_redacted` |
 | Concurrent identical capture and independent reply convergence; entry replay | `test_concurrent_writers_and_replay_conflicts_converge_fail_closed` |
-| Reader cannot observe a partial final initial tree | `test_initial_thread_tree_is_atomically_visible_to_readers` |
+| Concurrent exact entry-ID retry installs one physical envelope | `test_concurrent_exact_entry_retry_reserves_one_physical_artifact` |
+| Reader cannot observe a partial final initial tree; pre-existing destination is untouched | `test_initial_thread_tree_is_atomically_visible_to_readers`, `test_preexisting_empty_thread_destination_is_untouched` |
 | Late activity, superseding close/archive, incompatible disposition retry | `test_stale_dispositions_can_be_superseded_and_retries_conflict` |
 | File/link/fsync ordering and final cleanup-sync failure | `test_atomic_publication_uses_fsynced_temp_and_no_overwrite_link`, `test_atomic_publication_reports_final_directory_sync_failure_and_retries` |
-| Post-rename acknowledgement loss and exact recovery | `test_create_acknowledgement_loss_reconciles_on_exact_retry` |
+| Post-publication acknowledgement loss and exact recovery | `test_create_acknowledgement_loss_reconciles_on_exact_retry` |
+| Supported CLI create/reply lost-ack retry and typed bounded JSON failures | `test_cli_round_trip_covers_complete_thread_surface`, `test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append` |
+| Temp-unlink failure, exact twin cleanup, and later writer retry | `test_temp_unlink_failure_is_recovered_by_exact_writer_retry` |
+| Concurrent contradictory quarantine decisions and decision quarantine recovery | `test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable` |
+| Concurrent 128-entry boundary reservation and non-mutating 129th refusal | `test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating` |
 | Privacy patterns, actor identity, capture gate, bounds | `test_capture_gate_and_shared_non_sensitive_privacy_boundary` |
 | Recipient-bound answer plus immutable/idempotent inbox | `test_inbox_is_bounded_read_only_and_idempotent` |
-| Structurally valid privacy incident and incompatible quarantine retry | `test_quarantine_preserves_bytes_and_redacts_unsafe_artifact` |
+| Structurally valid privacy incidents, unsafe identity/ref redaction, and incompatible quarantine retry | `test_quarantine_preserves_bytes_and_redacts_unsafe_artifact`, `test_structural_quarantine_recovers_privacy_unsafe_identity_and_refs`, `test_structural_quarantine_redacts_unsafe_open_source_ref` |
+| Recomputed capture key and active-close archive targeting | `test_receiver_recomputes_capture_key_and_rejects_non_active_archive_target` |
 
 ## Workflow Simplification
 

@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping, cast
+from typing import Any, Callable, Iterable, Literal, Mapping, NoReturn, cast
 
 import click
 
@@ -18,6 +18,7 @@ from app.builderops.completeness_report import (
 from app.builderops.builder_threads import (
     BuilderThreadError,
     BuilderThreadService,
+    BuilderThreadValidationError,
 )
 from app.builderops.ci_handoff_state import (
     CiHandoffStateError,
@@ -384,23 +385,61 @@ def _parse_builder_thread_source_refs(
     for value in values:
         ref_type, separator, ref_value = value.partition(":")
         if not separator or not ref_type or not ref_value:
-            raise click.BadParameter(
-                "source-ref must use <type>:<value>", param_hint="source-ref"
-            )
+            raise BuilderThreadValidationError("source-ref must use <type>:<value>")
         refs.append({"type": ref_type, "value": ref_value})
     return refs
 
 
-def _builder_thread_service(ctx: click.Context) -> BuilderThreadService:
+def _builder_thread_failure(exc: Exception, *, as_json: bool) -> NoReturn:
+    message = str(exc).replace("\n", " ")[:240]
+    if as_json:
+        _emit(
+            {
+                "error": {
+                    "message": message,
+                    "type": exc.__class__.__name__,
+                },
+                "ok": False,
+            },
+            True,
+        )
+        raise click.exceptions.Exit(1)
+    raise click.ClickException(message) from exc
+
+
+class _BuilderThreadJsonCommand(click.Command):
+    """Keep Click usage refusals inside the bounded JSON protocol when requested."""
+
+    def make_context(
+        self,
+        info_name: str | None,
+        args: list[str],
+        parent: click.Context | None = None,
+        **extra: Any,
+    ) -> click.Context:
+        wants_json = "--json" in args
+        try:
+            return super().make_context(info_name, args, parent=parent, **extra)
+        except click.UsageError as exc:
+            if wants_json:
+                _builder_thread_failure(BuilderThreadValidationError(str(exc)), as_json=True)
+            raise
+
+
+def _builder_thread_service(ctx: click.Context, *, as_json: bool) -> BuilderThreadService:
     paths = _effective_paths(ctx)
     if paths.vault_root is None:
-        raise click.ClickException(
-            "BUILDEROPS_VAULT_ROOT is required for Builder Threads"
+        _builder_thread_failure(
+            BuilderThreadValidationError("BUILDEROPS_VAULT_ROOT is required for Builder Threads"),
+            as_json=as_json,
         )
     vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", "")).strip()
     if not vault_id:
-        raise click.ClickException(
-            "BUILDEROPS_VAULT_ID or --vault-id is required for Builder Threads"
+        _builder_thread_failure(
+            BuilderThreadValidationError(
+                "BUILDEROPS_VAULT_ID or --vault-id is required for Builder Threads"
+            ),
+            as_json=as_json,
         )
     try:
         return BuilderThreadService(
@@ -408,16 +447,16 @@ def _builder_thread_service(ctx: click.Context) -> BuilderThreadService:
             expected_vault_id=vault_id,
         )
     except BuilderThreadError as exc:
-        raise click.ClickException(str(exc)) from exc
+        _builder_thread_failure(exc, as_json=as_json)
+    raise AssertionError("unreachable Builder Thread service state")
 
 
-def _emit_builder_thread(
-    operation: Callable[[], dict[str, Any]], *, as_json: bool
-) -> None:
+def _emit_builder_thread(operation: Callable[[], dict[str, Any]], *, as_json: bool) -> None:
     try:
         payload = operation()
     except BuilderThreadError as exc:
-        raise click.ClickException(str(exc)) from exc
+        _builder_thread_failure(exc, as_json=as_json)
+        return
     _emit(payload, as_json)
 
 
@@ -428,16 +467,20 @@ def _emit_builder_thread(
 @click.option(
     "--vault-id",
     envvar="BUILDEROPS_VAULT_ID",
-    required=True,
+    required=False,
     help="Pinned UUID from the Builder Thread vault genesis.",
 )
 @click.pass_context
-def builder_thread(ctx: click.Context, vault_id: str) -> None:
+def builder_thread(ctx: click.Context, vault_id: str | None) -> None:
     ctx.ensure_object(dict)
-    ctx.obj["builder_thread_vault_id"] = vault_id
+    ctx.obj["builder_thread_vault_id"] = vault_id or ""
 
 
-@builder_thread.command("init", help="Install or verify the pinned vault genesis.")
+@builder_thread.command(
+    "init",
+    cls=_BuilderThreadJsonCommand,
+    help="Install or verify the pinned vault genesis.",
+)
 @click.option(
     "--adopt-existing",
     is_flag=True,
@@ -448,8 +491,9 @@ def builder_thread(ctx: click.Context, vault_id: str) -> None:
 def builder_thread_init(ctx: click.Context, adopt_existing: bool, as_json: bool) -> None:
     paths = _effective_paths(ctx)
     if paths.vault_root is None:
-        raise click.ClickException(
-            "BUILDEROPS_VAULT_ROOT is required for Builder Threads"
+        _builder_thread_failure(
+            BuilderThreadValidationError("BUILDEROPS_VAULT_ROOT is required for Builder Threads"),
+            as_json=as_json,
         )
     vault_root = paths.vault_root
     vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", ""))
@@ -478,7 +522,11 @@ def _thread_common_options(function: Callable[..., Any]) -> Callable[..., Any]:
     return function
 
 
-@builder_thread.command("create", help="Create one represented question thread.")
+@builder_thread.command(
+    "create",
+    cls=_BuilderThreadJsonCommand,
+    help="Create one represented question thread.",
+)
 @click.option("--recipient", required=True)
 @click.option("--subject", required=True)
 @click.option("--content", required=True)
@@ -486,6 +534,11 @@ def _thread_common_options(function: Callable[..., Any]) -> Callable[..., Any]:
     "--reply-expected/--no-reply-expected",
     default=True,
     show_default=True,
+)
+@click.option(
+    "--entry-id",
+    required=True,
+    help="Caller-retained UUIDv4 idempotency identity for safe exact retry.",
 )
 @_thread_common_options
 @click.option("--json", "as_json", is_flag=True)
@@ -496,26 +549,31 @@ def builder_thread_create(
     subject: str,
     content: str,
     reply_expected: bool,
+    entry_id: str,
     source_refs: tuple[str, ...],
     actor: str,
     as_json: bool,
 ) -> None:
-    service = _builder_thread_service(ctx)
-    refs = _parse_builder_thread_source_refs(source_refs)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
         lambda: service.create_thread(
             recipient_id=recipient,
             subject=subject,
             content=content,
             actor_id=actor,
-            source_refs=refs,
+            source_refs=_parse_builder_thread_source_refs(source_refs),
             reply_expected=reply_expected,
+            entry_id=entry_id,
         ),
         as_json=as_json,
     )
 
 
-@builder_thread.command("reply", help="Append a hash-bound reply contribution.")
+@builder_thread.command(
+    "reply",
+    cls=_BuilderThreadJsonCommand,
+    help="Append a hash-bound reply contribution.",
+)
 @click.argument("thread_id")
 @click.option("--recipient", required=True)
 @click.option("--content", required=True)
@@ -524,6 +582,11 @@ def builder_thread_create(
     "--reply-expected/--no-reply-expected",
     default=False,
     show_default=True,
+)
+@click.option(
+    "--entry-id",
+    required=True,
+    help="Caller-retained UUIDv4 idempotency identity for safe exact retry.",
 )
 @_thread_common_options
 @click.option("--json", "as_json", is_flag=True)
@@ -535,12 +598,12 @@ def builder_thread_reply(
     content: str,
     parent_hash: str,
     reply_expected: bool,
+    entry_id: str,
     source_refs: tuple[str, ...],
     actor: str,
     as_json: bool,
 ) -> None:
-    service = _builder_thread_service(ctx)
-    refs = _parse_builder_thread_source_refs(source_refs)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
         lambda: service.reply(
             thread_id,
@@ -548,23 +611,30 @@ def builder_thread_reply(
             content=content,
             actor_id=actor,
             parent_hash=parent_hash,
-            source_refs=refs,
+            source_refs=_parse_builder_thread_source_refs(source_refs),
             reply_expected=reply_expected,
+            entry_id=entry_id,
         ),
         as_json=as_json,
     )
 
 
-@builder_thread.command("read", help="Validate and read one exact thread.")
+@builder_thread.command(
+    "read", cls=_BuilderThreadJsonCommand, help="Validate and read one exact thread."
+)
 @click.argument("thread_id")
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def builder_thread_read(ctx: click.Context, thread_id: str, as_json: bool) -> None:
-    service = _builder_thread_service(ctx)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(lambda: service.read_thread(thread_id), as_json=as_json)
 
 
-@builder_thread.command("list", help="List bounded validated thread summaries.")
+@builder_thread.command(
+    "list",
+    cls=_BuilderThreadJsonCommand,
+    help="List bounded validated thread summaries.",
+)
 @click.option("--recipient")
 @click.option("--include-archived", is_flag=True)
 @click.option("--limit", type=click.IntRange(min=1), default=100, show_default=True)
@@ -577,7 +647,7 @@ def builder_thread_list(
     limit: int,
     as_json: bool,
 ) -> None:
-    service = _builder_thread_service(ctx)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
         lambda: service.list_threads(
             recipient_id=recipient,
@@ -588,7 +658,11 @@ def builder_thread_list(
     )
 
 
-@builder_thread.command("close", help="Append a non-authoritative close disposition.")
+@builder_thread.command(
+    "close",
+    cls=_BuilderThreadJsonCommand,
+    help="Append a non-authoritative close disposition.",
+)
 @click.argument("thread_id")
 @click.option("--actor", required=True)
 @click.option("--reason", required=True)
@@ -601,14 +675,18 @@ def builder_thread_close(
     reason: str,
     as_json: bool,
 ) -> None:
-    service = _builder_thread_service(ctx)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
         lambda: service.close_thread(thread_id, actor_id=actor, reason=reason),
         as_json=as_json,
     )
 
 
-@builder_thread.command("archive", help="Archive one currently closed thread.")
+@builder_thread.command(
+    "archive",
+    cls=_BuilderThreadJsonCommand,
+    help="Archive one currently closed thread.",
+)
 @click.argument("thread_id")
 @click.option("--actor", required=True)
 @click.option("--json", "as_json", is_flag=True)
@@ -619,7 +697,7 @@ def builder_thread_archive(
     actor: str,
     as_json: bool,
 ) -> None:
-    service = _builder_thread_service(ctx)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
         lambda: service.archive_thread(thread_id, actor_id=actor),
         as_json=as_json,
@@ -628,6 +706,7 @@ def builder_thread_archive(
 
 @builder_thread.command(
     "quarantine",
+    cls=_BuilderThreadJsonCommand,
     help="Append an explicit incident disposition without deleting the target bytes.",
 )
 @click.argument("thread_id")
@@ -644,7 +723,7 @@ def builder_thread_quarantine(
     actor: str,
     as_json: bool,
 ) -> None:
-    service = _builder_thread_service(ctx)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
         lambda: service.quarantine(
             thread_id,
@@ -663,16 +742,20 @@ def builder_thread_quarantine(
 @click.option(
     "--vault-id",
     envvar="BUILDEROPS_VAULT_ID",
-    required=True,
+    required=False,
     help="Pinned UUID from the Builder Thread vault genesis.",
 )
 @click.pass_context
-def builder_inbox(ctx: click.Context, vault_id: str) -> None:
+def builder_inbox(ctx: click.Context, vault_id: str | None) -> None:
     ctx.ensure_object(dict)
-    ctx.obj["builder_thread_vault_id"] = vault_id
+    ctx.obj["builder_thread_vault_id"] = vault_id or ""
 
 
-@builder_inbox.command("list", help="List contributions awaiting one named recipient.")
+@builder_inbox.command(
+    "list",
+    cls=_BuilderThreadJsonCommand,
+    help="List contributions awaiting one named recipient.",
+)
 @click.option("--recipient", required=True)
 @click.option("--limit", type=click.IntRange(min=1), default=100, show_default=True)
 @click.option("--json", "as_json", is_flag=True)
@@ -683,18 +766,22 @@ def builder_inbox_list(
     limit: int,
     as_json: bool,
 ) -> None:
-    service = _builder_thread_service(ctx)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
         lambda: service.inbox(recipient_id=recipient, limit=limit),
         as_json=as_json,
     )
 
 
-@builder_inbox.command("health", help="Validate all artifacts without mutating the vault.")
+@builder_inbox.command(
+    "health",
+    cls=_BuilderThreadJsonCommand,
+    help="Validate all artifacts without mutating the vault.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def builder_inbox_health(ctx: click.Context, as_json: bool) -> None:
-    service = _builder_thread_service(ctx)
+    service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(service.health, as_json=as_json)
 
 
