@@ -82,6 +82,35 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
+def test_builder_thread_contract_is_executable_and_discoverable() -> None:
+    index = _read(".codex/skills/README.md")
+    contract = _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md")
+    thread_skill = _read(".codex/skills/builder-thread/SKILL.md")
+    inbox_skill = _read(".codex/skills/builder-inbox/SKILL.md")
+
+    assert "builder-thread" in index
+    assert "builder-inbox" in index
+    assert "serialized writer" in contract.lower()
+    assert "shared_non_sensitive" in contract
+    assert "named recipient" in contract.lower()
+    assert "builder-thread" in thread_skill
+    assert "builder-inbox" in inbox_skill
+    assert "read-only" in inbox_skill.lower()
+
+
+def test_builder_thread_hooks_are_non_authoritative() -> None:
+    contract = " ".join(
+        _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md").lower().split()
+    )
+    store_doc = _read("docs/builderops/BUILDEROPS_VAULT_STORE.md").lower()
+
+    for authority in ("issue", "pr", "ci", "merge", "approval", "promotion", "receipt"):
+        assert f"{authority} authority" in contract
+    assert "devui" in contract
+    assert "external builderops vault" in store_doc
+    assert "repository `vault/` is a fixture" in store_doc
+
+
 def test_skill_readme_resume_work_summary_matches_recovery_order() -> None:
     index = _read(".codex/skills/README.md")
     skill = _read(".codex/skills/resume-work/SKILL.md")

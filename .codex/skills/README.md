@@ -97,6 +97,12 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - classifies the issue as Product/Runtime System, Builder System, or boundary work before pickup
   - before coding, use its pickup wrapper to acquire the available dispatcher lease or durable
     GitHub-label-only fallback and remove `agent:ready`
+- `builder-thread`
+  - attributed, shared-non-sensitive Builder Thread capture through the one designated serialized
+    BuilderOps writer; never a direct shared-vault write path or delivery authority
+- `builder-inbox`
+  - bounded read-only Builder Thread discovery through the same writer endpoint; never a backlog,
+    authority, or mutation surface
 - `start-model-inquiry`
   - launch a durable pre-ticket Fable/GPT inquiry exactly once through the sanctioned host-local
     subscription launcher; the dormant provider-API launcher has a distinct identity, and issue
