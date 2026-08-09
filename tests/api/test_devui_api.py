@@ -199,11 +199,18 @@ def test_devui_composition_refuses_other_forwarded_identity_headers() -> None:
         ("Forwarded", "for=127.0.0.1"),
         ("X-Real-IP", "127.0.0.1"),
         ("CF-Connecting-IP", "127.0.0.1"),
+        ("X-Original-Forwarded-For", "127.0.0.1"),
+        ("X-Envoy-External-Address", "127.0.0.1"),
     ):
         assert client.get(
             "/api/devui/composition",
             headers={name: value},
         ).status_code == 403
+
+    assert client.get(
+        "/api/devui/composition",
+        headers={"Host": "attacker.example"},
+    ).status_code == 403
 
 
 def test_devui_composition_sanitizes_ckm_refusal_diagnostics(

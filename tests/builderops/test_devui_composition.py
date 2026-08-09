@@ -333,6 +333,25 @@ def test_contradictory_cockpit_evidence_is_refused() -> None:
     )
     variants.append(unconfigured_dispatcher)
 
+    stale_github_without_withdrawal = deepcopy(_cockpit_payload())
+    stale_github_without_withdrawal["sources"].append(
+        {
+            "name": "github-live",
+            "state": "stale",
+            "last_successful_read": "2026-08-01T20:59:58+00:00",
+            "detail": "read succeeded",
+            "stale_after_days": 7,
+            "configured": True,
+        }
+    )
+    variants.append(stale_github_without_withdrawal)
+
+    stale_github_wrong_withdrawal = deepcopy(stale_github_without_withdrawal)
+    stale_github_wrong_withdrawal["withdrawn_counts"] = [
+        {"source": "github-live", "counts": ["not.a.real.count"]}
+    ]
+    variants.append(stale_github_wrong_withdrawal)
+
     for payload in variants:
         result = compose_owner_snapshot(
             cockpit_reader=lambda payload=payload: payload,

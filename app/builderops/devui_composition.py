@@ -41,6 +41,10 @@ _CKM_REFUSAL_MESSAGE = "CKM refused the read request"
 _LIST_CAPABILITIES_QUERY_DIGEST = canonical_query_digest(
     {"operation": "list_capabilities", "public_id": None}
 )
+_COCKPIT_WITHDRAWALS = {
+    "github-live": ("github.open_issues", "github.open_prs", "github.branches"),
+    "docs-frontmatter": ("capability_lanes.lanes",),
+}
 
 
 CockpitReader = Callable[[], Mapping[str, Any]]
@@ -150,6 +154,7 @@ def _valid_cockpit_contract(payload: Mapping[str, Any]) -> bool:
     ):
         return False
     withdrawn_sources: set[str] = set()
+    actual_withdrawals: dict[str, tuple[str, ...]] = {}
     for withdrawal in withdrawn_counts:
         withdrawal_source = (
             withdrawal.get("source") if isinstance(withdrawal, Mapping) else None
@@ -167,6 +172,14 @@ def _valid_cockpit_contract(payload: Mapping[str, Any]) -> bool:
         ):
             return False
         withdrawn_sources.add(withdrawal_source)
+        actual_withdrawals[withdrawal_source] = tuple(withdrawal["counts"])
+    expected_withdrawals = {
+        source: counts
+        for source, counts in _COCKPIT_WITHDRAWALS.items()
+        if source_states.get(source) == "stale"
+    }
+    if actual_withdrawals != expected_withdrawals:
+        return False
     return True
 
 

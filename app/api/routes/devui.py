@@ -20,6 +20,8 @@ _FORWARDED_IDENTITY_HEADERS = frozenset(
         "forwarded",
         "true-client-ip",
         "x-client-ip",
+        "x-envoy-external-address",
+        "x-original-forwarded-for",
         "x-real-ip",
     }
 )
@@ -44,12 +46,33 @@ def _is_immediate_loopback(request: Request) -> bool:
         return False
 
 
+def _has_local_host_header(request: Request) -> bool:
+    value = request.headers.get("host", "").strip().lower()
+    if value == "testserver" and request.client is not None:
+        return request.client.host == "testclient"
+    if value.startswith("["):
+        closing = value.find("]")
+        hostname = value[1:closing] if closing > 0 else ""
+    else:
+        hostname = value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+    if hostname == "localhost":
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def _require_local_caller(
     request: Request,
 ) -> None:
     """Admit only a direct loopback peer with no forwarded identity."""
 
-    if not _is_immediate_loopback(request) or _has_forwarded_identity(request):
+    if (
+        not _is_immediate_loopback(request)
+        or not _has_local_host_header(request)
+        or _has_forwarded_identity(request)
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_LOCAL_ONLY_DETAIL,
