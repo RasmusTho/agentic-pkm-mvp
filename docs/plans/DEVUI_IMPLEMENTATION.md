@@ -1,11 +1,14 @@
-State: Target-state implementation plan (2026-08-08). The read-only `devui.composition.v1` seam is delivered; the visual shell and authority-bearing stages remain targets. Existing GitHub Issues remain executable backlog truth.
+State: Target-state implementation plan (2026-08-09). The read-only `devui.composition.v1` seam is
+delivered; the subject Focus, external Conversation Port, Builder System Control lens, visual shell,
+and general authority-bearing stages remain targets. Existing GitHub Issues remain executable
+backlog truth.
 Doc role: Builder System implementation and sequencing plan
 Authority: Owns the proposed dependency order for realizing `docs/DEVUI.md`. Subordinate to accepted ADRs, DDO and BuilderOps control-plane specifications, live Issue contracts, and current-state owner docs.
 Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
 Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
-Last reviewed: 2026-08-08
+Last reviewed: 2026-08-09
 
 # devUI implementation plan
 
@@ -53,6 +56,10 @@ or concepts the owner must understand to complete the flow.
 10. CLI and API delivery continue to work without devUI.
 11. Raw Cockpit, CKM, and Signboard routes may remain for diagnostics and recovery, but devUI is the
     normal owner entry and must not require a product switch.
+12. Provider sessions and transcripts are provenance only. No text, timestamp, branch, repository,
+    or provider similarity may infer a link to work.
+13. Focus and Builder System Control use separate primary identities and contexts. The control lens
+    cannot become a policy, workflow, task, or source-of-truth engine.
 
 ## Reuse before construction
 
@@ -62,6 +69,10 @@ or concepts the owner must understand to complete the flow.
 | Work/freshness | `build_registry`, Cockpit chain predicates, source-state model | Delivered read-only |
 | Queue/claim/lease activity | Dispatcher store and Signboard API contracts | Delivered operational source; standalone Signboard is not devUI navigation |
 | Unified read composition | `devui.composition.v1`, GET `/api/devui/composition` | Delivered per-request projection; no cache, mutation, or visual shell |
+| Subject focus | `FocusView.v1` target over existing read sources | Specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/`; not delivered |
+| External conversation | `ConversationContextPack.v1` and external adapter target | Specified; no provider/session integration delivered |
+| First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |
+| Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, BuilderOps/live evidence | Separate read-lens target; not delivered |
 | Proposal/preview | `DeliveryRequest.v1`, `DeliveryPreview.v1`, pure plan compiler | DDO-06 target; compiler seam delivered |
 | Lawful transitions | DDO reducer and versioned lifecycle commands | Pure reducer delivered; durable binding is DDO-05 target |
 | Worker | `WorkerRuntimePort` and context/invocation/result contracts | Seam delivered; durable correlation/reattach target |
@@ -106,6 +117,39 @@ export states remain usable. Verify that **Needs you** has no false-positive tec
 selected item retains its full evidence path through all four information depths; quantified claims
 retain counts or denominators; and the first view directly supports perception, comprehension, and
 the next legal step without exposing subsystem topology.
+
+### Stage A2 — Focus + external Conversation Port
+
+After the composition seam and before the general delivery-command path, deliver the bounded slice
+specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`:
+
+1. compose one stable Issue/capability Focus with owner intent, governing source, evidence,
+   receipts, risks, limitations, next legal step, and only explicitly correlated execution
+   observations;
+2. complete the governed Yggdrasil handoff from exact Focus/source-state fixtures;
+3. export/open one immutable hash-bound context pack to an external Codex or Claude conversation,
+   with provider transcript/session data retained as provenance only; and
+4. admit one typed command, Start Model Inquiry, through exact preview and explicit Start/Hold into
+   the unchanged artifact-first workflow and its existing receipt.
+
+This is not an early activation of the general Stage B DDO command chain. Start Model Inquiry is the
+already governed narrow pre-Issue exception documented in the Builder System process map. The slice
+adds no delivery request, GitHub/repository mutation, task store, provider-session store, global
+session view, or direct provider invocation. Inquiry promotion and any later Issue/repo consequence
+remain separate governed workflows.
+
+Builder System Control is a sibling system-governance lens, not a Focus task. Its detailed
+specification follows separately in blocked Issue #4698 after this boundary lands. Parent #4693 and
+blocked children #4694–#4697 own only the Focus/Conversation chain. The control lens may compose document roles,
+versioned workflow adapters, bounded tool capabilities, policy/source coverage, drift, exceptions,
+unknowns, and explicitly evidenced route deviations. It may not own policy, workflow state, tasks,
+or source truth.
+
+Verify: the Focus identity is stable; all required source/correlation states remain distinct;
+external-provider failure degrades only the port; canonical pack/command hashes bind displayed and
+submitted bytes; changed/expired evidence withdraws Start; Hold invokes nothing; Start invokes the
+existing route once; valid/ambiguous receipts preserve its contract; and Builder System Control
+cannot appear as a tab or evidence join inside the subject Focus.
 
 ### Stage B — decide and act: contextual command surface
 
@@ -156,8 +200,12 @@ its replacement has a verified receipt.
 
 ```mermaid
 flowchart LR
-  A["A · See<br/>read-only cockpit"] --> B["B · Decide and act<br/>contextual command"]
+  A["A · See<br/>read-only cockpit"] --> A2["A2 · Focus + Conversation<br/>subject read · external reasoning · inquiry preview"]
+  A2 --> B["B · Decide and act<br/>general contextual command"]
   B --> C["C · Verify<br/>receipt, try, reassess"]
+  D["Governed design handoff"] --> A2
+  I["Existing artifact-first<br/>Start Model Inquiry"] --> A2
+  A2 -. separate follow-up .-> S["Builder System Control<br/>meta-governance lens"]
   M["Internal mechanism gates<br/>#3603 · #4168 · #4169 · #3604 · #4217 · #4466 · #3793 · #4170"] --> B
 ```
 
