@@ -424,8 +424,10 @@ semantics, but not primary identity, navigation state, authority, correlation, o
 | First command | Start Model Inquiry through the existing skill | None |
 | Prohibited authority | Work/session/task/delivery authority | Policy/workflow/task/source-of-truth authority |
 
-The normative target contracts and implementation decomposition live in
-`docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`.
+The Focus-side boundary lives in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`. The detailed
+control-lens source, state, coverage, deviation, interaction, and sequencing contracts live in
+`docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`. Both are target specifications; neither reference
+claims that the Builder System Control runtime or UI is delivered.
 
 ### Visual composition hypothesis (pre-handoff)
 

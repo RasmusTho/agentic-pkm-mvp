@@ -144,12 +144,13 @@ adds no delivery request, GitHub/repository mutation, task store, provider-sessi
 session view, or direct provider invocation. Inquiry promotion and any later Issue/repo consequence
 remain separate governed workflows.
 
-Builder System Control is a sibling system-governance lens, not a Focus task. Its detailed
-specification follows separately in blocked Issue #4698 after this boundary lands. Parent #4693 and
-blocked children #4694–#4697 own only the Focus/Conversation chain. The control lens may compose document roles,
-versioned workflow adapters, bounded tool capabilities, policy/source coverage, drift, exceptions,
-unknowns, and explicitly evidenced route deviations. It may not own policy, workflow state, tasks,
-or source truth.
+Builder System Control is a sibling system-governance lens, not a Focus task. Its detailed target
+contract is `docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`, developed separately under Issue #4698.
+Parent #4693 and children #4694–#4697 own only the Focus/Conversation chain; FCP-01 and FCP-03 are
+delivered while FCP-02 and FCP-04 retain their named blockers. The control lens may compose document
+roles, versioned workflow adapters, bounded tool capabilities, policy/source coverage, drift,
+exceptions, unknowns, and explicitly evidenced route deviations. It may not own policy, workflow
+state, tasks, or source truth.
 
 Verify: the Focus identity is stable; all required source/correlation states remain distinct;
 external-provider failure degrades only the port; canonical pack/command hashes bind displayed and
