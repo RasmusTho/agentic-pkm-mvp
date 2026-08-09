@@ -287,7 +287,7 @@ def test_workflow_adapter_projection_refuses_inferred_policy_or_ownership() -> N
     result = _compose_control(adapters=[incomplete])
 
     rendered = result["workflow_adapters"][0]
-    assert rendered["version_or_digest"] is None
+    assert rendered["version_or_digest"] == "unknown"
     assert rendered["owning_workflow_refs"] == []
     assert rendered["owning_policy_refs"] == []
     assert rendered["source_state"]["coverage"] == "missing"

@@ -387,6 +387,7 @@ def _workflow_adapter(value: Any, *, index: int, composed_at: datetime) -> dict[
     version = adapter["version_or_digest"]
     if version is not None:
         _nonempty(version, label=f"{label}.version_or_digest")
+    adapter["version_or_digest"] = "unknown" if version is None else version
     adapter["owning_workflow_refs"] = _references(
         adapter["owning_workflow_refs"], label=f"{label}.owning_workflow_refs"
     )
@@ -409,7 +410,7 @@ def _workflow_adapter(value: Any, *, index: int, composed_at: datetime) -> dict[
     )
     adapter["limitations"] = _limitations(adapter["limitations"], label=f"{label}.limitations")
 
-    if version is None or not adapter["owning_workflow_refs"]:
+    if version in {None, "unknown"} or not adapter["owning_workflow_refs"]:
         adapter["source_state"] = _missing_or_unlinked_state(
             adapter["source_state"],
             reason="incomplete explicit adapter declaration withdraws ownership claims",

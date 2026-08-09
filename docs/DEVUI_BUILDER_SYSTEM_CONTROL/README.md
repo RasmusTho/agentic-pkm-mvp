@@ -181,7 +181,7 @@ docs-governance path.
 source_ref: SourceRef.v1
 adapter_kind: skill
 adapter_id: string
-version_or_digest: string
+version_or_digest: string | unknown
 owning_workflow_refs: [SourceRef.v1]
 owning_policy_refs: [SourceRef.v1]
 trigger: string
@@ -193,8 +193,9 @@ limitations: [Limitation.v1]
 ```
 
 A skill is a versioned workflow adapter: it makes an owning workflow usable by an agent or operator
-at a specific source version. A skill is never the policy owner. A missing version/digest or owning
-workflow is rendered `missing` or `unlinked`; the lens does not fabricate either.
+at a specific source version. A skill is never the policy owner. A missing version/digest is rendered
+as `unknown` with `missing` or `unlinked` source state; a missing owning workflow is likewise
+`missing` or `unlinked`. The lens does not fabricate either.
 
 ### CapabilityBindingView.v1
 
@@ -411,9 +412,10 @@ of Focus parent #4693; Builder System Control remains a separate delivery line.
    per-read inventory of explicitly supplied governing documents with exact refs, declared
    role/authority/owner/lifecycle, source states, and hostile validation. No route or UI is
    delivered.
-2. **BSC-02 — compose adapters and capabilities.** Add pure workflow-adapter and capability-binding
-   projections over explicit skill/MCP/connector/script/CLI declarations. Refuse missing ownership
-   and never infer policy.
+2. **BSC-02 — compose adapters and capabilities.** **Delivered partial input by issue #4723 / PR
+   #4724.** Adds pure workflow-adapter and capability-binding projections over explicit
+   skill/MCP/connector/script/CLI declarations. Missing ownership or admission boundaries withdraw
+   dependent claims; the composer never infers policy.
 3. **BSC-03 — compose coverage and route deviations.** Add bounded coverage/exception/unknown and
    explicitly correlated intended-versus-observed route records with existing governed repair
    routes. No severity or effects.
