@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     db_dsn: str = "postgresql+psycopg://app:app@postgres:5432/app"
     vector_backend: str = "pgvector"
-    embed_model: str = "openai/text-embedding-3-large"
+    embed_model: str = "nomic-embed-text:latest"
     # Matches app/embedding_config.py::DEFAULT_EMBED_DIM (768) — closes the
     # EMBED_DIM/DEFAULT_EMBED_DIM drift (#2296/#2297) rather than layering a
     # third stale value alongside it. See docs/EMBEDDINGS.md :: EMBED_DIM.

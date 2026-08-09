@@ -3,7 +3,9 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app.search.service import search_vector
-from app.settings import settings
+
+
+_FIXTURE_EMBED_MODEL = "nomic-embed-text:latest"
 
 
 def test_vector_query_returns_closest_match(stub_index) -> None:
@@ -15,7 +17,7 @@ def test_vector_query_returns_closest_match(stub_index) -> None:
         source_ref="A",
         payload={"title": "Doc A"},
         embedding=[1.0, 0.0, 0.0],
-        model=settings.embed_model,
+        model=_FIXTURE_EMBED_MODEL,
     )
     stub_index.upsert(
         object_id=b_id,
@@ -23,7 +25,7 @@ def test_vector_query_returns_closest_match(stub_index) -> None:
         source_ref="B",
         payload={"title": "Doc B"},
         embedding=[0.0, 1.0, 0.0],
-        model=settings.embed_model,
+        model=_FIXTURE_EMBED_MODEL,
     )
 
     results = search_vector([0.9, 0.1, 0.0], k=1)

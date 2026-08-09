@@ -4,7 +4,9 @@ from uuid import uuid4
 
 from app.search.service import search_hybrid
 from app.search.vector_index import VectorResult
-from app.settings import settings
+
+
+_FIXTURE_EMBED_MODEL = "nomic-embed-text:latest"
 
 
 def test_hybrid_rrf_combines_ft_and_vector(monkeypatch, stub_index) -> None:
@@ -18,7 +20,7 @@ def test_hybrid_rrf_combines_ft_and_vector(monkeypatch, stub_index) -> None:
         source_ref="doc-1",
         payload={"title": "First"},
         embedding=[1.0, 0.0],
-        model=settings.embed_model,
+        model=_FIXTURE_EMBED_MODEL,
     )
     stub_index.upsert(
         object_id=second_id,
@@ -26,7 +28,7 @@ def test_hybrid_rrf_combines_ft_and_vector(monkeypatch, stub_index) -> None:
         source_ref="doc-2",
         payload={"title": "Second"},
         embedding=[0.0, 1.0],
-        model=settings.embed_model,
+        model=_FIXTURE_EMBED_MODEL,
     )
     stub_index.upsert(
         object_id=third_id,
@@ -34,7 +36,7 @@ def test_hybrid_rrf_combines_ft_and_vector(monkeypatch, stub_index) -> None:
         source_ref="doc-3",
         payload={"title": "Third"},
         embedding=[0.5, 0.5],
-        model=settings.embed_model,
+        model=_FIXTURE_EMBED_MODEL,
     )
 
     def fake_ft(query_text: str, *, k: int) -> list[VectorResult]:
