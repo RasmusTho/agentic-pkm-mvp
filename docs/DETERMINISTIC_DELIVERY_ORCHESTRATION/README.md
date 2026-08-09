@@ -312,6 +312,22 @@ resolves the seam between the delivered contracts/compiler and the remaining run
    evaluated only after DDO-05 through a bounded conformance proof showing replay-safe start,
    unknown-start recovery, fencing, cancellation, and no second effect authority.
 
+The durable worker handoff is deliberately narrower than a shared agent-session model:
+
+```text
+WorkerContextPack → WorkerInvocation → provider/session carrier
+  → WorkerResultV2 (with StructuredWorkerResult) → typed receipt
+```
+
+`WorkerContextPack` and `WorkerInvocation` bind the authorizing `ReducerEffect`; `WorkerResultV2`
+retains the invocation, carrier, and `StructuredWorkerResult` together. The provider or session
+carrier records transport provenance, not delivery authority. A retry or reattachment reads the
+BuilderOps journal/outbox, typed receipts, and live provider/GitHub/dispatcher state before it acts.
+Chat history, a session identifier, and model metadata cannot authorize a worker, reconstruct an
+effect, or substitute for that readback. This chain reuses the existing context, invocation, result,
+receipt, and lease contracts; it does not introduce a universal `AgentSession`, `WorkspaceLease`, or
+generic external-effect record.
+
 `DeliveryInitiation.v1`, `StructuredWorkerResult`, `DeliveryReceipt.v1`, and the delivered compiler
 remain readable history. DDO-04 may add compatible versioned contracts, including
 `DeliveryReceipt.v2`, but it must not silently reinterpret existing v1 bytes.
