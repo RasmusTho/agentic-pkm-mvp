@@ -500,15 +500,37 @@ def test_coverage_projection_refuses_unauthorized_or_unbounded_exceptions() -> N
         source_ref=_ref("evidence/expired-exception"),
         expires_at="2026-08-10T08:00:00+00:00",
     )
+    malformed = _exception(
+        source_ref=_ref("evidence/malformed-exception"),
+        lifecycle_ref={
+            "source_type": "repository_document",
+            "source_id": "docs/EXCEPTIONS.md#broken-expiry",
+            "content_hash": "not-a-sha",
+            "locator": "docs/EXCEPTIONS.md#broken-expiry",
+        },
+    )
 
     result = _compose_control(
-        coverage=[_coverage(exception_declarations=[valid, unauthorized, expired])]
+        coverage=[_coverage(exception_declarations=[valid, unauthorized, expired, malformed])]
     )
 
     rendered = result["coverage"][0]
     assert rendered["exception_refs"] == [valid["source_ref"]]
     assert "exception:evidence/unauthorized-exception" in rendered["unknowns"]
     assert "exception:evidence/expired-exception" in rendered["unknowns"]
+    assert "exception:evidence/malformed-exception" in rendered["unknowns"]
+
+    future_drift = _coverage(
+        drift_observations=[
+            {
+                "source_ref": _ref("evidence/future-drift"),
+                "observed_at": "2026-08-10T08:02:00+00:00",
+                "difference": "future evidence",
+            }
+        ]
+    )
+    with pytest.raises(GoverningDocumentContractError, match="cannot be after composition"):
+        _compose_control(coverage=[future_drift])
 
 
 def test_route_deviation_projection_requires_explicit_source_owned_correlation() -> None:
@@ -522,11 +544,22 @@ def test_route_deviation_projection_requires_explicit_source_owned_correlation()
             deviations=[_deviation(correlation_ref=None)],
             routes=[_route()],
         )
-    with pytest.raises(GoverningDocumentContractError, match="linked"):
-        _compose_control(
-            deviations=[_deviation(source_state=_state(linkage="unlinked"))],
+    for source_state in (
+        _state(linkage="unlinked"),
+        _state(
+            availability="unavailable",
+            coverage="partial",
+            cardinality="not_measured",
+        ),
+        _state(freshness="stale", coverage="partial"),
+        _state(coverage="unread", cardinality="not_measured"),
+    ):
+        withdrawn = _compose_control(
+            deviations=[_deviation(source_state=source_state)],
             routes=[_route()],
         )
+        assert withdrawn["deviations"] == []
+        assert "route deviation:deviation:declared-route withdrawn" in withdrawn["limitations"]
 
 
 def test_route_deviation_projection_preserves_governed_repair_route_without_effect() -> None:

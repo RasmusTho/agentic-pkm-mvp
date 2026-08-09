@@ -506,49 +506,60 @@ def _coverage_exception(
 
     label = f"coverage_declarations exception_declarations[{index}]"
     exception = _mapping(value, label=label)
-    _keys(
-        exception,
-        allowed={
-            "source_ref",
-            "permitting_authority_ref",
-            "lifecycle_ref",
-            "expires_at",
-            "limitations",
-        },
-        required={
-            "source_ref",
-            "permitting_authority_ref",
-            "lifecycle_ref",
-            "expires_at",
-            "limitations",
-        },
-        label=label,
+    raw_source = exception.get("source_ref")
+    raw_source_id = raw_source.get("source_id") if isinstance(raw_source, dict) else None
+    unknown_marker = (
+        f"exception:{raw_source_id}"
+        if isinstance(raw_source_id, str) and raw_source_id.strip()
+        else "exception:unidentified"
     )
-    source_ref = _source_ref(exception["source_ref"], label=f"{label}.source_ref")
-    permitting_authority = exception["permitting_authority_ref"]
-    lifecycle = exception["lifecycle_ref"]
-    expires_at = exception["expires_at"]
-    _limitations(exception["limitations"], label=f"{label}.limitations")
-
-    if permitting_authority is None or lifecycle is None or expires_at is None:
-        return None, f"exception:{source_ref['source_id']}"
-    permitting_authority_ref = _source_ref(
-        permitting_authority, label=f"{label}.permitting_authority_ref"
-    )
-    lifecycle_ref = _source_ref(lifecycle, label=f"{label}.lifecycle_ref")
-    expires_at_text = _timestamp(expires_at, label=f"{label}.expires_at")
-    if _timestamp_value(expires_at_text) <= composed_at:
-        return None, f"exception:{source_ref['source_id']}"
+    try:
+        _keys(
+            exception,
+            allowed={
+                "source_ref",
+                "permitting_authority_ref",
+                "lifecycle_ref",
+                "expires_at",
+                "limitations",
+            },
+            required={
+                "source_ref",
+                "permitting_authority_ref",
+                "lifecycle_ref",
+                "expires_at",
+                "limitations",
+            },
+            label=label,
+        )
+        source_ref = _source_ref(exception["source_ref"], label=f"{label}.source_ref")
+        permitting_authority = exception["permitting_authority_ref"]
+        lifecycle = exception["lifecycle_ref"]
+        expires_at = exception["expires_at"]
+        limitations = _limitations(exception["limitations"], label=f"{label}.limitations")
+        if permitting_authority is None or lifecycle is None or expires_at is None:
+            return None, f"exception:{source_ref['source_id']}"
+        permitting_authority_ref = _source_ref(
+            permitting_authority, label=f"{label}.permitting_authority_ref"
+        )
+        lifecycle_ref = _source_ref(lifecycle, label=f"{label}.lifecycle_ref")
+        expires_at_text = _timestamp(expires_at, label=f"{label}.expires_at")
+        if _timestamp_value(expires_at_text) <= composed_at:
+            return None, f"exception:{source_ref['source_id']}"
+    except GoverningDocumentContractError:
+        return None, unknown_marker
     return {
         "source_ref": source_ref,
         "permitting_authority_ref": permitting_authority_ref,
         "lifecycle_ref": lifecycle_ref,
         "expires_at": expires_at_text,
-        "limitations": _limitations(exception["limitations"], label=f"{label}.limitations"),
+        "limitations": limitations,
     }, None
 
 
-def _drift_observations(value: Any, *, label: str) -> list[dict[str, Any]]:
+def _drift_observations(
+    value: Any, *, label: str, composed_at: datetime
+) -> list[dict[str, Any]]:
     observations = _json_value(value, label=label)
     if not isinstance(observations, list):
         raise GoverningDocumentContractError(f"{label} must be a list")
@@ -563,7 +574,10 @@ def _drift_observations(value: Any, *, label: str) -> list[dict[str, Any]]:
             label=item_label,
         )
         item["source_ref"] = _source_ref(item["source_ref"], label=f"{item_label}.source_ref")
-        item["observed_at"] = _timestamp(item["observed_at"], label=f"{item_label}.observed_at")
+        observed_at = _timestamp(item["observed_at"], label=f"{item_label}.observed_at")
+        if _timestamp_value(observed_at) > composed_at:
+            raise GoverningDocumentContractError(f"{item_label}.observed_at cannot be after composition")
+        item["observed_at"] = observed_at
         _nonempty(item["difference"], label=f"{item_label}.difference")
         rendered.append(item)
     return rendered
@@ -622,7 +636,7 @@ def _coverage(value: Any, *, index: int, composed_at: datetime) -> dict[str, Any
         coverage["source_state"], label=f"{label}.source_state", composed_at=composed_at
     )
     coverage["drift_observations"] = _drift_observations(
-        coverage["drift_observations"], label=f"{label}.drift_observations"
+        coverage["drift_observations"], label=f"{label}.drift_observations", composed_at=composed_at
     )
     exceptions = _json_value(coverage["exception_declarations"], label=f"{label}.exception_declarations")
     if not isinstance(exceptions, list):
@@ -725,7 +739,9 @@ def _governed_route(value: Any, *, label: str, composed_at: datetime) -> dict[st
     return route
 
 
-def _route_deviation(value: Any, *, index: int, composed_at: datetime) -> dict[str, Any]:
+def _route_deviation(
+    value: Any, *, index: int, composed_at: datetime
+) -> tuple[dict[str, Any] | None, str | None]:
     label = f"route_deviation_declarations[{index}]"
     deviation = _mapping(value, label=label)
     _keys(
@@ -784,8 +800,14 @@ def _route_deviation(value: Any, *, index: int, composed_at: datetime) -> dict[s
     deviation["source_state"] = _state(
         deviation["source_state"], label=f"{label}.source_state", composed_at=composed_at
     )
-    if deviation["source_state"]["linkage"] != "linked":
-        raise GoverningDocumentContractError(f"{label}.source_state must remain linked")
+    state = deviation["source_state"]
+    if (
+        state["availability"] != "available"
+        or state["freshness"] != "fresh"
+        or state["coverage"] in {"unread", "missing"}
+        or state["linkage"] != "linked"
+    ):
+        return None, f"route deviation:{deviation['deviation_id']} withdrawn"
     route = deviation["existing_repair_route_ref"]
     linkage = deviation["repair_route_linkage"]
     if linkage not in {"linked", "unlinked", "not_assessed"}:
@@ -814,7 +836,7 @@ def _route_deviation(value: Any, *, index: int, composed_at: datetime) -> dict[s
     deviation["limitations"] = _limitations(
         deviation["limitations"], label=f"{label}.limitations"
     )
-    return deviation
+    return deviation, None
 
 
 def compose_governing_document_inventory(
@@ -915,9 +937,16 @@ def compose_builder_system_control_view(
         _coverage(item, index=index, composed_at=composed_at_value)
         for index, item in enumerate(coverage)
     ]
-    view["deviations"] = [
+    rendered_deviations = [
         _route_deviation(item, index=index, composed_at=composed_at_value)
         for index, item in enumerate(deviations)
+    ]
+    view["deviations"] = [
+        deviation for deviation, withdrawn in rendered_deviations if deviation is not None
+    ]
+    view["limitations"] = [
+        *view["limitations"],
+        *[withdrawn for deviation, withdrawn in rendered_deviations if withdrawn is not None],
     ]
     view["governed_routes"] = [
         _governed_route(item, label=f"governed_route_declarations[{index}]", composed_at=composed_at_value)
