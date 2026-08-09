@@ -96,7 +96,8 @@ The owner-controlled `yggdrasil-model-inquiry` launcher enables this fixed path 
 `BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1` for its BuilderOps `inquiry run` child only.
 That exact boolean selects the repo-owned bridge and its fixed Fable/Sol identities; it cannot carry
 a provider, model, command, credential, or endpoint. The dormant provider-API launcher never sets
-it. The bridge receives its role as an argv value and only the host home directory needed by the
+it and explicitly refuses to start if the marker is present or inherited. The bridge receives its
+role as an argv value and only the host home directory needed by the
 interactive subscription clients is allowlisted into the child environment.
 
 ## Host role-entrypoint lifecycle

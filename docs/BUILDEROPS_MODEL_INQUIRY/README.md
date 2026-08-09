@@ -98,7 +98,7 @@ is delivered. No task is ready to make a Product/Runtime write.
    credential or session failure, and persistence failure never fall back. The owner-controlled
    host launcher selects this fixed bridge only with
    `BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1`; that boolean cannot name targets or
-   secrets, and the provider-API launcher never sets it.
+   secrets, and the provider-API launcher refuses to start if it is present or inherited.
 5. **Traceability survives partial failure.** Each completed turn is persisted before a successor
    call. A worker restart can resume from the latest committed turn without replaying an accepted
    provider call. Duplicate command retries use idempotency keys.
