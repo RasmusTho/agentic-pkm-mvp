@@ -54,9 +54,13 @@ def test_spec_requires_correlated_deviation_and_existing_route() -> None:
     assert "intended_route_refs:" in spec
     assert "observed_route_refs:" in spec
     assert "existing_repair_route_ref: GovernedRouteRef.v1 | null" in spec
+    assert "repair_route_linkage: linked | unlinked | not_assessed" in spec
+    assert "repair_route_correlation_ref: SourceRef.v1 | null" in spec
     assert "Textual similarity, shared provider metadata, and temporal proximity are not correlation." in normalized
     assert "does not invent a severity" in spec
-    assert "A null `existing_repair_route_ref` requires `source_state.linkage: unlinked` and no offered action." in normalized
+    assert "`source_state.linkage` remains `linked` for every admitted deviation" in normalized
+    assert "A null `existing_repair_route_ref` requires `repair_route_linkage: unlinked` or `not_assessed` and no offered action." in normalized
+    assert "a non-null, source-owned `repair_route_correlation_ref` proving that the route applies to this exact deviation" in normalized
 
 
 def test_spec_separates_current_target_and_authority_questions() -> None:

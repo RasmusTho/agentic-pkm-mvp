@@ -246,16 +246,22 @@ observed_at: RFC3339
 difference: string
 source_state: SourceState.v1
 existing_repair_route_ref: GovernedRouteRef.v1 | null
+repair_route_linkage: linked | unlinked | not_assessed
+repair_route_correlation_ref: SourceRef.v1 | null
 limitations: [Limitation.v1]
 ```
 
 A deviation requires an intended route owned by a governing source, an observed route owned by live
 evidence, and a positive source-owned correlation between them. Textual similarity, shared provider
 metadata, and temporal proximity are not correlation. The projection describes the difference and
-does not invent a severity, policy breach, or repair state. A null `existing_repair_route_ref`
-requires `source_state.linkage: unlinked` and no offered action. When an existing governed repair,
-inquiry, docs-governance, issue-maintenance, or owner-decision route is available, the exact route
-ref is required; the lens never substitutes or invents one.
+does not invent a severity, policy breach, or repair state. `source_state.linkage` remains `linked`
+for every admitted deviation because it describes the intended-to-observed correlation. A null
+`existing_repair_route_ref` requires `repair_route_linkage: unlinked` or `not_assessed` and no
+offered action. In that state, `repair_route_correlation_ref` is also null. A non-null route requires
+`repair_route_linkage: linked` and a non-null, source-owned `repair_route_correlation_ref` proving
+that the route applies to this exact deviation. When an existing governed repair, inquiry,
+docs-governance, issue-maintenance, or owner-decision route is available, both exact refs are
+required; the lens never substitutes or invents either.
 
 ### GovernedRouteRef.v1 and limitations
 

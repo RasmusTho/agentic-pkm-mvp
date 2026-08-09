@@ -1,7 +1,7 @@
-State: Target-state implementation plan (2026-08-09). The read-only `devui.composition.v1` seam is
-delivered; the subject Focus, external Conversation Port, Builder System Control lens, visual shell,
-and general authority-bearing stages remain targets. Existing GitHub Issues remain executable
-backlog truth.
+State: Target-state implementation plan (2026-08-09). The read-only `devui.composition.v1` seam,
+pure `focus-view.v1` composer, and nonvisual external context-pack/export composer are delivered.
+The Focus UI, provider conversation runtime, Builder System Control lens, visual shell, and general
+authority-bearing stages remain targets. Existing GitHub Issues remain executable backlog truth.
 Doc role: Builder System implementation and sequencing plan
 Authority: Owns the proposed dependency order for realizing `docs/DEVUI.md`. Subordinate to accepted ADRs, DDO and BuilderOps control-plane specifications, live Issue contracts, and current-state owner docs.
 Owner: Builder System governance
@@ -69,8 +69,8 @@ or concepts the owner must understand to complete the flow.
 | Work/freshness | `build_registry`, Cockpit chain predicates, source-state model | Delivered read-only |
 | Queue/claim/lease activity | Dispatcher store and Signboard API contracts | Delivered operational source; standalone Signboard is not devUI navigation |
 | Unified read composition | `devui.composition.v1`, GET `/api/devui/composition` | Delivered per-request projection; no cache, mutation, or visual shell |
-| Subject focus | `FocusView.v1` target over existing read sources | Specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/`; not delivered |
-| External conversation | `ConversationContextPack.v1` and external adapter target | Specified; no provider/session integration delivered |
+| Subject focus | `FocusView.v1` over existing read sources | Pure read-only composer delivered by PR #4703; Focus route/UI not delivered |
+| External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |
 | Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, BuilderOps/live evidence | Separate read-lens target; not delivered |
 | Proposal/preview | `DeliveryRequest.v1`, `DeliveryPreview.v1`, pure plan compiler | DDO-06 target; compiler seam delivered |
