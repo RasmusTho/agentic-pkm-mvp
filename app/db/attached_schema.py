@@ -100,17 +100,18 @@ def assert_migration_owned_attached_objects(
         for fragment in required_trigger_fragments
         if fragment not in f" {definition} "
     ]
-    if enabled == "D" or function_name != trigger.function or malformed:
+    if enabled not in {"O", "A"} or function_name != trigger.function or malformed:
         raise error_type(
             f"Migration-owned trigger '{trigger.name}' on '{table}' is incompatible "
             f"(enabled={enabled!r}, function={function_name!r}, missing={malformed}). "
             f"{migration_hint}"
         )
 
+    normalized_function_definition = " ".join(function_definition.split())
     missing_function_fragments = [
         fragment
         for fragment in trigger.function_body_fragments
-        if fragment.lower() not in function_definition
+        if " ".join(fragment.lower().split()) not in normalized_function_definition
     ]
     if missing_function_fragments:
         raise error_type(

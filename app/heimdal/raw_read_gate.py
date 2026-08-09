@@ -240,6 +240,7 @@ def _assert_pg_schema(conn: Any) -> None:
         trigger=MigrationOwnedTrigger(
             "heimdal_raw_read_receipt_no_update",
             "heimdal_raw_read_receipt_reject_mutation",
+            ("TG_OP", "RAISE EXCEPTION"),
         ),
         error_type=RawReadReceiptSchemaMissingError,
         migration_hint=_MIGRATION_HINT,

@@ -180,6 +180,7 @@ def _assert_pg_schema(conn: Any) -> None:
         trigger=MigrationOwnedTrigger(
             "heimdal_observation_log_no_update",
             "heimdal_observation_log_reject_mutation",
+            ("TG_OP", "RAISE EXCEPTION"),
         ),
         error_type=ObservationLogSchemaMissingError,
         migration_hint=_MIGRATION_HINT,

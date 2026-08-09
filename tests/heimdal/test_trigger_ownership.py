@@ -122,7 +122,8 @@ class _RecordingCursor:
                 return None  # type: ignore[return-value]
             seam = self._conn.seam
             retention_fragment = (
-                " current_setting('app.heimdal_retention_bypass', true) "
+                " IF TG_OP = 'DELETE' AND current_setting('app.heimdal_retention_bypass', true) = 'true' "
+                "THEN RETURN OLD; END IF; "
                 if seam.table == "heimdal_raw_record"
                 else ""
             )
@@ -130,10 +131,12 @@ class _RecordingCursor:
                 seam.trigger,
                 f"CREATE TRIGGER {seam.trigger} BEFORE UPDATE OR DELETE ON {seam.table} "
                 f"FOR EACH ROW EXECUTE FUNCTION {seam.function}()",
-                "O",
+                self._conn.trigger_enabled,
                 seam.function,
-                f"CREATE FUNCTION {seam.function}() RETURNS trigger LANGUAGE plpgsql "
-                f"AS $$ BEGIN {retention_fragment} RAISE EXCEPTION 'append-only'; END $$",
+                self._conn.function_body
+                or f"CREATE FUNCTION {seam.function}() RETURNS trigger LANGUAGE plpgsql "
+                f"AS $$ BEGIN IF TG_OP = 'UPDATE' THEN RAISE EXCEPTION 'append-only'; END IF; "
+                f"{retention_fragment} RAISE EXCEPTION 'append-only'; END $$",
             )
         # ``to_regclass`` and consent-ledger standing-grant probes both need a
         # truthy row.  The exact metadata queries are covered by the real-PG test.
@@ -150,10 +153,14 @@ class _RecordingConn:
         *,
         missing_index: str | None = None,
         missing_trigger: bool = False,
+        trigger_enabled: str = "O",
+        function_body: str | None = None,
     ) -> None:
         self.seam = seam
         self.missing_index = missing_index
         self.missing_trigger = missing_trigger
+        self.trigger_enabled = trigger_enabled
+        self.function_body = function_body
         self.executed: list[str] = []
 
     def cursor(self) -> _RecordingCursor:
@@ -233,6 +240,56 @@ def test_missing_migration_owned_index_fails_loud_without_repair(
         module._bootstrap_pg(conn)
 
     assert all(sql.lstrip().lower().startswith("select") for sql in conn.executed)
+
+
+@pytest.mark.parametrize("enabled", ["R", "D"])
+def test_non_origin_trigger_mode_fails_loud_without_repair(
+    enabled: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seam = TRIGGER_SEAMS[0]
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    module = importlib.import_module(seam.module)
+    conn = _RecordingConn(seam, trigger_enabled=enabled)
+
+    with pytest.raises(getattr(module, seam.error_type), match="incompatible"):
+        module._bootstrap_pg(conn)
+
+
+def test_non_rejecting_function_fails_loud_without_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seam = TRIGGER_SEAMS[0]
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    module = importlib.import_module(seam.module)
+    conn = _RecordingConn(
+        seam,
+        function_body=(
+            f"CREATE FUNCTION {seam.function}() RETURNS trigger LANGUAGE plpgsql "
+            "AS $$ BEGIN RETURN NEW; END $$"
+        ),
+    )
+
+    with pytest.raises(getattr(module, seam.error_type), match="required guard"):
+        module._bootstrap_pg(conn)
+
+
+def test_retention_guard_requires_narrow_delete_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seam = next(item for item in TRIGGER_SEAMS if item.table == "heimdal_raw_record")
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    module = importlib.import_module(seam.module)
+    conn = _RecordingConn(
+        seam,
+        function_body=(
+            f"CREATE FUNCTION {seam.function}() RETURNS trigger LANGUAGE plpgsql "
+            "AS $$ BEGIN IF current_setting('app.heimdal_retention_bypass', true) = 'true' "
+            "THEN RETURN NEW; END IF; RAISE EXCEPTION 'append-only'; END $$"
+        ),
+    )
+
+    with pytest.raises(getattr(module, seam.error_type), match="required guard"):
+        module._bootstrap_pg(conn)
 
 
 class _GapCursor:

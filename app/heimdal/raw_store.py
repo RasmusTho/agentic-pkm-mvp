@@ -313,7 +313,11 @@ def _assert_pg_schema(conn: Any) -> None:
         trigger=MigrationOwnedTrigger(
             "heimdal_raw_record_no_update",
             "heimdal_raw_record_reject_mutation",
-            function_body_fragments=("app.heimdal_retention_bypass",),
+            function_body_fragments=(
+                "IF TG_OP = 'DELETE' AND current_setting('app.heimdal_retention_bypass', true) = 'true' THEN",
+                "RETURN OLD",
+                "RAISE EXCEPTION",
+            ),
         ),
         error_type=RawStoreSchemaMissingError,
         migration_hint=_MIGRATION_HINT,

@@ -392,6 +392,7 @@ def _assert_pg_schema(conn: Any) -> None:
         trigger=MigrationOwnedTrigger(
             "heimdal_consent_grant_no_update",
             "heimdal_consent_grant_reject_mutation",
+            ("TG_OP", "RAISE EXCEPTION"),
         ),
         error_type=ConsentLedgerSchemaMissingError,
         migration_hint=_MIGRATION_HINT,

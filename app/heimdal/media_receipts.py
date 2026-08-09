@@ -232,6 +232,7 @@ def _assert_pg_schema(conn: Any) -> None:
         trigger=MigrationOwnedTrigger(
             "heimdal_media_receipt_no_update",
             "heimdal_media_receipt_reject_mutation",
+            ("TG_OP", "RAISE EXCEPTION"),
         ),
         error_type=MediaReceiptSchemaMissingError,
         migration_hint=_MIGRATION_HINT,
