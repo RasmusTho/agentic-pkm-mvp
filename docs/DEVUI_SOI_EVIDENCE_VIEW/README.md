@@ -1,5 +1,6 @@
-State: Accepted target-state Builder System specification (2026-08-09). No SoI Evidence View
-composer, UI, durable hierarchy, or owner-outcome writer is delivered by this document.
+State: Accepted target-state Builder System specification (2026-08-09). The bounded SoI Evidence
+View proof composer and immutable proof fixture are delivered by issue #4710; no UI, durable
+hierarchy, or owner-outcome writer is delivered by this document.
 Doc role: Read-model/view specification and implementation boundary for a read-only devUI SoI
 Evidence View v0.
 Authority: `docs/DEVUI.md` owns the owner experience. Product and architecture owner documents
