@@ -13,8 +13,10 @@ import errno
 import os
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from app.dispatcher.darwin_launch_barrier import RELEASE_TOKEN
@@ -57,18 +59,29 @@ class DarwinLaunchBarrier:
         if not command:
             raise ValueError("Darwin launch barrier command is empty")
         reader, writer = os.pipe()
+        os.set_inheritable(reader, False)
+        os.set_inheritable(writer, False)
         self._reader: int | None = reader
         self._writer: int | None = writer
+        self._release_lock = threading.Lock()
+        self._release_attempted = False
+        self._may_have_released = False
         self.command = [
             sys.executable,
-            "-m",
-            "app.dispatcher.darwin_launch_barrier",
+            "-I",
+            "-S",
+            str(Path(__file__).with_name("darwin_launch_barrier.py").resolve()),
             "--release-fd",
             str(reader),
             "--",
             *command,
         ]
         self.pass_fds = (reader,)
+
+    @property
+    def may_have_released(self) -> bool:
+        with self._release_lock:
+            return self._may_have_released
 
     def after_spawn(self) -> None:
         if self._reader is None:
@@ -77,15 +90,31 @@ class DarwinLaunchBarrier:
         self._reader = None
 
     def release(self) -> None:
-        if self._reader is not None or self._writer is None:
-            raise ValueError("Darwin launch barrier is unavailable")
-        try:
-            written = os.write(self._writer, RELEASE_TOKEN)
-            if written != len(RELEASE_TOKEN):
-                raise OSError("Darwin launch barrier release was partial")
-        finally:
-            os.close(self._writer)
-            self._writer = None
+        with self._release_lock:
+            if self._release_attempted or self._reader is not None or self._writer is None:
+                raise ValueError("Darwin launch barrier is unavailable")
+            self._release_attempted = True
+            try:
+                written = os.write(self._writer, RELEASE_TOKEN)
+            except OSError:
+                self._may_have_released = True
+                try:
+                    os.close(self._writer)
+                finally:
+                    self._writer = None
+                raise
+            if written == len(RELEASE_TOKEN):
+                self._may_have_released = True
+                try:
+                    os.close(self._writer)
+                finally:
+                    self._writer = None
+                return
+            try:
+                os.close(self._writer)
+            finally:
+                self._writer = None
+            raise OSError("Darwin launch barrier release was partial")
 
     def close(self) -> None:
         for attribute in ("_reader", "_writer"):

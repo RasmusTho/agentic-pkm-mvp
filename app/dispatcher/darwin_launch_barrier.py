@@ -13,6 +13,7 @@ RELEASE_TOKEN = b"verification-launch-release-v1\n"
 def _read_release(fd: int) -> bool:
     payload = b""
     try:
+        os.set_inheritable(fd, False)
         while len(payload) <= len(RELEASE_TOKEN):
             chunk = os.read(fd, len(RELEASE_TOKEN) + 1 - len(payload))
             if not chunk:
