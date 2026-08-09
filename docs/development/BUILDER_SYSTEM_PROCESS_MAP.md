@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-07
+Last reviewed: 2026-08-09
 
 # Builder System Process Map
 
@@ -50,6 +50,41 @@ the resulting receipt. `PromotionIntent` is proposal and provenance material onl
 document or specification becomes authoritative through the normal PR workflow. A research note,
 design package, or chat transcript alone cannot define implementation scope or create an executable
 Issue.
+
+### Pre-Issue routing
+
+The Builder System has four existing routes from intent or signal to an executable GitHub Issue.
+They share the same Issue contract and downstream delivery flow, but they do not require the same
+staging record before Issue creation.
+
+| Source material | Route before Issue | When `PromotionIntent` applies | Issue crossing |
+| --- | --- | --- | --- |
+| Owner intent or active owner docs | Intent -> normative doc/spec -> `docs-to-issue` | Not required for ordinary extraction from an already authoritative repo doc/spec. | `docs-to-issue` creates the bounded Issue with source anchors and resolvable `Verify:` targets. |
+| Accepted research or design | Supporting artifact -> explicit disposition -> `PromotionIntent` -> normative doc/spec through PR | Required when accepted supporting material crosses into a different authority class. The intent records source, target, intended output, and receipt; it does not write the target. | After the normative doc/spec is accepted through PR, `docs-to-issue` or `feature-breakdown` creates the Issue. |
+| BuilderOps Model Inquiry | Question -> immutable artifacts/model turns -> consensus/synthesis -> deterministic `issue_ready` / `needs_input` / `not_ready` result -> file-first `PromotionIntent` | Required by the specialized inquiry promotion contract before any remote call. | Only the explicit `builderops inquiry promote <id> --create-issue` path may reconcile or create the Issue through REST and append the Issue receipt. |
+| Delivery divergence or reevaluation signal | Delivery evidence -> `LearningSignal` -> classification | Not required when `learning-to-issue` converts an already bounded signal with source anchors and resolvable `Verify:` targets directly into an Issue. Use `PromotionIntent` for other authority-class crossings; otherwise close the signal through another documented terminal disposition. | `learning-to-issue` creates or repairs the bounded Issue, or the retrospective records another terminal outcome. |
+
+The route owners remain `docs-to-issue` / `feature-breakdown`,
+`docs/BUILDEROPS_MODEL_INQUIRY/PROMOTION_AND_TRACEABILITY.md`, and
+`docs/development/DELIVERY_FEEDBACK_LOOP.md`; this table is their routing composition, not a new
+workflow contract.
+
+`PromotionIntent` is therefore the explicit staging boundary when material crosses authority classes;
+it is not a mandatory wrapper around ordinary `docs-to-issue` extraction or every bounded
+`LearningSignal`. The generic BuilderOps Promotion Gateway remains proposal, receipt, and state-
+transition infrastructure only. Model Inquiry is the narrow explicit exception whose stronger
+readiness and file-first evidence contract permits the separately invoked GitHub Issue mutation.
+
+### Execution-control composition
+
+The stable work identity is the existing repository, Issue, claim, worktree, PR, and evidence chain.
+Where the governed DDO worker seam is used, `WorkerContextPack` and `WorkerInvocation` bind execution
+to its run, plan, effect, Issue, base-head, context-pack, and runtime-target authority; durable binding
+through worktree, PR, and terminal evidence remains target work. Codex or Claude threads, host
+processes, provider sessions, and runtime observations are provenance and operational evidence only,
+not work or delivery authority. A missing or unread execution source remains explicit `unknown` and
+cannot create, select, advance, duplicate, or close work. This constraint does not claim that global
+multi-host session ingestion is delivered today or that the Builder System is one monolithic service.
 
 ## Evidence Legend
 
@@ -233,7 +268,7 @@ Mechanism classification:
 | branch/worktree allocation | partially deterministic | Dedicated worktree required by policy; preflight detects shared root/drift; no central allocator | [AGENTS.md :: Parallel-agent execution], [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
 | model choice | agentic | TCD policy and adapter defaults; no deterministic router service | [AGENTS.md :: Total Cost of Development], [`.codex/agents/issue-set-coordinator.toml`:1-21] |
 | skill choice | agentic + documented | `AGENTS.md` and skill README route by task class | [AGENTS.md :: Repo-local skill routing], [`.codex/skills/README.md`:64-128] |
-| docs/source context selection | agentic + documented | `DOCS_INDEX`, source anchors, owner docs; no context-builder script | [docs/DOCS_INDEX.md:11-17], [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37] |
+| docs/source context selection | partially deterministic + agentic | `DOCS_INDEX`, source anchors, and owner docs govern general selection; `app/builderops/epic_dispatch.py` builds bounded per-Issue context packs for its supported lane | [docs/DOCS_INDEX.md:11-17], [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37], [`app/builderops/epic_dispatch.py`] |
 | parallel collision prevention | deterministic + partial | Dispatcher leases, label removal, worktree preflight; no branch allocator | [docs/AGENT_ISSUE_DISPATCHER.md:152-180], [scripts/agent_workspace_preflight.sh:55-61] |
 | stale claims detection | deterministic + partial | Dispatcher TTL/heartbeat and reclaim semantics; GitHub-label-only fallback has weaker stale detection | [docs/AGENT_ISSUE_DISPATCHER.md:165-180], [tests/dispatcher/test_leases.py:194-222] |
 | failed work returns to queue | partially implemented | Dispatcher release/block; GitHub labels for blocked; no automated failed-work requeue from CI | [docs/AGENT_ISSUE_DISPATCHER.md:142-150], [`.codex/skills/issue-to-code/SKILL.md`:176-195] |
@@ -751,7 +786,6 @@ Where to store/post:
 | queue/readiness classifier | Make `agent:ready` deterministic beyond section/source checks | issue workflow, skills, scripts | agent judgment + governance check | malformed ready work | deterministic `Verify:`/DoR checker Action |
 | model router | Reduce under/over-modeling | `AGENTS.md`, `.codex/agents` | TCD prose + adapter defaults | excess human steering or cost | shared routing receipt schema |
 | skill router | Prevent wrong workflow | `AGENTS.md`, skills README | agent reads index | wrong lane | low-risk linter for skill entrypoint mentions |
-| context builder | Reduce repeated source loading | DOCS_INDEX, skills, `app/builderops/epic_dispatch.py` | dry-run helper plus agent review | token/time waste | helper builds runtime-neutral context pack from issue source anchors |
 | worktree/branch allocator | Avoid branch collision | branch gate, dispatcher docs | preflight detects, no central reservation | late collision | dispatcher branch/worktree reservation extension |
 | repair orchestrator | Bounded automated CI/review repair | pr-integration | agentic loop | endless or unsafe retries | patch-branch agent with retry ledger |
 | review gate runner | Make local review auditable in GitHub | verification skill | local subagent by agent | invisible review gaps | comment-only review Action or receipt artifact |
