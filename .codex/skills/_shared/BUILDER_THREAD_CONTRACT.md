@@ -68,9 +68,11 @@ Read-only health continues to expose unmatched or orphaned temps as incomplete.
 Stale close/archive snapshots may be superseded through immutable hash lineage. Each thread has 128
 immutable, create-if-absent entry slots. A writer must reserve one before publishing contribution
 bytes, so a concurrent or sequential 129th append fails without changing the thread. Concurrent
-incompatible quarantine decisions for one target fail closed, and one decision can be quarantined
-with `concurrent_conflict` to preserve the other while a slot remains. The same entry ID with changed
-semantics, conflict-copy siblings, partial temp artifacts, and uncertain lineage fail closed.
+incompatible quarantine decisions for one target fail closed. Only when at least two active sibling
+decisions exist may one decision be quarantined with `concurrent_conflict` to preserve the other
+while a slot remains; a lone decision cannot be neutralized this way. Entry IDs are vault-wide
+identities: reuse for changed semantics, conflict-copy siblings, partial temp artifacts, and
+uncertain lineage fail closed.
 An explicit quarantine contribution may disposition a structurally valid unsafe artifact by exact
 hash. It preserves the original bytes, redacts them from normal output, and never hides structural
 corruption. Incident handling is explicit; no free-form session capture or automatic quarantine is

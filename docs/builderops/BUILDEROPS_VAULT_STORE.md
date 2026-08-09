@@ -355,8 +355,10 @@ hash-bound quarantine contribution can preserve and redact a structurally valid 
 artifact; it never masks structural corruption. Each thread has exactly 128 possible immutable
 entry slots. A writer reserves one before publishing contribution bytes, so a concurrent or
 sequential 129th append fails without changing the tree. Multiple active quarantine decisions for
-one target are themselves a conflict; `concurrent_conflict` can disposition one exact decision
-without deleting either envelope while a slot remains.
+one target are themselves a conflict; only a real set of at least two active sibling decisions
+allows `concurrent_conflict` to disposition one exact decision without deleting either envelope
+while a slot remains. A lone quarantine decision cannot be neutralized. Entry IDs are unique across
+the whole Builder Thread vault, not merely within one thread.
 
 Use the production operator surfaces:
 

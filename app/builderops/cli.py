@@ -391,13 +391,21 @@ def _parse_builder_thread_source_refs(
 
 
 def _builder_thread_failure(exc: Exception, *, as_json: bool) -> NoReturn:
-    message = str(exc).replace("\n", " ")[:240]
+    if isinstance(exc, BuilderThreadError):
+        message = str(exc).replace("\n", " ")[:240]
+        error_type = exc.__class__.__name__
+    elif isinstance(exc, OSError):
+        message = "Builder Thread storage operation failed"
+        error_type = "BuilderThreadStorageError"
+    else:
+        message = "Builder Thread operation failed"
+        error_type = "BuilderThreadInternalError"
     if as_json:
         _emit(
             {
                 "error": {
                     "message": message,
-                    "type": exc.__class__.__name__,
+                    "type": error_type,
                 },
                 "ok": False,
             },
@@ -405,6 +413,38 @@ def _builder_thread_failure(exc: Exception, *, as_json: bool) -> NoReturn:
         )
         raise click.exceptions.Exit(1)
     raise click.ClickException(message) from exc
+
+
+class _BuilderThreadJsonGroup(click.Group):
+    """Keep group-level usage failures inside the bounded JSON protocol."""
+
+    def make_context(
+        self,
+        info_name: str | None,
+        args: list[str],
+        parent: click.Context | None = None,
+        **extra: Any,
+    ) -> click.Context:
+        wants_json = "--json" in args
+        try:
+            return super().make_context(info_name, args, parent=parent, **extra)
+        except click.UsageError as exc:
+            if wants_json:
+                _builder_thread_failure(BuilderThreadValidationError(str(exc)), as_json=True)
+            raise
+
+    def resolve_command(
+        self,
+        ctx: click.Context,
+        args: list[str],
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        wants_json = "--json" in args
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError as exc:
+            if wants_json:
+                _builder_thread_failure(BuilderThreadValidationError(str(exc)), as_json=True)
+            raise
 
 
 class _BuilderThreadJsonCommand(click.Command):
@@ -427,26 +467,22 @@ class _BuilderThreadJsonCommand(click.Command):
 
 
 def _builder_thread_service(ctx: click.Context, *, as_json: bool) -> BuilderThreadService:
-    paths = _effective_paths(ctx)
-    if paths.vault_root is None:
-        _builder_thread_failure(
-            BuilderThreadValidationError("BUILDEROPS_VAULT_ROOT is required for Builder Threads"),
-            as_json=as_json,
-        )
-    vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", "")).strip()
-    if not vault_id:
-        _builder_thread_failure(
-            BuilderThreadValidationError(
-                "BUILDEROPS_VAULT_ID or --vault-id is required for Builder Threads"
-            ),
-            as_json=as_json,
-        )
     try:
+        paths = _effective_paths(ctx)
+        if paths.vault_root is None:
+            raise BuilderThreadValidationError(
+                "BUILDEROPS_VAULT_ROOT is required for Builder Threads"
+            )
+        vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", "")).strip()
+        if not vault_id:
+            raise BuilderThreadValidationError(
+                "BUILDEROPS_VAULT_ID or --vault-id is required for Builder Threads"
+            )
         return BuilderThreadService(
             paths.vault_root,
             expected_vault_id=vault_id,
         )
-    except BuilderThreadError as exc:
+    except Exception as exc:
         _builder_thread_failure(exc, as_json=as_json)
     raise AssertionError("unreachable Builder Thread service state")
 
@@ -454,7 +490,7 @@ def _builder_thread_service(ctx: click.Context, *, as_json: bool) -> BuilderThre
 def _emit_builder_thread(operation: Callable[[], dict[str, Any]], *, as_json: bool) -> None:
     try:
         payload = operation()
-    except BuilderThreadError as exc:
+    except Exception as exc:
         _builder_thread_failure(exc, as_json=as_json)
         return
     _emit(payload, as_json)
@@ -462,6 +498,7 @@ def _emit_builder_thread(operation: Callable[[], dict[str, Any]], *, as_json: bo
 
 @builderops.group(
     "builder-thread",
+    cls=_BuilderThreadJsonGroup,
     help="Exchange immutable shared-non-sensitive Builder Thread contributions.",
 )
 @click.option(
@@ -737,6 +774,7 @@ def builder_thread_quarantine(
 
 @builderops.group(
     "builder-inbox",
+    cls=_BuilderThreadJsonGroup,
     help="Read-only Builder Thread inbox and health projection.",
 )
 @click.option(

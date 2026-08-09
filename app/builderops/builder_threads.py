@@ -93,10 +93,11 @@ CONFLICT_COPY_RE = re.compile(r"conflicted copy", re.IGNORECASE)
 TEMP_FILE_RE = re.compile(r"^\.tmp-(?P<stem>.+)-[0-9a-f]{32}$")
 PRIVATE_PATH_RE = re.compile(
     r"(?:file:(?://)?|~[/\\]|"
-    r"(?:^|[\s=(\[\{\"'])/(?!/)[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~ -]+)+|"
+    r"(?<![A-Za-z0-9._~/-])/(?!/)[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~ -]+)*|"
     r"[A-Za-z]:\\Users\\|%2f(?:Users|home|root|Volumes|private)%2f)",
     re.IGNORECASE,
 )
+WEB_URL_RE = re.compile(r"https?://[^\s<>]+", re.IGNORECASE)
 SECRET_RE = re.compile(
     r"(?:authorization\s*:\s*bearer|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"\b(?:api[_-]?key|access[_-]?token|password|client[_-]?secret)\s*[:=]|"
@@ -246,7 +247,7 @@ def _privacy_check(value: str | None, *, field: str) -> None:
         return
     if SECRET_RE.search(value):
         raise BuilderThreadPrivacyError(f"{field} contains credential-like content")
-    if PRIVATE_PATH_RE.search(value):
+    if PRIVATE_PATH_RE.search(WEB_URL_RE.sub("", value)):
         raise BuilderThreadPrivacyError(f"{field} contains a private host path")
     if ENV_RE.search(value) or ARGV_STDERR_RE.search(value):
         raise BuilderThreadPrivacyError(f"{field} contains argv/env/stderr material")
@@ -445,6 +446,11 @@ class BuilderThreadService:
         created_at: str | None = None,
     ) -> dict[str, Any]:
         self._prepare_write()
+        if entry_id is None:
+            raise BuilderThreadValidationError(
+                "create requires a caller-retained entry_id"
+            )
+        request_entry_id = _uuid4(entry_id, field="entry_id")
         recipient = _identity(recipient_id, field="recipient_id")
         actor = _identity(actor_id, field="actor_id")
         if reply_expected is not True:
@@ -466,7 +472,7 @@ class BuilderThreadService:
             )
         entry = self._entry_payload(
             thread_id=derived_thread_id,
-            entry_id=entry_id,
+            entry_id=request_entry_id,
             entry_type="open",
             created_at=created_at,
             actor_id=actor,
@@ -485,6 +491,16 @@ class BuilderThreadService:
             )
         for represented in self._load_all_threads():
             for item in represented["entries"]:
+                if item["entry"]["entry_id"] == request_entry_id:
+                    if _same_idempotent_request(item["entry"], entry):
+                        return self._result(
+                            represented,
+                            entry=item["entry"],
+                            entry_hash=item["entry_hash"],
+                        )
+                    raise BuilderThreadConflictError(
+                        f"entry_id replay conflict: {request_entry_id}"
+                    )
                 if item.get("quarantined") or item["entry"].get("capture_key") != capture_key:
                     continue
                 if _same_idempotent_request(item["entry"], entry):
@@ -512,7 +528,22 @@ class BuilderThreadService:
         created_at: str | None = None,
     ) -> dict[str, Any]:
         self._prepare_write()
-        thread = self._load_thread(_uuid4(thread_id, field="thread_id"))
+        if entry_id is None:
+            raise BuilderThreadValidationError(
+                "reply requires a caller-retained entry_id"
+            )
+        request_entry_id = _uuid4(entry_id, field="entry_id")
+        exact_thread_id = _uuid4(thread_id, field="thread_id")
+        thread = next(
+            (
+                item
+                for item in self._load_all_threads()
+                if item["thread_id"] == exact_thread_id
+            ),
+            None,
+        )
+        if thread is None:
+            raise BuilderThreadValidationError(f"thread not found: {exact_thread_id}")
         if not isinstance(reply_expected, bool):
             raise BuilderThreadValidationError("reply_expected must be boolean")
         if parent_hash not in thread["artifact_hashes"]:
@@ -523,7 +554,7 @@ class BuilderThreadService:
             raise BuilderThreadValidationError("reply actor must match the named parent recipient")
         entry = self._entry_payload(
             thread_id=thread_id,
-            entry_id=entry_id,
+            entry_id=request_entry_id,
             entry_type="reply",
             created_at=created_at,
             actor_id=actor,
@@ -629,13 +660,26 @@ class BuilderThreadService:
                 ):
                     return self.read_thread(thread_id)
                 raise BuilderThreadConflictError("incompatible quarantine retry")
-        target_entry = next(
-            item["entry"] for item in thread["entries"] if item["entry_hash"] == target
+        target_item = next(
+            item for item in thread["entries"] if item["entry_hash"] == target
         )
+        target_entry = target_item["entry"]
         if target_entry["entry_type"] == "quarantine":
             if reason_code != "concurrent_conflict":
                 raise BuilderThreadValidationError(
                     "quarantine-disposition recovery requires concurrent_conflict"
+                )
+            original_target = target_entry["target_hash"]
+            sibling_decisions = [
+                item
+                for item in thread["entries"]
+                if not item["quarantined"]
+                and item["entry"]["entry_type"] == "quarantine"
+                and item["entry"]["target_hash"] == original_target
+            ]
+            if len(sibling_decisions) < 2:
+                raise BuilderThreadValidationError(
+                    "concurrent_conflict requires active sibling quarantine decisions"
                 )
         entry = self._entry_payload(
             thread_id=thread_id,
@@ -825,10 +869,11 @@ class BuilderThreadService:
 
     def _prepare_write(self) -> None:
         self._validate_root(
-            require_genesis=False,
+            require_genesis=True,
             allow_committed_temps=True,
         )
         self._recover_committed_temps()
+        self._validate_root()
 
     def _recover_committed_temps(self) -> None:
         """Remove only exact temp twins whose final artifact is already installed."""
@@ -983,7 +1028,15 @@ class BuilderThreadService:
         thread_ids = sorted({thread_id for thread_id, _ in paths})
         threads = [self._load_thread_from_paths(thread_id, paths) for thread_id in thread_ids]
         captures: dict[str, str] = {}
+        entry_ids: set[str] = set()
         for thread in threads:
+            for item in thread["entries"]:
+                entry_id = item["entry"]["entry_id"]
+                if entry_id in entry_ids:
+                    raise BuilderThreadConflictError(
+                        f"duplicate entry_id across vault: {entry_id}"
+                    )
+                entry_ids.add(entry_id)
             open_entry = next(
                 item["entry"] for item in thread["entries"] if item["entry"]["entry_type"] == "open"
             )

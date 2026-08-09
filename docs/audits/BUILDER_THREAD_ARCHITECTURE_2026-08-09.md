@@ -20,7 +20,7 @@ conflict handling, and derived state without implementing any of them; string-pr
 not prove cross-device safety. The long skill names were also poor operator vocabulary and the
 global discovery hooks duplicated normal delivery checkpoints.
 
-The accepted repair is an issue-backed executable vertical slice:
+The governing repair design is an issue-backed executable vertical slice:
 
 - builder-thread owns explicit create/read/reply/close/archive/quarantine operations;
 - builder-inbox owns read-only recipient and health views;
@@ -130,9 +130,18 @@ review must reproduce the new CLI retries, cleanup recovery, pre-publication ent
 quarantine-conflict recovery, receiver validation, privacy variants, and plain docs guard on the
 exact repaired SHA.
 
+The following review rejected SHA `94bdd49964b0733ae47d60afa16fe7c2b754f21c`
+for optional service request identities, thread-local rather than vault-wide entry-ID uniqueness,
+pre-identity temp cleanup, lone-quarantine neutralization, remaining absolute-POSIX-path variants,
+and non-total JSON error handling for storage and group-usage failures. That SHA is rejected
+evidence. The next review must reproduce service and CLI acknowledgement-loss retry, global ID
+conflict, genesis-first non-mutation, real-sibling quarantine recovery, the expanded privacy matrix,
+and bounded JSON for both storage and unknown-command failures on the exact repaired SHA.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
 | Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |
+| Wrong pin or mismatched genesis cannot clean a committed temp twin | `test_wrong_identity_never_cleans_committed_temp_twins` |
 | Unknown, partial, conflict-copy, symlink, hash, and SQLite refusal | `test_validator_rejects_unknown_partial_conflict_and_sqlite_artifacts` |
 | Every envelope field is typed; hostile filenames are not echoed | `test_malformed_field_types_and_hostile_filenames_fail_typed_and_redacted` |
 | Concurrent identical capture and independent reply convergence; entry replay | `test_concurrent_writers_and_replay_conflicts_converge_fail_closed` |
@@ -142,8 +151,10 @@ exact repaired SHA.
 | File/link/fsync ordering and final cleanup-sync failure | `test_atomic_publication_uses_fsynced_temp_and_no_overwrite_link`, `test_atomic_publication_reports_final_directory_sync_failure_and_retries` |
 | Post-publication acknowledgement loss and exact recovery | `test_create_acknowledgement_loss_reconciles_on_exact_retry` |
 | Supported CLI create/reply lost-ack retry and typed bounded JSON failures | `test_cli_round_trip_covers_complete_thread_surface`, `test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append` |
+| Public service requires caller-owned request identity; entry ID is unique vault-wide | `test_public_service_requires_request_identity_and_retries_exactly`, `test_entry_id_is_unique_across_the_entire_vault` |
 | Temp-unlink failure, exact twin cleanup, and later writer retry | `test_temp_unlink_failure_is_recovered_by_exact_writer_retry` |
 | Concurrent contradictory quarantine decisions and decision quarantine recovery | `test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable` |
+| A lone quarantine decision cannot be neutralized as a concurrent conflict | `test_single_quarantine_decision_cannot_be_neutralized_as_concurrent` |
 | Concurrent 128-entry boundary reservation and non-mutating 129th refusal | `test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating` |
 | Privacy patterns, actor identity, capture gate, bounds | `test_capture_gate_and_shared_non_sensitive_privacy_boundary` |
 | Recipient-bound answer plus immutable/idempotent inbox | `test_inbox_is_bounded_read_only_and_idempotent` |

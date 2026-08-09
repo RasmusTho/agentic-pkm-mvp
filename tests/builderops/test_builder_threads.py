@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier, Event
@@ -19,7 +20,7 @@ from app.builderops.builder_threads import (
     BuilderThreadError,
     BuilderThreadConflictError,
     BuilderThreadPrivacyError,
-    BuilderThreadService,
+    BuilderThreadService as ProductionBuilderThreadService,
     BuilderThreadValidationError,
 )
 from app.builderops.vault_queue import init_vault
@@ -30,6 +31,18 @@ OTHER_VAULT_ID = "22222222-2222-4222-8222-222222222222"
 ACTOR = "agent:codex:test"
 RECIPIENT = "agent:claude:test"
 SOURCE_REFS = [{"type": "github_issue", "value": "4702"}]
+
+
+class BuilderThreadService(ProductionBuilderThreadService):
+    """Test client that retains a fresh request identity before each API call."""
+
+    def create_thread(self, **kwargs: Any) -> dict[str, Any]:
+        kwargs.setdefault("entry_id", str(uuid.uuid4()))
+        return super().create_thread(**kwargs)
+
+    def reply(self, thread_id: str, **kwargs: Any) -> dict[str, Any]:
+        kwargs.setdefault("entry_id", str(uuid.uuid4()))
+        return super().reply(thread_id, **kwargs)
 
 
 def _service(tmp_path: Path) -> tuple[BuilderThreadService, Path]:
@@ -173,6 +186,47 @@ def test_genesis_pair_refusal_is_non_mutating(tmp_path: Path, genesis_state: str
             adopt_existing=True,
         )
 
+    assert _vault_snapshot(vault) == before
+
+
+@pytest.mark.parametrize("identity_state", ("wrong_pin", "mismatched_pair"))
+def test_wrong_identity_never_cleans_committed_temp_twins(
+    tmp_path: Path, identity_state: str
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject=f"Preserve temp before {identity_state}",
+        content="Must identity validation precede every recovery mutation?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    final = _entry_files(vault, opened["thread_id"])[0]
+    temp = final.with_name(f".tmp-{final.stem}-{'a' * 32}")
+    os.link(final, temp)
+    expected_vault_id = VAULT_ID
+    if identity_state == "wrong_pin":
+        expected_vault_id = OTHER_VAULT_ID
+    else:
+        subsystem_genesis = vault / "builder-threads" / "genesis.json"
+        payload = json.loads(subsystem_genesis.read_bytes())
+        payload["created_at"] = "2026-08-09T11:59:59Z"
+        subsystem_genesis.write_bytes(_canonical_bytes(payload))
+    before = _vault_snapshot(vault)
+
+    with pytest.raises(BuilderThreadError):
+        ProductionBuilderThreadService(
+            vault, expected_vault_id=expected_vault_id
+        ).create_thread(
+            recipient_id=RECIPIENT,
+            subject="This write must not begin",
+            content="The temp twin is immutable evidence until genesis is trusted.",
+            actor_id=ACTOR,
+            source_refs=SOURCE_REFS,
+            entry_id="10101010-1010-4010-8010-101010101010",
+        )
+
+    assert temp.exists()
     assert _vault_snapshot(vault) == before
 
 
@@ -436,7 +490,7 @@ def test_cli_round_trip_covers_complete_thread_surface(
 
 
 def test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, vault = _service(tmp_path)
     env = _env(tmp_path, vault)
@@ -491,6 +545,110 @@ def test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append(
     missing = _run(["builder-inbox", "health", "--json"], missing_root_env)
     assert missing.exit_code == 1
     assert json.loads(missing.output)["error"]["type"] == ("BuilderThreadValidationError")
+
+    unknown = _run(["builder-thread", "does-not-exist", "--json"], env)
+    assert unknown.exit_code == 1
+    unknown_payload = json.loads(unknown.output)
+    assert unknown_payload["ok"] is False
+    assert unknown_payload["error"]["type"] == "BuilderThreadValidationError"
+    assert "Error:" not in unknown.output
+
+    private_marker = str(vault / "private-storage-detail")
+
+    def fail_storage(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise OSError(f"injected failure at {private_marker}")
+
+    monkeypatch.setattr(ProductionBuilderThreadService, "create_thread", fail_storage)
+    storage_failure = _run(args, env)
+    assert storage_failure.exit_code == 1
+    storage_payload = json.loads(storage_failure.output)
+    assert storage_payload == {
+        "error": {
+            "message": "Builder Thread storage operation failed",
+            "type": "BuilderThreadStorageError",
+        },
+        "ok": False,
+    }
+    assert private_marker not in storage_failure.output
+    assert "Traceback" not in storage_failure.output
+
+
+def test_public_service_requires_request_identity_and_retries_exactly(
+    tmp_path: Path,
+) -> None:
+    service, vault = _service(tmp_path)
+    public = ProductionBuilderThreadService(vault, expected_vault_id=VAULT_ID)
+    kwargs = {
+        "recipient_id": RECIPIENT,
+        "subject": "Require durable API request identity",
+        "content": "Can a service caller safely reconcile a lost acknowledgement?",
+        "actor_id": ACTOR,
+        "source_refs": SOURCE_REFS,
+    }
+    with pytest.raises(BuilderThreadValidationError, match="caller-retained entry_id"):
+        public.create_thread(**kwargs)
+    entry_id = "14141414-1414-4414-8414-141414141414"
+    opened = public.create_thread(**kwargs, entry_id=entry_id)
+    exact = public.create_thread(**kwargs, entry_id=entry_id)
+    assert exact["entry_hash"] == opened["entry_hash"]
+
+    reply_kwargs = {
+        "recipient_id": ACTOR,
+        "content": "The API caller retained the request identity.",
+        "actor_id": RECIPIENT,
+        "parent_hash": opened["entry_hash"],
+        "source_refs": SOURCE_REFS,
+    }
+    with pytest.raises(BuilderThreadValidationError, match="caller-retained entry_id"):
+        public.reply(opened["thread_id"], **reply_kwargs)
+    reply_id = "15151515-1515-4515-8515-151515151515"
+    replied = public.reply(opened["thread_id"], **reply_kwargs, entry_id=reply_id)
+    reply_retry = public.reply(opened["thread_id"], **reply_kwargs, entry_id=reply_id)
+    assert reply_retry["entry_hash"] == replied["entry_hash"]
+    assert public.health()["artifact_count"] == 2
+
+
+def test_entry_id_is_unique_across_the_entire_vault(tmp_path: Path) -> None:
+    service, vault = _service(tmp_path)
+    entry_id = "16161616-1616-4616-8616-161616161616"
+    first = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="First use of one request identity",
+        content="This request identity belongs to exactly one contribution.",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+        entry_id=entry_id,
+    )
+    with pytest.raises(BuilderThreadConflictError, match="entry_id replay conflict"):
+        service.create_thread(
+            recipient_id=RECIPIENT,
+            subject="Changed semantics with the same request identity",
+            content="This must not create a second represented thread.",
+            actor_id=ACTOR,
+            source_refs=SOURCE_REFS,
+            entry_id=entry_id,
+        )
+    assert service.health()["thread_count"] == 1
+    assert service.read_thread(first["thread_id"])["entry_count"] == 1
+
+    second = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="A valid second request identity",
+        content="The synchronized receiver must also enforce vault-wide uniqueness.",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    second_path = _entry_files(vault, second["thread_id"])[0]
+    second_payload = json.loads(second_path.read_bytes())
+    second_payload["entry_id"] = entry_id
+    duplicate_bytes = _canonical_bytes(second_payload)
+    duplicate_path = second_path.with_name(
+        f"{hashlib.sha256(duplicate_bytes).hexdigest()}.json"
+    )
+    second_path.unlink()
+    duplicate_path.write_bytes(duplicate_bytes)
+    with pytest.raises(BuilderThreadConflictError, match="duplicate entry_id across vault"):
+        service.health()
 
 
 def test_quarantine_preserves_bytes_and_redacts_unsafe_artifact(
@@ -944,7 +1102,7 @@ def test_receiver_recomputes_capture_key_and_rejects_non_active_archive_target(
 
 
 def test_concurrent_disposition_conflict_can_be_explicitly_quarantined(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     service, vault = _service(tmp_path)
     opened = service.create_thread(
@@ -955,41 +1113,46 @@ def test_concurrent_disposition_conflict_can_be_explicitly_quarantined(
         source_refs=SOURCE_REFS,
     )
     publish_barrier = Barrier(2)
-    real_publish = builder_thread_module._atomic_publish
 
-    def synchronized_close_publish(path: Path, data: bytes) -> bool:
-        payload = json.loads(data)
-        if payload.get("entry_type") == "close":
-            publish_barrier.wait(timeout=2)
-        return real_publish(path, data)
+    class SynchronizedCloseClient(BuilderThreadService):
+        def __init__(self, root: Path, *, expected_vault_id: str):
+            super().__init__(root, expected_vault_id=expected_vault_id)
+            self._loads = 0
 
-    monkeypatch.setattr(builder_thread_module, "_atomic_publish", synchronized_close_publish)
+        def _load_thread(
+            self, thread_id: str, *, structural_only: bool = False
+        ) -> dict[str, Any]:
+            loaded = super()._load_thread(thread_id, structural_only=structural_only)
+            self._loads += 1
+            if self._loads == 2:
+                publish_barrier.wait(timeout=2)
+            return loaded
 
     def close(reason: str) -> Exception | None:
         try:
-            BuilderThreadService(service.root, expected_vault_id=VAULT_ID).close_thread(
+            SynchronizedCloseClient(service.root, expected_vault_id=VAULT_ID).close_thread(
                 opened["thread_id"], actor_id=ACTOR, reason=reason
             )
-        except Exception as exc:  # noqa: BLE001 - assert typed convergence below
+        except BuilderThreadError as exc:
             return exc
         return None
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(close, ("Concurrent A", "Concurrent B")))
-    assert any(isinstance(item, BuilderThreadConflictError) for item in outcomes)
+    assert all(item is None or isinstance(item, BuilderThreadConflictError) for item in outcomes)
+
     with pytest.raises(BuilderThreadConflictError, match="multiple active close"):
         service.health()
 
-    monkeypatch.setattr(builder_thread_module, "_atomic_publish", real_publish)
-    closes = []
-    for path in _entry_files(vault, opened["thread_id"]):
-        payload = json.loads(path.read_bytes())
-        if payload["entry_type"] == "close":
-            closes.append(path.stem)
-    assert len(closes) == 2
+    close_hashes = [
+        path.stem
+        for path in _entry_files(vault, opened["thread_id"])
+        if json.loads(path.read_bytes())["entry_type"] == "close"
+    ]
+    assert len(close_hashes) == 2
     recovered = service.quarantine(
         opened["thread_id"],
-        artifact_hash=closes[0],
+        artifact_hash=close_hashes[0],
         actor_id=ACTOR,
         reason_code="concurrent_conflict",
     )
@@ -1130,7 +1293,7 @@ def test_temp_unlink_failure_is_recovered_by_exact_writer_retry(
 
 
 def test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     service, vault = _service(tmp_path)
     opened = service.create_thread(
@@ -1141,25 +1304,32 @@ def test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable(
         source_refs=SOURCE_REFS,
     )
     publish_barrier = Barrier(2)
-    real_publish = builder_thread_module._atomic_publish
 
-    def synchronized_quarantine_publish(path: Path, data: bytes) -> bool:
-        payload = json.loads(data)
-        if payload.get("entry_type") == "quarantine":
-            publish_barrier.wait(timeout=2)
-        return real_publish(path, data)
+    class SynchronizedQuarantineClient(BuilderThreadService):
+        def __init__(self, root: Path, *, expected_vault_id: str):
+            super().__init__(root, expected_vault_id=expected_vault_id)
+            self._loads = 0
 
-    monkeypatch.setattr(builder_thread_module, "_atomic_publish", synchronized_quarantine_publish)
+        def _load_thread(
+            self, thread_id: str, *, structural_only: bool = False
+        ) -> dict[str, Any]:
+            loaded = super()._load_thread(thread_id, structural_only=structural_only)
+            self._loads += 1
+            if self._loads == 2:
+                publish_barrier.wait(timeout=2)
+            return loaded
 
     def quarantine(actor: str, reason: str) -> Exception | None:
         try:
-            BuilderThreadService(service.root, expected_vault_id=VAULT_ID).quarantine(
+            SynchronizedQuarantineClient(
+                service.root, expected_vault_id=VAULT_ID
+            ).quarantine(
                 opened["thread_id"],
                 artifact_hash=opened["entry_hash"],
                 actor_id=actor,
                 reason_code=reason,
             )
-        except Exception as exc:  # noqa: BLE001 - typed convergence asserted below
+        except BuilderThreadError as exc:
             return exc
         return None
 
@@ -1173,16 +1343,16 @@ def test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable(
                 ),
             )
         )
-    assert any(isinstance(item, BuilderThreadConflictError) for item in outcomes)
+    assert all(item is None or isinstance(item, BuilderThreadConflictError) for item in outcomes)
+
     with pytest.raises(BuilderThreadConflictError, match="quarantine decisions"):
         service.health()
 
-    monkeypatch.setattr(builder_thread_module, "_atomic_publish", real_publish)
-    quarantine_hashes = []
-    for path in _entry_files(vault, opened["thread_id"]):
-        payload = json.loads(path.read_bytes())
-        if payload["entry_type"] == "quarantine":
-            quarantine_hashes.append(path.stem)
+    quarantine_hashes = [
+        path.stem
+        for path in _entry_files(vault, opened["thread_id"])
+        if json.loads(path.read_bytes())["entry_type"] == "quarantine"
+    ]
     assert len(quarantine_hashes) == 2
     recovered = service.quarantine(
         opened["thread_id"],
@@ -1191,6 +1361,51 @@ def test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable(
         reason_code="concurrent_conflict",
     )
     assert recovered["state"] == "quarantined"
+    assert service.health()["ok"] is True
+
+
+def test_single_quarantine_decision_cannot_be_neutralized_as_concurrent(
+    tmp_path: Path,
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Preserve one incident disposition",
+        content="Can a lone quarantine remain authoritative within this projection?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    quarantined = service.quarantine(
+        opened["thread_id"],
+        artifact_hash=opened["entry_hash"],
+        actor_id=ACTOR,
+        reason_code="privacy_misclassification",
+    )
+    decision_hash = quarantined["entry_hash"]
+    before = _vault_snapshot(vault)
+
+    with pytest.raises(
+        BuilderThreadValidationError,
+        match="active sibling quarantine decisions",
+    ):
+        service.quarantine(
+            opened["thread_id"],
+            artifact_hash=decision_hash,
+            actor_id=RECIPIENT,
+            reason_code="concurrent_conflict",
+        )
+
+    assert _vault_snapshot(vault) == before
+    reread = service.read_thread(opened["thread_id"])
+    assert reread["state"] == "quarantined"
+    open_entry = next(
+        item
+        for item in reread["entries"]
+        if item.get("entry_type") == "open"
+    )
+    assert open_entry["quarantined"] is True
+    assert "entry" not in open_entry
+    assert reread["subject"] == "[quarantined]"
     assert service.health()["ok"] is True
 
 
@@ -1315,6 +1530,9 @@ def test_capture_gate_and_shared_non_sensitive_privacy_boundary(
         "%2FUsers%2Fprivate-owner%2FSecrets",
         "/root/.ssh/id_rsa",
         "/etc/ssh/id_rsa",
+        "`/etc/passwd`",
+        "path:/etc/passwd",
+        "/single",
         "sys.argv was ['builder-thread', '--secret']",
         "sk-proj-abcdefghijklmnop",
         "github_pat_abcdefghijklmnop",
@@ -1337,6 +1555,14 @@ def test_capture_gate_and_shared_non_sensitive_privacy_boundary(
                 "source_refs": [{"type": "github_issue", "value": "not-a-number"}],
             }
         )
+    allowed = service.create_thread(
+        **{
+            **kwargs,
+            "subject": "Authority-safe web reference",
+            "content": "See https://example.com/docs/builder-thread for public context.",
+        }
+    )
+    assert allowed["state"] == "open"
 
 
 def test_inbox_is_bounded_read_only_and_idempotent(tmp_path: Path) -> None:
