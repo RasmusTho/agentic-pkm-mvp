@@ -411,11 +411,14 @@ when that writer is unavailable. The repository `vault/` directory is a fixture
 and is never a live target.
 
 The operational boundary accepts only bounded `shared_non_sensitive` material,
-typed provenance, and named-recipient questions. A caller-retained request ID
-supports an exact acknowledgement-loss retry; changed semantics under the same
-ID fail closed. Inbox and devUI views are read-only orientation projections.
-They do not grant Issue, PR, CI, merge, approval, promotion, or receipt
-authority. The detailed skill contract is
+typed provenance, and named-recipient questions. The writer host explicitly
+initializes the external root with its pinned vault identity and retains immutable
+request envelopes there; a caller-retained request ID therefore supports an exact
+acknowledgement-loss retry across a writer restart, while changed semantics under
+the same ID fail closed. Thread reads are capped at 32 contributions and the
+writer retains at most 100 total contributions. Inbox and devUI views are
+read-only orientation projections. They do not grant Issue, PR, CI, merge,
+approval, promotion, or receipt authority. The detailed skill contract is
 `.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md`; PR #4706 remains
 superseded multi-writer evidence and is not an operational dependency.
 

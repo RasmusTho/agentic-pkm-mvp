@@ -280,10 +280,13 @@ target; the external BuilderOps Vault is separate.
 
 The writer accepts create, reply, close, and archive commands, all constrained to
 `shared_non_sensitive` material, named recipients where applicable, bounded
-content and provenance, and caller-retained request IDs. Exact retries converge
-on the original accepted result; changed semantics under the same request ID fail
-closed. An unavailable writer returns a typed degraded failure and never enables
-direct client filesystem fallback.
+content and provenance, and caller-retained request IDs. Its external root is
+explicitly initialized with the stable vault identity, then records one immutable
+command envelope per request so exact retries survive a writer restart; changed
+semantics under the same request ID fail closed. A thread is capped at 32 entries
+and the writer at 100 total contributions, keeping reads bounded. An unavailable
+writer returns a typed degraded failure and never enables direct client filesystem
+fallback.
 
 This boundary is deliberately not a distributed filesystem protocol. It has no
 vault-global claims, slot reservations, cross-device locks, hard-link/fsync race

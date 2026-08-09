@@ -14,11 +14,12 @@ the BuilderOps/Mac mini host. Codex and Claude clients receive only that
 endpoint capability: they have no artifact-root or direct mutation API.
 
 The external BuilderOps Vault is never the repository `vault/` fixture. The
-writer host owns its configured external storage and deployment; this repository
-does not discover, configure, or write the live vault. A client request is
-bounded and attributed with its caller-retained request ID, actor, named
-recipient where applicable, source references, and the only permitted privacy
-class, `shared_non_sensitive`.
+writer host owns an explicitly initialized, pinned external root and its
+deployment; clients cannot configure or discover that root. The writer records
+one immutable command envelope per request and rebuilds its bounded state after
+a host restart. A client request is bounded and attributed with its
+caller-retained request ID, actor, named recipient where applicable, source
+references, and the only permitted privacy class, `shared_non_sensitive`.
 
 An exact retry of an accepted request ID returns the original result. Reusing
 that ID with changed semantics fails closed. Writer unavailability is a bounded
@@ -37,7 +38,9 @@ Create only when all of these are true:
 
 Content, subjects, reasons, identities, source references, and inbox results
 are bounded. Reject secrets, credentials, bearer material, private host paths,
-product code, patches, binaries, and untyped provenance. `builder-inbox` is
+product code, patches, binaries, and untyped provenance. A thread has at most
+32 contributions and the writer retains at most 100 contributions total, so
+both thread reads and inbox discovery have fixed bounds. `builder-inbox` is
 read-only and returns only bounded thread projections; it cannot reply, close,
 archive, promote, or create a reminder.
 

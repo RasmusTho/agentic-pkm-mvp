@@ -13,21 +13,32 @@ import re
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from pathlib import Path
+from typing import Any, Literal, Protocol, cast
 
 
 PRIVACY_CLASS: Literal["shared_non_sensitive"] = "shared_non_sensitive"
 _IDENTITY = re.compile(r"^[a-z][a-z0-9_-]{1,31}:[A-Za-z0-9._:-]{2,119}$")
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SOURCE_REF = re.compile(
     r"^(?:builderops|conversation|doc|git|github):[A-Za-z0-9._:/#@+-]{1,255}$"
 )
 _PRIVATE_CONTENT = re.compile(
-    r"(?i)(password|secret|credential|token|api[_-]?key|bearer\s+|/(?:Users|home|private)/)"
+    r"(?im)(password|secret|credential|token|api[_-]?key|bearer\s+|"
+    r"(?:^|\s)(?:~/.ssh|/(?:Users|home|private|etc|var|opt)/)|"
+    r"^aws_(?:access_key_id|secret_access_key)\s*=|"
+    r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----)"
 )
 _CODE_OR_PATCH = re.compile(
-    r"(?m)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|\s*(?:def|class)\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"
+    r"(?im)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|"
+    r"\s*(?:def|class|function|const|let|var|import|from)\b|"
+    r"\s*[a-z_$][a-z0-9_$]*\s*=\s*(?:\([^)]*\)|[a-z_$][a-z0-9_$]*)\s*=>)"
 )
 _MAX_TEXT = 500
+_MAX_THREAD_ENTRIES = 32
+_MAX_TOTAL_ENTRIES = 100
+_ROOT_IDENTITY = "builder-thread-writer.json"
+_ENTRY_DIRECTORY = "builder-thread-entries"
 
 
 class BuilderThreadError(ValueError):
@@ -48,6 +59,23 @@ class RequestReplayConflictError(BuilderThreadError):
 
 class ThreadAlreadyRepresentedError(BuilderThreadError):
     """The create capture key already has a durable Builder Thread."""
+
+
+def initialize_external_writer_root(root: Path, *, vault_id: str) -> None:
+    """Explicitly initialise the external writer-owned root for one vault ID."""
+    _validate_identifier(vault_id, field="vault_id")
+    root.mkdir(parents=True, exist_ok=True)
+    identity = root / _ROOT_IDENTITY
+    expected = _canonical_json({"schema": "builder-thread-writer.v1", "vault_id": vault_id})
+    if identity.exists():
+        if identity.is_symlink() or identity.read_bytes() != expected:
+            raise BuilderThreadError("external writer root identity conflicts")
+    else:
+        identity.write_bytes(expected)
+    entries = root / _ENTRY_DIRECTORY
+    entries.mkdir(exist_ok=True)
+    if entries.is_symlink() or not entries.is_dir():
+        raise BuilderThreadError("external writer entry directory is unavailable")
 
 
 @dataclass(frozen=True)
@@ -118,23 +146,27 @@ class WriterEndpoint(Protocol):
 
 
 class SerializedThreadWriter:
-    """One host-local writer for immutable-in-memory Builder Thread snapshots.
+    """One host-local writer for immutable external Builder Thread contributions.
 
-    Persistence and host deployment are outside this repo contract: an operator
-    runs this one writer against the external BuilderOps vault.  Keeping the
-    mutation authority in this object avoids pretending that two clients can
-    coordinate direct writes to an iCloud-synchronised file tree.
+    The designated BuilderOps/Mac mini host initializes and owns ``state_root``
+    outside this repository. Keeping mutation authority in this object avoids
+    pretending that two clients can coordinate direct writes to an
+    iCloud-synchronised file tree.
     """
 
-    def __init__(self, *, vault_id: str) -> None:
+    def __init__(self, *, vault_id: str, state_root: Path) -> None:
         _validate_identifier(vault_id, field="vault_id")
         self._vault_id = vault_id
+        self._state_root = state_root
+        self._entries_root = state_root / _ENTRY_DIRECTORY
         self._threads: dict[str, BuilderThread] = {}
         self._request_digests: dict[str, str] = {}
         self._request_results: dict[str, BuilderThread] = {}
         self._capture_index: dict[str, str] = {}
         self._accepted_mutation_count = 0
         self._lock = threading.RLock()
+        self._verify_external_root()
+        self._restore_external_state()
 
     @property
     def accepted_mutation_count(self) -> int:
@@ -159,10 +191,12 @@ class SerializedThreadWriter:
                 thread = self._create(command)
             else:
                 thread = self._append(command)
-
-            self._request_digests[command.request_id] = request_digest
-            self._request_results[command.request_id] = thread
-            self._accepted_mutation_count += 1
+            try:
+                self._persist(command, request_digest)
+            except OSError as exc:
+                self._restore_external_state()
+                raise WriterUnavailableError("serialized writer persistence is unavailable") from exc
+            self._record(command, request_digest, thread)
             return ThreadMutationResult(thread=thread, replayed=False)
 
     def read_thread(self, thread_id: str) -> BuilderThread:
@@ -196,6 +230,8 @@ class SerializedThreadWriter:
         capture_key = _capture_key(command.recipient, command.subject, command.source_refs)
         if capture_key in self._capture_index:
             raise ThreadAlreadyRepresentedError("capture already has a durable Builder Thread")
+        if len(self._request_digests) >= _MAX_TOTAL_ENTRIES:
+            raise BuilderThreadError("serialized writer contribution bound reached")
         thread_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self._vault_id}:{capture_key}"))
         entry = ThreadEntry(
             request_id=command.request_id,
@@ -221,6 +257,8 @@ class SerializedThreadWriter:
     def _append(self, command: ThreadMutation) -> BuilderThread:
         assert command.thread_id is not None
         current = self.read_thread(command.thread_id)
+        if len(current.entries) >= _MAX_THREAD_ENTRIES:
+            raise BuilderThreadError("thread contribution bound reached")
         if command.kind == "reply":
             if current.state != "open":
                 raise BuilderThreadError("only an open thread can receive a reply")
@@ -260,6 +298,61 @@ class SerializedThreadWriter:
         )
         self._threads[current.thread_id] = updated
         return updated
+
+    def _verify_external_root(self) -> None:
+        identity = self._state_root / _ROOT_IDENTITY
+        expected = _canonical_json({"schema": "builder-thread-writer.v1", "vault_id": self._vault_id})
+        if (
+            self._state_root.is_symlink()
+            or identity.is_symlink()
+            or not identity.is_file()
+            or identity.read_bytes() != expected
+            or self._entries_root.is_symlink()
+            or not self._entries_root.is_dir()
+        ):
+            raise BuilderThreadError("external writer root is not the pinned vault identity")
+
+    def _restore_external_state(self) -> None:
+        self._threads = {}
+        self._request_digests = {}
+        self._request_results = {}
+        self._capture_index = {}
+        self._accepted_mutation_count = 0
+        paths = sorted(self._entries_root.glob("*.json"))
+        if len(paths) > _MAX_TOTAL_ENTRIES:
+            raise BuilderThreadError("external writer contribution bound exceeded")
+        for path in paths:
+            if path.is_symlink():
+                raise BuilderThreadError("external writer entry is unavailable")
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                command = _command_from_record(payload, vault_id=self._vault_id)
+                digest = str(payload["request_digest"])
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise BuilderThreadError("external writer entry is invalid") from exc
+            if digest != _command_digest(command) or command.request_id in self._request_digests:
+                raise BuilderThreadError("external writer entry conflicts")
+            _validate_command(command)
+            thread = self._create(command) if command.kind == "create" else self._append(command)
+            self._record(command, digest, thread)
+
+    def _persist(self, command: ThreadMutation, request_digest: str) -> None:
+        path = self._entries_root / f"{command.request_id}.json"
+        payload = {
+            "command": _command_record(command),
+            "request_digest": request_digest,
+            "schema": "builder-thread-command.v1",
+            "vault_id": self._vault_id,
+        }
+        with path.open("xb") as handle:
+            handle.write(_canonical_json(payload))
+
+    def _record(
+        self, command: ThreadMutation, request_digest: str, thread: BuilderThread
+    ) -> None:
+        self._request_digests[command.request_id] = request_digest
+        self._request_results[command.request_id] = thread
+        self._accepted_mutation_count += 1
 
 
 class InProcessWriterEndpoint:
@@ -367,7 +460,8 @@ class BuilderThreadClient:
 def _validate_command(command: ThreadMutation) -> None:
     if command.kind not in {"create", "reply", "close", "archive"}:
         raise BuilderThreadError("unsupported thread mutation")
-    _validate_identifier(command.request_id, field="request_id")
+    if not _REQUEST_ID.fullmatch(command.request_id):
+        raise BuilderThreadError("request_id must be a filename-safe bounded identifier")
     _validate_identity(command.actor, field="actor")
     if command.kind == "create":
         if command.thread_id is not None:
@@ -435,21 +529,54 @@ def _capture_key(recipient: str, subject: str, source_refs: tuple[str, ...]) -> 
 
 
 def _command_digest(command: ThreadMutation) -> str:
-    canonical = json.dumps(
-        {
-            "actor": command.actor,
-            "content": command.content,
-            "kind": command.kind,
-            "recipient": command.recipient,
-            "request_id": command.request_id,
-            "source_refs": command.source_refs,
-            "subject": command.subject,
-            "thread_id": command.thread_id,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
+    return hashlib.sha256(_canonical_json(_command_record(command))).hexdigest()
+
+
+def _canonical_json(payload: Any) -> bytes:
+    return (
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _command_record(command: ThreadMutation) -> dict[str, Any]:
+    return {
+        "actor": command.actor,
+        "content": command.content,
+        "kind": command.kind,
+        "recipient": command.recipient,
+        "request_id": command.request_id,
+        "source_refs": list(command.source_refs),
+        "subject": command.subject,
+        "thread_id": command.thread_id,
+    }
+
+
+def _command_from_record(payload: Any, *, vault_id: str) -> ThreadMutation:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != "builder-thread-command.v1"
+        or payload.get("vault_id") != vault_id
+        or not isinstance(payload.get("command"), dict)
+    ):
+        raise ValueError("invalid writer command record")
+    command = payload["command"]
+    kind = command.get("kind")
+    source_refs = command.get("source_refs")
+    if kind not in {"create", "reply", "close", "archive"} or not isinstance(source_refs, list):
+        raise ValueError("invalid writer command fields")
+    if not all(isinstance(source_ref, str) for source_ref in source_refs):
+        raise ValueError("invalid writer source refs")
+    return ThreadMutation(
+        request_id=command.get("request_id"),
+        kind=cast(Literal["create", "reply", "close", "archive"], kind),
+        actor=command.get("actor"),
+        thread_id=command.get("thread_id"),
+        recipient=command.get("recipient"),
+        subject=command.get("subject"),
+        content=command.get("content"),
+        source_refs=tuple(source_refs),
+    )
 
 
 def _summary(thread: BuilderThread) -> BuilderThreadSummary:

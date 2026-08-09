@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 from app.builderops.builder_threads_serialized import (
     BuilderThreadClient,
@@ -9,6 +10,7 @@ from app.builderops.builder_threads_serialized import (
     ThreadMutation,
     WriterAcknowledgementLost,
     WriterUnavailableError,
+    initialize_external_writer_root,
 )
 
 
@@ -44,12 +46,15 @@ class _UnavailableEndpoint:
         raise WriterUnavailableError("serialized writer unavailable")
 
 
-def _writer() -> SerializedThreadWriter:
-    return SerializedThreadWriter(vault_id="builderops-mac-mini")
+def _writer(tmp_path: Path) -> SerializedThreadWriter:
+    root = tmp_path / "external-builderops-vault"
+    if not root.exists():
+        initialize_external_writer_root(root, vault_id="builderops-mac-mini")
+    return SerializedThreadWriter(vault_id="builderops-mac-mini", state_root=root)
 
 
-def test_serialized_writer_round_trip() -> None:
-    writer = _writer()
+def test_serialized_writer_round_trip(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
     codex = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="codex:desktop")
     claude = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="claude:mac")
 
@@ -94,8 +99,8 @@ def test_serialized_writer_round_trip() -> None:
     assert archived.thread.state == "archived"
 
 
-def test_clients_cannot_bypass_serialized_writer() -> None:
-    writer = _writer()
+def test_clients_cannot_bypass_serialized_writer(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
     endpoint = InProcessWriterEndpoint(writer)
     client = BuilderThreadClient(endpoint, client_id="codex:desktop")
 
@@ -115,8 +120,8 @@ def test_clients_cannot_bypass_serialized_writer() -> None:
     assert writer.accepted_mutation_count == 1
 
 
-def test_create_refuses_an_existing_durable_capture() -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer()), client_id="codex:desktop")
+def test_create_refuses_an_existing_durable_capture(tmp_path: Path) -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
     create = dict(
         actor="codex:desktop",
         recipient="claude:mac",
@@ -130,8 +135,8 @@ def test_create_refuses_an_existing_durable_capture() -> None:
         client.create(request_id="duplicate-capture-4708", **create)
 
 
-def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance() -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer()), client_id="codex:desktop")
+def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance(tmp_path: Path) -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
 
     with pytest.raises(ValueError, match="named identity"):
         client.create(
@@ -180,8 +185,36 @@ def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance() 
         )
 
 
-def test_close_requires_the_named_recipient_reply_and_keeps_unanswered_thread_discoverable() -> None:
-    client = BuilderThreadClient(InProcessWriterEndpoint(_writer()), client_id="codex:desktop")
+@pytest.mark.parametrize(
+    "content",
+    (
+        "~/.ssh/id_rsa",
+        "/etc/shadow",
+        "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "Authorization: Basic abc123",
+        "const deploy = () => deploy_unreviewed_change()",
+        "import os\nos.unlink('state')",
+    ),
+)
+def test_capture_rejects_private_host_and_product_code_forms(
+    tmp_path: Path, content: str
+) -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+
+    with pytest.raises(ValueError, match="shared_non_sensitive"):
+        client.create(
+            request_id="privacy-expanded-4708",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Rejected boundary form",
+            content=content,
+            source_refs=("github:4708",),
+        )
+
+
+def test_close_requires_the_named_recipient_reply_and_keeps_unanswered_thread_discoverable(tmp_path: Path) -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
     created = client.create(
         request_id="unanswered-create-4708",
         actor="codex:desktop",
@@ -202,8 +235,40 @@ def test_close_requires_the_named_recipient_reply_and_keeps_unanswered_thread_di
     assert client.inbox("claude:mac", limit=10).threads[0].thread_id == created.thread.thread_id
 
 
-def test_writer_rejects_unknown_mutation_kind_without_state_change() -> None:
-    writer = _writer()
+def test_thread_and_inbox_reads_remain_bounded(tmp_path: Path) -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    created = client.create(
+        request_id="bounded-create-4708",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Bounded read",
+        content="This thread has a fixed contribution budget.",
+        source_refs=("github:4708",),
+    )
+    for index in range(1, 32):
+        client.reply(
+            request_id=f"bounded-reply-{index}-4708",
+            thread_id=created.thread.thread_id,
+            actor="claude:mac",
+            recipient="codex:desktop",
+            content=f"Bounded reply {index}.",
+            source_refs=("github:4708",),
+        )
+
+    assert len(client.read(created.thread.thread_id).entries) == 32
+    with pytest.raises(ValueError, match="thread contribution bound"):
+        client.reply(
+            request_id="bounded-reply-overflow-4708",
+            thread_id=created.thread.thread_id,
+            actor="claude:mac",
+            recipient="codex:desktop",
+            content="This entry exceeds the bounded read budget.",
+            source_refs=("github:4708",),
+        )
+
+
+def test_writer_rejects_unknown_mutation_kind_without_state_change(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
 
     with pytest.raises(ValueError, match="unsupported thread mutation"):
         writer.mutate(
@@ -217,8 +282,8 @@ def test_writer_rejects_unknown_mutation_kind_without_state_change() -> None:
     assert writer.accepted_mutation_count == 0
 
 
-def test_serialized_request_id_retry_converges() -> None:
-    writer = _writer()
+def test_serialized_request_id_retry_converges(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
     endpoint = InProcessWriterEndpoint(writer)
     client = BuilderThreadClient(
         _AcknowledgementDroppingEndpoint(endpoint), client_id="codex:desktop"
@@ -244,8 +309,8 @@ def test_serialized_request_id_retry_converges() -> None:
         retrying_client.create(**{**create, "content": "Changed request under same ID."})
 
 
-def test_two_client_round_trip_and_writer_unavailable_state() -> None:
-    writer = _writer()
+def test_two_client_round_trip_and_writer_unavailable_state(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
     mac = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="codex:mac")
     mac_mini = BuilderThreadClient(InProcessWriterEndpoint(writer), client_id="claude:mac-mini")
     created = mac.create(
@@ -263,3 +328,20 @@ def test_two_client_round_trip_and_writer_unavailable_state() -> None:
     unavailable = BuilderThreadClient(_UnavailableEndpoint(), client_id="codex:mac")
     with pytest.raises(WriterUnavailableError, match="serialized writer unavailable"):
         unavailable.inbox("claude:mac-mini", limit=10)
+
+
+def test_external_writer_state_survives_restart_and_replays_exact_request(tmp_path: Path) -> None:
+    first = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="codex:desktop")
+    request = dict(
+        request_id="restart-retry-4708",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Durable retry",
+        content="The external writer survives a host restart.",
+        source_refs=("github:4708",),
+    )
+    created = first.create(**request)
+
+    restarted = BuilderThreadClient(InProcessWriterEndpoint(_writer(tmp_path)), client_id="claude:mac")
+    assert restarted.read(created.thread.thread_id).thread_id == created.thread.thread_id
+    assert restarted.create(**request).replayed is True
