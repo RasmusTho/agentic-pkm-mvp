@@ -366,28 +366,36 @@ recommended independently mergeable task order is:
    evidence refs, trust frame, deterministic non-joins, and verified-empty proof.
    `Verify:` contract examples and invalid cross-field fixtures in the new specification; every axis
    and zone eligibility rule maps to a named test in `tests/builderops/test_devui_owner_view.py`.
-2. **Server-side owner-view composer** — pure read adapter over `devui.composition.v1`; no
+2. **Cockpit/composition owner-question producer** — add the named owner-authority category and its
+   governing source reference to the existing read contract before any adapter is allowed to place
+   an item in **Needs you**. The producer must preserve unresolved, unavailable, unread, stale,
+   unlinked, and missing states and must not infer a question from provider sessions or work labels
+   alone.
+   `Verify:` Cockpit registry and `devui.composition.v1` producer tests prove that a supported named
+   category and source reference are emitted explicitly, while absent or unsupported categories
+   remain non-actionable and are never synthesized by the downstream adapter.
+3. **Server-side owner-view composer** — pure read adapter over `devui.composition.v1`; no
    persistence, cache, source read, or browser classification.
    `Verify:` `tests/builderops/test_devui_owner_view.py` proves healthy, partial, refused, stale,
    unlinked, and verified-empty combinations plus DVA-01 through DVA-05 at the production composer
    call site.
-3. **Read route and overview shell** — local-only GET route plus trust frame and the three zones,
+4. **Read route and overview shell** — local-only GET route plus trust frame and the three zones,
    built from exact existing token/component provenance.
    `Verify:` `tests/api/test_devui_owner_view_api.py` proves local-only GET/no mutation and exact
    contract version; a static-asset contract test proves only the binding token source and named
    existing primitives are used.
-4. **Focus and progressive evidence** — selected-subject navigation, glance/understand/verify/inspect,
+5. **Focus and progressive evidence** — selected-subject navigation, glance/understand/verify/inspect,
    stable context, no durable browser state.
    `Verify:` `tests/companion_ui/test_devui_journeys.py` follows one server-declared subject from
    overview through all four depths and asserts identical state/evidence refs with no local-storage,
    action-endpoint, or provider-switch dependency.
-5. **Failure/accessibility/browser proof** — hostile/cross-field tests plus desktop, narrow, 200%,
+6. **Failure/accessibility/browser proof** — hostile/cross-field tests plus desktop, narrow, 200%,
    keyboard, print, JavaScript-off, many-at-once, complete-empty, partial, stale, missing, and refused
    journeys; archive screenshots and open visual questions.
    `Verify:` the same browser suite names each required journey; the task receipt records screenshot
    paths, token SHA-256, accessibility results, and unresolved visual questions without claiming an
    external design receipt.
-6. **Read-only owner pilot** — verify that the owner can answer Now, Needs you, and Ready to try
+7. **Read-only owner pilot** — verify that the owner can answer Now, Needs you, and Ready to try
    without opening CKM/Cockpit/Signboard and without a false decision or readiness claim.
    `Verify:` parent-validation receipt records the exact tested SHA, source conditions, owner answers,
    any reconstruction step, and a pass/fail disposition for each of the three zones; no “tried” or
