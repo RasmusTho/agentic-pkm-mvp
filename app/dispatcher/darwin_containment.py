@@ -15,7 +15,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
-from typing import Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 
 DARWIN_LAUNCHD_COALITION_PROFILE = (
@@ -132,10 +132,13 @@ class DarwinLibprocKernel:
         ]
         signal_with_audit_token.restype = ctypes.c_int
         self._library = library
-        self._list_all_pids = list_all_pids
-        self._pid_info = pid_info
-        self._list_coalitions = list_coalitions
-        self._signal_with_audit_token = signal_with_audit_token
+        # ctypes function objects are dynamically shaped; explicit instance
+        # annotations keep the pinned CI mypy version from treating calls on
+        # these availability-checked symbols as untyped attributes.
+        self._list_all_pids: Any = list_all_pids
+        self._pid_info: Any = pid_info
+        self._list_coalitions: Any = list_coalitions
+        self._signal_with_audit_token: Any = signal_with_audit_token
 
     def list_pids(self) -> tuple[int, ...]:
         count = self._list_all_pids(None, 0)
