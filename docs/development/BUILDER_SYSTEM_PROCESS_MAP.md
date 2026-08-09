@@ -78,12 +78,13 @@ readiness and file-first evidence contract permits the separately invoked GitHub
 ### Execution-control composition
 
 The stable work identity is the existing repository, Issue, claim, worktree, PR, and evidence chain.
-`WorkerContextPack` and `WorkerInvocation` bind a governed execution to that chain. Codex or Claude
-threads, host processes, provider sessions, and runtime observations are provenance and operational
-evidence only, not work or delivery authority. A missing or unread execution source remains explicit
-`unknown` and cannot create, select, advance, duplicate, or close work. This constraint does not claim
-that global multi-host session ingestion is delivered today or that the Builder System is one
-monolithic service.
+Where the governed DDO worker seam is used, `WorkerContextPack` and `WorkerInvocation` bind execution
+to its run, plan, effect, Issue, base-head, context-pack, and runtime-target authority; durable binding
+through worktree, PR, and terminal evidence remains target work. Codex or Claude threads, host
+processes, provider sessions, and runtime observations are provenance and operational evidence only,
+not work or delivery authority. A missing or unread execution source remains explicit `unknown` and
+cannot create, select, advance, duplicate, or close work. This constraint does not claim that global
+multi-host session ingestion is delivered today or that the Builder System is one monolithic service.
 
 ## Evidence Legend
 
