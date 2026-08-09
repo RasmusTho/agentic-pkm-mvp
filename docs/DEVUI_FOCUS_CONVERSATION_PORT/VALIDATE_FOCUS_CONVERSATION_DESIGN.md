@@ -5,8 +5,8 @@ task_id: FCP-02
 github_issue: 4695
 source_anchor: "docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: Information architecture and hard boundary"
 parent_capability: devUI Focus + Conversation Port
-prerequisites: [FCP-01]
-depends_on: [COMPOSE_SUBJECT_CENTRED_FOCUS.md]
+prerequisites: [FCP-01, FCP-03, FCP-04]
+depends_on: [COMPOSE_SUBJECT_CENTRED_FOCUS.md, OPEN_EXTERNAL_CONVERSATION_PORT.md, START_MODEL_INQUIRY_FROM_PREVIEW.md]
 can_parallelize_with: []
 recommended_capability: "Codex Terra / medium plus governed Yggdrasil design handoff"
 capability_rationale: "Design normalization is bounded but must preserve exact authority and degraded-state semantics."
@@ -16,13 +16,17 @@ capability_rationale: "Design normalization is bounded but must preserve exact a
 
 ## Purpose
 
-Turn the information behavior into an accepted Yggdrasil handoff before visual implementation.
+Turn the stable Focus, Conversation Port, and Model Inquiry fixtures into an accepted Yggdrasil
+handoff before visual implementation.
 
 ## What This Task Does
 
 - Uses the existing Yggdrasil tokens/components and the governed design-handoff chain.
 - Designs the stable subject header, progressive Focus evidence, external Conversation Port, context
   pack preview, typed command preview, Start/Hold confirmation, receipt, and ambiguous result.
+- Resolves how a source-owned unresolved owner question appears along **Cockpit → Focus detail →
+  governed Command/Receipt** without becoming a devUI backlog item, authority claim, or autonomous
+  decision.
 - Proves that Builder System Control is a separate route/context, not a Focus tab or provider view.
 - Covers desktop, narrow, 200% zoom, keyboard, screen-reader naming, many-at-once, stale, unavailable,
   unread, unsupported, unlinked, missing, measured-empty, refused, and ambiguous states.
@@ -33,6 +37,12 @@ Turn the information behavior into an accepted Yggdrasil handoff before visual i
 The handoff shows one Issue/capability header from Focus through pack preview, external handoff,
 command preview, Hold/Start, and receipt. A separate Builder System Control entry visibly changes
 the header to system scope and restores the previous Focus subject on return.
+
+An unresolved owner question is demonstrated only from an explicit named owner-authority category,
+governing source reference, and subject correlation. The interaction routes from Cockpit attention
+to Focus detail and then, only when admitted, to an exact command/receipt boundary. Missing or
+unsupported question evidence is shown honestly; provider reasoning alone neither resolves the
+question nor advances its source lifecycle.
 
 ## Why This Matters
 
@@ -56,6 +66,9 @@ surface can cause the owner to mistake provider prose for an executable or compl
 - [ ] Builder System Control has a distinct system-scope header and navigation return path; no
       control-lens claims leak into the Focus subject.
   - Verify: runtime receipt: focus-builder-system-boundary.v1
+- [ ] Unresolved owner questions preserve Cockpit → Focus detail → governed Command/Receipt and do
+      not create a parallel backlog, authority source, or autonomous decision path.
+  - Verify: runtime receipt: focus-owner-question-journey.v1
 
 ## How to Verify (Pre-Merge)
 
@@ -80,4 +93,5 @@ surface can cause the owner to mistake provider prose for an executable or compl
 ## Related GitHub Issues
 
 Filed as blocked child [#4695](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695); it remains
-blocked after spec merge until FCP-01 fixtures and live governed design-handoff access are available.
+blocked after spec merge until FCP-01/FCP-03/FCP-04 fixtures and live governed design-handoff access
+are available.

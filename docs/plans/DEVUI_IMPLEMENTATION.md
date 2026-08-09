@@ -126,11 +126,12 @@ specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`:
 1. compose one stable Issue/capability Focus with owner intent, governing source, evidence,
    receipts, risks, limitations, next legal step, and only explicitly correlated execution
    observations;
-2. complete the governed Yggdrasil handoff from exact Focus/source-state fixtures;
-3. export/open one immutable hash-bound context pack to an external Codex or Claude conversation,
+2. export/open one immutable hash-bound context pack to an external Codex or Claude conversation,
    with provider transcript/session data retained as provenance only; and
-4. admit one typed command, Start Model Inquiry, through exact preview and explicit Start/Hold into
-   the unchanged artifact-first workflow and its existing receipt.
+3. admit one typed command, Start Model Inquiry, through exact preview and explicit Start/Hold into
+   the unchanged artifact-first workflow and its existing receipt; then
+4. complete the governed Yggdrasil handoff from the stable Focus, source-state, conversation, and
+   command/receipt fixtures before deriving any visual implementation slice.
 
 This is not an early activation of the general Stage B DDO command chain. Start Model Inquiry is the
 already governed narrow pre-Issue exception documented in the Builder System process map. The slice
@@ -203,7 +204,7 @@ flowchart LR
   A["A · See<br/>read-only cockpit"] --> A2["A2 · Focus + Conversation<br/>subject read · external reasoning · inquiry preview"]
   A2 --> B["B · Decide and act<br/>general contextual command"]
   B --> C["C · Verify<br/>receipt, try, reassess"]
-  D["Governed design handoff"] --> A2
+  D["Governed design handoff<br/>visual acceptance only"] --> A2
   I["Existing artifact-first<br/>Start Model Inquiry"] --> A2
   A2 -. separate follow-up .-> S["Builder System Control<br/>meta-governance lens"]
   M["Internal mechanism gates<br/>#3603 · #4168 · #4169 · #3604 · #4217 · #4466 · #3793 · #4170"] --> B

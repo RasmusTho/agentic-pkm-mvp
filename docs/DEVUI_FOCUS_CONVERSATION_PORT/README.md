@@ -221,6 +221,27 @@ repository history, and sources not needed for the stated purpose.
 If a governed downstream workflow requires durable provenance, that workflow records the accepted
 source reference or hash in its own existing artifact.
 
+### Deferred design input — unresolved owner questions
+
+The next governed visual handoff must decide how an unresolved owner question is presented while
+preserving the journey **Cockpit → Focus detail → governed Command/Receipt**. The question is a
+source-owned attention claim attached to a stable subject, never a devUI backlog item or decision.
+
+- Cockpit may orient the owner to the question only when the existing read contract provides the
+  named owner-authority category, governing source reference, and explicit subject correlation.
+- Selecting it opens the subject's Focus detail; it does not create or update a devUI queue.
+- Conversation Port may reason, clarify, recommend no action, or propose a typed command, but model
+  prose never answers the question authoritatively and never advances its source lifecycle.
+- A durable consequence remains possible only through the destination workflow's exact command
+  preview, approval rule, and receipt. Where no admitted command exists, the UI routes to the
+  governing source/workflow or shows `no_action`.
+- Missing, stale, unread, unsupported, unavailable, or unlinked question evidence withdraws the
+  attention claim rather than producing an inferred owner request.
+
+This is deferred interaction-design input, not current delivered behavior. Claude Design access is
+currently unavailable, so the handoff remains blocked without blocking the nonvisual contracts and
+adapters below.
+
 ### Typed command preview
 
 `TypedCommandProposal.v1` is the required boundary before any durable consequence:
@@ -354,10 +375,10 @@ policy. A deviation is evidence for an existing repair route, not a new workflow
 | Dependency | Why it is needed | Current posture / next safe path |
 | --- | --- | --- |
 | Subject composer over CKM/Cockpit sources | Builds `FocusView.v1` without copying authority | Extend the delivered read-only composition seam through FCP-01. |
-| Canonical pack/proposal hashing and expiry policy | Makes preview and confirmation exact | Specify and test in FCP-01/FCP-03 before command activation. |
-| Governed Yggdrasil visual handoff | Resolves layout, accessibility, external-port affordance, and command salience | FCP-02; use existing tokens/components. External design access remains a technical block, not an owner decision. |
-| External Codex/Claude adapter boundary | Opens/exports a pack without session discovery or credentials in devUI | FCP-03; start with explicit availability/unsupported states. |
-| Model Inquiry invocation adapter | Calls the existing skill exactly once and maps its receipt/failure states | FCP-04; do not duplicate launcher logic. |
+| Canonical pack/proposal hashing and expiry policy | Makes preview and confirmation exact | Specify and test in FCP-03/FCP-04 before visual integration. |
+| External Codex/Claude adapter boundary | Opens/exports a pack without session discovery or credentials in devUI | FCP-03; nonvisual core follows FCP-01 and starts with explicit availability/unsupported states. |
+| Model Inquiry invocation adapter | Calls the existing skill exactly once and maps its receipt/failure states | FCP-04; nonvisual core follows FCP-03 and does not duplicate launcher logic. |
+| Governed Yggdrasil visual handoff | Resolves layout, accessibility, unresolved-question treatment, external-port affordance, and command salience | FCP-02 follows the stable FCP-01/FCP-03/FCP-04 fixtures. External design access blocks this handoff and later visual implementation only. |
 | Local audience/auth policy | Current CKM/devUI read seam is single-operator local | Keep first slice local; route any audience expansion through the existing access-policy path. |
 | Builder System source registry/coverage composition | Required for a truthful control lens | Separate BSC specification issue after this boundary lands. Reuse DOCS_INDEX, skill contracts, process map, BuilderOps records, and live evidence. |
 | General devUI delivery command chain | Required for later GitHub/repository delivery commands | Remains governed and blocked through #3603, #4168–#4170, #3793, and related acceptance; not a dependency of Start Model Inquiry. |
@@ -385,14 +406,18 @@ scope. They block only the corresponding expansion.
 | Order | Task | Outcome | Dependency posture |
 | --- | --- | --- | --- |
 | 1 | [FCP-01 — Compose Subject-Centred Focus (#4694)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4694) | Target contracts and read-only subject composition with explicit correlation | First implementation slice after this spec merges |
-| 2 | [FCP-02 — Validate Focus and Conversation Design (#4695)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695) | Governed Yggdrasil handoff and accessibility/degraded-state receipt | Depends on FCP-01 fixtures; technically blocked while external handoff is unavailable |
-| 3 | [FCP-03 — Open External Conversation Port (#4696)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) | Hash-bound export/open flow and non-authoritative disposition | Depends on FCP-01 and accepted FCP-02 handoff |
-| 4 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Start/Hold, exactly-once existing workflow invocation, honest receipt/ambiguity | Depends on FCP-03 |
+| 2 | [FCP-03 — Open External Conversation Port (#4696)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) | Nonvisual canonical pack/export adapter and non-authoritative disposition contract | Depends on delivered FCP-01; no design receipt required |
+| 3 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Nonvisual proposal validation, Start/Hold admission, exactly-once workflow invocation, and honest receipt/ambiguity | Depends on delivered FCP-03; no design receipt required |
+| 4 | [FCP-02 — Validate Focus and Conversation Design (#4695)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695) | Governed Yggdrasil handoff over stable fixtures, including unresolved-owner-question treatment and accessibility/degraded-state receipts | Depends on FCP-01/FCP-03/FCP-04 fixtures; technically blocked while external handoff is unavailable |
 | Separate | [Builder System Control lens specification (#4698)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698) | Detailed source registry, coverage/deviation semantics, visual boundary, and later task split | Begins only after this boundary is accepted; not a Focus child |
 
 All implementation children remain blocked until this specification is merged. The parent remains a
 validation hub and never becomes ready work. Builder System Control is filed separately so its
 meta-governance context cannot leak into the Focus capability flow.
+
+FCP-01, FCP-03, and FCP-04 are independently mergeable nonvisual slices. FCP-02 owns the later
+governed visual acceptance; after that handoff, visual implementation is derived as a separate
+bounded issue rather than being smuggled into a contract/adapter slice.
 
 ## Cross-Task Invariants / Interaction Safety
 

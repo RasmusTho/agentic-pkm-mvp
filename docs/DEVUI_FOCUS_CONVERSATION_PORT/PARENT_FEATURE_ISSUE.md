@@ -51,8 +51,10 @@ from GitHub/repository delivery.
 ## Constraints
 
 - No child is ready before this specification merges and live readiness is reconciled.
-- FCP-02 remains technically blocked until the governed Yggdrasil design handoff is available.
-- FCP-03 waits for the accepted handoff; FCP-04 waits for FCP-03.
+- FCP-03 waits only for FCP-01; FCP-04 waits only for FCP-03. Both are nonvisual contract/adapter
+  slices and do not require a design receipt.
+- FCP-02 remains technically blocked until FCP-01/FCP-03/FCP-04 fixtures and the governed Yggdrasil
+  design handoff are available. Later visual implementation is a separately derived slice.
 - GitHub/repository delivery truth, workflow authority, and existing receipts remain external.
 - No global provider session view, inferred correlation, transcript/task store, direct repository or
   GitHub mutation, or Builder System Control implementation.
@@ -105,9 +107,9 @@ from GitHub/repository delivery.
 | Task | Issue | Initial lifecycle | Dependency |
 | --- | --- | --- | --- |
 | FCP-01 — Compose Subject-Centred Focus | #4694 | blocked until spec merge | none |
-| FCP-02 — Validate Focus and Conversation Design | #4695 | blocked on FCP-01 and handoff availability | FCP-01 |
-| FCP-03 — Open External Conversation Port | #4696 | blocked | FCP-01 and FCP-02 |
+| FCP-03 — Open External Conversation Port | #4696 | blocked until FCP-01 delivery | FCP-01 |
 | FCP-04 — Start Model Inquiry from Exact Preview | #4697 | blocked | FCP-03 |
+| FCP-02 — Validate Focus and Conversation Design | #4695 | blocked on stable fixtures and handoff availability | FCP-01, FCP-03, and FCP-04 |
 
 Live backlog and capability-validation state is maintained on
 [#4693](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4693).

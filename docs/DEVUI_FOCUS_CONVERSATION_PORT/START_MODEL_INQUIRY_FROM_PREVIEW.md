@@ -22,7 +22,8 @@ start the existing artifact-first Model Inquiry workflow once after explicit own
 ## What This Task Does
 
 - Defines and validates `TypedCommandProposal.v1` for `start_model_inquiry` only.
-- Renders exact input/source/destination/side-effect/non-effect/approval/expiry/receipt details.
+- Produces the complete preview-state contract for exact input/source/destination/side-effect/
+  non-effect/approval/expiry/receipt details without choosing a visual treatment.
 - Revalidates the proposal, pack, sources, workflow contract, and expiry immediately before Start.
 - Maps Start to the existing `.codex/skills/start-model-inquiry/SKILL.md` path exactly once and Hold
   to no workflow invocation.
@@ -62,13 +63,13 @@ existing recovery evidence.
 - [ ] No GitHub, repository, delivery-run, CKM, provider-session, or task mutation is made by the
       preview or adapter.
   - Verify: `tests/architecture/test_devui_focus_boundaries.py::test_start_model_inquiry_has_no_forbidden_effect`.
-- [ ] Browser acceptance covers exact preview, keyboard Start/Hold, stale invalidation, valid
-      receipt, ambiguous receipt, and provider/workflow unavailable states.
-  - Verify: `tests/browser/test_devui_model_inquiry_command.py::test_model_inquiry_command_acceptance_matrix`.
+- [ ] The adapter emits complete design-handoff fixtures for exact preview, Start/Hold, stale
+      invalidation, valid receipt, ambiguous receipt, and provider/workflow unavailable states.
+  - Verify: `tests/builderops/test_devui_model_inquiry_command.py::test_model_inquiry_emits_design_handoff_fixtures`.
 
 ## How to Verify (Pre-Merge)
 
-- Run all named unit, architecture, and browser acceptance tests.
+- Run all named unit and architecture tests.
 - Use workflow fakes to prove Hold, double-submit, refresh, stale preview, valid receipt, ambiguous
   response, and unavailable destination behavior without contacting providers in unit tests.
 - Complete one governed end-to-end receipt on the configured path when the Issue contract admits
@@ -81,6 +82,7 @@ existing recovery evidence.
 - Any `Apply/Hold` command.
 - General DDO/GitHub/repository commands or live delivery controls.
 - Inquiry launcher, provider adapter, or credential changes.
+- Browser layout, interaction geometry, or visual implementation; FCP-02 owns the governed handoff.
 
 ## Related Docs
 

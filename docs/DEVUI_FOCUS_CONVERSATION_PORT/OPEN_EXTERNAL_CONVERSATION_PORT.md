@@ -5,8 +5,8 @@ task_id: FCP-03
 github_issue: 4696
 source_anchor: "docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: Conversation Port contract"
 parent_capability: devUI Focus + Conversation Port
-prerequisites: [FCP-01, FCP-02]
-depends_on: [COMPOSE_SUBJECT_CENTRED_FOCUS.md, VALIDATE_FOCUS_CONVERSATION_DESIGN.md]
+prerequisites: [FCP-01]
+depends_on: [COMPOSE_SUBJECT_CENTRED_FOCUS.md]
 can_parallelize_with: []
 recommended_capability: "Codex Terra / high"
 capability_rationale: "Bounded external-adapter and canonical-hash work with provenance, privacy, and no-authority constraints."
@@ -22,8 +22,8 @@ through immutable context rather than inferred or globally discovered sessions.
 ## What This Task Does
 
 - Defines canonical serialization and SHA-256 validation for `ConversationContextPack.v1`.
-- Adds a pack preview showing purpose, exact includes/excludes, sources, limitations, expiry, and
-  hash.
+- Defines the read-only pack-preview data needed to show purpose, exact includes/excludes, sources,
+  limitations, expiry, and hash without selecting a visual treatment.
 - Adds bounded export/open adapters with explicit available/unavailable/unsupported states.
 - Accepts a non-authoritative `ConversationDisposition.v1` with one allowed outcome and optional
   typed-proposal payload.
@@ -58,13 +58,13 @@ implicit effect would turn a reasoning port into a competing work and authority 
 - [ ] No browser/server transcript store, session store, task store, inferred work link, credential
       path, GitHub call, or repository mutation is introduced.
   - Verify: `tests/architecture/test_devui_focus_boundaries.py::test_conversation_port_adds_no_authority_or_store`.
-- [ ] Browser acceptance covers the accepted handoff, keyboard flow, exact hash display, no-action,
-      unavailable, unsupported, stale, and unlinked states.
-  - Verify: `tests/browser/test_devui_conversation_port.py::test_conversation_port_acceptance_matrix`.
+- [ ] The adapter emits complete preview-state fixtures for exact hash, no-action, unavailable,
+      unsupported, stale, and unlinked states without prescribing layout or interaction geometry.
+  - Verify: `tests/builderops/test_devui_conversation_port.py::test_conversation_port_emits_design_handoff_fixtures`.
 
 ## How to Verify (Pre-Merge)
 
-- Run the five named unit/architecture tests and the browser acceptance file.
+- Run the six named unit/architecture tests.
 - Exercise changed-byte, expired, over-broad, unavailable, unsupported, refused, and no-action
   fixtures.
 - Inspect network/storage behavior for the absence of session enumeration and transcript/task
@@ -74,6 +74,7 @@ implicit effect would turn a reasoning port into a competing work and authority 
 ## Out of Scope
 
 - Embedded chat or transcript rendering.
+- Browser layout, interaction geometry, or visual implementation; FCP-02 owns the governed handoff.
 - Global provider-session view or reconciliation.
 - Command execution; FCP-04 owns the first command.
 - Builder System Control implementation.
@@ -87,4 +88,4 @@ implicit effect would turn a reasoning port into a competing work and authority 
 ## Related GitHub Issues
 
 Filed as blocked child [#4696](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) and made
-ready only after FCP-01 delivery and FCP-02 handoff acceptance.
+ready only after FCP-01 delivery. It does not wait for a visual design receipt.
