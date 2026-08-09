@@ -127,8 +127,8 @@ Partial failure examples:
 
 Parent feature Issue: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288). It is the
 validation hub for this capability. Child issues are #3289 (BMI-01), #3290 (BMI-02), #3291
-(BMI-03), #3292 (BMI-04), and #3293 (BMI-05). They remain blocked until this specification PR is
-merged, then become eligible in the listed dependency order.
+(BMI-03), #3292 (BMI-04), and #3293 (BMI-05). All five child issues are delivered and closed; the
+parent remains open for the end-to-end validation described below.
 
 ## Validation / Acceptance Path
 
