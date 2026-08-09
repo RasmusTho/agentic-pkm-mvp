@@ -112,6 +112,9 @@ def _compose_control(
     *,
     adapters: list[dict[str, object]] | None = None,
     capabilities: list[dict[str, object]] | None = None,
+    coverage: list[dict[str, object]] | None = None,
+    deviations: list[dict[str, object]] | None = None,
+    routes: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return compose_builder_system_control_view(
         repository_ref="RasmusTho/agentic-pkm-mvp",
@@ -120,8 +123,84 @@ def _compose_control(
         governing_document_declarations=[_document()],
         workflow_adapter_declarations=[] if adapters is None else adapters,
         capability_binding_declarations=[] if capabilities is None else capabilities,
+        coverage_declarations=[] if coverage is None else coverage,
+        route_deviation_declarations=[] if deviations is None else deviations,
+        governed_route_declarations=[] if routes is None else routes,
         limitations=[],
     )
+
+
+def _exception(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "source_ref": _ref("evidence/exception-governing-document"),
+        "permitting_authority_ref": _ref("docs/EXCEPTIONS.md#permit"),
+        "lifecycle_ref": _ref("docs/EXCEPTIONS.md#expiry"),
+        "expires_at": "2026-08-11T08:00:00+00:00",
+        "limitations": [],
+    }
+    value.update(overrides)
+    return value
+
+
+def _coverage(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "claim_id": "coverage:governing-documents",
+        "source_ref": _ref("evidence/governing-document-coverage"),
+        "authority_scope": "declared Builder System governing documents",
+        "governing_source_refs": [_ref("docs/architecture/SBS_OPERATING_MODEL.md")],
+        "completeness_definition_ref": _ref("docs/architecture/SBS_OPERATING_MODEL.md#scope"),
+        "assessed_scope": "declared Builder System governing documents at git:315d8103",
+        "source_state": _state(read_scope="coverage:declared-governing-documents"),
+        "drift_observations": [
+            {
+                "source_ref": _ref("evidence/governing-document-drift"),
+                "observed_at": "2026-08-10T08:00:00+00:00",
+                "difference": "no declared drift",
+            }
+        ],
+        "exception_declarations": [],
+        "unknowns": [],
+        "limitations": [],
+    }
+    value.update(overrides)
+    return value
+
+
+def _route(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "route_id": "route:docs-governance",
+        "source_ref": _ref(".codex/skills/docs-governance/SKILL.md"),
+        "entrypoint": "docs-governance",
+        "authority_or_admission_ref": _ref("docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md#routes"),
+        "accepted_inputs": ["exact source refs", "bounded conflict context"],
+        "expected_side_effects": ["none from the projection"],
+        "expected_non_effects": ["does not execute the destination workflow"],
+        "receipt_ref": _ref("docs/development/PR_HOT_PATH.md"),
+        "source_state": _state(read_scope="route:docs-governance"),
+        "limitations": [],
+    }
+    value.update(overrides)
+    return value
+
+
+def _deviation(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "deviation_id": "deviation:declared-route",
+        "source_ref": _ref("evidence/route-deviation"),
+        "authority_scope": "declared Builder System delivery route",
+        "intended_route_refs": [_ref("docs/development/DEV_WORKFLOW.md")],
+        "observed_route_refs": [_ref("evidence/observed-delivery-route")],
+        "correlation_ref": _ref("evidence/route-correlation"),
+        "observed_at": "2026-08-10T08:00:00+00:00",
+        "difference": "observed route omitted a declared handoff receipt",
+        "source_state": _state(read_scope="route-deviation:declared-route"),
+        "existing_repair_route_ref": _route(),
+        "repair_route_linkage": "linked",
+        "repair_route_correlation_ref": _ref("evidence/route-repair-applicability"),
+        "limitations": [],
+    }
+    value.update(overrides)
+    return value
 
 
 def test_governing_document_inventory_is_projection_only_and_has_no_io_or_state_path() -> None:
@@ -360,6 +439,158 @@ def test_adapter_and_capability_projection_preserves_independent_axes_and_projec
     assert result["capability_bindings"][0]["source_state"] == capability["source_state"]
     assert result["authority"] == "projection_only"
     assert result["primary_identity"] == "builder_system"
+    source = inspect.getsource(compose_builder_system_control_view)
+    assert "open(" not in source
+    assert "Path(" not in source
+    assert "requests" not in source
+
+
+def test_coverage_projection_preserves_bounded_source_owned_evidence() -> None:
+    coverage = _coverage(exception_declarations=[_exception()], unknowns=["unread legacy run"])
+
+    result = _compose_control(coverage=[coverage])
+
+    rendered = result["coverage"][0]
+    assert rendered["claim_id"] == coverage["claim_id"]
+    assert rendered["source_ref"] == coverage["source_ref"]
+    assert rendered["governing_source_refs"] == coverage["governing_source_refs"]
+    assert rendered["assessed_scope"] == coverage["assessed_scope"]
+    assert rendered["source_state"] == coverage["source_state"]
+    assert rendered["drift_observations"] == coverage["drift_observations"]
+    assert rendered["exception_refs"] == [_exception()["source_ref"]]
+    assert rendered["exceptions"] == [_exception()]
+    assert rendered["unknowns"] == ["unread legacy run"]
+    assert "score" not in rendered
+
+
+def test_coverage_projection_requires_fresh_bounded_completeness_evidence() -> None:
+    valid = _coverage(claim_id="coverage:valid")
+    degraded = _coverage(
+        claim_id="coverage:degraded",
+        completeness_definition_ref=None,
+        source_state=_state(
+            availability="unavailable",
+            freshness="stale",
+            coverage="complete",
+            cardinality="not_measured",
+            linkage="unlinked",
+        ),
+    )
+    measured_empty = _coverage(
+        claim_id="coverage:measured-empty",
+        source_state=_state(cardinality="measured_empty"),
+    )
+
+    result = _compose_control(coverage=[valid, degraded, measured_empty])
+
+    assert result["coverage"][0]["source_state"]["coverage"] == "complete"
+    assert result["coverage"][1]["source_state"]["coverage"] == "missing"
+    assert result["coverage"][1]["source_state"]["cardinality"] == "not_measured"
+    assert result["coverage"][1]["source_state"]["linkage"] == "unlinked"
+    assert result["coverage"][2]["source_state"]["cardinality"] == "measured_empty"
+
+
+def test_coverage_projection_refuses_unauthorized_or_unbounded_exceptions() -> None:
+    valid = _exception()
+    unauthorized = _exception(
+        source_ref=_ref("evidence/unauthorized-exception"),
+        permitting_authority_ref=None,
+    )
+    expired = _exception(
+        source_ref=_ref("evidence/expired-exception"),
+        expires_at="2026-08-10T08:00:00+00:00",
+    )
+    malformed = _exception(
+        source_ref=_ref("evidence/malformed-exception"),
+        lifecycle_ref={
+            "source_type": "repository_document",
+            "source_id": "docs/EXCEPTIONS.md#broken-expiry",
+            "content_hash": "not-a-sha",
+            "locator": "docs/EXCEPTIONS.md#broken-expiry",
+        },
+    )
+
+    result = _compose_control(
+        coverage=[
+            _coverage(
+                exception_declarations=[valid, unauthorized, expired, malformed, "not-an-exception"]
+            )
+        ]
+    )
+
+    rendered = result["coverage"][0]
+    assert rendered["exception_refs"] == [valid["source_ref"]]
+    assert "exception:evidence/unauthorized-exception" in rendered["unknowns"]
+    assert "exception:evidence/expired-exception" in rendered["unknowns"]
+    assert "exception:evidence/malformed-exception" in rendered["unknowns"]
+    assert "exception:unidentified" in rendered["unknowns"]
+
+    future_drift = _coverage(
+        drift_observations=[
+            {
+                "source_ref": _ref("evidence/future-drift"),
+                "observed_at": "2026-08-10T08:02:00+00:00",
+                "difference": "future evidence",
+            }
+        ]
+    )
+    with pytest.raises(GoverningDocumentContractError, match="cannot be after composition"):
+        _compose_control(coverage=[future_drift])
+
+
+def test_route_deviation_projection_requires_explicit_source_owned_correlation() -> None:
+    valid = _deviation()
+
+    result = _compose_control(deviations=[valid], routes=[_route()])
+
+    assert result["deviations"] == [valid]
+    with pytest.raises(GoverningDocumentContractError, match="correlation_ref"):
+        _compose_control(
+            deviations=[_deviation(correlation_ref=None)],
+            routes=[_route()],
+        )
+    for source_state in (
+        _state(linkage="unlinked"),
+        _state(
+            availability="unavailable",
+            coverage="partial",
+            cardinality="not_measured",
+        ),
+        _state(freshness="stale", coverage="partial"),
+        _state(coverage="unread", cardinality="not_measured"),
+    ):
+        withdrawn = _compose_control(
+            deviations=[_deviation(source_state=source_state)],
+            routes=[_route()],
+        )
+        assert withdrawn["deviations"] == []
+        assert "route deviation:deviation:declared-route withdrawn" in withdrawn["limitations"]
+
+
+def test_route_deviation_projection_preserves_governed_repair_route_without_effect() -> None:
+    route = _route()
+    deviation = _deviation(existing_repair_route_ref=route)
+
+    result = _compose_control(deviations=[deviation], routes=[route])
+
+    assert result["governed_routes"] == [route]
+    assert result["deviations"][0]["existing_repair_route_ref"] == route
+    assert result["deviations"][0]["repair_route_correlation_ref"] == _ref(
+        "evidence/route-repair-applicability"
+    )
+    source = inspect.getsource(compose_builder_system_control_view)
+    assert "execute" not in source
+    assert "mutate" not in source
+
+
+def test_coverage_and_deviation_projection_preserves_bsc_boundary() -> None:
+    result = _compose_control(coverage=[_coverage()], deviations=[_deviation()], routes=[_route()])
+
+    assert result["authority"] == "projection_only"
+    assert result["primary_identity"] == "builder_system"
+    assert "focus" not in result
+    assert "commands" not in result
+    assert "persistence" not in result
     source = inspect.getsource(compose_builder_system_control_view)
     assert "open(" not in source
     assert "Path(" not in source

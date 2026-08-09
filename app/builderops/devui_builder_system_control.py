@@ -499,6 +499,349 @@ def _capability_binding(value: Any, *, index: int, composed_at: datetime) -> dic
     return capability
 
 
+def _coverage_exception(
+    value: Any, *, index: int, composed_at: datetime
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return an admitted exception ref or a truthful unknown marker."""
+
+    label = f"coverage_declarations exception_declarations[{index}]"
+    try:
+        exception = _mapping(value, label=label)
+    except GoverningDocumentContractError:
+        return None, "exception:unidentified"
+    raw_source = exception.get("source_ref")
+    raw_source_id = raw_source.get("source_id") if isinstance(raw_source, dict) else None
+    unknown_marker = (
+        f"exception:{raw_source_id}"
+        if isinstance(raw_source_id, str) and raw_source_id.strip()
+        else "exception:unidentified"
+    )
+    try:
+        _keys(
+            exception,
+            allowed={
+                "source_ref",
+                "permitting_authority_ref",
+                "lifecycle_ref",
+                "expires_at",
+                "limitations",
+            },
+            required={
+                "source_ref",
+                "permitting_authority_ref",
+                "lifecycle_ref",
+                "expires_at",
+                "limitations",
+            },
+            label=label,
+        )
+        source_ref = _source_ref(exception["source_ref"], label=f"{label}.source_ref")
+        permitting_authority = exception["permitting_authority_ref"]
+        lifecycle = exception["lifecycle_ref"]
+        expires_at = exception["expires_at"]
+        limitations = _limitations(exception["limitations"], label=f"{label}.limitations")
+        if permitting_authority is None or lifecycle is None or expires_at is None:
+            return None, f"exception:{source_ref['source_id']}"
+        permitting_authority_ref = _source_ref(
+            permitting_authority, label=f"{label}.permitting_authority_ref"
+        )
+        lifecycle_ref = _source_ref(lifecycle, label=f"{label}.lifecycle_ref")
+        expires_at_text = _timestamp(expires_at, label=f"{label}.expires_at")
+        if _timestamp_value(expires_at_text) <= composed_at:
+            return None, f"exception:{source_ref['source_id']}"
+    except GoverningDocumentContractError:
+        return None, unknown_marker
+    return {
+        "source_ref": source_ref,
+        "permitting_authority_ref": permitting_authority_ref,
+        "lifecycle_ref": lifecycle_ref,
+        "expires_at": expires_at_text,
+        "limitations": limitations,
+    }, None
+
+
+def _drift_observations(
+    value: Any, *, label: str, composed_at: datetime
+) -> list[dict[str, Any]]:
+    observations = _json_value(value, label=label)
+    if not isinstance(observations, list):
+        raise GoverningDocumentContractError(f"{label} must be a list")
+    rendered: list[dict[str, Any]] = []
+    for index, observation in enumerate(observations):
+        item_label = f"{label}[{index}]"
+        item = _mapping(observation, label=item_label)
+        _keys(
+            item,
+            allowed={"source_ref", "observed_at", "difference"},
+            required={"source_ref", "observed_at", "difference"},
+            label=item_label,
+        )
+        item["source_ref"] = _source_ref(item["source_ref"], label=f"{item_label}.source_ref")
+        observed_at = _timestamp(item["observed_at"], label=f"{item_label}.observed_at")
+        if _timestamp_value(observed_at) > composed_at:
+            raise GoverningDocumentContractError(f"{item_label}.observed_at cannot be after composition")
+        item["observed_at"] = observed_at
+        _nonempty(item["difference"], label=f"{item_label}.difference")
+        rendered.append(item)
+    return rendered
+
+
+def _coverage(value: Any, *, index: int, composed_at: datetime) -> dict[str, Any]:
+    label = f"coverage_declarations[{index}]"
+    coverage = _mapping(value, label=label)
+    _keys(
+        coverage,
+        allowed={
+            "claim_id",
+            "source_ref",
+            "authority_scope",
+            "governing_source_refs",
+            "completeness_definition_ref",
+            "assessed_scope",
+            "source_state",
+            "drift_observations",
+            "exception_declarations",
+            "unknowns",
+            "limitations",
+        },
+        required={
+            "claim_id",
+            "source_ref",
+            "authority_scope",
+            "governing_source_refs",
+            "completeness_definition_ref",
+            "assessed_scope",
+            "source_state",
+            "drift_observations",
+            "exception_declarations",
+            "unknowns",
+            "limitations",
+        },
+        label=label,
+    )
+    _nonempty(coverage["claim_id"], label=f"{label}.claim_id")
+    coverage["source_ref"] = _source_ref(coverage["source_ref"], label=f"{label}.source_ref")
+    _nonempty(coverage["authority_scope"], label=f"{label}.authority_scope")
+    coverage["governing_source_refs"] = _references(
+        coverage["governing_source_refs"], label=f"{label}.governing_source_refs"
+    )
+    completeness_definition = coverage["completeness_definition_ref"]
+    coverage["completeness_definition_ref"] = (
+        None
+        if completeness_definition is None
+        else _source_ref(
+            completeness_definition,
+            label=f"{label}.completeness_definition_ref",
+        )
+    )
+    _nonempty(coverage["assessed_scope"], label=f"{label}.assessed_scope")
+    coverage["source_state"] = _state(
+        coverage["source_state"], label=f"{label}.source_state", composed_at=composed_at
+    )
+    coverage["drift_observations"] = _drift_observations(
+        coverage["drift_observations"], label=f"{label}.drift_observations", composed_at=composed_at
+    )
+    exceptions = _json_value(coverage["exception_declarations"], label=f"{label}.exception_declarations")
+    if not isinstance(exceptions, list):
+        raise GoverningDocumentContractError(f"{label}.exception_declarations must be a list")
+    admitted_exceptions: list[dict[str, Any]] = []
+    withdrawn_exceptions: list[str] = []
+    for exception_index, exception in enumerate(exceptions):
+        exception, withdrawn = _coverage_exception(
+            exception, index=exception_index, composed_at=composed_at
+        )
+        if exception is not None:
+            admitted_exceptions.append(exception)
+        if withdrawn is not None:
+            withdrawn_exceptions.append(withdrawn)
+    coverage["unknowns"] = [
+        *_strings(coverage["unknowns"], label=f"{label}.unknowns"),
+        *withdrawn_exceptions,
+    ]
+    coverage["limitations"] = _limitations(coverage["limitations"], label=f"{label}.limitations")
+
+    state = coverage["source_state"]
+    complete_is_admitted = (
+        coverage["completeness_definition_ref"] is not None
+        and bool(coverage["governing_source_refs"])
+        and state["availability"] == "available"
+        and state["freshness"] == "fresh"
+        and state["linkage"] == "linked"
+    )
+    if state["coverage"] == "complete" and not complete_is_admitted:
+        coverage["source_state"] = _missing_or_unlinked_state(
+            state,
+            reason="incomplete coverage evidence withdraws the completeness claim",
+        )
+
+    return {
+        "claim_id": coverage["claim_id"],
+        "source_ref": coverage["source_ref"],
+        "authority_scope": coverage["authority_scope"],
+        "governing_source_refs": coverage["governing_source_refs"],
+        "completeness_definition_ref": coverage["completeness_definition_ref"],
+        "assessed_scope": coverage["assessed_scope"],
+        "source_state": coverage["source_state"],
+        "drift_observations": coverage["drift_observations"],
+        "exception_refs": [exception["source_ref"] for exception in admitted_exceptions],
+        "exceptions": admitted_exceptions,
+        "unknowns": coverage["unknowns"],
+        "limitations": coverage["limitations"],
+    }
+
+
+def _governed_route(value: Any, *, label: str, composed_at: datetime) -> dict[str, Any]:
+    route = _mapping(value, label=label)
+    _keys(
+        route,
+        allowed={
+            "route_id",
+            "source_ref",
+            "entrypoint",
+            "authority_or_admission_ref",
+            "accepted_inputs",
+            "expected_side_effects",
+            "expected_non_effects",
+            "receipt_ref",
+            "source_state",
+            "limitations",
+        },
+        required={
+            "route_id",
+            "source_ref",
+            "entrypoint",
+            "authority_or_admission_ref",
+            "accepted_inputs",
+            "expected_side_effects",
+            "expected_non_effects",
+            "receipt_ref",
+            "source_state",
+            "limitations",
+        },
+        label=label,
+    )
+    _nonempty(route["route_id"], label=f"{label}.route_id")
+    route["source_ref"] = _source_ref(route["source_ref"], label=f"{label}.source_ref")
+    _nonempty(route["entrypoint"], label=f"{label}.entrypoint")
+    route["authority_or_admission_ref"] = _source_ref(
+        route["authority_or_admission_ref"],
+        label=f"{label}.authority_or_admission_ref",
+    )
+    route["accepted_inputs"] = _strings(route["accepted_inputs"], label=f"{label}.accepted_inputs")
+    route["expected_side_effects"] = _strings(
+        route["expected_side_effects"], label=f"{label}.expected_side_effects"
+    )
+    route["expected_non_effects"] = _strings(
+        route["expected_non_effects"], label=f"{label}.expected_non_effects"
+    )
+    route["receipt_ref"] = _source_ref(route["receipt_ref"], label=f"{label}.receipt_ref")
+    route["source_state"] = _state(
+        route["source_state"], label=f"{label}.source_state", composed_at=composed_at
+    )
+    route["limitations"] = _limitations(route["limitations"], label=f"{label}.limitations")
+    return route
+
+
+def _route_deviation(
+    value: Any, *, index: int, composed_at: datetime
+) -> tuple[dict[str, Any] | None, str | None]:
+    label = f"route_deviation_declarations[{index}]"
+    deviation = _mapping(value, label=label)
+    _keys(
+        deviation,
+        allowed={
+            "deviation_id",
+            "source_ref",
+            "authority_scope",
+            "intended_route_refs",
+            "observed_route_refs",
+            "correlation_ref",
+            "observed_at",
+            "difference",
+            "source_state",
+            "existing_repair_route_ref",
+            "repair_route_linkage",
+            "repair_route_correlation_ref",
+            "limitations",
+        },
+        required={
+            "deviation_id",
+            "source_ref",
+            "authority_scope",
+            "intended_route_refs",
+            "observed_route_refs",
+            "correlation_ref",
+            "observed_at",
+            "difference",
+            "source_state",
+            "existing_repair_route_ref",
+            "repair_route_linkage",
+            "repair_route_correlation_ref",
+            "limitations",
+        },
+        label=label,
+    )
+    _nonempty(deviation["deviation_id"], label=f"{label}.deviation_id")
+    deviation["source_ref"] = _source_ref(deviation["source_ref"], label=f"{label}.source_ref")
+    _nonempty(deviation["authority_scope"], label=f"{label}.authority_scope")
+    deviation["intended_route_refs"] = _references(
+        deviation["intended_route_refs"], label=f"{label}.intended_route_refs"
+    )
+    deviation["observed_route_refs"] = _references(
+        deviation["observed_route_refs"], label=f"{label}.observed_route_refs"
+    )
+    if not deviation["intended_route_refs"] or not deviation["observed_route_refs"]:
+        raise GoverningDocumentContractError(f"{label} requires intended and observed route refs")
+    deviation["correlation_ref"] = _source_ref(
+        deviation["correlation_ref"], label=f"{label}.correlation_ref"
+    )
+    observed_at = _timestamp(deviation["observed_at"], label=f"{label}.observed_at")
+    if _timestamp_value(observed_at) > composed_at:
+        raise GoverningDocumentContractError(f"{label}.observed_at cannot be after composition")
+    deviation["observed_at"] = observed_at
+    _nonempty(deviation["difference"], label=f"{label}.difference")
+    deviation["source_state"] = _state(
+        deviation["source_state"], label=f"{label}.source_state", composed_at=composed_at
+    )
+    state = deviation["source_state"]
+    if (
+        state["availability"] != "available"
+        or state["freshness"] != "fresh"
+        or state["coverage"] in {"unread", "missing"}
+        or state["linkage"] != "linked"
+    ):
+        return None, f"route deviation:{deviation['deviation_id']} withdrawn"
+    route = deviation["existing_repair_route_ref"]
+    linkage = deviation["repair_route_linkage"]
+    if linkage not in {"linked", "unlinked", "not_assessed"}:
+        raise GoverningDocumentContractError(f"{label}.repair_route_linkage is unsupported")
+    correlation = deviation["repair_route_correlation_ref"]
+    if route is None:
+        if linkage not in {"unlinked", "not_assessed"} or correlation is not None:
+            raise GoverningDocumentContractError(
+                f"{label} null repair route requires unlinked or not_assessed linkage"
+            )
+    else:
+        if linkage != "linked" or correlation is None:
+            raise GoverningDocumentContractError(
+                f"{label} linked repair route requires applicability correlation"
+            )
+        deviation["existing_repair_route_ref"] = _governed_route(
+            route,
+            label=f"{label}.existing_repair_route_ref",
+            composed_at=composed_at,
+        )
+    deviation["repair_route_correlation_ref"] = (
+        None
+        if correlation is None
+        else _source_ref(correlation, label=f"{label}.repair_route_correlation_ref")
+    )
+    deviation["limitations"] = _limitations(
+        deviation["limitations"], label=f"{label}.limitations"
+    )
+    return deviation, None
+
+
 def compose_governing_document_inventory(
     *,
     repository_ref: str,
@@ -553,9 +896,12 @@ def compose_builder_system_control_view(
     governing_document_declarations: Sequence[Mapping[str, Any]],
     workflow_adapter_declarations: Sequence[Mapping[str, Any]],
     capability_binding_declarations: Sequence[Mapping[str, Any]],
+    coverage_declarations: Sequence[Mapping[str, Any]],
+    route_deviation_declarations: Sequence[Mapping[str, Any]],
+    governed_route_declarations: Sequence[Mapping[str, Any]],
     limitations: Sequence[Any],
 ) -> dict[str, Any]:
-    """Extend the BSC-01 view from explicit, caller-supplied declarations only."""
+    """Extend the BSC view from explicit, caller-supplied declarations only."""
 
     view = compose_governing_document_inventory(
         repository_ref=repository_ref,
@@ -569,10 +915,19 @@ def compose_builder_system_control_view(
     capabilities = _json_value(
         capability_binding_declarations, label="capability_binding_declarations"
     )
+    coverage = _json_value(coverage_declarations, label="coverage_declarations")
+    deviations = _json_value(route_deviation_declarations, label="route_deviation_declarations")
+    routes = _json_value(governed_route_declarations, label="governed_route_declarations")
     if not isinstance(adapters, list):
         raise GoverningDocumentContractError("workflow_adapter_declarations must be a list")
     if not isinstance(capabilities, list):
         raise GoverningDocumentContractError("capability_binding_declarations must be a list")
+    if not isinstance(coverage, list):
+        raise GoverningDocumentContractError("coverage_declarations must be a list")
+    if not isinstance(deviations, list):
+        raise GoverningDocumentContractError("route_deviation_declarations must be a list")
+    if not isinstance(routes, list):
+        raise GoverningDocumentContractError("governed_route_declarations must be a list")
     view["workflow_adapters"] = [
         _workflow_adapter(adapter, index=index, composed_at=composed_at_value)
         for index, adapter in enumerate(adapters)
@@ -580,6 +935,25 @@ def compose_builder_system_control_view(
     view["capability_bindings"] = [
         _capability_binding(capability, index=index, composed_at=composed_at_value)
         for index, capability in enumerate(capabilities)
+    ]
+    view["coverage"] = [
+        _coverage(item, index=index, composed_at=composed_at_value)
+        for index, item in enumerate(coverage)
+    ]
+    rendered_deviations = [
+        _route_deviation(item, index=index, composed_at=composed_at_value)
+        for index, item in enumerate(deviations)
+    ]
+    view["deviations"] = [
+        deviation for deviation, withdrawn in rendered_deviations if deviation is not None
+    ]
+    view["limitations"] = [
+        *view["limitations"],
+        *[withdrawn for deviation, withdrawn in rendered_deviations if withdrawn is not None],
+    ]
+    view["governed_routes"] = [
+        _governed_route(item, label=f"governed_route_declarations[{index}]", composed_at=composed_at_value)
+        for index, item in enumerate(routes)
     ]
     return view
 
