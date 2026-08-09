@@ -785,7 +785,7 @@ def test_succeeded_model_effect_recovery_applies_attempt_without_relaunch() -> N
     assert restarted.ledger.merge_ready_receipt(run_id) is not None
 
 
-def test_api_ledger_preserves_dynamic_low_convergence_review_rounds() -> None:
+def test_api_ledger_low_convergence_still_needs_one_fresh_review() -> None:
     api = FakeBuilderOpsClient()
     ledger = BuilderOpsVerificationLedger(api, repository=REPO)
     run = ledger.ingest(request())
@@ -841,14 +841,6 @@ def test_api_ledger_preserves_dynamic_low_convergence_review_rounds() -> None:
     )
     loop.review(
         session_id="clean-review-1",
-        capability="gpt-5.6-sol",
-        reasoning_effort="xhigh",
-        context=context,
-        outcome="clean",
-    )
-    assert ledger.closure_ready(run.run_id) is False
-    loop.review(
-        session_id="clean-review-2",
         capability="gpt-5.6-sol",
         reasoning_effort="xhigh",
         context=context,

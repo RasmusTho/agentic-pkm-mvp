@@ -1115,99 +1115,13 @@ class BuilderOpsVerificationLedger:
         run: VerificationRun,
         attempts: Sequence[Mapping[str, object]],
     ) -> int:
-        required = _request_final_review_rounds(run.request)
-        repairs = [
-            row
-            for row in attempts
-            if row.get("kind") in {"standard_repair", "escalated_repair"}
-        ]
-        if (
-            not repairs
-            or run.repair_budget_policy != REPAIR_BUDGET_POLICY_MECHANISM
-        ):
-            return required
-        blocking_rounds: dict[
-            tuple[str, str, str, str], set[str]
-        ] = {}
-        for row in attempts:
-            receipt = row.get("receipt")
-            reviewed_attempt_id = (
-                receipt.get("reviewed_attempt_id")
-                if isinstance(receipt, Mapping)
-                else None
-            )
-            values = (
-                row.get("session_id"),
-                reviewed_attempt_id,
-                row.get("failure_domain"),
-                row.get("mechanism_id"),
-                row.get("finding_id"),
-            )
-            if (
-                row.get("kind") == "review"
-                and row.get("outcome") == "blocking"
-                and all(isinstance(value, str) and value for value in values)
-            ):
-                session_id, reviewed, domain, mechanism, finding = values
-                round_key = (
-                    str(session_id),
-                    str(reviewed),
-                    str(domain),
-                    str(mechanism),
-                )
-                blocking_rounds.setdefault(round_key, set()).add(
-                    str(finding)
-                )
-        if any(len(findings) >= 2 for findings in blocking_rounds.values()):
-            required = 2
-        final_repair = repairs[-1]
-        final_key = (
-            final_repair.get("failure_domain"),
-            final_repair.get("mechanism_id"),
-        )
-        final_index = next(
-            (
-                index
-                for index in range(len(attempts) - 1, -1, -1)
-                if attempts[index].get("attempt_id")
-                == final_repair.get("attempt_id")
-            ),
-            -1,
-        )
-        preceding_blocking = next(
-            (
-                row
-                for row in reversed(attempts[:final_index])
-                if row.get("kind") == "review"
-                and row.get("outcome") == "blocking"
-            ),
-            None,
-        )
-        has_prior_same_key_repair = any(
-            row.get("kind")
-            in {"standard_repair", "escalated_repair"}
-            and (
-                row.get("failure_domain"),
-                row.get("mechanism_id"),
-            )
-            == final_key
-            for row in attempts[:final_index]
-        )
-        if (
-            all(
-                isinstance(value, str) and value
-                for value in final_key
-            )
-            and has_prior_same_key_repair
-            and preceding_blocking is not None
-            and (
-                preceding_blocking.get("failure_domain"),
-                preceding_blocking.get("mechanism_id"),
-            )
-            == final_key
-        ):
-            required = 2
-        return required
+        # Risk and low-convergence evidence select capability and the separate
+        # mechanism-convergence gate; they no longer increase the number of
+        # consecutive clean final reviews. The latest verification/repair
+        # anchor still invalidates all older reviews in
+        # `_selected_clean_review_rounds` below.
+        del attempts
+        return _request_final_review_rounds(run.request)
 
     def closure_ready(self, run_id: str) -> bool:
         run = self.get(run_id)

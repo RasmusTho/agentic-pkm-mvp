@@ -2463,77 +2463,11 @@ class VerificationDispatchLedger:
             return False
         request = _validated_stored_request(request_row["request_json"])
         required_reviews = _request_final_review_rounds(request)
-        policy_row = conn.execute(
-            "SELECT repair_budget_policy FROM verification_runs WHERE run_id=?",
-            (run_id,),
-        ).fetchone()
-        if repairs and policy_row is not None and (
-            policy_row["repair_budget_policy"] == REPAIR_BUDGET_POLICY_MECHANISM
-        ):
-            blocking_rounds: dict[tuple[str, str, str, str], set[str]] = {}
-            for row in attempts:
-                session_id = row["session_id"]
-                reviewed_attempt_id = (
-                    row["receipt"].get("reviewed_attempt_id")
-                    if isinstance(row["receipt"], Mapping)
-                    else None
-                )
-                if (
-                    row["kind"] == "review"
-                    and row["outcome"] == "blocking"
-                    and isinstance(session_id, str)
-                    and isinstance(row["failure_domain"], str)
-                    and isinstance(row["mechanism_id"], str)
-                    and isinstance(row["finding_id"], str)
-                    and isinstance(reviewed_attempt_id, str)
-                ):
-                    round_key = (
-                        session_id,
-                        reviewed_attempt_id,
-                        row["failure_domain"],
-                        row["mechanism_id"],
-                    )
-                    blocking_rounds.setdefault(round_key, set()).add(row["finding_id"])
-            if any(len(findings) >= 2 for findings in blocking_rounds.values()):
-                required_reviews = 2
-            final_repair = repairs[-1]
-            final_key = (
-                final_repair["failure_domain"],
-                final_repair["mechanism_id"],
-            )
-            final_index = max(
-                index
-                for index, row in enumerate(attempts)
-                if row["attempt_id"] == final_repair["attempt_id"]
-            )
-            preceding_blocking = next(
-                (
-                    row
-                    for row in reversed(attempts[:final_index])
-                    if row["kind"] == "review" and row["outcome"] == "blocking"
-                ),
-                None,
-            )
-            has_prior_same_key_repair = any(
-                row["kind"] in {"standard_repair", "escalated_repair"}
-                and (row["failure_domain"], row["mechanism_id"]) == final_key
-                for row in attempts[:final_index]
-            )
-            # The circuit breaker needs both facts: the final repair repeats a
-            # stable key and the immediately preceding blocker is bound to that
-            # same key. A repair A -> blocker B -> repair A is not convergence
-            # evidence for A, and v1's unbound NULL keys cannot trigger it.
-            if (
-                all(isinstance(value, str) and value for value in final_key)
-                and has_prior_same_key_repair
-                and preceding_blocking is not None
-                and (
-                    preceding_blocking["failure_domain"],
-                    preceding_blocking["mechanism_id"],
-                )
-                == final_key
-            ):
-                required_reviews = 2
+        # Risk and low-convergence evidence still select stronger capability
+        # and the separate mechanism-convergence gate. They do not raise the
+        # authenticated final-review count. Reviews before `final_anchor`
+        # remain ineligible, so every repair still requires a fresh clean
+        # review on the repaired current head SHA.
         selected_reviews = reviews[-required_reviews:]
         for review in selected_reviews:
             receipt = review["receipt"]

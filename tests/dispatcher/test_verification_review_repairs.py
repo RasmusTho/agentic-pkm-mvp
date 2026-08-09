@@ -128,7 +128,7 @@ def test_old_lease_token_cannot_mutate_same_holder_takeover(tmp_path) -> None:
         )
 
 
-def test_low_convergence_requires_two_final_clean_reviews(tmp_path) -> None:
+def test_low_convergence_requires_one_fresh_final_clean_review(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "host")
@@ -184,14 +184,6 @@ def test_low_convergence_requires_two_final_clean_reviews(tmp_path) -> None:
         context=context,
         outcome="clean",
     )
-    assert not loop.closure_ready()
-    loop.review(
-        session_id="review-3",
-        capability="terra",
-        reasoning_effort="high",
-        context=context,
-        outcome="clean",
-    )
     assert loop.closure_ready()
 
 
@@ -224,7 +216,7 @@ def test_one_clean_review_closes_a_converged_delivery(tmp_path) -> None:
     assert loop.closure_ready()
 
 
-def test_declared_high_risk_requires_two_clean_reviews(tmp_path) -> None:
+def test_authenticated_two_round_declaration_remains_compatible(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request(final_review_rounds=2))
     claimed = state.claim(run.run_id, "host")
@@ -342,7 +334,7 @@ def test_same_head_replay_cannot_lower_authenticated_review_requirement(tmp_path
         state.ingest(request(final_review_rounds=1))
 
 
-def test_two_blockers_in_one_round_trigger_two_final_reviews(tmp_path) -> None:
+def test_two_blockers_in_one_round_still_require_only_one_fresh_final_review(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "host")
@@ -379,11 +371,6 @@ def test_two_blockers_in_one_round_trigger_two_final_reviews(tmp_path) -> None:
     )
     loop.review(
         session_id="review-final-1", capability="terra", reasoning_effort="high",
-        context=context, outcome="clean",
-    )
-    assert not loop.closure_ready()
-    loop.review(
-        session_id="review-final-2", capability="terra", reasoning_effort="high",
         context=context, outcome="clean",
     )
     assert loop.closure_ready()

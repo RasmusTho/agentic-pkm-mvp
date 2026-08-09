@@ -379,11 +379,10 @@ Maximum attempts:
   repair triage; it does not create a Human Exception.
 - P2/P3 findings do not enter this loop, consume attempts, trigger capability
   escalation, or require another review round.
-- One clean independent final review is the default. A second clean round is required only for a
-  PR that changes a runtime surface on a declared high-risk category, or after the low-convergence
-  circuit breaker has triggered for the same mechanism/domain key. A governance, docs, skill, or
-  test-enforcement change does not require a second round merely because it carries a high-risk
-  label.
+- One clean independent final review on the current head SHA is sufficient for every full-path PR,
+  including declared high-risk runtime work and work that triggered the low-convergence circuit
+  breaker. A P0/P1 fix invalidates the prior review authority and requires one new clean independent
+  review on the repaired current head SHA; no path requires two consecutive clean final reviews.
 - Cosmetic or receipt-only corrections do not reset the substantive attempt
   counter.
 
