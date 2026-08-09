@@ -12,10 +12,11 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-08-08
-Last verified against: `origin/main` `da85670ce0f9f1ba55eb7a5423967407a9c639ad`, ADR-0057,
-ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, and the Deterministic
-Delivery Orchestration specification.
+Last reviewed: 2026-08-09
+Last verified against: `origin/main` `c7561c8301a21276444e04bf462bdf8573a834c0`, ADR-0057,
+ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
+Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
+and the advisory Builder System devUI execution audit in PR #4689.
 
 # devUI — the owner flow for Yggdrasil development
 
@@ -288,6 +289,100 @@ Capabilities, work, evidence, and receipts are lenses within these views, not ad
 modes. Moving from overview to focus to command and receipt preserves the selected item,
 goal, scope, evidence, and owner-facing state.
 
+### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
+
+The first Focus slice is subject-centred. Its subject is exactly one stable GitHub Issue or one
+capability reference whose owning document gives it a stable identity. Focus does not accept a
+provider session, transcript, worker, PR, or free-form search result as its primary subject.
+
+Focus presents, in this order:
+
+1. owner intent and why this subject is in view;
+2. the governing source and any subordinate source references;
+3. current evidence and explicit gaps;
+4. delivery or inquiry receipts that are actually linked to the subject;
+5. material risks and limitations;
+6. the next legal step, its governing workflow, and who may take it; and
+7. execution observations only when an owning source supplies an explicit correlation.
+
+An execution observation never becomes work or delivery truth because its provider, timestamp,
+repository, branch text, or prose resembles the selected subject. An observation without an exact
+governed correlation is rendered as **unlinked** or omitted from the default Focus view. devUI does
+not infer or persist that link.
+
+The **Conversation Port** is a contextual region of Focus, not an agent or session browser. It
+creates a bounded, hash-addressed `ConversationContextPack.v1` and opens or exports that pack to an
+external Codex or Claude interaction. The provider may reason over the pack and return a
+disposition, decision brief, plan, inquiry recommendation, governed workflow route, or no-action
+result. Provider turns, transcripts, session identifiers, usage, and model metadata remain
+provenance. They do not authorize work, delivery, repository mutation, or a durable disposition.
+
+Before any durable consequence, the conversation must yield a `TypedCommandProposal.v1` bound to
+the exact context-pack hash. The proposal names exact inputs, source references, destination
+workflow, expected side effects and explicit non-effects, approval rule, freshness expiry, expected
+receipt, and one confirmation pair: **Start/Hold** for initiating a workflow or **Apply/Hold** for
+applying an already governed change. Changed inputs, sources, destination, or freshness invalidate
+the preview. Conversation prose is never an executable command.
+
+The first and only command admitted by this slice is **Start Model Inquiry**. Its preview routes the
+exact question artifact through `.codex/skills/start-model-inquiry/SKILL.md`, uses **Start/Hold**,
+and expects the existing artifact-first terminal response fields: `inquiry_id`, `final_state`,
+`terminal_receipt_id`, and `human_readable_report`. It creates no GitHub Issue, repository change,
+delivery run, CKM claim, or provider-session authority. An ambiguous launch outcome is shown as
+ambiguous, preserves the governed lock/staged-question recovery posture, and is never retried by
+devUI.
+
+The local-only devUI read admission is not action authentication. **Start** remains unavailable
+until the separately authenticated action boundary binds the owner principal to the exact proposal.
+The destination must also persist a proposal-scoped operation key in the existing Model Inquiry
+artifacts and return the prior inquiry/receipt or an honest active/ambiguous readback on replay;
+single-flight locking alone is not refresh-safe idempotency. This adds no devUI task store.
+
+This slice does not deliver an embedded chat runtime, transcript store, provider-session discovery,
+global session view, direct GitHub or repository mutation, generic command language, or parallel
+task store. The external provider interaction can be unavailable or unsupported without degrading
+the read-only Focus view.
+
+### DEVUI-BSC-BOUNDARY — Builder System Control lens
+
+**Builder System Control** is a separate control-oriented lens for the Builder System itself. It is
+not a tab, evidence group, or command region inside a capability/Issue Focus canvas. Entering it
+replaces the subject context with an explicit Builder System scope and a distinct header; returning
+to Focus restores the prior subject without carrying control-lens claims into that subject.
+
+The lens orients the owner to:
+
+- governing documents, their role, authority, owner, lifecycle, and freshness;
+- skills as versioned workflow adapters whose contracts bind their inputs, outputs, triggers, and
+  authority limits;
+- MCPs, connectors, scripts, and CLIs as bounded capabilities owned by workflows, never policy
+  owners;
+- policy and source coverage, freshness, drift, exceptions, measured-empty observations, and
+  unknowns; and
+- explicitly evidenced deviations between intended governance and observed delivery routes.
+
+The lens may link to a stable Focus subject or route the owner to an existing governed workflow. A
+later slice may present typed command proposals, but each proposal must still cross the workflow's
+existing approval and receipt boundary. The lens does not decide policy, advance workflows, persist
+tasks, reconcile source truth, invent correlations, or become a source of truth. It is a
+read-time/rebuildable orientation and deviation projection over existing owner documents,
+BuilderOps records, live delivery evidence, and bounded capability declarations.
+
+Focus and Builder System Control therefore share presentation primitives and evidence-state
+semantics, but not primary identity, navigation state, authority, correlation, or command scope:
+
+| Concern | Focus + Conversation Port | Builder System Control |
+| --- | --- | --- |
+| Primary identity | One stable Issue or capability | One explicit Builder System governance scope |
+| Owner question | What does this subject mean, and what is its next legal step? | Is the Builder System governed and operating as intended? |
+| Evidence | Subject-governing and explicitly correlated sources only | Governance sources, capability declarations, coverage, and route observations |
+| Conversation | External reasoning over one hash-bound subject pack | Not part of the first slice |
+| First command | Start Model Inquiry through the existing skill | None |
+| Prohibited authority | Work/session/task/delivery authority | Policy/workflow/task/source-of-truth authority |
+
+The normative target contracts and implementation decomposition live in
+`docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`.
+
 ### Visual composition hypothesis (pre-handoff)
 
 The following is a candidate composition brief for the governed Yggdrasil design handoff, not an
@@ -345,7 +440,9 @@ Delivered now:
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; owner pilot and tried-by-owner acceptance; and ADR-0065 dispositions.
+surface; the Focus/Conversation Port and its `ConversationContextPack.v1` / command-preview target
+contracts; the Builder System Control lens; owner pilot and tried-by-owner acceptance; and ADR-0065
+dispositions.
 
 The target turns the current cockpits and Signboard from competing owner destinations into internal
 providers: Direction B stays an exportable/static evidence fallback, BuilderOps Cockpit supplies
@@ -358,6 +455,18 @@ routes may remain available for diagnostics and recovery, but devUI is the norma
 - [ ] The first view answers Now, Needs you, and Ready to try without owner-side reconstruction.
 - [ ] One selected item can be followed from overview to terminal receipt without product switching
       or recreating context.
+- [ ] Focus is bound to one stable Issue or capability and shows intent, governing source,
+      evidence, receipts, risks, next legal step, and only explicitly correlated execution
+      observations.
+- [ ] The Conversation Port exports a scoped hash-bound context pack externally without creating a
+      transcript store, task store, inferred work link, or global session view.
+- [ ] A durable consequence requires a fresh typed proposal with exact inputs, sources,
+      destination, side effects, approval rule, expiry, expected receipt, and Start/Hold or
+      Apply/Hold.
+- [ ] Start Model Inquiry uses only the existing artifact-first workflow, produces its existing
+      terminal receipt or an honest ambiguous outcome, and performs no GitHub/repository mutation.
+- [ ] Builder System Control is a separate governance lens and cannot become a policy engine,
+      workflow engine, task system, capability policy owner, or source of truth.
 - [ ] Normal owner use never requires choosing or navigating to Cockpit, CKM, or Signboard; their
       source identity remains available only as progressive provenance and diagnostic detail.
 - [ ] Each item shows one owner-facing state, why it is shown, what happens next, and whether owner
