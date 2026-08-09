@@ -511,7 +511,11 @@ def test_coverage_projection_refuses_unauthorized_or_unbounded_exceptions() -> N
     )
 
     result = _compose_control(
-        coverage=[_coverage(exception_declarations=[valid, unauthorized, expired, malformed])]
+        coverage=[
+            _coverage(
+                exception_declarations=[valid, unauthorized, expired, malformed, "not-an-exception"]
+            )
+        ]
     )
 
     rendered = result["coverage"][0]
@@ -519,6 +523,7 @@ def test_coverage_projection_refuses_unauthorized_or_unbounded_exceptions() -> N
     assert "exception:evidence/unauthorized-exception" in rendered["unknowns"]
     assert "exception:evidence/expired-exception" in rendered["unknowns"]
     assert "exception:evidence/malformed-exception" in rendered["unknowns"]
+    assert "exception:unidentified" in rendered["unknowns"]
 
     future_drift = _coverage(
         drift_observations=[

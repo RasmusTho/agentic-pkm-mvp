@@ -505,7 +505,10 @@ def _coverage_exception(
     """Return an admitted exception ref or a truthful unknown marker."""
 
     label = f"coverage_declarations exception_declarations[{index}]"
-    exception = _mapping(value, label=label)
+    try:
+        exception = _mapping(value, label=label)
+    except GoverningDocumentContractError:
+        return None, "exception:unidentified"
     raw_source = exception.get("source_ref")
     raw_source_id = raw_source.get("source_id") if isinstance(raw_source, dict) else None
     unknown_marker = (
