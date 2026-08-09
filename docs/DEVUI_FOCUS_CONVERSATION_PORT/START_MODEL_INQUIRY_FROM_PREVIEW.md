@@ -5,7 +5,7 @@ task_id: FCP-04
 github_issue: 4697
 source_anchor: "docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: First command flow — Start Model Inquiry"
 parent_capability: devUI Focus + Conversation Port
-prerequisites: [FCP-03]
+prerequisites: [FCP-03, "authenticated action boundary #4169"]
 depends_on: [OPEN_EXTERNAL_CONVERSATION_PORT.md]
 can_parallelize_with: []
 recommended_capability: "Codex Sol / high"
@@ -24,9 +24,13 @@ start the existing artifact-first Model Inquiry workflow once after explicit own
 - Defines and validates `TypedCommandProposal.v1` for `start_model_inquiry` only.
 - Produces the complete preview-state contract for exact input/source/destination/side-effect/
   non-effect/approval/expiry/receipt details without choosing a visual treatment.
-- Revalidates the proposal, pack, sources, workflow contract, and expiry immediately before Start.
-- Maps Start to the existing `.codex/skills/start-model-inquiry/SKILL.md` path exactly once and Hold
-  to no workflow invocation.
+- Revalidates the authenticated principal, proposal, pack, sources, workflow contract, destination
+  operation-key support, and expiry immediately before Start.
+- Routes Start through the separately authenticated action boundary and maps it to the existing
+  `.codex/skills/start-model-inquiry/SKILL.md` path with one destination-owned operation key; Hold
+  makes no workflow invocation.
+- Adds bounded operation-key/readback support to the existing inquiry artifacts so refresh, process
+  restart, or ambiguous response cannot launch a second inquiry for the same proposal.
 - Maps valid terminal fields to the receipt view and malformed/nonzero/empty outcomes to honest
   ambiguity without retry or protected-state cleanup.
 
@@ -35,6 +39,9 @@ start the existing artifact-first Model Inquiry workflow once after explicit own
 The owner previews exact question bytes, source versions, pack/proposal hashes, destination,
 side effects, non-effects, expiry, and expected receipt. Hold makes no call. Start revalidates and
 calls the existing workflow once; a malformed response renders ambiguous and does not retry.
+
+The loopback-only `/api/devui` read route never admits Start. A replayed operation key returns the
+existing inquiry/receipt or an honest active/ambiguous readback from the artifact-first destination.
 
 ## Why This Matters
 
@@ -51,9 +58,13 @@ existing recovery evidence.
 - [ ] Changed question, pack, source version, correlation, workflow contract, or expiry withdraws
       Start and requires a new preview.
   - Verify: `tests/builderops/test_devui_model_inquiry_command.py::test_stale_or_changed_preview_cannot_start`.
-- [ ] Hold invokes nothing; double submit invokes the governed route at most once for the bound
-      proposal; browser refresh cannot create a second effect.
-  - Verify: `tests/builderops/test_devui_model_inquiry_command.py::test_start_hold_and_double_submit_are_safe`.
+- [ ] Start is unavailable without an authenticated owner principal, and local loopback/Host
+      admission never substitutes for action authentication.
+  - Verify: `tests/api/test_devui_model_inquiry_command.py::test_start_requires_authenticated_action_boundary`.
+- [ ] Hold invokes nothing; duplicate submit, browser refresh, or process restart reuses the same
+      destination operation key and returns the existing inquiry/receipt or active/ambiguous
+      readback without a second launch.
+  - Verify: `tests/builderops/test_devui_model_inquiry_command.py::test_operation_key_replay_never_relaunches_inquiry`.
 - [ ] The adapter invokes only the existing start-model-inquiry boundary and does not reproduce its
       host, lock, staging, credential, subscription, cleanup, or provider logic.
   - Verify: `tests/architecture/test_devui_focus_boundaries.py::test_model_inquiry_adapter_reuses_existing_workflow`.
@@ -70,8 +81,9 @@ existing recovery evidence.
 ## How to Verify (Pre-Merge)
 
 - Run all named unit and architecture tests.
-- Use workflow fakes to prove Hold, double-submit, refresh, stale preview, valid receipt, ambiguous
-  response, and unavailable destination behavior without contacting providers in unit tests.
+- Use workflow fakes to prove unauthenticated refusal, Hold, duplicate submit, refresh/restart
+  readback, stale preview, valid receipt, ambiguous response, and unavailable destination behavior
+  without contacting providers in unit tests.
 - Complete one governed end-to-end receipt on the configured path when the Issue contract admits
   live validation.
 - Run `git diff --check`.
@@ -81,7 +93,8 @@ existing recovery evidence.
 - Inquiry promotion, Issue creation, docs change, or delivery initiation.
 - Any `Apply/Hold` command.
 - General DDO/GitHub/repository commands or live delivery controls.
-- Inquiry launcher, provider adapter, or credential changes.
+- Provider adapter, credential, or route-selection changes. The only admitted destination change is
+  bounded operation-key/readback support in the existing artifact-first inquiry flow.
 - Browser layout, interaction geometry, or visual implementation; FCP-02 owns the governed handoff.
 
 ## Related Docs

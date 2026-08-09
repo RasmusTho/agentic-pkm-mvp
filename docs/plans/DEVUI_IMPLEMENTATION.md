@@ -129,12 +129,17 @@ specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`:
 2. export/open one immutable hash-bound context pack to an external Codex or Claude conversation,
    with provider transcript/session data retained as provenance only; and
 3. admit one typed command, Start Model Inquiry, through exact preview and explicit Start/Hold into
-   the unchanged artifact-first workflow and its existing receipt; then
+   the artifact-first workflow and its existing receipt, but only after the separately
+   authenticated action boundary and destination-owned operation-key/readback support exist; then
 4. complete the governed Yggdrasil handoff from the stable Focus, source-state, conversation, and
    command/receipt fixtures before deriving any visual implementation slice.
 
-This is not an early activation of the general Stage B DDO command chain. Start Model Inquiry is the
-already governed narrow pre-Issue exception documented in the Builder System process map. The slice
+This is not an early activation of the general Stage B DDO command chain. Start Model Inquiry is a
+narrow pre-Issue workflow documented in the Builder System process map, but its cost-bearing Start
+still crosses the authenticated action boundary owned by #4169. The current loopback-only read
+route is not approval authentication, and the current single-flight launcher is not durable
+idempotency. FCP-04 therefore remains blocked until the authenticated boundary and a proposal-scoped
+operation key/readback in the existing inquiry artifacts are available. The slice
 adds no delivery request, GitHub/repository mutation, task store, provider-session store, global
 session view, or direct provider invocation. Inquiry promotion and any later Issue/repo consequence
 remain separate governed workflows.

@@ -261,9 +261,10 @@ destination:
 side_effects: [string]
 explicit_non_effects: [string]
 approval_rule:
-  actor: owner
+  actor: authenticated_owner
   mode: start_hold
-  binds: [proposal_hash, context_pack_hash, input_hashes, source_versions, expires_at]
+  authenticated_principal_ref: string
+  binds: [authenticated_principal_ref, proposal_hash, context_pack_hash, input_hashes, source_versions, expires_at]
 freshness:
   created_at: RFC3339
   expires_at: RFC3339
@@ -272,6 +273,7 @@ expected_receipt:
   schema_ref: model-inquiry terminal launcher response
   required_fields: [inquiry_id, final_state, terminal_receipt_id, human_readable_report]
 refusal_conditions: [string]
+operation_key: canonical_sha256
 proposal_hash: canonical_sha256
 ```
 
@@ -297,13 +299,27 @@ The preview shows:
 - owner approval: **Start** binds the exact preview; **Hold** invokes nothing; and
 - expected terminal receipt fields and ambiguous-outcome behavior.
 
+The loopback-only read admission of `/api/devui` is not approval authentication. **Start** remains
+unavailable until it can cross the separately authenticated action boundary owned by #4169 (or a
+later explicitly accepted replacement) and bind the authenticated principal to the proposal.
+
+The current Model Inquiry launcher is single-flight but does not accept a durable operation key or
+support proposal readback after the lock is released. Therefore this specification does not claim
+refresh-safe or process-restart-safe at-most-once behavior from the current launcher. FCP-04 must
+extend the existing artifact-first flow with one proposal-scoped `operation_key` recorded in its
+existing inquiry artifacts. Replaying that key returns the existing inquiry/receipt or an honest
+active/ambiguous state; it never launches a second inquiry. This is destination-owned idempotency,
+not a devUI task store.
+
 ### Confirmation and receipt
 
-1. Re-read the proposal, pack, source versions, and expiry immediately before confirmation.
+1. Re-read the authenticated principal, proposal, pack, source versions, destination operation-key
+   support, and expiry immediately before confirmation.
 2. If anything changed or expired, withdraw **Start** and require a regenerated preview.
 3. **Hold** closes the preview locally with no durable workflow effect.
-4. **Start** invokes only the existing skill/launcher path exactly once; devUI does not reimplement
-   its route selection, lock, staging, credential, subscription, or cleanup logic.
+4. **Start** crosses the separate authenticated action boundary and invokes only the existing
+   skill/launcher path with the bound operation key; devUI does not reimplement route selection,
+   lock, staging, credential, subscription, artifact, readback, or cleanup logic.
 5. A valid terminal response renders the four existing receipt fields and links to the human report.
 6. Any invalid, empty, nonzero, or malformed launcher result is rendered `ambiguous`; devUI neither
    releases protected recovery state nor retries the inquiry.
@@ -377,7 +393,9 @@ policy. A deviation is evidence for an existing repair route, not a new workflow
 | Subject composer over CKM/Cockpit sources | Builds `FocusView.v1` without copying authority | Extend the delivered read-only composition seam through FCP-01. |
 | Canonical pack/proposal hashing and expiry policy | Makes preview and confirmation exact | Specify and test in FCP-03/FCP-04 before visual integration. |
 | External Codex/Claude adapter boundary | Opens/exports a pack without session discovery or credentials in devUI | FCP-03; nonvisual core follows FCP-01 and starts with explicit availability/unsupported states. |
-| Model Inquiry invocation adapter | Calls the existing skill exactly once and maps its receipt/failure states | FCP-04; nonvisual core follows FCP-03 and does not duplicate launcher logic. |
+| Model Inquiry invocation adapter | Submits one authenticated proposal operation key through the existing skill and maps destination readback/receipt/failure states | FCP-04; nonvisual core follows FCP-03 and does not duplicate route, artifact, or launcher logic. |
+| Authenticated Start admission | Proves that the caller approving a durable/cost-bearing effect is the admitted owner | Reuse the separately authenticated action boundary in #4169; loopback read admission is insufficient. FCP-04 remains blocked until this boundary is delivered or explicitly replaced. |
+| Destination-owned operation key and readback | Prevents refresh/restart from launching the same proposal twice without a devUI store | FCP-04 adds bounded operation-key support to the existing Model Inquiry artifact flow; current single-flight locking alone is insufficient. |
 | Governed Yggdrasil visual handoff | Resolves layout, accessibility, unresolved-question treatment, external-port affordance, and command salience | FCP-02 follows the stable FCP-01/FCP-03/FCP-04 fixtures. External design access blocks this handoff and later visual implementation only. |
 | Local audience/auth policy | Current CKM/devUI read seam is single-operator local | Keep first slice local; route any audience expansion through the existing access-policy path. |
 | Builder System source registry/coverage composition | Required for a truthful control lens | Separate BSC specification issue after this boundary lands. Reuse DOCS_INDEX, skill contracts, process map, BuilderOps records, and live evidence. |
@@ -388,18 +406,17 @@ policy. A deviation is evidence for an existing repair route, not a new workflow
 No owner decision is required to specify or implement the bounded first slice. The following are
 future authority questions and must not be answered implicitly by implementation:
 
-1. Which authenticated local owner identity may press **Start** when devUI moves beyond the current
-   single-operator local audience?
-2. Which durable provenance artifact, if any, should record an accepted external conversation
+1. Which durable provenance artifact, if any, should record an accepted external conversation
    disposition before a downstream workflow consumes it? The default for this slice is none.
-3. Which owner document will define the canonical Builder System coverage taxonomy and deviation
+2. Which owner document will define the canonical Builder System coverage taxonomy and deviation
    severity? Until accepted, the BSC lens may show source-specific facts but no synthesized policy
    verdict.
-4. Which future command types, if any, may use **Apply/Hold**? Each needs separate workflow and
+3. Which future command types, if any, may use **Apply/Hold**? Each needs separate workflow and
    authority approval; none is assumed here.
 
-These questions do not block FCP-01 through FCP-04 under the stated local, Start-Model-Inquiry-only
-scope. They block only the corresponding expansion.
+These questions do not block FCP-01 or FCP-03. FCP-04 is instead technically blocked by the named
+authenticated-action and destination-idempotency dependencies above; local loopback admission does
+not waive them.
 
 ## Sequenced follow-up breakdown
 
@@ -407,7 +424,7 @@ scope. They block only the corresponding expansion.
 | --- | --- | --- | --- |
 | 1 | [FCP-01 — Compose Subject-Centred Focus (#4694)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4694) | Target contracts and read-only subject composition with explicit correlation | First implementation slice after this spec merges |
 | 2 | [FCP-03 — Open External Conversation Port (#4696)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) | Nonvisual canonical pack/export adapter and non-authoritative disposition contract | Depends on delivered FCP-01; no design receipt required |
-| 3 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Nonvisual proposal validation, Start/Hold admission, exactly-once workflow invocation, and honest receipt/ambiguity | Depends on delivered FCP-03; no design receipt required |
+| 3 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Authenticated proposal validation, destination-owned operation-key admission, Start/Hold, and honest receipt/readback/ambiguity | Depends on delivered FCP-03, authenticated action boundary #4169, and bounded Model Inquiry operation-key support; no design receipt required |
 | 4 | [FCP-02 — Validate Focus and Conversation Design (#4695)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695) | Governed Yggdrasil handoff over stable fixtures, including unresolved-owner-question treatment and accessibility/degraded-state receipts | Depends on FCP-01/FCP-03/FCP-04 fixtures; technically blocked while external handoff is unavailable |
 | Separate | [Builder System Control lens specification (#4698)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698) | Detailed source registry, coverage/deviation semantics, visual boundary, and later task split | Begins only after this boundary is accepted; not a Focus child |
 
@@ -456,8 +473,9 @@ until a separate governed promotion route acts on it.
 - [ ] Every provider result is visibly provenance/non-authoritative and can end in no action.
 - [ ] The command preview invalidates on source/hash/contract/expiry change and binds **Start/Hold** to
   the exact artifact.
-- [ ] Start executes the unchanged Model Inquiry path once; Hold executes nothing; valid and ambiguous
-  outcomes preserve the existing receipt/recovery contract.
+- [ ] Authenticated Start submits one proposal operation key through the existing Model Inquiry
+  path; Hold executes nothing; replay returns prior/active/ambiguous readback without a duplicate;
+  valid and ambiguous outcomes preserve the receipt/recovery contract.
 - [ ] The visual handoff proves desktop, narrow, 200% zoom, keyboard, screen-reader naming, degraded,
   unsupported, stale, unread, unlinked, missing, and measured-empty states.
 - [ ] Builder System Control remains a separate route/context and has no implementation hidden in the

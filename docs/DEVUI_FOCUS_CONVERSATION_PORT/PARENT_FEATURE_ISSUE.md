@@ -51,8 +51,9 @@ from GitHub/repository delivery.
 ## Constraints
 
 - No child is ready before this specification merges and live readiness is reconciled.
-- FCP-03 waits only for FCP-01; FCP-04 waits only for FCP-03. Both are nonvisual contract/adapter
-  slices and do not require a design receipt.
+- FCP-03 waits only for FCP-01. FCP-04 also waits for the separately authenticated action boundary
+  in #4169 and destination-owned operation-key/readback support in the existing Model Inquiry
+  artifacts. Neither nonvisual slice requires a design receipt.
 - FCP-02 remains technically blocked until FCP-01/FCP-03/FCP-04 fixtures and the governed Yggdrasil
   design handoff are available. Later visual implementation is a separately derived slice.
 - GitHub/repository delivery truth, workflow authority, and existing receipts remain external.
@@ -68,8 +69,9 @@ from GitHub/repository delivery.
 - [ ] The accepted design handoff covers all required layout, accessibility, degraded, correlation,
       freshness, preview, and receipt states.
   - Verify: runtime receipt: yggdrasil-design-handoff.v1
-- [ ] Start/Hold is proven against the existing artifact-first flow without any forbidden effect or
-      ambiguous retry.
+- [ ] Authenticated Start/Hold and destination operation-key replay are proven against the existing
+      artifact-first flow without any forbidden effect, unauthenticated launch, duplicate launch,
+      or ambiguous retry.
   - Verify: runtime receipt: devui-start-model-inquiry-validation.v1
 - [ ] Builder System Control remains a separate contract/issue and no meta-governance source is
       mixed into Focus subject state.
@@ -108,7 +110,7 @@ from GitHub/repository delivery.
 | --- | --- | --- | --- |
 | FCP-01 — Compose Subject-Centred Focus | #4694 | blocked until spec merge | none |
 | FCP-03 — Open External Conversation Port | #4696 | blocked until FCP-01 delivery | FCP-01 |
-| FCP-04 — Start Model Inquiry from Exact Preview | #4697 | blocked | FCP-03 |
+| FCP-04 — Start Model Inquiry from Exact Preview | #4697 | blocked | FCP-03, authenticated boundary #4169, and Model Inquiry operation-key/readback support |
 | FCP-02 — Validate Focus and Conversation Design | #4695 | blocked on stable fixtures and handoff availability | FCP-01, FCP-03, and FCP-04 |
 
 Live backlog and capability-validation state is maintained on
@@ -125,5 +127,5 @@ and any remaining limitation.
 ## Validation / Acceptance Path
 
 The parent remains open after child delivery while exact source-state fixtures, design/accessibility
-receipts, external-port non-authority, command freshness, exactly-once invocation, ambiguous
+receipts, external-port non-authority, command freshness, authenticated operation-key replay, ambiguous
 recovery, and owner-doc truth are verified together.

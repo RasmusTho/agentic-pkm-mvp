@@ -332,6 +332,12 @@ delivery run, CKM claim, or provider-session authority. An ambiguous launch outc
 ambiguous, preserves the governed lock/staged-question recovery posture, and is never retried by
 devUI.
 
+The local-only devUI read admission is not action authentication. **Start** remains unavailable
+until the separately authenticated action boundary binds the owner principal to the exact proposal.
+The destination must also persist a proposal-scoped operation key in the existing Model Inquiry
+artifacts and return the prior inquiry/receipt or an honest active/ambiguous readback on replay;
+single-flight locking alone is not refresh-safe idempotency. This adds no devUI task store.
+
 This slice does not deliver an embedded chat runtime, transcript store, provider-session discovery,
 global session view, direct GitHub or repository mutation, generic command language, or parallel
 task store. The external provider interaction can be unavailable or unsupported without degrading
