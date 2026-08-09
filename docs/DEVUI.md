@@ -376,8 +376,11 @@ SoI payload, a delivery run, or a Builder System Control payload into a shared o
 The three zones have strict eligibility:
 
 - **Needs you** requires an explicit named owner-authority category and its governing source
-  reference. Missing, stale, unread, unavailable, refused, unsupported, or unlinked authority
-  evidence withdraws the classification; it is not an empty decision list or a technical decision.
+  reference. The only eligible categories are `irreversible_external_effect`,
+  `security_privacy_cost_commitment`, `production_release_operator_action`, and
+  `contradictory_source_authority`. Missing, unknown, stale, unread, unavailable, refused,
+  unsupported, or unlinked authority evidence withdraws the classification; it is not an empty
+  decision list or a technical decision.
 - **Ready to try** requires a receipt-backed ready-to-try fact. Delivery, merge, Issue closure,
   availability, ready-to-try, owner trial, and owner acceptance remain independent facts; none is
   inferred from another.

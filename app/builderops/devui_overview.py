@@ -38,6 +38,14 @@ _DELIVERY_FACTS = frozenset(
         "owner_acceptance",
     }
 )
+_OWNER_AUTHORITY_CATEGORIES = frozenset(
+    {
+        "irreversible_external_effect",
+        "security_privacy_cost_commitment",
+        "production_release_operator_action",
+        "contradictory_source_authority",
+    }
+)
 
 
 class OverviewContractError(ValueError):
@@ -294,11 +302,16 @@ def _classify(candidate: dict[str, Any], *, zone: str) -> tuple[dict[str, Any] |
     if zone == "needs_you":
         authority = candidate.get("owner_authority")
         evidence = evidence_by_id.get(authority["evidence_id"]) if authority else None
-        if authority is None or evidence is None or not _is_actionable(evidence):
+        if (
+            authority is None
+            or authority["category"] not in _OWNER_AUTHORITY_CATEGORIES
+            or evidence is None
+            or not _is_actionable(evidence)
+        ):
             return None, _withdrawal(
                 candidate,
                 zone=zone,
-                reason="owner authority is missing, unlinked, or degraded",
+                reason="owner authority is missing, unknown, unlinked, or degraded",
             )
     if zone == "ready_to_try":
         facts = candidate.get("delivery_facts") or {}
@@ -380,15 +393,16 @@ def compose_overview_view(
         "limitations": [],
     }
     for zone in _ZONE_ORDER:
-        if zone in {"needs_you", "ready_to_try"} and zone not in raw_candidates:
+        zone_candidates = _list(raw_candidates.get(zone, []), label=f"candidates.{zone}")
+        if zone in {"needs_you", "ready_to_try"} and not zone_candidates:
             result["limitations"].append(
                 {
                     "kind": "classification_withdrawn",
                     "zone": zone,
-                    "reason": "the producer supplied no classification evidence",
+                    "reason": "the producer supplied no actionable classification evidence",
                 }
             )
-        for raw in _list(raw_candidates.get(zone, []), label=f"candidates.{zone}"):
+        for raw in zone_candidates:
             candidate = _candidate(raw, zone=zone)
             classified, withdrawal = _classify(candidate, zone=zone)
             if classified is not None:

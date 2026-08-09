@@ -75,7 +75,7 @@ def _candidate(*, evidence: list[dict] | None = None) -> dict:
         "reason": "The server-declared reason for this placement.",
         "evidence": evidence or [_evidence("authority"), _evidence("ready")],
         "owner_authority": {
-            "category": "explicit_owner_decision",
+            "category": "contradictory_source_authority",
             "governing_source": _source("RasmusTho/agentic-pkm-mvp#4715"),
             "evidence_id": "authority",
         },
@@ -121,8 +121,16 @@ def test_overview_without_producer_candidates_withdraws_owner_and_ready_classifi
     assert result["needs_you"] == []
     assert result["ready_to_try"] == []
     assert {(item["zone"], item["reason"]) for item in result["limitations"]} == {
-        ("needs_you", "the producer supplied no classification evidence"),
-        ("ready_to_try", "the producer supplied no classification evidence"),
+        ("needs_you", "the producer supplied no actionable classification evidence"),
+        ("ready_to_try", "the producer supplied no actionable classification evidence"),
+    }
+
+    empty = compose_overview_view(
+        composition=_composition(), candidates={"needs_you": [], "ready_to_try": []}
+    )
+    assert {(item["zone"], item["reason"]) for item in empty["limitations"]} == {
+        ("needs_you", "the producer supplied no actionable classification evidence"),
+        ("ready_to_try", "the producer supplied no actionable classification evidence"),
     }
 
 
@@ -130,18 +138,20 @@ def test_needs_you_requires_named_owner_authority_and_withdraws_on_degraded_evid
     good = _candidate()
     missing = _candidate()
     missing.pop("owner_authority")
+    unknown = _candidate()
+    unknown["owner_authority"]["category"] = "ci_failure"
     stale = _candidate()
     stale["evidence"][0]["freshness"] = "stale"
     stale["evidence"][0]["claim"] = None
     stale["evidence"][0]["limitation"] = "authority source is stale"
 
     result = compose_overview_view(
-        composition=_composition(), candidates={"needs_you": [good, missing, stale]}
+        composition=_composition(), candidates={"needs_you": [good, missing, unknown, stale]}
     )
 
     assert result["needs_you"] == [good]
     withdrawals = [item for item in result["limitations"] if item["zone"] == "needs_you"]
-    assert len(withdrawals) == 2
+    assert len(withdrawals) == 3
     assert all(item["kind"] == "classification_withdrawn" for item in withdrawals)
 
 
