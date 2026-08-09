@@ -49,14 +49,16 @@ Reply by exact parent hash:
 Close or archive only by explicit authorization:
 
     scripts/builderops_cli.sh builderops builder-thread close <thread-id> \
-      --actor <named-id> --reason <bounded-disposition> --json
+      --actor <named-id> --reason <bounded-disposition> \
+      --entry-id <caller-retained-uuidv4> --json
     scripts/builderops_cli.sh builderops builder-thread archive <thread-id> \
-      --actor <named-id> --json
+      --actor <named-id> --entry-id <caller-retained-uuidv4> --json
 
 Quarantine an exact structurally valid unsafe artifact without deleting it:
 
     scripts/builderops_cli.sh builderops builder-thread quarantine <thread-id> \
-      --artifact-hash <sha256> --reason-code <allowed-code> --actor <named-id> --json
+      --artifact-hash <sha256> --reason-code <allowed-code> --actor <named-id> \
+      --entry-id <caller-retained-uuidv4> --json
 
 ## Rules
 
@@ -65,9 +67,9 @@ require explicit task/user authorization; workflow discovery never authorizes th
 may return the existing artifact. A typed refusal or conflict is terminal until the source problem
 is resolved.
 
-Retain the create/reply `--entry-id` with the calling task until readback succeeds. Reuse it only for
+Retain every mutation's `--entry-id` with the calling task until readback succeeds. Reuse it only for
 an exact semantic retry; the helper returns the already-installed entry even when the retry occurs
-in a later UTC second, and rejects changed content under the same ID.
+in a later UTC second, and rejects any changed semantic field under the same ID.
 
 First adoption is also a mutation and requires explicit operator authorization. Never add
 `--adopt-existing` merely because routine init reports an unattested root.

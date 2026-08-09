@@ -47,13 +47,13 @@ surface.
 | Surface | Contract |
 | --- | --- |
 | Genesis | Explicit first adoption installs one immutable `.builderops/vault-genesis.json`; `builder-threads/genesis.json` must match it byte-for-byte. Every client supplies the expected UUID and every operation verifies both. Routine init never self-attests an unmarked root. |
-| Contribution identity | Thread UUID is deterministically derived from vault ID plus capture key; entry IDs are UUIDv4; each filename equals SHA-256 of the complete canonical JSON envelope. One visible immutable entry-claim manifest atomically binds each entry ID to exactly one thread before contribution publication. |
+| Contribution identity | Thread UUID is deterministically derived from vault ID plus capture key; entry IDs are UUIDv4; each filename equals SHA-256 of the complete canonical JSON envelope. One visible immutable entry-claim manifest atomically binds each entry ID to exactly one thread and one semantic-request digest before contribution publication. |
 | Privacy | Only shared_non_sensitive; strict subject/content/ref/entry/output bounds and obvious credential, argv/env/stderr, and raw-private-path refusals. |
 | Capture | Named recipient, reply_expected=true, typed authority-safe refs, and deterministic duplicate representation refusal. |
 | Publication | Same-directory exclusive temp, file fsync, no-overwrite hard link, directory fsync, readback, temp unlink, second directory fsync. |
 | Concurrency | No sequence, mutable head, shared lock, SQLite, or hidden index. The visible entry claim, a new deterministic thread destination, and each of its 128 entry slots are claimed create-if-absent and never overwritten. Independent contributions converge by set; duplicate IDs or incompatible dispositions fail closed. |
 | Validation | Root/scaffold/genesis confinement plus no symlink, SQLite, conflict copy, temp/partial, unknown field/schema/path, hash mismatch, dangling lineage, or replay conflict. |
-| Recovery | Caller-retained create/reply entry IDs make semantic acknowledgement-loss retries idempotent. A claim-only crash is reader-visible incomplete state and exact-writer recoverable. Exact committed temp twins are cleanup-recoverable by writers. Stale close/archive entries are superseded through immutable lineage. A structurally valid privacy-unsafe or conflicting disposition can receive an explicit hash-bound quarantine contribution; bytes remain immutable and normal output redacts them. Structural corruption remains a hard refusal. |
+| Recovery | Caller-retained IDs for every mutation make semantic acknowledgement-loss retries idempotent. A claim-only or claim-plus-slot process death is reader-visible incomplete state and exact-writer recoverable. Exact committed temp twins and installed-final reservations are cleanup-recoverable by writers only after claim and bytes agree. Stale close/archive entries are superseded through immutable lineage. A structurally valid privacy-unsafe or conflicting disposition can receive an explicit hash-bound quarantine contribution; bytes remain immutable and normal output redacts them. Structural corruption remains a hard refusal. |
 | Derived state | open, answered, closed, archived, needs_review, or quarantined, rebuilt from validated contributions. Inbox/health has a deterministic snapshot hash and no write path. |
 
 Stable mechanism/domain key: `builder-thread/artifact-publication-and-reduction-v1`. The protected
@@ -99,12 +99,14 @@ There is deliberately no cross-device lock:
 iCloud conflict copies, duplicate capture keys, and incompatible current dispositions remain
 receiver-visible conflicts.
 
-Create/reply callers retain one UUIDv4 entry ID until readback. That ID binds semantic retry fields;
-the generated timestamp is excluded only from retry comparison, and the original installed
-timestamp is returned. Each thread has 128 immutable entry slots. Reservation precedes durable JSON
-publication, so one of two concurrent boundary writers succeeds and the other fails without writing
-contribution bytes; every later 129th append is likewise non-mutating. Quarantine entries do not
-recursively grow on ordinary review and remain one explicit mutation per target/incident.
+Every mutation caller retains one UUIDv4 entry ID until readback. Its immutable claim binds the
+thread plus a digest of all semantic retry fields; the generated timestamp is excluded only from
+retry comparison, and the original installed timestamp is returned. Each thread has 128 immutable
+entry slots. An identity marker makes a claim-plus-slot process-death window recoverable only by the
+exact writer. Reservation precedes durable JSON publication, so one of two concurrent boundary
+writers succeeds and the other fails without writing contribution bytes; every later 129th append
+is likewise non-mutating. Quarantine entries do not recursively grow on ordinary review and remain
+one explicit mutation per target/incident.
 
 Startup and every operation revalidate all existing path components for symlinks, the two genesis
 envelopes, the strict artifact tree, privacy/type/size bounds, content hashes, capture uniqueness,
@@ -146,6 +148,15 @@ against a lone non-disposition artifact. That SHA is rejected evidence. The repa
 the visible atomic entry-claim manifest, enforces it on every read/write path, redacts usage failures,
 and expands the privacy and disposition-sibling probes before another exact-SHA review.
 
+Review of SHA `616a8cfd0b6835979420a4f50f8fcad08d57dd6a` found that the global claim did
+not bind request semantics in a claim-only crash window, non-create mutations lacked caller-owned
+request identity, a claim-plus-empty-slot process death was not recoverable, one recognized temp
+cleanup race could be misclassified, path configuration could escape the JSON boundary, and the
+privacy normalizer missed encoded, Unicode-separator, Windows/UNC, URL-credential, and common token
+forms. That SHA is rejected evidence. The repaired mechanism binds a timestamp-excluded request
+digest for every contribution kind, retains identity-marked slots until final installation,
+normalizes privacy input with bounded decoding, and exercises every mutation crash/retry path.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
 | Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |
@@ -158,10 +169,11 @@ and expands the privacy and disposition-sibling probes before another exact-SHA 
 | Late activity, superseding close/archive, incompatible disposition retry | `test_stale_dispositions_can_be_superseded_and_retries_conflict` |
 | File/link/fsync ordering and final cleanup-sync failure | `test_atomic_publication_uses_fsynced_temp_and_no_overwrite_link`, `test_atomic_publication_reports_final_directory_sync_failure_and_retries` |
 | Post-publication acknowledgement loss and exact recovery | `test_create_acknowledgement_loss_reconciles_on_exact_retry` |
-| Supported CLI create/reply lost-ack retry and typed bounded JSON failures | `test_cli_round_trip_covers_complete_thread_surface`, `test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append` |
-| Public service requires caller-owned request identity; entry ID is unique vault-wide | `test_public_service_requires_request_identity_and_retries_exactly`, `test_entry_id_is_unique_across_the_entire_vault` |
+| Supported CLI mutation lost-ack retry, total init/config JSON, and typed bounded failures | `test_cli_round_trip_covers_complete_thread_surface`, `test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append` |
+| Public service requires caller-owned request identity for every mutation; entry ID is unique vault-wide | `test_public_service_requires_request_identity_and_retries_exactly`, `test_entry_id_is_unique_across_the_entire_vault` |
+| Claim-plus-slot process death and changed-semantics retry for each append mutation | `test_all_append_mutations_recover_exactly_after_claim_and_slot_crash` |
 | Concurrent cross-thread ID reuse has one claim winner; claim-only crash supports exact recovery | `test_concurrent_cross_thread_entry_id_claim_allows_one_winner`, `test_claim_only_crash_is_recovered_by_exact_create_retry` |
-| Temp-unlink failure, exact twin cleanup, and later writer retry | `test_temp_unlink_failure_is_recovered_by_exact_writer_retry` |
+| Temp-unlink failure, exact twin cleanup, later writer retry, and vanishing recognized-temp race | `test_temp_unlink_failure_is_recovered_by_exact_writer_retry`, `test_reader_tolerates_only_a_recognized_temp_that_vanishes_during_walk` |
 | Concurrent contradictory quarantine decisions and decision quarantine recovery | `test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable` |
 | A lone quarantine decision cannot be neutralized as a concurrent conflict | `test_single_quarantine_decision_cannot_be_neutralized_as_concurrent` |
 | Concurrent 128-entry boundary reservation and non-mutating 129th refusal | `test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating` |

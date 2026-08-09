@@ -44,6 +44,18 @@ class BuilderThreadService(ProductionBuilderThreadService):
         kwargs.setdefault("entry_id", str(uuid.uuid4()))
         return super().reply(thread_id, **kwargs)
 
+    def close_thread(self, thread_id: str, **kwargs: Any) -> dict[str, Any]:
+        kwargs.setdefault("entry_id", str(uuid.uuid4()))
+        return super().close_thread(thread_id, **kwargs)
+
+    def archive_thread(self, thread_id: str, **kwargs: Any) -> dict[str, Any]:
+        kwargs.setdefault("entry_id", str(uuid.uuid4()))
+        return super().archive_thread(thread_id, **kwargs)
+
+    def quarantine(self, thread_id: str, **kwargs: Any) -> dict[str, Any]:
+        kwargs.setdefault("entry_id", str(uuid.uuid4()))
+        return super().quarantine(thread_id, **kwargs)
+
 
 def _service(tmp_path: Path) -> tuple[BuilderThreadService, Path]:
     vault = tmp_path / "builderops-vault"
@@ -410,6 +422,10 @@ def test_cli_round_trip_covers_complete_thread_surface(
             "2026-08-09T12:00:05Z",
             "2026-08-09T12:00:06Z",
             "2026-08-09T12:00:07Z",
+            "2026-08-09T12:00:08Z",
+            "2026-08-09T12:00:09Z",
+            "2026-08-09T12:00:10Z",
+            "2026-08-09T12:00:11Z",
         )
     )
     monkeypatch.setattr(builder_thread_module, "_stamp", lambda: next(stamps))
@@ -468,25 +484,70 @@ def test_cli_round_trip_covers_complete_thread_surface(
     inbox = _run(["builder-inbox", "list", "--recipient", ACTOR, "--json"], env)
     assert json.loads(inbox.output)["threads"][0]["thread_id"] == thread_id
 
-    closed = _run(
-        [
-            "builder-thread",
-            "close",
-            thread_id,
-            "--actor",
-            ACTOR,
-            "--reason",
-            "Resolved by the cited Issue decision.",
-            "--json",
-        ],
-        env,
-    )
+    close_args = [
+        "builder-thread",
+        "close",
+        thread_id,
+        "--actor",
+        ACTOR,
+        "--reason",
+        "Resolved by the cited Issue decision.",
+        "--entry-id",
+        "88888888-8888-4888-8888-888888888888",
+        "--json",
+    ]
+    closed = _run(close_args, env)
     assert json.loads(closed.output)["state"] == "closed"
-    archived = _run(
-        ["builder-thread", "archive", thread_id, "--actor", ACTOR, "--json"],
-        env,
-    )
+    assert json.loads(_run(close_args, env).output)["entry_count"] == 3
+    archive_args = [
+        "builder-thread",
+        "archive",
+        thread_id,
+        "--actor",
+        ACTOR,
+        "--entry-id",
+        "99999999-9999-4999-8999-999999999999",
+        "--json",
+    ]
+    archived = _run(archive_args, env)
     assert json.loads(archived.output)["state"] == "archived"
+    assert json.loads(_run(archive_args, env).output)["entry_count"] == 4
+
+    incident_create = [
+        "builder-thread",
+        "create",
+        "--recipient",
+        RECIPIENT,
+        "--subject",
+        "Disposition a bounded incident",
+        "--content",
+        "Should this exact artifact be quarantined?",
+        "--actor",
+        ACTOR,
+        "--entry-id",
+        "10101010-1010-4010-8010-101010101010",
+        "--source-ref",
+        "github_issue:4702",
+        "--json",
+    ]
+    incident = json.loads(_run(incident_create, env).output)
+    quarantine_args = [
+        "builder-thread",
+        "quarantine",
+        incident["thread_id"],
+        "--artifact-hash",
+        incident["entry_hash"],
+        "--reason-code",
+        "privacy_misclassification",
+        "--actor",
+        ACTOR,
+        "--entry-id",
+        "11111111-1111-4111-8111-111111111112",
+        "--json",
+    ]
+    quarantined = _run(quarantine_args, env)
+    assert json.loads(quarantined.output)["state"] == "quarantined"
+    assert json.loads(_run(quarantine_args, env).output)["entry_count"] == 2
 
 
 def test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append(
@@ -580,6 +641,24 @@ def test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append(
     assert private_marker not in storage_failure.output
     assert "Traceback" not in storage_failure.output
 
+    invalid_init_env = {
+        **env,
+        "BUILDEROPS_DB_PATH": str(vault / "forbidden.sqlite3"),
+    }
+    invalid_init = _run(
+        ["builder-thread", "init", "--adopt-existing", "--json"],
+        invalid_init_env,
+    )
+    assert invalid_init.exit_code == 1
+    assert json.loads(invalid_init.output) == {
+        "error": {
+            "message": "invalid Builder Thread path configuration",
+            "type": "BuilderThreadValidationError",
+        },
+        "ok": False,
+    }
+    assert str(vault) not in invalid_init.output
+
 
 def test_public_service_requires_request_identity_and_retries_exactly(
     tmp_path: Path,
@@ -625,7 +704,139 @@ def test_public_service_requires_request_identity_and_retries_exactly(
     replied = public.reply(opened["thread_id"], **reply_kwargs, entry_id=reply_id)
     reply_retry = public.reply(opened["thread_id"], **reply_kwargs, entry_id=reply_id)
     assert reply_retry["entry_hash"] == replied["entry_hash"]
-    assert public.health()["artifact_count"] == 2
+    with pytest.raises(BuilderThreadValidationError, match="caller-retained entry_id"):
+        public.close_thread(opened["thread_id"], actor_id=ACTOR, reason="Resolved")
+    close_id = "19191919-1919-4919-8919-191919191919"
+    public.close_thread(
+        opened["thread_id"], actor_id=ACTOR, reason="Resolved", entry_id=close_id
+    )
+    public.close_thread(
+        opened["thread_id"], actor_id=ACTOR, reason="Resolved", entry_id=close_id
+    )
+    with pytest.raises(BuilderThreadValidationError, match="caller-retained entry_id"):
+        public.archive_thread(opened["thread_id"], actor_id=ACTOR)
+    archive_id = "20202020-2020-4020-8020-202020202020"
+    public.archive_thread(opened["thread_id"], actor_id=ACTOR, entry_id=archive_id)
+    public.archive_thread(opened["thread_id"], actor_id=ACTOR, entry_id=archive_id)
+
+    incident = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Require a quarantine request identity",
+        content="Must incident disposition also be safe to retry?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    with pytest.raises(BuilderThreadValidationError, match="caller-retained entry_id"):
+        public.quarantine(
+            incident["thread_id"],
+            artifact_hash=incident["entry_hash"],
+            actor_id=ACTOR,
+            reason_code="privacy_misclassification",
+        )
+    quarantine_id = "21212121-2121-4121-8121-212121212121"
+    public.quarantine(
+        incident["thread_id"],
+        artifact_hash=incident["entry_hash"],
+        actor_id=ACTOR,
+        reason_code="privacy_misclassification",
+        entry_id=quarantine_id,
+    )
+    public.quarantine(
+        incident["thread_id"],
+        artifact_hash=incident["entry_hash"],
+        actor_id=ACTOR,
+        reason_code="privacy_misclassification",
+        entry_id=quarantine_id,
+    )
+    assert public.health()["artifact_count"] == 6
+
+
+@pytest.mark.parametrize("entry_type", ("reply", "close", "archive", "quarantine"))
+def test_all_append_mutations_recover_exactly_after_claim_and_slot_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_type: str,
+) -> None:
+    case_root = tmp_path / entry_type
+    case_root.mkdir()
+    service, vault = _service(case_root)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject=f"Recover a {entry_type} process-death window",
+        content="Can the exact caller finish its durable pending reservation?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    if entry_type == "archive":
+        service.close_thread(
+            opened["thread_id"], actor_id=ACTOR, reason="Archive prerequisite"
+        )
+    request_id = {
+        "reply": "22222222-2222-4222-8222-222222222222",
+        "close": "23232323-2323-4323-8323-232323232323",
+        "archive": "24242424-2424-4424-8424-242424242424",
+        "quarantine": "25252525-2525-4525-8525-252525252525",
+    }[entry_type]
+    operations = {
+        "reply": lambda content="Recovered reply": service.reply(
+            opened["thread_id"],
+            recipient_id=ACTOR,
+            content=content,
+            actor_id=RECIPIENT,
+            parent_hash=opened["entry_hash"],
+            source_refs=SOURCE_REFS,
+            entry_id=request_id,
+        ),
+        "close": lambda reason="Recovered close": service.close_thread(
+            opened["thread_id"],
+            actor_id=ACTOR,
+            reason=reason,
+            entry_id=request_id,
+        ),
+        "archive": lambda actor=ACTOR: service.archive_thread(
+            opened["thread_id"], actor_id=actor, entry_id=request_id
+        ),
+        "quarantine": lambda reason="privacy_misclassification": service.quarantine(
+            opened["thread_id"],
+            artifact_hash=opened["entry_hash"],
+            actor_id=ACTOR,
+            reason_code=reason,
+            entry_id=request_id,
+        ),
+    }
+    changed_operations = {
+        "reply": lambda: operations["reply"]("Changed reply"),
+        "close": lambda: operations["close"]("Changed close"),
+        "archive": lambda: operations["archive"](RECIPIENT),
+        "quarantine": lambda: operations["quarantine"]("credential_like_content"),
+    }
+    real_publish = builder_thread_module._atomic_publish
+    crashed = False
+
+    def crash_after_claim_and_slot(path: Path, data: bytes) -> bool:
+        nonlocal crashed
+        payload = json.loads(data)
+        if payload.get("entry_type") == entry_type and not crashed:
+            crashed = True
+            raise KeyboardInterrupt("injected process death after claim and slot")
+        return real_publish(path, data)
+
+    monkeypatch.setattr(builder_thread_module, "_atomic_publish", crash_after_claim_and_slot)
+    with pytest.raises(KeyboardInterrupt, match="process death"):
+        operations[entry_type]()
+    claim = vault / "builder-threads" / "entry-claims" / f"{request_id}.json"
+    assert claim.exists()
+    assert list(vault.rglob(f".reservation-{request_id}"))
+    before_changed = _vault_snapshot(vault)
+    with pytest.raises(BuilderThreadConflictError, match="vault-wide entry_id replay conflict"):
+        changed_operations[entry_type]()
+    assert _vault_snapshot(vault) == before_changed
+
+    monkeypatch.setattr(builder_thread_module, "_atomic_publish", real_publish)
+    recovered = operations[entry_type]()
+    assert recovered["state"] in {"answered", "closed", "archived", "quarantined"}
+    assert not list(vault.rglob(f".reservation-{request_id}"))
+    assert service.health()["ok"] is True
 
 
 def test_entry_id_is_unique_across_the_entire_vault(tmp_path: Path) -> None:
@@ -855,7 +1066,7 @@ def test_structural_quarantine_recovers_privacy_unsafe_identity_and_refs(
     original_path.unlink()
     unsafe_path.write_bytes(unsafe_bytes)
 
-    with pytest.raises(BuilderThreadPrivacyError):
+    with pytest.raises(BuilderThreadError):
         service.read_thread(opened["thread_id"])
     before = unsafe_path.read_bytes()
     recovered = service.quarantine(
@@ -1393,6 +1604,26 @@ def test_claim_only_crash_is_recovered_by_exact_create_retry(
     with pytest.raises(BuilderThreadValidationError, match="incomplete vault-wide entry claim"):
         service.health()
 
+    before_changed_retry = {
+        path.relative_to(vault).as_posix(): path.read_bytes()
+        for path in vault.rglob("*")
+        if path.is_file()
+    }
+    with pytest.raises(BuilderThreadConflictError, match="vault-wide entry_id replay conflict"):
+        service.create_thread(
+            **{
+                **kwargs,
+                "content": "Changed semantics must not occupy a durable pending claim.",
+                "actor_id": "agent:codex:other",
+            }
+        )
+    after_changed_retry = {
+        path.relative_to(vault).as_posix(): path.read_bytes()
+        for path in vault.rglob("*")
+        if path.is_file()
+    }
+    assert after_changed_retry == before_changed_retry
+
     monkeypatch.setattr(service, "_publish_new_thread", real_publish)
     recovered = service.create_thread(**kwargs)
     assert recovered["state"] == "open"
@@ -1436,6 +1667,37 @@ def test_temp_unlink_failure_is_recovered_by_exact_writer_retry(
     exact = service.reply(**{**reply_kwargs, "created_at": "2026-08-09T12:01:01Z"})
     assert exact["state"] == "answered"
     assert not list(vault.rglob(".tmp-*"))
+
+
+def test_reader_tolerates_only_a_recognized_temp_that_vanishes_during_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Observe a transient temp cleanup race",
+        content="Can a receiver converge when a legitimate temp disappears mid-scan?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    final = _entry_files(vault, opened["thread_id"])[0]
+    transient = final.with_name(f".tmp-{final.stem}-{'d' * 32}")
+    os.link(final, transient)
+    real_lstat = Path.lstat
+    observed = False
+
+    def vanish_on_lstat(path: Path) -> os.stat_result:
+        nonlocal observed
+        if path == transient and not observed:
+            observed = True
+            path.unlink()
+            raise FileNotFoundError(path)
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", vanish_on_lstat)
+    assert service.health()["ok"] is True
+    assert observed is True
+    assert not transient.exists()
 
 
 def test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable(
@@ -1706,9 +1968,27 @@ def test_capture_gate_and_shared_non_sensitive_privacy_boundary(
         "/+private",
         "//server/share/secret",
         r"C:\Windows\System32\config",
+        r"\\server\share\secret",
+        r"\\server/share/secret",
+        r"\\?\UNC\server\share\secret",
+        r"\Windows\System32\config",
+        "%5C%5Cserver%5Cshare%5Csecret",
         "%2Fetc%2Fpasswd",
+        "%252Fetc%252Fpasswd",
+        "∕etc∕passwd",
+        "／etc／passwd",
         "https://example.com/redirect?local=/Users/private-owner/Library/Secrets",
         "https://alice:supersecret@example.com/private",
+        "https://alice%3Asupersecret@example.com/private",
+        "postgresql://alice:supersecret@db.example/app",
+        "ftp://alice:supersecret@example.com/private",
+        "ssh://alice:supersecret@example.com/repo",
+        "https://example.com/public?token=definitely-secret",
+        "Authorization: Basic dXNlcjpwYXNz",
+        "Proxy-Authorization: Basic dXNlcjpwYXNz",
+        "xoxb-1234567890-secret",
+        "AIzaSyDUMMYKEYABCDEFGHIJKLMNOP",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue",
         "sys.argv was ['builder-thread', '--secret']",
         "sk-proj-abcdefghijklmnop",
         "github_pat_abcdefghijklmnop",

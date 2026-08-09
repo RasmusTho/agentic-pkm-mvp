@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.parse import unquote
 
 from app.builderops.vault_queue import _content_is_local, _may_be_sqlite_image
 
@@ -82,7 +83,7 @@ ENTRY_KEYS = frozenset(
 )
 GENESIS_KEYS = frozenset({"created_at", "privacy_class", "schema", "vault_id"})
 ENTRY_CLAIM_KEYS = frozenset(
-    {"entry_id", "privacy_class", "schema", "thread_id", "vault_id"}
+    {"entry_id", "privacy_class", "request_hash", "schema", "thread_id", "vault_id"}
 )
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -95,18 +96,25 @@ GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$")
 GITHUB_NUMBER_RE = re.compile(r"^#?[1-9][0-9]*$")
 CONFLICT_COPY_RE = re.compile(r"conflicted copy", re.IGNORECASE)
 TEMP_FILE_RE = re.compile(r"^\.tmp-(?P<stem>.+)-[0-9a-f]{32}$")
+SLOT_RESERVATION_RE = re.compile(r"^\.reservation-(?P<entry_id>[0-9a-f-]{36})$")
 PRIVATE_PATH_RE = re.compile(
     r"(?:file:(?://)?|~[/\\]|"
     r"(?<![A-Za-z0-9._~/-])/(?!/|\s)[^\s<>`\"']+|"
-    r"(?<![:/])//[^\s<>]+|(?<![A-Za-z0-9])[A-Za-z]:[/\\]|%2f[^\s<>]+)",
+    r"(?<![:/])//[^\s<>]+|(?<![A-Za-z0-9])\\\\[^\s<>]+|"
+    r"(?<![A-Za-z0-9\\])\\(?![\\\s])[^\s<>]+|"
+    r"(?<![A-Za-z0-9])[A-Za-z]:[/\\]|%2f[^\s<>]+)",
     re.IGNORECASE,
 )
 SECRET_RE = re.compile(
-    r"(?:authorization\s*:\s*bearer|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
-    r"https?://[^/\s:@]+:[^@/\s]+@|"
+    r"(?:(?:proxy-)?authorization\s*:\s*(?:bearer|basic)|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@]+:[^@/\s]+@|"
+    r"[?&](?:access[_-]?token|api[_-]?key|token)=[^&#\s]+|"
     r"\b(?:api[_-]?key|access[_-]?token|password|client[_-]?secret)\s*[:=]|"
     r"\b(?:gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|"
-    r"sk-(?:proj-)?[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16}))",
+    r"sk-(?:proj-)?[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16}|"
+    r"xox[baprs]-[A-Za-z0-9-]{8,}|AIza[0-9A-Za-z_-]{20,}|"
+    r"eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}))",
     re.IGNORECASE,
 )
 ENV_RE = re.compile(
@@ -176,6 +184,14 @@ def _same_idempotent_request(left: Mapping[str, Any], right: Mapping[str, Any]) 
     return left.get("entry_id") == right.get("entry_id") and {
         key: value for key, value in left.items() if key != "created_at"
     } == {key: value for key, value in right.items() if key != "created_at"}
+
+
+def _request_hash(entry: Mapping[str, Any]) -> str:
+    return _sha256(
+        _canonical_bytes(
+            {key: value for key, value in entry.items() if key != "created_at"}
+        )
+    )
 
 
 def _capture_thread_id(vault_id: str, capture_key: str) -> str:
@@ -257,12 +273,31 @@ def _bounded_text(
 def _privacy_check(value: str | None, *, field: str) -> None:
     if value is None:
         return
-    if SECRET_RE.search(value):
-        raise BuilderThreadPrivacyError(f"{field} contains credential-like content")
-    if PRIVATE_PATH_RE.search(value):
-        raise BuilderThreadPrivacyError(f"{field} contains a private host path")
-    if ENV_RE.search(value) or ARGV_STDERR_RE.search(value):
-        raise BuilderThreadPrivacyError(f"{field} contains argv/env/stderr material")
+    variants = [value]
+    decoded = value
+    for _ in range(2):
+        candidate = unquote(decoded)
+        if candidate == decoded:
+            break
+        variants.append(candidate)
+        decoded = candidate
+    slash_translation = str.maketrans(
+        {
+            "⁄": "/",  # fraction slash
+            "∕": "/",  # division slash
+            "⧸": "/",  # big solidus
+            "／": "/",  # fullwidth solidus
+            "＼": "\\",  # fullwidth reverse solidus
+        }
+    )
+    variants.extend(item.translate(slash_translation) for item in tuple(variants))
+    for candidate in variants:
+        if SECRET_RE.search(candidate):
+            raise BuilderThreadPrivacyError(f"{field} contains credential-like content")
+        if PRIVATE_PATH_RE.search(candidate):
+            raise BuilderThreadPrivacyError(f"{field} contains a private host path")
+        if ENV_RE.search(candidate) or ARGV_STDERR_RE.search(candidate):
+            raise BuilderThreadPrivacyError(f"{field} contains argv/env/stderr material")
 
 
 def _source_refs(values: Any, *, enforce_privacy: bool = True) -> list[dict[str, str]]:
@@ -611,9 +646,19 @@ class BuilderThreadService:
         actor_id: str,
         reason: str,
         source_refs: Iterable[Mapping[str, str]] | None = None,
+        entry_id: str | None = None,
+        created_at: str | None = None,
     ) -> dict[str, Any]:
+        if entry_id is None:
+            raise BuilderThreadValidationError(
+                "close requires a caller-retained entry_id"
+            )
+        request_entry_id = _uuid4(entry_id, field="entry_id")
         self._prepare_write()
-        thread = self._load_thread(_uuid4(thread_id, field="thread_id"))
+        thread = self._load_thread(
+            _uuid4(thread_id, field="thread_id"),
+            allow_pending_claim_id=request_entry_id,
+        )
         actor = _identity(actor_id, field="actor_id")
         content = _bounded_text(reason, field="reason", maximum=self.MAX_CONTENT_CHARS)
         _privacy_check(content, field="reason")
@@ -625,7 +670,8 @@ class BuilderThreadService:
                 raise BuilderThreadConflictError("current close is ambiguous")
             existing = active_closes[0]["entry"]
             if (
-                existing["actor_id"] == actor
+                existing["entry_id"] == request_entry_id
+                and existing["actor_id"] == actor
                 and existing["content"] == content
                 and existing["source_refs"] == refs
             ):
@@ -634,7 +680,9 @@ class BuilderThreadService:
         basis = thread["artifact_hashes"]
         entry = self._entry_payload(
             thread_id=thread_id,
+            entry_id=request_entry_id,
             entry_type="close",
+            created_at=created_at,
             actor_id=actor,
             content=content,
             source_refs=refs,
@@ -644,13 +692,32 @@ class BuilderThreadService:
         )
         return self._append(entry)
 
-    def archive_thread(self, thread_id: str, *, actor_id: str) -> dict[str, Any]:
+    def archive_thread(
+        self,
+        thread_id: str,
+        *,
+        actor_id: str,
+        entry_id: str | None = None,
+        created_at: str | None = None,
+    ) -> dict[str, Any]:
+        if entry_id is None:
+            raise BuilderThreadValidationError(
+                "archive requires a caller-retained entry_id"
+            )
+        request_entry_id = _uuid4(entry_id, field="entry_id")
         self._prepare_write()
-        thread = self._load_thread(_uuid4(thread_id, field="thread_id"))
+        thread = self._load_thread(
+            _uuid4(thread_id, field="thread_id"),
+            allow_pending_claim_id=request_entry_id,
+        )
         actor = _identity(actor_id, field="actor_id")
         active_archives = self._active_dispositions(thread, "archive")
         if thread["state"] == "archived":
-            if len(active_archives) == 1 and active_archives[0]["entry"]["actor_id"] == actor:
+            if (
+                len(active_archives) == 1
+                and active_archives[0]["entry"]["entry_id"] == request_entry_id
+                and active_archives[0]["entry"]["actor_id"] == actor
+            ):
                 return self._result(thread)
             raise BuilderThreadConflictError("incompatible archive retry")
         close_entries = self._active_dispositions(thread, "close")
@@ -661,7 +728,9 @@ class BuilderThreadService:
             raise BuilderThreadValidationError("archive requires a current close snapshot")
         entry = self._entry_payload(
             thread_id=thread_id,
+            entry_id=request_entry_id,
             entry_type="archive",
+            created_at=created_at,
             actor_id=actor,
             source_refs=thread["source_refs"],
             basis_hashes=thread["artifact_hashes"],
@@ -677,12 +746,20 @@ class BuilderThreadService:
         artifact_hash: str,
         actor_id: str,
         reason_code: str,
+        entry_id: str | None = None,
+        created_at: str | None = None,
     ) -> dict[str, Any]:
+        if entry_id is None:
+            raise BuilderThreadValidationError(
+                "quarantine requires a caller-retained entry_id"
+            )
+        request_entry_id = _uuid4(entry_id, field="entry_id")
         self._prepare_write()
         target = self._hash(artifact_hash, field="artifact_hash")
         thread = self._load_thread(
             _uuid4(thread_id, field="thread_id"),
             structural_only=True,
+            allow_pending_claim_id=request_entry_id,
             allow_claim_mismatch_hash=target,
         )
         if target not in thread["artifact_hashes"]:
@@ -696,7 +773,8 @@ class BuilderThreadService:
             ):
                 existing = item["entry"]
                 if (
-                    existing["actor_id"] == _identity(actor_id, field="actor_id")
+                    existing["entry_id"] == request_entry_id
+                    and existing["actor_id"] == _identity(actor_id, field="actor_id")
                     and existing["reason_code"] == reason_code
                 ):
                     return self.read_thread(thread_id)
@@ -737,7 +815,9 @@ class BuilderThreadService:
                 )
         entry = self._entry_payload(
             thread_id=thread_id,
+            entry_id=request_entry_id,
             entry_type="quarantine",
+            created_at=created_at,
             actor_id=_identity(actor_id, field="actor_id"),
             source_refs=_source_refs(self.INCIDENT_SOURCE_REFS),
             basis_hashes=thread["artifact_hashes"],
@@ -892,6 +972,8 @@ class BuilderThreadService:
                 try:
                     info = path.lstat()
                 except FileNotFoundError as exc:
+                    if name.startswith(".tmp-"):
+                        continue
                     raise BuilderThreadValidationError(
                         "artifact changed during validation"
                     ) from exc
@@ -927,6 +1009,7 @@ class BuilderThreadService:
             allow_committed_temps=True,
         )
         self._recover_committed_temps()
+        self._recover_committed_reservations()
         self._validate_root()
 
     def _recover_committed_temps(self) -> None:
@@ -976,6 +1059,42 @@ class BuilderThreadService:
             temp.unlink()
             _fsync_directory(temp.parent)
 
+    def _recover_committed_reservations(self) -> None:
+        """Finalize only a reservation whose claimed contribution is installed."""
+
+        if not self.threads_root.exists():
+            return
+        claims = self._read_entry_claims()
+        for marker in self.threads_root.glob("*/entries/[0-9][0-9][0-9]/.reservation-*"):
+            match = SLOT_RESERVATION_RE.fullmatch(marker.name)
+            if match is None or marker.is_symlink() or not marker.is_file():
+                raise BuilderThreadValidationError("invalid entry slot reservation")
+            entry_id = _uuid4(match.group("entry_id"), field="entry_id")
+            finals = [
+                path
+                for path in marker.parent.iterdir()
+                if path != marker and path.name.endswith(".json")
+            ]
+            if not finals:
+                continue
+            if len(finals) != 1:
+                raise BuilderThreadConflictError("entry reservation has ambiguous final artifacts")
+            final = finals[0]
+            if final.is_symlink() or not final.is_file() or not HASH_RE.fullmatch(final.stem):
+                raise BuilderThreadValidationError("invalid reserved entry artifact")
+            payload, raw = self._read_canonical_json(final)
+            if _sha256(raw) != final.stem or payload.get("entry_id") != entry_id:
+                raise BuilderThreadConflictError("entry reservation does not match installed final")
+            claim = claims.get(entry_id)
+            if (
+                claim is None
+                or claim["thread_id"] != payload.get("thread_id")
+                or claim["request_hash"] != _request_hash(payload)
+            ):
+                raise BuilderThreadConflictError("entry reservation does not match its claim")
+            marker.unlink()
+            _fsync_directory(marker.parent)
+
     def _read_genesis(self) -> dict[str, Any]:
         return self._read_genesis_at(
             self.builder_root / GENESIS_NAME,
@@ -998,7 +1117,11 @@ class BuilderThreadService:
             raise BuilderThreadValidationError(f"{label} is not canonical JSON")
         return payload
 
-    def _validate_structure(self) -> list[tuple[str, Path]]:
+    def _validate_structure(
+        self,
+        *,
+        allow_pending_claim_id: str | None = None,
+    ) -> list[tuple[str, Path]]:
         self._validate_root()
         allowed_root = {GENESIS_NAME, "entry-claims", "threads"}
         result: list[tuple[str, Path]] = []
@@ -1024,11 +1147,19 @@ class BuilderThreadService:
                 )
             entries_dir = children[0]
             _real_directory(entries_dir, label=f"{thread_path.name}/entries")
-            entry_paths = self._complete_slot_entry_paths(entries_dir)
+            entry_paths = self._complete_slot_entry_paths(
+                entries_dir,
+                allow_pending_claim_id=allow_pending_claim_id,
+            )
             result.extend((thread_path.name, path) for path in entry_paths)
         return result
 
-    def _complete_slot_entry_paths(self, entries_dir: Path) -> list[Path]:
+    def _complete_slot_entry_paths(
+        self,
+        entries_dir: Path,
+        *,
+        allow_pending_claim_id: str | None = None,
+    ) -> list[Path]:
         for attempt in range(21):
             complete: list[Path] = []
             incomplete = False
@@ -1046,6 +1177,13 @@ class BuilderThreadService:
                 ):
                     raise BuilderThreadValidationError("unknown artifact beneath entries")
                 children = list(slot.iterdir())
+                if len(children) == 1 and SLOT_RESERVATION_RE.fullmatch(
+                    children[0].name
+                ):
+                    if children[0].name == f".reservation-{allow_pending_claim_id}":
+                        continue
+                    incomplete = True
+                    continue
                 if len(children) != 1 or children[0].name.startswith(".tmp-"):
                     incomplete = True
                     continue
@@ -1106,7 +1244,9 @@ class BuilderThreadService:
         *,
         allow_pending_claim_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        paths = self._validate_structure()
+        paths = self._validate_structure(
+            allow_pending_claim_id=allow_pending_claim_id
+        )
         thread_ids = sorted({thread_id for thread_id, _ in paths})
         threads = [self._load_thread_from_paths(thread_id, paths) for thread_id in thread_ids]
         captures: dict[str, str] = {}
@@ -1169,7 +1309,9 @@ class BuilderThreadService:
         allow_pending_claim_id: str | None = None,
         allow_claim_mismatch_hash: str | None = None,
     ) -> dict[str, Any]:
-        paths = self._validate_structure()
+        paths = self._validate_structure(
+            allow_pending_claim_id=allow_pending_claim_id
+        )
         self._validate_vault_wide_entry_ids(paths)
         thread_ids = sorted({item[0] for item in paths})
         structural_threads = [
@@ -1228,6 +1370,10 @@ class BuilderThreadService:
                 raise BuilderThreadValidationError("entry claim vault identity mismatch")
             entry_id = _uuid4(payload.get("entry_id"), field="entry_id")
             thread_id = _uuid4(payload.get("thread_id"), field="thread_id")
+            request_hash = payload.get("request_hash")
+            if not isinstance(request_hash, str):
+                raise BuilderThreadValidationError("request_hash must be a SHA-256 digest")
+            self._hash(request_hash, field="request_hash")
             if entry_id != path.stem:
                 raise BuilderThreadValidationError("entry claim path identity mismatch")
             claims[entry_id] = {**payload, "thread_id": thread_id}
@@ -1259,6 +1405,13 @@ class BuilderThreadService:
                 raise BuilderThreadConflictError(
                     f"entry claim thread mismatch: {entry_id}"
                 )
+            if claim["request_hash"] != _request_hash(item["entry"]) and not (
+                item["quarantined"]
+                or item["entry_hash"] == allow_claim_mismatch_hash
+            ):
+                raise BuilderThreadConflictError(
+                    f"entry claim request mismatch: {entry_id}"
+                )
         orphaned = set(claims) - set(contributions)
         if allow_pending_claim_id is not None:
             orphaned.discard(allow_pending_claim_id)
@@ -1269,13 +1422,28 @@ class BuilderThreadService:
         payload = {
             "entry_id": entry["entry_id"],
             "privacy_class": PRIVACY_CLASS,
+            "request_hash": _request_hash(entry),
             "schema": ENTRY_CLAIM_SCHEMA,
             "thread_id": entry["thread_id"],
             "vault_id": self.expected_vault_id,
         }
+        claim_path = self.entry_claims_root / f"{entry['entry_id']}.json"
+        try:
+            claim_info = claim_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(claim_info.st_mode) or not stat.S_ISREG(claim_info.st_mode):
+                raise BuilderThreadValidationError("entry claim must be a regular file")
+            existing, raw = self._read_canonical_json(claim_path)
+            if _canonical_bytes(payload) == raw and existing == payload:
+                return False
+            raise BuilderThreadConflictError(
+                f"vault-wide entry_id replay conflict: {entry['entry_id']}"
+            )
         try:
             return _atomic_publish(
-                self.entry_claims_root / f"{entry['entry_id']}.json",
+                claim_path,
                 _canonical_bytes(payload),
             )
         except BuilderThreadConflictError as exc:
@@ -1751,8 +1919,13 @@ class BuilderThreadService:
                 raise exc
         thread_dir = self.threads_root / entry["thread_id"]
         entries_dir = thread_dir / "entries"
+        claim_created = self._reserve_entry_claim(entry)
         try:
             slot = self._reserve_entry_slot(entries_dir, entry["entry_id"])
+        except BuilderThreadConflictError:
+            if claim_created:
+                self._release_unrepresented_entry_claim(entry["entry_id"])
+            raise
         except _ExistingEntryReservation:
             reloaded = self._load_thread(entry["thread_id"])
             represented = next(
@@ -1777,8 +1950,8 @@ class BuilderThreadService:
                 f"entry_id replay conflict: {entry['entry_id']}"
             ) from None
         try:
-            self._reserve_entry_claim(entry)
             _atomic_publish(slot / f"{entry_hash}.json", raw)
+            self._finalize_entry_slot(slot, entry["entry_id"])
         except Exception:
             if not any(slot.iterdir()):
                 slot.rmdir()
@@ -1796,6 +1969,14 @@ class BuilderThreadService:
         try:
             thread_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
         except FileExistsError as exc:
+            entries_dir = thread_dir / "entries"
+            if entries_dir.is_dir() and not entries_dir.is_symlink():
+                slot = self._pending_entry_slot(entries_dir, entry["entry_id"])
+                if slot is not None:
+                    _atomic_publish(slot / f"{entry_hash}.json", raw)
+                    self._finalize_entry_slot(slot, entry["entry_id"])
+                    reloaded = self._load_thread(entry["thread_id"])
+                    return self._result(reloaded, entry=entry, entry_hash=entry_hash)
             raise _ExistingThreadDestination(
                 f"question destination already exists: {entry['thread_id']}"
             ) from exc
@@ -1804,6 +1985,7 @@ class BuilderThreadService:
         _safe_mkdir(entries_dir)
         slot = self._reserve_entry_slot(entries_dir, entry["entry_id"])
         _atomic_publish(slot / f"{entry_hash}.json", raw)
+        self._finalize_entry_slot(slot, entry["entry_id"])
         reloaded = self._load_thread(entry["thread_id"])
         return self._result(reloaded, entry=entry, entry_hash=entry_hash)
 
@@ -1816,8 +1998,15 @@ class BuilderThreadService:
             except FileExistsError:
                 _real_directory(slot, label="entry slot")
                 if self._reserved_slot_entry_id(slot) == entry_id:
-                    raise _ExistingEntryReservation(entry_id)
+                    return slot
                 continue
+            reservation = slot / f".reservation-{entry_id}"
+            fd = os.open(reservation, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            _fsync_directory(slot)
             _fsync_directory(entries_dir)
             return slot
         raise BuilderThreadConflictError(
@@ -1827,6 +2016,13 @@ class BuilderThreadService:
     def _reserved_slot_entry_id(self, slot: Path) -> str:
         for attempt in range(21):
             children = list(slot.iterdir())
+            reservations = [
+                match.group("entry_id")
+                for path in children
+                if (match := SLOT_RESERVATION_RE.fullmatch(path.name)) is not None
+            ]
+            if len(reservations) == 1:
+                return _uuid4(reservations[0], field="entry_id")
             finals = [
                 path
                 for path in children
@@ -1852,6 +2048,19 @@ class BuilderThreadService:
                 continue
             raise BuilderThreadValidationError("incomplete artifact tree")
         raise BuilderThreadValidationError("incomplete artifact tree")
+
+    def _finalize_entry_slot(self, slot: Path, entry_id: str) -> None:
+        reservation = slot / f".reservation-{entry_id}"
+        reservation.unlink(missing_ok=True)
+        _fsync_directory(slot)
+
+    def _pending_entry_slot(self, entries_dir: Path, entry_id: str) -> Path | None:
+        for slot in entries_dir.iterdir():
+            if not slot.is_dir() or slot.is_symlink():
+                continue
+            if (slot / f".reservation-{entry_id}").exists():
+                return slot
+        return None
 
     def _read_canonical_json(self, path: Path) -> tuple[dict[str, Any], bytes]:
         try:

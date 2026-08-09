@@ -535,25 +535,28 @@ def builder_thread(ctx: click.Context, vault_id: str | None) -> None:
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def builder_thread_init(ctx: click.Context, adopt_existing: bool, as_json: bool) -> None:
-    paths = _effective_paths(ctx)
-    if paths.vault_root is None:
-        _builder_thread_failure(
-            BuilderThreadValidationError("BUILDEROPS_VAULT_ROOT is required for Builder Threads"),
-            as_json=as_json,
-        )
-    vault_root = paths.vault_root
-    vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", ""))
-    _emit_builder_thread(
-        lambda: {
+    def initialize() -> dict[str, Any]:
+        try:
+            paths = _effective_paths(ctx)
+        except click.ClickException as exc:
+            raise BuilderThreadValidationError(
+                "invalid Builder Thread path configuration"
+            ) from exc
+        if paths.vault_root is None:
+            raise BuilderThreadValidationError(
+                "BUILDEROPS_VAULT_ROOT is required for Builder Threads"
+            )
+        vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", ""))
+        return {
             **BuilderThreadService.initialize(
-                vault_root,
+                paths.vault_root,
                 vault_id=vault_id,
                 adopt_existing=adopt_existing,
             ).health(),
             "operation": "init",
-        },
-        as_json=as_json,
-    )
+        }
+
+    _emit_builder_thread(initialize, as_json=as_json)
 
 
 def _thread_common_options(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -712,6 +715,11 @@ def builder_thread_list(
 @click.argument("thread_id")
 @click.option("--actor", required=True)
 @click.option("--reason", required=True)
+@click.option(
+    "--entry-id",
+    required=True,
+    help="Caller-retained UUIDv4 idempotency identity for safe exact retry.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def builder_thread_close(
@@ -719,11 +727,17 @@ def builder_thread_close(
     thread_id: str,
     actor: str,
     reason: str,
+    entry_id: str,
     as_json: bool,
 ) -> None:
     service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
-        lambda: service.close_thread(thread_id, actor_id=actor, reason=reason),
+        lambda: service.close_thread(
+            thread_id,
+            actor_id=actor,
+            reason=reason,
+            entry_id=entry_id,
+        ),
         as_json=as_json,
     )
 
@@ -735,17 +749,27 @@ def builder_thread_close(
 )
 @click.argument("thread_id")
 @click.option("--actor", required=True)
+@click.option(
+    "--entry-id",
+    required=True,
+    help="Caller-retained UUIDv4 idempotency identity for safe exact retry.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def builder_thread_archive(
     ctx: click.Context,
     thread_id: str,
     actor: str,
+    entry_id: str,
     as_json: bool,
 ) -> None:
     service = _builder_thread_service(ctx, as_json=as_json)
     _emit_builder_thread(
-        lambda: service.archive_thread(thread_id, actor_id=actor),
+        lambda: service.archive_thread(
+            thread_id,
+            actor_id=actor,
+            entry_id=entry_id,
+        ),
         as_json=as_json,
     )
 
@@ -759,6 +783,11 @@ def builder_thread_archive(
 @click.option("--artifact-hash", required=True)
 @click.option("--reason-code", required=True)
 @click.option("--actor", required=True)
+@click.option(
+    "--entry-id",
+    required=True,
+    help="Caller-retained UUIDv4 idempotency identity for safe exact retry.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def builder_thread_quarantine(
@@ -767,6 +796,7 @@ def builder_thread_quarantine(
     artifact_hash: str,
     reason_code: str,
     actor: str,
+    entry_id: str,
     as_json: bool,
 ) -> None:
     service = _builder_thread_service(ctx, as_json=as_json)
@@ -776,6 +806,7 @@ def builder_thread_quarantine(
             artifact_hash=artifact_hash,
             actor_id=actor,
             reason_code=reason_code,
+            entry_id=entry_id,
         ),
         as_json=as_json,
     )
