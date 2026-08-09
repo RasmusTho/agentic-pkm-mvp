@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 
 import pytest
 
+from app.builderops.devui_composition import compose_owner_snapshot
 from app.builderops.devui_overview import (
     CONTRACT_VERSION,
     OverviewContractError,
@@ -383,6 +385,40 @@ def test_refused_provider_rejects_available_evidence(field: str, value: object) 
     composition = _composition()
     composition["providers"]["capabilities"][field] = value
 
+    with pytest.raises(OverviewContractError, match="cannot carry available evidence"):
+        compose_overview_view(composition=composition)
+
+
+@pytest.mark.parametrize("provider", ("work", "capabilities"))
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("captured_at", "2026-08-09T21:00:00+00:00"),
+        ("snapshot", {"watermark": "forged:1"}),
+        ("completeness", {"claim": {"kind": "counted"}}),
+        ("payload", {"resources": []}),
+    ),
+)
+def test_production_refusals_reject_available_evidence_at_overview_boundary(
+    provider: str, field: str, value: object
+) -> None:
+    def broken_cockpit() -> dict:
+        raise OSError("unavailable")
+
+    composition = compose_owner_snapshot(
+        cockpit_reader=broken_cockpit,
+        ckm_reader=lambda: object(),  # type: ignore[return-value]
+        now=lambda: datetime(2026, 8, 9, 21, 0, tzinfo=timezone.utc),
+    )
+
+    assert [
+        state["status"]
+        for state in compose_overview_view(composition=composition)["trust_frame"][
+            "provider_states"
+        ]
+    ] == ["refused", "refused"]
+
+    composition["providers"][provider][field] = value
     with pytest.raises(OverviewContractError, match="cannot carry available evidence"):
         compose_overview_view(composition=composition)
 
