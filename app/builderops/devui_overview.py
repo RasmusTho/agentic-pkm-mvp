@@ -8,6 +8,7 @@ interprets missing evidence as an empty or affirmative claim.
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -48,6 +49,12 @@ _OWNER_AUTHORITY_CATEGORIES = frozenset(
         "contradictory_source_authority",
     }
 )
+_RFC3339_TIMESTAMP = re.compile(
+    r"[0-9]{4}-(?:0[1-9]|1[0-2])-[0-9]{2}T"
+    r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z",
+    re.ASCII,
+)
 
 
 class OverviewContractError(ValueError):
@@ -85,6 +92,8 @@ def _string(value: Any, *, label: str) -> str:
 
 def _timestamp(value: Any, *, label: str) -> str:
     raw = _string(value, label=label)
+    if _RFC3339_TIMESTAMP.fullmatch(raw) is None:
+        raise OverviewContractError(f"{label} must be an RFC3339 timestamp")
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError as exc:
@@ -299,6 +308,14 @@ def _candidate(value: Any, *, zone: str) -> dict[str, Any]:
                 raise OverviewContractError(
                     f"{zone} candidate.delivery_facts.{key} evidenced fact requires source evidence"
                 )
+            if fact["state"] == "evidenced":
+                supporting_evidence = next(
+                    item for item in evidence if item["evidence_id"] == fact["evidence_id"]
+                )
+                if not _is_actionable(supporting_evidence):
+                    raise OverviewContractError(
+                        f"{zone} candidate.delivery_facts.{key} evidenced fact requires actionable source evidence"
+                    )
             if fact.get("receipt_ref") is not None:
                 fact["receipt_ref"] = _source_ref(
                     fact["receipt_ref"], label=f"{zone} candidate.delivery_facts.{key}.receipt_ref"
@@ -410,6 +427,23 @@ def compose_overview_view(
         if captured_at is not None:
             captured_at = _timestamp(
                 captured_at, label=f"composition.providers.{name}.captured_at"
+            )
+        if provider["status"] == "available":
+            if provider["authority"] is None or provider["completeness"] is None:
+                raise OverviewContractError(
+                    f"composition.providers.{name} available provider requires authority and completeness"
+                )
+            if provider["snapshot"] is None and captured_at is None:
+                raise OverviewContractError(
+                    f"composition.providers.{name} available provider requires snapshot or captured_at"
+                )
+            if provider["refusal"] is not None:
+                raise OverviewContractError(
+                    f"composition.providers.{name} available provider cannot carry refusal evidence"
+                )
+        elif provider["authority"] is None or provider["refusal"] is None:
+            raise OverviewContractError(
+                f"composition.providers.{name} refused provider requires authority and refusal evidence"
             )
         trust_providers.append(
             {

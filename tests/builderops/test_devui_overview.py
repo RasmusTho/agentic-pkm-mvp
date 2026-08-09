@@ -233,6 +233,24 @@ def test_evidenced_delivery_fact_requires_resolving_evidence() -> None:
             composition=_composition(), candidates={"now": [candidate]}
         )
 
+    unsupported = _candidate()
+    unsupported["evidence"].append(
+        _evidence(
+            "unsupported",
+            claim=None,
+            availability="refused",
+            freshness="unknown",
+            completeness="unread",
+            cardinality="not_measured",
+            linkage="unlinked",
+        )
+    )
+    unsupported["delivery_facts"]["merged"]["evidence_id"] = "unsupported"
+    with pytest.raises(OverviewContractError, match="evidenced fact requires actionable"):
+        compose_overview_view(
+            composition=_composition(), candidates={"now": [unsupported]}
+        )
+
 
 def test_overview_preserves_exact_withdrawals_and_independent_evidence_axes() -> None:
     candidate = _candidate(
@@ -293,9 +311,20 @@ def test_measured_empty_requires_fresh_source_evidence() -> None:
 
 
 @pytest.mark.parametrize("zone", ("needs_you", "ready_to_try"))
-def test_malformed_timestamps_cannot_support_classification(zone: str) -> None:
+@pytest.mark.parametrize(
+    "captured_at",
+    (
+        "not-rfc3339",
+        "2026-08-09 21:00:00+00:00",
+        "20260809T210000+00:00",
+        "2026-08-09T21:00:00",
+    ),
+)
+def test_malformed_timestamps_cannot_support_classification(
+    zone: str, captured_at: str
+) -> None:
     candidate = _candidate()
-    candidate["evidence"][0 if zone == "needs_you" else 1]["captured_at"] = "not-rfc3339"
+    candidate["evidence"][0 if zone == "needs_you" else 1]["captured_at"] = captured_at
 
     with pytest.raises(OverviewContractError, match="RFC3339"):
         compose_overview_view(
@@ -313,6 +342,32 @@ def test_composition_and_provider_timestamps_must_be_rfc3339() -> None:
     malformed_provider["providers"]["work"]["captured_at"] = "not-rfc3339"
     with pytest.raises(OverviewContractError, match="RFC3339"):
         compose_overview_view(composition=malformed_provider)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("authority", "completeness"),
+)
+def test_available_provider_requires_coherent_trust_fields(field: str) -> None:
+    composition = _composition()
+    composition["providers"]["work"][field] = None
+
+    with pytest.raises(OverviewContractError, match="available provider"):
+        compose_overview_view(composition=composition)
+
+    missing_identity = _composition()
+    missing_identity["providers"]["work"]["snapshot"] = None
+    missing_identity["providers"]["work"]["captured_at"] = None
+    with pytest.raises(OverviewContractError, match="snapshot or captured_at"):
+        compose_overview_view(composition=missing_identity)
+
+
+def test_refused_provider_requires_refusal_evidence() -> None:
+    composition = _composition()
+    composition["providers"]["capabilities"]["refusal"] = None
+
+    with pytest.raises(OverviewContractError, match="refused provider"):
+        compose_overview_view(composition=composition)
 
 
 def test_withdrawal_preserves_producer_limitations() -> None:
