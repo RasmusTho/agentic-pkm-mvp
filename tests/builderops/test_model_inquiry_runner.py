@@ -244,6 +244,22 @@ class CrashOnceConsensusAdapter(ConsensusAdapter):
         return super().execute(request)
 
 
+@dataclass
+class RecoveringConsensusAdapter(ConsensusAdapter):
+    failures_remaining: int = 1
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            self.calls.append(dict(request))
+            raise AdapterExecutionError(
+                "transient command failure",
+                failure_class="command_exit_nonzero",
+                exit_code=17,
+            )
+        return super().execute(request)
+
+
 class LocalCommandFixtureAdapter(LocalCommandAdapter):
     """Exercise subscription fallback policy without spawning a subprocess."""
 
@@ -536,6 +552,59 @@ def test_refusal_and_persistence_failure_do_not_fallback(
     assert persisted["outcome"] == "persistence_failed"
     assert len(first.calls) == 1
     assert second.calls == []
+
+
+def test_session_expiry_does_not_fallback(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_session_expired")
+    expired = CountingFailureAdapter(
+        "fable-adapter",
+        "anthropic",
+        "claude-fable-5",
+        [],
+        failure_class="session_expired",
+    )
+    alternate = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+
+    result = ModelInquiryRunner(
+        service,
+        _subscription_adapters(expired, alternate),
+        allow_operational_fallback=True,
+    ).run("inq_runner_session_expired", max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert result["details"]["diagnostic"]["adapter_failure_class"] == "session_expired"
+    assert len(expired.calls) == 1
+    assert alternate.calls == []
+
+
+def test_recovered_distinct_targets_remain_genuine_consensus(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_recovered_consensus")
+    fable = RecoveringConsensusAdapter(
+        "fable-adapter", "anthropic", "claude-fable-5", []
+    )
+    sol = ConsensusAdapter("sol-adapter", "openai", "gpt-5.6-sol", [])
+
+    result = ModelInquiryRunner(
+        service,
+        _subscription_adapters(fable, sol),
+        allow_operational_fallback=True,
+    ).run("inq_runner_recovered_consensus", max_rounds=1)
+
+    assert result["outcome"] == "consensus"
+    trace = service.trace("inq_runner_recovered_consensus")
+    review_targets = {
+        (turn["adapter_id"], turn["provider"], turn["model"])
+        for turn in trace["turns"]
+        if turn["phase"] == "review"
+    }
+    assert review_targets == {
+        ("fable-adapter", "anthropic", "claude-fable-5"),
+        ("sol-adapter", "openai", "gpt-5.6-sol"),
+    }
+    assert any(
+        receipt["event_type"] == "inquiry_provider_attempt_terminal"
+        for receipt in trace["receipts"]
+    )
 
 
 def test_resume_and_persistence_failure_fail_closed(tmp_path: Path, monkeypatch) -> None:

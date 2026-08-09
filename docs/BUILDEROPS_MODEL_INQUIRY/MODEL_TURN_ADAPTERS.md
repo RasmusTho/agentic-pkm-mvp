@@ -164,14 +164,17 @@ advance only after `provider_unavailable`, an allowlisted command availability/t
 failure, or strictly malformed structured output. Every failed candidate is committed as a
 sanitized attempt receipt before the next candidate starts, and resume skips that exact failed
 request. Explicit refusal, credential failure, suspicious/unsafe output, unexpected exceptions,
-and persistence failure remain terminal. The desktop caller still invokes the fixed host launcher
-exactly once and never retries the inquiry.
+and persistence failure remain terminal. `session_expired` is an authentication-state failure and
+is therefore terminal rather than fallback-eligible. The desktop caller still invokes the fixed
+host launcher exactly once and never retries the inquiry.
 
-When fallback means the same effective adapter produced both logical lanes, matching acceptance is
-stored as `degraded_consensus`, not `consensus`. The readable report shows the effective
-provider/model for every turn. Degraded synthesis is useful decision support but the BMI-05
-readiness and promotion boundary accepts only a genuine `consensus` terminal receipt. The dormant
-declared provider-API resolver retains `fallback_forbidden` and never enters this chain.
+When fallback means the same effective adapter produced both accepting review turns, matching
+acceptance is stored as `degraded_consensus`, not `consensus`. A safely receipted earlier attempt
+does not degrade a later accepting review pair that again has two distinct effective targets. The
+readable report shows the effective provider/model for every turn. Degraded synthesis is useful
+decision support but the BMI-05 readiness and promotion boundary accepts only a genuine
+`consensus` terminal receipt. The dormant declared provider-API resolver retains
+`fallback_forbidden` and never enters this chain.
 
 Dry-run is a deterministic, read-only plan: it performs no adapter call and creates no vault or
 receipt file. Provider-enabled execution serializes one runner per inquiry on the host, persists a

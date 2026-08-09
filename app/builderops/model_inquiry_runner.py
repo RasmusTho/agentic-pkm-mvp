@@ -37,7 +37,6 @@ FALLBACK_ADAPTER_FAILURE_CLASSES = frozenset(
     {
         "command_exit_nonzero",
         "command_timeout",
-        "session_expired",
         "stdout_empty",
         "stdout_unavailable",
     }
@@ -229,7 +228,7 @@ class ModelInquiryRunner:
                         source_refs=trace["source_refs"],
                     )
                     terminal_trace = self.service.trace(inquiry_id)
-                    degraded = _fallback_was_used(terminal_trace, reviews)
+                    degraded = _fallback_was_used(reviews)
                     return self._terminate(
                         inquiry_id,
                         "degraded_consensus" if degraded else "consensus",
@@ -760,14 +759,7 @@ def _attempt_receipt_allows_fallback(outcome: str, details: Mapping[str, Any]) -
     ) in FALLBACK_ADAPTER_FAILURE_CLASSES
 
 
-def _fallback_was_used(
-    trace: Mapping[str, Any], reviews: Sequence[TurnExecution]
-) -> bool:
-    attempts = [
-        receipt
-        for receipt in trace["receipts"]
-        if receipt.get("event_type") == "inquiry_provider_attempt_terminal"
-    ]
+def _fallback_was_used(reviews: Sequence[TurnExecution]) -> bool:
     effective_targets = {
         (
             item.turn.get("adapter_id"),
@@ -776,7 +768,7 @@ def _fallback_was_used(
         )
         for item in reviews
     }
-    return bool(attempts) or len(effective_targets) != len(ROLES)
+    return len(effective_targets) != len(ROLES)
 
 
 def _safe_provider_request_id(value: str | None) -> str | None:

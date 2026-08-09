@@ -1428,16 +1428,11 @@ class ModelInquiryService:
                 and turn.get("stance") == "accept"
                 and turn.get("accepted_artifact_hash") == accepted_hash
             ]
-            attempt_receipts = [
-                receipt
-                for receipt in receipts
-                if receipt.get("event_type") == "inquiry_provider_attempt_terminal"
-            ]
             effective_targets = {
                 (turn.get("adapter_id"), turn.get("provider"), turn.get("model"))
                 for turn in accept_turns
             }
-            degraded = bool(attempt_receipts) or len(effective_targets) != 2
+            degraded = len(effective_targets) != 2
             expected_detail_fields = {"accepted_artifact_hash", "round_index"}
             if outcome == "degraded_consensus":
                 expected_detail_fields.add("degradation_reason")
