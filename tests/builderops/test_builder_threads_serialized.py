@@ -160,6 +160,46 @@ def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance() 
             content="Source references must retain their type.",
             source_refs=("4708",),
         )
+    with pytest.raises(ValueError, match="shared_non_sensitive"):
+        client.create(
+            request_id="privacy-code-4708",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Code must not be captured",
+            content="def deploy():\n    return deploy_unreviewed_change()",
+            source_refs=("github:4708",),
+        )
+    with pytest.raises(ValueError, match="shared_non_sensitive"):
+        client.create(
+            request_id="privacy-patch-4708",
+            actor="codex:desktop",
+            recipient="claude:mac",
+            subject="Patch must not be captured",
+            content="diff --git a/app.py b/app.py\n@@ -1 +1 @@\n-old\n+new",
+            source_refs=("github:4708",),
+        )
+
+
+def test_close_requires_the_named_recipient_reply_and_keeps_unanswered_thread_discoverable() -> None:
+    client = BuilderThreadClient(InProcessWriterEndpoint(_writer()), client_id="codex:desktop")
+    created = client.create(
+        request_id="unanswered-create-4708",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Awaiting answer",
+        content="Please reply before this thread can close.",
+        source_refs=("github:4708",),
+    )
+
+    with pytest.raises(ValueError, match="requires a reply from the named recipient"):
+        client.close(
+            request_id="unanswered-close-4708",
+            thread_id=created.thread.thread_id,
+            actor="codex:desktop",
+            reason="Attempted premature closure.",
+        )
+
+    assert client.inbox("claude:mac", limit=10).threads[0].thread_id == created.thread.thread_id
 
 
 def test_writer_rejects_unknown_mutation_kind_without_state_change() -> None:

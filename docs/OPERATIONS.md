@@ -400,6 +400,25 @@ Companion docs:
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
 
+### Builder Thread serialized writer (#4708)
+
+Builder Threads are Builder System operational context, not a Product/Runtime
+vault flow. The designated BuilderOps/Mac mini writer is the only mutation
+boundary for the external BuilderOps Vault; Codex and Claude clients submit
+attributed commands and read bounded projections through its endpoint. Do not
+configure a client with a vault path or fall back to direct filesystem writes
+when that writer is unavailable. The repository `vault/` directory is a fixture
+and is never a live target.
+
+The operational boundary accepts only bounded `shared_non_sensitive` material,
+typed provenance, and named-recipient questions. A caller-retained request ID
+supports an exact acknowledgement-loss retry; changed semantics under the same
+ID fail closed. Inbox and devUI views are read-only orientation projections.
+They do not grant Issue, PR, CI, merge, approval, promotion, or receipt
+authority. The detailed skill contract is
+`.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md`; PR #4706 remains
+superseded multi-writer evidence and is not an operational dependency.
+
 ### Karakeep managed source service (KMA-02)
 - `docker-compose.karakeep.yml` is the repo-owned deployment for the self-hosted Karakeep
   read-later source on the mac mini (Heimdal's external source dependency; ADR-0049 §1). It pins the

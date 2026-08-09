@@ -24,6 +24,9 @@ _SOURCE_REF = re.compile(
 _PRIVATE_CONTENT = re.compile(
     r"(?i)(password|secret|credential|token|api[_-]?key|bearer\s+|/(?:Users|home|private)/)"
 )
+_CODE_OR_PATCH = re.compile(
+    r"(?m)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|\s*(?:def|class)\s+[A-Za-z_][A-Za-z0-9_]*\s*\()"
+)
 _MAX_TEXT = 500
 
 
@@ -225,6 +228,14 @@ class SerializedThreadWriter:
         elif command.kind == "close":
             if current.state != "open":
                 raise BuilderThreadError("only an open thread can close")
+            opening_recipient = current.entries[0].recipient
+            if not any(
+                entry.kind == "reply" and entry.actor == opening_recipient
+                for entry in current.entries
+            ):
+                raise BuilderThreadError(
+                    "close requires a reply from the named recipient"
+                )
             next_state = "closed"
         else:
             if current.state != "closed":
@@ -394,6 +405,8 @@ def _validate_text(value: str | None, *, field: str) -> None:
     if not isinstance(value, str) or not value.strip() or len(value) > _MAX_TEXT:
         raise BuilderThreadError(f"{field} must be bounded non-empty text")
     if _PRIVATE_CONTENT.search(value):
+        raise BuilderThreadError(f"{field} is not shared_non_sensitive")
+    if _CODE_OR_PATCH.search(value):
         raise BuilderThreadError(f"{field} is not shared_non_sensitive")
 
 
