@@ -22,6 +22,14 @@ _FRESHNESS = {"fresh", "stale", "unknown"}
 _COVERAGE = {"complete", "partial", "unread", "missing", "not_applicable"}
 _CARDINALITY = {"nonempty", "measured_empty", "not_measured", "not_countable"}
 _LINKAGE = {"linked", "unlinked", "not_assessed", "not_applicable"}
+_CAPABILITY_KINDS = {"mcp", "connector", "script", "cli"}
+_SIDE_EFFECT_CLASSES = {
+    "read_only",
+    "governed_write",
+    "external_effect",
+    "mixed",
+    "unknown",
+}
 _SHA256 = re.compile(r"[a-f0-9]{64}")
 _PROVENANCE_ONLY_SOURCE_PARTS = {"provider", "session", "transcript"}
 
@@ -50,9 +58,7 @@ def _nonempty(value: Any, *, label: str) -> str:
     return value
 
 
-def _keys(
-    value: Mapping[str, Any], *, allowed: set[str], required: set[str], label: str
-) -> None:
+def _keys(value: Mapping[str, Any], *, allowed: set[str], required: set[str], label: str) -> None:
     unknown = set(value) - allowed
     missing = required - set(value)
     if unknown:
@@ -96,9 +102,7 @@ def _source_ref(value: Any, *, label: str) -> dict[str, Any]:
             _nonempty(reference[key], label=f"{label}.{key}")
     content_hash = reference.get("content_hash")
     if content_hash is not None and not _SHA256.fullmatch(content_hash):
-        raise GoverningDocumentContractError(
-            f"{label}.content_hash must be a canonical SHA-256"
-        )
+        raise GoverningDocumentContractError(f"{label}.content_hash must be a canonical SHA-256")
     if not any(reference.get(key) is not None for key in ("version", "snapshot", "content_hash")):
         raise GoverningDocumentContractError(
             f"{label} requires a version, snapshot, or content hash"
@@ -174,9 +178,7 @@ def _state(value: Any, *, label: str, composed_at: datetime) -> dict[str, Any]:
     state["limitations"] = _limitations(state["limitations"], label=f"{label}.limitations")
 
     if state["availability"] != "available" and state["cardinality"] == "measured_empty":
-        raise GoverningDocumentContractError(
-            f"{label} unavailable source cannot be measured_empty"
-        )
+        raise GoverningDocumentContractError(f"{label} unavailable source cannot be measured_empty")
     if state["availability"] != "available" and state["cardinality"] != "not_measured":
         raise GoverningDocumentContractError(
             f"{label} unavailable source cannot support a cardinality claim"
@@ -256,9 +258,7 @@ def _lifecycle(value: Any, *, label: str) -> dict[str, Any]:
     return lifecycle
 
 
-def _governing_document(
-    value: Any, *, index: int, composed_at: datetime
-) -> dict[str, Any]:
+def _governing_document(value: Any, *, index: int, composed_at: datetime) -> dict[str, Any]:
     label = f"declarations[{index}]"
     document = _mapping(value, label=label)
     _keys(
@@ -317,6 +317,188 @@ def _governing_document(
     return document
 
 
+def _references(value: Any, *, label: str) -> list[dict[str, Any]]:
+    references = _json_value(value, label=label)
+    if not isinstance(references, list):
+        raise GoverningDocumentContractError(f"{label} must be a list")
+    return [
+        _source_ref(reference, label=f"{label}[{index}]")
+        for index, reference in enumerate(references)
+    ]
+
+
+def _strings(value: Any, *, label: str) -> list[str]:
+    values = _json_value(value, label=label)
+    if not isinstance(values, list):
+        raise GoverningDocumentContractError(f"{label} must be a list")
+    return [_nonempty(item, label=f"{label}[{index}]") for index, item in enumerate(values)]
+
+
+def _missing_or_unlinked_state(state: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    """Withdraw claims a declaration cannot support without inventing an owner."""
+
+    rendered = dict(state)
+    rendered["coverage"] = "missing"
+    rendered["cardinality"] = "not_measured"
+    rendered["linkage"] = "unlinked"
+    rendered["limitations"] = [*rendered["limitations"], reason]
+    return rendered
+
+
+def _workflow_adapter(value: Any, *, index: int, composed_at: datetime) -> dict[str, Any]:
+    label = f"workflow_adapter_declarations[{index}]"
+    adapter = _mapping(value, label=label)
+    _keys(
+        adapter,
+        allowed={
+            "source_ref",
+            "adapter_kind",
+            "adapter_id",
+            "version_or_digest",
+            "owning_workflow_refs",
+            "owning_policy_refs",
+            "trigger",
+            "input_contract_refs",
+            "output_and_receipt_refs",
+            "refusal_and_authority_limits",
+            "source_state",
+            "limitations",
+        },
+        required={
+            "source_ref",
+            "adapter_kind",
+            "adapter_id",
+            "version_or_digest",
+            "owning_workflow_refs",
+            "owning_policy_refs",
+            "trigger",
+            "input_contract_refs",
+            "output_and_receipt_refs",
+            "refusal_and_authority_limits",
+            "source_state",
+            "limitations",
+        },
+        label=label,
+    )
+    adapter["source_ref"] = _source_ref(adapter["source_ref"], label=f"{label}.source_ref")
+    if adapter["adapter_kind"] != "skill":
+        raise GoverningDocumentContractError(f"{label}.adapter_kind must be skill")
+    _nonempty(adapter["adapter_id"], label=f"{label}.adapter_id")
+    version = adapter["version_or_digest"]
+    if version is not None:
+        _nonempty(version, label=f"{label}.version_or_digest")
+    adapter["version_or_digest"] = "unknown" if version is None else version
+    adapter["owning_workflow_refs"] = _references(
+        adapter["owning_workflow_refs"], label=f"{label}.owning_workflow_refs"
+    )
+    adapter["owning_policy_refs"] = _references(
+        adapter["owning_policy_refs"], label=f"{label}.owning_policy_refs"
+    )
+    _nonempty(adapter["trigger"], label=f"{label}.trigger")
+    adapter["input_contract_refs"] = _references(
+        adapter["input_contract_refs"], label=f"{label}.input_contract_refs"
+    )
+    adapter["output_and_receipt_refs"] = _references(
+        adapter["output_and_receipt_refs"], label=f"{label}.output_and_receipt_refs"
+    )
+    adapter["refusal_and_authority_limits"] = _strings(
+        adapter["refusal_and_authority_limits"],
+        label=f"{label}.refusal_and_authority_limits",
+    )
+    adapter["source_state"] = _state(
+        adapter["source_state"], label=f"{label}.source_state", composed_at=composed_at
+    )
+    adapter["limitations"] = _limitations(adapter["limitations"], label=f"{label}.limitations")
+
+    if version in {None, "unknown"} or not adapter["owning_workflow_refs"]:
+        adapter["source_state"] = _missing_or_unlinked_state(
+            adapter["source_state"],
+            reason="incomplete explicit adapter declaration withdraws ownership claims",
+        )
+    return adapter
+
+
+def _capability_binding(value: Any, *, index: int, composed_at: datetime) -> dict[str, Any]:
+    label = f"capability_binding_declarations[{index}]"
+    capability = _mapping(value, label=label)
+    _keys(
+        capability,
+        allowed={
+            "source_ref",
+            "capability_kind",
+            "capability_id",
+            "version_or_digest",
+            "owning_workflow_refs",
+            "available_operations",
+            "side_effect_class",
+            "admission_boundary_ref",
+            "explicit_non_authority",
+            "source_state",
+            "limitations",
+        },
+        required={
+            "source_ref",
+            "capability_kind",
+            "capability_id",
+            "version_or_digest",
+            "owning_workflow_refs",
+            "available_operations",
+            "side_effect_class",
+            "admission_boundary_ref",
+            "explicit_non_authority",
+            "source_state",
+            "limitations",
+        },
+        label=label,
+    )
+    capability["source_ref"] = _source_ref(capability["source_ref"], label=f"{label}.source_ref")
+    if capability["capability_kind"] not in _CAPABILITY_KINDS:
+        raise GoverningDocumentContractError(f"{label}.capability_kind is unsupported")
+    _nonempty(capability["capability_id"], label=f"{label}.capability_id")
+    version = capability["version_or_digest"]
+    if version is not None:
+        _nonempty(version, label=f"{label}.version_or_digest")
+    capability["owning_workflow_refs"] = _references(
+        capability["owning_workflow_refs"], label=f"{label}.owning_workflow_refs"
+    )
+    capability["available_operations"] = _strings(
+        capability["available_operations"], label=f"{label}.available_operations"
+    )
+    if capability["side_effect_class"] not in _SIDE_EFFECT_CLASSES:
+        raise GoverningDocumentContractError(f"{label}.side_effect_class is unsupported")
+    admission = capability["admission_boundary_ref"]
+    capability["admission_boundary_ref"] = (
+        None
+        if admission is None
+        else _source_ref(admission, label=f"{label}.admission_boundary_ref")
+    )
+    capability["explicit_non_authority"] = _strings(
+        capability["explicit_non_authority"], label=f"{label}.explicit_non_authority"
+    )
+    capability["source_state"] = _state(
+        capability["source_state"], label=f"{label}.source_state", composed_at=composed_at
+    )
+    capability["limitations"] = _limitations(
+        capability["limitations"], label=f"{label}.limitations"
+    )
+
+    requires_admission = capability["side_effect_class"] in {
+        "governed_write",
+        "external_effect",
+        "mixed",
+    }
+    if (
+        version is None
+        or not capability["owning_workflow_refs"]
+        or (requires_admission and capability["admission_boundary_ref"] is None)
+    ):
+        capability["source_state"] = _missing_or_unlinked_state(
+            capability["source_state"],
+            reason="incomplete explicit capability declaration withdraws authority claims",
+        )
+    return capability
+
+
 def compose_governing_document_inventory(
     *,
     repository_ref: str,
@@ -363,8 +545,48 @@ def compose_governing_document_inventory(
     }
 
 
+def compose_builder_system_control_view(
+    *,
+    repository_ref: str,
+    governance_baseline_ref: Mapping[str, Any],
+    composed_at: str,
+    governing_document_declarations: Sequence[Mapping[str, Any]],
+    workflow_adapter_declarations: Sequence[Mapping[str, Any]],
+    capability_binding_declarations: Sequence[Mapping[str, Any]],
+    limitations: Sequence[Any],
+) -> dict[str, Any]:
+    """Extend the BSC-01 view from explicit, caller-supplied declarations only."""
+
+    view = compose_governing_document_inventory(
+        repository_ref=repository_ref,
+        governance_baseline_ref=governance_baseline_ref,
+        composed_at=composed_at,
+        declarations=governing_document_declarations,
+        limitations=limitations,
+    )
+    composed_at_value = _timestamp_value(view["composed_at"])
+    adapters = _json_value(workflow_adapter_declarations, label="workflow_adapter_declarations")
+    capabilities = _json_value(
+        capability_binding_declarations, label="capability_binding_declarations"
+    )
+    if not isinstance(adapters, list):
+        raise GoverningDocumentContractError("workflow_adapter_declarations must be a list")
+    if not isinstance(capabilities, list):
+        raise GoverningDocumentContractError("capability_binding_declarations must be a list")
+    view["workflow_adapters"] = [
+        _workflow_adapter(adapter, index=index, composed_at=composed_at_value)
+        for index, adapter in enumerate(adapters)
+    ]
+    view["capability_bindings"] = [
+        _capability_binding(capability, index=index, composed_at=composed_at_value)
+        for index, capability in enumerate(capabilities)
+    ]
+    return view
+
+
 __all__ = [
     "CONTRACT_VERSION",
     "GoverningDocumentContractError",
+    "compose_builder_system_control_view",
     "compose_governing_document_inventory",
 ]

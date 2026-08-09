@@ -26,7 +26,10 @@ def test_spec_defines_information_architecture_and_hard_boundary() -> None:
     assert "primary_identity: builder_system" in spec
     assert "not a tab, panel, or evidence group inside Focus" in spec
     assert "navigation, never a data join" in spec
-    assert "No runtime, route, or visual implementation is delivered by this specification." in normalized
+    assert (
+        "No runtime, route, or visual implementation is delivered by this specification."
+        in normalized
+    )
 
 
 def test_spec_preserves_source_authority_and_lifecycle() -> None:
@@ -56,11 +59,20 @@ def test_spec_requires_correlated_deviation_and_existing_route() -> None:
     assert "existing_repair_route_ref: GovernedRouteRef.v1 | null" in spec
     assert "repair_route_linkage: linked | unlinked | not_assessed" in spec
     assert "repair_route_correlation_ref: SourceRef.v1 | null" in spec
-    assert "Textual similarity, shared provider metadata, and temporal proximity are not correlation." in normalized
+    assert (
+        "Textual similarity, shared provider metadata, and temporal proximity are not correlation."
+        in normalized
+    )
     assert "does not invent a severity" in spec
     assert "`source_state.linkage` remains `linked` for every admitted deviation" in normalized
-    assert "A null `existing_repair_route_ref` requires `repair_route_linkage: unlinked` or `not_assessed` and no offered action." in normalized
-    assert "a non-null, source-owned `repair_route_correlation_ref` proving that the route applies to this exact deviation" in normalized
+    assert (
+        "A null `existing_repair_route_ref` requires `repair_route_linkage: unlinked` or `not_assessed` and no offered action."
+        in normalized
+    )
+    assert (
+        "a non-null, source-owned `repair_route_correlation_ref` proving that the route applies to this exact deviation"
+        in normalized
+    )
 
 
 def test_spec_separates_current_target_and_authority_questions() -> None:
@@ -71,8 +83,9 @@ def test_spec_separates_current_target_and_authority_questions() -> None:
     assert "## Open authority questions" in spec
     assert "Current delivered input" in spec
     assert "BSC-01 governing-document inventory composer" in spec
-    assert "Delivered partial input; no route, UI, or remaining composer is delivered" in spec
-    assert "Target contract; not delivered" in spec
+    assert "BSC-02 workflow-adapter and capability-binding composer" in spec
+    assert "BSC-03 coverage/deviations, routes, UI, command previews, and the whole lens" in spec
+    assert "Target contract; partially delivered" in spec
     assert "No owner decision blocks this docs-only specification." in spec
 
 
@@ -87,4 +100,7 @@ def test_spec_has_bounded_sequenced_follow_up() -> None:
     assert "BSC-04 — governed visual design handoff" in spec
     assert "BSC-05 — route previews over existing workflows" in spec
     assert "must not be filed as children of Focus parent #4693" in normalized
-    assert "No follow-up creates a policy engine, workflow engine, task system, or source registry." in normalized
+    assert (
+        "No follow-up creates a policy engine, workflow engine, task system, or source registry."
+        in normalized
+    )
