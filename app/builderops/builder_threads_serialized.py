@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import uuid
@@ -25,10 +26,11 @@ _SOURCE_REF = re.compile(
 )
 _PRIVATE_CONTENT = re.compile(
     r"(?im)(password|secret|credential|token|api[_-]?key|bearer\s+|"
-    r"(?:~/.ssh|/(?:Users|home|private|etc|var|opt)/)|"
+    r"(?:~/.ssh|/(?:Users|home|private|root|etc|var|opt)/)|"
     r"^aws_(?:access_key_id|secret_access_key)\s*=|"
     r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----|"
-    r"\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b)"
+    r"\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}|"
+    r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b)"
 )
 _CODE_OR_PATCH = re.compile(
     r"(?im)^(?:diff --git |--- a/|\+\+\+ b/|@@ |```|"
@@ -44,6 +46,8 @@ _MAX_TOTAL_ENTRIES = 100
 _ROOT_IDENTITY = "builder-thread-writer.json"
 _ENTRY_DIRECTORY = "builder-thread-entries"
 _REPOSITORY_VAULT_ROOT = (Path(__file__).resolve().parents[2] / "vault").resolve()
+_WRITER_ROOT_ENV = "BUILDEROPS_THREAD_WRITER_ROOT"
+_WRITER_VAULT_ID_ENV = "BUILDEROPS_THREAD_WRITER_VAULT_ID"
 
 
 class BuilderThreadError(ValueError):
@@ -52,6 +56,10 @@ class BuilderThreadError(ValueError):
 
 class WriterUnavailableError(BuilderThreadError):
     """The designated writer cannot currently accept or serve a request."""
+
+
+class WriterHostConfigurationError(WriterUnavailableError):
+    """The designated writer host lacks its required external-root settings."""
 
 
 class WriterAcknowledgementLost(WriterUnavailableError):
@@ -378,8 +386,8 @@ class SerializedThreadWriter:
         self._accepted_mutation_count += 1
 
 
-class InProcessWriterEndpoint:
-    """Test/development endpoint adapter; production clients use a remote adapter."""
+class BoundWriterEndpoint:
+    """Host-issued endpoint capability bound to exactly one client identity."""
 
     def __init__(self, writer: SerializedThreadWriter, *, client_id: str) -> None:
         self._writer = writer
@@ -398,6 +406,33 @@ class InProcessWriterEndpoint:
 
     def inbox(self, recipient: str, *, limit: int) -> BuilderInbox:
         return self._writer.inbox(recipient, limit=limit)
+
+
+class BuilderThreadWriterHost:
+    """Production host factory; clients never read its external-root settings."""
+
+    def __init__(self, writer: SerializedThreadWriter) -> None:
+        self._writer = writer
+
+    @classmethod
+    def from_environment(cls) -> BuilderThreadWriterHost:
+        root_value = os.getenv(_WRITER_ROOT_ENV, "").strip()
+        vault_id = os.getenv(_WRITER_VAULT_ID_ENV, "").strip()
+        if not root_value or not vault_id:
+            raise WriterHostConfigurationError(
+                f"{_WRITER_ROOT_ENV} and {_WRITER_VAULT_ID_ENV} are required on the writer host"
+            )
+        root = Path(root_value)
+        initialize_external_writer_root(root, vault_id=vault_id)
+        return cls(SerializedThreadWriter(vault_id=vault_id, state_root=root))
+
+    def endpoint_for(self, client_id: str) -> BoundWriterEndpoint:
+        return BoundWriterEndpoint(self._writer, client_id=client_id)
+
+
+# Compatibility alias for focused in-process contract tests. Production host
+# construction is :meth:`BuilderThreadWriterHost.from_environment`.
+InProcessWriterEndpoint = BoundWriterEndpoint
 
 
 class BuilderThreadClient:

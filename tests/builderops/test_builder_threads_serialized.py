@@ -5,10 +5,12 @@ from pathlib import Path
 
 from app.builderops.builder_threads_serialized import (
     BuilderThreadClient,
+    BuilderThreadWriterHost,
     InProcessWriterEndpoint,
     SerializedThreadWriter,
     ThreadMutation,
     WriterAcknowledgementLost,
+    WriterHostConfigurationError,
     WriterUnavailableError,
     initialize_external_writer_root,
 )
@@ -101,6 +103,30 @@ def test_serialized_writer_round_trip(tmp_path: Path) -> None:
     assert replied.thread.entries[-1].kind == "reply"
     assert closed.thread.state == "closed"
     assert archived.thread.state == "archived"
+
+
+def test_writer_host_reads_external_configuration_and_issues_bound_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "host-owned-external-vault"
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_ROOT", str(root))
+    monkeypatch.setenv("BUILDEROPS_THREAD_WRITER_VAULT_ID", "builderops-mac-mini")
+
+    host = BuilderThreadWriterHost.from_environment()
+    client = BuilderThreadClient(host.endpoint_for("codex:desktop"), client_id="codex:desktop")
+    created = client.create(
+        request_id="configured-host-4708",
+        actor="codex:desktop",
+        recipient="claude:mac",
+        subject="Configured writer host",
+        content="Only the designated host reads the external root configuration.",
+        source_refs=("github:4708",),
+    )
+
+    assert created.thread.vault_id == "builderops-mac-mini"
+    monkeypatch.delenv("BUILDEROPS_THREAD_WRITER_ROOT")
+    with pytest.raises(WriterHostConfigurationError, match="required on the writer host"):
+        BuilderThreadWriterHost.from_environment()
 
 
 def test_clients_cannot_bypass_serialized_writer(tmp_path: Path) -> None:
@@ -200,10 +226,12 @@ def test_capture_requires_named_recipient_and_shared_non_sensitive_provenance(tm
     (
         "~/.ssh/id_rsa",
         "/etc/shadow",
+        "/root/.ssh/id_rsa",
         "Inspect (/etc/shadow)",
         "AWS_ACCESS_KEY_ID=" + "AKIA" + "IOSFODNN7EXAMPLE",
         "AKIA" + "IOSFODNN7EXAMPLE",
         "github_pat_abcdefghijklmnopqrstuvwxyz0123456789",
+        "sk-" + "proj-" + "abcdefghijklmnopqrstuvwxyz0123456789",
         "-----BEGIN OPENSSH PRIVATE KEY-----",
         "Authorization: Basic abc123",
         "const deploy = () => deploy_unreviewed_change()",

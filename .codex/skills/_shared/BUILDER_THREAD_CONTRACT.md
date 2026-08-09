@@ -15,7 +15,9 @@ to that client's identity: clients have no artifact-root or direct mutation API.
 
 The external BuilderOps Vault is never the repository `vault/` fixture. The
 writer host owns an explicitly initialized, pinned external root and its
-deployment; clients cannot configure or discover that root. The writer records
+deployment. Only that host reads `BUILDEROPS_THREAD_WRITER_ROOT` and
+`BUILDEROPS_THREAD_WRITER_VAULT_ID`; clients cannot configure or discover the
+root. The writer records
 one immutable, writer-sequenced command envelope per request and rebuilds its
 bounded state after a host restart. A client request is bounded and attributed
 with its caller-retained request ID, endpoint client identity (which must match

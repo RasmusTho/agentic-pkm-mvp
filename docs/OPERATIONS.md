@@ -413,7 +413,9 @@ and is never a live target.
 The operational boundary accepts only bounded `shared_non_sensitive` material,
 typed provenance, endpoint-bound actor identities, and named-recipient questions.
 The writer host explicitly initializes the external root with its pinned vault
-identity and retains immutable, writer-sequenced request envelopes there; a
+identity from `BUILDEROPS_THREAD_WRITER_ROOT` and
+`BUILDEROPS_THREAD_WRITER_VAULT_ID`, then retains immutable, writer-sequenced
+request envelopes there; a
 caller-retained request ID therefore supports an exact
 acknowledgement-loss retry across a writer restart, while changed semantics under
 the same ID fail closed. Thread reads are capped at 32 contributions and the
