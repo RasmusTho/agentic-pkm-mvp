@@ -665,7 +665,16 @@ class _FakeDarwinKernel:
     def signal(
         self, identity: darwin_containment.ProcessIdentity, sig: int
     ) -> bool:
-        if self.identities.get(identity.pid) != identity:
+        current = self.identities.get(identity.pid)
+        if current is None or (
+            current.pid_version,
+            current.unique_id,
+            current.coalition_id,
+        ) != (
+            identity.pid_version,
+            identity.unique_id,
+            identity.coalition_id,
+        ):
             return False
         if self.signal_callback is not None:
             self.signal_callback(identity.pid, sig)
@@ -834,6 +843,44 @@ def test_containment_refuses_pid_reuse_between_snapshot_and_signal() -> None:
 
     assert containment.cleanup() is False
     assert kernel.identities[200].pid_version == 5
+
+
+def test_cleanup_accepts_child_reparented_after_parent_signal() -> None:
+    kernel = _FakeDarwinKernel()
+    signalled: list[int] = []
+
+    def signaler(pid: int, _sig: int) -> None:
+        signalled.append(pid)
+        kernel.identities.pop(pid, None)
+        if pid == 200:
+            child = kernel.identities[201]
+            kernel.identities[201] = darwin_containment.ProcessIdentity(
+                child.pid,
+                child.pid_version,
+                child.unique_id,
+                100,
+                child.coalition_id,
+            )
+
+    kernel.signal_callback = signaler
+    containment = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+        sleeper=lambda _seconds: None,
+    )()
+    containment.environment({})
+    kernel.identities[200] = darwin_containment.ProcessIdentity(
+        200, 4, 200, 100, 7
+    )
+    kernel.identities[201] = darwin_containment.ProcessIdentity(
+        201, 4, 201, 200, 7
+    )
+    containment.attach(200)
+
+    assert containment.cleanup() is True
+    assert signalled == [200, 201]
 
 
 def test_containment_rejects_unrelated_member_appearing_before_attach() -> None:

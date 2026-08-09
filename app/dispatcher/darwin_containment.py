@@ -48,6 +48,25 @@ class CoalitionSnapshot:
     kernel_task_count: int
 
 
+def _same_signal_identity(
+    left: ProcessIdentity,
+    right: ProcessIdentity,
+) -> bool:
+    """Compare immutable signal authority while allowing safe reparenting."""
+
+    return (
+        left.pid,
+        left.pid_version,
+        left.unique_id,
+        left.coalition_id,
+    ) == (
+        right.pid,
+        right.pid_version,
+        right.unique_id,
+        right.coalition_id,
+    )
+
+
 class DarwinCoalitionKernel(Protocol):
     """Narrow injectable kernel interface used by the containment profile."""
 
@@ -387,7 +406,7 @@ class DarwinLaunchdCoalitionContainment:
 
     def _signal_identity(self, identity: ProcessIdentity, sig: int) -> bool:
         fresh = self._kernel.inspect(identity.pid)
-        if fresh != identity or fresh.coalition_id != self._coalition_id:
+        if fresh is None or not _same_signal_identity(fresh, identity):
             return False
         try:
             return self._kernel.signal(identity, sig)
