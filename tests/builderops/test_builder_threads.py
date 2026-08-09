@@ -176,6 +176,23 @@ def test_root_and_genesis_validation_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(BuilderThreadValidationError, match="repository-nested"):
         BuilderThreadService.initialize(fixture, vault_id=VAULT_ID)
 
+    non_python_checkout = tmp_path / "non-python-checkout"
+    non_python_checkout.mkdir()
+    (non_python_checkout / ".git").write_text(
+        "gitdir: /external/worktrees/non-python\n", encoding="utf-8"
+    )
+    nested_external = non_python_checkout / "ops" / "shared-builder"
+    nested_external.parent.mkdir(parents=True)
+    init_vault(nested_external)
+    before_nested_refusal = _vault_snapshot(nested_external)
+    with pytest.raises(BuilderThreadValidationError, match="repository-nested"):
+        BuilderThreadService.initialize(
+            nested_external,
+            vault_id=VAULT_ID,
+            adopt_existing=True,
+        )
+    assert _vault_snapshot(nested_external) == before_nested_refusal
+
 
 @pytest.mark.parametrize("genesis_state", ("root_only", "subsystem_only", "mismatch"))
 def test_genesis_pair_refusal_is_non_mutating(tmp_path: Path, genesis_state: str) -> None:
@@ -1199,6 +1216,54 @@ def test_structural_quarantine_recovers_privacy_unsafe_identity_and_refs(
     rendered = json.dumps(recovered, sort_keys=True)
     assert secret_marker not in rendered
     assert "docs/builderops/BUILDEROPS_VAULT_STORE.md" in rendered
+    assert service.health()["ok"] is True
+
+
+def test_structural_quarantine_recovers_an_unsafe_quarantine_contribution(
+    tmp_path: Path,
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Recover unsafe incident metadata",
+        content="Can an unsafe quarantine decision be redacted without undoing its target?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    decision = service.quarantine(
+        opened["thread_id"],
+        artifact_hash=opened["entry_hash"],
+        actor_id=ACTOR,
+        reason_code="privacy_misclassification",
+    )
+    decision_path = next(
+        path
+        for path in _entry_files(vault, opened["thread_id"])
+        if path.stem == decision["entry_hash"]
+    )
+    payload = json.loads(decision_path.read_bytes())
+    unsafe_marker = "github_pat_" + "quarantineunsafe"
+    unsafe_bytes = _canonical_bytes(
+        {**payload, "actor_id": f"agent:{unsafe_marker}"}
+    )
+    unsafe_hash = hashlib.sha256(unsafe_bytes).hexdigest()
+    unsafe_path = decision_path.with_name(f"{unsafe_hash}.json")
+    decision_path.unlink()
+    unsafe_path.write_bytes(unsafe_bytes)
+
+    with pytest.raises(BuilderThreadPrivacyError):
+        service.health()
+    recovered = service.quarantine(
+        opened["thread_id"],
+        artifact_hash=unsafe_hash,
+        actor_id=RECIPIENT,
+        reason_code="credential_like_content",
+    )
+
+    rendered = json.dumps(recovered, sort_keys=True)
+    assert unsafe_marker not in rendered
+    assert recovered["state"] == "quarantined"
+    assert recovered["quarantined_count"] == 2
     assert service.health()["ok"] is True
 
 
@@ -2273,6 +2338,16 @@ def test_single_quarantine_decision_cannot_be_neutralized_as_concurrent(
 
     with pytest.raises(
         BuilderThreadValidationError,
+        match="recovery requires concurrent_conflict",
+    ):
+        service.quarantine(
+            opened["thread_id"],
+            artifact_hash=decision_hash,
+            actor_id=RECIPIENT,
+            reason_code="credential_like_content",
+        )
+    with pytest.raises(
+        BuilderThreadValidationError,
         match="active sibling dispositions",
     ):
         service.quarantine(
@@ -2544,6 +2619,15 @@ def test_capture_gate_and_shared_non_sensitive_privacy_boundary(
                 "source_refs": [{"type": "github_issue", "value": "not-a-number"}],
             }
         )
+    for unsafe_repo_path in ("../private", "docs/../private", "./docs"):
+        with pytest.raises(BuilderThreadValidationError, match="unsafe source ref"):
+            service.create_thread(
+                **{
+                    **kwargs,
+                    "subject": "Canonical repository paths",
+                    "source_refs": [{"type": "repo_path", "value": unsafe_repo_path}],
+                }
+            )
     allowed = service.create_thread(
         **{
             **kwargs,

@@ -193,6 +193,14 @@ removed it, leaving the other to surface `FileNotFoundError`. That SHA is reject
 evidence. Finalization now treats only disappearance of the already identity-verified reservation
 as convergence and still fsyncs the slot; the focused proof forces this window deterministically.
 
+Final review of SHA `dd0932c570a4ada650f89a2bb68643e1093ef470` found three remaining
+contract gaps: dot-segment traversal in `repo_path`, checkout confinement coupled to a Python
+marker, and no structural recovery when a quarantine contribution itself carried privacy-unsafe
+metadata. That SHA is rejected publication evidence. The bounded repair requires canonical relative
+repo paths, treats any `.git` file or directory in root ancestry as checkout evidence, and permits
+only a genuinely privacy-unsafe quarantine contribution to be redacted while preserving its
+original target disposition.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
 | Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |
@@ -221,7 +229,7 @@ as convergence and still fsyncs the slot; the focused proof forces this window d
 | Privacy patterns, actor identity, capture gate, bounds | `test_capture_gate_and_shared_non_sensitive_privacy_boundary` |
 | Recipient-bound answer plus immutable/idempotent inbox | `test_inbox_is_bounded_read_only_and_idempotent` |
 | Exact reads/mutations validate unhealthy sibling threads | `test_exact_thread_operations_reject_an_unhealthy_sibling_thread` |
-| Structurally valid privacy incidents, unsafe identity/ref redaction, and incompatible quarantine retry | `test_quarantine_preserves_bytes_and_redacts_unsafe_artifact`, `test_structural_quarantine_recovers_privacy_unsafe_identity_and_refs`, `test_structural_quarantine_redacts_unsafe_open_source_ref` |
+| Structurally valid privacy incidents, unsafe identity/ref redaction, unsafe quarantine-decision recovery, and incompatible quarantine retry | `test_quarantine_preserves_bytes_and_redacts_unsafe_artifact`, `test_structural_quarantine_recovers_privacy_unsafe_identity_and_refs`, `test_structural_quarantine_recovers_an_unsafe_quarantine_contribution`, `test_structural_quarantine_redacts_unsafe_open_source_ref` |
 | Recomputed capture key and active-close archive targeting | `test_receiver_recomputes_capture_key_and_rejects_non_active_archive_target` |
 | Sequentially superseded close is not a concurrent quarantine sibling | `test_sequentially_superseded_close_is_not_a_concurrent_conflict` |
 

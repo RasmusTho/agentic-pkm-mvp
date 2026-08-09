@@ -324,7 +324,15 @@ def _source_refs(values: Any, *, enforce_privacy: bool = True) -> list[dict[str,
             "github_pr": GITHUB_NUMBER_RE,
             "repo_path": REPO_PATH_RE,
         }.get(ref_type, REF_VALUE_RE)
-        if not matcher.fullmatch(value) or value.startswith(("/", "~")):
+        repo_path = value.rsplit(":", 1)[0]
+        has_dot_segment = ref_type == "repo_path" and any(
+            part in {".", ".."} for part in repo_path.split("/")
+        )
+        if (
+            not matcher.fullmatch(value)
+            or value.startswith(("/", "~"))
+            or has_dot_segment
+        ):
             raise BuilderThreadValidationError(f"unsafe source ref: {ref_type}")
         if enforce_privacy:
             _privacy_check(value, field="source_ref")
@@ -794,9 +802,20 @@ class BuilderThreadService:
         )
         target_entry = target_item["entry"]
         if target_entry["entry_type"] == "quarantine" and reason_code != "concurrent_conflict":
-            raise BuilderThreadValidationError(
-                "quarantine-disposition recovery requires concurrent_conflict"
-            )
+            try:
+                self._validate_entry_shape(
+                    target_entry,
+                    thread_id=thread["thread_id"],
+                    structural_only=False,
+                )
+                _privacy_check(target_entry.get("subject"), field="subject")
+                _privacy_check(target_entry.get("content"), field="content")
+            except BuilderThreadPrivacyError:
+                pass
+            else:
+                raise BuilderThreadValidationError(
+                    "quarantine-disposition recovery requires concurrent_conflict"
+                )
         if reason_code == "concurrent_conflict":
             target_type = target_entry["entry_type"]
             if target_type == "quarantine":
@@ -952,7 +971,11 @@ class BuilderThreadService:
                 "Mimer/human vault control tree is forbidden for Builder Threads"
             )
         for ancestor in (self.root, *self.root.parents):
-            if (ancestor / ".git").exists() and (ancestor / "pyproject.toml").exists():
+            try:
+                (ancestor / ".git").lstat()
+            except FileNotFoundError:
+                continue
+            else:
                 raise BuilderThreadValidationError(
                     "repository-nested vault root is forbidden for Builder Threads"
                 )
@@ -1662,11 +1685,14 @@ class BuilderThreadService:
         quarantine_entries = [
             item for item in entries if item["entry"]["entry_type"] == "quarantine"
         ]
+        quarantine_by_hash = {
+            item["entry_hash"]: item for item in quarantine_entries
+        }
         targeted_quarantine_hashes = {
             item["entry"]["target_hash"]
             for item in quarantine_entries
             if item["entry"]["target_hash"]
-            in {candidate["entry_hash"] for candidate in quarantine_entries}
+            in quarantine_by_hash
         }
         active_quarantines = [
             item
@@ -1674,8 +1700,24 @@ class BuilderThreadService:
             if item["entry_hash"] not in targeted_quarantine_hashes
         ]
         quarantine_targets: dict[str, list[str]] = {}
+        redacted_quarantine_hashes: set[str] = set()
         for item in active_quarantines:
             target_hash = item["entry"]["target_hash"]
+            if target_hash is None:
+                raise BuilderThreadValidationError("quarantine target is required")
+            redacted_quarantine_hashes.add(target_hash)
+            seen_targets: set[str] = set()
+            while (
+                item["entry"]["reason_code"] != "concurrent_conflict"
+                and target_hash in quarantine_by_hash
+            ):
+                if target_hash in seen_targets:
+                    raise BuilderThreadValidationError("quarantine target cycle")
+                seen_targets.add(target_hash)
+                targeted_decision = quarantine_by_hash[target_hash]["entry"]
+                target_hash = targeted_decision["target_hash"]
+                if target_hash is None:
+                    raise BuilderThreadValidationError("quarantine target is required")
             quarantine_targets.setdefault(target_hash, []).append(item["entry_hash"])
         quarantine_conflicts = {
             target: decisions
@@ -1684,7 +1726,7 @@ class BuilderThreadService:
         }
         if quarantine_conflicts and not structural_only:
             raise BuilderThreadConflictError("multiple active quarantine decisions for one target")
-        quarantined = set(quarantine_targets)
+        quarantined = set(quarantine_targets) | redacted_quarantine_hashes
         if None in quarantined:
             raise BuilderThreadValidationError("quarantine target is required")
         if not quarantined.issubset(hashes):
