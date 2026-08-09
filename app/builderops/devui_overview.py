@@ -441,10 +441,18 @@ def compose_overview_view(
                 raise OverviewContractError(
                     f"composition.providers.{name} available provider cannot carry refusal evidence"
                 )
-        elif provider["authority"] is None or provider["refusal"] is None:
-            raise OverviewContractError(
-                f"composition.providers.{name} refused provider requires authority and refusal evidence"
-            )
+        else:
+            if provider["authority"] is None or provider["refusal"] is None:
+                raise OverviewContractError(
+                    f"composition.providers.{name} refused provider requires authority and refusal evidence"
+                )
+            if any(
+                provider.get(field) is not None
+                for field in ("captured_at", "snapshot", "completeness", "payload")
+            ):
+                raise OverviewContractError(
+                    f"composition.providers.{name} refused provider cannot carry available evidence"
+                )
         trust_providers.append(
             {
                 "role": name,

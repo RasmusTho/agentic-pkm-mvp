@@ -42,7 +42,7 @@ def _composition() -> dict:
                 "status": "refused",
                 "authority": "projection_marker",
                 "captured_at": None,
-                "snapshot": {"watermark": "ckm:9"},
+                "snapshot": None,
                 "completeness": None,
                 "refusal": {"code": "unavailable"},
             },
@@ -367,6 +367,23 @@ def test_refused_provider_requires_refusal_evidence() -> None:
     composition["providers"]["capabilities"]["refusal"] = None
 
     with pytest.raises(OverviewContractError, match="refused provider"):
+        compose_overview_view(composition=composition)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("captured_at", "2026-08-09T21:00:00+00:00"),
+        ("snapshot", {"watermark": "forged:1"}),
+        ("completeness", {"claim": {"kind": "counted"}}),
+        ("payload", {"resources": []}),
+    ),
+)
+def test_refused_provider_rejects_available_evidence(field: str, value: object) -> None:
+    composition = _composition()
+    composition["providers"]["capabilities"][field] = value
+
+    with pytest.raises(OverviewContractError, match="cannot carry available evidence"):
         compose_overview_view(composition=composition)
 
 
