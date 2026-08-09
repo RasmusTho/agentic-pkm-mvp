@@ -13,10 +13,11 @@ Source of truth: This document owns the owner experience. Accepted ADRs and link
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
 Last reviewed: 2026-08-09
-Last verified against: `origin/main` `c7561c8301a21276444e04bf462bdf8573a834c0`, ADR-0057,
+Last verified against: `origin/main` `6f4fb5e2cdd1c05b8905f55b25b671c583c76a7e`, ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
 Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
-and the advisory Builder System devUI execution audit in PR #4689.
+the advisory Builder System devUI execution audit in PR #4689, and the merged Focus and Conversation
+Port specification in PR #4699.
 
 # devUI — the owner flow for Yggdrasil development
 
@@ -80,9 +81,52 @@ source graphs. They remain available as progressive technical detail and source 
 must not understand CKM, DDO, BuilderOps, dispatcher, GitHub, or CI as separate products to use the
 core flow.
 
-devUI may render a derived chain or graph, but it does not persist a Delivery Knowledge Graph or
-copy source lifecycle state. A new dashboard module, top-level mode, status, or durable entity is
-out of scope unless it removes an owner reconstruction step that the three zones cannot answer.
+devUI may render a **Delivery Graph Projection**: a read-time, rebuildable composition of existing
+authorities linked by typed references and receipts. It does not persist a Delivery Knowledge Graph,
+copy source lifecycle state, or become a new authority store. A new dashboard module, top-level
+mode, status, or durable entity is out of scope unless it removes an owner reconstruction step that
+the three zones cannot answer.
+
+### Delivery Graph Projection boundary
+
+The versioned devUI composition envelope declares when the view was composed and, for every provider
+claim it uses, the source identity, source-specific snapshot or reference, watermark or
+`captured_at`, completeness, and any typed refusal or withdrawal reason. It is rebuilt from CKM,
+BuilderOps/DDO, GitHub, Git/worktree, CI, review, merge, dispatcher, and receipt evidence at read
+time. A missing, stale, refused, or unlinked input remains visible as that source's condition; the
+envelope must never replace it with an inferred link, zero, empty result, or durable cache.
+
+The following existing authorities remain the minimal model. devUI links them; it does not normalize
+them into a universal object hierarchy or a shared lifecycle state machine.
+
+| Concern | Existing authority or contract |
+| --- | --- |
+| Meaning and scope | Owner docs, ADRs, task specifications, GitHub Issues, and `IssueScope` |
+| Delivery proposal and approval | `DeliveryRequest`, `DeliveryPreview`, `ApprovalEvidence`, and `DeliveryInitiation.v2` |
+| Execution | DDO plan/reducer, attempts, typed reducer effects, worker context/invocation/result contracts, BuilderOps journal/outbox |
+| Result facts | GitHub/Git/CI/review/merge readback and typed receipts |
+| Capability learning | CKM-derived/provenance-bound evidence and BuilderOps retrospective records |
+| Owner view | This read-only, rebuildable composition envelope |
+
+Do not add general-purpose `OwnerIntent`, `CapabilityDeliveryIntent`, `DeliveryScope`,
+`DeliveryApproval`, `ExternalEffect`, `EvidenceSnapshot`, `AgentSession`, or `WorkspaceLease`
+objects for this experience. The listed contracts, source-specific snapshots, carrier envelopes, and
+separate lease models already carry the necessary semantics. A future persistent owner-intent or
+needs register requires a separate authority, privacy, and demonstrated-use decision; **Needs you**
+is a projection zone, not such a register.
+
+Delivery facts stay multidimensional rather than advancing through one devUI state. Required checks
+green, merge, Issue closure, promotion or availability, **Ready to try**, owner tried, and owner
+accepted are separately evidenced facts with separate owners. No earlier fact implies a later one;
+in particular merge is not delivery, delivery is not promotion, and **Ready to try** is neither an
+owner trial nor acceptance. Owner-tried and owner-accepted remain future typed receipts until their
+governing authority exists.
+
+Claude and Codex handoffs use the existing durable chain
+`WorkerContextPack → WorkerInvocation → provider/session carrier → WorkerResultV2`
+`(with StructuredWorkerResult) → Receipt`. Provider/session identifiers and model metadata are
+provenance only. Resumption reads the BuilderOps journal, typed receipts, and live provider readback;
+it never treats chat history as delivery authority.
 
 ### Decision-support and information-depth contract
 
