@@ -1373,15 +1373,36 @@ def test_concurrent_exact_entry_retry_reserves_one_physical_artifact(
         source_refs=SOURCE_REFS,
     )
     barrier = Barrier(2)
-    real_reserve = BuilderThreadService._reserve_entry_slot
+    real_reserve = ProductionBuilderThreadService._reserve_entry_slot
+    real_unlink = Path.unlink
+    unlink_lock = Lock()
+    removed_by_peer = False
 
     def synchronized_reserve(
-        current: BuilderThreadService, entries_dir: Path, entry_id: str
+        current: ProductionBuilderThreadService, entries_dir: Path, entry_id: str
     ) -> Path:
         barrier.wait(timeout=2)
         return real_reserve(current, entries_dir, entry_id)
 
-    monkeypatch.setattr(BuilderThreadService, "_reserve_entry_slot", synchronized_reserve)
+    monkeypatch.setattr(
+        ProductionBuilderThreadService, "_reserve_entry_slot", synchronized_reserve
+    )
+
+    def concurrent_reservation_unlink(
+        path: Path, missing_ok: bool = False
+    ) -> None:
+        nonlocal removed_by_peer
+        if path.name == builder_thread_module.SLOT_RESERVATION_NAME:
+            with unlink_lock:
+                if not removed_by_peer:
+                    removed_by_peer = True
+                    real_unlink(path, missing_ok=missing_ok)
+                    raise FileNotFoundError(path)
+                real_unlink(path, missing_ok=missing_ok)
+            return
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", concurrent_reservation_unlink)
     kwargs = {
         "thread_id": opened["thread_id"],
         "recipient_id": ACTOR,
@@ -1404,6 +1425,7 @@ def test_concurrent_exact_entry_retry_reserves_one_physical_artifact(
         )
 
     assert len({item["entry_hash"] for item in results}) == 1
+    assert removed_by_peer is True
     assert len(_entry_files(vault, opened["thread_id"])) == 2
     assert service.health()["artifact_count"] == 2
 
@@ -2503,7 +2525,7 @@ def test_capture_gate_and_shared_non_sensitive_privacy_boundary(
         "sys.argv was ['builder-thread', '--secret']",
         "sk-proj-abcdefghijklmnop",
         "github_pat_abcdefghijklmnop",
-        "AKIAABCDEFGHIJKLMNOP",
+        "AKIA" + "ABCDEFGHIJKLMNOP",
     )
     for content in unsafe:
         with pytest.raises(BuilderThreadPrivacyError):

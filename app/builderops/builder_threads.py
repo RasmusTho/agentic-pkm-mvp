@@ -2233,7 +2233,10 @@ class BuilderThreadService:
             raise exc
         if reserved_entry_id != entry_id:
             raise BuilderThreadConflictError("entry reservation changed before finalization")
-        reservation.unlink()
+        try:
+            reservation.unlink()
+        except FileNotFoundError:
+            pass
         _fsync_directory(slot)
 
     def _pending_entry_slot(self, entries_dir: Path, entry_id: str) -> Path | None:

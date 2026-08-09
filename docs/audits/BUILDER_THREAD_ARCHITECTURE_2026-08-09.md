@@ -187,6 +187,12 @@ publish. That SHA is rejected publication evidence. The repaired slot has one fi
 create-if-absent marker name hard-linked to the immutable global claim; the link is complete when it
 becomes visible, one writer wins, and a process death before it leaves only unowned empty capacity.
 
+Exact-head CI for SHA `8d7757386c534d623f2825c55186b4eaa9590fc6` then reproduced an
+idempotent-finalization race: two exact retries could both validate one reservation before one
+removed it, leaving the other to surface `FileNotFoundError`. That SHA is rejected publication
+evidence. Finalization now treats only disappearance of the already identity-verified reservation
+as convergence and still fsyncs the slot; the focused proof forces this window deterministically.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
 | Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |

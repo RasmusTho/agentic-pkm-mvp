@@ -1822,6 +1822,13 @@
       "issue": "#4327"
     },
     {
+      "artifact": "tests/builderops/test_builder_threads.py",
+      "category": "iii",
+      "why_load_bearing": "Builder Thread storage tests retain a conflict-copy fixture that proves cross-device filenames fail closed.",
+      "disposition": "stay",
+      "issue": "#4702"
+    },
+    {
       "artifact": "tests/builderops/test_epic_run_state.py",
       "category": "iii",
       "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
