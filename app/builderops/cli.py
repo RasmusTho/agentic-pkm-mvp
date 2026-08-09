@@ -428,9 +428,12 @@ class _BuilderThreadJsonGroup(click.Group):
         wants_json = "--json" in args
         try:
             return super().make_context(info_name, args, parent=parent, **extra)
-        except click.UsageError as exc:
+        except click.UsageError:
             if wants_json:
-                _builder_thread_failure(BuilderThreadValidationError(str(exc)), as_json=True)
+                _builder_thread_failure(
+                    BuilderThreadValidationError("invalid Builder Thread command usage"),
+                    as_json=True,
+                )
             raise
 
     def resolve_command(
@@ -441,9 +444,12 @@ class _BuilderThreadJsonGroup(click.Group):
         wants_json = "--json" in args
         try:
             return super().resolve_command(ctx, args)
-        except click.UsageError as exc:
+        except click.UsageError:
             if wants_json:
-                _builder_thread_failure(BuilderThreadValidationError(str(exc)), as_json=True)
+                _builder_thread_failure(
+                    BuilderThreadValidationError("invalid Builder Thread command usage"),
+                    as_json=True,
+                )
             raise
 
 
@@ -460,9 +466,12 @@ class _BuilderThreadJsonCommand(click.Command):
         wants_json = "--json" in args
         try:
             return super().make_context(info_name, args, parent=parent, **extra)
-        except click.UsageError as exc:
+        except click.UsageError:
             if wants_json:
-                _builder_thread_failure(BuilderThreadValidationError(str(exc)), as_json=True)
+                _builder_thread_failure(
+                    BuilderThreadValidationError("invalid Builder Thread command usage"),
+                    as_json=True,
+                )
             raise
 
 

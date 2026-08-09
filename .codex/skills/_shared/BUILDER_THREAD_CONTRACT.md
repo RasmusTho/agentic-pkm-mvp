@@ -46,6 +46,11 @@ Each contribution is one canonical JSON envelope at:
 
     builder-threads/threads/<thread-id>/entries/<slot>/<sha256>.json
 
+Before publishing that envelope, the writer atomically claims its vault-wide entry UUID with one
+immutable visible manifest at `builder-threads/entry-claims/<entry-id>.json`. The manifest binds the
+entry ID to exactly one thread and is validated one-to-one with represented contributions. It is a
+concurrency guard and recovery artifact, not a mutable index, sequence, backlog, or authority.
+
 Canonical bytes are UTF-8 JSON with object keys sorted lexicographically, no whitespace outside
 strings, comma/colon separators, JSON Unicode characters emitted directly, and one terminal LF.
 The filename is the SHA-256 of the complete canonical envelope bytes. Writers use a same-directory
@@ -61,9 +66,12 @@ destination is a typed conflict and remains untouched.
 
 Create/reply require a caller-retained entry UUID. Reusing it for the same semantic request is an
 idempotent acknowledgement-loss retry even when the new invocation has a later generated timestamp;
-changed content under that ID is a replay conflict. A committed temp hard-link twin left by failed
-cleanup is removed only by a mutation retry after its bytes and content-addressed final match.
-Read-only health continues to expose unmatched or orphaned temps as incomplete.
+changed content under that ID is a replay conflict. The claim uses create-if-absent publication, so
+concurrent cross-thread reuse has one winner before either thread envelope can publish. A claim-only
+crash is incomplete to readers and recoverable only by an exact writer retry. A committed temp
+hard-link twin left by failed cleanup is removed only by a mutation retry after its bytes and
+content-addressed final match. Read-only health exposes unmatched claims and orphaned temps as
+incomplete.
 
 Stale close/archive snapshots may be superseded through immutable hash lineage. Each thread has 128
 immutable, create-if-absent entry slots. A writer must reserve one before publishing contribution

@@ -340,9 +340,12 @@ paths, duplicate IDs, hash mismatches, and replay conflicts.
 
 Create and reply require a caller-retained `--entry-id` UUIDv4. An exact semantic retry with that ID
 returns the installed contribution even when the helper generates a later timestamp; changed
-semantics under one ID are refused. If final publication succeeded but temp cleanup failed, a later
-mutation retry removes the temp only after its bytes and content-addressed final match. Read-only
-health never performs cleanup.
+semantics under one ID are refused. Before contribution publication, an immutable visible manifest
+at `builder-threads/entry-claims/<entry-id>.json` atomically binds that vault-wide ID to one thread.
+It is a create-if-absent concurrency/recovery guard, not a mutable index or authority. A claim-only
+crash is incomplete to readers and only an exact writer retry may finish it. If final publication
+succeeded but temp cleanup failed, a later mutation retry removes the temp only after its bytes and
+content-addressed final match. Read-only health never performs cleanup.
 
 Publication uses a same-directory exclusive temporary file, file `fsync`, a no-overwrite hard
 link, directory `fsync`, readback, temp unlink, and a second directory `fsync`. There is no

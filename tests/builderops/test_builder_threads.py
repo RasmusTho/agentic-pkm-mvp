@@ -553,6 +553,14 @@ def test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append(
     assert unknown_payload["error"]["type"] == "BuilderThreadValidationError"
     assert "Error:" not in unknown.output
 
+    hostile_command = "github_pat_abcdefghijklmnop"
+    hostile_unknown = _run(["builder-inbox", hostile_command, "--json"], env)
+    assert hostile_unknown.exit_code == 1
+    assert json.loads(hostile_unknown.output)["error"]["type"] == (
+        "BuilderThreadValidationError"
+    )
+    assert hostile_command not in hostile_unknown.output
+
     private_marker = str(vault / "private-storage-detail")
 
     def fail_storage(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
@@ -585,8 +593,14 @@ def test_public_service_requires_request_identity_and_retries_exactly(
         "actor_id": ACTOR,
         "source_refs": SOURCE_REFS,
     }
+    root_genesis = vault / ".builderops" / "vault-genesis.json"
+    genesis_temp = root_genesis.with_name(f".tmp-vault-genesis-{'b' * 32}")
+    os.link(root_genesis, genesis_temp)
+    before_missing_create = _vault_snapshot(vault)
     with pytest.raises(BuilderThreadValidationError, match="caller-retained entry_id"):
         public.create_thread(**kwargs)
+    assert _vault_snapshot(vault) == before_missing_create
+    genesis_temp.unlink()
     entry_id = "14141414-1414-4414-8414-141414141414"
     opened = public.create_thread(**kwargs, entry_id=entry_id)
     exact = public.create_thread(**kwargs, entry_id=entry_id)
@@ -599,8 +613,14 @@ def test_public_service_requires_request_identity_and_retries_exactly(
         "parent_hash": opened["entry_hash"],
         "source_refs": SOURCE_REFS,
     }
+    opened_path = _entry_files(vault, opened["thread_id"])[0]
+    entry_temp = opened_path.with_name(f".tmp-{opened_path.stem}-{'c' * 32}")
+    os.link(opened_path, entry_temp)
+    before_missing_reply = _vault_snapshot(vault)
     with pytest.raises(BuilderThreadValidationError, match="caller-retained entry_id"):
         public.reply(opened["thread_id"], **reply_kwargs)
+    assert _vault_snapshot(vault) == before_missing_reply
+    entry_temp.unlink()
     reply_id = "15151515-1515-4515-8515-151515151515"
     replied = public.reply(opened["thread_id"], **reply_kwargs, entry_id=reply_id)
     reply_retry = public.reply(opened["thread_id"], **reply_kwargs, entry_id=reply_id)
@@ -638,6 +658,18 @@ def test_entry_id_is_unique_across_the_entire_vault(tmp_path: Path) -> None:
         actor_id=ACTOR,
         source_refs=SOURCE_REFS,
     )
+    before_cross_thread_reply = _vault_snapshot(vault)
+    with pytest.raises(BuilderThreadConflictError, match="entry_id replay conflict"):
+        service.reply(
+            second["thread_id"],
+            recipient_id=ACTOR,
+            content="A reused request identity must not enter another thread.",
+            actor_id=RECIPIENT,
+            parent_hash=second["entry_hash"],
+            source_refs=SOURCE_REFS,
+            entry_id=entry_id,
+        )
+    assert _vault_snapshot(vault) == before_cross_thread_reply
     second_path = _entry_files(vault, second["thread_id"])[0]
     second_payload = json.loads(second_path.read_bytes())
     second_payload["entry_id"] = entry_id
@@ -649,6 +681,73 @@ def test_entry_id_is_unique_across_the_entire_vault(tmp_path: Path) -> None:
     duplicate_path.write_bytes(duplicate_bytes)
     with pytest.raises(BuilderThreadConflictError, match="duplicate entry_id across vault"):
         service.health()
+    before_exact_operations = _vault_snapshot(vault)
+    with pytest.raises(BuilderThreadConflictError, match="duplicate entry_id across vault"):
+        service.read_thread(first["thread_id"])
+    with pytest.raises(BuilderThreadConflictError, match="duplicate entry_id across vault"):
+        service.close_thread(
+            first["thread_id"], actor_id=ACTOR, reason="Must not append"
+        )
+    assert _vault_snapshot(vault) == before_exact_operations
+
+
+def test_concurrent_cross_thread_entry_id_claim_allows_one_winner(
+    tmp_path: Path,
+) -> None:
+    service, vault = _service(tmp_path)
+    entry_id = "17171717-1717-4717-8717-171717171717"
+    start = Barrier(2)
+
+    def create(index: int) -> dict[str, Any] | Exception:
+        start.wait(timeout=2)
+        try:
+            return BuilderThreadService(vault, expected_vault_id=VAULT_ID).create_thread(
+                recipient_id=RECIPIENT,
+                subject=f"Concurrent global identity {index}",
+                content=f"Only request semantics {index} may own this identity.",
+                actor_id=ACTOR,
+                source_refs=SOURCE_REFS,
+                entry_id=entry_id,
+            )
+        except BuilderThreadError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(create, (1, 2)))
+
+    assert sum(isinstance(item, dict) for item in outcomes) == 1
+    assert sum(isinstance(item, BuilderThreadConflictError) for item in outcomes) == 1
+    health = service.health()
+    assert health["ok"] is True
+    assert health["thread_count"] == 1
+    claims = list((vault / "builder-threads" / "entry-claims").glob("*.json"))
+    assert len(claims) == 1
+
+    exact_id = "19191919-1919-4919-8919-191919191919"
+    exact_start = Barrier(2)
+
+    def exact_create(_index: int) -> dict[str, Any] | Exception:
+        exact_start.wait(timeout=2)
+        try:
+            return BuilderThreadService(vault, expected_vault_id=VAULT_ID).create_thread(
+                recipient_id=RECIPIENT,
+                subject="Concurrent exact global identity",
+                content="Both callers represent one identical durable request.",
+                actor_id=ACTOR,
+                source_refs=SOURCE_REFS,
+                entry_id=exact_id,
+            )
+        except BuilderThreadError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        exact_outcomes = list(pool.map(exact_create, (1, 2)))
+
+    assert all(isinstance(item, dict) for item in exact_outcomes)
+    assert len({item["entry_hash"] for item in exact_outcomes if isinstance(item, dict)}) == 1
+    assert service.health()["thread_count"] == 2
+    claims = list((vault / "builder-threads" / "entry-claims").glob("*.json"))
+    assert len(claims) == 2
 
 
 def test_quarantine_preserves_bytes_and_redacts_unsafe_artifact(
@@ -676,6 +775,7 @@ def test_quarantine_preserves_bytes_and_redacts_unsafe_artifact(
     }
     unsafe_bytes = _canonical_bytes(unsafe_payload)
     unsafe_hash = hashlib.sha256(unsafe_bytes).hexdigest()
+    service._reserve_entry_claim(unsafe_payload)
     entries_dir = vault / "builder-threads" / "threads" / thread_id / "entries"
     unsafe_slot = next(
         entries_dir / f"{index:03d}"
@@ -686,7 +786,7 @@ def test_quarantine_preserves_bytes_and_redacts_unsafe_artifact(
     unsafe_path = unsafe_slot / f"{unsafe_hash}.json"
     unsafe_path.write_bytes(unsafe_bytes)
 
-    with pytest.raises(BuilderThreadPrivacyError):
+    with pytest.raises(BuilderThreadError):
         service.read_thread(thread_id)
     before = unsafe_path.read_bytes()
     disposition = service.quarantine(
@@ -807,7 +907,7 @@ def test_structural_quarantine_redacts_unsafe_open_source_ref(
     unsafe_path = new_thread_dir / "entries" / slot_name / f"{unsafe_hash}.json"
     unsafe_path.write_bytes(unsafe_bytes)
 
-    with pytest.raises(BuilderThreadPrivacyError):
+    with pytest.raises(BuilderThreadError):
         service.read_thread(thread_id)
     before = unsafe_path.read_bytes()
     recovered = service.quarantine(
@@ -1120,9 +1220,17 @@ def test_concurrent_disposition_conflict_can_be_explicitly_quarantined(
             self._loads = 0
 
         def _load_thread(
-            self, thread_id: str, *, structural_only: bool = False
+            self,
+            thread_id: str,
+            *,
+            structural_only: bool = False,
+            **kwargs: Any,
         ) -> dict[str, Any]:
-            loaded = super()._load_thread(thread_id, structural_only=structural_only)
+            loaded = super()._load_thread(
+                thread_id,
+                structural_only=structural_only,
+                **kwargs,
+            )
             self._loads += 1
             if self._loads == 2:
                 publish_barrier.wait(timeout=2)
@@ -1226,13 +1334,13 @@ def test_create_acknowledgement_loss_reconciles_on_exact_retry(
     real_load = service._load_thread
 
     def fail_first_post_publish_readback(
-        thread_id: str, *, structural_only: bool = False
+        thread_id: str, *, structural_only: bool = False, **kwargs: Any
     ) -> dict[str, Any]:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("injected post-publication acknowledgement loss")
-        return real_load(thread_id, structural_only=structural_only)
+        return real_load(thread_id, structural_only=structural_only, **kwargs)
 
     kwargs = {
         "recipient_id": RECIPIENT,
@@ -1250,6 +1358,44 @@ def test_create_acknowledgement_loss_reconciles_on_exact_retry(
     monkeypatch.setattr(service, "_load_thread", real_load)
     exact = service.create_thread(**kwargs)
     assert exact["state"] == "open"
+    assert service.health()["thread_count"] == 1
+
+
+def test_claim_only_crash_is_recovered_by_exact_create_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    real_publish = service._publish_new_thread
+    calls = 0
+
+    def fail_after_claim(
+        entry: dict[str, Any], raw: bytes, entry_hash: str
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("injected failure after vault-wide claim")
+        return real_publish(entry, raw, entry_hash)
+
+    kwargs = {
+        "recipient_id": RECIPIENT,
+        "subject": "Recover a durable global request claim",
+        "content": "Can exact retry finish publication after the claim commits?",
+        "actor_id": ACTOR,
+        "source_refs": SOURCE_REFS,
+        "entry_id": "18181818-1818-4818-8818-181818181818",
+    }
+    monkeypatch.setattr(service, "_publish_new_thread", fail_after_claim)
+    with pytest.raises(OSError, match="after vault-wide claim"):
+        service.create_thread(**kwargs)
+    claim = vault / "builder-threads" / "entry-claims" / f"{kwargs['entry_id']}.json"
+    assert claim.exists()
+    with pytest.raises(BuilderThreadValidationError, match="incomplete vault-wide entry claim"):
+        service.health()
+
+    monkeypatch.setattr(service, "_publish_new_thread", real_publish)
+    recovered = service.create_thread(**kwargs)
+    assert recovered["state"] == "open"
     assert service.health()["thread_count"] == 1
 
 
@@ -1311,9 +1457,17 @@ def test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable(
             self._loads = 0
 
         def _load_thread(
-            self, thread_id: str, *, structural_only: bool = False
+            self,
+            thread_id: str,
+            *,
+            structural_only: bool = False,
+            **kwargs: Any,
         ) -> dict[str, Any]:
-            loaded = super()._load_thread(thread_id, structural_only=structural_only)
+            loaded = super()._load_thread(
+                thread_id,
+                structural_only=structural_only,
+                **kwargs,
+            )
             self._loads += 1
             if self._loads == 2:
                 publish_barrier.wait(timeout=2)
@@ -1375,6 +1529,18 @@ def test_single_quarantine_decision_cannot_be_neutralized_as_concurrent(
         actor_id=ACTOR,
         source_refs=SOURCE_REFS,
     )
+    before_open_target = _vault_snapshot(vault)
+    with pytest.raises(
+        BuilderThreadValidationError,
+        match="requires a conflicting disposition target",
+    ):
+        service.quarantine(
+            opened["thread_id"],
+            artifact_hash=opened["entry_hash"],
+            actor_id=ACTOR,
+            reason_code="concurrent_conflict",
+        )
+    assert _vault_snapshot(vault) == before_open_target
     quarantined = service.quarantine(
         opened["thread_id"],
         artifact_hash=opened["entry_hash"],
@@ -1386,7 +1552,7 @@ def test_single_quarantine_decision_cannot_be_neutralized_as_concurrent(
 
     with pytest.raises(
         BuilderThreadValidationError,
-        match="active sibling quarantine decisions",
+        match="active sibling dispositions",
     ):
         service.quarantine(
             opened["thread_id"],
@@ -1533,6 +1699,16 @@ def test_capture_gate_and_shared_non_sensitive_privacy_boundary(
         "`/etc/passwd`",
         "path:/etc/passwd",
         "/single",
+        "/å",
+        "/💾",
+        "/秘密",
+        "/$HOME",
+        "/+private",
+        "//server/share/secret",
+        r"C:\Windows\System32\config",
+        "%2Fetc%2Fpasswd",
+        "https://example.com/redirect?local=/Users/private-owner/Library/Secrets",
+        "https://alice:supersecret@example.com/private",
         "sys.argv was ['builder-thread', '--secret']",
         "sk-proj-abcdefghijklmnop",
         "github_pat_abcdefghijklmnop",
