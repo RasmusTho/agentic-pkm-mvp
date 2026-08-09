@@ -117,8 +117,10 @@ source's snapshot and watermark, and never claims an atomic cross-system snapsho
 Before the visual handoff, Stage A starts with a server-declared `DevuiOverviewView.v1` as specified
 by `docs/DEVUI.md :: DEVUI-OVERVIEW-BOUNDARY — server-declared read model`. The delivery order is:
 
-1. enrich the existing Cockpit/composition producer only where it can expose a named
-   owner-authority category and governing source for **Needs you**;
+1. enrich the existing Cockpit/composition producers only where they can expose either a named
+   owner-authority category and governing source for **Needs you**, or an explicit receipt-backed
+   ready-to-try fact and its source reference for **Ready to try**. A merge, delivery, availability,
+   or closed Issue cannot substitute for that producer evidence;
 2. compose the pure Overview result from `devui.composition.v1`, preserving exact withdrawal and
    independent evidence axes without any source read, cache, persistence, task/graph/session path,
    mutation, inferred correlation, or browser-side classification;
