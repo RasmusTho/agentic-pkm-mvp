@@ -15,7 +15,9 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol, Sequence
+
+from app.dispatcher.darwin_launch_barrier import RELEASE_TOKEN
 
 
 DARWIN_LAUNCHD_COALITION_PROFILE = (
@@ -46,6 +48,55 @@ class CoalitionSnapshot:
     coalition_id: int
     members: frozenset[ProcessIdentity]
     kernel_task_count: int
+
+
+class DarwinLaunchBarrier:
+    """Keep the process-group root paused until containment is attached."""
+
+    def __init__(self, command: Sequence[str]) -> None:
+        if not command:
+            raise ValueError("Darwin launch barrier command is empty")
+        reader, writer = os.pipe()
+        self._reader: int | None = reader
+        self._writer: int | None = writer
+        self.command = [
+            sys.executable,
+            "-m",
+            "app.dispatcher.darwin_launch_barrier",
+            "--release-fd",
+            str(reader),
+            "--",
+            *command,
+        ]
+        self.pass_fds = (reader,)
+
+    def after_spawn(self) -> None:
+        if self._reader is None:
+            raise ValueError("Darwin launch barrier reader is unavailable")
+        os.close(self._reader)
+        self._reader = None
+
+    def release(self) -> None:
+        if self._reader is not None or self._writer is None:
+            raise ValueError("Darwin launch barrier is unavailable")
+        try:
+            written = os.write(self._writer, RELEASE_TOKEN)
+            if written != len(RELEASE_TOKEN):
+                raise OSError("Darwin launch barrier release was partial")
+        finally:
+            os.close(self._writer)
+            self._writer = None
+
+    def close(self) -> None:
+        for attribute in ("_reader", "_writer"):
+            descriptor = getattr(self, attribute)
+            if descriptor is None:
+                continue
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            setattr(self, attribute, None)
 
 
 def _same_signal_identity(
@@ -376,92 +427,32 @@ class DarwinLaunchdCoalitionContainment:
         self._assert_baseline_only()
         return dict(base)
 
-    def _assert_orphaned_launch_tree(
+    def launch_barrier(self, command: Sequence[str]) -> DarwinLaunchBarrier:
+        return DarwinLaunchBarrier(command)
+
+    def capture_launch_root(self, root_pid: int) -> ProcessIdentity:
+        root = self._kernel.inspect(root_pid)
+        if (
+            root is None
+            or root in self._baseline
+            or root.coalition_id != self._coalition_id
+        ):
+            raise ValueError("Darwin containment launch root is unproven")
+        return root
+
+    def attach(
         self,
-        stable: CoalitionSnapshot,
+        root_pid: int,
+        expected_root: ProcessIdentity | None = None,
     ) -> None:
-        """Prove all new tasks descend from one now-absent launch root.
-
-        The coordinator must fail when its Popen root disappears before attach,
-        but its error path still has to reap a detached descendant.  That is
-        safe only when every non-baseline member closes at one absent parent
-        unique ID; a baseline parent or multiple missing roots is foreign or
-        ambiguous and remains fail-closed.
-        """
-
-        members = stable.members
-        by_unique_id = {member.unique_id: member for member in members}
-        if len(by_unique_id) != len(members):
-            raise ValueError("Darwin containment process identities are ambiguous")
-        orphan_root_ids: set[int] = set()
-        for member in members - self._baseline:
-            cursor = member
-            visited: set[int] = set()
-            while True:
-                if cursor.unique_id in visited:
-                    raise ValueError("Darwin containment launch ancestry cycled")
-                visited.add(cursor.unique_id)
-                parent = by_unique_id.get(cursor.parent_unique_id)
-                if parent is None:
-                    if cursor.parent_unique_id <= 0:
-                        raise ValueError(
-                            "Darwin containment launch ancestry escaped root"
-                        )
-                    orphan_root_ids.add(cursor.parent_unique_id)
-                    break
-                if parent in self._baseline:
-                    raise ValueError(
-                        "Darwin containment launch ancestry escaped root"
-                    )
-                cursor = parent
-        if len(orphan_root_ids) != 1:
-            raise ValueError("Darwin containment launch root is unproven")
-        orphan_root_id = next(iter(orphan_root_ids))
-        outside_matches = [
-            identity
-            for pid in self._kernel.list_pids()
-            if (identity := self._kernel.inspect(pid)) is not None
-            and identity.unique_id == orphan_root_id
-        ]
-        if outside_matches:
-            raise ValueError("Darwin containment launch root is unproven")
-
-    def attach(self, root_pid: int) -> None:
+        if expected_root is None or expected_root.pid != root_pid:
+            raise ValueError("Darwin containment launch identity is unavailable")
         stable = _stable_snapshot(self._kernel, self._coalition_id)
-        if not self._baseline.issubset(stable.members):
-            raise ValueError("Darwin containment baseline escaped")
-        root = next(
-            (member for member in stable.members if member.pid == root_pid),
-            None,
-        )
-        if root is None:
-            # Keep the verification cycle fail-closed, but establish only the
-            # narrowly proven cleanup authority before reporting the raced
-            # attach.  Its caller's failure path then cannot strand a detached
-            # same-coalition descendant.
-            if self._kernel.inspect(root_pid) is not None:
-                raise ValueError("Darwin containment launch root is unproven")
-            self._assert_orphaned_launch_tree(stable)
-            self._attached = True
-            raise ValueError("Darwin containment launch root exited before attach")
-        if root in self._baseline:
-            raise ValueError("Darwin containment launch root is unproven")
-        by_unique_id = {
-            member.unique_id: member for member in stable.members
-        }
-        for member in stable.members - self._baseline:
-            cursor = member
-            visited: set[int] = set()
-            while cursor != root:
-                if cursor.unique_id in visited:
-                    raise ValueError("Darwin containment launch ancestry cycled")
-                visited.add(cursor.unique_id)
-                parent = by_unique_id.get(cursor.parent_unique_id)
-                if parent is None or parent in self._baseline:
-                    raise ValueError(
-                        "Darwin containment launch ancestry escaped root"
-                    )
-                cursor = parent
+        if stable.members != self._baseline | {expected_root}:
+            raise ValueError("Darwin containment pre-release membership is unproven")
+        current_root = self._kernel.inspect(root_pid)
+        if current_root != expected_root:
+            raise ValueError("Darwin containment launch identity changed")
         self._attached = True
 
     def _signal_identity(self, identity: ProcessIdentity, sig: int) -> bool:

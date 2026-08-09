@@ -5899,6 +5899,112 @@ class _ProvenContainment:
         return True
 
 
+def test_barrier_attaches_captured_root_before_coordinator_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    observed: dict[str, object] = {}
+
+    class Barrier:
+        command = ["barrier", "coordinator"]
+        pass_fds = (71,)
+
+        def after_spawn(self) -> None:
+            events.append("after_spawn")
+
+        def release(self) -> None:
+            events.append("release")
+
+        def close(self) -> None:
+            events.append("close")
+
+    class BarrierContainment(_ProvenContainment):
+        def launch_barrier(self, command: list[str]) -> Barrier:
+            observed["command"] = command
+            events.append("barrier")
+            return Barrier()
+
+        def capture_launch_root(self, root_pid: int) -> tuple[str, int]:
+            events.append("capture")
+            return ("identity", root_pid)
+
+        def attach(self, root_pid: int, identity: object | None = None) -> None:
+            assert identity == ("identity", root_pid)
+            events.append("attach")
+            super().attach(root_pid)
+
+    process = _CleanExitDetachedDescendantProcess()
+
+    def popen(command: list[str], **kwargs: object) -> _CleanExitDetachedDescendantProcess:
+        observed.setdefault("popen_calls", []).append((command, kwargs))
+        return process
+
+    monkeypatch.setattr(verification_consumer.subprocess, "Popen", popen)
+    containment = BarrierContainment()
+    session_id, _receipt = _authority_loss_launcher(
+        tmp_path,
+        containment_factory=lambda: containment,
+    ).launch({"head_sha": HEAD})
+
+    assert session_id == "01900000-0000-7000-8000-000000000011"
+    popen_command, popen_kwargs = observed["popen_calls"][0]
+    assert popen_command == ["barrier", "coordinator"]
+    assert popen_kwargs["pass_fds"] == (71,)
+    assert events == ["barrier", "after_spawn", "capture", "attach", "release"]
+
+
+def test_barrier_capture_failure_closes_without_coordinator_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Barrier:
+        command = ["barrier", "coordinator"]
+        pass_fds = (71,)
+
+        def after_spawn(self) -> None:
+            events.append("after_spawn")
+
+        def release(self) -> None:
+            events.append("release")
+
+        def close(self) -> None:
+            events.append("close")
+
+    class FailingBarrierContainment(_ProvenContainment):
+        def launch_barrier(self, _command: list[str]) -> Barrier:
+            events.append("barrier")
+            return Barrier()
+
+        def capture_launch_root(self, _root_pid: int) -> object:
+            events.append("capture")
+            raise ValueError("root identity unavailable")
+
+    process = _CleanExitDetachedDescendantProcess()
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    monkeypatch.setattr(verification_consumer.os, "killpg", process.killpg)
+
+    with pytest.raises(RuntimeError, match="verification coordinator setup failed"):
+        _authority_loss_launcher(
+            tmp_path,
+            containment_factory=FailingBarrierContainment,
+            cleanup_tracker_factory=_ProvenContainment,
+        ).launch({"head_sha": HEAD})
+
+    assert events == ["barrier", "after_spawn", "capture", "close"]
+    assert process.group_signals == [
+        (process.pid, verification_consumer.signal.SIGTERM),
+        (process.pid, 0),
+        (process.pid, verification_consumer.signal.SIGKILL),
+    ]
+
+
 class _EscapedDescendantContainment(_ProvenContainment):
     def __init__(self, process: _CleanExitDetachedDescendantProcess, *, proven: bool) -> None:
         self.process = process
