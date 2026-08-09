@@ -26,6 +26,7 @@ Honesty rules this module enforces (owner doc: docs/BUILDEROPS_COCKPIT/README.md
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -61,6 +62,8 @@ from app.builderops.cockpit_github_plane import (
     default_github_reader,
     fetch_github_live,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BANDS",
@@ -204,13 +207,14 @@ def _read_tasks(db_path: Path, sources: _Sources) -> list[dict[str, Any]] | None
                 " FROM dispatcher_tasks WHERE status != '_meta'"
                 " ORDER BY updated_at DESC, created_at DESC"
             ).fetchall()
-    except sqlite3.Error as exc:
+    except sqlite3.Error:
+        logger.exception("Cockpit dispatcher-store read failed")
         sources.add(
             _SourceRead(
                 name="dispatcher-store",
                 state="unavailable",
                 last_successful_read=None,
-                detail=f"read failed: {exc}",
+                detail="read failed",
             )
         )
         return None
@@ -261,13 +265,14 @@ def _read_verification_runs(
                 " updated_at"
                 " FROM verification_runs ORDER BY updated_at ASC"
             ).fetchall()
-    except sqlite3.Error as exc:
+    except sqlite3.Error:
+        logger.exception("Cockpit verification-runs read failed")
         sources.add(
             _SourceRead(
                 name="verification-runs",
                 state="unavailable",
                 last_successful_read=None,
-                detail=f"read failed: {exc}",
+                detail="read failed",
             )
         )
         return {}
@@ -296,8 +301,12 @@ def _read_deploy_receipts(
             continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            errors.append(f"{path.name}: {exc}")
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            logger.exception(
+                "Cockpit deploy receipt read failed for channel=%s",
+                channel,
+            )
+            errors.append(channel)
             continue
         receipts.append(
             {
@@ -312,7 +321,7 @@ def _read_deploy_receipts(
                 name="deploy-receipts",
                 state="unavailable",
                 last_successful_read=None,
-                detail="; ".join(errors),
+                detail=f"{len(errors)} unreadable channel receipt(s)",
             )
         )
     elif receipts:
@@ -984,17 +993,21 @@ def build_registry(
                     evaluated_predicates,
                     now,
                 )
-            except Exception as exc:  # noqa: BLE001 - one thread's derivation
+            except Exception:  # noqa: BLE001 - one thread's derivation
                 # failure must never crash the whole render (the #4451-class
                 # bug this exact pattern exists to prevent, applied per task
                 # rather than per source): the thread renders as explicitly
                 # unclassified instead of taking bands/tasks/everything down.
+                logger.exception(
+                    "Cockpit chain-position derivation failed for task_id=%s",
+                    task.get("task_id"),
+                )
                 unclassified.append(
                     {
                         "id": task.get("task_id"),
                         "title": task.get("title"),
                         "status": status,
-                        "reason": f"chain-position derivation failed: {exc}",
+                        "reason": "chain-position derivation failed",
                     }
                 )
                 continue

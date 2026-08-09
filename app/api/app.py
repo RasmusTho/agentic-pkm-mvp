@@ -175,6 +175,11 @@ try:
 except ImportError:
     cockpit_router = None
 
+try:
+    from app.api.routes.devui import router as devui_router
+except ImportError:
+    devui_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -362,6 +367,8 @@ def _create_app() -> FastAPI:
         application.include_router(signboard_router, prefix="/api")
     if cockpit_router is not None:
         application.include_router(cockpit_router, prefix="/api")
+    if devui_router is not None:
+        application.include_router(devui_router, prefix="/api")
     return application
 
 

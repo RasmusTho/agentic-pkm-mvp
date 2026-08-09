@@ -337,13 +337,15 @@ Delivered now:
 - CKM core, query/snapshot contracts, and generated Development Overview;
 - static, inert CKM Cockpit Direction B;
 - BuilderOps Cockpit `/cockpit` as a fresh, read-only work register;
+- `devui.composition.v1` at GET `/api/devui/composition`, a per-request projection that preserves
+  independent Cockpit and CKM authority, snapshots, completeness, and typed refusals without
+  persistence or mutation;
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
-Not delivered now: a composed versioned read contract; one devUI shell; request/preview/authenticated
-approval in one owner experience; PostgreSQL authority cutover; full live run controls; receipt-to-
-CKM reassessment in the unified surface; owner pilot and tried-by-owner acceptance; and ADR-0065
-dispositions.
+Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
+PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
+surface; owner pilot and tried-by-owner acceptance; and ADR-0065 dispositions.
 
 The target turns the current cockpits and Signboard from competing owner destinations into internal
 providers: Direction B stays an exportable/static evidence fallback, BuilderOps Cockpit supplies

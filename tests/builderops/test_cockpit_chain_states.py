@@ -1076,6 +1076,7 @@ def test_one_threads_derivation_failure_does_not_crash_the_render(
     unclassified = {entry["id"]: entry for entry in payload["unclassified"]}
     assert len(unclassified) == 1
     (reason,) = [entry["reason"] for entry in unclassified.values()]
-    assert "synthetic derivation bug" in reason
+    assert reason == "chain-position derivation failed"
+    assert "synthetic derivation bug" not in repr(payload)
     # The other thread is entirely unaffected.
     assert _issues_in(payload, "working") == {951}

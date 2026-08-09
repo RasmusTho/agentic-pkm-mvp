@@ -26,12 +26,15 @@ own the dispatcher's pull-sync mirror and are out of scope here (#4440/#4441).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "GithubIssue",
@@ -379,12 +382,13 @@ def fetch_github_live(
         )
     try:
         snapshot = reader(repo)
-    except Exception as exc:  # noqa: BLE001 - any reader failure degrades to refusal
+    except Exception:  # noqa: BLE001 - any reader failure degrades to refusal
+        logger.exception("Cockpit GitHub live-plane read failed for repo=%s", repo)
         return GithubLiveResult(
             snapshot=None,
             state="unavailable",
             last_successful_read=None,
-            detail=f"read failed: {exc}",
+            detail="read failed",
         )
     detail = (
         f"{len(snapshot.issues)} open issues, {len(snapshot.pulls)} open PRs,"
