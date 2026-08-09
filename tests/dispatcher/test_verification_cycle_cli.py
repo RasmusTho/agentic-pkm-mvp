@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import signal
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
@@ -683,6 +686,16 @@ class _FakeDarwinKernel:
         return True
 
 
+def _attach_darwin(
+    containment: darwin_containment.DarwinLaunchdCoalitionContainment,
+    root_pid: int,
+) -> None:
+    containment.attach(
+        root_pid,
+        containment.capture_launch_root(root_pid),
+    )
+
+
 def test_cycle_requires_supported_containment_profile_before_api_claim(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -746,7 +759,7 @@ def test_cycle_composition_injects_darwin_launchd_coalition_containment(
     assert containment.environment({"SAFE": "yes"}) == {"SAFE": "yes"}
 
     kernel.identities[200] = darwin_containment.ProcessIdentity(200, 4, 200, 100, 7)
-    containment.attach(200)
+    _attach_darwin(containment, 200)
     assert containment.cleanup() is True
     assert (200, signal.SIGTERM) in signalled
 
@@ -799,6 +812,69 @@ def test_darwin_signal_uses_pid_version_bound_audit_token() -> None:
     assert seen == {"pid": 123, "pid_version": 7, "sig": signal.SIGKILL}
 
 
+@pytest.mark.parametrize("release", [None, b"invalid-release\n"])
+def test_darwin_launch_barrier_rejects_eof_or_invalid_release(
+    tmp_path: Path,
+    release: bytes | None,
+) -> None:
+    marker = tmp_path / "executed"
+    reader, writer = os.pipe()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "app.dispatcher.darwin_launch_barrier",
+            "--release-fd",
+            str(reader),
+            "--",
+            sys.executable,
+            "-c",
+            f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')",
+        ],
+        pass_fds=(reader,),
+    )
+    os.close(reader)
+    try:
+        if release is not None:
+            assert os.write(writer, release) == len(release)
+    finally:
+        os.close(writer)
+
+    assert process.wait(timeout=5) == 1
+    assert not marker.exists()
+
+
+def test_darwin_launch_barrier_execs_with_same_pid_after_release() -> None:
+    reader, writer = os.pipe()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "app.dispatcher.darwin_launch_barrier",
+            "--release-fd",
+            str(reader),
+            "--",
+            sys.executable,
+            "-c",
+            "import os; print(os.getpid())",
+        ],
+        pass_fds=(reader,),
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    os.close(reader)
+    try:
+        assert os.write(writer, darwin_containment.RELEASE_TOKEN) == len(
+            darwin_containment.RELEASE_TOKEN
+        )
+    finally:
+        os.close(writer)
+
+    stdout, _stderr = process.communicate(timeout=5)
+    assert process.returncode == 0
+    assert stdout.strip() == str(process.pid)
+
+
 def test_containment_refuses_pid_reuse_between_snapshot_and_signal() -> None:
     class ReusingKernel(_FakeDarwinKernel):
         def __init__(self) -> None:
@@ -828,7 +904,7 @@ def test_containment_refuses_pid_reuse_between_snapshot_and_signal() -> None:
     kernel.identities[200] = darwin_containment.ProcessIdentity(
         200, 4, 200, 100, 7
     )
-    containment.attach(200)
+    _attach_darwin(containment, 200)
     original_signal = kernel.signal
 
     def reuse_before_atomic_signal(
@@ -874,17 +950,17 @@ def test_cleanup_accepts_child_reparented_after_parent_signal() -> None:
     kernel.identities[200] = darwin_containment.ProcessIdentity(
         200, 4, 200, 100, 7
     )
+    _attach_darwin(containment, 200)
     kernel.identities[201] = darwin_containment.ProcessIdentity(
         201, 4, 201, 200, 7
     )
-    containment.attach(200)
 
     assert containment.cleanup() is True
     assert signalled == [200, 201]
 
 
-def test_cleanup_reaps_detached_child_when_root_exits_before_attach() -> None:
-    """A vanished Popen root must not strand its proven coalition child."""
+def test_orphaned_child_cannot_gain_cleanup_authority_before_attach() -> None:
+    """The barrier, not orphan inference, prevents this launch race."""
 
     kernel = _FakeDarwinKernel()
     signalled: list[int] = []
@@ -908,15 +984,15 @@ def test_cleanup_reaps_detached_child_when_root_exits_before_attach() -> None:
         201, 4, 201, 200, 7
     )
 
-    with pytest.raises(ValueError, match="root exited before attach"):
-        containment.attach(200)
+    with pytest.raises(ValueError, match="launch root is unproven"):
+        containment.capture_launch_root(200)
 
-    assert containment.cleanup() is True
-    assert signalled == [201]
-    assert 201 not in kernel.identities
+    assert containment.cleanup() is False
+    assert signalled == []
+    assert 201 in kernel.identities
 
 
-def test_containment_rejects_unrelated_member_when_root_exits_before_attach() -> None:
+def test_containment_rejects_foreign_pre_release_member() -> None:
     kernel = _FakeDarwinKernel()
     containment = darwin_containment.select_verification_containment(
         CONTAINMENT_PROFILE,
@@ -925,20 +1001,21 @@ def test_containment_rejects_unrelated_member_when_root_exits_before_attach() ->
         current_pid=100,
     )()
     containment.environment({})
-    kernel.identities[201] = darwin_containment.ProcessIdentity(
-        201, 4, 201, 200, 7
+    kernel.identities[200] = darwin_containment.ProcessIdentity(
+        200, 4, 200, 100, 7
     )
-    # This member is not descended from the exited launch root: its parent is
-    # part of the protected baseline and must never become a cleanup target.
+    captured = containment.capture_launch_root(200)
+    # The paused wrapper may be the only post-baseline task before release.
     kernel.identities[300] = darwin_containment.ProcessIdentity(
         300, 4, 300, 100, 7
     )
 
-    with pytest.raises(ValueError, match="ancestry escaped root"):
-        containment.attach(200)
+    with pytest.raises(ValueError, match="pre-release membership"):
+        containment.attach(200, captured)
+    assert containment.cleanup() is False
 
 
-def test_containment_rejects_root_pid_reuse_before_orphan_cleanup() -> None:
+def test_containment_rejects_same_coalition_root_pid_reuse_before_release() -> None:
     kernel = _FakeDarwinKernel()
     containment = darwin_containment.select_verification_containment(
         CONTAINMENT_PROFILE,
@@ -947,17 +1024,17 @@ def test_containment_rejects_root_pid_reuse_before_orphan_cleanup() -> None:
         current_pid=100,
     )()
     containment.environment({})
-    kernel.identities[201] = darwin_containment.ProcessIdentity(
-        201, 4, 201, 200, 7
-    )
-    # A reused Popen PID outside the resource coalition invalidates the
-    # vanished-root proof before cleanup authority can be established.
     kernel.identities[200] = darwin_containment.ProcessIdentity(
-        200, 5, 999, 100, 99
+        200, 4, 200, 100, 7
+    )
+    captured = containment.capture_launch_root(200)
+    # Reuse stays inside the resource coalition, so PID alone must not pass.
+    kernel.identities[200] = darwin_containment.ProcessIdentity(
+        200, 5, 999, 100, 7
     )
 
-    with pytest.raises(ValueError, match="launch root is unproven"):
-        containment.attach(200)
+    with pytest.raises(ValueError, match="pre-release membership"):
+        containment.attach(200, captured)
     assert containment.cleanup() is False
 
 
@@ -977,8 +1054,9 @@ def test_containment_rejects_unrelated_member_appearing_before_attach() -> None:
         300, 4, 300, 100, 7
     )
 
-    with pytest.raises(ValueError, match="ancestry escaped root"):
-        containment.attach(200)
+    captured = containment.capture_launch_root(200)
+    with pytest.raises(ValueError, match="pre-release membership"):
+        containment.attach(200, captured)
 
 
 def test_cleanup_polls_until_delayed_kernel_task_disappearance() -> None:
@@ -1007,7 +1085,7 @@ def test_cleanup_polls_until_delayed_kernel_task_disappearance() -> None:
     kernel.identities[200] = darwin_containment.ProcessIdentity(
         200, 4, 200, 100, 7
     )
-    containment.attach(200)
+    _attach_darwin(containment, 200)
 
     assert containment.cleanup() is True
     assert clock[0] >= 0.15

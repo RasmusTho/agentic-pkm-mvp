@@ -223,12 +223,14 @@ identity whose parent-unique-id chain does not close at the launched root. Clean
 bounded deadline and then requires two stable baseline-only snapshots with exact task-count
 equality. This proves cleanup only inside the dedicated job's inherited resource coalition; it does
 not claim control of unrelated launchd jobs in other coalitions. This fence
-remains fail-closed if the launched root exits before attach: the cycle fails rather than proceeding,
-but its failure cleanup may use the containment only after every non-baseline task has a complete
-ancestry chain to one absent, uninspectable parent unique ID. A baseline parent, multiple absent
-roots, an active outside-coalition parent, an identity ambiguity, or a changing/count-mismatched
-snapshot rejects that cleanup authority. This prevents a detached same-coalition descendant from
-outliving the failed setup without admitting an unrelated task as a target. The fence
+uses a one-shot exec barrier for the launched root: before the barrier releases, the parent captures
+the root's full PID-version/unique-id/parent-unique-id/coalition identity and requires two stable,
+count-matched snapshots whose complete member set is exactly baseline plus that paused root. Any
+other member, identity change, release failure, or root loss fails setup before the model command
+can exec or spawn descendants; bounded process-group cleanup is then sufficient. The same root PID
+survives the direct exec only after attachment has armed containment cleanup. The barrier write end
+is parent-only and never inherited, while the wrapper owns only the read end and exits without exec
+on EOF or an invalid release token. The fence
 does not grant the model child GitHub authority: the installed-main cycle remains
 `github.merge.dry_run`, and BCP-06 stays disabled.
 

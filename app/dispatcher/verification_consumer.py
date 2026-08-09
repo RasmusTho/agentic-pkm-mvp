@@ -2991,27 +2991,55 @@ class CodexExecLauncher:
             terminate_and_reap_child()
 
         if self.runner is subprocess.run:
-            process = subprocess.Popen(
-                self.command(
-                    resume_session_id,
-                    host_fenced_merge=host_fenced_merge,
-                ),
-                cwd=self.worktree,
-                env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                start_new_session=True,
+            command = self.command(
+                resume_session_id,
+                host_fenced_merge=host_fenced_merge,
             )
+            barrier_factory = getattr(containment, "launch_barrier", None)
+            barrier = barrier_factory(command) if callable(barrier_factory) else None
+            try:
+                if barrier is None:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=self.worktree,
+                        env=env,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                        start_new_session=True,
+                    )
+                else:
+                    process = subprocess.Popen(
+                        barrier.command,
+                        cwd=self.worktree,
+                        env=env,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                        start_new_session=True,
+                        pass_fds=barrier.pass_fds,
+                    )
+                    barrier.after_spawn()
+            except Exception:
+                if barrier is not None:
+                    barrier.close()
+                raise
             try:
                 process_group_id = getattr(process, "pid", None)
                 if process_group_id is not None:
                     if cleanup_tracker is not containment:
                         cleanup_tracker.attach(process_group_id)
-                    containment.attach(process_group_id)
+                    capture_root = getattr(containment, "capture_launch_root", None)
+                    if callable(capture_root):
+                        attach = getattr(containment, "attach")
+                        attach(process_group_id, capture_root(process_group_id))
+                    else:
+                        containment.attach(process_group_id)
                 if process.stdout is None or process.stderr is None:
                     raise RuntimeError("coordinator process pipes unavailable")
                 lines = process.stdout
                 stderr = process.stderr
+                if barrier is not None:
+                    barrier.release()
             except Exception:
+                if barrier is not None:
+                    barrier.close()
                 terminate_and_reap_child()
                 raise RuntimeError("verification coordinator setup failed") from None
 
