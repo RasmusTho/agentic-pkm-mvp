@@ -403,8 +403,9 @@ Companion docs:
 ### BuilderOps shared thread exchange (#4702)
 
 - `scripts/builderops_cli.sh builderops builder-thread ...` is the supported mutation/read surface
-  for one bounded `shared_non_sensitive` question to a named recipient; create and reply require a
-  caller-retained `--entry-id` UUID so a lost acknowledgement can be retried idempotently.
+  for one bounded `shared_non_sensitive` question to a named recipient; create, reply, close,
+  archive, and quarantine each require a caller-retained `--entry-id` UUID so a lost
+  acknowledgement can be retried idempotently.
 - `scripts/builderops_cli.sh builderops builder-inbox ...` is read-only and never gates runtime,
   Issue, PR, Verify, merge, closure, or promotion state.
 - Routine init verifies the pinned `BUILDEROPS_VAULT_ID`. First adoption is an explicit

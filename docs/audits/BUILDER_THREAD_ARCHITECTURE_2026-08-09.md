@@ -157,6 +157,16 @@ forms. That SHA is rejected evidence. The repaired mechanism binds a timestamp-e
 digest for every contribution kind, retains identity-marked slots until final installation,
 normalizes privacy input with bounded decoding, and exercises every mutation crash/retry path.
 
+Review of SHA `b6fc804e3ea731e95454b50eb9b91524eabdc8f2` found ordinary durability and
+reduction failures: process death could leave an unidentifiable empty slot, interrupted full-bound
+cleanup could strand a claim and its unlink could race a healthy reader, and two writers could race
+cleanup of the same recognized committed temp. Exact-thread operations also failed to validate all
+sibling thread health, while sequentially superseded dispositions counted as concurrent quarantine
+siblings. That SHA is rejected evidence. The bounded repair treats empty numeric directories as
+unowned reusable capacity, makes exact bound cleanup retryable, tolerates only recognized vanishing
+writer artifacts, validates every sibling before exact operations, and uses active disposition
+lineage for `concurrent_conflict`.
+
 | Invariant / transition / crash point | Focused proof |
 | --- | --- |
 | Pinned root and subsystem genesis; explicit adoption; symlink ancestors; partial/mismatched non-mutation | `test_root_and_genesis_validation_fail_closed`, `test_genesis_pair_refusal_is_non_mutating` |
@@ -172,15 +182,20 @@ normalizes privacy input with bounded decoding, and exercises every mutation cra
 | Supported CLI mutation lost-ack retry, total init/config JSON, and typed bounded failures | `test_cli_round_trip_covers_complete_thread_surface`, `test_cli_json_failures_are_typed_bounded_and_retry_conflicts_do_not_append` |
 | Public service requires caller-owned request identity for every mutation; entry ID is unique vault-wide | `test_public_service_requires_request_identity_and_retries_exactly`, `test_entry_id_is_unique_across_the_entire_vault` |
 | Claim-plus-slot process death and changed-semantics retry for each append mutation | `test_all_append_mutations_recover_exactly_after_claim_and_slot_crash` |
+| Process death after numeric slot creation but before identity marker, for create and append | `test_empty_slot_crash_before_identity_marker_is_exactly_recoverable` |
 | Concurrent cross-thread ID reuse has one claim winner; claim-only crash supports exact recovery | `test_concurrent_cross_thread_entry_id_claim_allows_one_winner`, `test_claim_only_crash_is_recovered_by_exact_create_retry` |
 | Temp-unlink failure, exact twin cleanup, later writer retry, and vanishing recognized-temp race | `test_temp_unlink_failure_is_recovered_by_exact_writer_retry`, `test_reader_tolerates_only_a_recognized_temp_that_vanishes_during_walk` |
+| Two-writer committed-temp cleanup and unrecognized vanishing-temp refusal | `test_two_writers_converge_when_cleaning_the_same_committed_temp`, `test_disappearing_unrecognized_temp_name_still_fails_closed` |
 | Concurrent contradictory quarantine decisions and decision quarantine recovery | `test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable` |
 | A lone quarantine decision cannot be neutralized as a concurrent conflict | `test_single_quarantine_decision_cannot_be_neutralized_as_concurrent` |
 | Concurrent 128-entry boundary reservation and non-mutating 129th refusal | `test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating` |
+| Interrupted full-bound claim cleanup and exact-retry recovery | `test_full_bound_claim_cleanup_crash_is_recovered_by_exact_retry` |
 | Privacy patterns, actor identity, capture gate, bounds | `test_capture_gate_and_shared_non_sensitive_privacy_boundary` |
 | Recipient-bound answer plus immutable/idempotent inbox | `test_inbox_is_bounded_read_only_and_idempotent` |
+| Exact reads/mutations validate unhealthy sibling threads | `test_exact_thread_operations_reject_an_unhealthy_sibling_thread` |
 | Structurally valid privacy incidents, unsafe identity/ref redaction, and incompatible quarantine retry | `test_quarantine_preserves_bytes_and_redacts_unsafe_artifact`, `test_structural_quarantine_recovers_privacy_unsafe_identity_and_refs`, `test_structural_quarantine_redacts_unsafe_open_source_ref` |
 | Recomputed capture key and active-close archive targeting | `test_receiver_recomputes_capture_key_and_rejects_non_active_archive_target` |
+| Sequentially superseded close is not a concurrent quarantine sibling | `test_sequentially_superseded_close_is_not_a_concurrent_conflict` |
 
 ## Workflow Simplification
 
@@ -213,6 +228,9 @@ specification that preserves provider isolation and projection-only authority.
 
 ## Residual Risk
 
-iCloud remains a synchronized artifact transport, not a distributed lock. A malicious same-host
+iCloud remains a synchronized artifact transport, not a distributed lock. Privacy scanning is
+bounded defense in depth for realistic explicit captures, not complete DLP; exotic encoding tails
+outside the named corpus are non-blocking residual risk under the explicit/no-automatic-capture
+threat model. A malicious same-host
 process can still swap path components between checks; the single-operator trust model does not add
 a filesystem broker. Any synchronized conflict remains visible and blocks state reduction.

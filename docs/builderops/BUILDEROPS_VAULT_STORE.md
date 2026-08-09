@@ -344,8 +344,9 @@ timestamp; changed semantics under one ID are refused. Before contribution publi
 visible manifest at `builder-threads/entry-claims/<entry-id>.json` atomically binds that vault-wide ID,
 thread ID, and canonical semantic-request digest (excluding only the generated timestamp). It is a
 create-if-absent concurrency/recovery guard, not a mutable index or authority. A claim-only crash is
-incomplete to readers and only an exact writer retry may finish it. Each entry slot carries an
-identity-bound durable reservation until the claimed final exists. If final publication succeeded but
+incomplete to readers and only an exact writer retry may finish it. An empty numeric slot directory
+is unowned reusable capacity; ownership begins only with the durable entry-ID marker. An exact retry
+may reuse an empty slot or finish its own marked reservation. If final publication succeeded but
 temp or reservation cleanup failed, a later mutation retry removes it only after the claim, bytes, and
 content-addressed final agree. Read-only health never performs cleanup.
 
@@ -364,6 +365,12 @@ one target are themselves a conflict; only a real set of at least two active sib
 allows `concurrent_conflict` to disposition one exact decision without deleting either envelope
 while a slot remains. A lone quarantine decision cannot be neutralized. Entry IDs are unique across
 the whole Builder Thread vault, not merely within one thread.
+
+Privacy scanning is bounded defense in depth for ordinary explicit agent-authored input, not a
+complete DLP engine. The primary controls are explicit capture, a named recipient, typed authority
+refs, the `shared_non_sensitive` declaration, no automatic session ingestion, bounded output, and
+immutable quarantine. Exotic encoding tails outside the tested realistic corpus are residual risk
+unless they become credible through normal capture or represent a likely secret disclosure.
 
 Use the production operator surfaces:
 

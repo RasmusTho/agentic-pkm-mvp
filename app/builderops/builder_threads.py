@@ -97,6 +97,7 @@ GITHUB_NUMBER_RE = re.compile(r"^#?[1-9][0-9]*$")
 CONFLICT_COPY_RE = re.compile(r"conflicted copy", re.IGNORECASE)
 TEMP_FILE_RE = re.compile(r"^\.tmp-(?P<stem>.+)-[0-9a-f]{32}$")
 SLOT_RESERVATION_RE = re.compile(r"^\.reservation-(?P<entry_id>[0-9a-f-]{36})$")
+RECONCILE_ATTEMPTS = 61
 PRIVATE_PATH_RE = re.compile(
     r"(?:file:(?://)?|~[/\\]|"
     r"(?<![A-Za-z0-9._~/-])/(?!/|\s)[^\s<>`\"']+|"
@@ -799,12 +800,9 @@ class BuilderThreadService:
                     and item["entry"]["target_hash"] == original_target
                 ]
             elif target_type in {"close", "archive"}:
-                sibling_decisions = [
-                    item
-                    for item in thread["entries"]
-                    if not item["quarantined"]
-                    and item["entry"]["entry_type"] == target_type
-                ]
+                sibling_decisions = self._active_from_entries(
+                    thread["entries"], target_type
+                )
             else:
                 raise BuilderThreadValidationError(
                     "concurrent_conflict requires a conflicting disposition target"
@@ -972,7 +970,13 @@ class BuilderThreadService:
                 try:
                     info = path.lstat()
                 except FileNotFoundError as exc:
-                    if name.startswith(".tmp-"):
+                    if self._is_recognized_temp_path(path):
+                        continue
+                    if (
+                        current_path == self.entry_claims_root
+                        and name.endswith(".json")
+                        and UUID_RE.fullmatch(Path(name).stem)
+                    ):
                         continue
                     raise BuilderThreadValidationError(
                         "artifact changed during validation"
@@ -1002,6 +1006,22 @@ class BuilderThreadService:
                         raise BuilderThreadValidationError(
                             "SQLite artifact forbidden in shared vault"
                         )
+
+    def _is_recognized_temp_path(self, path: Path) -> bool:
+        if path.parent == self.root / ".builderops":
+            return re.fullmatch(r"\.tmp-vault-genesis-[0-9a-f]{32}", path.name) is not None
+        if path.parent == self.builder_root:
+            return re.fullmatch(r"\.tmp-genesis-[0-9a-f]{32}", path.name) is not None
+        if path.parent == self.entry_claims_root:
+            match = TEMP_FILE_RE.fullmatch(path.name)
+            return match is not None and UUID_RE.fullmatch(match.group("stem")) is not None
+        if (
+            path.parent.parent.name == "entries"
+            and re.fullmatch(r"[0-9]{3}", path.parent.name)
+        ):
+            match = TEMP_FILE_RE.fullmatch(path.name)
+            return match is not None and HASH_RE.fullmatch(match.group("stem")) is not None
+        return False
 
     def _prepare_write(self) -> None:
         self._validate_root(
@@ -1033,7 +1053,10 @@ class BuilderThreadService:
             match = TEMP_FILE_RE.fullmatch(temp.name)
             if match is None:
                 continue
-            info = temp.lstat()
+            try:
+                info = temp.lstat()
+            except FileNotFoundError:
+                continue
             if not stat.S_ISREG(info.st_mode):
                 raise BuilderThreadValidationError(
                     "committed-temp recovery requires a regular file"
@@ -1056,7 +1079,10 @@ class BuilderThreadService:
                 raise BuilderThreadConflictError(
                     "temporary artifact hash does not match installed final"
                 )
-            temp.unlink()
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                continue
             _fsync_directory(temp.parent)
 
     def _recover_committed_reservations(self) -> None:
@@ -1085,6 +1111,11 @@ class BuilderThreadService:
             payload, raw = self._read_canonical_json(final)
             if _sha256(raw) != final.stem or payload.get("entry_id") != entry_id:
                 raise BuilderThreadConflictError("entry reservation does not match installed final")
+            self._validate_entry_shape(
+                payload,
+                thread_id=marker.parent.parent.parent.name,
+                structural_only=True,
+            )
             claim = claims.get(entry_id)
             if (
                 claim is None
@@ -1160,7 +1191,7 @@ class BuilderThreadService:
         *,
         allow_pending_claim_id: str | None = None,
     ) -> list[Path]:
-        for attempt in range(21):
+        for attempt in range(RECONCILE_ATTEMPTS):
             complete: list[Path] = []
             incomplete = False
             slots = list(entries_dir.iterdir())
@@ -1177,6 +1208,8 @@ class BuilderThreadService:
                 ):
                     raise BuilderThreadValidationError("unknown artifact beneath entries")
                 children = list(slot.iterdir())
+                if not children:
+                    continue
                 if len(children) == 1 and SLOT_RESERVATION_RE.fullmatch(
                     children[0].name
                 ):
@@ -1196,9 +1229,13 @@ class BuilderThreadService:
                 ):
                     raise BuilderThreadValidationError("unknown artifact beneath entry slot")
                 complete.append(entry_path)
+            if not complete:
+                if allow_pending_claim_id is not None:
+                    return []
+                incomplete = True
             if not incomplete:
                 return complete
-            if attempt < 20:
+            if attempt < RECONCILE_ATTEMPTS - 1:
                 time.sleep(0.05)
         raise BuilderThreadValidationError("incomplete artifact tree")
 
@@ -1226,13 +1263,13 @@ class BuilderThreadService:
         *,
         allow_pending_claim_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        for attempt in range(21):
+        for attempt in range(RECONCILE_ATTEMPTS):
             try:
                 return self._load_all_threads_once(
                     allow_pending_claim_id=allow_pending_claim_id
                 )
             except _ActiveEntryClaim as exc:
-                if attempt == 20:
+                if attempt == RECONCILE_ATTEMPTS - 1:
                     raise BuilderThreadValidationError(
                         "incomplete vault-wide entry claim"
                     ) from exc
@@ -1285,7 +1322,7 @@ class BuilderThreadService:
         allow_pending_claim_id: str | None = None,
         allow_claim_mismatch_hash: str | None = None,
     ) -> dict[str, Any]:
-        for attempt in range(21):
+        for attempt in range(RECONCILE_ATTEMPTS):
             try:
                 return self._load_thread_once(
                     thread_id,
@@ -1294,7 +1331,7 @@ class BuilderThreadService:
                     allow_claim_mismatch_hash=allow_claim_mismatch_hash,
                 )
             except _ActiveEntryClaim as exc:
-                if attempt == 20:
+                if attempt == RECONCILE_ATTEMPTS - 1:
                     raise BuilderThreadValidationError(
                         "incomplete vault-wide entry claim"
                     ) from exc
@@ -1314,20 +1351,22 @@ class BuilderThreadService:
         )
         self._validate_vault_wide_entry_ids(paths)
         thread_ids = sorted({item[0] for item in paths})
-        structural_threads = [
-            self._load_thread_from_paths(item, paths, structural_only=True)
+        validated_threads = [
+            self._load_thread_from_paths(
+                item,
+                paths,
+                structural_only=structural_only and item == thread_id,
+            )
             for item in thread_ids
         ]
         self._validate_entry_claims(
-            structural_threads,
+            validated_threads,
             allow_pending_claim_id=allow_pending_claim_id,
             allow_claim_mismatch_hash=allow_claim_mismatch_hash,
         )
         if thread_id not in thread_ids:
             raise BuilderThreadValidationError(f"thread not found: {thread_id}")
-        if structural_only:
-            return next(item for item in structural_threads if item["thread_id"] == thread_id)
-        return self._load_thread_from_paths(thread_id, paths, structural_only=structural_only)
+        return next(item for item in validated_threads if item["thread_id"] == thread_id)
 
     def _validate_vault_wide_entry_ids(self, paths: list[tuple[str, Path]]) -> None:
         entry_ids: set[str] = set()
@@ -1361,7 +1400,12 @@ class BuilderThreadService:
                 raise BuilderThreadValidationError(
                     "unknown artifact beneath entry-claims"
                 )
-            payload, _raw = self._read_canonical_json(path)
+            try:
+                payload, _raw = self._read_canonical_json(path)
+            except BuilderThreadValidationError:
+                if not path.exists():
+                    continue
+                raise
             if set(payload) != ENTRY_CLAIM_KEYS or payload.get("schema") != ENTRY_CLAIM_SCHEMA:
                 raise BuilderThreadValidationError("invalid entry claim schema")
             if payload.get("privacy_class") != PRIVACY_CLASS:
@@ -1453,7 +1497,10 @@ class BuilderThreadService:
 
     def _release_unrepresented_entry_claim(self, entry_id: str) -> None:
         claim = self.entry_claims_root / f"{entry_id}.json"
-        claim.unlink()
+        try:
+            claim.unlink()
+        except FileNotFoundError:
+            return
         _fsync_directory(self.entry_claims_root)
 
     def _reconcile_lost_thread_destination_claim(
@@ -1466,17 +1513,26 @@ class BuilderThreadService:
         if not claim_created:
             return
         entries_dir = self.threads_root / thread_id / "entries"
-        try:
-            paths = self._complete_slot_entry_paths(entries_dir)
-        except (BuilderThreadError, OSError):
-            # A partial competing writer is indeterminate. Preserve the claim
-            # rather than deleting a reservation it may already depend on.
-            return
-        for path in paths:
-            payload, _raw = self._read_canonical_json(path)
-            if payload.get("entry_id") == entry_id:
+        for attempt in range(RECONCILE_ATTEMPTS):
+            try:
+                pending = self._pending_entry_slot(entries_dir, entry_id)
+                if pending is not None:
+                    return
+                paths = self._complete_slot_entry_paths(entries_dir)
+            except (BuilderThreadError, OSError):
+                if not entries_dir.exists() and attempt < RECONCILE_ATTEMPTS - 1:
+                    time.sleep(0.05)
+                    continue
                 return
-        self._release_unrepresented_entry_claim(entry_id)
+            for path in paths:
+                payload, _raw = self._read_canonical_json(path)
+                if payload.get("entry_id") == entry_id:
+                    return
+            if paths:
+                self._release_unrepresented_entry_claim(entry_id)
+                return
+            if attempt < RECONCILE_ATTEMPTS - 1:
+                time.sleep(0.05)
 
     def _load_thread_from_paths(
         self,
@@ -1889,7 +1945,12 @@ class BuilderThreadService:
         if current is None:
             claim_created = self._reserve_entry_claim(entry)
             try:
-                return self._publish_new_thread(entry, raw, entry_hash)
+                return self._publish_new_thread(
+                    entry,
+                    raw,
+                    entry_hash,
+                    recover_existing=not claim_created,
+                )
             except _ExistingThreadDestination as exc:
                 self._reconcile_lost_thread_destination_claim(
                     thread_id=entry["thread_id"],
@@ -1919,12 +1980,11 @@ class BuilderThreadService:
                 raise exc
         thread_dir = self.threads_root / entry["thread_id"]
         entries_dir = thread_dir / "entries"
-        claim_created = self._reserve_entry_claim(entry)
+        self._reserve_entry_claim(entry)
         try:
             slot = self._reserve_entry_slot(entries_dir, entry["entry_id"])
         except BuilderThreadConflictError:
-            if claim_created:
-                self._release_unrepresented_entry_claim(entry["entry_id"])
+            self._release_unrepresented_entry_claim(entry["entry_id"])
             raise
         except _ExistingEntryReservation:
             reloaded = self._load_thread(entry["thread_id"])
@@ -1961,7 +2021,12 @@ class BuilderThreadService:
         return self._result(reloaded, entry=entry, entry_hash=entry_hash)
 
     def _publish_new_thread(
-        self, entry: dict[str, Any], raw: bytes, entry_hash: str
+        self,
+        entry: dict[str, Any],
+        raw: bytes,
+        entry_hash: str,
+        *,
+        recover_existing: bool = False,
     ) -> dict[str, Any]:
         """Claim the deterministic destination without overwriting any existing tree."""
 
@@ -1970,13 +2035,14 @@ class BuilderThreadService:
             thread_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
         except FileExistsError as exc:
             entries_dir = thread_dir / "entries"
-            if entries_dir.is_dir() and not entries_dir.is_symlink():
+            if recover_existing and entries_dir.is_dir() and not entries_dir.is_symlink():
                 slot = self._pending_entry_slot(entries_dir, entry["entry_id"])
-                if slot is not None:
-                    _atomic_publish(slot / f"{entry_hash}.json", raw)
-                    self._finalize_entry_slot(slot, entry["entry_id"])
-                    reloaded = self._load_thread(entry["thread_id"])
-                    return self._result(reloaded, entry=entry, entry_hash=entry_hash)
+                if slot is None:
+                    slot = self._reserve_entry_slot(entries_dir, entry["entry_id"])
+                _atomic_publish(slot / f"{entry_hash}.json", raw)
+                self._finalize_entry_slot(slot, entry["entry_id"])
+                reloaded = self._load_thread(entry["thread_id"])
+                return self._result(reloaded, entry=entry, entry_hash=entry_hash)
             raise _ExistingThreadDestination(
                 f"question destination already exists: {entry['thread_id']}"
             ) from exc
@@ -1997,23 +2063,31 @@ class BuilderThreadService:
                 slot.mkdir(mode=0o700, parents=False, exist_ok=False)
             except FileExistsError:
                 _real_directory(slot, label="entry slot")
+                reserved_entry_id = self._reserved_slot_entry_id(slot)
+                if reserved_entry_id == entry_id:
+                    return slot
+                if reserved_entry_id is not None:
+                    continue
+            else:
+                _fsync_directory(entries_dir)
+            reservation = slot / f".reservation-{entry_id}"
+            try:
+                fd = os.open(reservation, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
                 if self._reserved_slot_entry_id(slot) == entry_id:
                     return slot
                 continue
-            reservation = slot / f".reservation-{entry_id}"
-            fd = os.open(reservation, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 os.fsync(fd)
             finally:
                 os.close(fd)
             _fsync_directory(slot)
-            _fsync_directory(entries_dir)
             return slot
         raise BuilderThreadConflictError(
             f"thread entry bound reached ({self.MAX_ENTRIES_PER_THREAD})"
         )
 
-    def _reserved_slot_entry_id(self, slot: Path) -> str:
+    def _reserved_slot_entry_id(self, slot: Path) -> str | None:
         for attempt in range(21):
             children = list(slot.iterdir())
             reservations = [
@@ -2041,6 +2115,8 @@ class BuilderThreadService:
                     structural_only=True,
                 )
                 return payload["entry_id"]
+            if not children:
+                return None
             if attempt < 20 and (
                 not children or all(path.name.startswith(".tmp-") for path in children)
             ):

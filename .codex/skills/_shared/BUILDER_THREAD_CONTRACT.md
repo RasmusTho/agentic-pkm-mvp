@@ -70,9 +70,10 @@ Reusing it for the same semantic request is an idempotent acknowledgement-loss r
 new invocation has a later generated timestamp; any changed semantic field under that ID is a replay
 conflict. The claim uses create-if-absent publication, so concurrent cross-thread reuse has one winner
 before either thread envelope can publish. A claim-only crash is incomplete to readers and recoverable
-only by an exact writer retry. An entry slot carries an identity-bound durable reservation until its
-claimed final contribution is installed; an exact retry may finish that reservation after process
-death. A committed temp hard-link twin or installed-final reservation left by failed cleanup is
+only by an exact writer retry. An empty numeric slot directory is unowned reusable capacity, not a
+contribution or reservation. Slot ownership begins only when its identity marker is durably created;
+an exact retry may reuse an empty slot or finish its own marked reservation after process death. A
+committed temp hard-link twin or installed-final reservation left by failed cleanup is
 removed only by a mutation retry after the claim, bytes, and content-addressed final agree. Read-only
 health exposes unmatched claims, reservations, and orphaned temps as incomplete.
 
@@ -88,6 +89,12 @@ An explicit quarantine contribution may disposition a structurally valid unsafe 
 hash. It preserves the original bytes, redacts them from normal output, and never hides structural
 corruption. Incident handling is explicit; no free-form session capture or automatic quarantine is
 allowed.
+
+Privacy scanning is bounded defense in depth for ordinary explicit agent input, not a complete DLP
+engine. Explicit capture, named recipients, typed refs, no automatic session intake, bounded output,
+and immutable quarantine are the primary privacy controls. Exotic encoding tails outside the tested
+realistic corpus are residual risk unless they become credible in normal capture or likely to
+disclose sensitive material.
 
 ## Authority Boundary
 

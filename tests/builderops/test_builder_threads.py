@@ -839,6 +839,71 @@ def test_all_append_mutations_recover_exactly_after_claim_and_slot_crash(
     assert service.health()["ok"] is True
 
 
+@pytest.mark.parametrize("operation", ("create", "reply"))
+def test_empty_slot_crash_before_identity_marker_is_exactly_recoverable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    service, vault = _service(tmp_path)
+    request_id = {
+        "create": "26262626-2626-4626-8626-262626262626",
+        "reply": "27272727-2727-4727-8727-272727272727",
+    }[operation]
+    if operation == "reply":
+        opened = service.create_thread(
+            recipient_id=RECIPIENT,
+            subject="Recover an empty append slot",
+            content="Can an exact retry reuse an unowned numeric slot?",
+            actor_id=ACTOR,
+            source_refs=SOURCE_REFS,
+        )
+        invoke = lambda: service.reply(
+            opened["thread_id"],
+            recipient_id=ACTOR,
+            content="Recover the empty slot.",
+            actor_id=RECIPIENT,
+            parent_hash=opened["entry_hash"],
+            source_refs=SOURCE_REFS,
+            entry_id=request_id,
+        )
+    else:
+        invoke = lambda: service.create_thread(
+            recipient_id=RECIPIENT,
+            subject="Recover an empty create slot",
+            content="Can an exact create retry reuse an unowned numeric slot?",
+            actor_id=ACTOR,
+            source_refs=SOURCE_REFS,
+            entry_id=request_id,
+        )
+    real_open = os.open
+    crashed = False
+
+    def crash_before_marker(path: os.PathLike[str] | str, flags: int, mode: int = 0o777) -> int:
+        nonlocal crashed
+        if Path(path).name == f".reservation-{request_id}" and not crashed:
+            crashed = True
+            raise KeyboardInterrupt("injected death before slot identity marker")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", crash_before_marker)
+    with pytest.raises(KeyboardInterrupt, match="before slot identity"):
+        invoke()
+    claim = vault / "builder-threads" / "entry-claims" / f"{request_id}.json"
+    assert claim.exists()
+    empty_slots = [
+        path
+        for path in vault.glob("builder-threads/threads/*/entries/[0-9][0-9][0-9]")
+        if not any(path.iterdir())
+    ]
+    assert empty_slots
+
+    monkeypatch.setattr(os, "open", real_open)
+    recovered = invoke()
+    assert recovered["state"] in {"open", "answered"}
+    assert service.health()["ok"] is True
+
+
 def test_entry_id_is_unique_across_the_entire_vault(tmp_path: Path) -> None:
     service, vault = _service(tmp_path)
     entry_id = "16161616-1616-4616-8616-161616161616"
@@ -900,6 +965,57 @@ def test_entry_id_is_unique_across_the_entire_vault(tmp_path: Path) -> None:
             first["thread_id"], actor_id=ACTOR, reason="Must not append"
         )
     assert _vault_snapshot(vault) == before_exact_operations
+
+
+def test_exact_thread_operations_reject_an_unhealthy_sibling_thread(
+    tmp_path: Path,
+) -> None:
+    service, vault = _service(tmp_path)
+    healthy = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Healthy exact target",
+        content="Must its read still honor vault-wide health?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    sibling = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Sibling integrity target",
+        content="This contribution starts within the privacy contract.",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    sibling_path = next(
+        path
+        for path in _entry_files(vault, sibling["thread_id"])
+        if path.stem == sibling["entry_hash"]
+    )
+    sibling_payload = json.loads(sibling_path.read_bytes())
+    sibling_payload["content"] = "Authorization: Basic dXNlcjpwYXNz"
+    unsafe_bytes = _canonical_bytes(sibling_payload)
+    unsafe_path = sibling_path.with_name(f"{hashlib.sha256(unsafe_bytes).hexdigest()}.json")
+    sibling_path.unlink()
+    unsafe_path.write_bytes(unsafe_bytes)
+    claim_path = (
+        vault
+        / "builder-threads"
+        / "entry-claims"
+        / f"{sibling_payload['entry_id']}.json"
+    )
+    claim_payload = json.loads(claim_path.read_bytes())
+    claim_payload["request_hash"] = builder_thread_module._request_hash(sibling_payload)
+    claim_path.write_bytes(_canonical_bytes(claim_payload))
+
+    with pytest.raises(BuilderThreadPrivacyError):
+        service.health()
+    before = _vault_snapshot(vault)
+    with pytest.raises(BuilderThreadPrivacyError):
+        service.read_thread(healthy["thread_id"])
+    with pytest.raises(BuilderThreadPrivacyError):
+        service.close_thread(
+            healthy["thread_id"], actor_id=ACTOR, reason="Must not bypass sibling health"
+        )
+    assert _vault_snapshot(vault) == before
 
 
 def test_concurrent_cross_thread_entry_id_claim_allows_one_winner(
@@ -1479,6 +1595,47 @@ def test_concurrent_disposition_conflict_can_be_explicitly_quarantined(
     assert service.health()["ok"] is True
 
 
+def test_sequentially_superseded_close_is_not_a_concurrent_conflict(
+    tmp_path: Path,
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Distinguish sequential close lineage",
+        content="Must a stale close remain ordinary superseded history?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    first_close = service.close_thread(
+        opened["thread_id"], actor_id=ACTOR, reason="First snapshot"
+    )
+    service.reply(
+        opened["thread_id"],
+        recipient_id=ACTOR,
+        content="Late reply makes the first close stale.",
+        actor_id=RECIPIENT,
+        parent_hash=opened["entry_hash"],
+        source_refs=SOURCE_REFS,
+    )
+    service.close_thread(
+        opened["thread_id"], actor_id=ACTOR, reason="Fresh superseding snapshot"
+    )
+    before = _vault_snapshot(vault)
+
+    with pytest.raises(
+        BuilderThreadValidationError,
+        match="active sibling dispositions",
+    ):
+        service.quarantine(
+            opened["thread_id"],
+            artifact_hash=first_close["entry_hash"],
+            actor_id=ACTOR,
+            reason_code="concurrent_conflict",
+        )
+    assert _vault_snapshot(vault) == before
+    assert service.health()["ok"] is True
+
+
 def test_atomic_publication_uses_fsynced_temp_and_no_overwrite_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1580,13 +1737,22 @@ def test_claim_only_crash_is_recovered_by_exact_create_retry(
     calls = 0
 
     def fail_after_claim(
-        entry: dict[str, Any], raw: bytes, entry_hash: str
+        entry: dict[str, Any],
+        raw: bytes,
+        entry_hash: str,
+        *,
+        recover_existing: bool = False,
     ) -> dict[str, Any]:
         nonlocal calls
         calls += 1
         if calls == 1:
             raise OSError("injected failure after vault-wide claim")
-        return real_publish(entry, raw, entry_hash)
+        return real_publish(
+            entry,
+            raw,
+            entry_hash,
+            recover_existing=recover_existing,
+        )
 
     kwargs = {
         "recipient_id": RECIPIENT,
@@ -1698,6 +1864,75 @@ def test_reader_tolerates_only_a_recognized_temp_that_vanishes_during_walk(
     assert service.health()["ok"] is True
     assert observed is True
     assert not transient.exists()
+
+
+def test_two_writers_converge_when_cleaning_the_same_committed_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Converge committed-temp cleanup",
+        content="Can two writers observe the same exact cleanup candidate?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    final = _entry_files(vault, opened["thread_id"])[0]
+    transient = final.with_name(f".tmp-{final.stem}-{'e' * 32}")
+    os.link(final, transient)
+    cleanup_barrier = Barrier(2)
+    real_unlink = Path.unlink
+
+    def synchronized_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == transient:
+            cleanup_barrier.wait(timeout=2)
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", synchronized_unlink)
+
+    def append(index: int) -> dict[str, Any] | Exception:
+        try:
+            return BuilderThreadService(
+                service.root, expected_vault_id=VAULT_ID
+            ).reply(
+                opened["thread_id"],
+                recipient_id=ACTOR,
+                content=f"Cleanup observer {index}",
+                actor_id=RECIPIENT,
+                parent_hash=opened["entry_hash"],
+                source_refs=SOURCE_REFS,
+            )
+        except Exception as exc:  # noqa: BLE001 - convergence result is asserted
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(append, (1, 2)))
+    assert all(isinstance(item, dict) for item in outcomes)
+    assert not transient.exists()
+    assert service.health()["ok"] is True
+
+
+def test_disappearing_unrecognized_temp_name_still_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    unknown = vault / ".tmp-arbitrary"
+    unknown.write_text("not a recognized writer artifact\n", encoding="utf-8")
+    real_lstat = Path.lstat
+    vanished = False
+
+    def vanish_unknown(path: Path) -> os.stat_result:
+        nonlocal vanished
+        if path == unknown and not vanished:
+            vanished = True
+            path.unlink()
+            raise FileNotFoundError(path)
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", vanish_unknown)
+    with pytest.raises(BuilderThreadValidationError, match="artifact changed"):
+        service.health()
+    assert vanished is True
 
 
 def test_concurrent_quarantine_conflict_fails_closed_and_is_recoverable(
@@ -1922,6 +2157,59 @@ def test_entry_bound_is_reserved_before_publication_and_129th_is_non_mutating(
     }
     assert after == before
     assert len(_entry_files(vault, opened["thread_id"])) == 128
+    assert service.health()["ok"] is True
+
+
+def test_full_bound_claim_cleanup_crash_is_recovered_by_exact_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, vault = _service(tmp_path)
+    opened = service.create_thread(
+        recipient_id=RECIPIENT,
+        subject="Recover a full-bound request claim",
+        content="Can exact retry finish cleanup without stranding vault health?",
+        actor_id=ACTOR,
+        source_refs=SOURCE_REFS,
+    )
+    for index in range(service.MAX_ENTRIES_PER_THREAD - 1):
+        service.reply(
+            opened["thread_id"],
+            recipient_id=ACTOR,
+            content=f"Capacity reply {index}",
+            actor_id=RECIPIENT,
+            parent_hash=opened["entry_hash"],
+            source_refs=SOURCE_REFS,
+        )
+    request_id = "28282828-2828-4828-8828-282828282828"
+    claim = vault / "builder-threads" / "entry-claims" / f"{request_id}.json"
+    real_unlink = Path.unlink
+    failed = False
+
+    def fail_claim_cleanup(path: Path, *args: Any, **kwargs: Any) -> None:
+        nonlocal failed
+        if path == claim and not failed:
+            failed = True
+            raise OSError("injected claim cleanup interruption")
+        real_unlink(path, *args, **kwargs)
+
+    kwargs = {
+        "thread_id": opened["thread_id"],
+        "recipient_id": ACTOR,
+        "content": "This request is beyond the bounded capacity.",
+        "actor_id": RECIPIENT,
+        "parent_hash": opened["entry_hash"],
+        "source_refs": SOURCE_REFS,
+        "entry_id": request_id,
+    }
+    monkeypatch.setattr(Path, "unlink", fail_claim_cleanup)
+    with pytest.raises(OSError, match="claim cleanup interruption"):
+        service.reply(**kwargs)
+    assert claim.exists()
+
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    with pytest.raises(BuilderThreadConflictError, match="entry bound reached"):
+        service.reply(**kwargs)
+    assert not claim.exists()
     assert service.health()["ok"] is True
 
 
