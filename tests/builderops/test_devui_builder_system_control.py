@@ -9,6 +9,7 @@ import pytest
 
 from app.builderops.devui_builder_system_control import (
     GoverningDocumentContractError,
+    compose_builder_system_control_view,
     compose_governing_document_inventory,
 )
 
@@ -66,6 +67,59 @@ def _compose(*documents: dict[str, object]) -> dict[str, object]:
         governance_baseline_ref=_ref("docs/architecture/SBS_OPERATING_MODEL.md"),
         composed_at="2026-08-10T08:01:00+00:00",
         declarations=list(documents),
+        limitations=[],
+    )
+
+
+def _adapter(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "source_ref": _ref(".codex/skills/issue-to-code/SKILL.md"),
+        "adapter_kind": "skill",
+        "adapter_id": "issue-to-code",
+        "version_or_digest": "git:315d8103",
+        "owning_workflow_refs": [_ref("docs/development/DEV_WORKFLOW.md")],
+        "owning_policy_refs": [_ref("AGENTS.md")],
+        "trigger": "bounded GitHub implementation work",
+        "input_contract_refs": [_ref(".codex/skills/_shared/ISSUE_CONTRACT.md")],
+        "output_and_receipt_refs": [_ref("docs/development/PR_HOT_PATH.md")],
+        "refusal_and_authority_limits": ["does not own policy or issue truth"],
+        "source_state": _state(),
+        "limitations": [],
+    }
+    value.update(overrides)
+    return value
+
+
+def _capability(**overrides: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "source_ref": _ref("scripts/issue_pickup_claim.sh"),
+        "capability_kind": "script",
+        "capability_id": "issue-pickup-claim",
+        "version_or_digest": "git:315d8103",
+        "owning_workflow_refs": [_ref("docs/development/DEV_WORKFLOW.md")],
+        "available_operations": ["claim"],
+        "side_effect_class": "governed_write",
+        "admission_boundary_ref": _ref(".codex/skills/issue-to-code/SKILL.md"),
+        "explicit_non_authority": ["does not grant approval or policy authority"],
+        "source_state": _state(),
+        "limitations": [],
+    }
+    value.update(overrides)
+    return value
+
+
+def _compose_control(
+    *,
+    adapters: list[dict[str, object]] | None = None,
+    capabilities: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return compose_builder_system_control_view(
+        repository_ref="RasmusTho/agentic-pkm-mvp",
+        governance_baseline_ref=_ref("docs/architecture/SBS_OPERATING_MODEL.md"),
+        composed_at="2026-08-10T08:01:00+00:00",
+        governing_document_declarations=[_document()],
+        workflow_adapter_declarations=[] if adapters is None else adapters,
+        capability_binding_declarations=[] if capabilities is None else capabilities,
         limitations=[],
     )
 
@@ -206,8 +260,107 @@ def test_governing_document_inventory_requires_time_basis_for_freshness() -> Non
     with pytest.raises(GoverningDocumentContractError, match="freshness basis"):
         _compose(no_basis)
 
-    expired = _document(
-        source_state=_state(fresh_until="2026-08-10T08:00:00+00:00")
-    )
+    expired = _document(source_state=_state(fresh_until="2026-08-10T08:00:00+00:00"))
     with pytest.raises(GoverningDocumentContractError, match="fresh_until"):
         _compose(expired)
+
+
+def test_workflow_adapter_projection_preserves_explicit_ownership_and_contract_refs() -> None:
+    adapter = _adapter()
+
+    result = _compose_control(adapters=[adapter])
+
+    assert result["workflow_adapters"] == [adapter]
+    assert result["capability_bindings"] == []
+    assert result["authority"] == "projection_only"
+    assert result["primary_identity"] == "builder_system"
+
+
+def test_workflow_adapter_projection_refuses_inferred_policy_or_ownership() -> None:
+    incomplete = _adapter(
+        version_or_digest=None,
+        owning_workflow_refs=[],
+        owning_policy_refs=[],
+        source_state=_state(linkage="linked"),
+    )
+
+    result = _compose_control(adapters=[incomplete])
+
+    rendered = result["workflow_adapters"][0]
+    assert rendered["version_or_digest"] is None
+    assert rendered["owning_workflow_refs"] == []
+    assert rendered["owning_policy_refs"] == []
+    assert rendered["source_state"]["coverage"] == "missing"
+    assert rendered["source_state"]["cardinality"] == "not_measured"
+    assert rendered["source_state"]["linkage"] == "unlinked"
+    assert "inferred" not in str(rendered).lower()
+
+
+def test_capability_binding_projection_preserves_operations_effects_and_admission_boundary() -> (
+    None
+):
+    capability = _capability(
+        capability_kind="connector",
+        available_operations=["list", "describe"],
+        side_effect_class="external_effect",
+    )
+
+    result = _compose_control(capabilities=[capability])
+
+    assert result["capability_bindings"] == [capability]
+    assert result["workflow_adapters"] == []
+
+
+def test_capability_binding_projection_never_promotes_availability_to_authority() -> None:
+    valid = _capability(
+        capability_id="safe-read", side_effect_class="read_only", admission_boundary_ref=None
+    )
+    incomplete = _capability(
+        capability_id="write-without-admission",
+        owning_workflow_refs=[],
+        admission_boundary_ref=None,
+        source_state=_state(linkage="linked"),
+    )
+
+    result = _compose_control(capabilities=[valid, incomplete])
+
+    assert result["capability_bindings"][0] == valid
+    refused = result["capability_bindings"][1]
+    assert refused["admission_boundary_ref"] is None
+    assert refused["source_state"]["availability"] == "available"
+    assert refused["source_state"]["coverage"] == "missing"
+    assert refused["source_state"]["linkage"] == "unlinked"
+
+
+def test_adapter_and_capability_projection_preserves_independent_axes_and_projection_boundary() -> (
+    None
+):
+    adapter = _adapter(
+        source_state=_state(
+            availability="unavailable",
+            freshness="stale",
+            coverage="unread",
+            cardinality="not_measured",
+            linkage="not_assessed",
+        )
+    )
+    capability = _capability(
+        source_state=_state(
+            availability="available",
+            freshness="unknown",
+            coverage="partial",
+            cardinality="nonempty",
+            linkage="unlinked",
+        )
+    )
+
+    result = _compose_control(adapters=[adapter], capabilities=[capability])
+
+    assert result["workflow_adapters"][0]["source_state"] == adapter["source_state"]
+    assert result["capability_bindings"][0]["source_state"] == capability["source_state"]
+    assert result["authority"] == "projection_only"
+    assert result["primary_identity"] == "builder_system"
+    source = inspect.getsource(compose_builder_system_control_view)
+    assert "open(" not in source
+    assert "Path(" not in source
+    assert "requests" not in source
