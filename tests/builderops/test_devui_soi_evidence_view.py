@@ -44,7 +44,14 @@ def test_unowned_relation_remains_unlinked() -> None:
         "context-bundles-capability",
         "soi-evidence-view-v0-contract",
     ]
-    assert result["denominator"]["coverage"] == "partial"
+    assert result["denominator"]["status"] == "unknown"
+    assert "coverage" not in result["denominator"]
+
+
+def test_unknown_denominator_does_not_render_partial() -> None:
+    result = compose_soi_evidence_view(_manifest())
+    assert result["denominator"]["status"] == "unknown"
+    assert "coverage" not in result["denominator"]
 
 
 def test_unknown_denominator_cannot_render_complete() -> None:

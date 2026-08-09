@@ -166,7 +166,6 @@
     },
     "denominator": {
       "status": "unknown",
-      "coverage": "partial",
       "source": null,
       "scope_ref": null,
       "observed_at": null,

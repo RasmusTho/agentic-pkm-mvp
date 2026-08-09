@@ -319,21 +319,24 @@ def compose_soi_evidence_view(manifest: Mapping[str, Any]) -> dict[str, Any]:
         if claim["horizon"] == "current":
             current_claim_ids.append(claim["claim_id"])
 
+    rendered_denominator = {
+        "status": denominator["status"],
+        "source": denominator.get("source"),
+        "scope_ref": denominator.get("scope_ref"),
+        "observed_at": denominator.get("observed_at"),
+        "horizon": denominator["horizon"],
+        "expected_subject_refs": denominator.get("expected_subject_refs", []),
+        "required_responsibilities": denominator.get("required_responsibilities", []),
+        "limitations": denominator["limitations"],
+    }
+    if denominator["status"] == "known":
+        rendered_denominator["coverage"] = "complete" if can_render_complete else "partial"
+
     result = {
         "contract_version": CONTRACT_VERSION,
         "authority": "projection_only",
         "scope": detached["scope"],
-        "denominator": {
-            "status": denominator["status"],
-            "coverage": "complete" if can_render_complete else "partial",
-            "source": denominator.get("source"),
-            "scope_ref": denominator.get("scope_ref"),
-            "observed_at": denominator.get("observed_at"),
-            "horizon": denominator["horizon"],
-            "expected_subject_refs": denominator.get("expected_subject_refs", []),
-            "required_responsibilities": denominator.get("required_responsibilities", []),
-            "limitations": denominator["limitations"],
-        },
+        "denominator": rendered_denominator,
         "claims": claims,
         "current_claim_ids": current_claim_ids,
         "relations": detached["relations"],
