@@ -1,5 +1,6 @@
-State: Proposed target-state specification from issue #4698; no runtime, route, source inventory, or
-visual implementation claimed. Delivered inputs and target contracts are separated below.
+State: Proposed target-state specification from issue #4698; BSC-01's pure governing-document
+inventory composer is delivered as a partial input, while no route, UI, remaining composer, or
+whole-lens implementation is claimed. Delivered inputs and target contracts are separated below.
 Doc role: Capability specification and hard authority boundary for the separate devUI Builder
 System Control lens.
 Authority: `docs/DEVUI.md` owns the owner experience. This document owns the target information,
@@ -39,6 +40,7 @@ specification.
 | MCP, connector, script, and CLI declarations | Current delivered input where explicitly declared | Bounded operations and admission surfaces; absence or unread declarations remain honest gaps. |
 | BuilderOps, dispatcher, GitHub, Git, CI, review, and receipt evidence | Current delivered input where available | Live or durable observations under each source's own authority and watermark. |
 | `devui.composition.v1`, Focus, and Conversation Port contracts | Current delivered inputs or accepted target contracts as named by their own docs | Shared presentation primitives and evidence axes only; they do not make this lens delivered. |
+| BSC-01 governing-document inventory composer | Delivered partial input; no route, UI, or remaining composer is delivered | Composes only explicit governing-document declarations per read, preserves source-owned authority/lifecycle/state evidence, and never discovers, copies, or decides document truth. |
 | `BuilderSystemControlView.v1` | Target contract; not delivered | Per-read composition of the records specified here. |
 | Builder System Control route and UI | Target contract; not delivered | Separate system-governance context, pending implementation and governed design handoff. |
 | Coverage/deviation composer and command proposals | Target contract; not delivered | Read-only assessment first; later proposals may route only to existing governed workflows. |
@@ -403,9 +405,10 @@ inventory, composition, or fixtures that precede that handoff.
 These are bounded candidates for later governed issue creation. They must not be filed as children
 of Focus parent #4693; Builder System Control remains a separate delivery line.
 
-1. **BSC-01 — compose the source inventory.** Define and implement a pure, per-read inventory of
-   governing documents with exact refs, declared role/authority/owner/lifecycle, source states, and
-   hostile validation. No route or UI.
+1. **BSC-01 — compose the source inventory (delivered by #4721).** Defines and implements a pure,
+   per-read inventory of explicitly supplied governing documents with exact refs, declared
+   role/authority/owner/lifecycle, source states, and hostile validation. No route or UI is
+   delivered.
 2. **BSC-02 — compose adapters and capabilities.** Add pure workflow-adapter and capability-binding
    projections over explicit skill/MCP/connector/script/CLI declarations. Refuse missing ownership
    and never infer policy.
