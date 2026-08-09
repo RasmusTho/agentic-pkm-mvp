@@ -1,6 +1,7 @@
-State: Proposed target-state specification with blocked parent #4693, children #4694–#4697, and
-separate Builder System Control specification issue #4698; no runtime or visual implementation
-claimed. The delivered inputs are listed separately under Current-to-target truth.
+State: Accepted target-state specification with blocked parent #4693; FCP-01 #4694 and FCP-03 #4696
+delivered; FCP-02 #4695 and FCP-04 #4697 blocked; separate Builder System Control specification
+issue #4698 active. No visual or command implementation claimed. Delivered inputs are listed
+separately under Current-to-target truth.
 Doc role: Capability specification and implementation boundary for the first subject-centred devUI
 Focus slice, its external Conversation Port, the Start Model Inquiry command preview, and the
 separate Builder System Control lens.
@@ -38,6 +39,8 @@ Focus flow.
 | Builder System process map | Governs pre-Issue routes, `PromotionIntent`, delivery correlation, and session provenance | Source for next-legal-step and limitation rendering |
 | Model Inquiry | Durable artifact-first launcher and terminal receipt contract | One devUI preview and confirmation adapter over that unchanged route |
 | Codex/Claude conversations | External provider interactions with no global authoritative session source | Export/open of one hash-bound context pack; no session inventory |
+| `focus-view.v1` composer | Delivered by PR #4703 as a pure read-only subject projection | Input to the future Focus UI; no route, UI, store, or effect implied |
+| Conversation pack/export composer | Delivered by PR #4704 with strict source freshness and non-authoritative dispositions | Nonvisual fixtures and adapter boundary; no embedded conversation runtime or command admission |
 | Focus UI | Not delivered | Subject-centred read view and external Conversation Port |
 | Builder System Control | Not delivered | Separate future read-oriented governance lens |
 
@@ -435,15 +438,17 @@ not waive them.
 
 | Order | Task | Outcome | Dependency posture |
 | --- | --- | --- | --- |
-| 1 | [FCP-01 — Compose Subject-Centred Focus (#4694)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4694) | Target contracts and read-only subject composition with explicit correlation | First implementation slice after this spec merges |
-| 2 | [FCP-03 — Open External Conversation Port (#4696)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) | Nonvisual canonical pack/export adapter and non-authoritative disposition contract | Depends on delivered FCP-01; no design receipt required |
+| 1 | [FCP-01 — Compose Subject-Centred Focus (#4694)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4694) | Target contracts and read-only subject composition with explicit correlation | Delivered by PR #4703 |
+| 2 | [FCP-03 — Open External Conversation Port (#4696)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) | Nonvisual canonical pack/export adapter and non-authoritative disposition contract | Delivered by PR #4704 |
 | 3 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Authenticated proposal validation, destination-owned operation-key admission, Start/Hold, and honest receipt/readback/ambiguity | Depends on delivered FCP-03, authenticated action boundary #4169, and bounded Model Inquiry operation-key support; no design receipt required |
 | 4 | [FCP-02 — Validate Focus and Conversation Design (#4695)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695) | Governed Yggdrasil handoff over stable fixtures, including unresolved-owner-question treatment and accessibility/degraded-state receipts | Depends on FCP-01/FCP-03/FCP-04 fixtures; technically blocked while external handoff is unavailable |
-| Separate | [Builder System Control lens specification (#4698)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698) | Detailed source registry, coverage/deviation semantics, visual boundary, and later task split | Begins only after this boundary is accepted; not a Focus child |
+| Separate | [Builder System Control lens specification (#4698)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698) | Detailed source/state contract, coverage/deviation semantics, visual boundary, and later task split | Active separate docs line; not a Focus child |
 
-All implementation children remain blocked until this specification is merged. The parent remains a
-validation hub and never becomes ready work. Builder System Control is filed separately so its
-meta-governance context cannot leak into the Focus capability flow.
+The specification is merged and FCP-01/FCP-03 are delivered. FCP-04 remains blocked by its
+authenticated-action and destination-idempotency dependencies; FCP-02 remains blocked by FCP-04
+fixtures and external design availability. The parent remains a validation hub and never becomes
+ready work. Builder System Control is filed separately so its meta-governance context cannot leak
+into the Focus capability flow.
 
 FCP-01, FCP-03, and FCP-04 are independently mergeable nonvisual slices. FCP-02 owns the later
 governed visual acceptance; after that handoff, visual implementation is derived as a separate
@@ -497,16 +502,17 @@ until a separate governed promotion route acts on it.
 ## Relationship to GitHub issues
 
 Parent [#4693](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4693) is the live validation hub.
-Each task maps to one blocked
-child Issue and carries the Issue number in `github_issue:` frontmatter. GitHub owns backlog state;
-this specification owns the stable capability/task contract. No child becomes `agent:ready` until
-this specification is merged and its live dependencies are reconciled.
-Builder System Control is tracked separately by
-[#4698](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698).
+Each task maps to one child Issue and carries the Issue number in `github_issue:` frontmatter.
+GitHub owns backlog state; this specification owns the stable capability/task contract. FCP-01 and
+FCP-03 are delivered; the remaining children stay blocked until their live dependencies are
+reconciled. Builder System Control is tracked separately by
+[#4698](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698) and specified in
+`docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`.
 
 ## Governing and supporting sources
 
 - `docs/DEVUI.md`
+- `docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`
 - `docs/plans/DEVUI_IMPLEMENTATION.md`
 - `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`
 - `docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md`
