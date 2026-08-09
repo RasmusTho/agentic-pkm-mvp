@@ -82,6 +82,55 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
+def test_builder_vault_deliberation_contract_is_shared_and_discoverable() -> None:
+    index = _read(".codex/skills/README.md")
+    contract = _read(
+        ".codex/skills/_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md"
+    )
+    deliberation = _read(".codex/skills/builder-vault-deliberation/SKILL.md")
+    review = _read(".codex/skills/builder-vault-review/SKILL.md")
+
+    for skill_name in ("builder-vault-deliberation", "builder-vault-review"):
+        assert f"- `{skill_name}`" in index
+
+    shared_ref = "_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md"
+    assert shared_ref in deliberation
+    assert shared_ref in review
+    assert "entries/*.md` are the only deliberation source artifacts" in contract
+    assert "repository's\n`vault/` tree is a fixture" in contract
+    assert "No SQLite database, sequence file, distributed lock" in contract
+    assert "existing `PromotionIntent` boundary" in contract
+
+    for path in (
+        "AGENTS.md",
+        ".codex/skills/resume-work/SKILL.md",
+        ".codex/skills/deliver-issue-set/SKILL.md",
+        ".codex/skills/verification-and-closure/SKILL.md",
+        "docs/development/PARENT_ISSUE_CLOSURE.md",
+    ):
+        assert "builder-vault-deliberation" in _read(path)
+    assert "builder-vault-review" in _read(
+        ".codex/skills/learning-retrospective/SKILL.md"
+    )
+
+
+def test_builder_vault_deliberation_contract_closes_cross_device_failure_modes() -> None:
+    contract = _read(
+        ".codex/skills/_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md"
+    )
+
+    assert "shared_vault_root` to resolve to the same directory" in contract
+    assert "agent-delivery/{Backlog,Ready,In Progress,Review,Blocked,Done}/" in contract
+    assert "unattested_root" in contract
+    assert "top-level Mimer `_heimdal/` control tree" in contract
+    assert "RFC 8785 (JCS) JSON record" in contract
+    assert "SHA-256 of the entire\nmanifest file bytes" in contract
+    assert "no-overwrite hard\n   `link(2)`" in contract
+    assert "Never stream bytes into a final pathname" in contract
+    assert "remove temp, and `fsync`" in contract
+    assert "exclusive create or no-overwrite link" not in contract
+
+
 def test_skill_readme_resume_work_summary_matches_recovery_order() -> None:
     index = _read(".codex/skills/README.md")
     skill = _read(".codex/skills/resume-work/SKILL.md")
