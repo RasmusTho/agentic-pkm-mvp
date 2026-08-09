@@ -29,6 +29,7 @@ def _composition() -> dict:
         "captured_at": "2026-08-09T21:00:00+00:00",
         "providers": {
             "work": {
+                "provider": "builderops_cockpit",
                 "status": "available",
                 "authority": "read_time_join",
                 "captured_at": "2026-08-09T21:00:00+00:00",
@@ -37,6 +38,7 @@ def _composition() -> dict:
                 "refusal": None,
             },
             "capabilities": {
+                "provider": "ckm",
                 "status": "refused",
                 "authority": "projection_marker",
                 "captured_at": None,
@@ -87,6 +89,7 @@ def _candidate(*, evidence: list[dict] | None = None) -> dict:
             "merged": {"state": "evidenced", "source_ref": _source("merge"), "evidence_id": "ready"},
             "delivery": {"state": "evidenced", "source_ref": _source("delivery"), "evidence_id": "ready"},
             "availability": {"state": "evidenced", "source_ref": _source("availability"), "evidence_id": "ready"},
+            "issue_closure": {"state": "evidenced", "source_ref": _source("closure"), "evidence_id": "ready"},
             "ready_to_try": {
                 "state": "evidenced",
                 "source_ref": _source("ready"),
@@ -110,7 +113,8 @@ def test_overview_production_composer_is_projection_only_and_has_no_io_or_state_
     assert result["contract_version"] == CONTRACT_VERSION
     assert result["authority"] == "projection_only"
     assert result["composed_at"] == composition["captured_at"]
-    assert result["trust_frame"]["provider_states"][0]["provider"] == "work"
+    assert result["trust_frame"]["provider_states"][0]["role"] == "work"
+    assert result["trust_frame"]["provider_states"][0]["provider"] == "builderops_cockpit"
     assert result["trust_frame"]["provider_states"][0]["authority"] == "read_time_join"
     assert result["trust_frame"]["provider_states"][0]["snapshot"] == {"watermark": "work:42"}
     assert result["now"][0]["subject_ref"] == candidates["now"][0]["subject_ref"]
@@ -118,6 +122,11 @@ def test_overview_production_composer_is_projection_only_and_has_no_io_or_state_
     assert "store" not in result
     assert "effects" not in result
     assert composition == _composition()
+
+    missing_identity = _composition()
+    del missing_identity["providers"]["work"]["authority"]
+    with pytest.raises(OverviewContractError, match="missing fields"):
+        compose_overview_view(composition=missing_identity)
 
 
 def test_overview_without_producer_candidates_withdraws_owner_and_ready_classifications() -> None:
@@ -161,6 +170,26 @@ def test_needs_you_requires_named_owner_authority_and_withdraws_on_degraded_evid
     assert all(item["kind"] == "classification_withdrawn" for item in withdrawals)
 
 
+@pytest.mark.parametrize(
+    "category",
+    (
+        "irreversible_external_effect",
+        "security_privacy_cost_commitment",
+        "production_release_operator_action",
+        "contradictory_source_authority",
+    ),
+)
+def test_needs_you_accepts_each_canonical_owner_authority_category(category: str) -> None:
+    candidate = _candidate()
+    candidate["owner_authority"]["category"] = category
+
+    result = compose_overview_view(
+        composition=_composition(), candidates={"needs_you": [candidate]}
+    )
+
+    assert result["needs_you"] == [candidate]
+
+
 def test_ready_to_try_requires_receipt_backed_fact_and_preserves_delivery_axes() -> None:
     ready = _candidate()
     merged_only = _candidate()
@@ -176,19 +205,40 @@ def test_ready_to_try_requires_receipt_backed_fact_and_preserves_delivery_axes()
 
     assert result["ready_to_try"] == [ready]
     facts = result["ready_to_try"][0]["delivery_facts"]
+    assert set(facts) == {
+        "merged",
+        "delivery",
+        "availability",
+        "issue_closure",
+        "ready_to_try",
+        "owner_trial",
+        "owner_acceptance",
+    }
     assert facts["merged"]["state"] == "evidenced"
     assert facts["delivery"]["state"] == "evidenced"
     assert facts["availability"]["state"] == "evidenced"
+    assert facts["issue_closure"]["state"] == "evidenced"
     assert facts["ready_to_try"]["receipt_ref"] == _source("receipt-ready")
     assert facts["owner_trial"]["state"] == "unknown"
     assert facts["owner_acceptance"]["state"] == "unknown"
     assert any(item["zone"] == "ready_to_try" for item in result["limitations"])
 
 
+def test_evidenced_delivery_fact_requires_resolving_evidence() -> None:
+    candidate = _candidate()
+    candidate["delivery_facts"]["merged"]["evidence_id"] = "missing"
+
+    with pytest.raises(OverviewContractError, match="evidenced fact requires source evidence"):
+        compose_overview_view(
+            composition=_composition(), candidates={"now": [candidate]}
+        )
+
+
 def test_overview_preserves_exact_withdrawals_and_independent_evidence_axes() -> None:
     candidate = _candidate(
         evidence=[
             _evidence("authority"),
+            _evidence("ready"),
             _evidence(
                 "withdrawn",
                 claim=None,
@@ -208,16 +258,57 @@ def test_overview_preserves_exact_withdrawals_and_independent_evidence_axes() ->
     result = compose_overview_view(composition=_composition(), candidates={"now": [candidate]})
 
     evidence = result["now"][0]["evidence"]
-    assert evidence[1]["availability"] == "refused"
-    assert evidence[1]["completeness"] == "unread"
-    assert evidence[1]["cardinality"] == "not_measured"
-    assert evidence[1]["linkage"] == "unlinked"
-    assert evidence[2]["cardinality"] == "measured_empty"
-    assert evidence[2]["read_watermark"] == "receipt-seq:0"
+    assert evidence[2]["availability"] == "refused"
+    assert evidence[2]["completeness"] == "unread"
+    assert evidence[2]["cardinality"] == "not_measured"
+    assert evidence[2]["linkage"] == "unlinked"
+    assert evidence[3]["cardinality"] == "measured_empty"
+    assert evidence[3]["read_watermark"] == "receipt-seq:0"
     inferred = deepcopy(candidate)
-    inferred["evidence"][1]["claim"] = "guessed relation"
+    inferred["evidence"][2]["claim"] = "guessed relation"
     with pytest.raises(OverviewContractError, match="unlinked evidence"):
         compose_overview_view(composition=_composition(), candidates={"now": [inferred]})
+
+
+def test_measured_empty_requires_fresh_source_evidence() -> None:
+    for freshness in ("stale", "unknown"):
+        candidate = _candidate(
+            evidence=[
+                {
+                    **_evidence(
+                        "empty",
+                        claim="Measured no items.",
+                        freshness=freshness,
+                        cardinality="measured_empty",
+                    ),
+                    "read_watermark": "receipt-seq:0",
+                }
+            ]
+        )
+
+        with pytest.raises(OverviewContractError, match="measured_empty requires fresh"):
+            compose_overview_view(
+                composition=_composition(), candidates={"now": [candidate]}
+            )
+
+
+def test_withdrawal_preserves_producer_limitations() -> None:
+    candidate = _candidate()
+    candidate["owner_authority"]["category"] = "ci_failure"
+    candidate["limitations"] = [
+        "The producer could not prove that this is an owner-authority decision."
+    ]
+
+    result = compose_overview_view(
+        composition=_composition(), candidates={"needs_you": [candidate]}
+    )
+
+    withdrawal = next(
+        item
+        for item in result["limitations"]
+        if item.get("subject_ref") == candidate["subject_ref"]
+    )
+    assert withdrawal["limitations"] == candidate["limitations"]
 
 
 def test_overview_keeps_roots_separate_and_survives_degraded_references() -> None:

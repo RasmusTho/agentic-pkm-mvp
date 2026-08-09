@@ -33,6 +33,7 @@ _DELIVERY_FACTS = frozenset(
         "merged",
         "delivery",
         "availability",
+        "issue_closure",
         "ready_to_try",
         "owner_trial",
         "owner_acceptance",
@@ -164,13 +165,14 @@ def _evidence(value: Any, *, label: str) -> dict[str, Any]:
     if evidence["cardinality"] == "measured_empty":
         if (
             evidence["availability"] != "available"
+            or evidence["freshness"] != "fresh"
             or evidence["completeness"] != "complete"
             or evidence["linkage"] != "linked"
             or not isinstance(evidence.get("read_watermark"), str)
             or not evidence["read_watermark"].strip()
         ):
             raise OverviewContractError(
-                f"{label}.measured_empty requires an available, complete, linked watermark"
+                f"{label}.measured_empty requires fresh, available, complete, linked evidence with a watermark"
             )
     if evidence["availability"] != "available" and evidence["cardinality"] == "measured_empty":
         raise OverviewContractError(f"{label} cannot make an empty claim from an unavailable source")
@@ -264,6 +266,7 @@ def _candidate(value: Any, *, zone: str) -> dict[str, Any]:
         facts = _mapping(facts, label=f"{zone} candidate.delivery_facts")
         if set(facts) - _DELIVERY_FACTS:
             raise OverviewContractError(f"{zone} candidate.delivery_facts has unknown facts")
+        evidence_ids = {item["evidence_id"] for item in evidence}
         for key, fact in facts.items():
             fact = _mapping(fact, label=f"{zone} candidate.delivery_facts.{key}")
             _keys(
@@ -278,6 +281,10 @@ def _candidate(value: Any, *, zone: str) -> dict[str, Any]:
                 fact["source_ref"], label=f"{zone} candidate.delivery_facts.{key}.source_ref"
             )
             _string(fact["evidence_id"], label=f"{zone} candidate.delivery_facts.{key}.evidence_id")
+            if fact["state"] == "evidenced" and fact["evidence_id"] not in evidence_ids:
+                raise OverviewContractError(
+                    f"{zone} candidate.delivery_facts.{key} evidenced fact requires source evidence"
+                )
             if fact.get("receipt_ref") is not None:
                 fact["receipt_ref"] = _source_ref(
                     fact["receipt_ref"], label=f"{zone} candidate.delivery_facts.{key}.receipt_ref"
@@ -294,6 +301,7 @@ def _withdrawal(candidate: Mapping[str, Any], *, zone: str, reason: str) -> dict
         "subject_ref": candidate["subject_ref"],
         "reason": reason,
         "evidence": candidate["evidence"],
+        "limitations": candidate["limitations"],
     }
 
 
@@ -357,11 +365,38 @@ def compose_overview_view(
     for name, provider in providers.items():
         provider = _mapping(provider, label=f"composition.providers.{name}")
         _string(name, label="composition provider name")
+        _keys(
+            provider,
+            allowed={
+                "provider",
+                "status",
+                "authority",
+                "captured_at",
+                "snapshot",
+                "completeness",
+                "refusal",
+                "payload",
+            },
+            required={
+                "provider",
+                "status",
+                "authority",
+                "captured_at",
+                "snapshot",
+                "completeness",
+                "refusal",
+            },
+            label=f"composition.providers.{name}",
+        )
         if provider.get("status") not in {"available", "refused"}:
             raise OverviewContractError(f"composition.providers.{name}.status is unsupported")
         trust_providers.append(
             {
-                "provider": name,
+                "role": name,
+                "provider": _string(
+                    provider.get("provider"),
+                    label=f"composition.providers.{name}.provider",
+                ),
                 "status": provider["status"],
                 "authority": _detached(provider.get("authority"), label="provider authority"),
                 "captured_at": provider.get("captured_at"),
