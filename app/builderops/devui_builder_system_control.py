@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 import json
+import re
 from typing import Any
 
 
@@ -21,6 +22,8 @@ _FRESHNESS = {"fresh", "stale", "unknown"}
 _COVERAGE = {"complete", "partial", "unread", "missing", "not_applicable"}
 _CARDINALITY = {"nonempty", "measured_empty", "not_measured", "not_countable"}
 _LINKAGE = {"linked", "unlinked", "not_assessed", "not_applicable"}
+_SHA256 = re.compile(r"[a-f0-9]{64}")
+_PROVENANCE_ONLY_SOURCE_PARTS = {"provider", "session", "transcript"}
 
 
 class GoverningDocumentContractError(ValueError):
@@ -69,6 +72,15 @@ def _timestamp(value: Any, *, label: str) -> str:
     return timestamp
 
 
+def _timestamp_value(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _is_provenance_only(reference: Mapping[str, Any]) -> bool:
+    parts = set(re.split(r"[^a-z0-9]+", str(reference["source_type"]).lower()))
+    return bool(parts & _PROVENANCE_ONLY_SOURCE_PARTS)
+
+
 def _source_ref(value: Any, *, label: str) -> dict[str, Any]:
     reference = _mapping(value, label=label)
     _keys(
@@ -82,9 +94,18 @@ def _source_ref(value: Any, *, label: str) -> dict[str, Any]:
     for key in ("version", "snapshot", "content_hash"):
         if reference.get(key) is not None:
             _nonempty(reference[key], label=f"{label}.{key}")
+    content_hash = reference.get("content_hash")
+    if content_hash is not None and not _SHA256.fullmatch(content_hash):
+        raise GoverningDocumentContractError(
+            f"{label}.content_hash must be a canonical SHA-256"
+        )
     if not any(reference.get(key) is not None for key in ("version", "snapshot", "content_hash")):
         raise GoverningDocumentContractError(
             f"{label} requires a version, snapshot, or content hash"
+        )
+    if _is_provenance_only(reference):
+        raise GoverningDocumentContractError(
+            f"{label} cannot use provider session or transcript provenance as authority"
         )
     return reference
 
@@ -96,7 +117,7 @@ def _limitations(value: Any, *, label: str) -> list[Any]:
     return detached
 
 
-def _state(value: Any, *, label: str) -> dict[str, Any]:
+def _state(value: Any, *, label: str, composed_at: datetime) -> dict[str, Any]:
     state = _mapping(value, label=label)
     _keys(
         state,
@@ -138,10 +159,18 @@ def _state(value: Any, *, label: str) -> dict[str, Any]:
     _timestamp(state["captured_at"], label=f"{label}.captured_at")
     _nonempty(state["read_scope"], label=f"{label}.read_scope")
     _nonempty(state["read_watermark"], label=f"{label}.read_watermark")
+    fresh_until: datetime | None = None
     if state.get("fresh_until") is not None:
-        _timestamp(state["fresh_until"], label=f"{label}.fresh_until")
+        fresh_until_text = _timestamp(state["fresh_until"], label=f"{label}.fresh_until")
+        fresh_until = _timestamp_value(fresh_until_text)
     if state.get("freshness_rule") is not None:
         _nonempty(state["freshness_rule"], label=f"{label}.freshness_rule")
+    if fresh_until is None and state.get("freshness_rule") is None:
+        raise GoverningDocumentContractError(f"{label} requires a freshness basis")
+    if state["freshness"] == "fresh" and fresh_until is not None and fresh_until <= composed_at:
+        raise GoverningDocumentContractError(
+            f"{label}.fresh_until must be later than composition for fresh evidence"
+        )
     state["limitations"] = _limitations(state["limitations"], label=f"{label}.limitations")
 
     if state["availability"] != "available" and state["cardinality"] == "measured_empty":
@@ -227,7 +256,9 @@ def _lifecycle(value: Any, *, label: str) -> dict[str, Any]:
     return lifecycle
 
 
-def _governing_document(value: Any, *, index: int) -> dict[str, Any]:
+def _governing_document(
+    value: Any, *, index: int, composed_at: datetime
+) -> dict[str, Any]:
     label = f"declarations[{index}]"
     document = _mapping(value, label=label)
     _keys(
@@ -263,7 +294,9 @@ def _governing_document(value: Any, *, index: int) -> dict[str, Any]:
     )
     lifecycle_is_missing = document.get("lifecycle") is None
     document["lifecycle"] = _lifecycle(document.get("lifecycle"), label=f"{label}.lifecycle")
-    document["source_state"] = _state(document["source_state"], label=f"{label}.source_state")
+    document["source_state"] = _state(
+        document["source_state"], label=f"{label}.source_state", composed_at=composed_at
+    )
     document["limitations"] = _limitations(document["limitations"], label=f"{label}.limitations")
 
     state = document["source_state"]
@@ -296,13 +329,17 @@ def compose_governing_document_inventory(
 
     _nonempty(repository_ref, label="repository_ref")
     baseline = _source_ref(governance_baseline_ref, label="governance_baseline_ref")
-    _timestamp(composed_at, label="composed_at")
+    composed_at_text = _timestamp(composed_at, label="composed_at")
+    composed_at_value = _timestamp_value(composed_at_text)
     supplied = _json_value(declarations, label="declarations")
     if not isinstance(supplied, list) or not supplied:
         raise GoverningDocumentContractError(
             "declarations must contain at least one explicit governing document"
         )
-    documents = [_governing_document(document, index=index) for index, document in enumerate(supplied)]
+    documents = [
+        _governing_document(document, index=index, composed_at=composed_at_value)
+        for index, document in enumerate(supplied)
+    ]
     identities = [
         (document["source_ref"]["source_id"], document["source_ref"].get("version"))
         for document in documents
@@ -320,7 +357,7 @@ def compose_governing_document_inventory(
             "repository_ref": repository_ref,
             "governance_baseline_ref": baseline,
         },
-        "composed_at": composed_at,
+        "composed_at": composed_at_text,
         "governing_documents": documents,
         "limitations": _limitations(limitations, label="limitations"),
     }

@@ -107,6 +107,30 @@ def test_governing_document_inventory_preserves_declared_authority_and_lifecycle
     assert rendered["limitations"] == []
 
 
+def test_governing_document_inventory_rejects_provenance_and_noncanonical_hashes() -> None:
+    provenance = _document(
+        source_ref={
+            "source_type": "provider_session",
+            "source_id": "session:untrusted",
+            "version": "run:1",
+            "locator": "session:untrusted",
+        }
+    )
+    with pytest.raises(GoverningDocumentContractError, match="provenance"):
+        _compose(provenance)
+
+    forged_hash = _document(
+        source_ref={
+            "source_type": "repository_document",
+            "source_id": "docs/forged.md",
+            "content_hash": "unknown",
+            "locator": "docs/forged.md",
+        }
+    )
+    with pytest.raises(GoverningDocumentContractError, match="SHA-256"):
+        _compose(forged_hash)
+
+
 def test_governing_document_inventory_never_infers_missing_authority_or_lifecycle() -> None:
     missing = _document(
         owner_ref=None,
@@ -175,3 +199,15 @@ def test_governing_document_inventory_preserves_independent_source_axes() -> Non
     )
     with pytest.raises(GoverningDocumentContractError, match="measured_empty"):
         _compose(hostile_empty)
+
+
+def test_governing_document_inventory_requires_time_basis_for_freshness() -> None:
+    no_basis = _document(source_state=_state(fresh_until=None))
+    with pytest.raises(GoverningDocumentContractError, match="freshness basis"):
+        _compose(no_basis)
+
+    expired = _document(
+        source_state=_state(fresh_until="2026-08-10T08:00:00+00:00")
+    )
+    with pytest.raises(GoverningDocumentContractError, match="fresh_until"):
+        _compose(expired)
