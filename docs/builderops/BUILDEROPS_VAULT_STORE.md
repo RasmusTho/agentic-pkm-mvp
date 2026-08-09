@@ -317,6 +317,47 @@ This does not promote iCloud advisory claims into distributed locks: independent
 devices can still race, and any resulting conflicting graph fails trace validation rather than
 being silently accepted.
 
+### Builder Thread artifact exchange
+
+Builder Threads are an executable file-first exchange under
+`$BUILDEROPS_VAULT_ROOT/builder-threads/`. They are for one bounded question to a named recipient
+when a reply is expected and the same subject/source/recipient capture is not already represented.
+Monologic work notes remain `AgentWorklog`; Builder Threads are never Issue, PR, review, approval,
+`Verify:`, merge, closure, or promotion authority.
+
+`builder-thread init` normally verifies the immutable `.builderops/vault-genesis.json` and matching
+`builder-threads/genesis.json` envelopes. First adoption requires the explicit
+`--adopt-existing` operator flag after vault validation; ordinary create/read/review paths never
+self-attest a root. Every client must pin the UUID through `BUILDEROPS_VAULT_ID`; a mismatched,
+missing, or divergent identity fails before artifact use. Contributions are canonical
+`shared_non_sensitive` JSON envelopes at
+`builder-threads/threads/<thread-id>/entries/<sha256>.json`, where the filename binds the complete
+file bytes. Canonical encoding is UTF-8 with lexicographically sorted object keys, compact
+comma/colon separators, direct JSON Unicode, and one terminal LF. Strict bounds and scanners reject
+obvious credentials, argv/env/stderr, raw private host
+paths, unsafe refs, symlinks, SQLite, conflict-copy names, partial/temp artifacts, unknown schemas or
+paths, duplicate IDs, hash mismatches, and replay conflicts.
+
+Publication uses a same-directory exclusive temporary file, file `fsync`, a no-overwrite hard
+link, directory `fsync`, readback, temp unlink, and a second directory `fsync`. There is no
+sequence, mutable head, database, shared lock, reminder entry, or hidden client index. Exact replay
+is idempotent. Initial thread trees are staged completely and renamed to a deterministic
+vault/capture-derived UUID before the threads directory is synced; concurrent identical captures
+therefore converge on one destination without exposing a partial final scaffold. Stale dispositions
+use immutable supersession lineage. An explicit hash-bound quarantine contribution can preserve and
+redact a structurally valid unsafe or conflicting artifact; it never masks structural corruption.
+
+Use the production operator surfaces:
+
+```bash
+scripts/builderops_cli.sh builderops builder-thread --help
+scripts/builderops_cli.sh builderops builder-inbox --help
+```
+
+`builder-inbox` is read-only. It reconstructs bounded recipient/health views and a deterministic
+snapshot hash from validated contributions. Unchanged input produces no mutation, and review never
+replies, closes, archives, quarantines, reminds, promotes, or triggers learning by itself.
+
 BMI-03 provider turns add adapter request ID, nullable provider-returned request ID,
 adapter/provider/model identity, canonical context/request/input/output hashes, phase, round, and
 stance to the immutable turn record. Valid output is committed before a successor request. Refusal,

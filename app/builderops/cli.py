@@ -15,6 +15,10 @@ from app.builderops.completeness_report import (
     build_completeness_report,
     load_records_from_db,
 )
+from app.builderops.builder_threads import (
+    BuilderThreadError,
+    BuilderThreadService,
+)
 from app.builderops.ci_handoff_state import (
     CiHandoffStateError,
     build_ci_pending_handoff,
@@ -371,6 +375,327 @@ def _model_inquiry_service(ctx: click.Context) -> ModelInquiryService:
             "BUILDEROPS_VAULT_ROOT is required for model inquiries"
         )
     return ModelInquiryService(paths.vault_root)
+
+
+def _parse_builder_thread_source_refs(
+    values: tuple[str, ...],
+) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    for value in values:
+        ref_type, separator, ref_value = value.partition(":")
+        if not separator or not ref_type or not ref_value:
+            raise click.BadParameter(
+                "source-ref must use <type>:<value>", param_hint="source-ref"
+            )
+        refs.append({"type": ref_type, "value": ref_value})
+    return refs
+
+
+def _builder_thread_service(ctx: click.Context) -> BuilderThreadService:
+    paths = _effective_paths(ctx)
+    if paths.vault_root is None:
+        raise click.ClickException(
+            "BUILDEROPS_VAULT_ROOT is required for Builder Threads"
+        )
+    vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", "")).strip()
+    if not vault_id:
+        raise click.ClickException(
+            "BUILDEROPS_VAULT_ID or --vault-id is required for Builder Threads"
+        )
+    try:
+        return BuilderThreadService(
+            paths.vault_root,
+            expected_vault_id=vault_id,
+        )
+    except BuilderThreadError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _emit_builder_thread(
+    operation: Callable[[], dict[str, Any]], *, as_json: bool
+) -> None:
+    try:
+        payload = operation()
+    except BuilderThreadError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@builderops.group(
+    "builder-thread",
+    help="Exchange immutable shared-non-sensitive Builder Thread contributions.",
+)
+@click.option(
+    "--vault-id",
+    envvar="BUILDEROPS_VAULT_ID",
+    required=True,
+    help="Pinned UUID from the Builder Thread vault genesis.",
+)
+@click.pass_context
+def builder_thread(ctx: click.Context, vault_id: str) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["builder_thread_vault_id"] = vault_id
+
+
+@builder_thread.command("init", help="Install or verify the pinned vault genesis.")
+@click.option(
+    "--adopt-existing",
+    is_flag=True,
+    help="Explicitly attest this existing BuilderOps vault on first initialization.",
+)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_init(ctx: click.Context, adopt_existing: bool, as_json: bool) -> None:
+    paths = _effective_paths(ctx)
+    if paths.vault_root is None:
+        raise click.ClickException(
+            "BUILDEROPS_VAULT_ROOT is required for Builder Threads"
+        )
+    vault_root = paths.vault_root
+    vault_id = str((ctx.obj or {}).get("builder_thread_vault_id", ""))
+    _emit_builder_thread(
+        lambda: {
+            **BuilderThreadService.initialize(
+                vault_root,
+                vault_id=vault_id,
+                adopt_existing=adopt_existing,
+            ).health(),
+            "operation": "init",
+        },
+        as_json=as_json,
+    )
+
+
+def _thread_common_options(function: Callable[..., Any]) -> Callable[..., Any]:
+    function = click.option(
+        "--source-ref",
+        "source_refs",
+        multiple=True,
+        required=True,
+        help="Bounded authority reference as <type>:<value>.",
+    )(function)
+    function = click.option("--actor", required=True)(function)
+    return function
+
+
+@builder_thread.command("create", help="Create one represented question thread.")
+@click.option("--recipient", required=True)
+@click.option("--subject", required=True)
+@click.option("--content", required=True)
+@click.option(
+    "--reply-expected/--no-reply-expected",
+    default=True,
+    show_default=True,
+)
+@_thread_common_options
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_create(
+    ctx: click.Context,
+    recipient: str,
+    subject: str,
+    content: str,
+    reply_expected: bool,
+    source_refs: tuple[str, ...],
+    actor: str,
+    as_json: bool,
+) -> None:
+    service = _builder_thread_service(ctx)
+    refs = _parse_builder_thread_source_refs(source_refs)
+    _emit_builder_thread(
+        lambda: service.create_thread(
+            recipient_id=recipient,
+            subject=subject,
+            content=content,
+            actor_id=actor,
+            source_refs=refs,
+            reply_expected=reply_expected,
+        ),
+        as_json=as_json,
+    )
+
+
+@builder_thread.command("reply", help="Append a hash-bound reply contribution.")
+@click.argument("thread_id")
+@click.option("--recipient", required=True)
+@click.option("--content", required=True)
+@click.option("--parent-hash", required=True)
+@click.option(
+    "--reply-expected/--no-reply-expected",
+    default=False,
+    show_default=True,
+)
+@_thread_common_options
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_reply(
+    ctx: click.Context,
+    thread_id: str,
+    recipient: str,
+    content: str,
+    parent_hash: str,
+    reply_expected: bool,
+    source_refs: tuple[str, ...],
+    actor: str,
+    as_json: bool,
+) -> None:
+    service = _builder_thread_service(ctx)
+    refs = _parse_builder_thread_source_refs(source_refs)
+    _emit_builder_thread(
+        lambda: service.reply(
+            thread_id,
+            recipient_id=recipient,
+            content=content,
+            actor_id=actor,
+            parent_hash=parent_hash,
+            source_refs=refs,
+            reply_expected=reply_expected,
+        ),
+        as_json=as_json,
+    )
+
+
+@builder_thread.command("read", help="Validate and read one exact thread.")
+@click.argument("thread_id")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_read(ctx: click.Context, thread_id: str, as_json: bool) -> None:
+    service = _builder_thread_service(ctx)
+    _emit_builder_thread(lambda: service.read_thread(thread_id), as_json=as_json)
+
+
+@builder_thread.command("list", help="List bounded validated thread summaries.")
+@click.option("--recipient")
+@click.option("--include-archived", is_flag=True)
+@click.option("--limit", type=click.IntRange(min=1), default=100, show_default=True)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_list(
+    ctx: click.Context,
+    recipient: str | None,
+    include_archived: bool,
+    limit: int,
+    as_json: bool,
+) -> None:
+    service = _builder_thread_service(ctx)
+    _emit_builder_thread(
+        lambda: service.list_threads(
+            recipient_id=recipient,
+            include_archived=include_archived,
+            limit=limit,
+        ),
+        as_json=as_json,
+    )
+
+
+@builder_thread.command("close", help="Append a non-authoritative close disposition.")
+@click.argument("thread_id")
+@click.option("--actor", required=True)
+@click.option("--reason", required=True)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_close(
+    ctx: click.Context,
+    thread_id: str,
+    actor: str,
+    reason: str,
+    as_json: bool,
+) -> None:
+    service = _builder_thread_service(ctx)
+    _emit_builder_thread(
+        lambda: service.close_thread(thread_id, actor_id=actor, reason=reason),
+        as_json=as_json,
+    )
+
+
+@builder_thread.command("archive", help="Archive one currently closed thread.")
+@click.argument("thread_id")
+@click.option("--actor", required=True)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_archive(
+    ctx: click.Context,
+    thread_id: str,
+    actor: str,
+    as_json: bool,
+) -> None:
+    service = _builder_thread_service(ctx)
+    _emit_builder_thread(
+        lambda: service.archive_thread(thread_id, actor_id=actor),
+        as_json=as_json,
+    )
+
+
+@builder_thread.command(
+    "quarantine",
+    help="Append an explicit incident disposition without deleting the target bytes.",
+)
+@click.argument("thread_id")
+@click.option("--artifact-hash", required=True)
+@click.option("--reason-code", required=True)
+@click.option("--actor", required=True)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_thread_quarantine(
+    ctx: click.Context,
+    thread_id: str,
+    artifact_hash: str,
+    reason_code: str,
+    actor: str,
+    as_json: bool,
+) -> None:
+    service = _builder_thread_service(ctx)
+    _emit_builder_thread(
+        lambda: service.quarantine(
+            thread_id,
+            artifact_hash=artifact_hash,
+            actor_id=actor,
+            reason_code=reason_code,
+        ),
+        as_json=as_json,
+    )
+
+
+@builderops.group(
+    "builder-inbox",
+    help="Read-only Builder Thread inbox and health projection.",
+)
+@click.option(
+    "--vault-id",
+    envvar="BUILDEROPS_VAULT_ID",
+    required=True,
+    help="Pinned UUID from the Builder Thread vault genesis.",
+)
+@click.pass_context
+def builder_inbox(ctx: click.Context, vault_id: str) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["builder_thread_vault_id"] = vault_id
+
+
+@builder_inbox.command("list", help="List contributions awaiting one named recipient.")
+@click.option("--recipient", required=True)
+@click.option("--limit", type=click.IntRange(min=1), default=100, show_default=True)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_inbox_list(
+    ctx: click.Context,
+    recipient: str,
+    limit: int,
+    as_json: bool,
+) -> None:
+    service = _builder_thread_service(ctx)
+    _emit_builder_thread(
+        lambda: service.inbox(recipient_id=recipient, limit=limit),
+        as_json=as_json,
+    )
+
+
+@builder_inbox.command("health", help="Validate all artifacts without mutating the vault.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def builder_inbox_health(ctx: click.Context, as_json: bool) -> None:
+    service = _builder_thread_service(ctx)
+    _emit_builder_thread(service.health, as_json=as_json)
 
 
 @builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")

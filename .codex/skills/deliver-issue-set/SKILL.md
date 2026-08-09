@@ -153,11 +153,10 @@ Delivery rules:
   (`builderops:epic-delivery-ledger v1`) per
   `verification-and-closure :: Parent Issue Closure :: Structured child ledger (epic delivery ledger v1)`
   instead of hand-editing prose child tables.
-- At the initial epic review and again before parent/epic closure, use the read-only discovery path
-  in `builder-vault-deliberation` for the epic, child, PR, commit, docs/design, and BuilderOps refs.
-  Deliberations can supply attributed context or receive a disposition, but never expand the child
-  set, grant a claim, satisfy a `Verify:` target, or authorize closure. Send conflict/orphan health
-  to `builder-vault-review` without guessing or silently merging threads.
+- At epic intake only, run one read-only `builder-inbox` scan when it is explicitly requested or a
+  configured automation supplies the pinned vault identity. Treat matching Builder Threads as
+  attributed context only: they never expand the child set, grant a claim, satisfy a `Verify:`
+  target, or authorize delivery/closure. Do not rescan or mutate threads at epic closure.
 - Stop forcing the current issue when it is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input. Apply the [no-progress final gate](#no-progress-final-gate) before treating that stop as a delivery conclusion.
 
 Parallel claim is allowed only when all are true:

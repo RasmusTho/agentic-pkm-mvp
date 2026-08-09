@@ -82,53 +82,51 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
-def test_builder_vault_deliberation_contract_is_shared_and_discoverable() -> None:
+def test_builder_thread_contract_is_executable_and_discoverable() -> None:
     index = _read(".codex/skills/README.md")
-    contract = _read(
-        ".codex/skills/_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md"
-    )
-    deliberation = _read(".codex/skills/builder-vault-deliberation/SKILL.md")
-    review = _read(".codex/skills/builder-vault-review/SKILL.md")
+    contract = _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md")
+    thread_skill = _read(".codex/skills/builder-thread/SKILL.md")
+    inbox_skill = _read(".codex/skills/builder-inbox/SKILL.md")
+    cli = _read("app/builderops/cli.py")
 
-    for skill_name in ("builder-vault-deliberation", "builder-vault-review"):
+    for skill_name in ("builder-thread", "builder-inbox"):
         assert f"- `{skill_name}`" in index
 
-    shared_ref = "_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md"
-    assert shared_ref in deliberation
-    assert shared_ref in review
-    assert "entries/*.md` are the only deliberation source artifacts" in contract
-    assert "repository's\n`vault/` tree is a fixture" in contract
-    assert "No SQLite database, sequence file, distributed lock" in contract
-    assert "existing `PromotionIntent` boundary" in contract
+    shared_ref = "_shared/BUILDER_THREAD_CONTRACT.md"
+    assert shared_ref in thread_skill
+    assert shared_ref in inbox_skill
+    assert "app/builderops/builder_threads.py" in contract
+    assert "shared_non_sensitive" in contract
+    assert "AgentWorklog" in contract
+    assert '"builder-thread"' in cli and "def builder_thread" in cli
+    assert '"builder-inbox"' in cli and "def builder_inbox" in cli
 
-    for path in (
-        "AGENTS.md",
-        ".codex/skills/resume-work/SKILL.md",
-        ".codex/skills/deliver-issue-set/SKILL.md",
-        ".codex/skills/verification-and-closure/SKILL.md",
-        "docs/development/PARENT_ISSUE_CLOSURE.md",
-    ):
-        assert "builder-vault-deliberation" in _read(path)
-    assert "builder-vault-review" in _read(
+    readme_checkpoint = _section_between(
+        index,
+        "6. **No-PR analysis checkpoint:**",
+        "## Skill routing",
+    )
+    assert "named recipient" in readme_checkpoint
+    assert "reply is" in readme_checkpoint and "expected" in readme_checkpoint
+    assert "AgentWorklog" in readme_checkpoint
+    assert "Deliberation discovery checkpoint" not in index
+
+    resume = _read(".codex/skills/resume-work/SKILL.md")
+    delivery = _read(".codex/skills/deliver-issue-set/SKILL.md")
+    verification = _read(".codex/skills/verification-and-closure/SKILL.md")
+    assert "exact" in resume and "Builder-Thread-Ref" in resume
+    assert "epic intake" in delivery
+    assert "explicit" in verification and "Builder-Thread-Ref" in verification
+    assert "read-only" in verification
+    assert "never mutates or gates" in verification
+    assert "builder-inbox" not in _read(
         ".codex/skills/learning-retrospective/SKILL.md"
     )
-
-
-def test_builder_vault_deliberation_contract_closes_cross_device_failure_modes() -> None:
-    contract = _read(
-        ".codex/skills/_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md"
+    assert "builder-thread" not in _read(
+        "docs/development/PARENT_ISSUE_CLOSURE.md"
     )
-
-    assert "shared_vault_root` to resolve to the same directory" in contract
-    assert "agent-delivery/{Backlog,Ready,In Progress,Review,Blocked,Done}/" in contract
-    assert "unattested_root" in contract
-    assert "top-level Mimer `_heimdal/` control tree" in contract
-    assert "RFC 8785 (JCS) JSON record" in contract
-    assert "SHA-256 of the entire\nmanifest file bytes" in contract
-    assert "no-overwrite hard\n   `link(2)`" in contract
-    assert "Never stream bytes into a final pathname" in contract
-    assert "remove temp, and `fsync`" in contract
-    assert "exclusive create or no-overwrite link" not in contract
+    assert "builder-vault-deliberation" not in index
+    assert "builder-vault-review" not in index
 
 
 def test_skill_readme_resume_work_summary_matches_recovery_order() -> None:

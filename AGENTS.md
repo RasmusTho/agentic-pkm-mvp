@@ -53,10 +53,10 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
   `.codex/skills/agentic-pkm/SKILL.md`
 - Resume interrupted dev/build work after a session breaks (quota, network, hung command, tool failure, context loss):
   `.codex/skills/resume-work/SKILL.md`
-- Create, discover, reply to, correct, resolve, or archive shared asynchronous BuilderOps deliberations:
-  `.codex/skills/builder-vault-deliberation/SKILL.md`
-- Review stale, unanswered, duplicated, promotion-pending, conflicted, or orphaned deliberations:
-  `.codex/skills/builder-vault-review/SKILL.md`
+- Create, read, reply to, close, archive, or explicitly quarantine one Builder Thread:
+  `.codex/skills/builder-thread/SKILL.md`
+- Run an explicit/configured read-only Builder Thread inbox or health review:
+  `.codex/skills/builder-inbox/SKILL.md`
 - GitHub implementation work from a bounded Issue:
   `.codex/skills/issue-to-code/SKILL.md`
 - Issue, PR, label, or Project lifecycle correction:
@@ -117,7 +117,7 @@ Workflow state model:
 BuilderOps Vault workflow boundary:
 
 - BuilderOps Vault governs builder-operations material only. It does not change product/runtime truth, repo owner docs, code, tests, ADRs, or runtime contracts unless material is explicitly promoted through the normal GitHub/PR/repo authority path.
-- Shared asynchronous deliberations are attributed, non-authoritative Builder System context under the validated external `BUILDEROPS_VAULT_ROOT`. They use immutable Markdown entries and derived manifests/projections through `.codex/skills/_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md`; they never grant claims, approval, delivery state, or promotion. The repository `vault/` remains a fixture and receives no live deliberation content.
+- Builder Threads are named-recipient, reply-expected, `shared_non_sensitive` Builder System context under the validated external `BUILDEROPS_VAULT_ROOT` and client-pinned vault genesis. The executable helper writes immutable content-addressed JSON contributions and derives inbox/health state through `.codex/skills/_shared/BUILDER_THREAD_CONTRACT.md`; threads and inbox review never grant claims, approval, `Verify:` evidence, delivery/closure state, Issue/PR creation, or promotion. Monologic notes remain `AgentWorklog`, and the repository `vault/` fixture receives no live content.
 - Use BuilderOps records instead of direct repo-doc edits for operational state: `AgentWorklog` for raw builder-agent work notes, `LearningSignal` for delivery divergences, `DocsFreshnessRecord` for high-churn docs freshness state, `RoadmapExecutionItem` for roadmap execution movement, `PromotionIntent` for staged cross-surface proposals, and `BuilderOpsReceipt` for transitions, projections, promotions, supersessions, or discards.
 - GitHub Issues remain the executable task-contract surface. Create or update an Issue when BuilderOps material becomes bounded implementation, governance, docs, or follow-up work that needs backlog ownership and `Verify:` targets.
 - Open a PR only when repo-governed artifacts must change: code, tests, authoritative docs, ADRs, `.codex/skills/**`, `AGENTS.md`, or generated projections committed to the repo. A BuilderOps record alone is not a repo change.

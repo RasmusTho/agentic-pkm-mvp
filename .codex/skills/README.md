@@ -62,20 +62,13 @@ Do not rely on a human remembering where BuilderOps material belongs.
 5. **Automation checkpoint:** recurring Codex automations for this repo must read the relevant
    workflow skill and route high-churn operational material to BuilderOps first. `docs/learning-log.md`
    is historical/fallback only; generated projections are readable views only.
-6. **Analysis checkpoint (no PR in flight):** the checkpoints above are anchored to work that is
+6. **No-PR analysis checkpoint:** the checkpoints above are anchored to work that is
    already implementation-, delivery-, or automation-bound. A standalone research pass, prior-art
    sweep, architecture analysis, or other chat-turn work product that answers a question but produces
-   no PR still needs a home — it does not get a pass just because none of checkpoints 1-5 fired. Before
-   treating that thread as closed, create the matching BuilderOps record (usually `AgentWorklog`) for
-   any findings, sources, or process narrative worth keeping, unless the material is trivial enough
-   that losing it costs nothing.
-7. **Deliberation discovery checkpoint:** at substantial session close, interrupted-work resume,
-   larger delivery review/closure, and epic/parent closure, search through
-   `builder-vault-deliberation` for threads matching the current Issue, PR, commit, doc, design, or
-   BuilderOps refs. Reply or disposition only when useful; no match is normal and never weakens the
-   governing delivery authority. Run `builder-vault-review` on the configured weekly/threshold
-   cadence or immediately on a conflict/orphan. Never write live content into the repository
-   `vault/` fixture.
+   no PR still needs a home. Use `AgentWorklog` for findings, sources, process narrative, and other
+   monologic notes worth keeping. Use `builder-thread` only when a named recipient exists, a reply is
+   expected, and the exact question is not already represented. Do not automatically capture a
+   free-form session and do not create a second global close checkpoint.
 
 ## Skill routing
 
@@ -86,8 +79,8 @@ instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + 
 (optional legacy Project projection per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
 `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations), `CI_WAIT_CONTRACT.md` (how to wait
 on CI checks — and the optional `--codex` verdict path — via REST without draining the shared API budget),
-`BUILDER_VAULT_DELIBERATION_CONTRACT.md` (non-authoritative shared-file deliberation, immutable
-entries, hash/conflict rules, and existing promotion boundaries), and `READ_SCOPE.md` (how much of a
+`BUILDER_THREAD_CONTRACT.md` (executable immutable Builder Thread exchange, privacy/conflict rules,
+and existing authority boundaries), and `READ_SCOPE.md` (how much of a
 cited document to read). A reference like
 `_shared/<FILE>.md :: <section>` resolves there. `_shared/` is not a skill directory.
 
@@ -101,10 +94,10 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
 - `resume-work`
   - dev-time recovery for interrupted Codex/Claude/ChatGPT sessions (quota, network, hung command, tool failure, context loss); check resumable orchestration journals/runs before git reconstruction, use git reconstruction as the fallback, keep a lightweight `.codex-tmp/HANDOFF.md`, continue when clear, and escalate only on destructive or contract/SoT ambiguity; not a runtime/product feature
-- `builder-vault-deliberation`
-  - create, discover, read, search, reply to, correct, resolve, and archive attributed asynchronous BuilderOps deliberations as immutable shared-vault entries; never delivery or promotion authority
-- `builder-vault-review`
-  - weekly, threshold, or conflict-triggered health review of stale, unanswered, duplicated, promotion-pending, conflicted, and orphaned deliberations; uses the deliberation skill for any entry mutation
+- `builder-thread`
+  - executable create/read/reply/close/archive/quarantine workflow for one named-recipient, reply-expected, shared-non-sensitive Builder Thread; monologic notes remain AgentWorklog
+- `builder-inbox`
+  - explicit or configured-automation read-only inbox/health review; deterministic snapshot output with no reminder, disposition, learning, or external-effect mutation
 - `issue-to-code`
   - implementation entrypoint for bounded GitHub Issue work
   - classifies the issue as Product/Runtime System, Builder System, or boundary work before pickup

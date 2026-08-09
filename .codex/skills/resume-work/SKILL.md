@@ -72,12 +72,11 @@ Then read the two context hints, if they exist:
 - The linked Issue/PR, only if the branch maps to one and the network is up
   (`gh pr view`, `gh issue view`). Never block recovery on network.
 
-When a validated external `BUILDEROPS_VAULT_ROOT` is available, run the read-only discovery path in
-`builder-vault-deliberation` for the reconstructed Issue, PR, commit, doc, design, and BuilderOps
-refs. A matching thread is attributed recovery context, not authority: Git, the orchestration
-journal, current owner docs, and live GitHub still win. No match, an unavailable vault, or a stale
-projection does not block recovery. A hash conflict or orphan is surfaced through
-`builder-vault-review` and must not be guessed around.
+If the handoff or current task context carries one exact `Builder-Thread-Ref: <thread-id>`, use
+`builder-thread` to read that thread after reconstructing Git/GitHub state. Do not scan by Issue,
+PR, commit, subject, or session during resume. The thread is attributed context only; Git, the
+orchestration journal, owner docs, and live GitHub still win. Missing/invalid thread evidence is
+reported but never guessed around and never blocks otherwise valid recovery.
 
 From that, classify into one of the four situations and act.
 
