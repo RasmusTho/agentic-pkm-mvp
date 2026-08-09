@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import signal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
 import pytest
 
 from app.dispatcher import cli as dispatcher_cli
+from app.dispatcher import darwin_containment
 from app.dispatcher import verification_consumer
 from app.dispatcher import verification_github
 from app.dispatcher import verification_merge
@@ -18,6 +21,7 @@ from app.dispatcher.verification_merge import MergeAuthorityError
 
 REPO = "RasmusTho/agentic-pkm-mvp"
 HEAD = "a" * 40
+CONTAINMENT_PROFILE = "darwin-launchd-resource-coalition-v1"
 
 
 def _request() -> dict[str, object]:
@@ -28,6 +32,28 @@ def _request() -> dict[str, object]:
         "head_sha": HEAD,
         "linked_issue": 4677,
     }
+
+
+def _cycle_args(request_file: Path) -> list[str]:
+    return [
+        "verification-cycle",
+        str(request_file),
+        "--containment-profile",
+        CONTAINMENT_PROFILE,
+        "--json",
+    ]
+
+
+def _allow_containment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        dispatcher_cli,
+        "select_verification_containment",
+        lambda profile: (
+            (lambda: object())
+            if profile == CONTAINMENT_PROFILE
+            else (_ for _ in ()).throw(ValueError("unsupported containment"))
+        ),
+    )
 
 
 class _Client:
@@ -94,6 +120,7 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     auth = object()
     launcher = object()
     exact_launcher = object()
+    containment_factory = lambda: object()
     consumer = object()
     repository = SimpleNamespace(close=lambda: None)
     executor = object()
@@ -142,11 +169,12 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     monkeypatch.setattr(
         verification_consumer,
         "CodexExecLauncher",
-        lambda worktree, receipt_schema, context_path: (
+        lambda worktree, receipt_schema, context_path, *, containment_factory: (
             seen.update(
                 worktree=worktree,
                 receipt_schema=receipt_schema,
                 context_path=context_path,
+                containment_factory=containment_factory,
             )
             or launcher
         ),
@@ -215,6 +243,7 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
         holder="verification-host",
         worktree=tmp_path,
         context_path=tmp_path / "context.json",
+        containment_factory=containment_factory,
     )
 
     assert built is runtime
@@ -224,6 +253,7 @@ def test_cycle_command_composes_api_outbox_and_host_runtime(
     assert seen["ledger_outbox"] is outbox
     assert seen["consumer_ledger"] is ledger
     assert seen["raw_launcher"] is launcher
+    assert seen["containment_factory"] is containment_factory
     assert seen["launcher"] is exact_launcher
     assert seen["executor_ledger"] is ledger
     assert seen["executor_outbox"] is outbox
@@ -287,6 +317,7 @@ def test_cycle_command_runs_and_recovers_dry_cycle(
 ) -> None:
     request_file = tmp_path / "request.json"
     request_file.write_text(json.dumps(_request()), encoding="utf-8")
+    _allow_containment(monkeypatch)
     runtime = _Runtime()
     monkeypatch.setattr(
         dispatcher_cli,
@@ -318,6 +349,8 @@ def test_cycle_command_runs_and_recovers_dry_cycle(
                 str(request_file),
                 "--holder",
                 "verification-host",
+                "--containment-profile",
+                CONTAINMENT_PROFILE,
                 "--json",
             ]
         )
@@ -337,6 +370,8 @@ def test_cycle_command_runs_and_recovers_dry_cycle(
                 REPO,
                 "--holder",
                 "verification-host",
+                "--containment-profile",
+                CONTAINMENT_PROFILE,
                 "--json",
             ]
         )
@@ -419,6 +454,7 @@ def test_cycle_command_output_is_secret_free_and_fail_closed(
     secret = "github_pat_NEVER_PRINT_THIS_VALUE"
     request_file = tmp_path / "request.json"
     request_file.write_text(json.dumps(_request()), encoding="utf-8")
+    _allow_containment(monkeypatch)
     monkeypatch.setattr(
         dispatcher_cli,
         "_make_verification_client",
@@ -437,7 +473,7 @@ def test_cycle_command_output_is_secret_free_and_fail_closed(
 
     assert (
         dispatcher_cli.main(
-            ["verification-cycle", str(request_file), "--json"]
+            _cycle_args(request_file)
         )
         == 1
     )
@@ -467,7 +503,7 @@ def test_cycle_command_output_is_secret_free_and_fail_closed(
     )
     assert (
         dispatcher_cli.main(
-            ["verification-cycle", str(request_file), "--json"]
+            _cycle_args(request_file)
         )
         == 1
     )
@@ -499,7 +535,7 @@ def test_cycle_command_output_is_secret_free_and_fail_closed(
     )
     assert (
         dispatcher_cli.main(
-            ["verification-cycle", str(request_file), "--json"]
+            _cycle_args(request_file)
         )
         == 1
     )
@@ -597,3 +633,321 @@ def test_installed_main_preflight_binds_source_and_target_repository(
     )
     with pytest.raises(ValueError, match="exact clean origin/main"):
         dispatcher_cli._assert_installed_main_worktree(tmp_path, REPO)
+
+
+class _FakeDarwinKernel:
+    def __init__(self) -> None:
+        self.identities = {
+            1: darwin_containment.ProcessIdentity(1, 1, 10, 0, 99),
+            90: darwin_containment.ProcessIdentity(90, 2, 90, 10, 7),
+            100: darwin_containment.ProcessIdentity(100, 3, 100, 90, 7),
+        }
+        self.task_count_override: int | None = None
+        self.pid_reads: list[tuple[int, ...]] = []
+        self.signal_callback: Callable[[int, int], None] | None = None
+
+    def list_pids(self) -> tuple[int, ...]:
+        if self.pid_reads:
+            return self.pid_reads.pop(0)
+        return tuple(self.identities)
+
+    def inspect(self, pid: int) -> darwin_containment.ProcessIdentity | None:
+        return self.identities.get(pid)
+
+    def coalition_task_count(self, coalition_id: int) -> int:
+        if self.task_count_override is not None:
+            return self.task_count_override
+        return sum(
+            identity.coalition_id == coalition_id
+            for identity in self.identities.values()
+        )
+
+    def signal(
+        self, identity: darwin_containment.ProcessIdentity, sig: int
+    ) -> bool:
+        if self.identities.get(identity.pid) != identity:
+            return False
+        if self.signal_callback is not None:
+            self.signal_callback(identity.pid, sig)
+        else:
+            self.identities.pop(identity.pid, None)
+        return True
+
+
+def test_cycle_requires_supported_containment_profile_before_api_claim(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request_file = tmp_path / "request.json"
+    request_file.write_text(json.dumps(_request()), encoding="utf-8")
+    client_opened = False
+
+    def _unexpected_client() -> _Client:
+        nonlocal client_opened
+        client_opened = True
+        return _Client()
+
+    monkeypatch.setattr(
+        dispatcher_cli, "_assert_installed_main_worktree", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        dispatcher_cli, "_make_verification_client", _unexpected_client
+    )
+
+    assert dispatcher_cli.main(
+        ["verification-cycle", str(request_file), "--json"]
+    ) == 1
+    assert json.loads(capsys.readouterr().out)["error_type"] == "ValueError"
+    assert client_opened is False
+
+    assert dispatcher_cli.main(
+        [
+            "verification-cycle",
+            str(request_file),
+            "--containment-profile",
+            "unsupported-profile",
+            "--json",
+        ]
+    ) == 1
+    assert json.loads(capsys.readouterr().out)["error_type"] == "ValueError"
+    assert client_opened is False
+
+
+def test_cycle_composition_injects_darwin_launchd_coalition_containment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    kernel = _FakeDarwinKernel()
+    signalled: list[tuple[int, int]] = []
+
+    def signaler(pid: int, sig: int) -> None:
+        signalled.append((pid, sig))
+        kernel.identities.pop(pid, None)
+
+    kernel.signal_callback = signaler
+
+    factory = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+    )
+    containment = factory()
+    assert containment.environment({"SAFE": "yes"}) == {"SAFE": "yes"}
+
+    kernel.identities[200] = darwin_containment.ProcessIdentity(200, 4, 200, 100, 7)
+    containment.attach(200)
+    assert containment.cleanup() is True
+    assert (200, signal.SIGTERM) in signalled
+
+
+def test_darwin_private_abi_reads_pid_version_unique_ancestry_and_coalition() -> None:
+    kernel = darwin_containment.DarwinLibprocKernel.__new__(
+        darwin_containment.DarwinLibprocKernel
+    )
+    calls: list[tuple[int, int]] = []
+
+    def pid_info(pid: int, flavor: int, _arg: int, buffer, size: int) -> int:
+        calls.append((flavor, size))
+        if flavor == 17:
+            value = darwin_containment._ProcUniqIdentifierInfo.from_address(  # noqa: SLF001
+                darwin_containment.ctypes.addressof(buffer._obj)
+            )
+            value.p_uniqueid = 900
+            value.p_puniqueid = 800
+            value.p_idversion = 7
+            return darwin_containment.ctypes.sizeof(value)
+        value = darwin_containment._ProcPidCoalitionInfo.from_address(  # noqa: SLF001
+            darwin_containment.ctypes.addressof(buffer._obj)
+        )
+        value.coalition_id[0] = 42
+        return darwin_containment.ctypes.sizeof(value)
+
+    kernel._pid_info = pid_info  # type: ignore[attr-defined]  # noqa: SLF001
+
+    assert kernel.inspect(123) == darwin_containment.ProcessIdentity(
+        123, 7, 900, 800, 42
+    )
+    assert calls == [(17, 56), (20, 40), (17, 56)]
+
+
+def test_darwin_signal_uses_pid_version_bound_audit_token() -> None:
+    kernel = darwin_containment.DarwinLibprocKernel.__new__(
+        darwin_containment.DarwinLibprocKernel
+    )
+    seen: dict[str, object] = {}
+
+    def signal_with_token(token_pointer, sig: int) -> int:
+        token = token_pointer._obj
+        seen.update(pid=token.val[5], pid_version=token.val[7], sig=sig)
+        return 0
+
+    kernel._signal_with_audit_token = signal_with_token  # type: ignore[attr-defined]  # noqa: SLF001
+    identity = darwin_containment.ProcessIdentity(123, 7, 900, 800, 42)
+
+    assert kernel.signal(identity, signal.SIGKILL) is True
+    assert seen == {"pid": 123, "pid_version": 7, "sig": signal.SIGKILL}
+
+
+def test_containment_refuses_pid_reuse_between_snapshot_and_signal() -> None:
+    class ReusingKernel(_FakeDarwinKernel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.child_inspections = 0
+            self.reuse_at: int | None = None
+
+        def inspect(self, pid: int) -> darwin_containment.ProcessIdentity | None:
+            if pid == 200:
+                self.child_inspections += 1
+                if self.reuse_at == self.child_inspections:
+                    self.identities[200] = darwin_containment.ProcessIdentity(
+                        200, 5, 201, 100, 7
+                    )
+            return super().inspect(pid)
+
+    kernel = ReusingKernel()
+    factory = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+        sleeper=lambda _seconds: None,
+    )
+    containment = factory()
+    containment.environment({})
+    kernel.identities[200] = darwin_containment.ProcessIdentity(
+        200, 4, 200, 100, 7
+    )
+    containment.attach(200)
+    original_signal = kernel.signal
+
+    def reuse_before_atomic_signal(
+        identity: darwin_containment.ProcessIdentity, sig: int
+    ) -> bool:
+        kernel.identities[200] = darwin_containment.ProcessIdentity(
+            200, 5, 201, 100, 7
+        )
+        return original_signal(identity, sig)
+
+    kernel.signal = reuse_before_atomic_signal  # type: ignore[method-assign]
+
+    assert containment.cleanup() is False
+    assert kernel.identities[200].pid_version == 5
+
+
+def test_containment_rejects_unrelated_member_appearing_before_attach() -> None:
+    kernel = _FakeDarwinKernel()
+    containment = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+    )()
+    containment.environment({})
+    kernel.identities[200] = darwin_containment.ProcessIdentity(
+        200, 4, 200, 100, 7
+    )
+    kernel.identities[300] = darwin_containment.ProcessIdentity(
+        300, 4, 300, 100, 7
+    )
+
+    with pytest.raises(ValueError, match="ancestry escaped root"):
+        containment.attach(200)
+
+
+def test_cleanup_polls_until_delayed_kernel_task_disappearance() -> None:
+    kernel = _FakeDarwinKernel()
+    clock = [0.0]
+    remove_at = [float("inf")]
+
+    def signaler(_pid: int, _sig: int) -> None:
+        remove_at[0] = clock[0] + 0.15
+
+    def sleeper(seconds: float) -> None:
+        clock[0] += seconds
+        if clock[0] >= remove_at[0]:
+            kernel.identities.pop(200, None)
+
+    kernel.signal_callback = signaler
+    containment = darwin_containment.select_verification_containment(
+        CONTAINMENT_PROFILE,
+        platform="darwin",
+        kernel=kernel,
+        current_pid=100,
+        sleeper=sleeper,
+        monotonic=lambda: clock[0],
+    )()
+    containment.environment({})
+    kernel.identities[200] = darwin_containment.ProcessIdentity(
+        200, 4, 200, 100, 7
+    )
+    containment.attach(200)
+
+    assert containment.cleanup() is True
+    assert clock[0] >= 0.15
+
+
+@pytest.mark.parametrize("failure", ["shared", "count", "changing"])
+def test_cycle_rejects_shared_or_unproven_coalition_before_api_claim(
+    failure: str,
+) -> None:
+    kernel = _FakeDarwinKernel()
+    if failure == "shared":
+        kernel.identities[200] = darwin_containment.ProcessIdentity(200, 4, 200, 10, 7)
+    elif failure == "count":
+        kernel.task_count_override = 3
+    else:
+        kernel.pid_reads = [
+            (1, 90, 100),
+            (1, 90),
+            (1, 90, 100),
+            (1, 90),
+            (1, 90, 100),
+            (1, 90),
+            (1, 90, 100),
+            (1, 90),
+        ]
+
+    with pytest.raises(ValueError, match="containment"):
+        darwin_containment.select_verification_containment(
+            CONTAINMENT_PROFILE,
+            platform="darwin",
+            kernel=kernel,
+            current_pid=100,
+        )
+
+
+def test_cycle_real_launcher_accepts_terminal_receipt_with_proven_containment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tests.dispatcher.test_verification_consumer import (
+        _CleanExitDetachedDescendantProcess,
+        _EscapedDescendantContainment,
+        _authority_loss_launcher,
+    )
+
+    process = _CleanExitDetachedDescendantProcess()
+    containment = _EscapedDescendantContainment(process, proven=True)
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: process,
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda process_group_id, sig: (_ for _ in ()).throw(
+            ProcessLookupError(process_group_id)
+        ),
+    )
+
+    session_id, receipt = _authority_loss_launcher(
+        tmp_path,
+        containment_factory=lambda: containment,
+    ).launch({"head_sha": HEAD})
+
+    assert session_id == "01900000-0000-7000-8000-000000000011"
+    assert receipt["verdict"] == "blocked"
+    assert containment.cleanup_calls == 1

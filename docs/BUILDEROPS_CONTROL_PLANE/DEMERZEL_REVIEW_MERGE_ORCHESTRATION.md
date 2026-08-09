@@ -181,6 +181,7 @@ python -m app.dispatcher.cli verification-cycle \
   <verification_dispatch_request.v3.json> \
   --holder verification-host \
   --worktree <installed-main-checkout> \
+  --containment-profile darwin-launchd-resource-coalition-v1 \
   --json
 ```
 
@@ -199,6 +200,7 @@ python -m app.dispatcher.cli verification-cycle \
   --repo <owner/repo> \
   --holder verification-host \
   --worktree <installed-main-checkout> \
+  --containment-profile darwin-launchd-resource-coalition-v1 \
   --json
 ```
 
@@ -207,7 +209,24 @@ Both forms are dry-run-safe and API/PostgreSQL-only. A successful command emits 
 Demerzel invocation posts that receipt to #3603. The command itself does not satisfy that parent
 gate or activate BCP-06. Before constructing any client or effect adapter, the command requires the
 selected worktree to be clean `main` at the exact locally fetched `origin/main`; a detached, dirty,
-stale, or feature-branch checkout fails closed. That checkout supplies the installed composition
+stale, or feature-branch checkout fails closed. It also requires the explicit
+`darwin-launchd-resource-coalition-v1` profile while running inside the dedicated launchd job whose
+resource coalition is inherited by the child-wrapper topology. Before API construction or claim,
+the profile enumerates PIDs, binds each task to its PID-version and resource-coalition identity,
+and accepts only two identical snapshots whose complete identity set equals the kernel
+`proc_listcoalitions` task-count witness. The trusted baseline is only the current CLI plus its
+same-coalition ancestor chain up to the first inspected ancestor outside the coalition; a shared,
+uninspectable, changing, count-mismatched, or private-symbol-unavailable coalition fails closed.
+Cleanup freshly revalidates PID-version and coalition identity before signalling every non-baseline
+task through Darwin's PID-version-bound audit-token signal API; attach also rejects any post-baseline
+identity whose parent-unique-id chain does not close at the launched root. Cleanup polls within a
+bounded deadline and then requires two stable baseline-only snapshots with exact task-count
+equality. This proves cleanup only inside the dedicated job's inherited resource coalition; it does
+not claim control of unrelated launchd jobs in other coalitions. This fence
+does not grant the model child GitHub authority: the installed-main cycle remains
+`github.merge.dry_run`, and BCP-06 stays disabled.
+
+That checkout supplies the installed composition
 code only: before launching the network-fenced reviewer, the host materializes an immutable
 `origin/main...current_head_sha` patch, binds its SHA-256 digest and PR head into the dispatch
 context, and requires the reviewer to inspect that exact source evidence rather than treating the
