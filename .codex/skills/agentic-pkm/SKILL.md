@@ -28,6 +28,10 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
 2. Open relevant SoT docs and tests.
 3. Propose a short plan (files, tests, docs).
    - Before committing to the plan, route capability per `AGENTS.md :: Total Cost of Development`: pick the cheapest acceptable model, reasoning effort, verification, and review for the task. Escalation and de-escalation triggers live there.
+   - When invoked from issue-set coordination, work from the fresh issue context and its minimal
+     authority pack. Do not absorb sibling Issue history or implement a non-trivial child inline in
+     the coordinator. Use one bounded issue-local helper only when `AGENTS.md :: Parallel-agent
+     execution` makes its incremental input/context cost cheaper than keeping the work local.
 4. Implement minimal changes that follow Store/Outbox/Components boundaries.
 5. Update docs and tests in the same change.
 6. Recommend focused test commands.

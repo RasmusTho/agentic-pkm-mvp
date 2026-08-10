@@ -168,6 +168,30 @@ handoff changes still follow the explicit commands in this skill.
 - If the chosen issue is stale, malformed, drifted, or too large, stop implementation and hand off to Issue maintenance before coding.
 - If the chosen issue is clearly feature-level, references multiple child slices, or carries the full feature acceptance path, stop implementation and route through `feature-breakdown` or Issue maintenance before coding.
 
+## Issue Context Ownership And Bounded Delegation
+
+The claiming agent owns exactly one Issue's context end to end through implementation, publication,
+governed integration/verification/closure, and its terminal receipt. It must not reuse a sibling Issue's
+conversation, absorb the issue-set coordinator role, or copy sibling transcripts into this context.
+It is the sole claim/lifecycle owner and sole writer/integrator in the issue worktree.
+
+A complex Issue may use at most one active issue-local helper under `AGENTS.md :: Parallel-agent
+execution` when a bounded independent source investigation, test/log analysis, test design, or fresh
+review reduces expected TCD. Give the helper the smallest issue-local question plus exact anchors,
+not the full issue transcript. The helper is read-only by default, has no Issue/Project/PR lifecycle,
+publication, merge, owner-doc, or sibling-coordination authority, and cannot spawn another agent. It
+returns anchored evidence and a compact recommendation to the claiming agent, which remains
+responsible for every write and final verdict. Tier 1/2 light-path work normally has helper budget
+zero. Multiple writing agents require separately governed child Issues and isolated worktrees; they
+never share this Issue's writable worktree.
+
+For Codex, use `.codex/agents/issue-local-helper.toml`; its read-only sandbox is the executable
+mutation boundary. Do not substitute a general workspace-write agent for this helper role.
+
+Resume an agent only for this same Issue while its current authority remains valid. Before replacing
+it, produce a durable compact handoff with current SHA, changed files, validation/review evidence,
+budget state, blockers, residual risk, and the next authorized action.
+
 ## Lifecycle rules during execution
 
 **All state changes must be executed using explicit commands, not described as recommendations.**
@@ -315,6 +339,10 @@ scope; it never adds steps to the implementation hot path.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
 - Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Risk tiers`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery. Read `:: Delivery budgets and stop-loss` only when a repair budget is actually in play.
 - Route model family, reasoning effort, and escalation/de-escalation per `AGENTS.md :: Total Cost of Development`. The risk tier above, plus the artifact class, environment/channel risk, and stop conditions from the pre-implementation classification check, are the routing inputs — do not restate the policy here.
+- When this Issue came from `deliver-issue-set`, honor the pack's fresh-context and helper-budget
+  decision unless current issue-local evidence justifies recomputing it. Record the canonical
+  `context_cost` values when exposed by the runtime; otherwise use a named proxy or
+  `unknown(reason)` rather than inventing token counts.
 - For a `type:bug` Issue dispatched from a larger bug set, also apply `AGENTS.md :: Transition-period
   bug-delivery policy`: own one end-to-end Codex task/session and isolated worktree, normally Terra
   / medium, with escalation only through the existing TCD or protected P0/P1/high-risk triggers.

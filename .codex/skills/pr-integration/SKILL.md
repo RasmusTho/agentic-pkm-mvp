@@ -61,6 +61,12 @@ If any condition fails, stop and use the relevant escalation path.
 - Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.
 - If CI fails, review blocks, branch drifts, or the PR is large or mixed-scope, stop and read `PR_ESCALATION_PATHS.md`.
 - Integration effort and the model/reasoning to spend (cheap hot path vs. escalated investigation) follow `AGENTS.md :: Total Cost of Development` — do not duplicate it here. [tcd-routing]
+- Keep integration and ordinary review-feedback repair in the same issue agent so PR state and
+  failure evidence remain issue-local. Start a fresh repair context only when the canonical
+  capability-escalation rule fires; pass the exact PR head, bounded Issue contract, failing evidence,
+  stable mechanism/attempt budget, and current authority refs — never the whole issue-set history.
+  This skill returns compact integration evidence for `verification-and-closure`; it does not emit a
+  second terminal `tcd_review`.
 - When waiting for CI to go green, follow `_shared/CI_WAIT_CONTRACT.md` (shared
   `app.dispatcher.poll_backoff` helper, REST check-runs only, interval + cap + exponential backoff,
   `Retry-After` and x-ratelimit-reset header honoring, calibrated backoff,
