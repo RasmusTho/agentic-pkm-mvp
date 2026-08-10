@@ -124,14 +124,18 @@ GitHub state.
 Route capability per `AGENTS.md :: Total Cost of Development` — do not restate the policy. For
 this skill specifically:
 
-- The **coordinator/synthesis role is Opus/xhigh-tier minimum** — synthesis, invariant extraction,
-  and RQ resolution are exactly the architecture / unclear-requirements / high-defect-cost cases
-  the policy escalates.
-- **Explorers may run cheaper** (Sonnet-tier) because their contract is evidence collection with
-  anchors, verifiable by the coordinator; escalate an explorer only if its subsystem demands
-  design judgment.
-- Emit a `tcd_plan` block when chartering the pass (fan-out rationale included, per
-  `AGENTS.md :: Parallel-agent execution`).
+- Route the **root coordinator/synthesis role** to the current architecture-grade capability from
+  the canonical ladder; do not hardcode a provider or generation here. It retains only the charter,
+  RQs, subsystem map, contradiction ledger, synthesis, and invariant extraction.
+- Give each genuinely independent subsystem a fresh read-only explorer with a minimal owner-doc,
+  code, and test scope. Explorers may use cheaper capability when anchored evidence collection is
+  mechanically verifiable; escalate only when the subsystem itself requires design judgment.
+- Explorers return anchored facts and divergence receipts, not transcripts. One explorer may use at
+  most one depth-2 helper for a bounded independent evidence question and remains responsible for
+  its report.
+- Emit a `tcd_plan` when chartering the pass. Count repeated input/context per explorer, preserve
+  coordinator buffer for cross-system synthesis, and justify why fan-out beats one sequential read
+  under `AGENTS.md :: Parallel-agent execution`.
 
 ## Output contract
 

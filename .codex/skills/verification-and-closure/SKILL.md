@@ -195,6 +195,11 @@ The PR review gate runs locally via the built-in `/code-review` skill instead of
 external GitHub-native reviewer bot. Run it once the PR's required and relevant repo-standard checks are green (per
 `_shared/CI_WAIT_CONTRACT.md`, without `--codex`) and before merge:
 
+- Treat this reviewer as the one issue-local depth-2 helper permitted by `AGENTS.md ::
+  Parallel-agent execution`. Give it the exact head SHA, diff, governing AC/`Verify:` targets, and
+  relevant owner contracts, but not the implementation agent's reasoning history or sibling Issue
+  context. It has no merge, Issue/Project, publication, or owner-doc mutation authority; its result
+  returns to the issue agent, which owns repair and closure.
 - This section is an explicit repo-local authorization for any delivery or closure agent to spawn the
   `/code-review` review agent when it is resolving the mandatory local review gate for a PR. The
   agent does not need separate owner confirmation for this gate, because the reviewer is required by
@@ -660,6 +665,11 @@ Lead with the human summary; include later sections only when they have content,
 AC-by-AC resolution: state whether each `Verify:` target resolves green and why.
 
 For Tier-2/Tier-3 work, alongside the AC-by-AC verdict, emit a `tcd_review` block (fields per `AGENTS.md :: Total Cost of Development`): verdict, risk_level, blocking vs non-blocking issues, missing tests, residual risk, and under/over-modeling. On Tier-1 / trivial / docs-only verifications a one-line capability + residual-risk note suffices — do not pay a fixed audit-block tax on cheap work. Use the same policy for when to escalate verification depth versus stay on the hot path; do not restate the triggers or any model matrix here.
+
+When this closes one child in an issue set, return the compact terminal receipt plus the canonical
+`context_cost` values or a named proxy. The set coordinator consumes that receipt and current live
+readback; it does not rerun issue-local verification or reopen raw implementation context unless the
+receipt is incomplete, contradictory, or fails authority checks.
 
 ### 3. State Changes Executed
 

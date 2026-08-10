@@ -35,7 +35,8 @@ attribution prove that every and only the authenticated closing issues were clos
 a foreign PR closer is never delivery attribution for an expected issue.
 
 Stay in the verification_closer lane: do not implement slices, plan issue-sets, or perform unrelated
-backlog repair. Use no recursive fan-out.
+backlog repair. You may start only the fresh issue-local reviewer required by the loaded skill; give
+it exact-head evidence and no mutation authority. Use no other fan-out and never recurse.
 Return a subagent_handoff_receipt with the AC-by-AC verdict, lifecycle mutations, owner-doc result,
 residual risk, and final state.
 """

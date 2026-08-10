@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Mapping
 from unittest.mock import patch
@@ -39,6 +40,8 @@ def _candidate(
     preferred_path: str | None = None,
     scriptable: bool = False,
     worktree: str | None = None,
+    issue_local_helper_budget: int = 0,
+    issue_local_helper_rationale: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "issue_number": issue_number,
@@ -64,6 +67,8 @@ def _candidate(
         "source_anchors": ["#3229"],
         "known_constraints": ["worker self-claims through issue-to-code"],
         "validation": ["pytest -q tests/builderops/test_epic_dispatch.py"],
+        "issue_local_helper_budget": issue_local_helper_budget,
+        "issue_local_helper_rationale": issue_local_helper_rationale,
     }
     if preferred_path is not None:
         payload["preferred_path"] = preferred_path
@@ -99,7 +104,7 @@ class _RecordingSessionLauncher:
 def _worker_receipt(
     issue_number: int,
     *,
-    final_state: str = "handoff",
+    final_state: str = "done",
 ) -> dict[str, object]:
     return {
         "role": "slice_implementer",
@@ -115,6 +120,13 @@ def _worker_receipt(
         "residual_risk": "none",
         "final_state": final_state,
         "next_step": "verify PR",
+        "context_cost": {
+            "measurement": "proxy",
+            "input_tokens": "unknown(runtime-not-exposed)",
+            "agent_starts": 1,
+            "context_pack_bytes": "unknown(not-recorded)",
+            "compactions": "unknown(runtime-not-exposed)",
+        },
     }
 
 
@@ -181,9 +193,15 @@ def test_project_status_does_not_gate_dispatch() -> None:
         candidates=candidates,
     )
 
-    assert plan["selected_count"] == 3
-    assert all(item["selected_for_dispatch"] for item in plan["decisions"])
-    assert all(item["skip_reason"] is None for item in plan["decisions"])
+    assert plan["requested_max_parallel"] == 3
+    assert plan["max_parallel"] == 2
+    assert plan["parallel_cap_reason"] == "configured-non-root-agent-slot-cap"
+    assert plan["selected_count"] == 2
+    assert [item["skip_reason"] for item in plan["decisions"]] == [
+        None,
+        None,
+        "parallel-slot-cap",
+    ]
 
 
 def test_codex_and_claude_use_same_minimal_context_pack_schema() -> None:
@@ -205,6 +223,105 @@ def test_codex_and_claude_use_same_minimal_context_pack_schema() -> None:
     assert "full_epic_narrative" not in json.dumps(packs)
     assert packs[0]["branch_worktree_plan"]["coordinator_preclaim"] is False
     assert packs[0]["branch_worktree_plan"]["worker_self_claim"] is True
+    assert packs[0]["coordination"] == {
+        "routine_worker_to_worker": "prohibited",
+        "discovered_overlap": "typed-coordinator-exception",
+        "coordinator_scope": "cross_issue_only",
+        "worker_scope": "one_issue_end_to_end",
+        "issue_local_helper_budget": 0,
+        "issue_local_helper_rationale": None,
+        "sole_writer": "issue_agent",
+    }
+    assert "context_cost" in packs[0]["return_schema"]["required_fields"]
+    assert packs[0]["return_schema"]["schema_version"] == 2
+    baseline = packs[0]["context_cost_baseline"]
+    without_baseline = dict(packs[0])
+    without_baseline.pop("context_cost_baseline")
+    assert baseline["context_pack_bytes_excluding_baseline"] == len(
+        json.dumps(without_baseline, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    )
+
+
+def test_context_pack_carries_bounded_issue_local_helper_budget() -> None:
+    plan = build_dispatch_plan(
+        epic_issue_number=3229,
+        run_id="run-helper-budget",
+        candidates=[
+            _candidate(
+                3051,
+                risk="high",
+                issue_local_helper_budget=1,
+                issue_local_helper_rationale="independent state-machine test design",
+            )
+        ],
+    )
+
+    assert plan["context_packs"][0]["coordination"]["issue_local_helper_budget"] == 1
+
+    invalid = _candidate(3052, risk="high")
+    invalid["issue_local_helper_budget"] = 2
+    try:
+        build_dispatch_plan(
+            epic_issue_number=3229,
+            run_id="run-invalid-helper-budget",
+            candidates=[invalid],
+        )
+    except EpicDispatchError as exc:
+        assert str(exc) == "issue_local_helper_budget must be 0 or 1"
+    else:
+        raise AssertionError("invalid helper budget was accepted")
+
+    trivial = _candidate(
+        3053,
+        risk="low",
+        issue_local_helper_budget=1,
+        issue_local_helper_rationale="unnecessary helper",
+    )
+    try:
+        build_dispatch_plan(
+            epic_issue_number=3229,
+            run_id="run-trivial-helper-budget",
+            candidates=[trivial],
+        )
+    except EpicDispatchError as exc:
+        assert "requires high/critical risk" in str(exc)
+    else:
+        raise AssertionError("trivial helper allocation was accepted")
+
+    missing_rationale = _candidate(3054, risk="high", issue_local_helper_budget=1)
+    try:
+        build_dispatch_plan(
+            epic_issue_number=3229,
+            run_id="run-missing-helper-rationale",
+            candidates=[missing_rationale],
+        )
+    except EpicDispatchError as exc:
+        assert "requires an explicit issue_local_helper_rationale" in str(exc)
+    else:
+        raise AssertionError("helper allocation without rationale was accepted")
+
+
+def test_helper_budget_reserves_a_non_root_agent_slot() -> None:
+    plan = build_dispatch_plan(
+        epic_issue_number=3229,
+        run_id="run-helper-slot-reserve",
+        max_parallel=2,
+        candidates=[
+            _candidate(
+                3061,
+                risk="high",
+                issue_local_helper_budget=1,
+                issue_local_helper_rationale="bounded independent log analysis",
+            ),
+            _candidate(3062, risk="high"),
+        ],
+    )
+
+    decisions = {item["issue_number"]: item for item in plan["decisions"]}
+    assert decisions[3061]["selected_for_dispatch"] is True
+    assert decisions[3062]["skip_reason"] == "parallel-helper-capacity-reserve"
+    assert plan["selected_count"] == 1
+    assert plan["selected_helper_slots"] == 1
 
 
 def test_run_state_accepts_dispatch_decision_summaries(tmp_path: Path) -> None:
@@ -433,6 +550,11 @@ def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
     assert pack["coordination"] == {
         "routine_worker_to_worker": "prohibited",
         "discovered_overlap": "typed-coordinator-exception",
+        "coordinator_scope": "cross_issue_only",
+        "worker_scope": "one_issue_end_to_end",
+        "issue_local_helper_budget": 0,
+        "issue_local_helper_rationale": None,
+        "sole_writer": "issue_agent",
     }
     assert "epic_history" not in json.dumps(pack)
 
@@ -469,6 +591,7 @@ def test_dispatch_sessions_starts_one_fresh_serial_session_per_issue() -> None:
         "session-5402",
     ]
     assert all(item["fresh_session"] is True for item in receipt["sessions"])
+    assert all(item["status"] == "completed" for item in receipt["sessions"])
     assert receipt["github_mutations"] == []
     assert receipt["coordinator_claims"] == []
 
@@ -480,6 +603,10 @@ def test_dispatch_sessions_rejects_invalid_plan_before_launch() -> None:
         candidates=[_candidate(5501, risk="high", files=["app/a.py"])],
     )
     invalid_plans = []
+
+    old_schema = json.loads(json.dumps(valid))
+    old_schema["schema_version"] = 1
+    invalid_plans.append(old_schema)
 
     missing = json.loads(json.dumps(valid))
     missing["context_packs"] = []
@@ -585,6 +712,42 @@ def test_dispatch_sessions_stops_after_first_failed_session() -> None:
     assert len(blocked_launcher.calls) == 1
     assert blocked_receipt["sessions"][0]["status"] == "blocked"
 
+    handoff_launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5701-handoff",
+                "worker_receipt": _worker_receipt(5701, final_state="handoff"),
+            },
+            {"session_id": "session-5702", "worker_receipt": _worker_receipt(5702)},
+        ]
+    )
+
+    handoff_receipt = dispatch_issue_sessions(plan, handoff_launcher)
+
+    assert handoff_receipt["status"] == "stopped"
+    assert handoff_receipt["stopped_reason"] == "worker-handoff"
+    assert len(handoff_launcher.calls) == 1
+    assert handoff_receipt["sessions"][0]["status"] == "handoff"
+
+
+def test_dispatch_sessions_rejects_malformed_context_cost() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5751],
+        run_id="invalid-context-cost",
+        candidates=[_candidate(5751, risk="high", files=["app/a.py"])],
+    )
+    malformed = _worker_receipt(5751)
+    malformed["context_cost"] = None
+    launcher = _RecordingSessionLauncher(
+        [{"session_id": "session-5751", "worker_receipt": malformed}]
+    )
+
+    receipt = dispatch_issue_sessions(plan, launcher)
+
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert "context_cost must be an object" in receipt["sessions"][0]["error"]
+
 
 def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) -> None:
     plan = build_dispatch_plan(
@@ -613,6 +776,51 @@ def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) ->
     assert "slice_implementer" in prompt
     assert ".codex/skills/issue-to-code/SKILL.md" in prompt
     assert '"number": 5801' in prompt
+
+
+def test_codex_issue_session_captures_exposed_token_usage_and_pack_bytes(
+    tmp_path: Path,
+) -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5851],
+        run_id="codex-usage",
+        candidates=[
+            _candidate(
+                5851,
+                risk="high",
+                files=["app/a.py"],
+                worktree=str(tmp_path / "issue-5851"),
+            )
+        ],
+    )
+    worker = _worker_receipt(5851)
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "session-5851"}),
+            json.dumps({"type": "turn.completed", "usage": {"input_tokens": 4321}}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": json.dumps(worker)},
+                }
+            ),
+        ]
+    )
+
+    def runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path, runner=runner)
+    context_pack = plan["context_packs"][0]
+
+    result = launcher.launch(context_pack)
+
+    cost = result["worker_receipt"]["context_cost"]
+    assert cost["measurement"] == "actual"
+    assert cost["input_tokens"] == 4321
+    assert cost["context_pack_bytes"] == context_pack["context_cost_baseline"][
+        "context_pack_bytes_excluding_baseline"
+    ]
 
 
 def test_dispatch_sessions_cli_emits_receipt_without_github_mutations(

@@ -17,16 +17,22 @@ Apply that policy before the generic independent-issue fast lane or delivery-mod
 
 ## First Context To Load
 
-1. `AGENTS.md`
-2. `docs/architecture/SBS_OPERATING_MODEL.md` — mandatory. This skill always classifies the issue set as Product/Runtime vs Builder System vs boundary work *before* dispatch; §3 (Builder System boundary and classification procedure) is the source of that classification, §5 (Definition of Ready) defines the `## SBS Impact` readiness gate used below, and §9/§10 define the owner-doc and transition-debt writeback the parent validation hub checks at closure.
-3. `.codex/skills/README.md`
-4. `.codex/skills/issue-to-code/SKILL.md`
-5. `.codex/skills/verification-and-closure/SKILL.md`
-6. `docs/development/DEV_WORKFLOW.md`
-7. `docs/development/AGENT_OPERATING_PROTOCOL.md`
-8. `docs/development/GOVERNANCE_PROPORTIONALITY.md`
-9. `docs/DOCS_INDEX.md`
-10. Owner docs and `Source Docs` referenced by the epic or candidate issues
+Keep coordinator startup section-scoped; do not preload worker-internal workflow contracts.
+
+1. `AGENTS.md :: Reading order`, `:: Total Cost of Development`, `:: Parallel-agent execution`, and
+   `:: Proportional delivery`
+2. `.codex/skills/README.md :: Skill routing` and `:: Cross-cutting invariant: Total Cost of
+   Development (capability routing)`
+3. `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`,
+   `:: Definition of Ready (SBS-relevant issues)`, and — only for parent closure — `:: Owner-doc
+   writeback rule` plus `:: Transition debt lifecycle`
+4. `docs/DOCS_INDEX.md` by grep for the scoped work areas; never read the index wholesale
+5. The parent/epic contract plus the candidate Issues' bounded contracts, Source Anchors, and owner
+   doc references needed to classify dependencies, overlap, and readiness
+
+The issue agent loads `issue-to-code`, its owner/source docs, code, tests, logs, publication, and
+closure contracts at that workflow boundary. The coordinator loads a downstream skill itself only
+when it is executing that owning boundary rather than dispatching it.
 
 Load secondary skills only when the work needs them:
 
@@ -36,11 +42,43 @@ Load secondary skills only when the work needs them:
 - `.codex/skills/publish-pr/SKILL.md` when local issue work is ready to commit, push, and publish.
 - `.codex/skills/pr-integration/SKILL.md` only when mergeability, CI attachment, branch drift, or review-feedback repair is needed before verification.
 
+## Coordinator Buffer Contract
+
+The root delivery session is the coordinator. Its active buffer may retain only the issue-set scope,
+dependency/authority graph, readiness and priority, anticipated write/validation/owner-doc overlap,
+claims/worktrees, current Issue/PR/SHA/CI/review state, shared constraints, typed blockers/decisions,
+slot and TCD summaries, and compact handoff receipts.
+
+Do not retain full issue transcripts, sibling implementation reasoning, full diffs, raw test/CI logs,
+or complete worker-loaded docs in the coordinator. Keep them issue-local and return durable artifact
+refs when evidence may need inspection. Reopen raw worker context only when a compact receipt is
+missing, contradictory, or fails live authority readback. Run-state is a discardable index into this
+evidence, not a transcript store.
+
+Every independent non-trivial Issue gets a fresh issue agent even when the queue is serial. Reuse or
+resume that agent only for the same Issue while its authority remains current. Deterministic scripts
+and existing inline-local-cheaper classifications are the only coordinator-inline execution paths.
+
 ## Modes
 
 ### Independent-Issue Fast Lane
 
-An explicit set of strictly ready independent Issues may be dispatched without inventing a synthetic epic. Cap the pilot at a maximum of two workers. Each worker gets exactly one minimal context pack, worktree, branch, PR, `Verify:` ledger, known constraints, and compact terminal receipt. Routine worker-to-worker coordination is prohibited: a dependency, shared mutation surface, migration, contract overlap, or authority ambiguity is a typed coordinator exception that pauses or rejects only the affected wave. The plan and any run-state are evidence-only and rebuildable from live Issue, dispatcher, PR, CI, review, merge, and closure authority; they never authorize effects or parent closure.
+An explicit set of strictly ready independent Issues may be dispatched without inventing a synthetic
+epic. Cap the pilot at two workers (two concurrently active issue agents); a larger ready set may
+still run as fresh issue agents in a serial queue. Each worker gets exactly one minimal context pack,
+worktree, branch, PR, `Verify:` ledger, known constraints, helper budget (`0` or `1`), and compact
+terminal receipt. Helper budget `1` also requires an explicit bounded complexity/TCD rationale.
+Routine worker-to-worker coordination is prohibited: a dependency, shared mutation
+surface, migration, contract overlap, or authority ambiguity is a typed coordinator exception that
+pauses or rejects only the affected wave. The plan and any run-state are evidence-only and
+rebuildable from live Issue, dispatcher, PR, CI, review, merge, and closure authority; they never
+authorize effects or parent closure.
+
+Treat `max_parallel` as this repository planner's usable non-root agent-slot budget, including
+reserved issue-local helper slots. It is a reserve policy, not a claim that separate `codex exec`
+primary sessions share one native subagent pool. With the current usable cap of two, one Issue with
+helper budget `1` runs alone; a two-worker wave requires both helper budgets `0` until one worker
+releases its slot.
 
 Consume, rather than restate, the canonical severity and known-defect routes in `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` and `.codex/skills/bug-to-issue/SKILL.md`: invalid, malformed, low-confidence, protected, and P0/P1 outcomes block; a valid P2 is deferred through the governed intake without a synchronous repair/re-review loop.
 
@@ -105,7 +143,7 @@ Delivery rules:
 - Dispatcher status in run-state is snapshot-only. Recording `{"db_exists": false}` or similar does
   not start, stop, claim, heartbeat, release, or complete dispatcher work. Keep dispatcher behavior
   governed by the existing dispatcher flow until a separate child issue changes it.
-- Before launching a parallel batch, use the runtime-neutral dry-run dispatch helper when candidate
+- Before launching any multi-issue worker wave, use the runtime-neutral dry-run dispatch helper when candidate
   data is available:
   `python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`.
   The helper emits TCD launch decisions, capped batch selection, minimal Codex/Claude worker context
@@ -122,11 +160,16 @@ Delivery rules:
   performs no GitHub, Project, dispatcher, run-state, or agent-spawn mutation; execute any proposed
   lifecycle command only through the owning skill (`issue-to-code` for claim, `verification-and-closure`
   for terminal closure, or issue maintenance for drift repair).
-- Default to delivering one issue at a time.
+- Default every selected non-trivial Issue to a fresh issue agent. Schedule those agents serially
+  when dependencies, overlap, pooled-resource pressure, or uncertain fan-out economics require it;
+  schedule proven-independent Issues concurrently only when the saved delay/quality cost exceeds
+  duplicated input context, agent starts, coordination, and reserved verification/recovery capacity.
 - For `type:bug` candidates, the transition-period policy in `AGENTS.md` is stricter: dispatch one
   end-to-end bug implementation in its own Codex task/session and isolated worktree unless an
   explicit independent-wave TCD rationale supports more.
-- You may claim multiple issues only when you are immediately assigning them to active sub-agents with isolated worktrees and the parallelization is rational from both token-budget and quality perspectives.
+- You may claim multiple issues only when you are immediately assigning them to active issue agents
+  with isolated worktrees and concurrent scheduling is rational from token/context, delay, pooled
+  resource, and quality perspectives.
 - Before selecting or dispatching work, classify each candidate as Product/Runtime System,
   Builder System, or boundary work using
   `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work Classification`.
@@ -134,7 +177,7 @@ Delivery rules:
   procedure; Builder System issues route through the Builder System boundary/artifact map; boundary
   issues name both sides.
 - Route the serial-vs-parallel dispatch and slot-count decision through `AGENTS.md :: Total Cost of Development` (parallelization and coordination are TCD cost terms); per-issue model and reasoning routing is owned by `issue-to-code`. Run every parallel sub-agent under `AGENTS.md :: Parallel-agent execution` — isolated worktree per issue, never the shared root; reconcile claim races on evidence rather than re-implementing.
-- Per-issue budgets and stop-loss follow `AGENTS.md :: Proportional delivery`: each dispatched issue carries its own 2-CI-repair-round budget, never rebound to reset accounting; prefer the fewest slices that ship the value; single-issue Tier 1/2 deliveries take the light path and run without further sub-agent fan-out.
+- Per-issue budgets and stop-loss follow `AGENTS.md :: Proportional delivery`: each dispatched issue carries its own 2-CI-repair-round budget, never rebound to reset accounting; prefer the fewest slices that ship the value. Tier 1/2 light-path work has issue-local helper budget zero; complex work may receive budget one only under `AGENTS.md :: Parallel-agent execution`.
 - Do not claim the whole epic or entire Kanban pool up front.
 - Do not claim more issues than there are ready sub-agent execution slots.
 - Never make speculative claims. Every claimed issue must have an owner agent, worktree/branch plan, lifecycle registration plus heartbeat owner, validation plan, and expected return receipt.
@@ -164,6 +207,10 @@ Parallel claim is allowed only when all are true:
 - each sub-agent receives the relevant owner docs, issue contract, `Verify:` ledger, validation commands, and required skills
 - each sub-agent can publish and verify its work without relying on hidden chat context
 - the expected token savings or quality gain is explicit, for example isolating unrelated subsystems, avoiding repeated context reload, or letting independent validation run concurrently
+
+Independence grants separate issue contexts; it does not itself require concurrent execution. The
+coordinator records both decisions separately in `tcd_plan`: `execution_context` for where the Issue
+runs and the batch plan for when it runs.
 
 If any parallel worker stalls, fails claim, loses branch/worktree truth, or discovers contract drift, release or reclassify that issue before claiming replacements.
 
@@ -380,18 +427,26 @@ When delivery mode is active:
 
 If the work spans multiple sub-agents:
 
-- assign one bounded ready issue per sub-agent at a time, unless a tightly coupled pair has an explicit quality reason to stay with the same sub-agent
+- assign one bounded ready issue per issue agent; never reuse that agent for a sibling Issue
 - state the token/quality rationale for the parallel batch before claiming
 - claim only after the sub-agent handoff is ready
 - build sub-agent handoffs from the same runtime-neutral context-pack schema for Codex and Claude;
   runtime differences are invocation hints only, not duplicate workflow contracts
 - include the relevant owner docs, `Verify:` ledger, validation commands, and required skills in each handoff
+- pass owner docs and Source Anchors as exact references for the worker to load, not copied full-doc
+  content or the full parent narrative
 - include a publication preflight in each handoff: verify the eventual PR can satisfy the `publish-pr` lane classifier and closing keyword, the exact `## BuilderOps Routing` shape (`Records/projections/receipts:` and `Reason:`) when that section is required, and the repo-standard validation that applies to the touched files
 - if the handoff touches `app/` or `tests/` files, require `ruff check app tests` in the validation plan up front
 - if the handoff adds or changes tests, require robust guard coverage up front: name the intended success path and the relevant negative or completeness path, and make enforcement tests exercise the production call site rather than a helper in isolation
 - require each sub-agent to report lifecycle actions, PR link, validation, doc writeback, and closure state
+- require each issue agent to report the canonical `context_cost` values when the runtime exposes
+  them; otherwise use a named proxy/unknown reason instead of inventing token counts
 - reference `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary instead of duplicating its full PR-body contract here
 - never let sub-agents work from parent feature issues unless the parent is explicitly one executable slice
+
+The coordinator never decomposes one Issue into several writing agents. The claiming issue agent
+owns any intra-issue delegation under `issue-to-code`: at most one active read-only-by-default helper,
+one issue write owner, no sibling coordination, and one compact terminal receipt back to this skill.
 
 ## Verification Ledger
 
@@ -418,6 +473,12 @@ Lead with the human summary, then include a section only when it has content —
 5. Delivered Issues And Receipts (PRs merged, lifecycle mutations, delivery progress)
 6. Blockers And Non-Executable Items (reason and next action per item, stop conditions)
 7. Maintenance And Follow-Ups (issues needing maintenance or breakdown, owner-doc and source-anchor notes)
+
+For any non-trivial set, include one `tcd_plan` using the canonical fields in `AGENTS.md :: Total
+Cost of Development`. Record each child's execution context (`inline_deterministic` or
+`fresh_issue_agent`), helper budget, estimated/proxy context cost, and the separate serial-vs-
+concurrent scheduling decision. Do not restate the model ladder or duplicate the full block schema in
+this skill.
 
 Receipts for mutations must name the issue number, authoritative label/Issue/PR state, command
 family used, verification result, and optional Project projection only when it was inspected or

@@ -48,12 +48,13 @@ Do not depend on repo-scoped spawning in automation yet.
 
 ## Role inventory
 
-Four initial execution roles. Each maps to exactly one canonical skill and stays in its lane.
+Five execution roles. Each maps to exactly one canonical skill and stays in its lane.
 
 | Role (`name`) | Adapter file | Job | Canonical skill |
 |---|---|---|---|
-| `issue_set_coordinator` | `.codex/agents/issue-set-coordinator.toml` | Plan and dispatch an issue-set: readiness tables, pickup order, fan-out rationale, receipt reconciliation. Coordinates only; does not implement. Defaults to Luna / low for deterministic intake and dispatch; judgment routes through the canonical TCD policy. | `.codex/skills/deliver-issue-set/SKILL.md` |
+| `issue_set_coordinator` | `.codex/agents/issue-set-coordinator.toml` | Top-level/root execution role for issue-set planning and dispatch: readiness tables, pickup order, fan-out rationale, receipt reconciliation. Do not insert it as an extra subagent beneath a parent that already coordinates the same set. Coordinates only; does not implement. Defaults to Luna / low for deterministic intake and dispatch; judgment routes through the canonical TCD policy. | `.codex/skills/deliver-issue-set/SKILL.md` |
 | `slice_implementer` | `.codex/agents/slice-implementer.toml` | Implement exactly one bounded, strictly validated `agent:ready` issue end to end; Project Status is optional projection. | `.codex/skills/issue-to-code/SKILL.md` |
+| `issue_local_helper` | `.codex/agents/issue-local-helper.toml` | Answer one bounded read-only evidence, test-design, log-analysis, or fresh-review question for an issue owner; no writes or lifecycle authority. | `.codex/skills/issue-to-code/SKILL.md :: Issue Context Ownership And Bounded Delegation` |
 | `backlog_contract_maintainer` | `.codex/agents/backlog-contract-maintainer.toml` | Repair stale, malformed, duplicate, or drifted Issue/PR/label state plus optional Project projection. | `.codex/skills/issue-maintenance-change-control/SKILL.md` |
 | `verification_closer` | `.codex/agents/verification-closer.toml` | Verify a PR against its governing contract, check CI/review state, and close delivery. | `.codex/skills/verification-and-closure/SKILL.md` |
 
@@ -69,6 +70,7 @@ strongest-capability attempts.
 |---|---|---|
 | Epic / parent feature / lane / ready-issue-set planning and dispatch | `deliver-issue-set` | `issue_set_coordinator` |
 | One bounded slice issue → code → PR | `issue-to-code` | `slice_implementer` |
+| One bounded issue-local read-only question | `issue-to-code` delegation contract | `issue_local_helper` |
 | Issue/PR/label lifecycle correction or optional Project projection repair | `issue-maintenance-change-control` | `backlog_contract_maintainer` |
 | Verify delivered slice, merge, close the loop | `verification-and-closure` | `verification_closer` |
 
@@ -78,10 +80,14 @@ If a task does not match a role, do not invent one: run the matching skill direc
 
 - Subagent loops are **verifier-driven repair loops only** — a worker produces, a verifier checks, the
   worker repairs against named findings.
-- One dispatch hop, no recursion. Codex counts the root session as depth 0, so the supported topology
-  is root(0) → `issue_set_coordinator`(1) → worker(2). `.codex/config.toml` sets `[agents] max_depth = 2`,
-  which permits the coordinator to dispatch workers but blocks workers from spawning their own workers
-  (depth 3 is refused). Width is bounded by `max_threads = 3`.
+- Codex counts the root session as depth 0. For issue sets the supported topology is root
+  `issue_set_coordinator`(0) → `slice_implementer`(1) → optional issue-local helper(2).
+  `.codex/config.toml` sets `[agents] max_depth = 2`, permitting one bounded helper layer while
+  refusing depth 3. The helper uses the `issue_local_helper` read-only adapter, cannot perform lifecycle/publication/merge
+  effects, and cannot spawn again. Native in-process width is bounded by `max_threads = 3` per
+  primary session. The serial subprocess bridge creates fresh primary sessions instead, so its
+  repository scheduling cap is modeled separately as two usable non-root slots with recovery/review
+  reserve; it must not be described as sharing the native pool.
 - No generic looping agent. Loops terminate on a concrete verification verdict, not on a turn budget.
 
 ## Handoff receipt
@@ -90,6 +96,11 @@ Every worker receives a minimal runtime-neutral context pack and returns a `suba
 so the coordinator can act without hidden chat context. Codex and Claude use the same pack and receipt
 schema; differences such as runtime/model hints belong in the invocation metadata, not in duplicate
 workflow contracts.
+
+Fresh context and concurrent scheduling are separate decisions. Every independent non-trivial Issue
+gets a fresh `slice_implementer` context even in a serial queue. Only deterministic or explicitly
+`inline-local-cheaper` work remains in the root coordinator. Raw worker transcripts and logs remain
+issue-local; the coordinator consumes durable refs and the compact receipt.
 
 The dry-run helper for generating these packets is:
 
@@ -105,12 +116,14 @@ For a small ready Issue set, save the dry-run output and run:
 `python3 -m app.builderops builderops epic-run-state dispatch-sessions --plan-file <frozen-plan.json> --repo-root <repo> --json`
 
 This transitional local command validates the complete frozen plan before execution, then runs each
-selected Issue to its worker handoff in deterministic order. Every Issue uses a new Codex session;
+selected Issue through its governed delivery chain in deterministic order. Every Issue uses a new Codex session;
 the command never resumes or reuses another Issue's session, and it stops before later Issues when
-one session fails or returns a `blocked` / `needs-human` handoff. Each candidate must name an
+one session fails or returns `blocked`, `needs-human`, or a non-terminal `handoff`. Only `done` counts
+as completed delivery. Each candidate must name an
 explicit absolute worktree path; the worker creates or enters that dedicated worktree and
 self-claims through `issue-to-code`. The coordinator does not preclaim, mutate GitHub lifecycle
-state, merge, or close.
+state, merge, or close; the issue agent loads `publish-pr` and `verification-and-closure` at those
+workflow boundaries and remains the sole lifecycle owner.
 
 The command is intentionally Codex-only and serial. It is the simplest executable bridge from the
 existing context-pack planner, not a second durable orchestrator. DDO-04's provider-neutral
@@ -132,6 +145,7 @@ subagent_handoff_receipt:
   residual_risk:        # remaining risk / blockers
   final_state:          # done | blocked | needs-human | handoff
   next_step:            # single recommended next action
+  context_cost:         # canonical AGENTS.md measurement or named proxy/unknown reason
 ```
 
 ## Claude compatibility

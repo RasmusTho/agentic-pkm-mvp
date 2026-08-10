@@ -248,20 +248,25 @@ lease check, then keep the rest of execution local and deterministic.
 Capability routing across the whole chain follows `AGENTS.md :: Total Cost of Development`: each
 stage picks the cheapest *acceptable* capability (workflow/skill + model + reasoning effort + context
 discipline + tools + verification + review gate) for the lowest expected total cost per accepted
-delivery — human time at 100 USD/hour is the dominant term, and x5 Codex/Claude budget pressure is
-medium-low but not zero. Choose model and reasoning effort actively. The escalation/de-escalation
-triggers and the Claude/Codex model-and-reasoning policy live once in `AGENTS.md`, not in each skill.
+delivery. Choose model and reasoning effort actively. Context/input-token accounting, the
+root-coordinator → issue-agent → optional issue-helper hierarchy, escalation/de-escalation triggers,
+and model/reasoning policy live once in `AGENTS.md`, not in each skill.
 
 The policy attaches to the stages that actually choose capability; it does not change the chain:
 
-- Decompose / plan (`feature-breakdown`, `deliver-issue-set`): emit a `tcd_plan` and route the
-  serial-vs-parallel sub-agent decision by expected total cost.
-- Implement (`agentic-pkm`, `issue-to-code`): pick model, reasoning, and escalation from the plan's
-  risk, artifact class, and environment/channel risk.
-- Integrate / verify (`pr-integration`, `verification-and-closure`): scale review and verification
-  depth to risk, and emit a `tcd_review`.
+- Research (`architecture-research`): emit a `tcd_plan`; keep synthesis in the root coordinator and
+  give independent read-only explorers bounded subsystem contexts.
+- Decompose / plan (`feature-breakdown`, `deliver-issue-set`): emit a `tcd_plan`, choose inline vs.
+  fresh issue context, and route serial-vs-concurrent scheduling as a separate expected-cost
+  decision.
+- Implement (`agentic-pkm`, `issue-to-code`): one fresh issue agent owns each non-trivial Issue end
+  to end; it picks model/reasoning from risk and may use one bounded issue-local helper only under
+  `AGENTS.md :: Parallel-agent execution`.
+- Integrate / verify (`pr-integration`, `verification-and-closure`): keep repair context issue-local,
+  scale review and verification to risk, and let `verification-and-closure` emit the terminal
+  `tcd_review`; `pr-integration` supplies compact evidence rather than a second review block.
 - Retrospect (`learning-retrospective`): emit a `tcd_retrospective` when a learning cluster shows a
-  routing mistake, and feed the fix back into `AGENTS.md`.
+  routing or context-topology mistake, and feed the fix back into `AGENTS.md`.
 
 Mechanical, deterministic, or operator-gated skills (publication, promotion and rollback, issue/bug/
 learning intake, docs and backlog maintenance) do not choose capability and carry no TCD block.

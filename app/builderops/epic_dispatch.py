@@ -10,12 +10,14 @@ from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from app.builderops.epic_run_state import validate_run_id
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_MAX_PARALLEL = 2
 FAST_LANE_MAX_PARALLEL = 2
+MAX_NON_ROOT_AGENT_SLOTS = 2
 VALID_PATHS = {"inline", "script", "subagent", "skip"}
 
 HANDOFF_RECEIPT_SCHEMA: dict[str, Any] = {
+    "schema_version": SCHEMA_VERSION,
     "schema_name": "subagent_handoff_receipt",
     "required_fields": [
         "role",
@@ -31,6 +33,7 @@ HANDOFF_RECEIPT_SCHEMA: dict[str, Any] = {
         "residual_risk",
         "final_state",
         "next_step",
+        "context_cost",
     ],
 }
 
@@ -127,19 +130,22 @@ class CodexIssueSessionLauncher:
             "Use the registered slice_implementer execution role.\n"
             f"{self.developer_instructions}\n"
             "Load and obey .codex/skills/issue-to-code/SKILL.md. "
-            "Perform exactly the one Issue in this immutable context pack. "
+            "Perform exactly the one Issue in this immutable context pack through publication, "
+            "governed verification, merge, and truthful closure. Load publish-pr and "
+            "verification-and-closure at their boundaries. "
             "Self-claim through issue-to-code before editing, work in the named dedicated "
             "worktree, and return only one JSON object matching the requested "
-            "subagent_handoff_receipt. "
+            "subagent_handoff_receipt; final_state=done is valid only after terminal delivery. "
             "This invocation is a fresh session; do not resume or reuse another Issue's session.\n"
             f"{serialized}\n"
         )
 
     def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]:
+        prompt = self.prompt(context_pack)
         result = self.runner(
             self.command(context_pack),
             cwd=self.repo_root,
-            input=self.prompt(context_pack),
+            input=prompt,
             capture_output=True,
             text=True,
             check=False,
@@ -147,6 +153,7 @@ class CodexIssueSessionLauncher:
         session_id: str | None = None
         worker_receipt: object | None = None
         terminal_error: str | None = None
+        observed_input_tokens: int | None = None
         for line in result.stdout.splitlines():
             try:
                 event = json.loads(line)
@@ -160,6 +167,15 @@ class CodexIssueSessionLauncher:
                     session_id = candidate.strip()
             if event.get("type") in {"turn.failed", "error"}:
                 terminal_error = json.dumps(event, sort_keys=True)
+            usage = event.get("usage")
+            if isinstance(usage, Mapping):
+                candidate_tokens = usage.get("input_tokens")
+                if (
+                    isinstance(candidate_tokens, int)
+                    and not isinstance(candidate_tokens, bool)
+                    and candidate_tokens >= 0
+                ):
+                    observed_input_tokens = candidate_tokens
             if event.get("type") == "item.completed":
                 item = event.get("item")
                 if isinstance(item, Mapping) and item.get("type") == "agent_message":
@@ -179,6 +195,20 @@ class CodexIssueSessionLauncher:
                 "codex exec produced no terminal worker receipt",
                 session_id=session_id,
             )
+        if isinstance(worker_receipt, Mapping):
+            worker_receipt = dict(worker_receipt)
+            raw_cost = worker_receipt.get("context_cost")
+            if isinstance(raw_cost, Mapping):
+                context_cost = dict(raw_cost)
+                if observed_input_tokens is not None:
+                    context_cost["input_tokens"] = observed_input_tokens
+                    context_cost["measurement"] = "actual"
+                baseline = context_pack.get("context_cost_baseline")
+                if isinstance(baseline, Mapping):
+                    pack_bytes = baseline.get("context_pack_bytes_excluding_baseline")
+                    if isinstance(pack_bytes, int) and pack_bytes >= 0:
+                        context_cost["context_pack_bytes"] = pack_bytes
+                worker_receipt["context_cost"] = context_cost
         return {
             "session_id": session_id,
             "worker_receipt": worker_receipt,
@@ -243,11 +273,12 @@ def build_dispatch_plan(
             raise EpicDispatchError(
                 "independent_issue_numbers cannot be combined with epic_issue_number"
             )
-    normalized_max = _normalize_positive_int(max_parallel, "max_parallel")
-    if independent_scope and normalized_max > FAST_LANE_MAX_PARALLEL:
+    requested_max = _normalize_positive_int(max_parallel, "max_parallel")
+    if independent_scope and requested_max > FAST_LANE_MAX_PARALLEL:
         raise EpicDispatchError(
             f"independent fast lane max_parallel must not exceed {FAST_LANE_MAX_PARALLEL}"
         )
+    normalized_max = min(requested_max, MAX_NON_ROOT_AGENT_SLOTS)
     runtimes = _normalize_runtime_targets(runtime_targets)
     lease_issues = _normalize_active_leases(active_leases)
     normalized_candidates = [_normalize_candidate(item) for item in candidates]
@@ -275,6 +306,7 @@ def build_dispatch_plan(
     selected_owner_docs: set[str] = set()
     selected_validation_resources: set[str] = set()
     selected_count = 0
+    selected_helper_slots = 0
 
     for index, candidate in enumerate(normalized_candidates):
         decision = _build_tcd_decision(candidate, runtimes, lease_issues)
@@ -289,12 +321,14 @@ def build_dispatch_plan(
                 selected_files=selected_files,
                 selected_owner_docs=selected_owner_docs,
                 selected_validation_resources=selected_validation_resources,
+                selected_helper_slots=selected_helper_slots,
             )
             if skip_reason is not None:
                 decision["selected_path"] = "skip"
                 decision["skip_reason"] = skip_reason
             else:
                 selected_count += 1
+                selected_helper_slots += candidate["issue_local_helper_budget"]
                 selected_for_dispatch = True
                 context_pack_id = f"ctx-{candidate['issue_number']}"
                 context_pack = _build_context_pack(
@@ -305,6 +339,15 @@ def build_dispatch_plan(
                     run_state_constraints=run_state_constraints,
                 )
                 context_packs.append(context_pack)
+                decision["context_cost_estimate"] = {
+                    "measurement": "proxy",
+                    "input_tokens": "unknown(pre-dispatch-runtime-dependent)",
+                    "agent_starts": 1 + candidate["issue_local_helper_budget"],
+                    "context_pack_bytes": context_pack["context_cost_baseline"][
+                        "context_pack_bytes_excluding_baseline"
+                    ],
+                    "compactions": "unknown(pre-dispatch-runtime-dependent)",
+                }
                 selected_files.update(candidate["likely_touched_files"])
                 if candidate["owner_doc_writeback_required"]:
                     selected_owner_docs.update(candidate["owner_docs"])
@@ -326,9 +369,16 @@ def build_dispatch_plan(
     result = {
         "schema_version": SCHEMA_VERSION,
         "run_id": normalized_run_id,
+        "requested_max_parallel": requested_max,
         "max_parallel": normalized_max,
+        "parallel_cap_reason": (
+            "configured-non-root-agent-slot-cap"
+            if requested_max > normalized_max
+            else None
+        ),
         "runtime_targets": runtimes,
         "selected_count": selected_count,
+        "selected_helper_slots": selected_helper_slots,
         "decisions": decisions,
         "context_packs": context_packs,
         "epic_run_state_update": {
@@ -406,14 +456,12 @@ def dispatch_issue_sessions(
                     "session_id": session_id,
                     "fresh_session": True,
                     "status": (
-                        "completed"
-                        if final_state in {"done", "handoff"}
-                        else final_state
+                        "completed" if final_state == "done" else final_state
                     ),
                     "worker_receipt": worker_receipt,
                 }
             )
-            if final_state not in {"done", "handoff"}:
+            if final_state != "done":
                 return _session_dispatch_receipt(
                     run_id,
                     sessions,
@@ -458,6 +506,10 @@ def _validated_session_contexts(
 ) -> tuple[str, list[tuple[dict[str, Any], dict[str, Any]]]]:
     if not isinstance(plan, Mapping):
         raise EpicDispatchError("dispatch plan must be an object")
+    if plan.get("schema_version") != SCHEMA_VERSION:
+        raise EpicDispatchError(
+            f"dispatch plan schema_version must be {SCHEMA_VERSION}; rebuild the frozen plan"
+        )
     if plan.get("source") != "builderops.epic_dispatch.dry_run":
         raise EpicDispatchError("dispatch sessions requires a frozen dry-run plan")
     run_id = validate_run_id(_normalize_string(plan.get("run_id"), "plan.run_id"))
@@ -591,7 +643,35 @@ def _validated_worker_receipt(
             "worker handoff receipt has an invalid final_state",
             session_id=session_id,
         )
+    _validate_context_cost(receipt.get("context_cost"), session_id=session_id)
     return dict(receipt)
+
+
+def _validate_context_cost(value: object, *, session_id: str) -> None:
+    if not isinstance(value, Mapping):
+        raise IssueSessionLaunchError(
+            "worker handoff receipt context_cost must be an object",
+            session_id=session_id,
+        )
+    if value.get("measurement") not in {"actual", "proxy"}:
+        raise IssueSessionLaunchError(
+            "worker handoff receipt context_cost measurement must be actual or proxy",
+            session_id=session_id,
+        )
+    for field in ("input_tokens", "agent_starts", "context_pack_bytes", "compactions"):
+        item = value.get(field)
+        valid_integer = isinstance(item, int) and not isinstance(item, bool) and item >= 0
+        valid_unknown = (
+            isinstance(item, str)
+            and item.startswith("unknown(")
+            and item.endswith(")")
+            and len(item) > len("unknown()")
+        )
+        if not (valid_integer or valid_unknown):
+            raise IssueSessionLaunchError(
+                f"worker handoff receipt context_cost.{field} must be a non-negative integer or unknown(reason)",
+                session_id=session_id,
+            )
 
 
 def _build_tcd_decision(
@@ -622,6 +702,13 @@ def _build_tcd_decision(
             "runtime_difference": "invocation-hint-only",
         },
         "budget_class": _budget_class_for(risk, candidate["expected_value"]),
+        "context_cost_estimate": {
+            "measurement": "proxy",
+            "input_tokens": "unknown(no-fresh-agent-selected)",
+            "agent_starts": 0,
+            "context_pack_bytes": 0,
+            "compactions": 0,
+        },
         "stop_condition": candidate["stop_condition"]
         or "Return a subagent_handoff_receipt; stop on claim conflict, branch/worktree drift, missing Verify target, or authority ambiguity.",
         "skip_reason": skip_reason,
@@ -636,7 +723,7 @@ def _build_context_pack(
     dispatch_slot: int,
     run_state_constraints: list[Any],
 ) -> dict[str, Any]:
-    return {
+    pack = {
         "schema_version": SCHEMA_VERSION,
         "context_pack_id": context_pack_id,
         "dispatch_slot": dispatch_slot,
@@ -667,13 +754,26 @@ def _build_context_pack(
             "builderops_routing_required": True,
             "github_lifecycle_truth": "Issues/PRs/CI",
             "no_project_or_label_mutation_by_dispatch_planner": True,
+            "terminal_delivery_expected": True,
         },
         "coordination": {
             "routine_worker_to_worker": "prohibited",
             "discovered_overlap": "typed-coordinator-exception",
+            "coordinator_scope": "cross_issue_only",
+            "worker_scope": "one_issue_end_to_end",
+            "issue_local_helper_budget": candidate["issue_local_helper_budget"],
+            "issue_local_helper_rationale": candidate["issue_local_helper_rationale"],
+            "sole_writer": "issue_agent",
         },
         "return_schema": HANDOFF_RECEIPT_SCHEMA,
     }
+    pack["context_cost_baseline"] = {
+        "measurement": "actual",
+        "context_pack_bytes_excluding_baseline": len(
+            json.dumps(pack, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ),
+    }
+    return pack
 
 
 def _parallel_skip_reason(
@@ -684,9 +784,8 @@ def _parallel_skip_reason(
     selected_files: set[str],
     selected_owner_docs: set[str],
     selected_validation_resources: set[str],
+    selected_helper_slots: int,
 ) -> str | None:
-    if selected_count >= max_parallel:
-        return "parallel-slot-cap"
     if candidate["dependencies"] and not candidate["dependencies_satisfied"]:
         return "dependency-not-ready"
     if selected_files.intersection(candidate["likely_touched_files"]):
@@ -698,6 +797,16 @@ def _parallel_skip_reason(
         return "owner-doc-writeback-conflict"
     if selected_validation_resources.intersection(candidate["validation_resources"]):
         return "validation-resource-conflict"
+    required_slots = (
+        selected_count
+        + selected_helper_slots
+        + 1
+        + candidate["issue_local_helper_budget"]
+    )
+    if selected_count >= max_parallel:
+        return "parallel-slot-cap"
+    if required_slots > max_parallel:
+        return "parallel-helper-capacity-reserve"
     return None
 
 
@@ -771,26 +880,55 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         candidate.get("issue_number", candidate.get("number")),
         "issue_number",
     )
+    issue_local_helper_budget = candidate.get("issue_local_helper_budget", 0)
+    if (
+        not isinstance(issue_local_helper_budget, int)
+        or isinstance(issue_local_helper_budget, bool)
+        or issue_local_helper_budget not in {0, 1}
+    ):
+        raise EpicDispatchError("issue_local_helper_budget must be 0 or 1")
+    risk = _normalize_choice(
+        candidate.get("risk", "medium"),
+        "risk",
+        {"low", "medium", "high", "critical"},
+    )
+    task_class = _normalize_string(
+        candidate.get("task_class", "implementation"), "task_class"
+    )
+    helper_rationale = _normalize_optional_string(
+        candidate.get("issue_local_helper_rationale")
+    )
+    complex_task_classes = {"complex", "multi-layer", "architecture", "state-machine"}
+    if (
+        issue_local_helper_budget == 1
+        and risk not in {"high", "critical"}
+        and task_class.lower() not in complex_task_classes
+    ):
+        raise EpicDispatchError(
+            "issue_local_helper_budget=1 requires high/critical risk or an explicit complex task_class"
+        )
+    if issue_local_helper_budget == 1 and helper_rationale is None:
+        raise EpicDispatchError(
+            "issue_local_helper_budget=1 requires an explicit issue_local_helper_rationale"
+        )
     return {
         "issue_number": issue_number,
         "title": _normalize_string(candidate.get("title"), "title"),
         "url": _normalize_optional_string(candidate.get("url")),
         "state": _normalize_string(candidate.get("state", "OPEN"), "state").upper(),
         "labels": set(_normalize_string_list(candidate.get("labels", []), "labels")),
-        "risk": _normalize_choice(
-            candidate.get("risk", "medium"),
-            "risk",
-            {"low", "medium", "high", "critical"},
-        ),
+        "risk": risk,
         "expected_value": _normalize_choice(
             candidate.get("expected_value", "medium"),
             "expected_value",
             {"low", "medium", "high"},
         ),
-        "task_class": _normalize_string(candidate.get("task_class", "implementation"), "task_class"),
+        "task_class": task_class,
         "preferred_path": _normalize_optional_string(candidate.get("preferred_path")),
         "runtime_hint": _normalize_optional_string(candidate.get("runtime_hint")),
         "scriptable": bool(candidate.get("scriptable", False)),
+        "issue_local_helper_budget": issue_local_helper_budget,
+        "issue_local_helper_rationale": helper_rationale,
         "stop_condition": _normalize_optional_string(candidate.get("stop_condition")),
         "dependencies": [
             _normalize_positive_int(value, "dependencies")
