@@ -67,6 +67,10 @@ target contract does not become delivered merely because this specification name
 - `docs/audits/BUILDER_SYSTEM_DEVUI_EXECUTION_ARCHITECTURE_2026-08-09.md` from PR #4689 is advisory
   source/design evidence. It can motivate or test this contract but cannot make target behavior
   delivered or authoritative by itself.
+- `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md` is advisory comparison and
+  document-class evidence. This specification imports only its iterative intent–evidence,
+  late-change visibility, and verification-versus-validation boundaries; the audit remains
+  non-authoritative.
 
 ## Information architecture and hard boundary
 
@@ -109,6 +113,20 @@ The lens owns no policy, workflow transition, task, queue, claim, session, sourc
 graph, correlation, severity, approval, mutation, or durable disposition. It never writes GitHub,
 the repository, BuilderOps, a provider, or an external system directly. It never promotes a
 descriptive process-map observation into intended governance.
+
+### Intent–evidence continuity
+
+The target lens orients across the existing intent-to-evidence chain only when each relationship is
+declared by its owning source. Progressive detail should answer which intent, need, outcome,
+decision, or constraint governs the route; which capability/specification and Issue received it;
+which PR/SHA evidence verifies it; whether a later change superseded a source or invalidated proof;
+and whether the result is verified, **Ready to try**, tried, or accepted.
+
+An absent relationship uses the existing source-state axes as unlinked, unread, missing, stale,
+unavailable, or not assessed; composition never repairs it by inference. Discovery and delivery may
+loop in either direction. A late change is not a deviation by itself: a deviation needs a
+source-owned intended route, explicit observed correlation, and the source or receipt recording the
+changed decision and affected evidence.
 
 ## Minimal data and state contract
 
@@ -460,6 +478,8 @@ engine, task system, or source registry.
   provenance according to their owning contracts, never replacement authority.
 - Every durable consequence crosses an existing authenticated workflow and returns its existing
   receipt.
+- Intent, decision, supersession, verification, and owner-validation relationships remain
+  source-owned and independently evidenced; no delivery fact implies owner acceptance.
 - No inferred links, copied work state, direct GitHub/repository mutation, global session view, or
   claimed system-wide atomic freshness is introduced.
 - Current delivered capability and target-state design remain visibly separate in docs, tests, and

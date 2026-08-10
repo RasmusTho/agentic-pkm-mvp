@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-09
+Last reviewed: 2026-08-10
 
 # Builder System Process Map
 
@@ -74,6 +74,30 @@ it is not a mandatory wrapper around ordinary `docs-to-issue` extraction or ever
 `LearningSignal`. The generic BuilderOps Promotion Gateway remains proposal, receipt, and state-
 transition infrastructure only. Model Inquiry is the narrow explicit exception whose stronger
 readiness and file-first evidence contract permits the separately invoked GitHub Issue mutation.
+
+### Iterative intent–evidence loop
+
+The routes above compose into a feedback loop, not a waterfall or mandatory phases:
+
+```text
+owner intent / need / outcome
+  → bounded discovery or assumption test → disposition
+  → normative owner doc / ADR / specification
+  → Issue → agent work → PR / exact-SHA verification
+  → optional owner validation
+  → divergence, learning, or supersession back to the affected source
+```
+
+Discover/define and develop/deliver are repeatable divergent/convergent moves, not phase-completion
+documents. A deterministic repair may start from an already normative Issue; uncertain product or
+architecture work may loop through research and disposition before Issue creation.
+
+Late changes remain allowed. When a change alters owner intent, a governing constraint, acceptance
+criteria, authority ownership, or a costly-to-reverse boundary, the owning source preserves the
+superseded decision and consequence and affected verification or validation is rerun. Routine
+reversible technical choices stay in Issue, Git, PR, review and test evidence. Verified delivery,
+**Ready to try**, owner tried, and owner accepted remain separate. See
+`docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 
 ### Execution-control composition
 
