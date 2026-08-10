@@ -10,7 +10,7 @@ Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
 Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
-Last reviewed: 2026-08-09
+Last reviewed: 2026-08-10
 
 # devUI implementation plan
 
@@ -62,6 +62,20 @@ or concepts the owner must understand to complete the flow.
     or provider similarity may infer a link to work.
 13. Focus and Builder System Control use separate primary identities and contexts. The control lens
     cannot become a policy, workflow, task, or source-of-truth engine.
+14. Every stage preserves source-owned intent, decision, supersession, verification, and optional
+    owner-validation relationships when available; missing joins remain explicit and no stage may
+    infer them or turn the read-time composition into authority.
+
+### Cross-stage intent–evidence constraint
+
+Discovery and delivery may loop in either direction at any stage. A late owner-intent, governing
+decision, or acceptance-criterion change updates its owning source, preserves what it supersedes,
+shows the consequence for active work, and invalidates affected exact-SHA verification or owner
+validation. This is not a new stage or object model. Stage A exposes the relationship and honest
+absence, Stage A2 keeps external reasoning advisory until disposition, Stage B binds consequences
+to current sources, and Stage C distinguishes verified delivery, **Ready to try**, tried, and
+accepted evidence. Builder System Control orients over the same source-owned chain without copying
+it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 
 ## Reuse before construction
 
@@ -76,7 +90,7 @@ or concepts the owner must understand to complete the flow.
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | Product/Runtime SoI evidence | bounded SoI Evidence View v0 composer and manifest | Read-only proof delivered by PR #4711; optional Overview reference retains explicit denominator and claim horizons |
 | First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |
-| Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, BuilderOps/live evidence | Separate read-lens target; not delivered |
+| Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, source-owned intent/decision/evidence joins, BuilderOps/live evidence | Separate read-lens target; not delivered |
 | Proposal/preview | `DeliveryRequest.v1`, `DeliveryPreview.v1`, pure plan compiler | DDO-06 target; compiler seam delivered |
 | Lawful transitions | DDO reducer and versioned lifecycle commands | Pure reducer delivered; durable binding is DDO-05 target |
 | Worker | `WorkerRuntimePort` and context/invocation/result contracts | Seam delivered; durable correlation/reattach target |

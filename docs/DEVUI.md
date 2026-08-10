@@ -12,8 +12,8 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-08-09
-Last verified against: `origin/main` `c938e7371148df34be3e2d3d896579e79ed449a4`, ADR-0057,
+Last reviewed: 2026-08-10
+Last verified against: `origin/main` `07d060f1e24f93ed9e0e0834256e053fa5781d30`, ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
 Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
 the advisory Builder System devUI execution audit in PR #4689, and the merged Focus and Conversation
@@ -58,6 +58,21 @@ intent → capability → evidence and gaps → delivery request → preview
 
 This is one experience, not merged authority. CKM only describes. The authenticated delivery
 boundary approves exact scope. GitHub, CI, review, merge, and closure prove what happened.
+
+### Intent and evidence continuity
+
+Discovery and delivery are short, nested loops inside the owner flow, not sequential phases. New
+evidence or a late change may return an item to its owning intent, assumption, decision,
+specification, or acceptance criterion. The change remains legal when the owning source records what
+was superseded and why, the consequence for active work is visible, and affected verification is
+rerun. Routine reversible implementation choices remain in Issue, Git and PR evidence.
+
+devUI should make the source-owned path from intent or need through normative decision, capability
+or specification, Issue, PR/SHA proof, and optional owner validation progressively visible. It must
+show an absent, stale, unlinked, unassessed, or unavailable edge honestly and must not create a
+persistent intent store, infer correlation, or convert the Delivery Graph Projection into authority.
+Verified delivery, **Ready to try**, tried by owner, and owner accepted are separate facts. See
+`docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 
 ## Cognitive-load contract
 
@@ -657,6 +672,9 @@ routes may remain available for diagnostics and recovery, but devUI is the norma
       same item without dropping evidence or forcing a product switch.
 - [ ] Every claim names source, freshness, and whether it is confirmed, candidate, stale, unread,
       or unavailable.
+- [ ] When owner intent, a governing decision, or an acceptance criterion changes, the selected
+      context shows the superseded source, consequence for active work, and which exact verification
+      or owner-validation evidence was invalidated or rerun; absent linkage remains explicit.
 - [ ] CKM score or model proposal cannot start or prioritize work alone.
 - [ ] Preview is read-only; approval binds exact request, preview, and acceptance profile.
 - [ ] Technical blocking never appears as an owner decision without explicit authority category.
@@ -687,4 +705,6 @@ routes may remain available for diagnostics and recovery, but devUI is the norma
 - Model access: `docs/adr/ADR-0064-model-access-substrate.md`
 - Temporal intention authority: `docs/adr/ADR-0065-builderops-temporal-intention-authority.md`
 - Evidence synthesis: `docs/audits/DEVUI_ARCHITECTURE_2026-08-06.md`
+- Intent–evidence governance synthesis:
+  `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`
 - Implementation order: `docs/plans/DEVUI_IMPLEMENTATION.md`
