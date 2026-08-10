@@ -8,8 +8,8 @@ Deterministic, stdlib-only, read-only. Catches the defect classes found by the
    frontmatter matches the directory name.
 2. Every backticked kebab-case token in the README and the SKILL.md files that
    looks like a skill reference resolves to an existing skill directory, a
-   `_shared/` file, a known non-skill term, or carries an explicit `(planned)`
-   marker on the same line.
+   registered portable external skill, a `_shared/` file, a known non-skill
+   term, or carries an explicit `(planned)` marker on the same line.
 3. The README "Skill routing" section lists every skill directory.
 4. Every full agent-label taxonomy block (a bullet list of six or more
    `type:`/`prio:`/`agent:` labels) is identical to the canonical taxonomy.
@@ -98,6 +98,8 @@ KNOWN_NON_SKILL_TERMS = {
     "create-learning-signal",  # builderops CLI subcommand
 }
 
+PORTABLE_SKILLS_MANIFEST = "portable-skills.list"
+
 RETIRED_PHRASE = "Do not batch to end of task"
 
 KEBAB_TOKEN_RE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
@@ -113,6 +115,7 @@ BASH4_ONLY_CONSTRUCTS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("${var^^}", re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\^\^\}")),
 )
 FULL_TAXONOMY_MIN_ITEMS = 6
+SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 
 
 def _parse_frontmatter(text: str) -> dict[str, str] | None:
@@ -134,6 +137,43 @@ def _skill_dirs(skills_root: Path) -> list[Path]:
     return sorted(
         d for d in skills_root.iterdir() if d.is_dir() and d.name != "_shared"
     )
+
+
+def _portable_skill_names(skills_root: Path) -> list[str]:
+    manifest = skills_root / PORTABLE_SKILLS_MANIFEST
+    if not manifest.is_file():
+        return []
+    return [
+        line.strip()
+        for line in manifest.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def check_portable_skill_registry(skills_root: Path) -> list[str]:
+    """Registered portable dependencies are valid, unique, and non-local."""
+    errors: list[str] = []
+    names = _portable_skill_names(skills_root)
+    local_names = {d.name for d in _skill_dirs(skills_root)}
+    seen: set[str] = set()
+    for name in names:
+        if not SKILL_NAME_RE.fullmatch(name):
+            errors.append(
+                f".codex/skills/{PORTABLE_SKILLS_MANIFEST}: invalid portable skill "
+                f"name `{name}`"
+            )
+        if name in seen:
+            errors.append(
+                f".codex/skills/{PORTABLE_SKILLS_MANIFEST}: duplicate portable skill "
+                f"name `{name}`"
+            )
+        if name in local_names:
+            errors.append(
+                f".codex/skills/{PORTABLE_SKILLS_MANIFEST}: portable skill `{name}` "
+                "collides with a repo-local skill"
+            )
+        seen.add(name)
+    return errors
 
 
 def check_skill_frontmatter(skills_root: Path) -> list[str]:
@@ -176,7 +216,8 @@ def check_skill_references(skills_root: Path) -> list[str]:
         if shared_dir.is_dir()
         else set()
     )
-    known = skill_names | shared_names | KNOWN_NON_SKILL_TERMS
+    portable_skill_names = set(_portable_skill_names(skills_root))
+    known = skill_names | shared_names | portable_skill_names | KNOWN_NON_SKILL_TERMS
     readme = skills_root / "README.md"
     files = ([readme] if readme.is_file() else []) + [
         d / "SKILL.md" for d in _skill_dirs(skills_root) if (d / "SKILL.md").is_file()
@@ -191,7 +232,8 @@ def check_skill_references(skills_root: Path) -> list[str]:
                     continue
                 errors.append(
                     f"{rel}:{lineno}: unknown skill-like reference `{token}` — "
-                    "fix the reference, mark it (planned), or add it to "
+                    "fix the reference, register an intentional portable dependency in "
+                    f"{PORTABLE_SKILLS_MANIFEST}, mark it (planned), or add it to "
                     "KNOWN_NON_SKILL_TERMS if it is plain vocabulary"
                 )
     return errors
@@ -758,6 +800,7 @@ def run_lint(repo_root: Path) -> list[str]:
         return [f"{skills_root}: not a directory"]
     errors: list[str] = []
     errors += check_skill_frontmatter(skills_root)
+    errors += check_portable_skill_registry(skills_root)
     errors += check_skill_references(skills_root)
     errors += check_readme_routing_complete(skills_root)
     errors += check_label_taxonomy(skills_root)
@@ -779,7 +822,25 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(__file__).resolve().parents[1],
         help="repository root to lint (default: this repo)",
     )
+    parser.add_argument(
+        "--print-portable-skills",
+        action="store_true",
+        help="validate and print normalized portable skill names, one per line",
+    )
     args = parser.parse_args(argv)
+    if args.print_portable_skills:
+        skills_root = args.root / ".codex" / "skills"
+        if not skills_root.is_dir():
+            print(f"{skills_root}: not a directory")
+            return 1
+        errors = check_portable_skill_registry(skills_root)
+        if errors:
+            for error in errors:
+                print(error)
+            return 1
+        for name in _portable_skill_names(skills_root):
+            print(name)
+        return 0
     errors = run_lint(args.root)
     for error in errors:
         print(error)

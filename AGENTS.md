@@ -222,7 +222,10 @@ Human time is the dominant TCD term, so the default posture is to **act**, not t
 - Escalate to the human (`agent:needs-human` / "ask you") **only** for decisions that are irreversible, external-facing, or genuinely ambiguous in authority — not for work that is merely non-trivial. `agent:needs-human` on a buildable, bounded slice is usually defensive posture: classify on evidence first, and defer only when a named human decision, missing input, or authority question actually blocks the work.
 - `log + Git` is the safety net, not a human gate. Reversible, in-scope, bounded work proceeds without asking.
 - A retry count, a failed local/CI/type check, a host/tool compatibility failure, or a safe fail-closed pause is **not** by itself an owner decision. Route it through the autonomous escalation classifier in `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md`; only its explicit authority categories may create `agent:needs-human`.
-- Owner asks route through `.codex/skills/owner-decision-brief`: discretionary escalations re-test this gate first (contractual operator gates are never re-tested away — they fire as their skills define), and every ask that reaches the owner is delivered as one standalone plain-language decision brief.
+- Owner asks route through `.codex/skills/owner-decision-brief`, the thin Yggdrasil profile for the
+  portable `decision-quality` method: discretionary escalations re-test this gate first (contractual
+  operator gates are never re-tested away — they fire as their skills define), and every ask that
+  reaches the owner is delivered as one standalone plain-language decision brief.
 - **Autonomous delivery** runs its tier's gate chain unattended per `AGENTS.md :: Proportional delivery`: on the light path (single-issue or issue-free Tier 1/2), wait for required CI green with self-verified `Verify:` targets, then merge; on the full path (Tier 3, multi-issue, TCD high-risk surfaces), also resolve the local review gate (`verification-and-closure :: Running the local review gate`) before merging — the owner is not asked to babysit either way. The governing tier's gate is never waived (an unprotected branch does not relax it); only the human *watching* is removed. Quality is preserved by the gate plus cheap reverts on an always-releasable main, not by the wait.
 
 This is human-first, not human-absent: the owner still owns irreversible, external, and strategic calls — agents just stop interrupting for reversible ones.
@@ -407,7 +410,7 @@ The owner is the operator and decision-maker. Human-first means optimizing for t
 
 - Lead with next steps and the answer. Keep responses concise and scannable; do not include a verbose reasoning trace.
 - **Minimize cognitive load.** Bundle coherent work into one PR/thread instead of scattering it; collapse options to a recommendation plus the one fork that is genuinely the owner's; never make him reconstruct context or track machinery he does not need.
-- When a decision is the owner's to make, present it as: clear **Problem → Options → Consequences** (the consequences of each choice matter most). Surface the decisions that are genuinely his explicitly rather than burying them — without manufacturing choices he should not have to make. The operational shape of that ask (escalation re-test, one-decision brief, jargon gate) is `.codex/skills/owner-decision-brief`.
+- When a decision is the owner's to make, present it as: clear **Problem → Options → Consequences** (the consequences of each choice matter most). Surface the decisions that are genuinely his explicitly rather than burying them — without manufacturing choices he should not have to make. The operational Yggdrasil profile for that ask is `.codex/skills/owner-decision-brief`; it uses the portable `decision-quality` skill as the single decision method.
 - Keep durable audit artifacts complete but separate from the human-facing summary: BuilderOps receipts, `Verify:` markers, and traceability live in the record, not in the lead. Do not add machinery whose only purpose is to capture reasoning for audit.
 
 ## Specialist subagent roles

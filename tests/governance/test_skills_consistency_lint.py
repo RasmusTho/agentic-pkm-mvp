@@ -7,7 +7,10 @@ seeded into a synthetic tree.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from scripts.lint_skills_consistency import run_lint
@@ -49,6 +52,248 @@ def test_skills_consistency_lint_passes() -> None:
 
 def test_seeded_clean_tree_passes(tmp_path: Path) -> None:
     assert run_lint(_seed_tree(tmp_path)) == []
+
+
+def test_registered_portable_skill_reference_passes(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    (root / ".codex" / "skills" / "portable-skills.list").write_text(
+        "decision-quality\n", encoding="utf-8"
+    )
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + "\nLoad and follow the portable `decision-quality` skill.\n",
+        encoding="utf-8",
+    )
+
+    assert run_lint(root) == []
+
+
+def test_portable_skill_registry_rejects_invalid_duplicate_and_local_names(
+    tmp_path: Path,
+) -> None:
+    root = _seed_tree(tmp_path)
+    (root / ".codex" / "skills" / "portable-skills.list").write_text(
+        "alpha-skill\ndecision_quality\ndecision-quality\ndecision-quality\n",
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    assert any("collides with a repo-local skill" in error for error in errors)
+    assert any("invalid portable skill name `decision_quality`" in error for error in errors)
+    assert any("duplicate portable skill name `decision-quality`" in error for error in errors)
+
+
+def test_install_skills_provisions_registered_portable_dependency(tmp_path: Path) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    source_text = "---\nname: decision-quality\ndescription: test\n---\n"
+    (source_skill / "SKILL.md").write_text(source_text, encoding="utf-8")
+    destination = tmp_path / "installed"
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (destination / "decision-quality" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == source_text
+
+
+def test_install_skills_fails_closed_when_portable_dependency_is_missing(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    portable_root.mkdir()
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(tmp_path / "installed"),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Registered portable skill is unavailable: decision-quality" in result.stderr
+    assert not Path(env["CLAUDE_SKILLS_DIR"]).exists()
+    assert not (Path(env["CLAUDE_SKILLS_DIR"]) / "owner-decision-brief").exists()
+
+
+def test_install_skills_fails_closed_when_portable_enumeration_fails(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    (source_skill / "SKILL.md").write_text(
+        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_find = fake_bin / "find"
+    fake_find.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "${1%/}" == "$FAIL_FIND_PATH" ]]; then\n'
+        '  echo "forced portable enumeration failure" >&2\n'
+        "  exit 73\n"
+        "fi\n"
+        'exec "$REAL_FIND" "$@"\n',
+        encoding="utf-8",
+    )
+    fake_find.chmod(0o755)
+    destination = tmp_path / "installed"
+    real_find = shutil.which("find")
+    assert real_find is not None
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAIL_FIND_PATH": str(source_skill),
+        "REAL_FIND": real_find,
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "forced portable enumeration failure" in result.stderr
+    assert "Unable to enumerate source skill: decision-quality" in result.stderr
+    assert not (destination / "decision-quality").exists()
+    assert not (destination / "owner-decision-brief").exists()
+    assert "Skills installed to" not in result.stdout
+
+
+def test_install_skills_fails_closed_when_skill_disappears_before_enumeration(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    skill_file = source_skill / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_find = fake_bin / "find"
+    fake_find.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "${1%/}" == "$MOVE_FIND_PATH" ]]; then\n'
+        '  mv "$MOVE_SKILL_FILE" "$MOVE_SKILL_FILE.removed"\n'
+        "fi\n"
+        'exec "$REAL_FIND" "$@"\n',
+        encoding="utf-8",
+    )
+    fake_find.chmod(0o755)
+    destination = tmp_path / "installed"
+    real_find = shutil.which("find")
+    assert real_find is not None
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "MOVE_FIND_PATH": str(source_skill),
+        "MOVE_SKILL_FILE": str(skill_file),
+        "REAL_FIND": real_find,
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert (source_skill / "SKILL.md.removed").exists()
+    assert "enumeration omitted required SKILL.md: decision-quality" in result.stderr
+    assert not (destination / "decision-quality").exists()
+    assert not (destination / "owner-decision-brief").exists()
+    assert "Skills installed to" not in result.stdout
+
+
+def test_install_skills_rejects_directory_at_portable_contract_destination(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    (source_skill / "SKILL.md").write_text(
+        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+    )
+    destination = tmp_path / "installed"
+    malformed_contract = destination / "decision-quality" / "SKILL.md"
+    malformed_contract.mkdir(parents=True)
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Portable skill destination has invalid SKILL.md: decision-quality" in result.stderr
+    assert not (malformed_contract / "SKILL.md").exists()
+    assert not (destination / "owner-decision-brief").exists()
+    assert "Skills installed to" not in result.stdout
+
+
+def test_portable_registry_cli_uses_the_lint_normalization(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    (root / ".codex" / "skills" / "portable-skills.list").write_text(
+        "  # indented comment\n\n  decision-quality  \n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "python3",
+            str(REPO_ROOT / "scripts" / "lint_skills_consistency.py"),
+            "--root",
+            str(root),
+            "--print-portable-skills",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout == "decision-quality\n"
 
 
 def test_lint_detects_seeded_defects(tmp_path: Path) -> None:

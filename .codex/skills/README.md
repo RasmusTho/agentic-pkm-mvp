@@ -11,6 +11,18 @@ Product/Runtime work, route SBS impact through `docs/architecture/SBS_OPERATING_
 workflow, issue/PR, CI, release, BuilderOps, learning, or TCD work, route through the Builder System
 boundary and artifact map in `docs/architecture/SBS_OPERATING_MODEL.md`.
 
+## Portable skill dependencies
+
+`.codex/skills/portable-skills.list` is the single repo registry for skills whose method is maintained
+outside this repository. Their method text is not vendored or duplicated here. The default portable
+source root is `~/.local/share/agent-skills`; set `PKM_PORTABLE_SKILLS_DIR` when the platform uses a
+different source root.
+
+`scripts/install_skills.sh` installs both repo-local skills and every registered portable dependency
+into the configured Claude skill directory. It fails closed when a registered source is absent. Codex
+discovers the same portable source root directly. A repo skill may require a portable method only
+when its dependency is registered here and the environment has completed that provisioning step.
+
 ## Workflow map
 
 Hot path:
@@ -149,7 +161,7 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `capture-learning`
   - micro-skill: create one BuilderOps `LearningSignal` when a builder-workflow plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback; never treat builder learning as runtime/user memory without Product System authority
 - `owner-decision-brief`
-  - micro-skill: invoke at the moment any workflow is about to ask the owner for a decision (`agent:needs-human`, an operator ask, an inline question); first re-test discretionary escalations against `AGENTS.md :: Agency default` and act instead when an agent can take the decision as well or better (contractual operator gates are never re-tested away — the skill only shapes their ask), then deliver each owner decision as one standalone plain-language brief (decision, why-you, options with owner-facing consequences, recommendation, no-answer default) — never a codenamed decision menu, never project jargon
+  - thin Yggdrasil profile: invoke at the moment any workflow is about to ask the owner for a decision (`agent:needs-human`, an operator ask, an inline question); load the portable `decision-quality` skill as the single decision method, preserve contractual operator and local vault-binding gates, apply repo authority and no-parallel-store constraints, and render the resulting owner ask as one standalone plain-language brief
 - `learning-retrospective`
   - cadence-triggered: read BuilderOps `LearningSignal` records and the generated learning-summary projection, include historical `docs/learning-log.md` compatibility entries only when needed, cluster by upstream artifact, and propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and recording a BuilderOps retrospective receipt
 - `learning-to-issue`
