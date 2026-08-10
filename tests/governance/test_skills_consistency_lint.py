@@ -187,6 +187,57 @@ def test_install_skills_fails_closed_when_portable_enumeration_fails(
     assert "Skills installed to" not in result.stdout
 
 
+def test_install_skills_fails_closed_when_skill_disappears_before_enumeration(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    skill_file = source_skill / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_find = fake_bin / "find"
+    fake_find.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "${1%/}" == "$MOVE_FIND_PATH" ]]; then\n'
+        '  mv "$MOVE_SKILL_FILE" "$MOVE_SKILL_FILE.removed"\n'
+        "fi\n"
+        'exec "$REAL_FIND" "$@"\n',
+        encoding="utf-8",
+    )
+    fake_find.chmod(0o755)
+    destination = tmp_path / "installed"
+    real_find = shutil.which("find")
+    assert real_find is not None
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "MOVE_FIND_PATH": str(source_skill),
+        "MOVE_SKILL_FILE": str(skill_file),
+        "REAL_FIND": real_find,
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert (source_skill / "SKILL.md.removed").exists()
+    assert "enumeration omitted required SKILL.md: decision-quality" in result.stderr
+    assert not (destination / "decision-quality").exists()
+    assert not (destination / "owner-decision-brief").exists()
+    assert "Skills installed to" not in result.stdout
+
+
 def test_portable_registry_cli_uses_the_lint_normalization(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     (root / ".codex" / "skills" / "portable-skills.list").write_text(

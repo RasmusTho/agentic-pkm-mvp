@@ -70,12 +70,14 @@ skipped=0
 install_skill_dir() {
   local skill_dir="$1"
   local skill_name="$2"
+  local require_skill_contract="${3:-0}"
   local dst_dir="$SKILLS_DST/$skill_name"
   local file_list
   local src_file
   local rel
   local dst_file
   local install_failed=0
+  local required_skill_found=0
 
   file_list="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-install-skills.XXXXXX")"
 
@@ -86,6 +88,25 @@ install_skill_dir() {
     echo "ERROR: Unable to enumerate source skill: $skill_name" >&2
     rm -f "$file_list"
     return 1
+  fi
+
+  if [[ $require_skill_contract -eq 1 ]]; then
+    # Portable source preflight and enumeration are separate filesystem reads.
+    # Require the recorded list itself to contain the root skill contract before
+    # creating or updating this skill in the target directory. If SKILL.md then
+    # disappears before copying, the normal copy-failure path still fails closed.
+    while IFS= read -r -d '' src_file; do
+      rel="${src_file#$skill_dir}"
+      if [[ "$rel" == "SKILL.md" ]]; then
+        required_skill_found=1
+        break
+      fi
+    done < "$file_list"
+    if [[ $required_skill_found -eq 0 ]]; then
+      echo "ERROR: Source skill enumeration omitted required SKILL.md: $skill_name" >&2
+      rm -f "$file_list"
+      return 1
+    fi
   fi
 
   # Copy each file under the skill directory
@@ -140,7 +161,7 @@ install_skill_dir() {
 while IFS= read -r skill_name; do
   [[ -z "$skill_name" ]] && continue
   portable_skill_dir="$PORTABLE_SKILLS_SRC/$skill_name/"
-  install_skill_dir "$portable_skill_dir" "$skill_name"
+  install_skill_dir "$portable_skill_dir" "$skill_name" 1
 done <<< "$portable_skill_names"
 
 for skill_dir in "$SKILLS_SRC"/*/; do
