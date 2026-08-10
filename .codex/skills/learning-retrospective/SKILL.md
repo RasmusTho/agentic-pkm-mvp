@@ -17,6 +17,9 @@ and SBS impact procedure in `docs/architecture/SBS_OPERATING_MODEL.md`.
 Cross-cutting: when a clustered learning shows a capability-routing mistake (a task class under- or
 over-modeled, or run at the wrong review/verification depth), surface it as a `tcd_retrospective` per
 `AGENTS.md :: Total Cost of Development` (single source — do not restate the policy or its fields here).
+Wrong context topology is also a routing mistake: coordinator implementation, sibling-context reuse,
+missing fresh issue context, unjustified helper/fan-out, repeated oversized input, coordinator-buffer
+pressure, or a terminal receipt too weak to avoid reopening raw worker context.
 
 `docs/learning-log.md` is historical/compatibility material after #1506. Read it only for
 pre-BuilderOps entries or explicit compatibility fallback entries that are not yet represented as
@@ -80,6 +83,11 @@ clusters:
 - `unknown — flag for retro` — signals where the artifact was unresolved at capture time
 
 Prefer batching similar low-signal entries into one repair proposal when they point at the same upstream artifact.
+
+Build the retrospective from LearningSignals, compact delivery receipts, and measured or named-proxy
+`context_cost` data, not full historical chat transcripts. Independent clusters may use fresh
+read-only analysis agents only when the expected synthesis benefit exceeds duplicated input context;
+the root retrospective agent alone joins clusters and proposes upstream edits.
 
 ### Step 3: Propose concrete edits
 
@@ -182,5 +190,5 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 
 1. BuilderOps learning scope (LearningSignals read, date range, last retrospective receipt if known, historical compatibility marker if used)
 2. Clusters formed (upstream artifact → entry count)
-3. Proposals or autonomous actions (numbered, concrete, with artifact path and exact edit text or Issue receipt); when a cluster shows a task class was under-modeled or over-modeled, or had the wrong review/verification depth, include a `tcd_retrospective` block (fields per `AGENTS.md :: Total Cost of Development`) and route its `routing_policy_update_recommendation` as a concrete proposed `AGENTS.md` edit through the Step 3 proposal mechanic.
+3. Proposals or autonomous actions (numbered, concrete, with artifact path and exact edit text or Issue receipt); when a cluster shows a task class was under/over-modeled, used the wrong context topology, or had the wrong review/verification depth, include a `tcd_retrospective` block (fields per `AGENTS.md :: Total Cost of Development`) and route its `routing_policy_update_recommendation` as a concrete proposed `AGENTS.md` edit through the Step 3 proposal mechanic.
 4. BuilderOps retrospective receipt, plus historical compatibility marker only if `docs/learning-log.md` entries were processed

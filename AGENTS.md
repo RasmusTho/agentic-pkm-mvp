@@ -151,6 +151,13 @@ Capability = workflow/skill + model + reasoning effort + context discipline + to
 
 TCD = C_model + C_reasoning + C_context + C_tools + C_parallelization + C_human + C_rework + C_defect + C_delay + C_coordination.
 
+`C_context` includes input tokens, repeated instruction and owner-doc loads, context-pack size,
+tool output retained in the active buffer, compaction/reload cost, and the defect risk of a crowded
+context window. `C_parallelization` includes the duplicated input context plus model/tool work of
+every agent start. Delegation is cheaper only when the saved human time, delay, rework, or defect
+risk exceeds those incremental costs; a fresh context can improve quality while still increasing
+total tokens.
+
 Human time is the dominant term: **R_human = 100 USD/hour** (1 min ≈ 1.67 USD; 10 min ≈ 16.7 USD; 15 min ≈ 25 USD). The owner runs x5 Codex and x5 Claude subscriptions, so budget pressure is **medium-low but not zero**.
 
 Decision rule — spend more capability (stronger model, higher reasoning, more specialized workflow, deeper review) when:
@@ -230,7 +237,37 @@ Many agents run against this repo at once. C_coordination, C_delay, and C_rework
 - **Never switch the shared root worktree's branch out from under a concurrent agent.** Branch switches happen in your own worktree. The shared-root HEAD thrash is a real, recurring loss — uncommitted work rides an unexpected checkout.
 - **Branch-truth before write.** Capture `EXPECTED_BRANCH` / `EXPECTED_WORKTREE` at branch creation and run the branch-truth gate before commit and before push (`_shared/BRANCH_TRUTH_GATE.md`). Proportionality never relaxes this.
 - **Smallest shared lease, then local.** Claim the issue/lane with the minimal shared handshake (dispatcher lease when available; otherwise remove `agent:ready` and post a claimant receipt), then keep execution local and deterministic. One active lease per issue.
-- **Right-size fan-out.** Parallelize only independent issues with isolated worktrees, explicit return receipts, and an explicit token/quality rationale. Over-fanning raises C_coordination faster than it cuts C_delay — when in doubt, fewer agents.
+- **Context ownership hierarchy.** For issue-set delivery, the root delivery session is the
+  coordinator. It retains only cross-issue scope, dependencies, readiness, dispatch/slot decisions,
+  live lifecycle truth, typed conflicts, and compact receipts. Every independent non-trivial Issue
+  runs end to end in a fresh issue agent and isolated worktree, whether the queue is serial or
+  concurrent. The coordinator may execute only deterministic scripts or work explicitly classified
+  `inline-local-cheaper`; do not insert a separate coordinator subagent between the root and issue
+  agents. Fresh-context isolation is distinct from concurrency.
+- **Bounded issue-local help.** A complex issue agent may run at most one active depth-2 helper at a
+  time when a bounded independent read-heavy investigation, source check, test/log analysis, or
+  fresh review lowers expected TCD. The issue agent remains the sole claim, lifecycle, write,
+  integration, and receipt owner. The helper receives only issue-local context, is read-only by
+  default, may not mutate GitHub/Project lifecycle, publish or merge, write owner docs, coordinate
+  with sibling issue agents, or spawn another agent. It consumes a global slot and must not displace
+  ready issue work without an explicit context/token, delay, or quality benefit. Tier 1/2 light-path
+  work normally has helper budget zero, and budget one requires a bounded complexity/TCD rationale.
+  Native Codex `max_threads = 3` is a per-primary-session subagent cap; separate `codex exec`
+  primary sessions do not thereby share one native pool. Repository scheduling intentionally exposes
+  only two usable non-root slots so one remains available for verification/recovery. Within that
+  policy budget, any active issue agent with helper budget one reduces concurrent issue-agent
+  capacity to one; a two-worker wave requires both helper budgets to be zero until a slot is released.
+- **Compact boundaries.** Cross-issue context enters an issue agent only as exact dependency
+  receipts, current authority references, shared constraints, and the bounded issue contract. Raw
+  sibling transcripts, exploration, test logs, and implementation reasoning stay issue-local. The
+  issue agent returns a compact terminal receipt; reopen raw context only when the receipt is
+  incomplete, contradictory, or fails live GitHub/Git/CI/review readback. Resume an agent only for
+  the same Issue and unchanged authority; never reuse it for a sibling Issue.
+- **Right-size fan-out.** Give each independent non-trivial Issue a fresh agent, then decide
+  separately whether those agents should run serially or concurrently. Concurrent waves require
+  isolated worktrees, explicit receipts, typed conflict checks, and a token/quality/delay rationale.
+  Over-fanning raises C_context and C_coordination faster than it cuts C_delay; reserve capacity for
+  verification/recovery and use fewer simultaneous agents when evidence is weak.
 - **Reconcile races on evidence, do not redo.** On a claim or delivery collision, the latest unreleased lease governs; verify on `origin/main` and close your duplicate rather than re-implementing.
 - **Shared-budget awareness.** The GitHub API budget (5,000/hr) is shared across every concurrent agent, and GraphQL exhausts first. A tool call's real cost is its *marginal cost to all agents*, not to your task — so never busy-wait on a shared budget, prefer the transport that spares the scarce bucket (REST `gh api` over GraphQL `gh pr`/`gh issue`/`gh repo`; `git push --delete` over the API for branch ops), and read the free `gh api rate_limit` endpoint before assuming exhaustion. The same rule covers any pooled resource (CI runners, the embedding/Ollama queue). For waiting on CI checks (and the optional `--codex` verdict path, inactive as the default gate) specifically, follow `_shared/CI_WAIT_CONTRACT.md` — a tight `gh pr checks` loop drains the shared GraphQL bucket to zero and stalls every other agent.
 - **Atomically lease host-global validation.** Run repo-wide local suites and other host-global
@@ -279,6 +316,14 @@ tcd_plan:
   human_review_burden: low|medium|high
   defect_blast_radius: low|medium|high|critical
   budget_pressure: low|medium|high
+  execution_context: coordinator_only|inline_deterministic|fresh_issue_agent
+  issue_local_helper_budget: 0|1
+  context_cost:
+    measurement: estimated|actual|proxy
+    input_tokens: <integer|unknown(reason)>
+    agent_starts: <integer>
+    context_pack_bytes: <integer|unknown(reason)>
+    compactions: <integer|unknown(reason)>
   recommended_capability:
     workflow_or_skill:
     model_family:
@@ -299,6 +344,12 @@ tcd_review:
   risk_level: low|medium|high|critical
   model_used:
   reasoning_effort_used:
+  context_cost:
+    measurement: actual|proxy
+    input_tokens: <integer|unknown(reason)>
+    agent_starts: <integer>
+    context_pack_bytes: <integer|unknown(reason)>
+    compactions: <integer|unknown(reason)>
   under_modeling_detected: true|false
   over_modeling_detected: true|false
   blocking_issues:
@@ -321,6 +372,12 @@ tcd_retrospective:
   estimated_human_minutes:
   model_used:
   reasoning_effort_used:
+  context_cost:
+    measurement: actual|proxy
+    input_tokens: <integer|unknown(reason)>
+    agent_starts: <integer>
+    context_pack_bytes: <integer|unknown(reason)>
+    compactions: <integer|unknown(reason)>
   under_modeling_detected: true|false
   over_modeling_detected: true|false
   missed_risk:
@@ -332,7 +389,7 @@ tcd_retrospective:
 
 TCD chooses capability *inside* the delivery chain; this section chooses how much chain and how much solution a change pays for. Skills reference it as `AGENTS.md :: Proportional delivery`; the per-tier mechanics live in `docs/development/GOVERNANCE_PROPORTIONALITY.md` and are not restated here. This is a single-operator system: function over ceremony, ready over perfect.
 
-- **Delivery depth follows the risk tier.** Single-issue (or issue-free) Tier 1 and Tier 2 PRs take the light path: required CI green plus self-verified `Verify:` targets on the head SHA, then plain merge with `Final-Review-Rounds: 0` — no independent review round, no verified-merge ceremony. The full chain (independent local review gate, `Final-Review-Rounds: 1|2`, verified-merge sequence) applies only to Tier 3 work, multi-issue PRs, and PRs touching a TCD high-risk *surface* (auth / security / data / migration / concurrency / payments / external API). Process outcomes in the escalation-trigger list — a failed attempt, a CI flake, a reviewer nit — escalate capability, never delivery depth.
+- **Delivery depth follows the risk tier.** Single-issue (or issue-free) Tier 1 and Tier 2 PRs take the light path: required CI green plus self-verified `Verify:` targets on the head SHA, then plain merge with `Final-Review-Rounds: 0` — no independent review round, no verified-merge ceremony. The full chain (one independent local review gate with `Final-Review-Rounds: 1`, verified-merge sequence) applies only to Tier 3 work, multi-issue PRs, and PRs touching a TCD high-risk *surface* (auth / security / data / migration / concurrency / payments / external API). A P0/P1 repair invalidates the prior review authority and requires one new clean independent review on the repaired current head SHA. Process outcomes in the escalation-trigger list — a failed attempt, a CI flake, a reviewer nit — escalate capability, never delivery depth or the number of consecutive clean final reviews.
 - **Right-size default.** Build the most boring solution that satisfies the acceptance criteria. A new gate, receipt, ledger, registry, config surface, abstraction layer, or enterprise-grade pattern (high availability, multi-tenancy, pluggable providers, defense-in-depth beyond the single-operator trust model) requires an explicit demand in the governing contract — never default posture. "A simpler mechanism satisfies the contract" is a valid blocking review finding. A new permanent governance mechanism must name what it replaces or carry an explicit review-by date.
 - **Budget and stop-loss.** A delivery gets 2 CI-repair rounds per failure mechanism (the full path keeps the 2+2 escalated repair budget in `verification-and-closure`). When the budget is spent, stop grinding: ship the smallest passing subset, or hand back a one-paragraph stop report plus a `LearningSignal`. Budgets are never rebound to reset accounting. Light work runs without sub-agent fan-out. Repeated failure on a bounded change usually means the solution is too big — shrink it before escalating capability.
 - **Do not pay twice for irrelevant base drift.** Branch freshness and validation freshness are
@@ -360,7 +417,9 @@ Specialist subagents are execution roles, not workflow contracts. Repo-local ski
 - Use `docs/development/BUILDER_SUBAGENT_ROLES.md` for the shared role inventory, the skill-to-role routing matrix, the bounded-loop policy, and the handoff-receipt template. Keep that detail in the reference doc, not here.
 - Codex project-scoped custom agents live under `.codex/agents/**` and Codex agent settings in `.codex/config.toml`. They are Codex-specific execution-role adapters and must not duplicate skill contract text; each adapter must explicitly load the skills it needs, because Codex does not auto-discover this repo's `.codex/skills/**`.
 - Claude compatibility stays routed through `AGENTS.md`, `CLAUDE.md`, and the shared role doc. Do not assume Claude consumes Codex TOML, and do not add `.claude/agents/**` adapters without a separate decision.
-- Subagent loops are verifier-driven repair loops only: no recursive fan-out and no generic looping agent.
+- Subagent loops are verifier-driven repair loops only. The one bounded issue-local helper permitted
+  by `AGENTS.md :: Parallel-agent execution` is the maximum depth; it cannot spawn again. No generic
+  looping agent or broader recursive fan-out.
 
 ## Docs authoring lane
 

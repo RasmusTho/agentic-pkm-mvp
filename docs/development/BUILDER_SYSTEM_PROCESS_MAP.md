@@ -567,9 +567,9 @@ flowchart TD
   Triage -->|explicit authority category| Human["Human exception"]
 ```
 
-Full-path review repair loop: re-run after substantive fixes; stop after one clean independent round
-by default. Require a second clean round only for declared high-risk runtime work or a
-low-convergence circuit-breaker trigger on the same mechanism/domain key. A multi-blocker or
+Full-path review repair loop: re-run after every substantive P0/P1 fix and stop after one clean
+independent round on the repaired current head SHA. This single-clean-round rule also governs
+declared high-risk runtime work and low-convergence circuit-breaker cases. A multi-blocker or
 adjacent repeat finding in one stateful mechanism triggers a convergence packet and independent
 review before another full-suite/CI cycle. Light-path PRs do not enter this loop. A repeated
 mechanism after two attempts enters capability escalation plus classifier triage, not an automatic

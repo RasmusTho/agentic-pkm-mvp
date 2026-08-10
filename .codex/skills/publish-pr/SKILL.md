@@ -258,8 +258,10 @@ Any overlap with your staged file set => STOP: keep the earlier compliant PR, cl
 
 Execute based on lane classification. Every template below defaults to the light path with the
 required `Final-Review-Rounds: 0` line and concrete `## BuilderOps Routing` defaults instead of
-`<...>` placeholders. Raise `Final-Review-Rounds` to `1` or `2` only when
-`AGENTS.md :: Proportional delivery` selects the full path. The exact shape both fields must satisfy
+`<...>` placeholders. Raise `Final-Review-Rounds` to `1` only when
+`AGENTS.md :: Proportional delivery` selects the full path. The validator still accepts `2` solely
+for backward compatibility with already-started authenticated deliveries; never select it for a new
+PR. The exact shape both fields must satisfy
 is the canonical `app/dispatcher/verification_contract.py::resolve_pr_contract_final_review_rounds`
 and `::resolve_builderops_routing_status` (proven equivalent to the `pr-contract` gate's own JS across
 every ECMAScript line terminator and the JS/Python whitespace-class edge cases, not merely on an

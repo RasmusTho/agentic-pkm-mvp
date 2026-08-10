@@ -403,29 +403,29 @@ def test_mechanism_convergence_contract_is_wired_across_delivery_skills() -> Non
     assert "state-machine surfaces" in verification
 
 
-def test_final_review_rounds_are_proportionate_to_runtime_or_low_convergence() -> None:
+def test_one_final_review_round_governs_every_full_path() -> None:
     verification = VERIFICATION_SKILL.read_text(encoding="utf-8")
     contract = REVIEW_REPAIR_CONTRACT.read_text(encoding="utf-8")
     process_map = (REPO_ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md").read_text(
         encoding="utf-8"
     )
     dispatcher = DISPATCHER_CONTRACT.read_text(encoding="utf-8")
+    normalized_verification = " ".join(verification.split())
 
-    assert "One independent final passing review is the default" in verification
-    assert "changes a runtime surface on a declared high-risk TCD category" in verification
-    assert "same mechanism/domain key" in verification
-    assert "One clean independent final review is the default" in contract
-    assert "does not require a second round merely because it carries a high-risk\n  label" in contract
+    assert "one independent final round on the current head SHA" in verification
+    assert "No path requires two consecutive clean final reviews" in normalized_verification
+    assert "One clean independent final review on the current head SHA is sufficient" in contract
+    assert "A P0/P1 fix invalidates the prior review authority" in contract
     normalized_process_map = " ".join(process_map.split())
     assert (
-        "Full-path review repair loop: re-run after substantive fixes; stop after one clean "
-        "independent round by default"
+        "Full-path review repair loop: re-run after every substantive P0/P1 fix and stop after "
+        "one clean independent round on the repaired current head SHA"
         in normalized_process_map
     )
     assert "Light-path PRs do not enter this loop" in process_map
     assert "two clean rounds for high-risk surfaces" not in process_map
-    assert "one distinct clean review session" in dispatcher
-    assert "ledger-visible low-convergence condition" in dispatcher
+    assert "normal v3 delivery requires one distinct clean review session" in dispatcher
+    assert "ledger-visible low-convergence evidence does not raise" in dispatcher
     assert "no-repair delivery still requires two distinct clean review sessions" not in dispatcher
 
 

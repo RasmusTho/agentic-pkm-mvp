@@ -133,8 +133,10 @@ explicit:
 - rework and hidden-defect risk;
 - delay and coordination cost;
 - chosen capability, model tier, and reasoning effort;
-- serial versus parallel execution;
+- fresh issue context versus inline deterministic execution;
+- serial versus concurrent scheduling as a separate choice;
 - context-pack boundaries;
+- estimated/proxy input-token, agent-start, pack-size, and compaction cost;
 - review and verification depth; and
 - why the batch size is cheaper in total than the nearest alternative.
 
@@ -152,10 +154,11 @@ Escalate capability after two failed attempts, repeated review rejection, unclea
 or discovery of hidden invariants. De-escalate when a high-capability pass has converted the remaining
 work into mechanical, test-anchored execution.
 
-Parallelize only independent slices with isolated worktrees, non-overlapping authority/touch surfaces,
-complete worker context packs, and an explicit TCD advantage. Prefer a dependency-unlocking wave over
-maximum fan-out. Run shared validations once at the highest useful aggregation point when doing so is
-safe; do not make every worker reload the entire epic history.
+Give every independent non-trivial slice a fresh issue agent and isolated worktree, even in a serial
+queue. Run those agents concurrently only with non-overlapping authority/touch surfaces, complete
+minimal packs, reserved verification/recovery capacity, and an explicit TCD advantage. Prefer a
+dependency-unlocking wave over maximum fan-out. Run shared validations once at the highest useful
+aggregation point when safe; do not make every worker reload the entire epic history.
 
 ---
 
@@ -209,7 +212,7 @@ mutation. Do not mark work Ready merely to fill worker slots.
 
 #### Independent-Issue Fast Lane
 
-For an explicit independent issue set, do not manufacture an epic or parent-closure plan. Admit only strictly ready Issues with no dependency, likely shared mutation surface, migration, contract overlap, or authority ambiguity, and never start more than two workers during the pilot. Give each worker one minimal pack (one Issue, one worktree/branch plan, exact `Verify:` targets, known constraints, and compact terminal-receipt schema). Workers do not message one another routinely; discovered overlap becomes a typed coordinator exception and pauses or rejects the affected wave. Dry-run and persisted run-state are reconstructable evidence only, never delivery authority. Follow `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` and the existing structured severity and known-defect contracts: invalid/P0/P1/protected/low-confidence outcomes block; only a valid P2 may defer through governed intake without synchronous repair or re-review.
+For an explicit independent issue set, do not manufacture an epic or parent-closure plan. Admit only strictly ready Issues with no dependency, likely shared mutation surface, migration, contract overlap, or authority ambiguity. Give every non-trivial Issue a fresh issue agent, but never start more than two workers concurrently during the pilot. Give each worker one minimal pack (one Issue, one worktree/branch plan, exact `Verify:` targets, known constraints, helper budget `0|1`, and compact terminal-receipt schema). Workers do not message one another routinely; discovered overlap becomes a typed coordinator exception and pauses or rejects the affected wave. Dry-run and persisted run-state are reconstructable evidence only, never delivery authority. Follow `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md` and the existing structured severity and known-defect contracts: invalid/P0/P1/protected/low-confidence outcomes block; only a valid P2 may defer through governed intake without synchronous repair or re-review.
 
 Rank executable work by:
 
@@ -231,12 +234,13 @@ Before every wave:
 - for a parent/epic run, persist only evidence permitted by the run-state contract; otherwise retain
   normal live-GitHub coordination evidence.
 
-Each worker gets exactly one bounded issue unless a tightly coupled pair has a stated quality reason.
+Each worker gets exactly one bounded Issue and is never reused for a sibling Issue. Tightly coupled
+Issues stay serial or return to breakdown; they do not share one long-lived worker context.
 The context pack must include:
 
 - issue number and exact contract;
 - coordinator/run id and expected return receipt;
-- classification and owner docs;
+- classification plus owner/source-doc references for the worker to load, not copied full docs;
 - source anchors and relevant current-state code paths;
 - AC-to-`Verify:` ledger and validation commands;
 - required repo skills;
@@ -244,12 +248,15 @@ The context pack must include:
 - publication lane and closing-keyword expectation;
 - exact BuilderOps Routing shape when required;
 - owner-doc and transition-debt writeback expectation;
+- issue-local helper budget `0|1`, sole-writer constraint, and canonical `context_cost` return field;
 - robust positive and negative/completeness tests;
 - `ruff check app tests` whenever `app/` or `tests/` is touched; and
 - instruction to stop only the affected slice on contract/authority collision and promptly return
   evidence so the coordinator can reroute the rest of the wave.
 
-The worker, not the coordinator, performs the fast claim. Count the issue as dispatched only after
+The worker, not the coordinator, performs the fast claim. Keep exploration, raw logs, full diffs,
+and implementation reasoning issue-local; only compact receipts and durable evidence refs return to
+the root coordinator. Count the issue as dispatched only after
 the claim/lease and receipt are verified.
 
 ### Phase 3 — Drive every slice to acceptance

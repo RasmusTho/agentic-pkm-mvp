@@ -3,10 +3,12 @@
 # and docs/architecture/SBS_OPERATING_MODEL.md. Not Product/Runtime truth.
 
 # Bound specialist-subagent fan-out: many agents already run against this repo, so
-# coordination/rework cost dominates. Codex counts the root session as depth 0, so the
-# coordinator topology is root(0) -> issue_set_coordinator(1) -> worker(2). max_depth = 2
-# permits exactly that one dispatch hop while forbidding workers from spawning their own
-# workers (depth 3 is blocked = no recursive fan-out). max_threads caps concurrent threads.
+# coordination/rework cost dominates. Codex counts the root session as depth 0. The issue-set
+# topology is root coordinator(0) -> issue worker(1) -> optional issue-local helper(2).
+# max_depth = 2 permits that single bounded helper layer and blocks recursive fan-out.
+# max_threads caps native subagents within one primary session. Independent `codex exec` primary
+# sessions do not share that native pool; the dispatch planner separately caps usable non-root work
+# at two so verification and recovery retain repository-level capacity.
 [agents]
 max_threads = 3
 max_depth = 2

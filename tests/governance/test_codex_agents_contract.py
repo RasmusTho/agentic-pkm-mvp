@@ -21,6 +21,7 @@ ROLE_DOC = "docs/development/BUILDER_SUBAGENT_ROLES.md"
 REQUIRED_AGENT_FILES = {
     "issue-set-coordinator.toml": ("issue_set_coordinator", ".codex/skills/deliver-issue-set/SKILL.md"),
     "slice-implementer.toml": ("slice_implementer", ".codex/skills/issue-to-code/SKILL.md"),
+    "issue-local-helper.toml": ("issue_local_helper", ".codex/skills/issue-to-code/SKILL.md"),
     "backlog-contract-maintainer.toml": (
         "backlog_contract_maintainer",
         ".codex/skills/issue-maintenance-change-control/SKILL.md",
@@ -70,12 +71,21 @@ def test_codex_agent_model_reasoning_and_sandbox_are_bounded() -> None:
 
 
 def test_codex_subagent_config_limits_fanout() -> None:
-    # Codex root session is depth 0; root -> coordinator(1) -> worker(2) is the supported
-    # topology. max_depth = 2 allows the single coordinator dispatch hop while still blocking
-    # workers from spawning workers (depth 3). max_threads bounds concurrent width.
+    # Codex root session is depth 0 and already owns issue-set coordination. Root -> issue
+    # worker(1) -> bounded helper(2) is the supported topology. max_depth = 2 allows that one
+    # helper hop while still blocking recursion at depth 3. max_threads bounds concurrent width.
     data = tomllib.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     assert data["agents"]["max_threads"] == 3
     assert data["agents"]["max_depth"] == 2
+
+
+def test_issue_local_helper_has_an_executable_read_only_boundary() -> None:
+    helper = _load_agent(AGENTS_DIR / "issue-local-helper.toml")
+
+    assert helper["sandbox_mode"] == "read-only"
+    assert "Do not edit files" in helper["developer_instructions"]
+    assert "Do not" in helper["developer_instructions"]
+    assert "spawn another agent" in helper["developer_instructions"]
 
 
 def test_autonomous_runner_prompt_guards_epic_run_state_by_parent() -> None:

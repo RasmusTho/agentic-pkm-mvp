@@ -195,6 +195,11 @@ The PR review gate runs locally via the built-in `/code-review` skill instead of
 external GitHub-native reviewer bot. Run it once the PR's required and relevant repo-standard checks are green (per
 `_shared/CI_WAIT_CONTRACT.md`, without `--codex`) and before merge:
 
+- Treat this reviewer as the one issue-local depth-2 helper permitted by `AGENTS.md ::
+  Parallel-agent execution`. Give it the exact head SHA, diff, governing AC/`Verify:` targets, and
+  relevant owner contracts, but not the implementation agent's reasoning history or sibling Issue
+  context. It has no merge, Issue/Project, publication, or owner-doc mutation authority; its result
+  returns to the issue agent, which owns repair and closure.
 - This section is an explicit repo-local authorization for any delivery or closure agent to spawn the
   `/code-review` review agent when it is resolving the mandatory local review gate for a PR. The
   agent does not need separate owner confirmation for this gate, because the reviewer is required by
@@ -299,19 +304,16 @@ finding and does not re-trigger review.
   verdict.
 - A **trivial** P0/P1 fix (single-line wording/doc/formatting, no logic change) may be self-verified
   against the current head SHA without a full re-run.
-- **Stop condition:** the gate passes once a round has no new P0/P1 finding and all P2/P3 findings
-  are dispositioned. One independent final passing review is the default. Require a second
-  consecutive passing round only when either
-  (a) the PR changes a runtime surface on a declared high-risk TCD category (security, data,
-  migration, auth, concurrency, external-API, credential-durability, or explicit state-machine surfaces),
-  or (b) the
-  low-convergence circuit breaker below was triggered for the same mechanism/domain key. A
-  governance, docs, skill, or test-enforcement change carrying a high-risk label alone does not
-  qualify as a runtime surface.
+- **Stop condition:** the gate passes once one independent final round on the current head SHA has
+  no new P0/P1 finding and all P2/P3 findings are dispositioned. This is also the rule for declared
+  high-risk runtime work (security, data, migration, auth, concurrency, external-API,
+  credential-durability, and explicit state-machine surfaces) and after the low-convergence circuit
+  breaker below. No path requires two consecutive clean final reviews.
 - Before publication, record that decision in the canonical PR body as exactly
-  `Final-Review-Rounds: 1` or `Final-Review-Rounds: 2` (light-path PRs declare
-  `Final-Review-Rounds: 0` and skip this gate entirely per `Delivery-path routing`). Use `2` for
-  the declared high-risk runtime case above. The verification-dispatch producer authenticates this v3 field from the live PR and
+  `Final-Review-Rounds: 1` (light-path PRs declare `Final-Review-Rounds: 0` and skip this gate
+  entirely per `Delivery-path routing`). The value `2` remains accepted only so already-started
+  authenticated deliveries can finish under their captured contract; never select it for a new
+  delivery. The verification-dispatch producer authenticates this v3 field from the live PR and
   every normal, post-launch, and crash-recovery live-truth fence must match it before the durable
   closure ledger can proceed; changing prose or coordinator output cannot lower it.
 - **Low-convergence circuit breaker:** if one round reports two or more P0/P1 blockers in the same
@@ -321,8 +323,8 @@ finding and does not re-trigger review.
   independent pre-expensive-gate review defined in
   `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
   sequence only after that review is clean. Preserve the existing mechanism/domain binding and
-  attempt count; this replan does not reset budget and requires the second final clean round only
-  for that triggered mechanism/domain key.
+  attempt count; this replan does not reset budget. After any resulting P0/P1 repair, one new clean
+  independent final review on the repaired current head SHA is required.
 - Repair budget applies only to blocking P0/P1 findings and is per stable failure mechanism and
   failure domain: two standard repair attempts followed, when needed, by two strongest-capability
   repair attempts for that same key. The closed domains are review/code correctness,
@@ -660,6 +662,11 @@ Lead with the human summary; include later sections only when they have content,
 AC-by-AC resolution: state whether each `Verify:` target resolves green and why.
 
 For Tier-2/Tier-3 work, alongside the AC-by-AC verdict, emit a `tcd_review` block (fields per `AGENTS.md :: Total Cost of Development`): verdict, risk_level, blocking vs non-blocking issues, missing tests, residual risk, and under/over-modeling. On Tier-1 / trivial / docs-only verifications a one-line capability + residual-risk note suffices — do not pay a fixed audit-block tax on cheap work. Use the same policy for when to escalate verification depth versus stay on the hot path; do not restate the triggers or any model matrix here.
+
+When this closes one child in an issue set, return the compact terminal receipt plus the canonical
+`context_cost` values or a named proxy. The set coordinator consumes that receipt and current live
+readback; it does not rerun issue-local verification or reopen raw implementation context unless the
+receipt is incomplete, contradictory, or fails authority checks.
 
 ### 3. State Changes Executed
 

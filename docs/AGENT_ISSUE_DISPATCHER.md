@@ -143,13 +143,12 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   rate-limit backoff. Terminal completion
   additionally enforces the authenticated v3 `final_review_rounds` value from the live PR's unique
   `Final-Review-Rounds: 1|2` declaration. This verification-dispatch path is full-path only:
-  light-path PRs declare `Final-Review-Rounds: 0` and bypass it. Within the full path the normal
-  value is one; declared high-risk runtime work uses two. Intake, post-launch delivery validation, artifact replay, explicit restart, and
-  neutralized or merged crash recovery all re-check that live authority before proceeding.
-  Independently, the ledger raises the requirement to two when it detects low convergence
-  for the same stable mechanism/domain key: two distinct blockers in one review session or an
-  adjacent blocker after repair. Pre-v3 executable requests retain their conservative two-round
-  behavior. Repair budget is per stable
+  light-path PRs declare `Final-Review-Rounds: 0` and bypass it. New full-path deliveries use one;
+  two remains valid only for backward compatibility with already-authenticated deliveries. Intake,
+  post-launch delivery validation, artifact replay, explicit restart, and neutralized or merged
+  crash recovery all re-check that live authority before proceeding. The ledger does not raise the
+  required clean-round count from risk or low-convergence evidence. Pre-v3 executable requests
+  retain their conservative two-round behavior. Repair budget is per stable
   failure mechanism and failure domain: two standard repair attempts followed, when needed, by two
   strongest-capability repair attempts for the same key. The closed domains are
   `review_code_correctness`, `static_quality`, `lease_concurrency`, and
@@ -170,8 +169,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
   rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
   invalid review or repair events cannot strand coordinator authority or consume a partial budget;
-  a normal v3 no-repair delivery requires one distinct clean review session. An authenticated
-  two-round declaration or a ledger-visible low-convergence condition requires two fresh sessions.
+  a normal v3 delivery requires one distinct clean review session after its latest verification or
+  repair anchor. An authenticated backward-compatible two-round declaration requires two fresh
+  sessions, but ledger-visible low-convergence evidence does not raise a one-round declaration.
   The minimal coordinator context and CLI status expose only policy version plus a bounded,
   most-recent-first list of sanitized mechanism/domain keys and used/remaining
   standard/escalated counts. Total and omitted counts make any truncation explicit; finding

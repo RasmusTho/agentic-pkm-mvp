@@ -53,7 +53,7 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 
 **Classification:** migrations, release channels, prod mutations, `stable` pointer moves, Core Runtime <-> Agentic Lab boundary moves.
 
-**Required machinery:** the full current machinery — fail-closed checks, promotion plans, operator acknowledgment, verification receipts. **Unchanged by this contract.** Delivery depth is the full path: the independent local review gate with `Final-Review-Rounds: 1` or `2` plus the verified-merge sequence in `verification-and-closure`. The release-channel promotion chain (`promote-to-test`, `promote-test-to-prod`, `prepare-promotion`, `execute-promotion`, `verify-promotion`, `rollback-promotion`) keeps every existing gate.
+**Required machinery:** the full current machinery — fail-closed checks, promotion plans, operator acknowledgment, verification receipts. **Unchanged by this contract.** Delivery depth is the full path: one independent local review gate with `Final-Review-Rounds: 1` plus the verified-merge sequence in `verification-and-closure`. A P0/P1 repair requires a new clean independent review on the repaired current head SHA, but no delivery requires two consecutive clean final reviews. The release-channel promotion chain (`promote-to-test`, `promote-test-to-prod`, `prepare-promotion`, `execute-promotion`, `verify-promotion`, `rollback-promotion`) keeps every existing gate.
 
 ## Delivery budgets and stop-loss
 
@@ -113,7 +113,7 @@ Product-side scale posture is owned by `docs/DESIGN_PRINCIPLES.md`.
 
 ## CI enforcement
 
-`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) implements the Tier 1 relaxation deterministically: when the PR body carries a docs-authoring or governance lane checkbox, a missing `## BuilderOps Routing` section is treated as "none"; for all other PRs the section remains required with concrete values. The same job accepts `Final-Review-Rounds: 0` (light path), `1`, or `2`; the value's delivery-depth meaning is defined by this contract, not by CI.
+`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) implements the Tier 1 relaxation deterministically: when the PR body carries a docs-authoring or governance lane checkbox, a missing `## BuilderOps Routing` section is treated as "none"; for all other PRs the section remains required with concrete values. The same job accepts `Final-Review-Rounds: 0` (light path), `1` (current full path), or `2` (backward-compatible authenticated declaration for already-started deliveries); the value's delivery-depth meaning is defined by this contract, not by CI. New deliveries never select `2` from risk or convergence classification.
 
 ## Output formats
 

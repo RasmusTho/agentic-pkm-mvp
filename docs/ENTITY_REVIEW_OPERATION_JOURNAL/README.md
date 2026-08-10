@@ -153,9 +153,9 @@ Each child implementation PR records its exact focused-test results, current-SHA
 producer coverage where applicable, owner-doc result, and a short handoff receipt on the parent
 feature issue. Because every child touches data durability, state-machine recovery, and/or
 concurrency-sensitive multi-store writes, the full Tier-3 delivery path applies: independent local
-review plus current-SHA CI and verified merge. Use two final review rounds when a repair changes the
-same stateful mechanism; apply the mechanism-level convergence gate before another expensive proof
-cycle if the repository contract triggers it.
+review plus current-SHA CI and verified merge. After a P0/P1 repair, require one new clean independent
+final review on the repaired current head SHA; apply the mechanism-level convergence gate before
+another expensive proof cycle if the repository contract triggers it.
 
 Parent acceptance occurs only after EROJ-03 and a terminal replay covering every row of the
 partial-failure matrix. The terminal receipt names the exact implementation SHAs and proves that
