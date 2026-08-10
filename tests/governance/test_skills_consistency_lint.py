@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -122,7 +123,7 @@ def test_install_skills_fails_closed_when_portable_dependency_is_missing(
     }
 
     result = subprocess.run(
-        ["bash", "scripts/install_skills.sh", "--dry-run"],
+        ["bash", "scripts/install_skills.sh"],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -132,7 +133,58 @@ def test_install_skills_fails_closed_when_portable_dependency_is_missing(
 
     assert result.returncode != 0
     assert "Registered portable skill is unavailable: decision-quality" in result.stderr
+    assert not Path(env["CLAUDE_SKILLS_DIR"]).exists()
     assert not (Path(env["CLAUDE_SKILLS_DIR"]) / "owner-decision-brief").exists()
+
+
+def test_install_skills_fails_closed_when_portable_enumeration_fails(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    (source_skill / "SKILL.md").write_text(
+        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_find = fake_bin / "find"
+    fake_find.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "${1%/}" == "$FAIL_FIND_PATH" ]]; then\n'
+        '  echo "forced portable enumeration failure" >&2\n'
+        "  exit 73\n"
+        "fi\n"
+        'exec "$REAL_FIND" "$@"\n',
+        encoding="utf-8",
+    )
+    fake_find.chmod(0o755)
+    destination = tmp_path / "installed"
+    real_find = shutil.which("find")
+    assert real_find is not None
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAIL_FIND_PATH": str(source_skill),
+        "REAL_FIND": real_find,
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "forced portable enumeration failure" in result.stderr
+    assert "Unable to enumerate source skill: decision-quality" in result.stderr
+    assert not (destination / "decision-quality").exists()
+    assert not (destination / "owner-decision-brief").exists()
+    assert "Skills installed to" not in result.stdout
 
 
 def test_portable_registry_cli_uses_the_lint_normalization(tmp_path: Path) -> None:

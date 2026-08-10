@@ -70,7 +70,23 @@ skipped=0
 install_skill_dir() {
   local skill_dir="$1"
   local skill_name="$2"
-  dst_dir="$SKILLS_DST/$skill_name"
+  local dst_dir="$SKILLS_DST/$skill_name"
+  local file_list
+  local src_file
+  local rel
+  local dst_file
+  local install_failed=0
+
+  file_list="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-install-skills.XXXXXX")"
+
+  # Bash 3.2 does not propagate a failed process substitution into the while
+  # loop's status. Enumerate in a foreground command so source traversal must
+  # succeed before any file from this skill is copied.
+  if ! find "$skill_dir" -type f -print0 > "$file_list"; then
+    echo "ERROR: Unable to enumerate source skill: $skill_name" >&2
+    rm -f "$file_list"
+    return 1
+  fi
 
   # Copy each file under the skill directory
   while IFS= read -r -d '' src_file; do
@@ -92,28 +108,45 @@ install_skill_dir() {
         ((installed++)) || true
       fi
     else
-      mkdir -p "$(dirname "$dst_file")"
+      if ! mkdir -p "$(dirname "$dst_file")"; then
+        install_failed=1
+        break
+      fi
       if [[ -f "$dst_file" ]]; then
-        cp "$src_file" "$dst_file"
+        if ! cp "$src_file" "$dst_file"; then
+          install_failed=1
+          break
+        fi
         ((updated++)) || true
       else
-        cp "$src_file" "$dst_file"
+        if ! cp "$src_file" "$dst_file"; then
+          install_failed=1
+          break
+        fi
         ((installed++)) || true
       fi
     fi
-  done < <(find "$skill_dir" -type f -print0)
+  done < "$file_list"
+
+  rm -f "$file_list"
+  if [[ $install_failed -ne 0 ]]; then
+    echo "ERROR: Failed to install skill: $skill_name" >&2
+    return 1
+  fi
 }
 
-for skill_dir in "$SKILLS_SRC"/*/; do
-  skill_name="$(basename "$skill_dir")"
-  install_skill_dir "$skill_dir" "$skill_name"
-done
-
+# Portable dependencies must be completely installed before repo-local
+# profiles that may require them become active in the target directory.
 while IFS= read -r skill_name; do
   [[ -z "$skill_name" ]] && continue
   portable_skill_dir="$PORTABLE_SKILLS_SRC/$skill_name/"
   install_skill_dir "$portable_skill_dir" "$skill_name"
 done <<< "$portable_skill_names"
+
+for skill_dir in "$SKILLS_SRC"/*/; do
+  skill_name="$(basename "$skill_dir")"
+  install_skill_dir "$skill_dir" "$skill_name"
+done
 
 echo ""
 if [[ $DRY_RUN -eq 1 ]]; then
