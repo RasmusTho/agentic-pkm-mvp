@@ -439,6 +439,22 @@ composition envelope, explicit producer evidence, and typed root references; wit
 producer evidence it reports the affected **Needs you** or **Ready to try** classification as
 withdrawn. This does not deliver producer enrichment, a local route, or a visual shell.
 
+#### ARO-01 source-authority resolution (2026-08-10)
+
+The owner authorized continued work only when explicit source-backed facts improve decision quality
+with low cognitive load. The live source audit for Stage A found no existing serialized producer
+contract that satisfies the Overview boundary for either zone:
+
+| Overview fact | Current canonical source/field | Decision | Consequence |
+| --- | --- | --- | --- |
+| **Needs you** owner authority | None. The dispatcher Human Exception packet exposes only the coarse `failure_class`; it does not serialize one of the four Overview categories with a stable subject and governing-source reference. | No current owner is admitted. | The zone remains withdrawn; `agent:needs-human`, technical state, merge, done, closure, and generic terminal receipts are not substitutes. |
+| **Ready to try** | None. No existing producer or receipt contract owns an explicit `ready_to_try` fact with subject linkage, availability, and freshness. | No current owner is admitted. | The zone remains withdrawn; delivery, merge, closure, availability, owner trial, and owner acceptance remain independent facts. |
+
+This is a source-ownership result, not a new devUI authority. The existing GitHub → Cockpit →
+`devui.composition.v1` chain may transport these facts only after a separately governed source
+contract exists; it may not manufacture them or persist a replacement. Until then, producers and
+the composer must preserve the explicit withdrawal state.
+
 ### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
 
 The first Focus slice is subject-centred. Its subject is exactly one stable GitHub Issue or one
