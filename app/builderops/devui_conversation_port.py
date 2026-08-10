@@ -27,7 +27,7 @@ _ISSUE_STABLE_ID = re.compile(
 _CAPABILITY_STABLE_ID = re.compile(r"[a-z][a-z0-9_.:-]{2,127}\Z")
 _SUBJECT_SOURCE_TYPES = {
     "issue": {"github_issue"},
-    "capability": {"ckm_capability", "owner_document"},
+    "capability": {"owner_document"},
 }
 _DIALOGUE_OUTCOMES = (
     "disposition",
@@ -212,6 +212,10 @@ def _subject_ref(value: Any) -> dict[str, Any]:
     authority_ref = _source_ref(
         subject["authority_ref"], label="subject_ref.authority_ref"
     )
+    if kind == "capability" and authority_ref["source_type"] != "owner_document":
+        raise ConversationPortContractError(
+            "capability subject_ref requires owner_document authority"
+        )
     if authority_ref["source_type"] not in _SUBJECT_SOURCE_TYPES[kind]:
         raise ConversationPortContractError(
             "subject_ref authority does not match its governed kind"
