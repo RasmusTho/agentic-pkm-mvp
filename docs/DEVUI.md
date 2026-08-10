@@ -412,7 +412,8 @@ withdrawn. This does not deliver producer enrichment, a local route, or a visual
 
 The first Focus slice is subject-centred. Its subject is exactly one stable GitHub Issue or one
 capability reference whose owning document gives it a stable identity. Focus does not accept a
-provider session, transcript, worker, PR, or free-form search result as its primary subject.
+provider session, transcript, worker, PR, free-form search result, or CKM-only capability identity
+as its primary subject.
 
 Focus presents, in this order:
 
@@ -426,8 +427,9 @@ Focus presents, in this order:
 
 An execution observation never becomes work or delivery truth because its provider, timestamp,
 repository, branch text, or prose resembles the selected subject. An observation without an exact
-governed correlation is rendered as **unlinked** or omitted from the default Focus view. devUI does
-not infer or persist that link.
+governed correlation whose authority identity matches the selected subject is rendered as
+**unlinked** or omitted from the default Focus view. The same subject-authority check applies to
+linked receipts. devUI does not infer or persist that link.
 
 The **Conversation Port** is a contextual region of Focus, not an agent or session browser. It
 creates a bounded, hash-addressed `ConversationContextPack.v1` and opens or exports that pack to an

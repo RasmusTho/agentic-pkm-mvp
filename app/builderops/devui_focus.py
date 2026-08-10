@@ -22,7 +22,7 @@ _CAPABILITY_STABLE_ID = re.compile(r"[a-z][a-z0-9_.:-]{2,127}\Z")
 _SUBJECT_KINDS = {"issue", "capability"}
 _SUBJECT_SOURCE_TYPES = {
     "issue": {"github_issue"},
-    "capability": {"ckm_capability", "owner_document"},
+    "capability": {"owner_document"},
 }
 _AVAILABILITY = {"available", "unavailable", "refused", "unsupported"}
 _FRESHNESS = {"fresh", "stale", "unknown"}
@@ -171,6 +171,26 @@ def _require_authority_source(ref: Mapping[str, Any], *, label: str) -> None:
         )
 
 
+def _correlation_authority_ref(
+    value: Any,
+    *,
+    subject: Mapping[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    authority_ref = _source_ref(value, label=label)
+    _require_authority_source(authority_ref, label="correlation")
+    subject_authority = subject["authority_ref"]
+    if (
+        authority_ref["source_type"],
+        authority_ref["source_id"],
+    ) != (
+        subject_authority["source_type"],
+        subject_authority["source_id"],
+    ):
+        raise FocusContractError("correlation authority must match the selected subject")
+    return authority_ref
+
+
 def _subject_ref(value: Any) -> dict[str, Any]:
     subject = _mapping(value, label="subject")
     _keys(
@@ -185,6 +205,10 @@ def _subject_ref(value: Any) -> dict[str, Any]:
     stable_id = _nonempty(subject.get("stable_id"), label="subject.stable_id")
     _nonempty(subject.get("title"), label="subject.title")
     authority_ref = _source_ref(subject.get("authority_ref"), label="subject.authority_ref")
+    if kind == "capability" and authority_ref["source_type"] != "owner_document":
+        raise FocusContractError(
+            "capability subject requires owner-document authority"
+        )
     if authority_ref["source_type"] not in _SUBJECT_SOURCE_TYPES[kind]:
         raise FocusContractError("subject authority does not match its governed kind")
     if kind == "issue" and (
@@ -352,7 +376,9 @@ def _next_legal_step(value: Any) -> dict[str, Any]:
     return step
 
 
-def _observation(value: Any, *, label: str) -> dict[str, Any]:
+def _observation(
+    value: Any, *, subject: Mapping[str, Any], label: str
+) -> dict[str, Any]:
     observation = _mapping(value, label=label)
     _keys(
         observation,
@@ -402,8 +428,10 @@ def _observation(value: Any, *, label: str) -> dict[str, Any]:
             raise FocusContractError(
                 "linked observation requires governed reference or explicit receipt"
             )
-        correlation["authority_ref"] = _source_ref(
-            authority_ref, label=f"{label}.correlation.authority_ref"
+        correlation["authority_ref"] = _correlation_authority_ref(
+            authority_ref,
+            subject=subject,
+            label=f"{label}.correlation.authority_ref",
         )
     elif method != "none" or authority_ref is not None:
         raise FocusContractError(
@@ -413,7 +441,9 @@ def _observation(value: Any, *, label: str) -> dict[str, Any]:
     return observation
 
 
-def _receipt(value: Any, *, label: str) -> dict[str, Any]:
+def _receipt(
+    value: Any, *, subject: Mapping[str, Any], label: str
+) -> dict[str, Any]:
     receipt = _mapping(value, label=label)
     _keys(
         receipt,
@@ -438,8 +468,10 @@ def _receipt(value: Any, *, label: str) -> dict[str, Any]:
         "explicit_receipt",
     }:
         raise FocusContractError("receipt requires explicit subject correlation")
-    correlation["authority_ref"] = _source_ref(
-        correlation.get("authority_ref"), label=f"{label}.correlation.authority_ref"
+    correlation["authority_ref"] = _correlation_authority_ref(
+        correlation.get("authority_ref"),
+        subject=subject,
+        label=f"{label}.correlation.authority_ref",
     )
     receipt["correlation"] = correlation
     return receipt
@@ -560,7 +592,7 @@ def compose_focus_view(
         for index, item in enumerate(_items(evidence, label="evidence"))
     ]
     normalized_receipts = [
-        _receipt(item, label=f"receipts[{index}]")
+        _receipt(item, subject=normalized_subject, label=f"receipts[{index}]")
         for index, item in enumerate(_items(receipts, label="receipts"))
     ]
     normalized_risks = [
@@ -583,7 +615,11 @@ def compose_focus_view(
     for index, item in enumerate(
         _items(execution_observations, label="execution_observations")
     ):
-        observation = _observation(item, label=f"execution_observations[{index}]")
+        observation = _observation(
+            item,
+            subject=normalized_subject,
+            label=f"execution_observations[{index}]",
+        )
         linkage = observation["correlation"]["status"]
         if linkage == "linked":
             linked_observations.append(observation)

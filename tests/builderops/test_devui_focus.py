@@ -85,13 +85,24 @@ def _observation(*, status: str = "linked", method: str = "explicit_receipt") ->
             "status": status,
             "method": method,
             "authority_ref": (
-                _source_ref(
-                    "builderops:receipt:receipt-4694",
-                    source_type="builderops_receipt",
-                )
+                deepcopy(ISSUE_REF["authority_ref"])
                 if status == "linked"
                 else None
             ),
+        },
+    }
+
+
+def _receipt() -> dict:
+    return {
+        "receipt_ref": "builderops:receipt:receipt-4694",
+        "source_ref": _source_ref(
+            "builderops:receipt:receipt-4694", source_type="builderops_receipt"
+        ),
+        "correlation": {
+            "status": "linked",
+            "method": "explicit_receipt",
+            "authority_ref": deepcopy(ISSUE_REF["authority_ref"]),
         },
     }
 
@@ -124,6 +135,14 @@ def _compose(**overrides: object) -> dict:
         "now": lambda: NOW,
     }
     values.update(overrides)
+    if "execution_observations" not in overrides:
+        observation = _observation()
+        selected_subject = values["subject"]
+        assert isinstance(selected_subject, dict)
+        observation["correlation"]["authority_ref"] = deepcopy(
+            selected_subject["authority_ref"]
+        )
+        values["execution_observations"] = [observation]
     return compose_focus_view(**values)  # type: ignore[arg-type]
 
 
@@ -138,6 +157,63 @@ def test_focus_accepts_only_governed_issue_or_capability_subjects() -> None:
         invalid = {**ISSUE_REF, "kind": kind}
         with pytest.raises(FocusContractError, match="governed Issue or capability"):
             _compose(subject=invalid)
+
+
+def test_linked_evidence_must_match_selected_subject() -> None:
+    matching_observation = _observation()
+    matching_receipt = _receipt()
+
+    result = _compose(
+        execution_observations=[matching_observation], receipts=[matching_receipt]
+    )
+
+    assert result["execution_observations"] == [matching_observation]
+    assert result["receipts"] == [matching_receipt]
+
+    mismatched_issue = deepcopy(ISSUE_REF["authority_ref"])
+    mismatched_issue["source_id"] = "RasmusTho/agentic-pkm-mvp#9999"
+    mismatched_issue["locator"] = (
+        "https://github.com/RasmusTho/agentic-pkm-mvp/issues/9999"
+    )
+    mismatched_observation = _observation()
+    mismatched_observation["correlation"]["authority_ref"] = mismatched_issue
+    with pytest.raises(FocusContractError, match="must match the selected subject"):
+        _compose(execution_observations=[mismatched_observation])
+
+    mismatched_receipt = _receipt()
+    mismatched_receipt["correlation"]["authority_ref"] = mismatched_issue
+    with pytest.raises(FocusContractError, match="must match the selected subject"):
+        _compose(receipts=[mismatched_receipt])
+
+    provider_authority = _source_ref(
+        "codex:transcript:unrelated", source_type="provider_transcript"
+    )
+    provider_observation = _observation()
+    provider_observation["correlation"]["authority_ref"] = provider_authority
+    with pytest.raises(FocusContractError, match="cannot use.*as authority"):
+        _compose(execution_observations=[provider_observation])
+
+    unrelated_authority = _source_ref(
+        "docs/UNRELATED.md#other-subject", source_type="owner_document"
+    )
+    unrelated_receipt = _receipt()
+    unrelated_receipt["correlation"]["authority_ref"] = unrelated_authority
+    with pytest.raises(FocusContractError, match="must match the selected subject"):
+        _compose(receipts=[unrelated_receipt])
+
+
+def test_capability_subject_requires_owner_document_authority() -> None:
+    result = _compose(subject=CAPABILITY_REF)
+    assert result["subject"]["authority_ref"]["source_type"] == "owner_document"
+
+    ckm_only = deepcopy(CAPABILITY_REF)
+    ckm_only["authority_ref"] = _source_ref(
+        "ckm:capability:devui-focus", source_type="ckm_capability"
+    )
+    with pytest.raises(
+        FocusContractError, match="capability subject requires owner-document authority"
+    ):
+        _compose(subject=ckm_only)
 
 
 def test_focus_preserves_independent_evidence_axes() -> None:
