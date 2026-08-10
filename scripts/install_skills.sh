@@ -59,6 +59,16 @@ while IFS= read -r skill_name; do
     echo "Provision it under $PORTABLE_SKILLS_SRC or set PKM_PORTABLE_SKILLS_DIR." >&2
     exit 1
   fi
+  portable_dst_dir="$SKILLS_DST/$skill_name"
+  portable_dst_contract="$portable_dst_dir/SKILL.md"
+  if [[ ( -e "$portable_dst_dir" || -L "$portable_dst_dir" ) && ! -d "$portable_dst_dir" ]]; then
+    echo "ERROR: Portable skill destination is not a directory: $skill_name" >&2
+    exit 1
+  fi
+  if [[ ( -e "$portable_dst_contract" || -L "$portable_dst_contract" ) && ! -f "$portable_dst_contract" ]]; then
+    echo "ERROR: Portable skill destination has invalid SKILL.md: $skill_name" >&2
+    exit 1
+  fi
 done <<< "$portable_skill_names"
 
 mkdir -p "$SKILLS_DST"
@@ -66,6 +76,20 @@ mkdir -p "$SKILLS_DST"
 installed=0
 updated=0
 skipped=0
+
+validate_installed_portable_skills() {
+  local skill_name
+  local dst_contract
+
+  while IFS= read -r skill_name; do
+    [[ -z "$skill_name" ]] && continue
+    dst_contract="$SKILLS_DST/$skill_name/SKILL.md"
+    if [[ ! -f "$dst_contract" ]]; then
+      echo "ERROR: Installed portable skill has invalid SKILL.md: $skill_name" >&2
+      return 1
+    fi
+  done <<< "$portable_skill_names"
+}
 
 install_skill_dir() {
   local skill_dir="$1"
@@ -164,10 +188,22 @@ while IFS= read -r skill_name; do
   install_skill_dir "$portable_skill_dir" "$skill_name" 1
 done <<< "$portable_skill_names"
 
+if [[ $DRY_RUN -eq 0 ]]; then
+  # Repo-local profiles may depend on portable methods. Do not activate them
+  # until every portable install has its required root contract in place.
+  validate_installed_portable_skills
+fi
+
 for skill_dir in "$SKILLS_SRC"/*/; do
   skill_name="$(basename "$skill_dir")"
   install_skill_dir "$skill_dir" "$skill_name"
 done
+
+if [[ $DRY_RUN -eq 0 ]]; then
+  # Re-check the success postcondition after all writes so the installer cannot
+  # report success for a malformed or concurrently changed portable target.
+  validate_installed_portable_skills
+fi
 
 echo ""
 if [[ $DRY_RUN -eq 1 ]]; then

@@ -238,6 +238,39 @@ def test_install_skills_fails_closed_when_skill_disappears_before_enumeration(
     assert "Skills installed to" not in result.stdout
 
 
+def test_install_skills_rejects_directory_at_portable_contract_destination(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    (source_skill / "SKILL.md").write_text(
+        "---\nname: decision-quality\ndescription: test\n---\n", encoding="utf-8"
+    )
+    destination = tmp_path / "installed"
+    malformed_contract = destination / "decision-quality" / "SKILL.md"
+    malformed_contract.mkdir(parents=True)
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Portable skill destination has invalid SKILL.md: decision-quality" in result.stderr
+    assert not (malformed_contract / "SKILL.md").exists()
+    assert not (destination / "owner-decision-brief").exists()
+    assert "Skills installed to" not in result.stdout
+
+
 def test_portable_registry_cli_uses_the_lint_normalization(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     (root / ".codex" / "skills" / "portable-skills.list").write_text(
