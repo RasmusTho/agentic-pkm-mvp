@@ -132,6 +132,32 @@ def test_install_skills_fails_closed_when_portable_dependency_is_missing(
 
     assert result.returncode != 0
     assert "Registered portable skill is unavailable: decision-quality" in result.stderr
+    assert not (Path(env["CLAUDE_SKILLS_DIR"]) / "owner-decision-brief").exists()
+
+
+def test_portable_registry_cli_uses_the_lint_normalization(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    (root / ".codex" / "skills" / "portable-skills.list").write_text(
+        "  # indented comment\n\n  decision-quality  \n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "python3",
+            str(REPO_ROOT / "scripts" / "lint_skills_consistency.py"),
+            "--root",
+            str(root),
+            "--print-portable-skills",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout == "decision-quality\n"
 
 
 def test_lint_detects_seeded_defects(tmp_path: Path) -> None:

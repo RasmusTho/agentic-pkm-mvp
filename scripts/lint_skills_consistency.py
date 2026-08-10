@@ -822,7 +822,25 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(__file__).resolve().parents[1],
         help="repository root to lint (default: this repo)",
     )
+    parser.add_argument(
+        "--print-portable-skills",
+        action="store_true",
+        help="validate and print normalized portable skill names, one per line",
+    )
     args = parser.parse_args(argv)
+    if args.print_portable_skills:
+        skills_root = args.root / ".codex" / "skills"
+        if not skills_root.is_dir():
+            print(f"{skills_root}: not a directory")
+            return 1
+        errors = check_portable_skill_registry(skills_root)
+        if errors:
+            for error in errors:
+                print(error)
+            return 1
+        for name in _portable_skill_names(skills_root):
+            print(name)
+        return 0
     errors = run_lint(args.root)
     for error in errors:
         print(error)

@@ -35,6 +35,32 @@ if [[ ! -f "$PORTABLE_SKILLS_MANIFEST" ]]; then
   exit 1
 fi
 
+# Resolve the portable registry through the same parser the repo lint uses, then
+# prove every registered source before the first target-directory mutation.
+# A missing dependency must not leave a newly installed owner-decision profile
+# that cannot execute its required method.
+if ! portable_skill_names="$(
+  python3 "$ROOT/scripts/lint_skills_consistency.py" \
+    --root "$ROOT" --print-portable-skills
+)"; then
+  echo "$portable_skill_names" >&2
+  exit 1
+fi
+
+while IFS= read -r skill_name; do
+  [[ -z "$skill_name" ]] && continue
+  if [[ -d "$SKILLS_SRC/$skill_name" ]]; then
+    echo "ERROR: Portable skill collides with repo-local skill: $skill_name" >&2
+    exit 1
+  fi
+  portable_skill_dir="$PORTABLE_SKILLS_SRC/$skill_name/"
+  if [[ ! -f "$portable_skill_dir/SKILL.md" ]]; then
+    echo "ERROR: Registered portable skill is unavailable: $skill_name" >&2
+    echo "Provision it under $PORTABLE_SKILLS_SRC or set PKM_PORTABLE_SKILLS_DIR." >&2
+    exit 1
+  fi
+done <<< "$portable_skill_names"
+
 mkdir -p "$SKILLS_DST"
 
 installed=0
@@ -83,25 +109,11 @@ for skill_dir in "$SKILLS_SRC"/*/; do
   install_skill_dir "$skill_dir" "$skill_name"
 done
 
-while IFS= read -r skill_name || [[ -n "$skill_name" ]]; do
-  [[ -z "$skill_name" || "$skill_name" == \#* ]] && continue
-  if [[ ! "$skill_name" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]]; then
-    echo "ERROR: Invalid portable skill name in $PORTABLE_SKILLS_MANIFEST: $skill_name" >&2
-    exit 1
-  fi
-  if [[ -d "$SKILLS_SRC/$skill_name" ]]; then
-    echo "ERROR: Portable skill collides with repo-local skill: $skill_name" >&2
-    exit 1
-  fi
-
+while IFS= read -r skill_name; do
+  [[ -z "$skill_name" ]] && continue
   portable_skill_dir="$PORTABLE_SKILLS_SRC/$skill_name/"
-  if [[ ! -f "$portable_skill_dir/SKILL.md" ]]; then
-    echo "ERROR: Registered portable skill is unavailable: $skill_name" >&2
-    echo "Provision it under $PORTABLE_SKILLS_SRC or set PKM_PORTABLE_SKILLS_DIR." >&2
-    exit 1
-  fi
   install_skill_dir "$portable_skill_dir" "$skill_name"
-done < "$PORTABLE_SKILLS_MANIFEST"
+done <<< "$portable_skill_names"
 
 echo ""
 if [[ $DRY_RUN -eq 1 ]]; then
