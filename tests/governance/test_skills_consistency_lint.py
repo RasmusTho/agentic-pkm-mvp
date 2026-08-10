@@ -51,6 +51,18 @@ def test_seeded_clean_tree_passes(tmp_path: Path) -> None:
     assert run_lint(_seed_tree(tmp_path)) == []
 
 
+def test_registered_portable_skill_reference_passes(tmp_path: Path) -> None:
+    root = _seed_tree(tmp_path)
+    alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
+    alpha.write_text(
+        alpha.read_text(encoding="utf-8")
+        + "\nLoad and follow the portable `decision-quality` skill.\n",
+        encoding="utf-8",
+    )
+
+    assert run_lint(root) == []
+
+
 def test_lint_detects_seeded_defects(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
     skills_root = root / ".codex" / "skills"

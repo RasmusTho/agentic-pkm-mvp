@@ -1,39 +1,56 @@
 ---
 name: owner-decision-brief
-description: "Gate and format every escalation to the owner: first test whether an agent can take the decision itself (then act, do not ask); when the decision is genuinely the owner's, deliver a plain-language decision brief — one decision, options with consequences, a recommendation — with zero project jargon."
+description: "Yggdrasil profile for owner escalations: use the portable decision-quality skill, preserve contractual operator gates and repo authority, and render one plain-language owner decision without creating another decision or task authority."
 ---
 
 # Owner Decision Brief
 
-Micro-skill, invoked at the moment any workflow is about to ask the owner for a decision —
-an `agent:needs-human` label, an operator acknowledgment, an inline "should I...?" in chat,
-an open question in an Issue or PR. It applies to the *ask itself*, wherever it surfaces.
+This is a thin Yggdrasil profile for the portable `decision-quality` skill. It applies whenever a
+repository workflow is about to ask the owner for a decision: an `agent:needs-human` label, an
+operator acknowledgment, an inline question, or an open question in an Issue or PR.
 
-Scope boundary, stated first because it is load-bearing: **contractual operator gates are
-never re-tested away.** An ask that another skill defines as unconditional — the promotion
-plan's operator acknowledgment, consent-class changes, any prod-touching step whose owning
-skill requires an explicit human ack — skips Step 1 entirely and goes straight to Step 2:
-the gate fires exactly as its skill defines, and this skill only shapes the *form* of that
-ask. Step 1 filters discretionary escalations only.
+## Required method
 
-The canonical policy lives in `AGENTS.md :: Agency default` (when to escalate at all) and
-`AGENTS.md :: Communicating with the owner` (Problem → Options → Consequences). This skill
-operationalizes those sections into a mandatory two-step check and a fixed output shape; it
-does not restate or override them.
+Load and follow the complete `decision-quality` skill before researching, recommending, or drafting
+the ask. Its seven-dimension diagnosis, weakest-link rule, decision ownership gate, decision-support
+method, and post-decision activation handoff are the single authoritative decision method. This
+profile adds repository constraints only; it must not copy, abbreviate, or redefine that method.
 
-Two failure modes motivate this skill, and it must close both:
+If `decision-quality` is unavailable, do not reconstruct a local substitute or send a free-form
+owner ask. Report the missing capability through the current workflow and keep only independently
+safe, reversible work moving.
 
-1. **Escalations that should not exist.** Decisions an agent can take as well as or better
-   than the owner keep reaching him. Every unnecessary ask costs owner time and cognitive
-   load (the dominant TCD term).
-2. **Escalations in project jargon.** When a decision *is* the owner's, it arrives wrapped
-   in internal terminology, so he must first decode the question before he can decide.
+Apply the `decision-quality :: Yggdrasil profile` together with these repo authorities:
+
+- `AGENTS.md :: Agency default` is canonical for whether a discretionary escalation may reach the
+  owner.
+- `AGENTS.md :: Communicating with the owner` is canonical for owner-facing language and the
+  Problem -> Options -> Consequences shape.
+- Current repo owner docs and live GitHub, Git, CI, dispatcher, or BuilderOps authority outrank
+  screens, plans, generated projections, chat history, and agent memory.
+- Keep observation, proposal, decision, command, and receipt distinct. This skill does not create a
+  decision log, task store, lifecycle authority, or execution tracker.
+
+## Contractual operator gates
+
+Never use the decision ownership gate to remove an unconditional operator gate defined by another
+skill or contract. Promotion acknowledgment, consent-class changes, and any prod-touching action
+whose owning workflow requires explicit human acknowledgment still fire exactly as defined. Use
+`decision-quality` to diagnose and prepare the ask, while this profile shapes its repository-safe
+form.
+
+For discretionary escalations, apply the canonical `AGENTS.md :: Agency default` gate during the
+Decision Quality diagnosis. When no irreversible effect, external-facing consequence, material
+authority ambiguity, or owner-reserved value choice remains, do not escalate. Take the authorized,
+reversible action or route it through agent review, leave evidence in the existing authoritative
+record, and report the decision afterwards.
 
 ## Local vault-binding preflight
 
-When the apparent blocker is a missing local vault binding, mount, or path, complete this preflight
-before adding `agent:needs-human` or asking the owner. A missing binding is often a reparable
-channel-bootstrap/configuration problem, not an owner decision.
+When a missing local vault binding, mount, or path appears to be the blocker, first complete the
+mandatory Decision Quality diagnosis. If the diagnosis identifies missing binding evidence as the
+weakest material link, use this preflight as the focused next action before adding
+`agent:needs-human` or asking the owner.
 
 1. Inspect the deploy environment files selected for the target channel and identify the variables
    that supply the vault source and target. Use a non-emitting parser or check that returns only
@@ -50,121 +67,35 @@ channel-bootstrap/configuration problem, not an owner decision.
 4. Create or repair a bounded, reversible configuration Issue only when the non-emitting check
    independently proves a channel-owned canonical source and matching bindings for every
    write-capable service, or proves that the bounded repair will restore a single missing/divergent
-   binding to that already-proven source. A generic iCloud/Obsidian discovery must never be used to
-   create or rewrite a dev/test/prod binding. If channel ownership or matching bindings cannot be
-   independently established, do not repair the binding: retain only redacted boolean/path-class
-   evidence (for example, `channel source: absent` or `configured path: unreadable`) and proceed to
-   Step 1.
+   binding to that already-proven source. Generic iCloud/Obsidian discovery must never select or
+   rewrite a dev/test/prod binding. If channel ownership or matching bindings remain unproven, retain
+   only redacted boolean/path-class evidence and continue the Decision Quality workflow with that
+   uncertainty explicit.
 
-This preflight is inspection-only unless the governing issue or source authority already permits the
-resulting bounded repair. It does not authorize a real-vault write, a deployment, or disclosure of
-environment-file contents.
+This preflight is inspection-only unless the governing Issue or source authority already permits the
+bounded repair. It never authorizes a real-vault write, deployment, or disclosure of environment-file
+contents. Issue, PR, BuilderOps, and maintenance receipts may contain only variable names and
+redacted boolean/path-class results; never raw paths, vault names, environment values, DSNs, secrets,
+or raw startup/Compose output.
 
-This redaction discipline applies to every preflight outcome, including a repair that can continue:
-Issue, PR, BuilderOps, and maintenance receipts may contain only variable names and redacted
-boolean/path-class results. They must never contain raw paths, vault names, environment values, DSNs,
-secrets, or raw startup/Compose output.
+## Owner-facing profile
 
-## Step 1 — The filter: is this discretionary decision the owner's at all?
+When the diagnosis and ownership gate establish that the owner must decide, produce the proportionate
+Decision Quality brief with these additional presentation constraints:
 
-Before writing anything owner-facing, test the decision against the escalation gate of
-`AGENTS.md :: Agency default`, which is canonical over this list. The owner decides only
-when at least one of these holds:
+- Lead with the exact decision and why it belongs to the owner or which contractual gate requires it.
+- Present one decision per brief and two or three genuine options, including deferral or the safe
+  status quo when relevant.
+- State each option's owner-visible consequence, then give one recommendation, confidence, material
+  uncertainty, and the safe no-answer default.
+- Keep the lead brief readable in under a minute. Link durable evidence instead of embedding paths,
+  IDs, labels, internal codenames, or a reasoning trace.
+- Use the owner's current language. Remove unexplained repository jargon and say what the owner will
+  notice, gain, lose, pay, or risk.
 
-- **Irreversible** — the action cannot be undone by git, a log entry, a rollback, or a
-  re-run. (Reversible work proceeds without asking; `log + Git` is the safety net.)
-- **External-facing** — the effect leaves the repo/trusted environment: publishing,
-  spending money, contacting people, writing to third-party services, or any new
-  prod/real-vault effect beyond what the governing contract and its gates already cover.
-- **Genuinely the owner's by authority** — the authority is ambiguous (it is unclear whose
-  call this is — unclear authority escalates, it does not default to acting) or explicitly
-  owner-reserved: product direction, scope trade-offs, taste, personal data, priority
-  rulings.
+Place the brief at the decision boundary: at the top of the chat or session summary, in the same
+Issue comment that adds `agent:needs-human`, or in the PR body/top-level comment when the PR is
+waiting on that decision. Never block unrelated reversible work while waiting.
 
-If none holds: **do not escalate.** Act (or route through agent-review), log the decision
-where the work already leaves a trail (commit, PR body, Issue comment, BuilderOps record),
-and report it afterwards as a done decision, not a question.
-
-Disqualified reasons to escalate — these never justify an owner ask on their own:
-
-- The work is hard, risky-feeling, or unfamiliar → escalate *capability* instead
-  (`AGENTS.md :: Total Cost of Development`), not the human.
-- You want confirmation that an in-scope, reversible plan is OK → it is; proceed.
-- An Issue carries `agent:needs-human` or `blocked` → often defensive posture; resolve it
-  per the `agent:needs-human` rule in `AGENTS.md :: Agency default` before deferring.
-- Several small calls accumulated → resolve the agent-grade ones, then check whether any
-  owner-grade decision actually remains.
-
-## Step 2 — The brief: one decision, plain language
-
-Everything that survives Step 1 — plus every contractual operator gate's ask — is
-delivered in this shape, nothing else. This template is the **Problem → Options →
-Consequences** shape from `AGENTS.md :: Communicating with the owner` made concrete:
-"Decision" states the problem, each option carries its consequence, and a recommendation
-plus a no-answer default are added so the owner can decide in one read. Render the brief
-in the language the owner is currently using (Swedish when he writes Swedish); the field
-labels below are structural, translate them with the content.
-
-```
-**Decision:** <one sentence: what is being decided>
-**Why you:** <one sentence: irreversible / external / genuinely yours (authority or value call) / a contractual gate — why no agent can take this>
-**Options:**
-1. <option in plain words> — <what the owner gains/loses/risks, one sentence>
-2. <option in plain words> — <same>
-**Recommendation:** <one option + a one-sentence reason>
-**If you don't answer:** <what happens or stays blocked, and any safe default>
-```
-
-Hard rules:
-
-- **One decision per brief.** Never a menu of codenamed decisions (no `OD-1`/`OD-2`
-  batches, no option codenames). If several owner-grade decisions genuinely exist, send
-  separate briefs, each standalone — the owner must be able to answer one without loading
-  the others.
-- **2–3 options, no more.** Collapse the rest into the recommendation. If only one sane
-  option exists and no contractual gate requires the ask, that is not a decision — go back
-  to Step 1 and act. (A contractual gate with one sane option still gets its brief: options
-  become "approve" / "hold".)
-- **Every option carries its consequence,** phrased as what the owner will notice, gain,
-  lose, pay, or risk — not the mechanism that produces it. "Old links stop working" beats
-  "the redirect table is not backfilled".
-- **Always include a recommendation.** Presenting naked options outsources the analysis
-  the agent was supposed to do.
-- **Under a minute to read.** No reasoning trace, no background essay. Durable audit
-  detail (receipts, `Verify:` targets, analysis) lives in the Issue/PR/record — link it,
-  do not inline it.
-
-### The jargon gate
-
-Before sending, re-read the brief as someone smart who has never seen this repository:
-
-- Every internal term, codename, acronym, or component name must be either removed or
-  explained in plain words in the same sentence ("Heimdal (the wearable-capture service)").
-  Terms the owner himself introduced in the conversation are fine.
-- Each consequence line must answer "so what happens to me?" — if it describes system
-  internals instead, rewrite it.
-- No paths, IDs, or labels as load-bearing content in the brief body; they belong in the
-  linked record.
-
-If the brief fails the gate, rewrite it before sending. A correct decision delivered in
-jargon still costs the owner the decoding time this skill exists to eliminate.
-
-## Placement
-
-The brief replaces free-form escalation text wherever the ask lives:
-
-- **Chat / session summary:** the brief is the ask; put it at the top, not buried in a
-  status report.
-- **Issue:** post the brief in the same comment that adds `agent:needs-human`. Never delay
-  the label while drafting — if the label somehow lands first, the brief follows
-  immediately; a lasting label without a brief is an incomplete escalation.
-- **PR:** put the brief in the PR body or a top-level comment when a merge waits on the
-  owner.
-
-## Output format
-
-1. Either the acted-on decision reported afterwards (Step 1 outcome: no escalation), or
-   one brief per owner decision — surviving Step 1 or contractual — in the template above
-2. A link to where the durable detail lives (Issue, PR, receipt) when one exists
-3. Continue with the interrupted task — never block reversible work while waiting on an
-   unrelated brief
+After the decision, use the portable skill's activation handoff and route any longer-lived execution
+to the existing domain or delivery workflow. Do not track it here.

@@ -8,8 +8,8 @@ Deterministic, stdlib-only, read-only. Catches the defect classes found by the
    frontmatter matches the directory name.
 2. Every backticked kebab-case token in the README and the SKILL.md files that
    looks like a skill reference resolves to an existing skill directory, a
-   `_shared/` file, a known non-skill term, or carries an explicit `(planned)`
-   marker on the same line.
+   registered portable external skill, a `_shared/` file, a known non-skill
+   term, or carries an explicit `(planned)` marker on the same line.
 3. The README "Skill routing" section lists every skill directory.
 4. Every full agent-label taxonomy block (a bullet list of six or more
    `type:`/`prio:`/`agent:` labels) is identical to the canonical taxonomy.
@@ -98,6 +98,13 @@ KNOWN_NON_SKILL_TERMS = {
     "create-learning-signal",  # builderops CLI subcommand
 }
 
+# Portable skills that are intentionally distributed outside this repository.
+# Keep this allowlist explicit: repo-local skills may depend on these names, but
+# must not vendor or duplicate their method text merely to satisfy this lint.
+KNOWN_EXTERNAL_SKILLS = {
+    "decision-quality",
+}
+
 RETIRED_PHRASE = "Do not batch to end of task"
 
 KEBAB_TOKEN_RE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
@@ -176,7 +183,7 @@ def check_skill_references(skills_root: Path) -> list[str]:
         if shared_dir.is_dir()
         else set()
     )
-    known = skill_names | shared_names | KNOWN_NON_SKILL_TERMS
+    known = skill_names | shared_names | KNOWN_EXTERNAL_SKILLS | KNOWN_NON_SKILL_TERMS
     readme = skills_root / "README.md"
     files = ([readme] if readme.is_file() else []) + [
         d / "SKILL.md" for d in _skill_dirs(skills_root) if (d / "SKILL.md").is_file()
@@ -191,7 +198,8 @@ def check_skill_references(skills_root: Path) -> list[str]:
                     continue
                 errors.append(
                     f"{rel}:{lineno}: unknown skill-like reference `{token}` — "
-                    "fix the reference, mark it (planned), or add it to "
+                    "fix the reference, register an intentional portable dependency in "
+                    "KNOWN_EXTERNAL_SKILLS, mark it (planned), or add it to "
                     "KNOWN_NON_SKILL_TERMS if it is plain vocabulary"
                 )
     return errors
