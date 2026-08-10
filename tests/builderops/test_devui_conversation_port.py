@@ -42,6 +42,7 @@ def _source(source_id: str, *, digest: str = "a") -> dict:
 
 
 def _build(**overrides: object) -> dict:
+    subject_ref = overrides.get("subject_ref", SUBJECT_REF)
     owner_intent_ref = _source("docs/DEVUI.md#DEVUI-FCP-BOUNDARY", digest="b")
     source_refs = [
         _source("docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md", digest="c")
@@ -55,14 +56,14 @@ def _build(**overrides: object) -> dict:
         }
     ]
     material_refs = [
-        SUBJECT_REF["authority_ref"],
+        subject_ref["authority_ref"],  # type: ignore[index]
         owner_intent_ref,
         *source_refs,
         *evidence_snapshot_refs,
     ]
     values: dict[str, object] = {
         "pack_id": "pack-4696-a",
-        "subject_ref": SUBJECT_REF,
+        "subject_ref": subject_ref,
         "purpose": "Reason about the next governed disposition for FCP-03.",
         "owner_intent_ref": owner_intent_ref,
         "source_refs": source_refs,
@@ -146,6 +147,52 @@ def test_context_pack_hash_is_canonical_and_scope_bounded() -> None:
     }
     with pytest.raises(ConversationPortContractError, match="freshness deadline"):
         _build(source_states=expiring_states)
+
+
+def test_context_pack_capability_subject_requires_owner_document_authority() -> None:
+    capability_subject = {
+        "kind": "capability",
+        "stable_id": "devui.conversation-port",
+        "authority_ref": _source(
+            "docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md#conversation-port-contract",
+            digest="d",
+        ),
+        "title": "External Conversation Port",
+    }
+    calls: list[bytes] = []
+
+    def build_and_open(subject_ref: dict) -> dict:
+        pack = _build(subject_ref=subject_ref)
+        exact = canonical_context_pack_bytes(pack)
+
+        def opener(payload: bytes, _content_hash: str) -> dict:
+            calls.append(payload)
+            return {"provider_request_id": "codex-capability-subject"}
+
+        return open_external_conversation(
+            pack_bytes=exact,
+            expected_hash=pack["content_hash"],
+            provider="codex",
+            availability="available",
+            reason="Configured external adapter",
+            opener=opener,
+            now=NOW,
+        )
+
+    ckm_only_subject = {
+        **capability_subject,
+        "authority_ref": {
+            **capability_subject["authority_ref"],
+            "source_type": "ckm_capability",
+        },
+    }
+    with pytest.raises(ConversationPortContractError, match="owner_document"):
+        build_and_open(ckm_only_subject)
+    assert calls == []
+
+    result = build_and_open(capability_subject)
+    assert result["state"] == "opened"
+    assert calls == [canonical_context_pack_bytes(_build(subject_ref=capability_subject))]
 
 
 def test_external_port_has_no_global_session_discovery() -> None:
