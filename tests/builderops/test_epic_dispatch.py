@@ -104,7 +104,7 @@ class _RecordingSessionLauncher:
 def _worker_receipt(
     issue_number: int,
     *,
-    final_state: str = "done",
+    final_state: str = "handoff",
 ) -> dict[str, object]:
     return {
         "role": "slice_implementer",
@@ -559,7 +559,7 @@ def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
     assert "epic_history" not in json.dumps(pack)
 
 
-def test_dispatch_sessions_starts_one_fresh_serial_session_per_issue() -> None:
+def test_dispatch_sessions_stops_at_the_first_nonterminal_worker_handoff() -> None:
     plan = build_dispatch_plan(
         independent_issue_numbers=[5401, 5402],
         run_id="serial-sessions",
@@ -583,15 +583,13 @@ def test_dispatch_sessions_starts_one_fresh_serial_session_per_issue() -> None:
 
     receipt = dispatch_issue_sessions(plan, launcher)
 
-    assert [call["issue_contract"]["number"] for call in launcher.calls] == [5401, 5402]
-    assert receipt["status"] == "completed"
+    assert [call["issue_contract"]["number"] for call in launcher.calls] == [5401]
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "worker-handoff"
     assert receipt["execution_mode"] == "serial-fresh-sessions"
-    assert [item["session_id"] for item in receipt["sessions"]] == [
-        "session-5401",
-        "session-5402",
-    ]
+    assert [item["session_id"] for item in receipt["sessions"]] == ["session-5401"]
     assert all(item["fresh_session"] is True for item in receipt["sessions"])
-    assert all(item["status"] == "completed" for item in receipt["sessions"])
+    assert all(item["status"] == "handoff" for item in receipt["sessions"])
     assert receipt["github_mutations"] == []
     assert receipt["coordinator_claims"] == []
 
@@ -635,7 +633,7 @@ def test_dispatch_sessions_rejects_invalid_plan_before_launch() -> None:
         assert launcher.calls == []
 
 
-def test_dispatch_sessions_rejects_cross_issue_session_reuse() -> None:
+def test_dispatch_sessions_does_not_launch_a_second_issue_after_handoff() -> None:
     plan = build_dispatch_plan(
         independent_issue_numbers=[5601, 5602],
         run_id="session-reuse",
@@ -654,9 +652,9 @@ def test_dispatch_sessions_rejects_cross_issue_session_reuse() -> None:
     receipt = dispatch_issue_sessions(plan, launcher)
 
     assert receipt["status"] == "stopped"
-    assert receipt["stopped_reason"] == "cross-issue-session-reuse"
-    assert len(launcher.calls) == 2
-    assert receipt["sessions"][1]["status"] == "rejected"
+    assert receipt["stopped_reason"] == "worker-handoff"
+    assert len(launcher.calls) == 1
+    assert receipt["sessions"][0]["status"] == "handoff"
 
 
 def test_dispatch_sessions_stops_after_first_failed_session() -> None:
@@ -747,6 +745,28 @@ def test_dispatch_sessions_rejects_malformed_context_cost() -> None:
     assert receipt["status"] == "stopped"
     assert receipt["stopped_reason"] == "session-launch-failed"
     assert "context_cost must be an object" in receipt["sessions"][0]["error"]
+
+
+def test_dispatch_sessions_rejects_self_attested_terminal_done() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5761],
+        run_id="unverified-terminal-done",
+        candidates=[_candidate(5761, risk="high", files=["app/a.py"])],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5761",
+                "worker_receipt": _worker_receipt(5761, final_state="done"),
+            }
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(plan, launcher)
+
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert "invalid final_state" in receipt["sessions"][0]["error"]
 
 
 def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) -> None:
@@ -860,7 +880,8 @@ def test_dispatch_sessions_cli_emits_receipt_without_github_mutations(
 
     assert result.exit_code == 0, result.output
     receipt = json.loads(result.output)
-    assert receipt["status"] == "completed"
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "worker-handoff"
     assert receipt["sessions"][0]["session_id"] == "session-5901"
     assert receipt["github_mutations"] == []
     assert receipt["coordinator_claims"] == []

@@ -455,19 +455,16 @@ def dispatch_issue_sessions(
                     "context_pack_id": context_pack_id,
                     "session_id": session_id,
                     "fresh_session": True,
-                    "status": (
-                        "completed" if final_state == "done" else final_state
-                    ),
+                    "status": final_state,
                     "worker_receipt": worker_receipt,
                 }
             )
-            if final_state != "done":
-                return _session_dispatch_receipt(
-                    run_id,
-                    sessions,
-                    status="stopped",
-                    stopped_reason=f"worker-{final_state}",
-                )
+            return _session_dispatch_receipt(
+                run_id,
+                sessions,
+                status="stopped",
+                stopped_reason=f"worker-{final_state}",
+            )
         except Exception as exc:
             failed_session_id = getattr(exc, "session_id", None)
             if (
@@ -638,7 +635,7 @@ def _validated_worker_receipt(
             session_id=session_id,
         )
     final_state = receipt.get("final_state")
-    if final_state not in {"done", "blocked", "needs-human", "handoff"}:
+    if final_state not in {"blocked", "needs-human", "handoff"}:
         raise IssueSessionLaunchError(
             "worker handoff receipt has an invalid final_state",
             session_id=session_id,

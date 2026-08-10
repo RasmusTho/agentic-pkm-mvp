@@ -118,8 +118,9 @@ For a small ready Issue set, save the dry-run output and run:
 This transitional local command validates the complete frozen plan before execution, then runs each
 selected Issue through its governed delivery chain in deterministic order. Every Issue uses a new Codex session;
 the command never resumes or reuses another Issue's session, and it stops before later Issues when
-one session fails or returns `blocked`, `needs-human`, or a non-terminal `handoff`. Only `done` counts
-as completed delivery. Each candidate must name an
+one session fails or returns `blocked`, `needs-human`, or `handoff`. The transitional bridge never
+accepts a worker's self-reported terminal `done`: only verification-and-closure's live GitHub/Git/CI
+readback may establish completed delivery. Each candidate must name an
 explicit absolute worktree path; the worker creates or enters that dedicated worktree and
 self-claims through `issue-to-code`. The coordinator does not preclaim, mutate GitHub lifecycle
 state, merge, or close; the issue agent loads `publish-pr` and `verification-and-closure` at those
@@ -143,7 +144,7 @@ subagent_handoff_receipt:
   validation:           # commands run + results
   owner_doc_result:     # writeback path/anchor or "none"
   residual_risk:        # remaining risk / blockers
-  final_state:          # done | blocked | needs-human | handoff
+  final_state:          # blocked | needs-human | handoff (never self-attested done)
   next_step:            # single recommended next action
   context_cost:         # canonical AGENTS.md measurement or named proxy/unknown reason
 ```

@@ -24,6 +24,7 @@ Issue. For a complex Issue only, you may use one active read-only-by-default iss
 a bounded evidence/test/review question, no lifecycle/publication authority, and no ability to
 spawn again. Tier 1/2 light-path work uses no helper.
 Return a subagent_handoff_receipt with AC verdicts, validation results, context cost, and a single
-next step. Use final_state=done only after terminal delivery. A PR-ready handoff is final_state=handoff
-and must not be represented as completed delivery.
+next step. This transitional worker contract never self-attests terminal delivery: return
+final_state=handoff after publication or closure work and let verification-and-closure's live
+GitHub/Git/CI readback establish terminal delivery. Do not represent a handoff as completed delivery.
 """
