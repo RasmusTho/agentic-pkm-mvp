@@ -417,7 +417,6 @@ def compose_overview_view(
                 "captured_at",
                 "snapshot",
                 "completeness",
-                "refusal",
             },
             label=f"composition.providers.{name}",
         )
@@ -437,12 +436,12 @@ def compose_overview_view(
                 raise OverviewContractError(
                     f"composition.providers.{name} available provider requires snapshot or captured_at"
                 )
-            if provider["refusal"] is not None:
+            if "refusal" in provider:
                 raise OverviewContractError(
                     f"composition.providers.{name} available provider cannot carry refusal evidence"
                 )
         else:
-            if provider["authority"] is None or provider["refusal"] is None:
+            if provider["authority"] is None or provider.get("refusal") is None:
                 raise OverviewContractError(
                     f"composition.providers.{name} refused provider requires authority and refusal evidence"
                 )
@@ -453,21 +452,25 @@ def compose_overview_view(
                 raise OverviewContractError(
                     f"composition.providers.{name} refused provider cannot carry available evidence"
                 )
-        trust_providers.append(
-            {
-                "role": name,
-                "provider": _string(
-                    provider.get("provider"),
-                    label=f"composition.providers.{name}.provider",
-                ),
-                "status": provider["status"],
-                "authority": _detached(provider.get("authority"), label="provider authority"),
-                "captured_at": captured_at,
-                "snapshot": _detached(provider.get("snapshot"), label="provider snapshot"),
-                "completeness": _detached(provider.get("completeness"), label="provider completeness"),
-                "refusal": _detached(provider.get("refusal"), label="provider refusal"),
-            }
-        )
+        provider_state = {
+            "role": name,
+            "provider": _string(
+                provider.get("provider"),
+                label=f"composition.providers.{name}.provider",
+            ),
+            "status": provider["status"],
+            "authority": _detached(provider.get("authority"), label="provider authority"),
+            "captured_at": captured_at,
+            "snapshot": _detached(provider.get("snapshot"), label="provider snapshot"),
+            "completeness": _detached(
+                provider.get("completeness"), label="provider completeness"
+            ),
+        }
+        if provider["status"] == "refused":
+            provider_state["refusal"] = _detached(
+                provider["refusal"], label="provider refusal"
+            )
+        trust_providers.append(provider_state)
 
     raw_candidates = _mapping(candidates or {}, label="candidates")
     if set(raw_candidates) - _ZONES:
