@@ -108,6 +108,37 @@ them into a universal object hierarchy or a shared lifecycle state machine.
 | Capability learning | CKM-derived/provenance-bound evidence and BuilderOps retrospective records |
 | Owner view | This read-only, rebuildable composition envelope |
 
+### Shared read-envelope validation
+
+Before a provider adapter supplies an owner-facing claim to a devUI composition, it must prove a
+shared read-envelope at its public boundary. The contract is provider-local and projection-only:
+it validates what that provider can support for this read, without normalizing or taking ownership
+of the provider's source facts.
+
+- **Semantic shape.** The envelope identifies the provider and source, declares the claim or
+  withdrawal it can support, and distinguishes fresh evidence, measured empty, missing, stale,
+  unavailable, refused, and degraded states. A refusal or degradation is typed with a reason and
+  affected claim; it is never converted to a healthy value, inferred link, zero, or empty result.
+- **Serialization shape.** The public serialized envelope preserves the semantic state, source
+  identity, source-specific snapshot/reference or watermark, `captured_at` freshness, completeness,
+  and typed refusal/degraded detail needed by a consumer to render the claim honestly. Internal
+  objects may have richer fields, but serialization must neither drop a material state nor invent a
+  value absent from the source.
+- **Authority preservation.** Provider identity, source references, and freshness/completeness
+  metadata remain attributable to the provider's existing authority. Composition may join them at
+  read time, but cannot upgrade provenance into authority or collapse independent source states
+  into a devUI lifecycle.
+
+Typed/dataclass/dictionary shape alone is insufficient evidence unless the public serialized
+envelope and semantic states are covered by provider-boundary tests or equivalent fixtures. Those
+checks must exercise both supported and refused/degraded material so composition can rely on the
+rendered contract rather than an adapter's internal representation.
+
+Provider envelope validation cannot create task, issue, lifecycle, priority, or source authority.
+It creates no persistent devUI store, registry, cache, or control path; GitHub, CI, receipts,
+Cockpit, CKM, Signboard, BuilderOps, and each provider's own source remain authoritative for their
+respective facts.
+
 Do not add general-purpose `OwnerIntent`, `CapabilityDeliveryIntent`, `DeliveryScope`,
 `DeliveryApproval`, `ExternalEffect`, `EvidenceSnapshot`, `AgentSession`, or `WorkspaceLease`
 objects for this experience. The listed contracts, source-specific snapshots, carrier envelopes, and
