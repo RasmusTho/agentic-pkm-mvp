@@ -177,29 +177,48 @@ def test_linked_evidence_must_match_selected_subject() -> None:
     )
     mismatched_observation = _observation()
     mismatched_observation["correlation"]["authority_ref"] = mismatched_issue
-    with pytest.raises(FocusContractError, match="must match the selected subject"):
-        _compose(execution_observations=[mismatched_observation])
+    mismatched_observation_result = _compose(
+        execution_observations=[mismatched_observation]
+    )
+    assert mismatched_observation_result["execution_observations"] == []
+    assert any(
+        item["kind"] == "unlinked_execution_observation"
+        and item["observation_ref"] == mismatched_observation["observation_ref"]
+        for item in mismatched_observation_result["limitations"]
+    )
 
     mismatched_receipt = _receipt()
     mismatched_receipt["correlation"]["authority_ref"] = mismatched_issue
-    with pytest.raises(FocusContractError, match="must match the selected subject"):
-        _compose(receipts=[mismatched_receipt])
+    mismatched_receipt_result = _compose(receipts=[mismatched_receipt])
+    assert mismatched_receipt_result["receipts"] == []
+    assert any(
+        item["kind"] == "unlinked_receipt"
+        and item["receipt_ref"] == mismatched_receipt["receipt_ref"]
+        for item in mismatched_receipt_result["limitations"]
+    )
 
     provider_authority = _source_ref(
         "codex:transcript:unrelated", source_type="provider_transcript"
     )
     provider_observation = _observation()
     provider_observation["correlation"]["authority_ref"] = provider_authority
-    with pytest.raises(FocusContractError, match="cannot use.*as authority"):
-        _compose(execution_observations=[provider_observation])
+    provider_result = _compose(execution_observations=[provider_observation])
+    assert provider_result["execution_observations"] == []
+    assert provider_result["state"] == "focus_partial"
 
     unrelated_authority = _source_ref(
         "docs/UNRELATED.md#other-subject", source_type="owner_document"
     )
     unrelated_receipt = _receipt()
     unrelated_receipt["correlation"]["authority_ref"] = unrelated_authority
-    with pytest.raises(FocusContractError, match="must match the selected subject"):
-        _compose(receipts=[unrelated_receipt])
+    unrelated_result = _compose(receipts=[unrelated_receipt])
+    assert unrelated_result["receipts"] == []
+    assert unrelated_result["limitations"][0]["kind"] == "unlinked_receipt"
+
+    missing_authority = _observation()
+    missing_authority["correlation"]["authority_ref"] = None
+    with pytest.raises(FocusContractError, match="linked observation requires"):
+        _compose(execution_observations=[missing_authority])
 
 
 def test_capability_subject_requires_owner_document_authority() -> None:

@@ -176,9 +176,10 @@ def _correlation_authority_ref(
     *,
     subject: Mapping[str, Any],
     label: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     authority_ref = _source_ref(value, label=label)
-    _require_authority_source(authority_ref, label="correlation")
+    if _is_provenance_only(authority_ref):
+        return None
     subject_authority = subject["authority_ref"]
     if (
         authority_ref["source_type"],
@@ -187,7 +188,7 @@ def _correlation_authority_ref(
         subject_authority["source_type"],
         subject_authority["source_id"],
     ):
-        raise FocusContractError("correlation authority must match the selected subject")
+        return None
     return authority_ref
 
 
@@ -428,11 +429,19 @@ def _observation(
             raise FocusContractError(
                 "linked observation requires governed reference or explicit receipt"
             )
-        correlation["authority_ref"] = _correlation_authority_ref(
+        correlation_authority = _correlation_authority_ref(
             authority_ref,
             subject=subject,
             label=f"{label}.correlation.authority_ref",
         )
+        if correlation_authority is None:
+            correlation = {
+                "status": "unlinked",
+                "method": "none",
+                "authority_ref": None,
+            }
+        else:
+            correlation["authority_ref"] = correlation_authority
     elif method != "none" or authority_ref is not None:
         raise FocusContractError(
             "unlinked observation cannot carry a correlation authority"
@@ -468,11 +477,19 @@ def _receipt(
         "explicit_receipt",
     }:
         raise FocusContractError("receipt requires explicit subject correlation")
-    correlation["authority_ref"] = _correlation_authority_ref(
+    correlation_authority = _correlation_authority_ref(
         correlation.get("authority_ref"),
         subject=subject,
         label=f"{label}.correlation.authority_ref",
     )
+    if correlation_authority is None:
+        correlation = {
+            "status": "unlinked",
+            "method": "none",
+            "authority_ref": None,
+        }
+    else:
+        correlation["authority_ref"] = correlation_authority
     receipt["correlation"] = correlation
     return receipt
 
@@ -519,6 +536,7 @@ def _limitation(value: Any, *, label: str) -> dict[str, Any]:
             "source_ref",
             "evidence_state",
             "observation_ref",
+            "receipt_ref",
             "linkage",
             "provider",
             "observed_at",
@@ -591,10 +609,6 @@ def compose_focus_view(
         _source_claim(item, label=f"evidence[{index}]")
         for index, item in enumerate(_items(evidence, label="evidence"))
     ]
-    normalized_receipts = [
-        _receipt(item, subject=normalized_subject, label=f"receipts[{index}]")
-        for index, item in enumerate(_items(receipts, label="receipts"))
-    ]
     normalized_risks = [
         _risk(item, label=f"risks[{index}]")
         for index, item in enumerate(_items(risks, label="risks"))
@@ -603,6 +617,23 @@ def compose_focus_view(
         _limitation(item, label=f"limitations[{index}]")
         for index, item in enumerate(_items(limitations, label="limitations"))
     ]
+    normalized_receipts: list[dict[str, Any]] = []
+    for index, item in enumerate(_items(receipts, label="receipts")):
+        receipt = _receipt(
+            item, subject=normalized_subject, label=f"receipts[{index}]"
+        )
+        if receipt["correlation"]["status"] == "linked":
+            normalized_receipts.append(receipt)
+            continue
+        normalized_limitations.append(
+            {
+                "kind": "unlinked_receipt",
+                "receipt_ref": receipt["receipt_ref"],
+                "linkage": "unlinked",
+                "source_ref": receipt["source_ref"],
+                "reason": "Receipt has no source-owned subject correlation",
+            }
+        )
 
     claim_ids = [
         claim["claim_id"] for claim in (*normalized_governing, *normalized_evidence)
