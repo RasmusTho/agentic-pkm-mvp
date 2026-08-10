@@ -1,7 +1,7 @@
 State: Target-state implementation plan (2026-08-09). The read-only `devui.composition.v1` seam,
 pure `focus-view.v1` composer, nonvisual external context-pack/export composer, and bounded SoI
-Evidence View v0 proof are delivered. The server-declared Overview composer and its producer
-enrichment are next nonvisual work. The Focus UI, provider conversation runtime, Builder System
+Evidence View v0 proof and the pure server-declared Overview composer are delivered. Producer
+enrichment for owner and ready classification is the next nonvisual work. The Focus UI, provider conversation runtime, Builder System
 Control lens, visual shell, and general authority-bearing stages remain targets. Existing GitHub
 Issues remain executable backlog truth.
 Doc role: Builder System implementation and sequencing plan
@@ -71,7 +71,7 @@ or concepts the owner must understand to complete the flow.
 | Work/freshness | `build_registry`, Cockpit chain predicates, source-state model | Delivered read-only |
 | Queue/claim/lease activity | Dispatcher store and Signboard API contracts | Delivered operational source; standalone Signboard is not devUI navigation |
 | Unified read composition | `devui.composition.v1`, GET `/api/devui/composition` | Delivered per-request projection; no cache, mutation, or visual shell |
-| Overview zones | `DevuiOverviewView.v1` over the composition envelope | Target: pure server-side composer only; needs producer-authority enrichment before full three-zone classification |
+| Overview zones | `DevuiOverviewView.v1` over the composition envelope | Pure server-side composer delivered; it withdraws unsupported Needs you and Ready to try classifications until producer-authority enrichment exists |
 | Subject focus | `FocusView.v1` over existing read sources | Pure read-only composer delivered by PR #4703; Focus route/UI not delivered |
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | Product/Runtime SoI evidence | bounded SoI Evidence View v0 composer and manifest | Read-only proof delivered by PR #4711; optional Overview reference retains explicit denominator and claim horizons |
@@ -117,13 +117,15 @@ source's snapshot and watermark, and never claims an atomic cross-system snapsho
 Before the visual handoff, Stage A starts with a server-declared `DevuiOverviewView.v1` as specified
 by `docs/DEVUI.md :: DEVUI-OVERVIEW-BOUNDARY — server-declared read model`. The delivery order is:
 
-1. enrich the existing Cockpit/composition producers only where they can expose either a named
+1. compose the pure Overview result from `devui.composition.v1`, preserving exact withdrawal and
+   independent evidence axes without any source read, cache, persistence, task/graph/session path,
+   mutation, inferred correlation, or browser-side classification. Until an eligible producer
+   supplies the authority, receipt, and linkage evidence, **Needs you** and **Ready to try** are
+   explicitly withdrawn rather than treated as empty;
+2. enrich the existing Cockpit/composition producers only where they can expose either a named
    owner-authority category and governing source for **Needs you**, or an explicit receipt-backed
    ready-to-try fact and its source reference for **Ready to try**. A merge, delivery, availability,
    or closed Issue cannot substitute for that producer evidence;
-2. compose the pure Overview result from `devui.composition.v1`, preserving exact withdrawal and
-   independent evidence axes without any source read, cache, persistence, task/graph/session path,
-   mutation, inferred correlation, or browser-side classification;
 3. expose the read model through a local GET-only route; and
 4. add typed Overview-to-Focus and optional SoI navigation references without joining those roots.
 

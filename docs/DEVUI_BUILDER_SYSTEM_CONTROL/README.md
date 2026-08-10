@@ -1,5 +1,8 @@
-State: Proposed target-state specification from issue #4698; no runtime, route, source inventory, or
-visual implementation claimed. Delivered inputs and target contracts are separated below.
+State: Proposed target-state specification from issue #4698; BSC-01's pure governing-document
+inventory composer, BSC-02's pure workflow-adapter and capability-binding composer, and BSC-03's
+pure coverage/deviation and governed-route composer are delivered as nonvisual partial inputs.
+BSC-04 design, BSC-05 previews, route/UI, commands, and the whole lens remain undelivered.
+Delivered inputs and target contracts are separated below.
 Doc role: Capability specification and hard authority boundary for the separate devUI Builder
 System Control lens.
 Authority: `docs/DEVUI.md` owns the owner experience. This document owns the target information,
@@ -12,7 +15,7 @@ Review cadence: Event-driven
 Source of truth: Owner documents own policy and intended behavior; workflow contracts own their
 admission and receipts; live sources own observations; GitHub and repository evidence own delivery
 truth. This lens owns none of them.
-Last reviewed: 2026-08-09
+Last reviewed: 2026-08-10
 
 # devUI Builder System Control
 
@@ -39,9 +42,12 @@ specification.
 | MCP, connector, script, and CLI declarations | Current delivered input where explicitly declared | Bounded operations and admission surfaces; absence or unread declarations remain honest gaps. |
 | BuilderOps, dispatcher, GitHub, Git, CI, review, and receipt evidence | Current delivered input where available | Live or durable observations under each source's own authority and watermark. |
 | `devui.composition.v1`, Focus, and Conversation Port contracts | Current delivered inputs or accepted target contracts as named by their own docs | Shared presentation primitives and evidence axes only; they do not make this lens delivered. |
-| `BuilderSystemControlView.v1` | Target contract; not delivered | Per-read composition of the records specified here. |
+| BSC-01 governing-document inventory composer | Delivered partial input; no route, UI, or effect is delivered | Composes only explicit governing-document declarations per read, preserves source-owned authority/lifecycle/state evidence, and never discovers, copies, or decides document truth. |
+| BSC-02 workflow-adapter and capability-binding composer | Delivered partial input; no source discovery, route, UI, command, or effect is delivered | Composes only explicit skill/MCP/connector/script/CLI declarations per read, preserves their exact refs, operations, ownership, admission boundary, source axes, and limitations, and withdraws unsupported ownership or authority claims rather than inferring them. |
+| BSC-03 coverage/deviation and governed-route composer | Delivered partial input by issue #4725; no source discovery, UI, command, or effect is delivered | Composes only explicit bounded coverage, exception, unknown, intended/observed correlation, and governed-route declarations per read; incomplete completeness/exception evidence is withdrawn locally and a route remains navigation only. |
+| `BuilderSystemControlView.v1` | Target contract; partially delivered | BSC-01..03 compose only explicit governing-document, workflow-adapter, capability-binding, coverage, deviation, and governed-route records per read; BSC-04 design, BSC-05 previews, route/UI, commands, and the whole lens remain undelivered. |
 | Builder System Control route and UI | Target contract; not delivered | Separate system-governance context, pending implementation and governed design handoff. |
-| Coverage/deviation composer and command proposals | Target contract; not delivered | Read-only assessment first; later proposals may route only to existing governed workflows. |
+| Command proposals | Target contract; not delivered | Later proposals may route only to existing governed workflows. |
 
 The status of an input is not inherited by the composed view. A delivered source may be stale,
 unavailable, unread, unsupported, unlinked, missing, or measured empty at a particular read. A
@@ -177,7 +183,7 @@ docs-governance path.
 source_ref: SourceRef.v1
 adapter_kind: skill
 adapter_id: string
-version_or_digest: string
+version_or_digest: string | unknown
 owning_workflow_refs: [SourceRef.v1]
 owning_policy_refs: [SourceRef.v1]
 trigger: string
@@ -189,8 +195,9 @@ limitations: [Limitation.v1]
 ```
 
 A skill is a versioned workflow adapter: it makes an owning workflow usable by an agent or operator
-at a specific source version. A skill is never the policy owner. A missing version/digest or owning
-workflow is rendered `missing` or `unlinked`; the lens does not fabricate either.
+at a specific source version. A skill is never the policy owner. A missing version/digest is rendered
+as `unknown` with `missing` or `unlinked` source state; a missing owning workflow is likewise
+`missing` or `unlinked`. The lens does not fabricate either.
 
 ### CapabilityBindingView.v1
 
@@ -219,10 +226,12 @@ claim_id: string
 source_ref: SourceRef.v1
 authority_scope: string
 governing_source_refs: [SourceRef.v1]
+completeness_definition_ref: SourceRef.v1 | null
 assessed_scope: string
 source_state: SourceState.v1
 drift_observations: [DriftObservation.v1]
 exception_refs: [SourceRef.v1]
+exceptions: [CoverageException.v1]
 unknowns: [string]
 limitations: [Limitation.v1]
 ```
@@ -232,6 +241,12 @@ a whole. `complete` requires an owning definition of completeness and a fresh su
 Drift is a descriptive difference between source versions or between an intended source and an
 explicitly correlated observation. An exception must name the authority that permits it and its
 lifecycle/expiry; otherwise it is an unknown or deviation, not an exception.
+
+`CoverageException.v1` preserves `source_ref`, `permitting_authority_ref`, `lifecycle_ref`,
+`expires_at`, and limitations. A missing, expired, or malformed authority/lifecycle declaration is
+not admitted into `exceptions` or `exception_refs`; the supplied exception remains an explicit
+unknown marker. An unavailable, stale, unlinked, or otherwise incomplete coverage record withdraws
+only its own `complete` claim and never changes an unrelated record.
 
 ### RouteDeviationView.v1
 
@@ -270,6 +285,19 @@ approval, accepted inputs, expected side effects/non-effects, expected receipt, 
 It is navigation until a separately delivered typed proposal adapter binds exact fresh inputs.
 Limitations are first-class records with affected claims, source refs, observed time, and whether
 the dependent claim is withdrawn.
+
+```yaml
+route_id: string
+source_ref: SourceRef.v1
+entrypoint: string
+authority_or_admission_ref: SourceRef.v1
+accepted_inputs: [string]
+expected_side_effects: [string]
+expected_non_effects: [string]
+receipt_ref: SourceRef.v1
+source_state: SourceState.v1
+limitations: [Limitation.v1]
+```
 
 ## Interaction flows
 
@@ -403,15 +431,17 @@ inventory, composition, or fixtures that precede that handoff.
 These are bounded candidates for later governed issue creation. They must not be filed as children
 of Focus parent #4693; Builder System Control remains a separate delivery line.
 
-1. **BSC-01 — compose the source inventory.** Define and implement a pure, per-read inventory of
-   governing documents with exact refs, declared role/authority/owner/lifecycle, source states, and
-   hostile validation. No route or UI.
-2. **BSC-02 — compose adapters and capabilities.** Add pure workflow-adapter and capability-binding
-   projections over explicit skill/MCP/connector/script/CLI declarations. Refuse missing ownership
-   and never infer policy.
-3. **BSC-03 — compose coverage and route deviations.** Add bounded coverage/exception/unknown and
-   explicitly correlated intended-versus-observed route records with existing governed repair
-   routes. No severity or effects.
+1. **BSC-01 — compose the source inventory (delivered by #4721).** Defines and implements a pure,
+   per-read inventory of explicitly supplied governing documents with exact refs, declared
+   role/authority/owner/lifecycle, source states, and hostile validation. No route or UI is
+   delivered.
+2. **BSC-02 — compose adapters and capabilities.** **Delivered partial input by issue #4723 / PR
+   #4724.** Adds pure workflow-adapter and capability-binding projections over explicit
+   skill/MCP/connector/script/CLI declarations. Missing ownership or admission boundaries withdraw
+   dependent claims; the composer never infers policy.
+3. **BSC-03 — compose coverage and route deviations (delivered by #4725).** Adds bounded explicit
+   coverage/exception/unknown records, source-owned intended-versus-observed correlations, and
+   governed repair-route references. It adds no severity, policy decision, UI, command, or effect.
 4. **BSC-04 — governed visual design handoff.** Use stable fixtures from BSC-01..03 to validate the
    separate lens, degraded states, unresolved owner questions, accessibility, responsive behavior,
    and Command/Receipt boundary when the external design capability is available.

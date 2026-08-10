@@ -14,7 +14,13 @@ from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_root
 from app.builderops.model_inquiry import ModelInquiryService
-from app.builderops.model_inquiry_adapters import AdapterResult, INQUIRY_INTENT_CONFIG_ENV
+from app.builderops.model_inquiry_adapters import (
+    INQUIRY_INTENT_CONFIG_ENV,
+    OPERATIONAL_SUBSCRIPTION_MODE_ENV,
+    AdapterExecutionError,
+    AdapterResult,
+    LocalCommandAdapter,
+)
 from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION
 from app.builderops.model_inquiry_promotion import ModelInquiryPromotionGateway
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
@@ -840,6 +846,66 @@ def test_inquiry_run_dry_run_uses_common_runner(tmp_path: Path) -> None:
     assert payload["dry_run"] is True
     assert payload["unavailable_roles"] == ["fable", "gpt_codex"]
     assert ModelInquiryService.from_env(env).trace("inq_test_cli_run") == before
+
+
+def test_inquiry_run_uses_operational_subscription_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _env(tmp_path)
+    env[OPERATIONAL_SUBSCRIPTION_MODE_ENV] = "1"
+    home = tmp_path / "home"
+    home.mkdir()
+    env["HOME"] = str(home)
+    service = ModelInquiryService.from_env(env)
+    service.start(
+        question="Use the available subscription lane",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_cli_subscription_fallback",
+        source_refs=[{"ref_type": "github_issue", "ref": "#4713"}],
+    )
+    calls: list[tuple[str, str, str]] = []
+
+    def execute(
+        adapter: LocalCommandAdapter, request: Mapping[str, Any]
+    ) -> AdapterResult:
+        calls.append((adapter.provider, str(request["role"]), str(request["phase"])))
+        if adapter.provider == "anthropic":
+            raise AdapterExecutionError(
+                "subscription command unavailable",
+                failure_class="command_exit_nonzero",
+                exit_code=17,
+            )
+        if request["phase"] == "draft":
+            return AdapterResult(_response("draft"))
+        return AdapterResult(
+            _response(
+                "accept",
+                reviewed=list(request["reviewed_artifact_refs"]),
+                accepted_hash=request["input_artifacts"][0]["artifact_hash"],
+            )
+        )
+
+    monkeypatch.setattr(LocalCommandAdapter, "execute", execute)
+    result = CliRunner().invoke(
+        builderops_root,
+        [
+            "builderops",
+            "inquiry",
+            "run",
+            "inq_test_cli_subscription_fallback",
+            "--max-rounds",
+            "1",
+            "--json",
+        ],
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["outcome"] == "degraded_consensus"
+    assert ("anthropic", "fable", "draft") in calls
+    assert ("openai", "fable", "draft") in calls
 
 
 def test_inquiry_start_honors_group_db_path_without_host_ack(tmp_path: Path) -> None:

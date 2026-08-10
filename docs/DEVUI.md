@@ -363,6 +363,7 @@ trust_frame:
 now: [OverviewItem.v1]
 needs_you: [OverviewItem.v1]
 ready_to_try: [OverviewItem.v1]
+root_references: [TypedRootReference.v1]
 soi_evidence_lens: SoIEvidenceReference.v1 | null
 limitations: [Limitation.v1]
 ```
@@ -375,8 +376,11 @@ SoI payload, a delivery run, or a Builder System Control payload into a shared o
 The three zones have strict eligibility:
 
 - **Needs you** requires an explicit named owner-authority category and its governing source
-  reference. Missing, stale, unread, unavailable, refused, unsupported, or unlinked authority
-  evidence withdraws the classification; it is not an empty decision list or a technical decision.
+  reference. The only eligible categories are `irreversible_external_effect`,
+  `security_privacy_cost_commitment`, `production_release_operator_action`, and
+  `contradictory_source_authority`. Missing, unknown, stale, unread, unavailable, refused,
+  unsupported, or unlinked authority evidence withdraws the classification; it is not an empty
+  decision list or a technical decision.
 - **Ready to try** requires a receipt-backed ready-to-try fact. Delivery, merge, Issue closure,
   availability, ready-to-try, owner trial, and owner acceptance remain independent facts; none is
   inferred from another.
@@ -398,6 +402,11 @@ This contract is a nonvisual prerequisite. A local GET-only route may expose it 
 bounded implementation proof. A visual shell remains separately gated by the governed Yggdrasil
 design handoff; neither a browser nor a shell may reclassify the server result or add durable
 selection state.
+
+The pure composer is implemented in `app/builderops/devui_overview.py`. It accepts only the
+composition envelope, explicit producer evidence, and typed root references; without actionable
+producer evidence it reports the affected **Needs you** or **Ready to try** classification as
+withdrawn. This does not deliver producer enrichment, a local route, or a visual shell.
 
 ### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
 
@@ -553,12 +562,14 @@ Delivered now:
   by #4696 / PR #4704; and
 - the bounded, read-only SoI Evidence View v0 proof composer and immutable fixtures, delivered by
   #4710 / PR #4711;
+- the pure `devui-overview-view.v1` server-side composer, which preserves missing producer
+  classification as an explicit withdrawal rather than an empty owner or ready list;
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; the server-declared Overview composer and local Overview route; Focus route/UI and
+surface; the local Overview route; Focus route/UI and
 Overview-to-Focus navigation; provider conversation runtime; authenticated command preview/Start/Hold;
 the Builder System Control lens; visual shell; owner pilot and tried-by-owner acceptance; and
 ADR-0065 dispositions.

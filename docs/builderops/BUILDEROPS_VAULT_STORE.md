@@ -266,6 +266,39 @@ Markdown artifact root, not a database or lock service. `builderops vault init` 
 `agent-delivery/<status>/` directories plus `.builderops/claims/` for TTL-based advisory signals.
 It never creates SQLite files or provider credentials there.
 
+### Builder Thread artifact exchange
+
+State: Implemented by the serialized-writer boundary in
+`app/builderops/builder_threads_serialized.py` (Issue #4708).
+
+Builder Threads are external BuilderOps Vault artifacts with one designated
+serialized writer service, initially operated on the Mac mini / BuilderOps host.
+Codex and Claude clients submit attributed commands and read bounded projections
+through that endpoint; they do not receive a shared artifact-tree mutation path.
+The repository `vault/` is a fixture, test-only and never a live Builder Thread
+target; the external BuilderOps Vault is separate.
+
+The writer accepts create, reply, close, and archive commands, all constrained to
+`shared_non_sensitive` material, named recipients where applicable, bounded
+content and provenance, endpoint-bound actor identities, and caller-retained
+request IDs. Its external root is
+explicitly initialized with the stable vault identity, then records one immutable,
+writer-sequenced command envelope per request so exact retries survive a writer
+restart; changed semantics under the same request ID fail closed. A thread is capped at 32 entries
+and the writer at 100 total contributions, keeping reads bounded. An unavailable
+writer returns a typed degraded failure and never enables direct client filesystem
+fallback.
+
+This boundary is deliberately not a distributed filesystem protocol. It has no
+vault-global claims, slot reservations, cross-device locks, hard-link/fsync race
+recovery, SQLite state, or iCloud convergence semantics. PR #4706 is superseded
+multi-writer evidence only; it is not merged or used as the operational contract.
+
+Threads and their inbox/devUI projections are non-authoritative discussion
+context. They cannot gate or mutate Issue, PR, CI, merge, approval, promotion,
+or receipt authority. GitHub, Git, CI, review, merge, approvals, promotion gates,
+and receipts remain the authoritative delivery surfaces.
+
 `builderops vault init` creates `.builderops/claims/` in the shared vault for TTL-based advisory
 claim signals. Multiple agents may write claims for the same ticket. These files improve queue
 visibility and stale-recovery, but are explicitly not distributed locks: iCloud gives no global

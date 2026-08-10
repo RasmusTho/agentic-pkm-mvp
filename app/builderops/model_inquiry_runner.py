@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.model_inquiry import (
@@ -14,9 +14,12 @@ from app.builderops.model_inquiry_adapters import (
     AdapterExecutionError,
     AdapterUnavailableError,
     CredentialUnavailableError,
+    LocalCommandAdapter,
     ModelTurnAdapter,
     load_adapter_descriptors,
     load_adapters,
+    load_operational_subscription_adapters,
+    operational_subscription_requested,
     sanitized_adapter_failure,
     sanitized_adapter_identity,
 )
@@ -26,11 +29,20 @@ from app.builderops.model_inquiry_contract import (
     canonical_hash,
     initial_context_packet,
     model_turn_request_hash,
+    model_turn_system_prompt,
     parse_model_turn_response,
 )
 from app.builderops.models import BuilderOpsValidationError
 
 ROLES = ("fable", "gpt_codex")
+FALLBACK_ADAPTER_FAILURE_CLASSES = frozenset(
+    {
+        "command_exit_nonzero",
+        "command_timeout",
+        "stdout_empty",
+        "stdout_unavailable",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +59,7 @@ class ModelInquiryRunner:
         *,
         env: Mapping[str, str] | None = None,
         resolver: BuilderModelAccessResolver | None = None,
+        allow_operational_fallback: bool | None = None,
     ) -> None:
         self.service = service
         self._adapters = dict(adapters) if adapters is not None else None
@@ -54,6 +67,7 @@ class ModelInquiryRunner:
         # Builder resolution authority. Injected only so a caller can bind
         # declared sources explicitly; it is never a provider or credential.
         self._resolver = resolver
+        self._allow_operational_fallback = allow_operational_fallback
 
     def plan(self, inquiry_id: str, *, max_rounds: int) -> dict[str, Any]:
         _validate_max_rounds(max_rounds)
@@ -85,6 +99,7 @@ class ModelInquiryRunner:
                     "round_index": round_index,
                     "context_hash": context["context_hash"],
                     "adapter_identity": descriptors[role],
+                    "system_prompt_hash": canonical_hash(model_turn_system_prompt(role)),
                     "input_basis": "latest persisted role artifacts",
                 }
                 planned_reviews.append(
@@ -137,7 +152,12 @@ class ModelInquiryRunner:
             if terminal is not None:
                 return self._finalize_terminal(inquiry_id, terminal, replayed=True)
             try:
-                adapters = self._adapters if self._adapters is not None else load_adapters(self._env, resolver=self._resolver)
+                if self._adapters is not None:
+                    adapters = self._adapters
+                elif operational_subscription_requested(self._env):
+                    adapters = load_operational_subscription_adapters(self._env)
+                else:
+                    adapters = load_adapters(self._env, resolver=self._resolver)
             except CredentialUnavailableError as exc:
                 # Fail closed before any adapter call. No subscription CLI, no
                 # ambient environment, and no other provider is attempted.
@@ -153,6 +173,9 @@ class ModelInquiryRunner:
                     trace,
                 )
             context_hash = _initial_context(trace)["context_hash"]
+            candidate_adapters = {
+                role: self._candidate_adapters(adapters, role=role) for role in ROLES
+            }
             drafts: list[TurnExecution] = []
             for role in ROLES:
                 execution = self._execute_turn(
@@ -162,7 +185,7 @@ class ModelInquiryRunner:
                     round_index=0,
                     input_refs=["question"],
                     reviewed_refs=[],
-                    adapter=adapters[role],
+                    adapters=candidate_adapters[role],
                     context_hash=context_hash,
                 )
                 if isinstance(execution, dict):
@@ -180,7 +203,7 @@ class ModelInquiryRunner:
                         round_index=round_index,
                         input_refs=list(latest_refs),
                         reviewed_refs=list(latest_refs),
-                        adapter=adapters[role],
+                        adapters=candidate_adapters[role],
                         context_hash=context_hash,
                     )
                     if isinstance(execution, dict):
@@ -211,14 +234,21 @@ class ModelInquiryRunner:
                         input_artifact_refs=[accepted_turn["turn_id"]],
                         source_refs=trace["source_refs"],
                     )
+                    terminal_trace = self.service.trace(inquiry_id)
+                    degraded = _fallback_was_used(reviews)
                     return self._terminate(
                         inquiry_id,
-                        "consensus",
+                        "degraded_consensus" if degraded else "consensus",
                         {
                             "accepted_artifact_hash": consensus_hash,
                             "round_index": round_index,
+                            **(
+                                {"degradation_reason": "operational adapter fallback used"}
+                                if degraded
+                                else {}
+                            ),
                         },
-                        self.service.trace(inquiry_id),
+                        terminal_trace,
                     )
                 latest_refs = [item.turn["turn_id"] for item in reviews]
             return self._terminate(
@@ -237,39 +267,206 @@ class ModelInquiryRunner:
         round_index: int,
         input_refs: list[str],
         reviewed_refs: list[str],
-        adapter: ModelTurnAdapter,
+        adapters: Sequence[ModelTurnAdapter],
         context_hash: str,
     ) -> TurnExecution | dict[str, Any]:
         trace = self.service.trace(inquiry_id)
         turn_id = f"draft-{role}" if phase == "draft" else f"review-{round_index:03d}-{role}"
-        request = self._request_packet(
-            trace,
-            role=role,
-            phase=phase,
-            round_index=round_index,
-            input_refs=input_refs,
-            reviewed_refs=reviewed_refs,
-            adapter_identity=sanitized_adapter_identity(adapter),
-            context_hash=context_hash,
-        )
         existing = next((turn for turn in trace["turns"] if turn["turn_id"] == turn_id), None)
         if existing is not None:
-            mismatch = _existing_turn_mismatch(
-                existing,
-                request=request,
+            for adapter in adapters:
+                request = self._request_packet(
+                    trace,
+                    role=role,
+                    phase=phase,
+                    round_index=round_index,
+                    input_refs=input_refs,
+                    reviewed_refs=reviewed_refs,
+                    adapter_identity=sanitized_adapter_identity(adapter),
+                    context_hash=context_hash,
+                )
+                if (
+                    _existing_turn_mismatch(
+                        existing,
+                        request=request,
+                        role=role,
+                        phase=phase,
+                        round_index=round_index,
+                        input_refs=input_refs,
+                        adapter=adapter,
+                    )
+                    is None
+                ):
+                    self.service.commit_terminal_turn_receipt(
+                        inquiry_id,
+                        turn_id=turn_id,
+                        outcome="accepted",
+                        source_refs=trace["source_refs"],
+                    )
+                    return TurnExecution(existing, parse_model_turn_response(existing["content"]))
+            primary_request = self._request_packet(
+                trace,
                 role=role,
                 phase=phase,
                 round_index=round_index,
                 input_refs=input_refs,
-                adapter=adapter,
+                reviewed_refs=reviewed_refs,
+                adapter_identity=sanitized_adapter_identity(adapters[0]),
+                context_hash=context_hash,
             )
-            if mismatch is not None:
+            return self._attempt_failure(
+                inquiry_id,
+                "provider_error",
+                primary_request,
+                trace,
+                RuntimeError("persisted turn does not match any configured fallback candidate"),
+            )
+
+        last_failure: tuple[str, dict[str, Any]] | None = None
+        for adapter in adapters:
+            trace = self.service.trace(inquiry_id)
+            request = self._request_packet(
+                trace,
+                role=role,
+                phase=phase,
+                round_index=round_index,
+                input_refs=input_refs,
+                reviewed_refs=reviewed_refs,
+                adapter_identity=sanitized_adapter_identity(adapter),
+                context_hash=context_hash,
+            )
+            accepted_attempt_ids = {
+                f"adapter_req_{request_hash[:32]}"
+                for request_hash in _request_lineage_hashes(request, adapter=adapter)
+            }
+            prior_attempt = next(
+                (
+                    receipt
+                    for receipt in trace["receipts"]
+                    if receipt.get("event_type") == "inquiry_provider_attempt_terminal"
+                    and receipt.get("adapter_request_id") in accepted_attempt_ids
+                ),
+                None,
+            )
+            if prior_attempt is not None:
+                prior_outcome = str(prior_attempt["outcome"])
+                prior_details = dict(prior_attempt.get("details", {}))
+                if _attempt_receipt_allows_fallback(prior_outcome, prior_details):
+                    last_failure = (prior_outcome, prior_details)
+                    continue
+                return self._terminate(inquiry_id, prior_outcome, prior_details, trace)
+            try:
+                result = adapter.execute(request)
+            except AdapterUnavailableError as exc:
+                details = self._record_attempt_failure(
+                    inquiry_id, "provider_unavailable", request, trace, exc
+                )
+                last_failure = ("provider_unavailable", details)
+                continue
+            except AdapterExecutionError as exc:
+                if exc.failure_class not in FALLBACK_ADAPTER_FAILURE_CLASSES:
+                    return self._attempt_failure(
+                        inquiry_id, "provider_error", request, trace, exc
+                    )
+                details = self._record_attempt_failure(
+                    inquiry_id, "provider_error", request, trace, exc
+                )
+                last_failure = ("provider_error", details)
+                continue
+            except Exception as exc:
                 return self._attempt_failure(
                     inquiry_id,
                     "provider_error",
                     request,
                     trace,
-                    RuntimeError(mismatch),
+                    exc,
+                )
+            output_hash = canonical_hash(result.response_text)
+            try:
+                provider_request_id = _safe_provider_request_id(result.provider_request_id)
+            except BuilderOpsValidationError as exc:
+                return self._attempt_failure(
+                    inquiry_id,
+                    "provider_error",
+                    request,
+                    trace,
+                    exc,
+                    output_hash=output_hash,
+                )
+            try:
+                response = parse_model_turn_response(result.response_text)
+                output_hash = canonical_hash(response.to_dict())
+                if response.reviewed_artifact_refs != reviewed_refs:
+                    raise BuilderOpsValidationError(
+                        "model response reviewed_artifact_refs do not match persisted request inputs"
+                    )
+                if response.stance == "refuse":
+                    return self._attempt_failure(
+                        inquiry_id,
+                        "provider_refused",
+                        request,
+                        trace,
+                        RuntimeError("provider returned refusal stance"),
+                        output_hash=output_hash,
+                    )
+                if phase == "draft" and response.stance != "draft":
+                    raise BuilderOpsValidationError("independent draft must use draft stance")
+                if phase == "review" and response.stance == "draft":
+                    raise BuilderOpsValidationError("review turn cannot use draft stance")
+                if response.accepted_artifact_hash is not None and not any(
+                    turn["artifact_hash"] == response.accepted_artifact_hash
+                    and turn["turn_id"] in reviewed_refs
+                    for turn in trace["turns"]
+                ):
+                    raise BuilderOpsValidationError(
+                        "accepted_artifact_hash is not a current reviewed artifact"
+                    )
+            except BuilderOpsValidationError as exc:
+                details = self._record_attempt_failure(
+                    inquiry_id,
+                    "malformed_output",
+                    request,
+                    trace,
+                    exc,
+                    output_hash=output_hash,
+                )
+                last_failure = ("malformed_output", details)
+                continue
+            metadata = {
+                "adapter_request_id": request["adapter_request_id"],
+                "provider_request_id": provider_request_id,
+                "adapter_id": adapter.adapter_id,
+                "provider": adapter.provider,
+                "model": adapter.model,
+                "context_hash": context_hash,
+                "request_hash": request["request_hash"],
+                "input_hash": request["input_hash"],
+                "output_hash": output_hash,
+                "phase": phase,
+                "round_index": round_index,
+                "stance": response.stance,
+                "accepted_artifact_hash": response.accepted_artifact_hash,
+            }
+            sequence = max((turn["sequence"] for turn in trace["turns"]), default=-1) + 1
+            try:
+                turn = self.service.commit_turn(
+                    inquiry_id,
+                    turn_id=turn_id,
+                    sequence=sequence,
+                    role=role,
+                    content=response.canonical_json(),
+                    input_artifact_refs=input_refs,
+                    source_refs=trace["source_refs"],
+                    provider_metadata=metadata,
+                )
+            except Exception as exc:
+                return self._attempt_failure(
+                    inquiry_id,
+                    "persistence_failed",
+                    request,
+                    trace,
+                    exc,
+                    output_hash=output_hash,
                 )
             self.service.commit_terminal_turn_receipt(
                 inquiry_id,
@@ -277,128 +474,17 @@ class ModelInquiryRunner:
                 outcome="accepted",
                 source_refs=trace["source_refs"],
             )
-            return TurnExecution(existing, parse_model_turn_response(existing["content"]))
-        prior_attempt = next(
-            (
-                receipt
-                for receipt in trace["receipts"]
-                if receipt.get("event_type") == "inquiry_provider_attempt_terminal"
-                and receipt.get("adapter_request_id") == request["adapter_request_id"]
-            ),
-            None,
-        )
-        if prior_attempt is not None:
-            return self._terminate(
-                inquiry_id,
-                str(prior_attempt["outcome"]),
-                dict(prior_attempt.get("details", {})),
-                trace,
-            )
-        try:
-            result = adapter.execute(request)
-        except AdapterUnavailableError as exc:
-            return self._attempt_failure(inquiry_id, "provider_unavailable", request, trace, exc)
-        except AdapterExecutionError as exc:
-            return self._attempt_failure(inquiry_id, "provider_error", request, trace, exc)
-        except Exception as exc:
-            return self._attempt_failure(inquiry_id, "provider_error", request, trace, exc)
-        output_hash = canonical_hash(result.response_text)
-        try:
-            provider_request_id = _safe_provider_request_id(result.provider_request_id)
-        except BuilderOpsValidationError as exc:
-            return self._attempt_failure(
-                inquiry_id,
-                "provider_error",
-                request,
-                trace,
-                exc,
-                output_hash=output_hash,
-            )
-        try:
-            response = parse_model_turn_response(result.response_text)
-            output_hash = canonical_hash(response.to_dict())
-            if response.reviewed_artifact_refs != reviewed_refs:
-                raise BuilderOpsValidationError(
-                    "model response reviewed_artifact_refs do not match persisted request inputs"
-                )
-            if response.stance == "refuse":
-                return self._attempt_failure(
-                    inquiry_id,
-                    "provider_refused",
-                    request,
-                    trace,
-                    RuntimeError("provider returned refusal stance"),
-                    output_hash=output_hash,
-                )
-            if phase == "draft" and response.stance != "draft":
-                raise BuilderOpsValidationError("independent draft must use draft stance")
-            if phase == "review" and response.stance == "draft":
-                raise BuilderOpsValidationError("review turn cannot use draft stance")
-        except BuilderOpsValidationError as exc:
-            return self._attempt_failure(
-                inquiry_id,
-                "malformed_output",
-                request,
-                trace,
-                exc,
-                output_hash=output_hash,
-            )
-        if response.accepted_artifact_hash is not None and not any(
-            turn["artifact_hash"] == response.accepted_artifact_hash
-            and turn["turn_id"] in reviewed_refs
-            for turn in trace["turns"]
-        ):
-            return self._attempt_failure(
-                inquiry_id,
-                "malformed_output",
-                request,
-                trace,
-                RuntimeError("accepted_artifact_hash is not a current reviewed artifact"),
-                output_hash=output_hash,
-            )
-        metadata = {
-            "adapter_request_id": request["adapter_request_id"],
-            "provider_request_id": provider_request_id,
-            "adapter_id": adapter.adapter_id,
-            "provider": adapter.provider,
-            "model": adapter.model,
-            "context_hash": context_hash,
-            "request_hash": request["request_hash"],
-            "input_hash": request["input_hash"],
-            "output_hash": output_hash,
-            "phase": phase,
-            "round_index": round_index,
-            "stance": response.stance,
-            "accepted_artifact_hash": response.accepted_artifact_hash,
-        }
-        sequence = max((turn["sequence"] for turn in trace["turns"]), default=-1) + 1
-        try:
-            turn = self.service.commit_turn(
-                inquiry_id,
-                turn_id=turn_id,
-                sequence=sequence,
-                role=role,
-                content=response.canonical_json(),
-                input_artifact_refs=input_refs,
-                source_refs=trace["source_refs"],
-                provider_metadata=metadata,
-            )
-        except Exception as exc:
-            return self._attempt_failure(
-                inquiry_id,
-                "persistence_failed",
-                request,
-                trace,
-                exc,
-                output_hash=output_hash,
-            )
-        self.service.commit_terminal_turn_receipt(
+            return TurnExecution(turn, response)
+
+        if last_failure is None:
+            raise BuilderOpsValidationError("model inquiry has no executable adapter candidates")
+        outcome, details = last_failure
+        return self._terminate(
             inquiry_id,
-            turn_id=turn_id,
-            outcome="accepted",
-            source_refs=trace["source_refs"],
+            outcome,
+            details,
+            self.service.trace(inquiry_id),
         )
-        return TurnExecution(turn, response)
 
     def _request_packet(
         self,
@@ -448,7 +534,7 @@ class ModelInquiryRunner:
             "role": role,
             "phase": phase,
             "round_index": round_index,
-            "system_prompt": MODEL_TURN_SYSTEM_PROMPT,
+            "system_prompt": model_turn_system_prompt(role),
             "context_hash": context_hash,
             "input_hash": input_hash,
             "input_artifacts": inputs,
@@ -471,8 +557,29 @@ class ModelInquiryRunner:
         *,
         output_hash: str | None = None,
     ) -> dict[str, Any]:
-        details = {
+        details = self._record_attempt_failure(
+            inquiry_id,
+            outcome,
+            request,
+            trace,
+            error,
+            output_hash=output_hash,
+        )
+        return self._terminate(inquiry_id, outcome, details, self.service.trace(inquiry_id))
+
+    def _record_attempt_failure(
+        self,
+        inquiry_id: str,
+        outcome: str,
+        request: Mapping[str, Any],
+        trace: Mapping[str, Any],
+        error: Exception,
+        *,
+        output_hash: str | None = None,
+    ) -> dict[str, Any]:
+        details: dict[str, Any] = {
             "adapter_request_id": request["adapter_request_id"],
+            "candidate_adapter_id": request["adapter_identity"]["adapter_id"],
             "request_hash": request["request_hash"],
             "context_hash": request["context_hash"],
             "input_hash": request["input_hash"],
@@ -491,7 +598,29 @@ class ModelInquiryRunner:
             details=details,
             source_refs=trace["source_refs"],
         )
-        return self._terminate(inquiry_id, outcome, details, self.service.trace(inquiry_id))
+        return details
+
+    def _candidate_adapters(
+        self,
+        adapters: Mapping[str, ModelTurnAdapter],
+        *,
+        role: str,
+    ) -> tuple[ModelTurnAdapter, ...]:
+        primary = adapters[role]
+        if not all(isinstance(adapter, LocalCommandAdapter) for adapter in adapters.values()):
+            return (primary,)
+        allow_fallback = self._allow_operational_fallback
+        if allow_fallback is None:
+            allow_fallback = True
+        if not allow_fallback:
+            return (primary,)
+        alternate_role = next(candidate for candidate in ROLES if candidate != role)
+        alternate = adapters[alternate_role]
+        primary_identity = sanitized_adapter_identity(primary)
+        alternate_identity = sanitized_adapter_identity(alternate)
+        if primary_identity == alternate_identity:
+            return (primary,)
+        return (primary, alternate)
 
     def _configuration_failure(
         self,
@@ -628,6 +757,28 @@ def _error_classification(error: Exception, outcome: str) -> str:
     return type(error).__name__
 
 
+def _attempt_receipt_allows_fallback(outcome: str, details: Mapping[str, Any]) -> bool:
+    if outcome in {"provider_unavailable", "malformed_output"}:
+        return True
+    if outcome != "provider_error":
+        return False
+    diagnostic = details.get("diagnostic")
+    return isinstance(diagnostic, Mapping) and diagnostic.get(
+        "adapter_failure_class"
+    ) in FALLBACK_ADAPTER_FAILURE_CLASSES
+
+
+def _fallback_was_used(reviews: Sequence[TurnExecution]) -> bool:
+    effective_targets = {
+        (
+            item.turn.get("provider"),
+            item.turn.get("model"),
+        )
+        for item in reviews
+    }
+    return len(effective_targets) != len(ROLES)
+
+
 def _safe_provider_request_id(value: str | None) -> str | None:
     if value is None:
         return None
@@ -662,13 +813,41 @@ def _existing_turn_mismatch(
         "provider": adapter.provider,
         "model": adapter.model,
         "context_hash": request["context_hash"],
-        "request_hash": request["request_hash"],
         "input_hash": request["input_hash"],
-        "adapter_request_id": request["adapter_request_id"],
     }
     if any(turn.get(field) != value for field, value in expected.items()):
         return "persisted deterministic turn does not match the configured request"
+    accepted_request_hashes = _request_lineage_hashes(request, adapter=adapter)
+    persisted_request_hash = str(turn.get("request_hash", ""))
+    if (
+        persisted_request_hash not in accepted_request_hashes
+        or turn.get("adapter_request_id")
+        != f"adapter_req_{persisted_request_hash[:32]}"
+    ):
+        return "persisted deterministic turn does not match current or legacy request lineage"
     return None
+
+
+def _request_lineage_hashes(
+    request: Mapping[str, Any], *, adapter: ModelTurnAdapter
+) -> set[str]:
+    legacy_request_hash = model_turn_request_hash(
+        inquiry_id=str(request["inquiry_id"]),
+        role=str(request["role"]),
+        phase=str(request["phase"]),
+        round_index=int(request["round_index"]),
+        context_hash=str(request["context_hash"]),
+        input_hash=str(request["input_hash"]),
+        input_artifact_refs=[
+            str(item["artifact_id"])
+            for item in request["input_artifacts"]
+        ],
+        adapter_id=adapter.adapter_id,
+        provider=adapter.provider,
+        model=adapter.model,
+        system_prompt=MODEL_TURN_SYSTEM_PROMPT,
+    )
+    return {str(request["request_hash"]), legacy_request_hash}
 
 
 __all__ = ["ModelInquiryRunner"]

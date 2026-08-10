@@ -18,6 +18,19 @@ MODEL_TURN_SYSTEM_PROMPT = (
     "When proposing executable backlog work, set content to a JSON string matching "
     "builderops.model-inquiry-issue-proposal.v1 with exact fields schema_version, title, and body."
 )
+MODEL_TURN_ROLE_PROMPTS = {
+    "fable": (
+        "Inquiry lane role: context and systems synthesizer. Identify the domain lens most "
+        "relevant to the supplied question, such as architecture, data, UX, operations, or "
+        "governance. Build a coherent option, connect cross-system consequences, and make "
+        "assumptions explicit."
+    ),
+    "gpt_codex": (
+        "Inquiry lane role: failure-mode and delivery verifier. Identify the engineering lens "
+        "most relevant to the supplied question. Challenge assumptions, test the option against "
+        "credible failure and recovery cases, and require bounded verification evidence."
+    ),
+}
 RESPONSE_FIELDS = frozenset(
     {
         "schema_version",
@@ -146,6 +159,14 @@ def canonical_hash(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def model_turn_system_prompt(role: str) -> str:
+    try:
+        role_prompt = MODEL_TURN_ROLE_PROMPTS[role]
+    except KeyError as exc:
+        raise BuilderOpsValidationError(f"unsupported model inquiry role: {role}") from exc
+    return f"{MODEL_TURN_SYSTEM_PROMPT} {role_prompt}"
+
+
 def github_issue_url_matches(url: Any, repository: Any, issue_number: Any) -> bool:
     if (
         not isinstance(url, str)
@@ -203,6 +224,7 @@ def model_turn_request_hash(
     adapter_id: str,
     provider: str,
     model: str,
+    system_prompt: str | None = None,
 ) -> str:
     return canonical_hash(
         {
@@ -215,7 +237,9 @@ def model_turn_request_hash(
             "input_hash": input_hash,
             "input_artifact_refs": input_artifact_refs,
             "reviewed_artifact_refs": [] if phase == "draft" else input_artifact_refs,
-            "system_prompt_hash": canonical_hash(MODEL_TURN_SYSTEM_PROMPT),
+            "system_prompt_hash": canonical_hash(
+                model_turn_system_prompt(role) if system_prompt is None else system_prompt
+            ),
             "adapter_identity": {
                 "adapter_id": adapter_id,
                 "provider": provider,
@@ -230,12 +254,14 @@ __all__ = [
     "ModelInquiryIssueProposal",
     "ModelTurnResponse",
     "MODEL_TURN_SYSTEM_PROMPT",
+    "MODEL_TURN_ROLE_PROMPTS",
     "RESPONSE_SCHEMA_VERSION",
     "canonical_hash",
     "canonical_json",
     "github_issue_url_matches",
     "initial_context_packet",
     "model_turn_request_hash",
+    "model_turn_system_prompt",
     "parse_model_turn_response",
     "parse_issue_proposal",
 ]

@@ -10,7 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from app.builderops.model_inquiry_adapters import CredentialUnavailableError
+from app.builderops.model_inquiry_adapters import (
+    OPERATIONAL_SUBSCRIPTION_MODE_ENV,
+    CredentialUnavailableError,
+)
 from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.models import BuilderOpsValidationError
 import scripts.start_model_inquiry as start_model_inquiry
@@ -111,6 +114,30 @@ def test_local_launcher_emits_terminal_provider_error_json(
     assert payload["final_state"] == "provider_error"
     assert payload["diagnostic"]["adapter_failure_class"] == "unexpected_adapter_error"
     assert "credential-sentinel" not in json.dumps(payload)
+
+
+def test_provider_api_launcher_refuses_operational_subscription_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_preflight(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise AssertionError("provider preflight must not run after a mode-boundary violation")
+
+    monkeypatch.setattr(
+        start_model_inquiry,
+        "preflight_dependencies",
+        unexpected_preflight,
+    )
+
+    with pytest.raises(
+        start_model_inquiry.LauncherError,
+        match="refuses operational subscription mode",
+    ):
+        start_model_inquiry.launch(
+            "Keep auth paths separate.",
+            max_rounds=1,
+            env={OPERATIONAL_SUBSCRIPTION_MODE_ENV: "1"},
+            repo_root=REPO_ROOT,
+        )
 
 
 def _typed_credential_terminal() -> dict[str, object]:

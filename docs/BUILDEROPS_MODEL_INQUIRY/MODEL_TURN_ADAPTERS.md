@@ -85,9 +85,20 @@ generic 60-second HTTP posture cannot truncate a production inquiry turn.
 `scripts/model_inquiry_subscription_adapter.py` remains the sanctioned operational auth path for
 host-local Builder model inquiry under ADR-0064's 2026-07-30 owner-cost ruling. Its versioned profile
 uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 1200-second inner command deadline,
-and a 1500-second host adapter deadline. This is an explicit Model Inquiry-only exception to the
-general headless subscription prohibition, not a fallback selected by the declared provider-API
-resolver. CKM cannot select or reuse it.
+and a 1500-second host adapter deadline. Each compatibility lane also receives a distinct role
+brief: `fable` is the context-and-systems synthesizer, while `gpt_codex` is the failure-mode and
+delivery verifier. Both briefs direct the model to select the domain lens most relevant to the
+immutable question, and the effective brief is part of request lineage. This is an explicit Model
+Inquiry-only exception to the general headless subscription prohibition, not a fallback selected by
+the declared provider-API resolver. CKM cannot select or reuse it.
+
+The owner-controlled `yggdrasil-model-inquiry` launcher enables this fixed path by exporting
+`BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1` for its BuilderOps `inquiry run` child only.
+That exact boolean selects the repo-owned bridge and its fixed Fable/Sol identities; it cannot carry
+a provider, model, command, credential, or endpoint. The dormant provider-API launcher never sets
+it and explicitly refuses to start if the marker is present or inherited. The bridge receives its
+role as an argv value and only the host home directory needed by the
+interactive subscription clients is allowlisted into the child environment.
 
 ## Host role-entrypoint lifecycle
 
@@ -152,7 +163,26 @@ and audit evidence explicit.
 Provider output must be exactly one `builderops.model-turn-response.v1` JSON object. Extra or
 missing fields fail validation. The object carries stance, content, claims, risks, blocking
 questions, reviewed artifact refs, and an optional accepted artifact hash. Consensus exists only
-when both reviewer roles explicitly accept the same prior persisted artifact hash.
+when both reviewer roles explicitly accept the same prior persisted artifact hash through distinct
+effective adapter targets.
+
+The sanctioned subscription runner owns one ordered, at-most-two-candidate chain per logical lane:
+the lane's configured adapter first, then the other already-configured subscription adapter. It may
+advance only after `provider_unavailable`, an allowlisted command availability/timeout/empty-output
+failure, or strictly malformed structured output. Every failed candidate is committed as a
+sanitized attempt receipt before the next candidate starts, and resume skips that exact failed
+request. Explicit refusal, credential failure, suspicious/unsafe output, unexpected exceptions,
+and persistence failure remain terminal. `session_expired` is an authentication-state failure and
+is therefore terminal rather than fallback-eligible. The desktop caller still invokes the fixed
+host launcher exactly once and never retries the inquiry.
+
+When fallback means the same effective provider/model produced both accepting review turns, matching
+acceptance is stored as `degraded_consensus`, not `consensus`. A safely receipted earlier attempt
+does not degrade a later accepting review pair that again has two distinct effective targets. The
+readable report shows the effective provider/model for every turn. Degraded synthesis is useful
+decision support but the BMI-05 readiness and promotion boundary accepts only a genuine
+`consensus` terminal receipt. The dormant declared provider-API resolver retains
+`fallback_forbidden` and never enters this chain.
 
 Dry-run is a deterministic, read-only plan: it performs no adapter call and creates no vault or
 receipt file. Provider-enabled execution serializes one runner per inquiry on the host, persists a
@@ -169,7 +199,8 @@ receipts or trace.
 
 ## Out of Scope
 
-- silent fallback from one provider to another;
+- silent or unreceipted fallback from one provider to another;
+- any fallback on the dormant declared provider-API path;
 - direct automation of a desktop UI;
 - external browsing or product/runtime writes.
 - metered provider-API parent acceptance or API-key provisioning under the current owner-cost ruling;
