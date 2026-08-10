@@ -7,7 +7,9 @@ seeded into a synthetic tree.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 from scripts.lint_skills_consistency import run_lint
@@ -53,6 +55,9 @@ def test_seeded_clean_tree_passes(tmp_path: Path) -> None:
 
 def test_registered_portable_skill_reference_passes(tmp_path: Path) -> None:
     root = _seed_tree(tmp_path)
+    (root / ".codex" / "skills" / "portable-skills.list").write_text(
+        "decision-quality\n", encoding="utf-8"
+    )
     alpha = root / ".codex" / "skills" / "alpha-skill" / "SKILL.md"
     alpha.write_text(
         alpha.read_text(encoding="utf-8")
@@ -61,6 +66,72 @@ def test_registered_portable_skill_reference_passes(tmp_path: Path) -> None:
     )
 
     assert run_lint(root) == []
+
+
+def test_portable_skill_registry_rejects_invalid_duplicate_and_local_names(
+    tmp_path: Path,
+) -> None:
+    root = _seed_tree(tmp_path)
+    (root / ".codex" / "skills" / "portable-skills.list").write_text(
+        "alpha-skill\ndecision_quality\ndecision-quality\ndecision-quality\n",
+        encoding="utf-8",
+    )
+
+    errors = run_lint(root)
+
+    assert any("collides with a repo-local skill" in error for error in errors)
+    assert any("invalid portable skill name `decision_quality`" in error for error in errors)
+    assert any("duplicate portable skill name `decision-quality`" in error for error in errors)
+
+
+def test_install_skills_provisions_registered_portable_dependency(tmp_path: Path) -> None:
+    portable_root = tmp_path / "portable"
+    source_skill = portable_root / "decision-quality"
+    source_skill.mkdir(parents=True)
+    source_text = "---\nname: decision-quality\ndescription: test\n---\n"
+    (source_skill / "SKILL.md").write_text(source_text, encoding="utf-8")
+    destination = tmp_path / "installed"
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(destination),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (destination / "decision-quality" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == source_text
+
+
+def test_install_skills_fails_closed_when_portable_dependency_is_missing(
+    tmp_path: Path,
+) -> None:
+    portable_root = tmp_path / "portable"
+    portable_root.mkdir()
+    env = os.environ | {
+        "CLAUDE_SKILLS_DIR": str(tmp_path / "installed"),
+        "PKM_PORTABLE_SKILLS_DIR": str(portable_root),
+    }
+
+    result = subprocess.run(
+        ["bash", "scripts/install_skills.sh", "--dry-run"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Registered portable skill is unavailable: decision-quality" in result.stderr
 
 
 def test_lint_detects_seeded_defects(tmp_path: Path) -> None:

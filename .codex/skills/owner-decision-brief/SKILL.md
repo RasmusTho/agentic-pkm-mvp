@@ -16,6 +16,10 @@ the ask. Its seven-dimension diagnosis, weakest-link rule, decision ownership ga
 method, and post-decision activation handoff are the single authoritative decision method. This
 profile adds repository constraints only; it must not copy, abbreviate, or redefine that method.
 
+The dependency is registered in `.codex/skills/portable-skills.list` and provisioned through
+`scripts/install_skills.sh` from the portable skill source root. Successful provisioning is a
+precondition for environments that execute this profile.
+
 If `decision-quality` is unavailable, do not reconstruct a local substitute or send a free-form
 owner ask. Report the missing capability through the current workflow and keep only independently
 safe, reversible work moving.

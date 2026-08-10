@@ -11,6 +11,18 @@ Product/Runtime work, route SBS impact through `docs/architecture/SBS_OPERATING_
 workflow, issue/PR, CI, release, BuilderOps, learning, or TCD work, route through the Builder System
 boundary and artifact map in `docs/architecture/SBS_OPERATING_MODEL.md`.
 
+## Portable skill dependencies
+
+`.codex/skills/portable-skills.list` is the single repo registry for skills whose method is maintained
+outside this repository. Their method text is not vendored or duplicated here. The default portable
+source root is `~/.local/share/agent-skills`; set `PKM_PORTABLE_SKILLS_DIR` when the platform uses a
+different source root.
+
+`scripts/install_skills.sh` installs both repo-local skills and every registered portable dependency
+into the configured Claude skill directory. It fails closed when a registered source is absent. Codex
+discovers the same portable source root directly. A repo skill may require a portable method only
+when its dependency is registered here and the environment has completed that provisioning step.
+
 ## Workflow map
 
 Hot path:
