@@ -7,6 +7,16 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.builderops.ckm.contracts import (
+    CkmStateIdentity,
+    CompletenessManifest,
+    ObjectClassCompleteness,
+    ResourceDto,
+    ResultEnvelope,
+    SnapshotManifest,
+    canonical_digest,
+    canonical_query_digest,
+)
 from app.builderops.devui_composition import compose_owner_snapshot
 from app.builderops.devui_overview import (
     CONTRACT_VERSION,
@@ -37,7 +47,6 @@ def _composition() -> dict:
                 "captured_at": "2026-08-09T21:00:00+00:00",
                 "snapshot": {"watermark": "work:42"},
                 "completeness": {"claim": {"kind": "counted"}},
-                "refusal": None,
             },
             "capabilities": {
                 "provider": "ckm",
@@ -50,6 +59,64 @@ def _composition() -> dict:
             },
         },
     }
+
+
+def _production_cockpit_payload() -> dict:
+    return {
+        "authority": "read_time_join",
+        "generated_at": "2026-08-09T21:00:00+00:00",
+        "claim": {
+            "kind": "counted",
+            "text": "One thread in motion.",
+            "as_of": "2026-08-09T21:00:00+00:00",
+        },
+        "sources": [
+            {
+                "name": "dispatcher-store",
+                "state": "fresh",
+                "last_successful_read": "2026-08-09T21:00:00+00:00",
+                "detail": "read succeeded",
+                "stale_after_days": 7,
+                "configured": True,
+            }
+        ],
+        "unread_planes": [],
+        "withdrawn_counts": [],
+        "bands": {"moving": [{"issue_number": 4715}]},
+    }
+
+
+def _production_ckm_envelope() -> ResultEnvelope:
+    resource = ResourceDto(
+        public_id="ckm_capability_overview",
+        resource_type="capability",
+        display_name="Overview capability",
+        lifecycle="confirmed",
+        provenance=({"kind": "fixture"},),
+        values={},
+        candidate=False,
+    )
+    snapshot = SnapshotManifest.build(
+        state=CkmStateIdentity(epoch="epoch-overview", state_revision=1),
+        taxonomy_digest=canonical_digest({"taxonomy": "overview-fixture"}),
+        watermarks={"capability": "2026-08-09T21:00:00+00:00"},
+        provenance=({"kind": "fixture"},),
+        completeness=CompletenessManifest(
+            object_classes=(
+                ObjectClassCompleteness(object_class="capability", included=1),
+            ),
+            complete=True,
+        ),
+        read_set={"capability": (resource.public_id,)},
+    )
+    return ResultEnvelope(
+        resource_type="capability",
+        query_digest=canonical_query_digest(
+            {"operation": "list_capabilities", "public_id": None}
+        ),
+        snapshot=snapshot,
+        resources=(resource,),
+    )
 
 
 def _evidence(
@@ -370,6 +437,59 @@ def test_refused_provider_requires_refusal_evidence() -> None:
 
     with pytest.raises(OverviewContractError, match="refused provider"):
         compose_overview_view(composition=composition)
+
+
+def test_overview_enforces_status_dependent_refusal_contract() -> None:
+    available_with_refusal = _composition()
+    available_with_refusal["providers"]["work"]["refusal"] = None
+    with pytest.raises(OverviewContractError, match="cannot carry refusal evidence"):
+        compose_overview_view(composition=available_with_refusal)
+
+    refused_without_refusal = _composition()
+    refused_without_refusal["providers"]["capabilities"].pop("refusal")
+    with pytest.raises(OverviewContractError, match="refused provider"):
+        compose_overview_view(composition=refused_without_refusal)
+
+
+def test_overview_accepts_all_available_production_composition_without_refusals() -> None:
+    composition = compose_owner_snapshot(
+        cockpit_reader=_production_cockpit_payload,
+        ckm_reader=_production_ckm_envelope,
+        now=lambda: datetime(2026, 8, 9, 21, 0, tzinfo=timezone.utc),
+    )
+
+    assert all(
+        provider["status"] == "available" and "refusal" not in provider
+        for provider in composition["providers"].values()
+    )
+    result = compose_overview_view(composition=composition)
+    assert [
+        provider["status"] for provider in result["trust_frame"]["provider_states"]
+    ] == ["available", "available"]
+    assert all(
+        "refusal" not in provider
+        for provider in result["trust_frame"]["provider_states"]
+    )
+
+
+def test_overview_preserves_mixed_available_and_refused_production_composition() -> None:
+    def broken_cockpit() -> dict:
+        raise OSError("unavailable")
+
+    composition = compose_owner_snapshot(
+        cockpit_reader=broken_cockpit,
+        ckm_reader=_production_ckm_envelope,
+        now=lambda: datetime(2026, 8, 9, 21, 0, tzinfo=timezone.utc),
+    )
+
+    assert composition["providers"]["work"]["status"] == "refused"
+    assert "refusal" in composition["providers"]["work"]
+    assert composition["providers"]["capabilities"]["status"] == "available"
+    assert "refusal" not in composition["providers"]["capabilities"]
+    result = compose_overview_view(composition=composition)
+    assert [
+        provider["status"] for provider in result["trust_frame"]["provider_states"]
+    ] == ["refused", "available"]
 
 
 @pytest.mark.parametrize(
