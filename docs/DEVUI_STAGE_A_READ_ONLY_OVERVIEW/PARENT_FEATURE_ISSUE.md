@@ -106,11 +106,11 @@ work.
 
 | Task | Issue | Initial label | Dependency / exact next trigger |
 | --- | --- | --- | --- |
-| ARO-01 — Authorize Overview Source Facts | [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742) | `agent:needs-human` | Owner accepts the exact source/serialization contract |
-| ARO-02 — Enrich Overview Producer Facts | [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) | `agent:blocked` | accepted #4742 transportable through bounded current producer chain |
-| ARO-03 — Expose Local Overview GET Route | [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) | `agent:blocked` | #4743 merged; #4744 proves route → production producer → delivered composer |
+| ARO-01 — Authorize Overview Source Facts | [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742) | Closed #4742; withdrawal recorded by PR #4751 | No current source owns either Overview fact |
+| ARO-02 — Enrich Overview Producer Facts | [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) | Superseded #4743 | The accepted no-source decision leaves no producer facts to enrich; a future source contract requires a new governed slice |
+| ARO-03 — Expose Local Overview GET Route | [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) | Delivered #4744; PR #4772 | The direct-loopback route rebuilds the production composition and calls the delivered composer without candidates |
 | ARO-04 — Bind Typed Overview Navigation | [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) | `agent:blocked` | #4744 plus delivered [#4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) local Focus route and optional SoI destination |
-| ARO-05 — Validate Overview Yggdrasil Design | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | `agent:blocked` | stable #4743/#4744/#4745 fixtures plus design preflight |
+| ARO-05 — Validate Overview Yggdrasil Design | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | `agent:blocked` | stable #4744/#4745 fixtures plus design preflight |
 | ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | `agent:blocked` | #4744/#4745 merged and #4746 accepted |
 | ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | `agent:blocked` | exact merged #4747 SHA |
 | ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | #4748 receipt and stable local fixtures |
@@ -120,14 +120,14 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 
 | Child | Issue | PR | SHA | CI | Blocker | Next |
 | --- | --- | --- | --- | --- | --- | --- |
-| #4742 ARO-01 | open / needs-human | none | none | not started | canonical source decision absent | record owner decision |
-| #4743 ARO-02 | open / blocked | none | none | not started | #4742 | revalidate after accepted source contract |
-| #4744 ARO-03 | open / blocked | none | none | not started | #4743 | revalidate after producer merge |
-| #4745 ARO-04 | open / blocked | none | none | not started | #4744 + real destinations | revalidate after destination routes exist |
-| #4746 ARO-05 | open / blocked | none | none | not started | stable fixtures + design preflight | run governed handoff when inputs exist |
-| #4747 ARO-06 | open / blocked | none | none | not started | #4744/#4745/#4746 | revalidate after accepted handoff |
-| #4748 ARO-07 | open / blocked | none | none | not started | #4747 | validate exact merged shell SHA |
-| #4749 ARO-08 | open / blocked | none | none | not started | #4748 | run owner pilot after browser receipt |
+| #4742 ARO-01 | closed / withdrawal | #4751 merged | none | verified | no current source owns either Overview fact | preserve withdrawal until a separate source contract exists |
+| #4743 ARO-02 | closed / superseded | none | none | superseded | accepted no-source decision | create a new governed slice only after a source contract exists |
+| #4744 ARO-03 | open / P1 closure repair | #4772 merged | head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`<br>merge `24371d8bf3289dad631c2986f44865794897f32c` | exact-head CI rerun pending | parent-ledger current-state drift | merge the bounded ledger repair, then close #4744 |
+| #4745 ARO-04 | open / blocked | none | none | unknown | #4744 + real destinations | revalidate after destination routes exist |
+| #4746 ARO-05 | open / blocked | none | none | unknown | stable #4744/#4745 fixtures + design preflight | run governed handoff when inputs exist |
+| #4747 ARO-06 | open / blocked | none | none | unknown | #4744/#4745/#4746 | revalidate after accepted handoff |
+| #4748 ARO-07 | open / blocked | none | none | unknown | #4747 | validate exact merged shell SHA |
+| #4749 ARO-08 | open / blocked | none | none | unknown | #4748 | run owner pilot after browser receipt |
 <!-- /builderops:epic-delivery-ledger -->
 
 ## Verification Path
