@@ -107,6 +107,20 @@ class LLMRoutingSettings(BaseModel):
         default=None,
         description="Default embedding model override for routed tasks.",
     )
+    timeout_seconds: float = Field(
+        default=60.0,
+        gt=0.0,
+        description="Default LLM request timeout in seconds. LLM_TIMEOUT remains a one-release override.",
+    )
+    temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Default LLM generation temperature. LLM_TEMPERATURE remains a one-release override.",
+    )
+    reasoning_model: str | None = Field(
+        default=None,
+        description="Optional model override for the legacy reasoning provider.",
+    )
     task_overrides: Dict[str, Dict[str, str]] = Field(
         default_factory=dict,
         description="Per task_kind provider/model overrides (future use).",
@@ -351,6 +365,10 @@ class RetrievalTuning(BaseModel):
             "reranks only when the top BM25 result does not already dominate. Ships dark; the "
             "default stays 'off'."
         ),
+    )
+    rerank_provider: str = Field(
+        default="none",
+        description="Reranker implementation selector. RERANK_PROVIDER remains a one-release override.",
     )
     rerank_top_k: int = Field(
         default=100,

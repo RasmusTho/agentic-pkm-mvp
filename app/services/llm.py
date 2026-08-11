@@ -11,7 +11,8 @@ from urllib.parse import urlparse
 import requests
 
 from app.llm.trace import log_llm_call
-from app.settings.env_defaults import env_float
+from app.settings.env_defaults import env_default
+from app.settings.wave_one import llm_temperature, llm_timeout_seconds
 
 
 _DISPATCH_PROVIDERS = frozenset({"mock", "ollama", "openai", "deepseek"})
@@ -85,7 +86,7 @@ def _ollama_chat(
     response_format: dict[str, Any] | str | None = None,
 ) -> str:
     if timeout is None:
-        timeout = env_float("LLM_TIMEOUT")
+        timeout = llm_timeout_seconds()
     body: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -244,7 +245,7 @@ def _normalize_model(value: str | None) -> str | None:
 
 
 def _default_model() -> str:
-    return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
+    return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", env_default("MERGE_LLM_MODEL")))
 
 
 def _mock_response_for_kind(kind: str | None) -> str:
@@ -275,10 +276,11 @@ def _http_chat(
     model: str,
     messages: list[dict[str, str]],
     timeout: float,
+    temperature: float,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    payload: dict[str, Any] = {"model": model, "messages": messages}
+    payload: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
     if response_format is not None:
@@ -338,7 +340,7 @@ def call_llm(
 
     provider = _normalize_provider(provider_override) or _normalize_provider(os.getenv("LLM_PROVIDER")) or "mock"
     model = _normalize_model(model_override) or _default_model()
-    temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
+    temperature = llm_temperature()
     system = pack.get("system", "")
     user = pack.get("user", "")
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
@@ -398,7 +400,7 @@ def call_llm(
                     user,
                     str(model),
                     temperature,
-                    timeout=env_float("LLM_TIMEOUT"),
+                    timeout=llm_timeout_seconds(),
                     max_tokens=max_tokens,
                     response_format=response_format,
                 )
@@ -435,7 +437,8 @@ def call_llm(
                 api_key=api_key,
                 model=str(model),
                 messages=messages,
-                timeout=env_float("LLM_TIMEOUT"),
+                timeout=llm_timeout_seconds(),
+                temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
             )
@@ -455,7 +458,8 @@ def call_llm(
                 api_key=api_key,
                 model=str(model),
                 messages=messages,
-                timeout=env_float("LLM_TIMEOUT"),
+                timeout=llm_timeout_seconds(),
+                temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
             )

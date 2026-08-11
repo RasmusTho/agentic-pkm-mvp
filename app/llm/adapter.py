@@ -8,7 +8,7 @@ import requests
 
 from app.config.llm import get_provider
 from app.llm.trace import log_llm_call
-from app.settings.env_defaults import env_float
+from app.settings.wave_one import llm_timeout_seconds
 
 
 _DISPATCH_PROVIDERS = frozenset({"mock", "ollama", "openai", "deepseek"})
@@ -59,7 +59,7 @@ def generate(
         r = requests.post(
             ollama_host.rstrip("/") + "/api/chat",
             json={"model": m, "messages": messages, "stream": False},
-            timeout=env_float("LLM_TIMEOUT"),
+            timeout=llm_timeout_seconds(),
         )
         r.raise_for_status()
         raw_response = r.json()
@@ -77,7 +77,7 @@ def generate(
             url,
             headers={"Authorization": f"Bearer {api}", "Content-Type": "application/json"},
             data=json.dumps({"model": m, "messages": messages}),
-            timeout=env_float("LLM_TIMEOUT"),
+            timeout=llm_timeout_seconds(),
         )
         r.raise_for_status()
         raw_response = r.json()
@@ -91,7 +91,7 @@ def generate(
             url,
             headers={"Authorization": f"Bearer {api}", "Content-Type": "application/json"},
             data=json.dumps({"model": m, "messages": messages}),
-            timeout=env_float("LLM_TIMEOUT"),
+            timeout=llm_timeout_seconds(),
         )
         r.raise_for_status()
         raw_response = r.json()

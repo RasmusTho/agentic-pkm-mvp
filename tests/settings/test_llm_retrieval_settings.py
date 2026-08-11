@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import pytest
+
+from app.retrieval.rerank.provider import MockCrossEncoderReranker, get_reranker
+from app.retrieval.tuning import get_retrieval_tuning, reset_retrieval_tuning_cache
+import app.retrieval.tuning as retrieval_tuning
+from app.services import llm
+from app.reasoning.provider import OllamaDeliberationAgent
+from app.settings import wave_one
+from app.settings.models import LLMRoutingSettings, RetrievalTuning, SettingsBundle
+
+
+pytestmark = pytest.mark.not_pg
+
+
+def _bundle() -> SettingsBundle:
+    return SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            timeout_seconds=17.0,
+            temperature=0.7,
+            reasoning_model="vault-reasoning-model",
+        ),
+        retrieval_tuning=RetrievalTuning(
+            rerank="always",
+            rerank_provider="mock_ce",
+            rerank_top_k=7,
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch: pytest.MonkeyPatch):
+    for key in (
+        "LLM_TIMEOUT", "LLM_TEMPERATURE", "REASONING_MODEL", "MERGE_LLM_MODEL",
+        "RERANK_ENABLE", "RERANK_PROVIDER", "RERANK_TOP_K", "PKM_SETTINGS_PROFILE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    reset_retrieval_tuning_cache()
+    yield
+    reset_retrieval_tuning_cache()
+
+
+def test_vault_settings_reach_model_and_rerank_production_consumers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Covers the real resolver calls used by LLM, reasoning, and rerank production paths."""
+    bundle = _bundle()
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setattr(wave_one, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", lambda: bundle)
+
+    assert wave_one.llm_timeout_seconds() == 17.0
+    assert wave_one.llm_temperature() == 0.7
+    assert wave_one.reasoning_model() == "vault-reasoning-model"
+    captured: dict[str, float] = {}
+
+    def fake_ollama(_system, _user, _model, temperature, *, timeout, **_kwargs):
+        captured["temperature"] = temperature
+        captured["timeout"] = timeout
+        return "vault-backed response"
+
+    monkeypatch.setattr(llm, "_ollama_chat", fake_ollama)
+    assert llm.call_llm("test", {"system": "s", "user": "u"}, provider_override="ollama") == "vault-backed response"
+    assert captured == {"temperature": 0.7, "timeout": 17.0}
+    assert OllamaDeliberationAgent().model == "vault-reasoning-model"
+    assert isinstance(get_reranker(), MockCrossEncoderReranker)
+    assert get_retrieval_tuning().rerank_top_k == 7
+    explained = wave_one.wave_one_explain()
+    assert explained["retrieval.rerank.top_k"]["origin"] == "vault-shared:settings/retrieval.md"
+    assert explained["retrieval.rerank.top_k"]["tier"] == "lab"
+
+
+def test_empty_settings_and_legacy_env_preserve_llm_and_rerank_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setattr(wave_one, "get_settings_bundle", SettingsBundle)
+    monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", SettingsBundle)
+    assert wave_one.llm_timeout_seconds() == 60.0
+    assert wave_one.llm_temperature() == 0.0
+    assert wave_one.reasoning_model() == "llama3.1:8b"
+    monkeypatch.setenv("LLM_TIMEOUT", "31")
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.25")
+    monkeypatch.setenv("REASONING_MODEL", "legacy-reasoning")
+    monkeypatch.setenv("RERANK_PROVIDER", "mock_ce")
+    monkeypatch.setenv("RERANK_TOP_K", "9")
+    assert wave_one.llm_timeout_seconds() == 31.0
+    assert wave_one.llm_temperature() == 0.25
+    assert wave_one.reasoning_model() == "legacy-reasoning"
+    assert isinstance(get_reranker(), MockCrossEncoderReranker)
+    assert get_retrieval_tuning().rerank_top_k == 9
+    assert "deprecated" in str(wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"])
+
+
+def test_llm_and_rerank_lab_keys_are_inert_for_operator_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wave_one, "get_settings_bundle", _bundle)
+    monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", _bundle)
+    assert wave_one.llm_temperature() == 0.0
+    assert wave_one.rerank_provider() == "none"
+    assert get_retrieval_tuning().rerank_top_k == 100
+    assert wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"] == "registry default (operator profile)"

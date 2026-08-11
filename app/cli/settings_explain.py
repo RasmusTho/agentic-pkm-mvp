@@ -15,6 +15,7 @@ from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 from app.settings.runtime import get_settings_bundle
 from app.settings.prompts import resolve_ask_system_prompt
+from app.settings.wave_one import wave_one_explain
 
 
 # group 1 = "://user:", group 2 = "@" — replaces only the password portion
@@ -168,6 +169,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
                 "openai_base_url": "env:OPENAI_BASE_URL" if env_base_url else ("settings:providers.default_chat.base_url" if settings_base_url else "unresolved"),
             },
         },
+        "settings": wave_one_explain(),
         "prompts": {"ask.system_prompt": {"origin": ask_prompt_origin}},
     }
 

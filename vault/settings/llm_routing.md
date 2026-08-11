@@ -46,6 +46,8 @@ Available options:
 Follows the same model-first contract but still defaults to skip mode unless explicitly enabled elsewhere.
 
 ```yaml settings
+timeout_seconds: 60
+temperature: 0
 default_chat:
   primary:
     model_id: openai.chat.gpt_4_1_mini

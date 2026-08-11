@@ -8,6 +8,8 @@ from typing import Iterable, List, Protocol
 
 import httpx
 
+from app.settings.wave_one import rerank_provider
+
 
 @dataclass(frozen=True)
 class RerankItem:
@@ -185,7 +187,7 @@ def _ngram_phrases(tokens: list[str], max_n: int = 3) -> set[str]:
 
 
 def select_provider(name: str | None = None) -> BaseReranker:
-    spec = (name or os.getenv("RERANK_PROVIDER", "none")).strip().lower()
+    spec = (name or rerank_provider()).strip().lower()
     try:
         if spec in ("none", "", "off", "disabled"):
             return NoneReranker()

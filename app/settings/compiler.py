@@ -36,6 +36,7 @@ from .models import (
     SettingsBundle,
     YggdrasilPaths,
     EmbeddingProfiles,
+    RetrievalTuning,
 )
 from .prompts import resolve_ask_system_prompt
 from .parsers import parse_section
@@ -490,6 +491,19 @@ def compile_all(
     if "llm_routing" in file_paths:
         _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, writeback_allowed(file_paths["llm_routing"]), vault_root=resolved_vault_root)
 
+    retrieval_payload = _merge_sections(file_sections.get("retrieval", {}))
+    retrieval_model, retrieval_canonical, retrieval_fixed = _hydrate_model(
+        payload=retrieval_payload, model_cls=RetrievalTuning
+    )
+    bundle.retrieval_tuning = retrieval_model
+    if retrieval_fixed and "retrieval" in file_paths and writeback_allowed(file_paths["retrieval"]):
+        writeback_settings_block(
+            file_paths["retrieval"], retrieval_canonical, previous=retrieval_payload,
+            vault_root=resolved_vault_root,
+        )
+    if "retrieval" in file_paths:
+        _update_reference(file_paths["retrieval"], "Retrieval", bundle.retrieval_tuning, writeback_allowed(file_paths["retrieval"]), vault_root=resolved_vault_root)
+
     embedding_payload = _merge_sections(file_sections.get("embeddings", {}))
     embeddings_model, embeddings_canonical, embeddings_fixed = _hydrate_model(
         payload=embedding_payload, model_cls=EmbeddingProfiles
@@ -577,6 +591,7 @@ def compile_all(
         dump(staged_runtime, "global.yaml", bundle.global_.model_dump())
         dump(staged_runtime, "providers.yaml", bundle.providers.model_dump())
         dump(staged_runtime, "llm_routing.yaml", bundle.llm_routing.model_dump())
+        dump(staged_runtime, "retrieval_tuning.yaml", bundle.retrieval_tuning.model_dump())
         dump(staged_runtime, "instance.yaml", bundle.instance.model_dump())
         if bundle.yggdrasil_paths is not None:
             dump(staged_runtime, "yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())

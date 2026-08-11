@@ -28,6 +28,7 @@ from pydantic import ValidationError
 
 from app.settings.models import RetrievalTuning
 from app.settings.runtime import get_settings_bundle
+from app.settings.tiering import is_lab_profile
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -68,7 +69,18 @@ def _base_tuning() -> RetrievalTuning:
     # The runtime settings bundle is the authoritative typed configuration
     # surface. Do not downgrade a malformed runtime file to defaults here:
     # callers of the actual retrieval resolver must fail just as startup does.
-    return get_settings_bundle().retrieval_tuning
+    configured = get_settings_bundle().retrieval_tuning
+    if is_lab_profile():
+        return configured
+    # Candidate depth, provider and rerank size are lab-tier tuning controls.
+    # The operator profile keeps the registry posture even if a lab-authored
+    # vault setting is present, so promotion cannot silently alter ranking.
+    return configured.model_copy(
+        update={
+            "rerank_top_k": RetrievalTuning().rerank_top_k,
+            "rerank_provider": RetrievalTuning().rerank_provider,
+        }
+    )
 
 
 def _parse_int(raw: str, *, env_key: str) -> int:

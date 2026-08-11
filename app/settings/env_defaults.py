@@ -46,6 +46,31 @@ ENV_DEFAULTS: dict[str, EnvDefault] = {
             ),
         ),
         EnvDefault(
+            key="LLM_TEMPERATURE",
+            default="0",
+            rationale="Preserves deterministic generation when no vault setting or bootstrap override is present.",
+        ),
+        EnvDefault(
+            key="REASONING_MODEL",
+            default="llama3.1:8b",
+            rationale="Preserves the legacy reasoning-provider model until its one-release bootstrap override retires.",
+        ),
+        EnvDefault(
+            key="MERGE_LLM_MODEL",
+            default="llama3.1:8b",
+            rationale="Preserves the legacy merge-model fallback until its one-release bootstrap override retires.",
+        ),
+        EnvDefault(
+            key="RERANK_PROVIDER",
+            default="none",
+            rationale="Preserves the disabled reranker implementation when no vault setting or bootstrap override is present.",
+        ),
+        EnvDefault(
+            key="RERANK_TOP_K",
+            default="100",
+            rationale="Preserves the historical rerank candidate limit until its one-release bootstrap override retires.",
+        ),
+        EnvDefault(
             key="WATCHER_ENABLE",
             default="1",
             rationale=(

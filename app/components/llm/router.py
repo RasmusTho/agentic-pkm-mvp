@@ -8,6 +8,7 @@ from typing import Any, Iterable
 from app.components.embeddings import EmbeddingIdentity, resolve_embedding_identity
 from app.components.settings.models_loader import load_models
 from app.settings.models import LLMRoutingSettings
+from app.settings.env_defaults import env_default
 from app.settings.runtime import get_settings_bundle
 
 
@@ -74,7 +75,7 @@ def _provider_enforced() -> bool:
 
 
 def _default_chat_model() -> str:
-    return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", "llama3.1:8b"))
+    return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", env_default("MERGE_LLM_MODEL")))
 
 
 def _default_embed_model() -> str:

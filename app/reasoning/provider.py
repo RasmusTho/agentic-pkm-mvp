@@ -14,6 +14,7 @@ from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
 from app.stores import get_object_store
+from app.settings.wave_one import reasoning_model
 
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
 
@@ -99,7 +100,7 @@ class MockDeliberationAgent(BaseDeliberationAgent):
 
 class OllamaDeliberationAgent(BaseDeliberationAgent):
     def __init__(self, *, model: str | None = None) -> None:
-        self.model = model or os.getenv("REASONING_MODEL", "llama3.1:8b")
+        self.model = model or reasoning_model()
 
     def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:
         prompt = build_user_prompt(reasoning_input.text, [rel.model_dump() for rel in reasoning_input.relations])
@@ -255,7 +256,7 @@ def run_reasoning(
             log_llm_call(
                 provider=os.getenv("LLM_PROVIDER", "").strip().lower()
                 or _reasoning_backend(),
-                model=os.getenv("REASONING_MODEL", "llama3.1:8b"),
+                model=reasoning_model(),
                 agent=agent_name,
                 kind=kind_name,
                 messages=[],
