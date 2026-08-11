@@ -516,7 +516,7 @@ them must be reverified against current owner docs and live authorities before o
 
 Yggdrasil's Builder System is the continuous-development enabling system around the Product/Runtime System. It builds, verifies, releases, governs, and learns from Product/Runtime changes; it is not itself a Product SBS runtime subsystem [docs/architecture/SBS_OPERATING_MODEL.md:68-93].
 
-Rasmus provides intent, preferences, constraints, and strategic direction. Tier-selected review,
+The accountable human owner provides intent, preferences, constraints, and strategic direction. Tier-selected review,
 dispatch, CI triage, PR closing, post-merge documentation checking, and learning capture should be
 performed by the Builder System when the governing contracts are sufficient. Human attention is an
 exception path: the canonical builder instructions say the default posture is to act, and to
@@ -725,7 +725,7 @@ Observed contradiction handling:
 
 ```mermaid
 flowchart TD
-  Intent["Rasmus intent / strategy"] --> Docs["Docs-as-code authority"]
+  Intent["Owner intent / strategy"] --> Docs["Docs-as-code authority"]
   Docs --> Index["DOCS_INDEX role routing"]
   Index --> Owner["Owner docs / specs"]
   Owner --> Issue["GitHub Issue contract with Source Anchors + Verify"]
@@ -748,7 +748,7 @@ flowchart TD
 
 | Lane | Trigger | Actor | Input | Authority file(s) | Skill(s) | Script/workflow | Output | Mutation authority | Verification gate | Decision points | Feedback loops | Failure path | Human exception condition | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| intent capture | Human strategy/request | Rasmus + agent | Intent | `PROJECT_KERNEL`, `DOCS_INDEX`, owner docs | docs-authoring | PR/docs | Updated docs or issue-ready spec | PR | Docs review | current vs target | docs-to-issue | clarify docs | intent ambiguity | [docs/DOCS_INDEX.md:24-47] |
+| intent capture | Human strategy/request | Owner + agent | Intent | `PROJECT_KERNEL`, `DOCS_INDEX`, owner docs | docs-authoring | PR/docs | Updated docs or issue-ready spec | PR | Docs review | current vs target | docs-to-issue | clarify docs | intent ambiguity | [docs/DOCS_INDEX.md:24-47] |
 | docs/spec authoring | Docs-only change | Agent | Existing docs | `AGENTS.md`, `DOCS_INDEX`, `DEV_WORKFLOW` | docs-authoring | docs/governance checks | Docs PR | PR | factual claim verification | owner doc role | docs-to-issue later | switch to issue-first if implementation | authority ambiguity | [`.codex/skills/docs-authoring/SKILL.md`:18-48] |
 | docs-to-issue | Active docs become executable work | Agent | Docs/source anchors | `ISSUE_CONTRACT`, `docs-to-issue` | docs-to-issue | gh; optional Project repair | Issue | GitHub | `Verify:` markers | executable? duplicate? ready? | issue maintenance | Backlog/needs-human | named human decision | [`.codex/skills/docs-to-issue/SKILL.md`:69-119] |
 | feature breakdown | Capability too large | Agent | Owner/spec docs | feature-breakdown | feature-breakdown | gh/docs | Spec dir, parent/child issues | PR + GitHub | task specs with ACs | parent vs child | validation hub | blocked parent | target acceptance ambiguity | [`.codex/skills/feature-breakdown/SKILL.md`:25-47], [`.codex/skills/feature-breakdown/SKILL.md`:107-129] |
@@ -1313,7 +1313,7 @@ Current observed state, refreshed through read-only GitHub API calls on 2026-08-
 - Repository auto-merge is disabled: `allow_auto_merge=false`. Governed delivery uses an explicit
   merge after the applicable exact-head gates; disabled GitHub auto-merge is not evidence that
   autonomous delivery is absent.
-- CODEOWNERS exists and names Rasmus for prod-critical files, promotion skills, and migrations [`.github/CODEOWNERS`:1-9].
+- CODEOWNERS assigns a designated human owner for prod-critical files, promotion skills, and migrations [`.github/CODEOWNERS`:1-9].
 - Docs claim required checks were added to `stable` on 2026-05-10 [docs/development/GITHUB_GOVERNANCE_SETUP.md:303-319].
 
 Required target state before widening merge authority to a new event-driven or platform-native
@@ -1339,7 +1339,7 @@ authorized through `verification-and-closure` after the applicable exact-head ga
 
 ## 14. Human Exception Model
 
-The canonical escalation classifier owns the route. Rasmus may be called only when it establishes a
+The canonical escalation classifier owns the route. A human owner or operator may be called only when it establishes a
 real owner/operator authority category, including:
 
 - security, privacy, secrets/credentials, protected state, production/release, migrations,
@@ -1403,7 +1403,7 @@ Where to store/post:
 
 ```mermaid
 flowchart LR
-  Rasmus["Rasmus: intent / preference / authority"] --> Docs["Docs-as-code authority"]
+  Owner["Human owner: intent / preference / authority"] --> Docs["Docs-as-code authority"]
   Docs --> Issues["GitHub Issues / Project"]
   Issues --> Dispatcher["Dispatcher queue / leases"]
   Dispatcher --> Agents["Builder agents + skills"]
@@ -1432,7 +1432,7 @@ flowchart LR
   Learning --> Docs
   Review --> Triage["Classifier / recovery"]
   Triage --> Exception["Human exception only for authority"]
-  Exception --> Rasmus
+  Exception --> Owner
 ```
 
 ### Docs-As-Code Feedback Loop
@@ -1610,7 +1610,7 @@ flowchart TD
   Triage -->|technical route| Recover["auto-repair / auto-backoff / blocked_technical"]
   Triage -->|explicit authority category| Packet["Human Exception packet"]
   Packet --> Label["agent:needs-human"]
-  Label --> Decision["Rasmus decision"]
+  Label --> Decision["Human owner decision"]
   Decision -->|authorize| Resume["Resume autonomous flow"]
   Decision -->|reject| Close["Close/block/discard"]
 ```
@@ -1632,5 +1632,5 @@ created. The durable dependency principles are:
   other contractually protected effects;
 - keep docs-as-code and source systems authoritative while representations remain rebuildable;
 - add no routine human review gate where the proportional delivery path does not require one;
-- treat Rasmus as exception and strategic authority, not routine dispatcher, triager, reviewer, or
+- treat the human owner as exception and strategic authority, not routine dispatcher, triager, reviewer, or
   closer.
