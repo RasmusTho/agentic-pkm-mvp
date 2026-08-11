@@ -93,8 +93,9 @@ the route's existing local-admission dependency and calls ARO-02 plus the delive
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_preserves_semantic_provider_envelopes`
 - [ ] The endpoint recomposes each request and creates no cache, store, session, or durable selection.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_rebuildable_and_stateless`
-- [ ] The route imports and calls the delivered composer instead of reimplementing zone rules.
-  - Verify: `tests/api/test_devui_api.py :: test_overview_route_uses_delivered_composer`
+- [ ] The route calls ARO-02's production producer and then the delivered composer in the same
+      request instead of reimplementing zone rules or relying on an unconnected composer test.
+  - Verify: `tests/api/test_devui_api.py :: test_overview_route_uses_production_producer_and_delivered_composer`
 
 ## How to Verify (Pre-Merge)
 

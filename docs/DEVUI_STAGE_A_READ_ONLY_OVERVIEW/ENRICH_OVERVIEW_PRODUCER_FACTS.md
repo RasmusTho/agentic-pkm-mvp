@@ -36,7 +36,7 @@ their canonical source facts. Missing or unsupported facts remain withdrawals.
 
 - Carries accepted source-owned category/governing-source/subject/evidence fields for **Needs you**.
 - Carries accepted receipt-backed `ready_to_try`/subject/evidence fields for **Ready to try**.
-- Supplies candidates to the delivered composer at the production composition call site.
+- Supplies candidate inputs to the route slice that will call the delivered composer.
 - Preserves Now and every degraded/withdrawn state without source or lifecycle inference.
 
 ## Concretely
@@ -53,7 +53,8 @@ as owner truth everywhere downstream.
 ## Scope
 
 - Modify only the current source-to-composition chain named under Constraints.
-- Add production-call-site and hostile-input tests for both admitted and withdrawn facts.
+- Add producer-boundary and hostile-input tests for both admitted and withdrawn facts. ARO-03 owns
+  the production route-to-producer-to-composer call-site proof.
 
 ## Source Anchors
 
@@ -88,7 +89,7 @@ this boundary, this child remains blocked and must be superseded by a new breakd
 
 ## Acceptance Criteria
 
-- [ ] Only ARO-01-authorized fields enter Overview candidates at the production call site.
+- [ ] Only ARO-01-authorized fields enter the Overview candidate input handed to ARO-03.
   - Verify: `tests/builderops/test_devui_composition.py :: test_overview_candidates_preserve_authorized_source_facts`
 - [ ] A supported owner category carries exact governing source, subject linkage, and actionable
       evidence; missing/unknown/degraded fields withdraw it.
@@ -98,8 +99,8 @@ this boundary, this child remains blocked and must be superseded by a new breakd
   - Verify: `tests/builderops/test_devui_composition.py :: test_overview_ready_to_try_never_follows_terminal_delivery_state`
 - [ ] Provider prose, labels alone, timestamps, and textual similarity never synthesize either zone.
   - Verify: `tests/builderops/test_devui_composition.py :: test_overview_candidates_reject_inferred_source_facts`
-- [ ] The delivered pure composer remains unchanged and the production result preserves its
-      withdrawals and independent evidence axes.
+- [ ] The delivered pure composer remains unchanged and the producer result preserves its
+      withdrawals and independent evidence axes for ARO-03 to compose at the production route.
   - Verify: `tests/builderops/test_devui_overview.py :: test_overview_production_inputs_preserve_withdrawals`
 
 ## How to Verify (Pre-Merge)
