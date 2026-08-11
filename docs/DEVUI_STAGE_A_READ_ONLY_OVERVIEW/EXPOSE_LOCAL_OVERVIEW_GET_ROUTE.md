@@ -1,12 +1,12 @@
 ---
 name: Expose the Local Overview GET Route
-description: Expose the delivered composer over one local-only GET endpoint using the accepted production producer result.
+description: Expose the delivered composer over one direct-loopback GET endpoint using live composition readers.
 task_id: ARO-03
 github_issue: 4744
 source_anchor: "docs/plans/DEVUI_IMPLEMENTATION.md :: Stage A — see: coherent read-only devUI"
 parent_capability: devUI Stage A Read-Only Overview
-prerequisites: [ARO-02]
-depends_on: [ENRICH_OVERVIEW_PRODUCER_FACTS.md]
+prerequisites: []
+depends_on: []
 can_parallelize_with: []
 recommended_capability: "Codex Terra / high"
 capability_rationale: "Small API slice with strict local admission, method, and semantic-envelope invariants."
@@ -21,9 +21,17 @@ review_gate: exact-head API review and CI
 
 # Expose the Local Overview GET Route
 
+## Delivery status
+
+Delivered by #4744 / PR #4772 at implementation head
+`7b1f83d4a0b6bdd75071959c41146c70012a29d2` and merge
+`24371d8bf3289dad631c2986f44865794897f32c`. The direct-loopback route calls the live composition
+readers and the delivered composer without candidates. It delivers no producer enrichment, typed
+navigation, browser UI, design, accessibility proof, or owner pilot.
+
 ## Purpose
 
-Expose the accepted production Overview as one bounded local GET endpoint.
+Expose the accepted production Overview as one bounded direct-loopback GET endpoint.
 
 ## Context
 
@@ -34,13 +42,13 @@ write path, cache, browser classification, or alternate composer.
 
 ## Scope
 
-- Add `/api/devui/overview` as a per-request projection over ARO-02 and the delivered composer.
+- Add `/api/devui/overview` as a per-request projection over the live composition readers and the delivered composer.
 - Reuse existing local admission and preserve all semantic provider/candidate state.
 - Add no static assets, navigation destination, command, or write method.
 
 ## What This Task Does
 
-- Reuses local admission, ARO-02 production output, and the delivered composer.
+- Reuses direct-loopback local admission, the live composition readers, and the delivered composer.
 - Returns the exact semantic envelope per request and rejects every mutation method.
 
 ## Concretely
@@ -79,7 +87,8 @@ A separate route proof prevents the browser shell from becoming an implicit sour
 ## Constraints
 
 Implementation is limited to `app/api/routes/devui.py` and `tests/api/test_devui_api.py`. It reuses
-the route's existing local-admission dependency and calls ARO-02 plus the delivered composer.
+the route's existing direct-loopback local-admission dependency and calls the live composition
+readers plus the delivered composer without candidates.
 
 ## Acceptance Criteria
 
@@ -128,5 +137,6 @@ the route's existing local-admission dependency and calls ARO-02 plus the delive
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) on #4743's
-exact merged producer receipt.
+Delivered by [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) / PR #4772 after
+the accepted no-source decision superseded #4743. Future candidate enrichment requires a separate
+governed source contract.

@@ -1,11 +1,13 @@
-State: Accepted target-state breakdown with blocked validation parent #4741 and children #4742–#4749 filed; Focus-route prerequisite #4768 is ready; no remaining Stage A implementation is claimed.
+State: Accepted target-state breakdown with blocked validation parent #4741; #4742 closed with the
+no-source withdrawal, #4743 superseded, #4744 delivered as the direct-loopback Overview route, and
+#4745–#4749 still blocked. Focus-route prerequisite #4768 is delivered by PR #4771.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
 Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-11
 
 # devUI Stage A Read-Only Overview
 
@@ -15,19 +17,21 @@ Complete the remaining read-only Overview path without reimplementing the delive
 `devui-overview-view.v1` composer or allowing a browser, label, terminal delivery state, or merged
 PR to invent owner attention or trial readiness.
 
-The capability is deliberately blocked. No current producer exposes the canonical source facts
-needed for **Needs you** or **Ready to try**, and no local Focus or SoI destination exists for typed
-navigation. Visual implementation additionally waits for a governed Yggdrasil handoff.
+The remaining capability is deliberately blocked. No current producer exposes canonical source
+facts for **Needs you** or **Ready to try**, so those zones remain withdrawn rather than waiting on
+producer enrichment. The direct-loopback Overview route and separate local Focus Issue route are
+delivered, but typed Overview-to-Focus navigation is not; no local SoI destination is available.
+Visual implementation additionally waits for a governed Yggdrasil handoff.
 
 ## Current-to-target truth
 
 | Surface | Current delivered fact | Remaining target |
 | --- | --- | --- |
-| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 remains blocked |
+| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 is superseded |
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | `agent:needs-human` may place work in a Cockpit band, but no serialized canonical owner-authority category/governing-source fact reaches Overview | Exact source-owned owner-question facts, or an honest withdrawal |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
-| API | Local-only GET `/api/devui/composition`; no devUI mutation route | Local-only GET `/api/devui/overview` over the accepted producer and delivered composer |
+| API | Local-only GET `/api/devui/composition` plus direct-loopback GET `/api/devui/overview`, which calls the delivered composer without candidates; no devUI mutation route | No remaining ARO-03 route work; typed navigation and the browser shell remain separate targets |
 | Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
 | Visual shell | No Overview browser shell | Governed Yggdrasil design, read-only shell, browser/accessibility proof, owner pilot |
 
@@ -47,25 +51,25 @@ contract would have to name:
 4. whether the current GitHub → Cockpit → `devui.composition.v1` producer chain can transport those
    exact facts without acquiring authority.
 
-The recorded no-source resolution keeps the corresponding zones withdrawn and ARO-02 blocked or
-superseded. `agent:needs-human`, `done`, a merge, Issue closure, availability, or a terminal
+The recorded no-source resolution keeps the corresponding zones withdrawn and supersedes ARO-02.
+`agent:needs-human`, `done`, a merge, Issue closure, availability, or a terminal
 verification receipt is never itself the missing category or `ready_to_try` fact.
 
 ## Dependency order and readiness
 
-| Order | Task | Initial label | Exact executable trigger |
+| Order | Task | Current disposition | Exact next condition |
 | --- | --- | --- | --- |
 | 1 | ARO-01 — Authorize Overview Source Facts | Closed #4742; withdrawal recorded by PR #4751 | No current source owns either Overview fact |
 | 2 | ARO-02 — Enrich Overview Producer Facts | Superseded #4743 | The accepted no-source decision leaves no producer facts to enrich; a future source contract requires a new governed slice |
 | 3 | ARO-03 — Expose the Local Overview GET Route | Delivered #4744 | The route rebuilds the production composition and calls the delivered composer without candidates |
-| 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus delivered #4768 local Focus route and an optional local SoI destination |
+| 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | Revalidate its own typed-navigation contract against delivered ARO-03 and #4768; absent optional SoI remains unsupported rather than fabricated |
 | 5 | ARO-05 — Validate the Overview Yggdrasil Design | `agent:blocked` | Stable ARO-03/04 fixtures plus passing governed design-system preflight |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 handoff and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | ARO-06 merged at an exact testable SHA |
 | 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | ARO-07 receipt and stable local source fixtures |
 
-No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a
-pickup issue.
+ARO-04 through ARO-08 remain `agent:blocked`. The parent is a blocked validation hub and never
+becomes a pickup issue.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -88,9 +92,9 @@ pickup issue.
 ## Capability acceptance
 
 - [ ] Every child has a terminal delivery receipt or explicit superseding/withdrawal disposition.
-- [ ] The accepted source contract proves that Needs-you and Ready-to-try facts are source-owned,
-      serialized, linked, fresh enough, and never inferred.
-- [ ] The local Overview endpoint is GET-only, local-admission constrained, projection-only, and
+- [x] The accepted no-source resolution keeps Needs-you and Ready-to-try withdrawn until separately
+      governed source-owned facts are serialized, linked, fresh enough, and explicitly admitted.
+- [x] The local Overview endpoint is GET-only, local-admission constrained, projection-only, and
       preserves the delivered composer contract.
 - [ ] Every typed navigation reference resolves to an actual admitted local destination or remains
       explicitly unavailable/unsupported; no dead or synthetic link is rendered.

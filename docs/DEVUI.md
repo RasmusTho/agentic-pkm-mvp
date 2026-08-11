@@ -12,8 +12,10 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-08-10
-Last verified against: `origin/main` `07d060f1e24f93ed9e0e0834256e053fa5781d30`, ADR-0057,
+Last reviewed: 2026-08-11
+Last verified against: `origin/main` `2638fb4f1df70871db85ce8e3f3cf5461ef0d5e0`, which contains
+merged PR #4772 (`7b1f83d4a0b6bdd75071959c41146c70012a29d2` ->
+`24371d8bf3289dad631c2986f44865794897f32c`), ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
 Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
 the advisory Builder System devUI execution audit in PR #4689, and the merged Focus and Conversation
@@ -444,10 +446,10 @@ The optional `soi_evidence_lens` is a reference to the delivered bounded SoI Evi
 it retains that proof's explicit Product/Runtime denominator and current/target claim horizons. It
 does not classify Overview items or become a maturity, priority, or lifecycle authority.
 
-This contract is a nonvisual prerequisite. A local GET-only route may expose it after its own
-bounded implementation proof. A visual shell remains separately gated by the governed Yggdrasil
-design handoff; neither a browser nor a shell may reclassify the server result or add durable
-selection state.
+This contract is a nonvisual prerequisite. The delivered direct-loopback GET-only route exposes it
+after its bounded implementation proof. A visual shell remains separately gated by the governed
+Yggdrasil design handoff; neither a browser nor a shell may reclassify the server result or add
+durable selection state.
 
 The pure composer is implemented in `app/builderops/devui_overview.py`. It accepts only the
 composition envelope, explicit producer evidence, and typed root references; without actionable
@@ -643,13 +645,16 @@ Delivered now:
   #4710 / PR #4711;
 - the pure `devui-overview-view.v1` server-side composer, which preserves missing producer
   classification as an explicit withdrawal rather than an empty owner or ready list;
+- admitted direct-loopback GET `/api/devui/overview`, rebuilding the live composition and passing no
+  candidates to the delivered composer so **Needs you** and **Ready to try** remain explicitly
+  withdrawn, implemented by #4744 / PR #4772;
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; the local Overview route; Focus browser UI, capability-subject route, and Overview-to-Focus
-navigation; provider conversation runtime; authenticated command preview/Start/Hold;
+surface; Focus browser UI, capability-subject route, and Overview-to-Focus navigation; provider
+conversation runtime; authenticated command preview/Start/Hold;
 the Builder System Control lens; visual shell; owner pilot and tried-by-owner acceptance; and
 ADR-0065 dispositions.
 
