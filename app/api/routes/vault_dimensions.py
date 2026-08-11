@@ -45,6 +45,7 @@ from app.instance.vault_dimensions import (
     REASON_DIMENSION_UNKNOWN,
     REASON_MEMBER_UNAUTHORIZED,
     DimensionReceipt,
+    DimensionRecoveryReceipt,
     DimensionResolutionError,
     VaultDimensionService,
 )
@@ -85,6 +86,14 @@ class DimensionMembersRequest(BaseModel):
     vault_binding_ids: list[str] = Field(default_factory=list)
 
 
+class DimensionRecoveryRequest(BaseModel):
+    """The recovery write is pinned to exactly the registry revision read by the operator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_registry_revision: int = Field(ge=0)
+
+
 class DimensionView(BaseModel):
     """Stored grouping metadata. Deliberately carries no authority field."""
 
@@ -110,6 +119,12 @@ class DimensionReceiptResponse(BaseModel):
     dimension_revision: int | None = None
     vault_binding_ids: list[str] = Field(default_factory=list)
     last_repair: dict | None = None
+
+
+class DimensionRecoveryReceiptResponse(BaseModel):
+    old_registry_revision: int
+    new_registry_revision: int
+    removed_extension_slot: str
 
 
 class ResolvedMemberView(BaseModel):
@@ -199,6 +214,10 @@ def _receipt(receipt: DimensionReceipt) -> DimensionReceiptResponse:
     return DimensionReceiptResponse(**receipt.as_dict())
 
 
+def _recovery_receipt(receipt: DimensionRecoveryReceipt) -> DimensionRecoveryReceiptResponse:
+    return DimensionRecoveryReceiptResponse(**receipt.as_dict())
+
+
 @router.get("", response_model=DimensionListResponse)
 def list_dimensions(
     service: VaultDimensionService = Depends(get_dimension_service),
@@ -226,6 +245,22 @@ def create_dimension(
     except RegistryError as exc:
         raise _fail(exc) from exc
     return _receipt(receipt)
+
+
+@router.post("/recover-malformed", response_model=DimensionRecoveryReceiptResponse)
+def recover_malformed_dimensions(
+    payload: DimensionRecoveryRequest,
+    service: VaultDimensionService = Depends(get_dimension_service),
+) -> DimensionRecoveryReceiptResponse:
+    """Remove only an unparsable dimensions slot at an explicit registry revision."""
+
+    try:
+        receipt = service.recover_malformed_dimensions(
+            expected_registry_revision=payload.expected_registry_revision
+        )
+    except RegistryError as exc:
+        raise _fail(exc) from exc
+    return _recovery_receipt(receipt)
 
 
 @router.get("/{dimension_id}", response_model=DimensionView)
