@@ -110,7 +110,11 @@ def _read_issue_inputs(subject_id: str, match: re.Match[str]) -> dict[str, Any]:
     title = issue.get("title")
     html_url = issue.get("html_url")
     updated_at = issue.get("updated_at")
-    if not all(isinstance(value, str) and value for value in (title, html_url, updated_at)):
+    if not isinstance(title, str) or not title:
+        raise FocusInputError("selected Issue source is unavailable")
+    if not isinstance(html_url, str) or not html_url:
+        raise FocusInputError("selected Issue source is unavailable")
+    if not isinstance(updated_at, str) or not updated_at:
         raise FocusInputError("selected Issue source is unavailable")
     source_ref = _source_ref(
         source_type="github_issue",

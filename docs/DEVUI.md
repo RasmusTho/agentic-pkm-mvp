@@ -624,6 +624,9 @@ Delivered now:
   persistence or mutation;
 - `FocusView.v1` / `focus-view.v1`, a pure subject-centred projection with explicit correlation,
   delivered by #4694 / PR #4703;
+- admitted local GET `/api/devui/focus` for one stable governed GitHub Issue, rebuilding the
+  delivered `focus-view.v1` projection per request without a root-payload join, persistence,
+  command, cache, session, or browser UI, implemented by #4768 / PR #4771;
 - `conversation-context-pack.v1` and its non-authoritative external disposition composer, delivered
   by #4696 / PR #4704; and
 - the bounded, read-only SoI Evidence View v0 proof composer and immutable fixtures, delivered by
@@ -635,8 +638,8 @@ Delivered now:
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; the local Overview route; Focus route/UI (the route remains undelivered until executable
-prerequisite #4768 is delivered) and Overview-to-Focus navigation; provider conversation runtime; authenticated command preview/Start/Hold;
+surface; the local Overview route; Focus browser UI, capability-subject route, and Overview-to-Focus
+navigation; provider conversation runtime; authenticated command preview/Start/Hold;
 the Builder System Control lens; visual shell; owner pilot and tried-by-owner acceptance; and
 ADR-0065 dispositions.
 
