@@ -1,4 +1,6 @@
-State: Accepted target-state breakdown with blocked validation parent #4741 and children #4742–#4749 filed; Focus-route prerequisite #4768 is ready; no remaining Stage A implementation is claimed.
+State: Accepted target-state breakdown with blocked validation parent #4741; #4742 closed with the
+no-source withdrawal, #4743 superseded, #4744 delivered as the direct-loopback Overview route, and
+#4745–#4749 still blocked. Focus-route prerequisite #4768 is delivered by PR #4771.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
@@ -15,7 +17,7 @@ Complete the remaining read-only Overview path without reimplementing the delive
 `devui-overview-view.v1` composer or allowing a browser, label, terminal delivery state, or merged
 PR to invent owner attention or trial readiness.
 
-The capability is deliberately blocked. No current producer exposes the canonical source facts
+The remaining capability is deliberately blocked. No current producer exposes the canonical source facts
 needed for **Needs you** or **Ready to try**, and no local Focus or SoI destination exists for typed
 navigation. Visual implementation additionally waits for a governed Yggdrasil handoff.
 
@@ -23,7 +25,7 @@ navigation. Visual implementation additionally waits for a governed Yggdrasil ha
 
 | Surface | Current delivered fact | Remaining target |
 | --- | --- | --- |
-| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 remains blocked |
+| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 is superseded |
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | `agent:needs-human` may place work in a Cockpit band, but no serialized canonical owner-authority category/governing-source fact reaches Overview | Exact source-owned owner-question facts, or an honest withdrawal |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |

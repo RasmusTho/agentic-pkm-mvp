@@ -122,7 +122,7 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 | --- | --- | --- | --- | --- | --- | --- |
 | #4742 ARO-01 | closed / withdrawal | #4751 merged | none | verified | no current source owns either Overview fact | preserve withdrawal until a separate source contract exists |
 | #4743 ARO-02 | closed / superseded | none | none | superseded | accepted no-source decision | create a new governed slice only after a source contract exists |
-| #4744 ARO-03 | open / P1 closure repair | #4772 merged | head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`<br>merge `24371d8bf3289dad631c2986f44865794897f32c` | exact-head CI rerun pending | parent-ledger current-state drift | merge the bounded ledger repair, then close #4744 |
+| #4744 ARO-03 | delivered / closure pending | #4772 merged | head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`<br>merge `24371d8bf3289dad631c2986f44865794897f32c` | exact-head CI and convergence review pending | parent-ledger current-state drift repaired by #4774 | close #4744 after the exact-head gates and merged writeback |
 | #4745 ARO-04 | open / blocked | none | none | unknown | #4744 + real destinations | revalidate after destination routes exist |
 | #4746 ARO-05 | open / blocked | none | none | unknown | stable #4744/#4745 fixtures + design preflight | run governed handoff when inputs exist |
 | #4747 ARO-06 | open / blocked | none | none | unknown | #4744/#4745/#4746 | revalidate after accepted handoff |

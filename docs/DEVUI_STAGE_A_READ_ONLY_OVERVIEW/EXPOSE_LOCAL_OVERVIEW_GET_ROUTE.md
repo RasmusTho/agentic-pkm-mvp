@@ -1,12 +1,12 @@
 ---
 name: Expose the Local Overview GET Route
-description: Expose the delivered composer over one local-only GET endpoint using the accepted production producer result.
+description: Expose the delivered composer over one direct-loopback GET endpoint using live composition readers.
 task_id: ARO-03
 github_issue: 4744
 source_anchor: "docs/plans/DEVUI_IMPLEMENTATION.md :: Stage A — see: coherent read-only devUI"
 parent_capability: devUI Stage A Read-Only Overview
-prerequisites: [ARO-02]
-depends_on: [ENRICH_OVERVIEW_PRODUCER_FACTS.md]
+prerequisites: []
+depends_on: []
 can_parallelize_with: []
 recommended_capability: "Codex Terra / high"
 capability_rationale: "Small API slice with strict local admission, method, and semantic-envelope invariants."
@@ -34,13 +34,13 @@ write path, cache, browser classification, or alternate composer.
 
 ## Scope
 
-- Add `/api/devui/overview` as a per-request projection over ARO-02 and the delivered composer.
+- Add `/api/devui/overview` as a per-request projection over the live composition readers and the delivered composer.
 - Reuse existing local admission and preserve all semantic provider/candidate state.
 - Add no static assets, navigation destination, command, or write method.
 
 ## What This Task Does
 
-- Reuses local admission, ARO-02 production output, and the delivered composer.
+- Reuses direct-loopback local admission, the live composition readers, and the delivered composer.
 - Returns the exact semantic envelope per request and rejects every mutation method.
 
 ## Concretely
@@ -79,23 +79,24 @@ A separate route proof prevents the browser shell from becoming an implicit sour
 ## Constraints
 
 Implementation is limited to `app/api/routes/devui.py` and `tests/api/test_devui_api.py`. It reuses
-the route's existing local-admission dependency and calls ARO-02 plus the delivered composer.
+the route's existing direct-loopback local-admission dependency and calls the live composition
+readers plus the delivered composer without candidates.
 
 ## Acceptance Criteria
 
-- [ ] Local direct and accepted proxy requests return exact `devui-overview-view.v1`; non-local or
-      ambiguous forwarded identity is rejected.
+- [ ] Local direct requests return exact `devui-overview-view.v1`; non-local or every forwarded
+      identity is rejected.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_reuses_local_admission_and_exact_contract`
 - [ ] POST, PUT, PATCH, and DELETE are unavailable and the route has no command or mutation dependency.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_get_only`
-- [ ] Available, partial, refused, and mixed-provider inputs preserve provider identity,
-      freshness, completeness, refusal, linkage, withdrawals, and limitations.
-  - Verify: `tests/api/test_devui_api.py :: test_overview_route_preserves_semantic_provider_envelopes`
+- [ ] With no current source contract, `needs_you` and `ready_to_try` remain withdrawn rather than
+      becoming fabricated facts or measured-empty claims.
+  - Verify: `tests/api/test_devui_api.py::test_overview_route_preserves_no_source_withdrawals`
 - [ ] The endpoint recomposes each request and creates no cache, store, session, or durable selection.
-  - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_rebuildable_and_stateless`
-- [ ] The route calls ARO-02's production producer and then the delivered composer in the same
-      request instead of reimplementing zone rules or relying on an unconnected composer test.
-  - Verify: `tests/api/test_devui_api.py :: test_overview_route_uses_production_producer_and_delivered_composer`
+  - Verify: `tests/api/test_devui_api.py::test_overview_route_is_get_only`
+- [ ] The route calls the live production composition readers and then the delivered composer in the
+      same request instead of reimplementing zone rules or depending on superseded #4743 enrichment.
+  - Verify: `tests/api/test_devui_api.py::test_overview_route_uses_live_composition_and_delivered_composer`
 
 ## How to Verify (Pre-Merge)
 
@@ -128,5 +129,6 @@ the route's existing local-admission dependency and calls ARO-02 plus the delive
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) on #4743's
-exact merged producer receipt.
+Delivered by [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) / PR #4772 after
+the accepted no-source decision superseded #4743. Future candidate enrichment requires a separate
+governed source contract.
