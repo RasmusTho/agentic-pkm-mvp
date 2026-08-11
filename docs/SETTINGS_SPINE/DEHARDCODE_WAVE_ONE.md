@@ -1,7 +1,8 @@
 ---
 name: Dehardcode Wave One
-description: The highest user-meaning hardcoded values — model routing overrides, TTS voices, rerank surface, curation/expansion thresholds, watcher tunables — migrate into the settings registry, tier-gated
+description: SETTINGS-07 validation hub and serial ledger for the highest user-meaning settings migrations
 task_id: SETTINGS-07
+github_issue: 3165
 source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F3
 parent_capability: Settings Spine
 prerequisites: [SETTINGS-02, SETTINGS-03]
@@ -13,29 +14,24 @@ can_parallelize_with: [Prompts As Settings]
 
 ## Purpose
 
-Migrate the first wave of the ~50 user-meaningful env-only/constant-only values from audit
-finding F3 into the settings surface, so an operator tunes behavior by editing markdown, not by
-redeploying with different env vars.
+This is the SETTINGS-07 validation hub. The three bounded child specifications migrate the first
+wave of user-meaningful env-only/constant-only values, so an operator tunes behavior by editing
+markdown rather than redeploying with different environment variables.
 
 ## What This Task Does
 
-Wave-one scope (each becomes a registry key with the current value as default, vault-editable at
-the canonical location, tier-gated operator/lab per `app/settings/tiering.py`):
+The hub owns the serial child ledger and stage-level acceptance. Each child owns its own registry
+keys and production consumers:
 
-- **Model overrides:** `REASONING_MODEL`, `MERGE_LLM_MODEL` (both default `llama3.1:8b` today),
-  `LLM_TEMPERATURE`, unified `LLM_TIMEOUT` (post SETTINGS-02) → `settings/llm_routing.md` keys.
-- **TTS:** voices (`TTS_SV_VOICE`, `TTS_EN_US_VOICE`, `TTS_EN_GB_VOICE`) and the local-only /
-  fallback toggles → a `settings/tts.md` note; `app/tts/config.py` gains a settings-backed layer
-  (env remains deploy bootstrap override, lab-tier).
-- **Rerank:** `RERANK_ENABLE`, `RERANK_PROVIDER`, `RERANK_TOP_K` → `settings/retrieval.md`
-  (lab-tier; remaining RERANK_* stay env bootstrap).
-- **Curation/expansion thresholds:** contradiction floor 0.4, relatedness floor 0.55, retrieval
-  k 8, findings caps — and fix the constant-vs-field defect where the module constant is read
-  instead of the configured instance field (`app/curation/contradiction.py:108,336`,
-  `app/expansion/connect.py:112,212`) so configuration actually flows (lab-tier).
-- **Watcher tunables:** debounce, rate limit, backoff, tick sleep, per-tick caps
-  (`app/watcher/config.py:170-204`) → `settings/watchers.md` (lab-tier), env as bootstrap
-  override.
+1. [LLM_AND_RETRIEVAL_SETTINGS.md](LLM_AND_RETRIEVAL_SETTINGS.md) / SETTINGS-07A / #4796
+2. [TTS_SETTINGS.md](TTS_SETTINGS.md) / SETTINGS-07B / #4797
+3. [WATCHER_AND_TUNING_SETTINGS.md](WATCHER_AND_TUNING_SETTINGS.md) / SETTINGS-07C / #4798
+
+The original wave-one scope is allocated as follows:
+
+- **Model overrides and rerank:** SETTINGS-07A.
+- **TTS:** SETTINGS-07B.
+- **Curation/expansion thresholds and watcher tunables:** SETTINGS-07C.
 
 Env vars for migrated keys keep working one release as bootstrap overrides with a deprecation
 note in `settings explain` output; the registry is the declaration point (SETTINGS-02 gate
@@ -58,33 +54,23 @@ parallel mechanism per subsystem.
 
 ## Acceptance Criteria
 
-- [ ] Every wave-one key resolves through the spine and is visible in `settings explain` with its
-      origin and tier.
-  - Verify: `tests/cli/test_settings_explain_cli.py::test_wave_one_keys_explainable` (extend)
-- [ ] Curation/expansion passes honor configured thresholds (constant-vs-field defect fixed): a
-      configured relatedness floor changes connect-pass admission.
-  - Verify: `tests/expansion/test_connect_findings.py::test_configured_floor_is_honored`
-    (enforcement AC — configures via the settings path and asserts the production pass uses it)
-- [ ] TTS voice selection follows the settings value on the synthesis path.
-  - Verify: `tests/tts/test_settings_backed_voices.py::test_voice_resolves_from_settings`
-- [ ] Watcher tunables from settings reach `WatcherConfig` on startup and on reload.
-  - Verify: `tests/watcher/test_settings_tiering_profile.py::test_tunables_from_settings` (extend
-    existing module)
-- [ ] Operator/lab tiering holds: lab-tier keys are inert under the operator profile and say so in
-      `settings explain`.
-  - Verify: `tests/settings/test_tiering_wave_one.py::test_lab_keys_inert_under_operator`
-- [ ] No behavior change with an empty settings folder (defaults identical to today).
-  - Verify: `pytest -q -m "not pg"` green with no settings fixtures
+- [ ] Every child has a merged delivery receipt and the parent ledger names SETTINGS-07 delivered.
+  - Verify: doc writeback at `docs/SETTINGS_SPINE/PARENT_FEATURE_ISSUE.md :: Child issues (execution order)`
+- [ ] Every migrated wave-one key is explainable with origin and tier while empty settings preserve behavior.
+  - Verify: `tests/settings/test_llm_retrieval_settings.py::test_empty_settings_and_legacy_env_preserve_llm_and_rerank_behavior`
+  - Verify: `tests/tts/test_settings_backed_voices.py::test_empty_settings_and_legacy_tts_env_preserve_behavior`
+  - Verify: `tests/settings/test_watcher_and_tuning_settings.py::test_empty_settings_legacy_env_and_operator_tier_preserve_watcher_and_tuning_behavior`
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/settings tests/cli/test_settings_explain_cli.py tests/expansion/test_connect_findings.py tests/tts -k settings`
-- `pytest -q -m "not pg"` (broad shared surfaces — full suite mandatory)
+- Run every child’s declared validation on its exact delivery SHA.
+- On the final child, run `pytest -q -m "not pg"` and attach the result to #3165 and #3156.
 
 ## Out of Scope
 
+- Implementation; each code change belongs to the named child.
 - Wave two (embedding provider knobs, API browse limits, panel-agent decider, knowledge adapter
-  choice) — follow-up issues after wave one proves the pattern.
+  choice).
 - Removing env vars — bootstrap override semantics stay.
 - Prompt migration (SETTINGS-06).
 
