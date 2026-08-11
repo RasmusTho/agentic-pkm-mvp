@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 from app.dispatcher import leases as lease_module
 from app.dispatcher import queue as queue_module
 from app.dispatcher.config import load_paths
+from app.dispatcher.darwin_containment import select_verification_containment
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import LeaseRecord, TaskRecord
 from app.dispatcher.singleton import (
@@ -696,6 +697,7 @@ def _build_host_fenced_verification_cycle(
     holder: str,
     worktree: Path,
     context_path: Path,
+    containment_factory: Callable[[], Any],
 ) -> tuple[Any, Callable[[], None]]:
     from app.dispatcher.verification_consumer import (
         CANONICAL_RECEIPT_SCHEMA_PATH,
@@ -738,6 +740,7 @@ def _build_host_fenced_verification_cycle(
             worktree,
             CANONICAL_RECEIPT_SCHEMA_PATH,
             context_path,
+            containment_factory=containment_factory,
         )
         launcher = _InstalledMainExactHeadLauncher(
             raw_launcher,
@@ -810,6 +813,12 @@ def _cmd_verification_cycle(
         if not (worktree / ".git").exists():
             raise ValueError("verification worktree is unavailable")
         _assert_installed_main_worktree(worktree, repository)
+        # The kernel containment fence is selected and proven before the API
+        # client exists, so an unavailable/shared coalition cannot ingest or
+        # claim a BuilderOps verification run.
+        containment_factory = select_verification_containment(
+            args.containment_profile
+        )
         with tempfile.TemporaryDirectory(
             prefix="yggdrasil-verification-cycle-"
         ) as scratch:
@@ -821,6 +830,7 @@ def _cmd_verification_cycle(
                         holder=args.holder,
                         worktree=worktree,
                         context_path=Path(scratch) / "context.json",
+                        containment_factory=containment_factory,
                     )
                 )
                 try:
@@ -1199,6 +1209,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default=None, help="Explicit owner/repo authority")
     p.add_argument("--holder", default="verification-host")
     p.add_argument("--worktree", default=None)
+    p.add_argument(
+        "--containment-profile",
+        default=None,
+        help=(
+            "Required allowlisted whole-process-tree containment profile; "
+            "installed-main currently supports "
+            "darwin-launchd-resource-coalition-v1"
+        ),
+    )
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
