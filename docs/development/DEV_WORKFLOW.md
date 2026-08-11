@@ -64,6 +64,19 @@ Practical rule:
 
 ## Validation baseline
 
+### Repository documentation language
+
+Repository documentation uses English as its primary prose. The policy covers root contributor
+documents, `docs/**`, repo-local skills and agent adapters, Companion UI documentation, and governed
+design handoffs. It deliberately does not reclassify Product/vault Markdown or multilingual test
+corpora as documentation; those surfaces contain Swedish and other languages by design.
+
+`python3 scripts/docs_guard.py --language-only` scans the complete tracked documentation surface on
+every PR, including implementation PRs. It removes fenced code, inline code, URLs, and comments
+before applying a deterministic primary-language check. Bounded quotations, localization strings,
+and SV/EN examples are permitted inside an otherwise-English document. A document whose primary
+prose is detected as non-English fails with the path and marker evidence; there is no per-file bypass.
+
 - Docs-only changes:
   - run any repo docs validation command if one exists
   - when `.codex/skills/**` changed, run `python3 scripts/lint_skills_consistency.py` (exit 0, zero output = clean)
@@ -283,6 +296,7 @@ Use this lane only when:
   - `.github/workflows/issue-pr-governance.yml`
   - `Makefile`
   - `scripts/docs_guard.py`
+  - `scripts/docs_guard_logic.py`
   - `scripts/install_skills.sh`
   - `scripts/agent_workspace_preflight.sh`
   - `scripts/agent_workspace_cleanup.sh`
@@ -317,6 +331,7 @@ Use this lane only when:
   - `tests/ops/test_review_before_ci_gate.py`
   - `tests/ops/test_host_global_lease.py`
   - `tests/scripts/test_validate_issue_readiness.py`
+  - `tests/scripts/test_docs_guard.py`
   - `tests/scripts/test_pr_body_generator.py`
   - `tests/fixtures/issue_readiness/**`
   - `tests/fixtures/pr_body_generator/**`

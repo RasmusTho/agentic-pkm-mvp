@@ -151,6 +151,13 @@ jobs:
       - name: Skills consistency lint
         run: python3 scripts/lint_skills_consistency.py
 
+      # Full-repository and unconditional: implementation PRs may update docs
+      # while the broader docs guard below intentionally stays off the runtime
+      # surface. Product/vault content and multilingual test corpora are not
+      # repository documentation and remain outside this policy.
+      - name: Documentation language guard
+        run: python3 scripts/docs_guard.py --language-only
+
       # Companion to the unconditional skills lint above. scripts/docs_guard.py
       # had no PR-triggered home at all: its only caller is architecture-ci.yaml,
       # which has been workflow_dispatch-only since #3892, so the docs-pairing
