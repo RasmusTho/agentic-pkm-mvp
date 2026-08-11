@@ -1,13 +1,516 @@
-State: Builder System architecture and process map.
-Doc role: Development governance / system-of-systems map
-Authority: Descriptive inventory plus target automation roadmap for the Builder System. This document does not change workflows, skills, scripts, issue templates, CI, branch protection, or GitHub state.
+State: Builder System normative process architecture with verified current-to-target coverage.
+Doc role: Development governance / process architecture and system-of-systems map
+Authority: Owns the single L0 Builder System root, the separate value-stream and cross-cutting governance process hierarchies, L3-to-L2 instruction mapping, and information/evidence/representation architecture. Existing skills, scripts, templates, owner docs, and live systems remain the executable authorities named by this architecture. Target process descriptions do not claim shipped automation or runtime behavior.
 Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-11
 
 # Builder System Process Map
+
+## Normative Process Architecture
+
+This section is the primary written process. The implementation inventory, state machines, and
+diagrams later in this document provide evidence and detail; they do not replace this hierarchy.
+Where a current executable workflow is named, its owning skill, owner document, script, GitHub
+object, or live system remains authoritative for execution. Where this section says **target**, it
+defines intended process shape only.
+
+Normative terms use their usual meanings: **must** is required for process conformance, **should** is
+the normal path with proportionate exceptions, and **may** is optional. Status terms mean:
+
+- **current**: verified in an owner document, skill, script, template, or live authority;
+- **partial**: current mechanisms cover part of the process but not the whole interface;
+- **target**: intended architecture that is not yet fully implemented;
+- **advisory**: research or audit input that has not crossed into normative authority.
+
+### Scope and boundary
+
+The Builder System is the continuous-development enabling system around Yggdrasil's
+Product/Runtime System. It turns intent and operational evidence into governed, accepted changes.
+It may be reused as a portable pattern, but this repository's owner docs and contracts govern this
+instance. It is not a competing product runtime, Product SBS subsystem, knowledge authority,
+backlog alternative, or lifecycle authority.
+
+The Builder System begins when owner intent, a verified need, or an operational signal is taken up
+for shaping. It ends only provisionally: an accepted change enters operation, and operational
+evidence returns to planning or process governance. Product operation remains Product/Runtime
+authority. The Builder System observes it and may propose or deliver changes through the normal
+repo path; it cannot silently convert observations, BuilderOps records, chat, or projections into
+Product truth.
+
+### L0 root — Governed Builder System Delivery & Operations System
+
+L0 contains exactly one root: the **Governed Builder System Delivery & Operations System**. Its
+purpose is to turn owner intent and operational evidence into accepted, operated, and continuously
+improved software-product outcomes while preserving Product/Runtime authority, bounded change,
+verifiable completion, safe recovery, and durable learning.
+
+Three non-competing views describe this one root:
+
+1. the **primary value-stream process hierarchy** — how value and corrective action flow;
+2. the **cross-cutting governance process hierarchy** — how intent, contracts, risk, evidence, and
+   process authority constrain and improve the value stream; and
+3. the **information, evidence, and representation architecture** — which artifacts are systems of
+   record, control-plane state, proof, or rebuildable views.
+
+These views answer different questions and must not be flattened into one sequence.
+
+Hierarchy consistency rule:
+
+- every non-root process belongs to exactly one parent in its own process hierarchy;
+- a cross-cutting governance process may attach to many value-stream processes, but it is not
+  duplicated as a value-stream stage;
+- information, evidence, and representation classes are architecture, not process stages;
+- an L3 work instruction is bound to one named L2 subprocess as its primary parent and cannot be a
+  sibling of an L1 or L2 process; references from other subprocesses are reuse, not duplicate
+  parentage.
+
+### Target operating model — a governed agentic dark factory
+
+**Target-state vision — not current delivered reality.** The intended operating model is a fully
+agentic **dark factory for governed software-product delivery**: once intent, policy, scope, and
+authority are sufficiently explicit, agents can carry routine, bounded, reversible work through
+shaping, contract formation, execution, verification, integration, release handling, observation,
+and improvement without routine human attendance or babysitting.
+
+"Dark factory" describes an unattended normal flow, not an opaque one. The target must remain
+evidence-lit, inspectable, interruptible, and accountable. Every effect still binds to its owning
+source, exact change, policy, evidence gate, receipt, and recovery path. Fully agentic operation
+does not mean unlimited agent discretion, the removal of governance, or the transfer of authority
+to a dashboard, projection, model session, or orchestration layer.
+
+The maturity transition is explicit:
+
+| Maturity posture | Human involvement | Agent authority and controls |
+| --- | --- | --- |
+| **Current** | Human escalation occurs relatively often across shaping, ambiguous routing, operational recovery, release decisions, and incomplete automation. Several strong delivery workflows can run autonomously, but the whole lifecycle is not unattended. | Authority is fragmented across current skills, scripts, docs, GitHub, CI, runbooks, and operator steps; early shaping and post-release feedback remain partial. |
+| **Transition** | Repeated routine questions are removed from the human path only after their decision boundaries are made explicit. Humans remain available for true exceptions and may inspect, interrupt, or narrow delegated authority. | Encode repeatable decisions as owner-approved policies, bounded Issue contracts, permission scopes, deterministic preflights, exact-head evidence gates, retry/repair budgets, safe defaults, rollback paths, and durable receipts. Expand autonomy in staged, reversible increments with observed evidence before broader mutation rights. |
+| **Target** | Human escalation is the exception rather than the normal path. Humans retain strategic and legal/ethical ownership plus decisions that are genuinely irreversible, external-facing, authority-ambiguous, or protected by an explicit operator contract. | Agents operate the routine value stream end to end within explicit policy and bounded authority, fail closed outside it, recover or replan autonomously when safe, and return only real authority decisions with concise evidence and consequences. |
+
+The transition must not hide current limitations by relabeling them as autonomy. A workflow is not
+target-dark-factory capable until its normal decisions, allowed mutations, evidence freshness,
+failure handling, and stop conditions are explicit enough to run without inventing authority.
+Conversely, frequent human escalation in current practice is a maturity signal: repeated reversible
+decisions should be converted into policy, evidence gates, or narrower delegated authority rather
+than preserved as permanent approval steps.
+
+Target autonomy is constrained by these guardrails:
+
+1. Agents may exercise only explicitly delegated, bounded, and auditable authority; they may not
+   infer broader permission from task urgency, technical capability, or a projection.
+2. Required CI, verification, review, release, safety, privacy, migration, and environment gates
+   remain non-waivable. Human approval cannot fabricate a passing gate.
+3. Routine/reversible decisions should become policy-driven and evidence-gated; irreversible,
+   external-facing, strategic, or genuinely authority-ambiguous decisions stay human-owned.
+4. Mutations must preserve limited blast radius, isolation, idempotency or reconciliation where
+   applicable, a safe stop, and a tested or explicit recovery/rollback path.
+5. Evidence must identify the authoritative source, exact revision or effect, freshness, outcome,
+   and unknowns. Missing evidence fails closed rather than becoming optimistic completion.
+6. devUI, CKM, Signboard, BuilderOps Cockpit, Delivery Graph, Project views, and other projections
+   may orient, explain, or prepare proposals; they never acquire lifecycle or mutation authority.
+7. Human re-entry must remain possible at named control points without requiring the human to
+   reconstruct hidden agent state or supervise every routine step.
+
+This vision does not assert that every current workflow is unattended. The current-to-target table
+below and the executable L3 owners determine what can run autonomously now; the dark-factory model
+governs the direction of maturity, not the truth of present deployment.
+
+#### Per-workflow autonomy qualification and demotion
+
+Autonomy is qualified per named L2 subprocess or bounded workflow; it is never inferred from the
+dark-factory vision or summarized by one universal composite score. Before a workflow is promoted
+to a more autonomous mode, its accountable assessor must record falsifiable evidence for all of:
+
+| Gate | Required evidence |
+| --- | --- |
+| Representative unattended traces | Multiple named traces covering normal work and the important risk/exception classes, each bound to exact inputs, effects, and outcomes |
+| Contract and evidence sufficiency | Explicit entry/exit criteria, permissions, source authorities, freshness rules, and proof that completion cannot be fabricated by a missing or stale source |
+| Stop and recovery proof | Demonstrated fail-closed stop, bounded retry/backoff, interruption reconstruction, rollback/reconciliation, and safe human re-entry |
+| Exception ceiling | A workflow-specific maximum acceptable rate or class of unplanned human intervention, defined as a falsifiable threshold rather than a portfolio-wide score |
+| Accountable assessment | Named process owner/assessor, assessment date, evidence refs, authorized autonomy mode, and residual risks |
+| Regression and demotion triggers | Named events that automatically pause or reduce autonomy: authority drift, stale evidence, security/control failure, repeated defect/incident class, exception-ceiling breach, rollback failure, or inability to reconstruct state |
+
+Promotion evidence must be current enough for the risk of the workflow. Demotion is a safety action,
+not failure of the target vision; the workflow returns to observe-only, bounded-agent, or
+human-operated mode until the failed gate is proved again.
+
+### View 1 — primary value-stream process hierarchy
+
+The primary value stream has four L1 macro-processes. They are iterative and may exchange feedback;
+they are not mandatory stage gates. Each L2 subprocess has exactly one L1 parent.
+
+| L1 ID and macro-process | Distinct outcome | Current coverage |
+| --- | --- | --- |
+| **V1 Shape & Decide** | A framed capability, verified need, or bounded operational concern with explicit assumptions, evidence, authority, and disposition. | **partial** — several governed routes exist, but no single proportional shaping interface covers all of them. |
+| **V2 Define & Make Ready** | Accepted governing docs/specs and one canonical bounded GitHub Issue contract that is ready, blocked, deferred, or needs a real owner decision. | **current/partial** — docs/spec and Issue-contract mechanisms are strong; early decomposition and operational intake are uneven. |
+| **V3 Deliver & Release** | An exact change that is implemented, integrated, verified, merged, closed truthfully, and released/deployed through the applicable current channel contract. | **current/strong through merge; partial for release** — Issue-to-merge is mature; the gated `stable` promotion model remains target/deferred under ADR-0040. |
+| **V4 Operate & Improve** | A healthy operated product plus incidents, defects, improvements, and learning routed to owned corrective action or explicit terminal disposition. | **partial** — operations and individual feedback routes exist; the composed operation-to-corrective-action loop remains less formalized. |
+
+#### V1 Shape & Decide — L2 children
+
+| L2 ID | Child subprocess | Required output and boundary |
+| --- | --- | --- |
+| **V1.1 Frame intent, need, and capability** | Identify actor, need/outcome, constraints, assumptions, Product/Builder/boundary classification, and discovery depth. | A framed question or capability; no implementation authority is implied. |
+| **V1.2 Research domain, architecture, and options** | Gather source-grounded evidence, diverge across credible alternatives, reconcile contradictions, and identify unknowns. | Advisory findings with provenance; research remains subordinate to owner docs. |
+| **V1.3 Challenge the solution form and proportionality** | Before choosing agentic delivery, test the least costly adequate form: no change, policy or owner-doc repair, deterministic check/automation, manual one-off, bounded agent task, or capability/feature. | A reasoned solution-form choice that avoids using an agentic implementation slice when a smaller governed response satisfies the outcome. |
+| **V1.4 Decide disposition and authority crossing** | Select continue, test, defer, reject, or Human Exception; promote accepted supporting material through `PromotionIntent` when authority classes change. | An explicit disposition and authorized destination, not an executable Issue by assertion. |
+
+#### V2 Define & Make Ready — L2 children
+
+| L2 ID | Child subprocess | Required output and boundary |
+| --- | --- | --- |
+| **V2.1 Author governing decisions, docs, and specifications** | Locate the owner, classify current/target/proposal status, author the smallest coherent authority surface, and preserve supersession/consequences. | Accepted owner doc, ADR, contract, or specification through normal PR authority. |
+| **V2.2 Decompose capability and validation outcome** | Decide whether work is one bounded slice or a parent validation hub with dependency-ordered children; keep feature validation distinct from slice verification. | Bounded task/spec structure with source anchors and a validation path. |
+| **V2.3 Triage operational defect or improvement evidence** | Reproduce/classify observations, distinguish incident recovery from corrective action, deduplicate known work, and route defects, improvements, or structural patterns proportionately. | Verified bounded defect/improvement input, broader research/learning route, or explicit non-actionable disposition. |
+| **V2.4 Form the canonical bounded Issue contract** | Converge the docs/capability inflow from V2.1/V2.2 and the bug/improvement inflow from V2.3 on the same Issue shape. | One GitHub Issue with stable source anchors, SBS impact, acceptance criteria, `Verify:` targets, and truthful agent state. |
+| **V2.5 Validate readiness and expose eligible work** | Reconcile duplicates/live delivery, validate contract and anchors, classify ready/blocked/needs-human, and expose eligible work to the queue. | Strictly valid `agent:ready` or a truthful non-active state; Project and other projections do not gate readiness. |
+
+##### V2.4 convergence detail — the two canonical Issue inflows
+
+All implementation-bound work converges on the canonical bounded GitHub Issue contract. The two
+main inflows differ before that boundary and are identical after it.
+
+```text
+capability / docs inflow
+  V1 shaping/research/disposition -> accepted owner doc/ADR/spec in V2.1
+  -> capability decomposition in V2.2
+  -> V2.4 bounded Issue
+
+operation / improvement inflow
+  V4 observation/response/analysis -> verified input in V2.3
+  -> V2.4 bounded Issue when implementation-ready
+
+V2.4 bounded Issue
+  -> V2.5 readiness -> V3 claim/execution/proof/merge/closure
+```
+
+Shortcuts are proportionate, not authority bypasses:
+
+- A small reversible change with a clear current owner contract may go directly from V1 framing to
+  V2.4 and the light delivery path.
+- An incident may prioritize V4.2 stabilization and rollback before full analysis; follow-up
+  evidence still routes through V2.3/V2.4.
+- A confirmed P0/P1 or implementation-bound bug uses a normal bounded bug Issue. A confirmed P2
+  review defect may use the governed Known Defects registry until its promotion trigger fires.
+- A vague aspiration, unverified symptom, chat note, dashboard gap, or projection anomaly is not an
+  executable Issue until the relevant workflow makes it bounded and verifiable.
+
+#### V3 Deliver & Release — L2 children
+
+| L2 ID | Child subprocess | Required output and boundary |
+| --- | --- | --- |
+| **V3.1 Claim and execute the bounded change** | Acquire the one active claim, register isolated worktree identity, load bounded context, implement within scope, and maintain lease/receipts. | Local change and focused validation evidence bound to the Issue and worktree. |
+| **V3.2 Reconstruct, resume, and revalidate interrupted work** | On interruption, read resumable orchestration state first, then reconstruct Issue/claim/worktree/branch/HEAD/PR/evidence state; revalidate stale anchors and leases; resume only unchanged authority or perform governed stale-lease takeover/release. | A refreshed, generation-safe execution context or a truthful technical/authority block; chat continuity never authorizes resume. |
+| **V3.3 Publish and integrate the proposed change** | Apply branch-truth and publication gates, open/update the PR, run CI, and repair contract, drift, or integration failures while respecting shared-resource and review/CI backpressure. | Current-head PR that is ready for the applicable verification path or truthfully blocked. |
+| **V3.4 Verify, accept, merge, and close** | Resolve delivery tier, prove exact-head ACs/checks, run full-path independent review when required, perform the current governed explicit merge/readback, close Issue/claim, and classify owner-doc impact. | Accepted merge and closure evidence; technical verification remains distinct from owner/product validation. Disabled GitHub auto-merge is not the merge mechanism. |
+| **V3.5 Release, deploy, verify, or roll back** | Resolve the current channel model, authorize the candidate, prepare risk/migration/config delta, obtain only required operator authority, deploy the authorized SHA, prove live identity/health, run feature/owner acceptance when required, and accept or roll back with rollback verification. | Live-channel receipt or safe rollback/block; current `main`-tracking production and target gated-`stable` promotion remain distinct. |
+
+#### V4 Operate & Improve — L2 children
+
+| L2 ID | Child subprocess | Required output and boundary |
+| --- | --- | --- |
+| **V4.1 Operate and observe the Product/Runtime System** | Run the product under Product/Runtime authority and observe health, reliability, operator/user outcomes, freshness, and unknown states. | Current operational evidence; the Builder System does not become runtime authority. |
+| **V4.2 Respond, stabilize, and recover** | Classify the event, limit harm, use runbooks, rollback/restore when authorized, and preserve incident evidence. | Restored or safely degraded service plus an incident/recovery record; stabilization alone does not close the underlying defect. |
+| **V4.3 Analyze defects, improvements, and recurring patterns** | Confirm reproduction and impact, separate one bounded defect from a structural pattern, and identify corrective or learning destinations. | Input to V2.3/V2.4, V1 research, or cross-cutting process governance; speculation remains non-authoritative. |
+| **V4.4 Close corrective action and value-stream learning** | Track the operational signal to a delivered correction, owner-doc/plan update, accepted risk, or explicit discard/supersession and feed outcome evidence back to shaping. | Closed product/value-stream loop; Builder-process learning crosses to G6 rather than becoming a duplicate value-stream stage. |
+
+Small reversible work may take proportionate shortcuts between children, and evidence may send work
+backward to an affected parent. The required Issue, CI, review, release, safety, and authority gates
+still apply.
+
+**Derived posture note — current governed delivery and release.**
+
+Mutable posture was refreshed on 2026-08-11 before this claim was written:
+
+- Live GitHub repository readback reports `allow_auto_merge=false`. Current autonomous delivery,
+  where permitted, therefore uses the governed explicit merge path in `verification-and-closure`;
+  it is not GitHub auto-merge.
+- Live `main` protection readback requires `Unit tests (not pg)`, with strict status-check mode off
+  and no required pull-request review object. Applicable contract, CI, and full-path review gates
+  that are not platform-required remain workflow-enforced and non-waivable.
+- `docs/RELEASE_CHANNELS/README.md :: Promotion model` remains the release authority: production's
+  interim promotion ref is `main`. The remote `stable` ref still exists, but the protected
+  test-receipt-to-`stable` promotion workflow is deferred target hardening and must not be described
+  as the current production path.
+
+These facts are mutable. Re-read GitHub settings, current release-channel owner docs, exact refs,
+and the target host before a merge, release, or current-state report; this dated posture is not an
+execution receipt.
+
+**Derived navigation note — end-to-end operational continuity.**
+
+This navigation sequence composes V3 and V4 without creating another process hierarchy:
+
+```text
+verified merge candidate
+  -> authorized candidate under the current channel model
+  -> deploy exact authorized SHA/image
+  -> prove live identity, environment binding, health, and smoke
+  -> run required feature/owner acceptance
+  -> accept, or roll back and verify the rollback
+  -> operate and observe
+  -> respond/recover when needed
+  -> route verified incident/defect/improvement evidence through V2.3 and V2.4
+  -> close corrective action and feed outcome evidence to V1/V2 or G6
+```
+
+Merge is not deployment, deployment health is not feature/owner acceptance, incident stabilization
+is not corrective-action closure, and rollback is not complete until the restored state is verified.
+
+### View 2 — cross-cutting governance process hierarchy
+
+Governance has its own root, **G0 Govern the Builder System**, subordinate to the L0 system. Its L1
+processes attach where relevant across V1-V4; none is a serial value-stream stage.
+
+| Governance L1 | L2 child subprocesses | Cross-cutting attachment |
+| --- | --- | --- |
+| **G1 Govern intent and portfolio** | **G1.1** maintain owner intent/constraints; **G1.2** prioritize or defer capabilities; **G1.3** preserve dispositions and supersession | Primarily V1 and V2, with operational evidence from V4 |
+| **G2 Govern architecture and contracts** | **G2.1** assign system/interface ownership; **G2.2** maintain ADRs/contracts/SBS registers; **G2.3** define and evolve invariants/fitness rules | All value-stream nodes that read or change architecture or contracts |
+| **G3 Govern change, flow, and release** | **G3.1** classify risk/proportional path; **G3.2** control claims, isolation, publication, and explicit merge; **G3.3** control WIP, dependencies, shared resources, review/CI backpressure, and preservation of independent ready work; **G3.4** control channel promotion, migration, rollback, and external effects | V2 readiness and all of V3 |
+| **G4 Govern agent/tool security, operational risk, incidents, and exceptions** | **G4.1** admit principals/tools through the security contract; **G4.2** define safety/stop/recovery/revocation posture; **G4.3** classify technical block versus canonical Human Exception; **G4.4** retain protected operator decisions | Every agent/tool execution boundary, V3 release, and V4 operation/response; exception attachments may occur anywhere |
+| **G5 Govern evidence and audit** | **G5.1** define proof/freshness requirements; **G5.2** preserve exact identity/provenance/receipts; **G5.3** reconcile live truth and stale projections | Every value-stream handoff |
+| **G6 Govern process and learning** | **G6.1** capture Builder-process divergence; **G6.2** run retrospective/reevaluation; **G6.3** route each signal to governance edit, Issue, debt/fitness, promotion, or discard | Receives signals from V1-V4 and changes their governing L3 artifacts through normal authority |
+
+Governance intensity follows risk and reversibility. It must not add a decorative human approval to
+every value-stream node. Technical difficulty, a failed check, retry exhaustion, or a safe
+fail-closed pause is not by itself a human decision.
+
+#### G3 flow-control contract
+
+Issue-set execution must apply the existing coordination controls proportionately rather than
+maximizing concurrent starts. The coordinator or owning workflow must:
+
+- limit WIP to work with real independent capacity and isolated worktrees;
+- preserve dependency order and serialize conflict-, integration-, migration-, merge-, and
+  shared-resource-critical phases;
+- treat host-global validation leases, CI runners, GitHub API budget, review capacity, and merge
+  capacity as shared constraints;
+- stop adding work when review, CI, recovery, or integration queues are the bottleneck;
+- keep independent, strictly ready work available when one lane blocks, rather than imposing a
+  global singleton; and
+- preserve exact claims, leases, receipts, and typed conflict evidence so backpressure does not
+  create duplicate work or false closure.
+
+`deliver-issue-set`, dispatcher/worktree contracts, and `AGENTS.md :: Parallel-agent execution`
+remain the L3 owners of the current controls.
+
+#### G4 agent/tool security admission contract
+
+Every agent, model, script, automation, connector, or external tool that can read protected context
+or cause an effect must have an admission record or governing contract appropriate to its security
+level before use. The contract must identify:
+
+| Field | Required statement |
+| --- | --- |
+| Principal and purpose | Named human, service, agent/session, workflow, or tool identity and the bounded outcome it may pursue |
+| Permissions and effect scope | Allowed reads, writes, commands, repositories, APIs, environments, and explicitly forbidden effects |
+| Credential scope | Credential owner, least-privilege scope, storage/forwarding rule, expiry/rotation, and whether delegation is permitted |
+| Filesystem and network containment | Allowed roots, hosts, protocols, sandboxes/worktrees, and cross-host or external-service boundaries |
+| Egress, secrets, and sensitive data | What may leave the boundary, redaction requirements, secret-handling rule, and prohibited destinations |
+| Input/output trust and provenance | Trusted sources, untrusted-input treatment, output status, citation/receipt requirements, and injection/content risks |
+| Budgets and timeouts | Model/tool/API/CI/runtime budgets, retry limits, timeouts, and stop-loss behavior |
+| Receipt and exact identity | Principal, invocation/run id, policy/version, inputs or hashes, effects, result, time, and target authority |
+| Rollback and revocation | How effects are reversed or reconciled, credentials/leases revoked, sessions stopped, and residual effects reported |
+| Required security level | The proportional assurance level and the owner contract, test, review, or operator gate that establishes it |
+
+**Current:** authority mostly relies on OS account boundaries, tool permissions, worktrees,
+repository policy, scoped credentials, workflow permissions, and explicit operator delegation.
+These are real controls but do not constitute uniform containment or repository-wide RBAC.
+**Target:** admission is consistently least-privilege, policy-evaluated, contained, revocable, and
+receipt-backed, with stronger sandbox/RBAC and egress controls where the risk justifies them. The
+target is not claimed as shipped.
+
+### Exception and human-decision model
+
+The default response to a deviation is autonomous classification, repair, backoff, replan, or a
+technical block. `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation
+Classifier` owns the canonical routing decision; this summary must never narrow it. A Human
+Exception is appropriate when the classifier establishes a real owner/operator authority category,
+including:
+
+1. irreversible action, accepted irreversible consequence, or external-facing commitment/effect;
+2. strategic product, portfolio, legal, ethical, or cost/risk trade-off reserved to the owner;
+3. genuinely conflicting, absent, or contradictory authority that owner docs and existing contracts
+   cannot resolve;
+4. security, privacy, secret/credential, protected-state, production/release, migration, or
+   environment decisions whose governing contract requires human/operator authority;
+5. any proposed guardrail bypass, policy exception, expanded permission, or acceptance of residual
+   risk that an agent is not authorized to take; or
+6. an explicit protected operator gate named by the governing workflow.
+
+The exception packet must name the decision, authoritative evidence, options, consequences,
+recommendation, and safe default if no decision is made. The decision returns work to the relevant
+L2 subprocess; it does not waive CI, review, verification, release, or safety gates. If none of the
+canonical authority conditions applies, use `agent:blocked` or the workflow's technical recovery
+state rather than `agent:needs-human`.
+
+### View 3 — information, evidence, and representation architecture
+
+This view classifies artifacts and state; it is not a fourth process hierarchy. These surfaces must
+remain separate even when a UI joins them.
+
+| Surface/artifact | Class and authority | Write responsibility | Evidence/freshness expectation | Projection? |
+| --- | --- | --- | --- | --- |
+| Product owner docs, contracts, ADRs, and accepted specs | System of record for current Product truth, durable decisions, and intended contracts according to DOCS_INDEX role | Normal repo PR owned by the relevant Product/architecture authority | Commit/PR provenance; present-tense claims reconciled after delivery | No |
+| Builder governance docs and repo-local skills | System of record for Builder System policy and executable work instructions within their declared scope | Docs/governance PR; matching owner and skill route | Commit/PR provenance; reviewed against current executable mechanisms | No |
+| GitHub Issue | Canonical executable task contract and Issue lifecycle truth | Intake/maintenance/delivery workflow with claimant and closure receipts | Live body, labels, state, source anchors, and `Verify:` targets; reread before mutation | No |
+| Git branch, commit, and PR | Canonical proposed change identity, review conversation, and integration state | Owning delivery agent/workflow in its isolated worktree | Exact branch/head/base, diff, review threads, and merge readback | No |
+| CI checks, tests, review findings, and verification receipts | Evidence authority for the exact revision and named contract; not intent authority | CI, test runner, reviewer, and verification workflow | Exact SHA, run identity, outcome, and recency sufficient for the gate | No |
+| Release plan/receipt and live target channel | Authority for authorized deployment attempt and observed operational state; channel owner docs define the model | Release/promotion workflow and required operator | Candidate/deployed SHA, environment binding, timestamp, health/smoke, rollback outcome; live host wins on current state | No |
+| BuilderOps Vault record mutation | System of record for builder-operational objects such as LearningSignal, PromotionIntent, worklog, freshness, roadmap execution, and BuilderOps receipts; not Product or GitHub lifecycle truth | Designated BuilderOps writer/workflow may create or transition only the admitted BuilderOps record | Source refs, disposition/receipt lineage, writer identity, storage availability, and explicit unknown states | No, but limited to BuilderOps authority |
+| Promotion from BuilderOps to GitHub, repo, or Product authority | Separate authority crossing; a BuilderOps record may propose and preserve provenance but cannot execute the destination mutation | Destination-owning workflow: Issue intake for GitHub task contract, PR for repo docs/code/contracts, or Product-governed writer for Product/runtime truth | PromotionIntent/source refs plus destination-specific authorization, exact mutation receipt, and live destination readback | No; the destination system becomes authoritative only through its own write path |
+| Dispatcher queue, claim, lease, and heartbeat | Coordination/control plane for volatile work allocation; cannot redefine the Issue contract or delivery result | Dispatcher and canonical claim/release workflow | Current lease generation, owner, expiry/heartbeat, Issue identity; reconcile with live GitHub | No; coordination state |
+| Skills, scripts, templates, and automations | L3 control mechanisms that execute or enforce parts of the process within explicit permissions | Repo PR for definitions; named workflow for execution | Version/commit plus execution output or receipt; fail closed when a required gate is unavailable | No; control mechanisms, not a global authority |
+| GitHub Project, Signboard, devUI, CKM, BuilderOps Cockpit, Delivery Graph, and generated BuilderOps views | Read-only or rebuildable representation joining source-owned facts for orientation, gap detection, and action routing | Source-specific projector/composer only; commands route to the owning authenticated workflow | Source IDs, coverage, watermark/as-of time, freshness, missing/unknown states, deterministic rebuild where promised | **Yes** |
+| Chat, model/provider session, screen, or design prototype | Conversation/provenance/supporting evidence only | Its originating tool or person | Link or artifact when useful; never sufficient for lifecycle or current-state claims | Yes/supporting artifact |
+
+A representation may show a proposed action, but authorization and mutation occur only through the
+owning source workflow. devUI and Delivery Graph therefore never become Issue, claim, merge,
+release, runtime, or acceptance authority.
+
+### Derived swimlane navigation view
+
+This swimlane is derived from V1-V4, G1-G6, and the information architecture. It is navigation
+only: placement in a lane grants no authority, and the written hierarchy and owning source
+contracts win on conflict.
+
+| Value-stream location | Agent / automation lane | Human owner / operator lane | Authoritative system / gate lane | Autonomy status |
+| --- | --- | --- | --- | --- |
+| V1 Shape & Decide | Gather evidence, frame options, challenge solution form, and prepare dispositions within bounded context | Supply strategic intent and decide only real product/portfolio, external, irreversible, or authority-conflict questions | Owner docs, ADR/decision authority, source evidence, and `PromotionIntent` when authority classes change | **Current:** human clarification is frequent. **Target:** routine shaping/disposition is agentic under explicit policy and evidence. |
+| V2 Define & Make Ready | Author proposed docs/specs, decompose, deduplicate, draft canonical Issue, and validate readiness | Resolve genuinely missing intent/authority; accept owner decisions through the normal repo path | DOCS_INDEX/owner docs, docs PR, GitHub Issue, Issue contract, source anchors, readiness validator | **Current:** mixed agent/human. **Target:** routine bounded readiness is unattended; real owner decisions remain human. |
+| V3.1-V3.4 Deliver | Claim, isolate, execute, reconstruct/resume, publish, repair, verify, and perform governed explicit merge/closure when authorized | Intervene only for canonical Human Exceptions or protected decisions; no routine merge babysitting in target | Dispatcher lease, worktree/branch/commit, GitHub Issue/PR, exact-head CI/review, merge and closure readback | **Current:** strong agentic segments with recurring escalation. **Target:** routine reversible delivery is unattended and evidence-gated. |
+| V3.5 Release | Prepare authorized candidate, deploy through current channel contract, verify identity/health/acceptance, and run authorized rollback/reverification | Acknowledge protected prod/release/migration/external effects exactly where the owner contract requires | Release-channel owner docs, candidate SHA/image, target host/runtime identity, health/smoke, acceptance, promotion/rollback receipt | **Current:** production tracks `main`; operator involvement remains material. **Target:** gated automation expands, but protected authority remains human. |
+| V4.1-V4.3 Operate & Respond | Observe, classify, stabilize, recover within delegated authority, preserve evidence, and prepare defect/improvement intake | Own protected production, safety, privacy, and external decisions; validate outcomes where required | Product/runtime owner docs, live host/runtime state, health/observability, incident and recovery evidence | **Current:** frequent operator participation. **Target:** routine response/recovery is agentic only after workflow-specific maturity proof. |
+| V4.4 and G6 Improve | Route product corrections to V2 and Builder-process learning to G6; verify terminal dispositions | Decide strategic changes or authority crossings, not routine record processing | BuilderOps record authority first; later GitHub/repo/Product mutation only through the separate destination authority | **Current:** routes exist but use is uneven. **Target:** continuous closed-loop improvement with explicit cross-authority receipts. |
+
+External-facing, irreversible, security/privacy/protected-state, guardrail-bypass, contradictory-
+authority, and explicitly operator-gated decisions remain in the human lane in both current and
+target postures. Their presence does not turn every nearby routine decision into a human gate.
+
+### L3 — executable work instructions mapped to L2 parents
+
+L3 contains individual skills, runbooks, scripts, state machines, templates, receipts, and
+automation contracts. It contains no peer process categories. In this map, every representative L3
+instruction names exactly one primary L2 parent; another subprocess may reference or invoke it
+without duplicating its parentage.
+
+| Primary L2 parent | Representative L3 work instruction(s) | Type and current/target boundary |
+| --- | --- | --- |
+| V1.1 | Owner-doc intake surfaces; process-card template in this doc | Template/owner-doc instruction; shaping interface is partial |
+| V1.2 | `architecture-research`; `start-model-inquiry`; `yggdrasil-design-handoff` | Skills; advisory evidence until disposition/promotion |
+| V1.3 | `AGENTS.md :: Proportional delivery`; `docs/development/GOVERNANCE_PROPORTIONALITY.md` | Policy/work instruction for choosing no change, deterministic, manual, bounded-agent, or capability form |
+| V1.4 | `owner-decision-brief`; BuilderOps `PromotionIntent` contract and receipt | Skill/record contract; neither creates destination authority by itself |
+| V2.1 | `docs-governance`; `docs-authoring`; DOCS_INDEX routing; ADR/spec templates | Skills/templates; repo authority arrives through PR |
+| V2.2 | `feature-breakdown`; parent feature and child task templates | Skill/templates; parent remains validation hub, not direct pickup |
+| V2.3 | `bug-to-issue`; `docs/OPERATIONS.md :: Incident handling`; relevant incident runbooks | Skill/runbooks; unproven observations do not become defects |
+| V2.4 | `docs-to-issue`; `learning-to-issue`; `_shared/ISSUE_CONTRACT.md`; `.github/ISSUE_TEMPLATE/task.yml` | Skills/contracts/templates for the single Issue convergence boundary |
+| V2.5 | `scripts/validate_issue_readiness.py`; `issue-maintenance-change-control`; dispatcher pull/queue contract | Script/skill/state contract; Project remains optional projection |
+| V3.1 | `issue-to-code`; `scripts/issue_pickup_claim.sh`; `scripts/agent_worktree.py` lifecycle receipts | Skill/scripts/receipts for claim, isolation, execution, and heartbeat |
+| V3.2 | `resume-work`; dispatcher heartbeat/reclaim rules; worktree lifecycle reconstruction and generation checks | Skill/state-machine instructions for resume, revalidation, release, and stale-lease takeover |
+| V3.3 | `publish-pr`; conditional `pr-integration`; branch-truth gate; CI workflows | Skills/gates/automation contracts; publication never supplies verification authority |
+| V3.4 | `verification-and-closure`; `scripts/await_pr_checks.sh`; review/repair state machines; `post-merge-owner-doc` | Skill/scripts/state machines/receipts for exact-head proof, explicit merge, closure, and writeback |
+| V3.5 | Current release-channel owner docs and deployment runbooks; target `promote-to-test` -> `promote-test-to-prod` -> verify/rollback skills | Current and target instructions must retain their status labels; target `stable` flow is not current production truth |
+| V4.1 | `docs/OPERATIONS.md`; `docs/HEALTH.md`; `docs/OBSERVABILITY.md`; status/health commands | Runbooks/commands under Product/runtime authority |
+| V4.2 | `RUNBOOK_AGENTOPS_INCIDENT_TRIAGE`; go-live/restore runbooks; applicable rollback instructions | Runbooks/state transitions; stabilization and rollback require verification |
+| V4.3 | `bug-to-issue` classification; `architecture-research` for structural recurrence; evidence-bridge classifiers | Skills/report-only helpers; candidates do not mutate backlog or Product truth |
+| V4.4 | Corrective-action Issue/receipt; owner-doc writeback; feature validation receipt | Destination-specific work instructions; closes the product/value-stream loop |
+| G3.3 | `deliver-issue-set`; host-global lease script; CI wait contract; dispatcher/worktree conflict rules | Flow-control skills/scripts/contracts; preserve independent ready work while respecting backpressure |
+| G4.1 | Security owner docs; tool/workflow permission declarations; credential and environment contracts; admission fields above | Current controls are distributed; uniform containment/RBAC is target |
+| G4.3 | Canonical escalation classifier; `owner-decision-brief`; Human Exception packet | Policy/skill/template; technical failure alone cannot select owner escalation |
+| G5.2 | Exact-SHA check/review receipts, merge/closure readback, BuilderOpsReceipt, promotion/rollback receipts | Evidence contracts; each receipt is limited to its named authority/effect |
+| G6.1 | `capture-learning`; BuilderOps `LearningSignal` contract | Skill/record contract; Builder learning never silently becomes Product memory |
+| G6.2 | `learning-retrospective`; evidence/CKM reevaluation classifiers | Skill/report-only helpers; current default and autonomous modes retain their owning contracts |
+| G6.3 | BuilderOps terminal-outcome ledger; governance PR/Issue promotion; debt/fitness registers; discard/supersession receipt | Records/destination instructions; every claimed signal reaches one explicit terminal outcome |
+
+An L3 change that alters its L2 outcome, authority boundary, required evidence, or parent mapping
+must update this architecture. A mechanical implementation change that preserves those contracts
+updates only its L3 owner.
+
+### Process-card template for L1 and L2 owners
+
+Use this compact card when adding or materially changing an L1 or L2 process. Keep executable
+commands and detailed state machines in L3 owners.
+
+```markdown
+## <ID> — <Process name>
+
+- Hierarchy: primary value stream | cross-cutting governance
+- Parent ID: L0 for a hierarchy root, otherwise exactly one L1 or governance parent
+- Purpose / owner outcome:
+- Scope and boundary:
+- Status: current | partial | target
+- Trigger(s):
+- Inputs and source authorities:
+- Entry criteria:
+- Main activities:
+- Outputs and destination authorities:
+- Exit / acceptance criteria:
+- Accountable process owner:
+- Write actors and allowed mutations:
+- Required evidence and freshness:
+- Controls and proportionality:
+- Exception / recovery paths:
+- Human decision condition, if any:
+- Feedback destinations:
+- L3 work instructions:
+- Known target gaps:
+```
+
+The card defines a process interface, not a ceremony checklist. Omit a human-decision condition
+when none exists; do not invent one to complete the template. L3 instructions use the explicit
+parent mapping table above rather than pretending to be process cards at the same level.
+
+### Current-to-target coverage and priority gaps
+
+| Area | Verified current practice | Target architecture not yet fully realized | Posture |
+| --- | --- | --- | --- |
+| Autonomy and human escalation | Strong Issue-to-merge workflows can act autonomously within contracts, but current practice still escalates to humans relatively often and the end-to-end lifecycle is not unattended | A governed dark-factory normal flow in which routine bounded reversible decisions are policy-driven and evidence-gated, while humans retain real strategic, irreversible, external-facing, authority-ambiguous, and explicit operator decisions | Treat frequent routine escalation as maturity debt; remove it only by making policy, evidence, permissions, recovery, and stop conditions explicit |
+| Agent/tool security admission | OS/tool permissions, worktrees, workflow permissions, scoped credentials, and operator delegation provide distributed controls | Consistent principal/permission/credential/containment/egress/trust/budget/receipt/revocation/security-level admission with proportional sandbox/RBAC | Do not claim uniform containment today; strengthen the highest-risk boundaries first |
+| Interruption and resume | `resume-work`, dispatcher heartbeat/reclaim, worktree lifecycle records, and live Git/GitHub reconstruction exist | Consistent resumable state, generation-safe stale-lease takeover, and automatic demotion when authority/evidence cannot be reconstructed | Resume from authoritative state, never chat continuity; fail closed on ambiguous claim or generation |
+| Issue-set flow control | Dedicated worktrees, dependency/conflict checks, host-global lease, CI wait contract, and bounded issue-set coordination exist | Explicit backpressure based on WIP, shared resources, review/CI/integration capacity, with independent ready work preserved | Do not maximize starts or impose a global singleton; follow live bottleneck evidence |
+| Idea to capability | Owner docs, docs authoring, Model Inquiry, design handoff, and architecture research provide usable routes | One proportional framing contract that preserves hypotheses, disposition, and source authority across routes | Formalize only when repeated work proves a shared contract useful; do not add a universal intake object now |
+| Research to governing authority | Advisory audits/designs are explicitly subordinate; accepted cross-authority material uses `PromotionIntent` and PR | Consistent disposition and supersession receipts across every research/design route | Improve through existing owners, not a second research repository |
+| Capability/spec to bounded work | `docs-to-issue` and `feature-breakdown` enforce anchors, dedupe, ACs, and `Verify:` | More consistent early capability decomposition and traceability from owner outcome to feature validation | Strengthen shaping/spec cards and acceptance linkage before adding automation |
+| Issue to accepted merge | Claims, isolated worktrees, bounded execution, PR governance, exact-head CI/review, governed explicit merge, closure, and owner-doc feedback are mature; live GitHub auto-merge is disabled | Remaining automation and guardrail gaps are tracked in the implementation inventory and live backlog; dark-factory delivery need not depend on GitHub auto-merge | Preserve; optimize bottlenecks without weakening proof and re-read mutable GitHub settings before current-state claims |
+| Release/deployment | Current release authority says production tracks `main`; deployment operations and runbooks exist | Test-receipt-to-gated-`stable` prod promotion is target/deferred; skills themselves state the current ADR-0040 exception | Never present target `stable` promotion as current; refresh channel docs, refs, and live target evidence before action/reporting |
+| Operation to improvement | Health, observability, incident handling, `bug-to-issue`, known-defect intake, and learning routes exist | A composed observe -> respond -> recover -> analyze -> owned corrective-action loop with consistent closure evidence | Compose existing runbooks and intake routes before inventing incident platforms or ceremonies |
+| Learning to planning and process | BuilderOps learning, reevaluation, terminal outcomes, governance PRs, debt, fitness, and Issue routes exist | Routine use across operational and product/value-stream signals remains uneven | Keep Product and Builder learning separated; require explicit promotion between authority classes |
+| Unified owner representation | devUI, CKM, BuilderOps Cockpit, Signboard, and Delivery Graph concepts join evidence | A single coherent, source-fresh experience remains partial/target | Build only as a read/route layer; never transfer source authority to the representation |
+
+The highest-leverage gaps are the two weak interfaces: early shaping before authoritative specs and
+the post-release route from operations into owned corrective action. Integration, verification, and
+quality capacity should be treated as likely flow constraints and monitored through delivery
+evidence; this statement is a planning hypothesis, not measured proof.
+
+### Future measurement posture
+
+Total Cost of Development (TCD) is the north-star decision model: minimize expected cost per
+accepted delivery, including human attention, rework, defects, delay, coordination, context, tools,
+and model capability. This architecture does **not** require token metering, human-time tracking, a
+composite score, or new instrumentation now.
+
+If measurement later becomes decision-useful, start with low-cost, independently readable proxies:
+
+- elapsed time from bounded-ready Issue to accepted merge;
+- wait time versus active repair time at integration, CI, review, and release gates;
+- first-pass acceptance and reopen/rollback/incident-follow-up counts;
+- repeated failure mechanism or repeated clarification class;
+- age of verified operational defect/improvement signals without a terminal disposition;
+- percentage of sampled traces with intact intent -> Issue -> exact change -> proof -> operational
+  outcome links.
+
+Use individual measures to answer named questions. Do not collapse them into a universal score,
+optimize token use in isolation, or treat a projection metric as authority. Add instrumentation only
+when the expected reduction in human time, rework, defects, or delay exceeds its maintenance and
+Goodhart cost.
+
+## Supporting Implementation Inventory And Evidence
+
+The remaining sections describe current components, detailed flows, automation candidates, and
+historical verification. They support the normative architecture above. Time-sensitive claims in
+them must be reverified against current owner docs and live authorities before operational use.
 
 ## 1. Executive Model
 
@@ -24,7 +527,7 @@ through the autonomous classifier; a human path opens only for a separately name
 exception
 [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
-The Builder System has these layers:
+The supporting implementation inventory spans these non-hierarchical concerns:
 
 1. Intent layer: human intent enters through docs, issues, tasks, explicit decisions, and strategic constraints. Observed authority: `PROJECT_KERNEL`, charter, docs, and GitHub issue contracts route intent; `AGENTS.md` names the owner as the authority for irreversible and strategic calls [AGENTS.md :: Agency default], [docs/DOCS_INDEX.md:48-90].
 2. Docs-as-code/spec authority layer: docs are primary Builder System authority, not background. `docs/DOCS_INDEX.md` is the stable role/routing map and says to read Core SoT docs before references, and plans/historical docs as context only [docs/DOCS_INDEX.md:1-17].
@@ -128,9 +631,16 @@ Read-only GitHub evidence used:
 - `gh pr list --state open --limit 100` on 2026-07-08: open PRs #3208, #3201, #3198.
 - `gh issue list --state open --limit 50` on 2026-07-08: open issues included `agent:ready`, `agent:blocked`, `agent:needs-human` work such as #3199, #3190, #3178, #3177, #3176, #3172, #3171.
 - `gh label list --limit 200` on 2026-07-08: canonical labels exist (`type:task`, `type:bug`, `type:refactor`, `prio:*`, `agent:*`, `lane:governance`) but many non-canonical labels also exist, including `governance`, `ci`, `maintenance`, `docs`, and legacy/default labels.
-- `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on 2026-07-08: `Branch not protected` / HTTP 404.
-- `gh api repos/RasmusTho/agentic-pkm-mvp/branches/stable/protection` on 2026-07-08: `stable` protected; required status checks are `smoke`, `smoke-docker`, and `pr-contract`; strict is `true`; required approving review count is `0`; CODEOWNERS review is not required.
-- `gh api repos/RasmusTho/agentic-pkm-mvp --jq '{allow_auto_merge,...}'` on 2026-07-08: `allow_auto_merge=false`, default branch `main`, merge/squash/rebase allowed, delete branch on merge disabled.
+- Historical snapshot only: `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on
+  2026-07-08 returned `Branch not protected` / HTTP 404. This has been superseded by the CURRENT
+  2026-08-11 readback in Section 13 and must not drive execution.
+- CURRENT protection readback on 2026-08-11: `main` is protected and requires `Unit tests (not pg)`
+  with `strict=false`; `allow_auto_merge=false`. CURRENT governed delivery uses the explicit-merge
+  path in `verification-and-closure`, not GitHub auto-merge.
+- TARGET/DEFERRED channel evidence, refreshed 2026-08-11: `stable` is protected with required
+  checks `smoke`, `smoke-docker`, and `pr-contract`, but the ref is dormant for production and
+  diverged from `main`. This evidence does not authorize `promote-*`, `stable` mutation, or release
+  execution under the CURRENT main-tracking channel contract.
 - `find .claude -path '.claude/worktrees' -prune -o -type f -print`: repo-level `.claude` files are `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` files were found.
 - `gh issue list --state open --search "builder OR BuilderOps OR Kvasir OR CKM OR dispatcher OR review repair OR governance" --limit 80` on 2026-07-09: open Builder System work included #3229 (dispatcher-backed epic runner), #3224 (autonomous review and repair gates), #3138/#3139-#3148 (CKM/Kvasir), #3226 (process-map reconciliation), #3257 (epic-runner lifecycle transition plans), #3260-#3266 (continuous improvement / reevaluation operationalization), and #3171/#3174 (cross-repo Builder System governance).
 - PR #3222 merged 2026-07-08: the artifact-only CI failure context collector is now implemented by `.github/workflows/pr-ci-failure-context.yml` and `scripts/collect_ci_failure_context.py`, with workflow and script tests. It observes failed PR-triggered workflow runs, produces a context artifact, and neither reruns nor repairs CI.
@@ -166,11 +676,11 @@ Read-only GitHub evidence used:
 | PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |
 | PR contract validator | implemented | `issue-pr-governance.yml` | Check PR body lane/issue/paths/BuilderOps routing | PR body/files | Failed or passed check | GitHub Action | [`.github/workflows/issue-pr-governance.yml`:79-218] |
 | review gate | partially_implemented | Local convergence review through `review_before_ci_gate.py`, final `/code-review` skill in `verification-and-closure`, optional Codex verdict resolver | Review high-risk mechanisms before expensive proof and independently review current PR head before merge | Local publishable diff plus convergence packet; current PR diff | Findings/pass | Local receipt, agent comments, or blocked-technical receipt | [scripts/review_before_ci_gate.py], [`.codex/skills/verification-and-closure/SKILL.md`:116-225], [app/dispatcher/poll_backoff.py:21] |
-| merge gate | implemented light path / partially_implemented full path | `verification-and-closure`, `scripts/await_pr_checks.sh`; full path also uses `scripts/prepare_verified_issue_set_merge.py`, `scripts/build_verified_issue_set_merge_phase.py`; branch protection on `stable` only | Decide merge eligibility with tier-selected depth; fence mutable PR-body closure authority only on the full path | Light: current-SHA CI + exact single-issue ACs. Full: CI/review/exact closing-issue ACs plus governing issue-set contract | Light: plain merge + native closure readback. Full: exact-head merge or block with trusted authority and durable prepared/merged/reconciled/restored phase receipts plus exact closure attribution | REST merge plus explicit issue mutations; platform on `stable` | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`], [`app/dispatcher/verification_consumer.py`], `gh api stable protection -> required checks` |
+| merge gate | implemented light path / partially_implemented full path | `verification-and-closure`, `scripts/await_pr_checks.sh`; full path also uses `scripts/prepare_verified_issue_set_merge.py`, `scripts/build_verified_issue_set_merge_phase.py`; live `main` protection plus workflow-enforced gates | Decide merge eligibility with tier-selected depth; fence mutable PR-body closure authority only on the full path | Light: current-SHA CI + exact single-issue ACs. Full: CI/review/exact closing-issue ACs plus governing issue-set contract | Light: governed explicit merge + native closure readback. Full: exact-head explicit merge or block with trusted authority and durable prepared/merged/reconciled/restored phase receipts plus exact closure attribution | REST merge plus explicit issue mutations against the authorized target; GitHub auto-merge remains disabled | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`], [`app/dispatcher/verification_consumer.py`], live `main` protection readback dated 2026-08-11 |
 | issue closure worker | partially_implemented | `verification-and-closure` | Close issues and set Done | Merged PR | Closed issue, labels removed, receipts | GitHub | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
 | post-merge docs/spec classifier | partially_implemented | `post-merge-owner-doc` skill, classifier and watchdog workflows | Decide owner-doc update/follow-up/no-change | Merged PR diff plus canonical body authority or one unique trusted same-head merge-authority receipt during neutralization | Docs PR, follow-up issue, or PR-specific receipt on every closed child and distinct open governing parent; issue-free receipt on PR | Agent/GitHub Action nudge | [`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-docs-classifier.yml`], [`.github/workflows/post-merge-owner-doc-watchdog.yml`] |
 | autonomous closure gate | implicit | `verification-and-closure` prerequisites | Ensure closure is safe | ACs, CI, review, owner-doc receipt | Delivery receipt | Agent | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
-| promotion/release gate | partially_implemented | release-channel docs/skills, stable branch protection | Gate test/prod promotion | Promotion plan and operator ack | Stable update/verify/rollback | Operator + skills | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113], `gh api stable protection` |
+| release/deployment gate | current main-tracking operations; target stable promotion partially_implemented/deferred | Current `docs/RELEASE_CHANNELS/README.md`, deployment/operations runbooks; target promotion skills and `stable` protection | Apply the current authorized candidate to production and verify it; retain gated `stable` as target only | Current: authorized `main` candidate plus current channel/operator contract. Target: test receipt, promotion plan, and required operator acknowledgement | Current deploy/live identity/health/acceptance or rollback verification receipt. Target only: governed `stable` update/verify/rollback | Current deployment/operator path; target promotion skills may not mutate current production by claiming `stable` is active | `docs/RELEASE_CHANNELS/README.md :: Promotion model`, [`.codex/skills/promote-test-to-prod/SKILL.md`:1-20] |
 | Mimer/product-lane workflow | implemented | Product docs, `mimer-*` skills | Runtime client operations separate from Builder workflow | Vault/user requests | Governed Mimer actions | Product authority paths | [`.codex/skills/README.md`:220-250] |
 | BuilderOps/governance workflow | partially_implemented | BuilderOps docs/API/skills | Store worklogs, learning, promotion intents, receipts | Agent workflow evidence | BuilderOps records/projections | BuilderOps CLI/API; promotion explicit | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:13-81], [docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md:13-45] |
 | learning/retrospective loop | partially_implemented | `capture-learning`, `learning-retrospective`, BuilderOps records | Promote learning into artifacts | Divergences | LearningSignal, proposals, PRs/issues | BuilderOps + PR | [`.codex/skills/capture-learning/SKILL.md`:19-90], [`.codex/skills/learning-retrospective/SKILL.md`:27-150] |
@@ -263,7 +773,7 @@ flowchart TD
 | merge gate | Verification complete | Agent | PR + issue + CI; full path also consumes v2 closer context | verification-and-closure | verification-and-closure | `await_pr_checks.sh`; full path adds verified merge preparer/phase writer and REST/GraphQL attribution | light plain merge/readback or full exact-head merge/block with trusted phase ledger | GitHub | tier-selected CI/AC/review/closure gate | eligible? full-path race/crash? | repair or idempotent full-path recovery | no merge before the selected path's prerequisites | non-waivable selected path | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`] |
 | issue closure | After merge | Agent + automation | merged PR | Issue/PR truth; optional projection matrix | verification-and-closure | gh; optional Project ops | closed issue; optional Done projection | GitHub | readback | partial? | closure loop | follow-up issue | closure ambiguity | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
 | post-merge docs/spec feedback | After merge | Agent + watchdog | merged diff + authenticated issue targets | post-merge-owner-doc | post-merge-owner-doc | watchdog workflow | docs PR/follow-up/no-change plus PR-specific receipts | closed children + distinct open governing parent, or PR for issue-free lane | receipt exists for this PR on every target | owner doc changed? | docs loop | nudge | wording judgment | [`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-owner-doc-watchdog.yml`] |
-| promotion/release | Test/prod promotion | Agent + operator | candidate ref/plan | release docs/skills | promote-* | release workflows/scripts | promotion receipt | operator + PR to stable | health/smoke | reversible? | rollback loop | rollback/block | prod/stable authority | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113], `gh api stable protection` |
+| release/deployment | Accepted candidate under the current channel contract | Agent + operator | authorized `main` candidate today; target test receipt/plan only after gated-`stable` activation | current release-channel owner docs; target promotion skills are subordinate | current deployment/operations instructions; target `promote-*` only in target mode | deployed identity/health/acceptance receipt or verified rollback; target promotion receipt only after activation | current operator/deployment authority; target PR to `stable` is not today's prod path | live identity + health/smoke + required feature/owner acceptance | current or target channel model? reversible? protected effect? | verify/rollback/operate loop | rollback/block/Human Exception only for canonical authority category | `docs/RELEASE_CHANNELS/README.md :: Promotion model`, target [`.codex/skills/promote-test-to-prod/SKILL.md`] |
 | Mimer/product-lane work | Runtime client task | App agent/human | vault/runtime request | Mimer contracts | `mimer-*` | product APIs/files | governed runtime action | Product authority | Mimer receipts | user/runtime authority | Product loops | human gate | durable knowledge mutation | [`.codex/skills/README.md`:220-250] |
 | BuilderOps/governance work | Workflow/governance change | Agent | learning/worklog/docs | BuilderOps docs | capture-learning, learning-retrospective | BuilderOps CLI/API | records, proposals, PRs | BuilderOps + PR | receipt/projection | promote? | learning loop | fallback log | authority crossing | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:40-81] |
 | learning/retrospective | Divergence or cadence | Agent | LearningSignals | delivery feedback | capture-learning, learning-retrospective | BuilderOps CLI | proposals/PRs/issues | BuilderOps + PR | receipt | upstream artifact? | retro loop | proposal-only | human review in default mode | [docs/development/DELIVERY_FEEDBACK_LOOP.md:67-188] |
@@ -334,6 +844,15 @@ flowchart TD
   Label --> Work["implementation"]
   Work --> Heartbeat["heartbeat while active"]
   Work --> PR["publish PR"]
+  Work --> Interrupted["interrupted"]
+  Interrupted --> Reconstruct["resume-work: reconstruct Issue / head / lease / worktree / PR"]
+  Reconstruct --> Revalidate{"Issue, head, and lease still authoritative?"}
+  Revalidate -->|same unexpired lease + unchanged authority| Continue["single authorized continuation"]
+  Continue --> Work
+  Revalidate -->|lease expired only| Takeover["governed stale takeover"]
+  Takeover --> Continue
+  Revalidate -->|unexpired foreign lease| Reject["reject takeover; technical block"]
+  Revalidate -->|contradictory or missing authority| AuthorityBlock["authority block / canonical escalation classifier"]
   PR --> Complete["complete/release after closure"]
   Backlog --> Human["human exception when agent:needs-human"]
 ```
@@ -359,8 +878,11 @@ stateDiagram-v2
   CIFailing --> PRRepair
   PRRepair --> PRPublished
   PRPublished --> FrontierRescue: repeated failure / unclear route
-  FrontierRescue --> NeedsHuman
-  PRPublished --> MergeEligible: CI + review + ACs
+  FrontierRescue --> EscalationTriage
+  EscalationTriage --> NeedsRepair: bounded repair or replan
+  EscalationTriage --> Blocked: technical pause
+  EscalationTriage --> NeedsHuman: explicit authority category
+  PRPublished --> MergeEligible: CI + ACs + any review required by delivery tier
   MergeEligible --> Merged
   Merged --> Closure
   Closure --> PostMergeDocs
@@ -379,7 +901,9 @@ stateDiagram-v2
   ContractCheck --> CI
   CI --> CIRepair: failing or stale
   CIRepair --> CI
-  CI --> ReviewGate: green
+  CI --> DeliveryPath: green
+  DeliveryPath --> MergeEligible: light path
+  DeliveryPath --> ReviewGate: full path
   ReviewGate --> ReviewRepair: blocking findings
   ReviewRepair --> CI
   ReviewGate --> MergeEligible: clean/fixed
@@ -434,6 +958,17 @@ stateDiagram-v2
   Receipt --> [*]
   Claim --> Release: blocked
   Validate --> NeedsHuman: unsafe ambiguity
+  Implement --> Interrupted: session/tool/context interruption
+  Validate --> Interrupted: session/tool/context interruption
+  Integrate --> Interrupted: session/tool/context interruption
+  Interrupted --> ReconstructResume: resume-work reconstructs Issue/head/lease/worktree/PR
+  ReconstructResume --> RevalidateAuthority
+  RevalidateAuthority --> Implement: same unexpired lease + unchanged authority; one continuation
+  RevalidateAuthority --> StaleTakeover: lease expired only
+  StaleTakeover --> Implement: governed reclaim; one continuation
+  RevalidateAuthority --> TakeoverRejected: unexpired foreign lease; no second continuation
+  RevalidateAuthority --> TechnicalBlock: reconstruction or revalidation fails
+  RevalidateAuthority --> AuthorityBlock: contradictory or missing authority
 ```
 
 ### CI Repair Lifecycle
@@ -518,10 +1053,11 @@ Human Exception merely because a retry budget is exhausted. The only route to
 | Which tests/checks required? | `DEV_WORKFLOW`, issue `Verify:` | partial | yes | no | touched files/ACs | validation plan | missing coverage | [docs/development/DEV_WORKFLOW.md:60-83] |
 | Can CI failure be auto-repaired? | PR escalation | no | yes | if unresolved | logs/checks | fix/follow-up/block | blind retry | [docs/development/PR_ESCALATION_PATHS.md:12-20] |
 | Is review finding blocking? | review gate rules | no | yes | no | findings | fix/block | unresolved finding merged | [`.codex/skills/verification-and-closure/SKILL.md`:131-163] |
-| PR eligible for auto-merge? | verification prerequisites | partial | yes | no | CI/review/ACs | merge/block | main unprotected | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], `gh api main protection -> 404` |
+| CURRENT: PR eligible for unattended governed explicit merge? | `verification-and-closure` exact-head prerequisites; GitHub auto-merge is disabled and is not the mechanism | partial | yes | only when the canonical authority classifier requires it | CI/review/ACs and current head | explicit merge/block | a skill gate is bypassed or current-head evidence is stale | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], live `main` protection and `allow_auto_merge=false` readback dated 2026-08-11 |
 | Can issue be closed? | verification/closure | partial | yes | if partial/ambiguous | merge/ACs | close/follow-up | false done | [`.codex/skills/verification-and-closure/SKILL.md`:209-217] |
 | Owner doc/spec update needed? | PR template + post-merge skill | partial | yes | if wording judgment | diff | docs PR/follow-up/no-change | drift | [`.github/pull_request_template.md`:34-39], [`.codex/skills/post-merge-owner-doc/SKILL.md`:76-85] |
-| Promotion needs operator authority? | release skills | yes | yes | yes | plan | execute/stop | prod mutation without ack | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113] |
+| CURRENT main-tracking deployment needs operator authority? | current release-channel owner doc and deployment/operator runbooks | yes | yes | as reserved by the current channel contract | authorized `main` candidate and deployment plan | deploy/stop | production mutation outside current operator authority | [`docs/RELEASE_CHANNELS/README.md :: Promotion model`] |
+| TARGET/DEFERRED gated-`stable` promotion needs operator authority? | target `promote-*` skills, executable for production only after owner-doc activation | yes | yes | yes where the target contract reserves it | target test receipt and promotion plan | target execute/stop | dormant `stable` mutated as though it were current production | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113] |
 | Learning signal promotion? | capture-learning/retro | partial | yes | default retro review | divergence | record/proposal/issue | learning lost or product memory contamination | [`.codex/skills/capture-learning/SKILL.md`:19-90], [docs/architecture/SBS_OPERATING_MODEL.md:235-261] |
 
 ## 8. Feedback Loops
@@ -653,7 +1189,12 @@ bounded GitHub Issue, `PromotionIntent`, debt/fitness update, or discard/superse
 output remains projection-only and never mutates Product/Runtime authority by itself
 [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220], [docs/CAPABILITY_KNOWLEDGE_MODEL/README.md:51-77].
 
-Promotion/rollback loop: triggered by test/prod promotion; actor is release skills plus operator; stop condition is PASS receipt or rollback verification; human/operator ack is required for prod promotion [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
+Release/rollback loop: under the current baseline, production follows the `main`-tracking channel
+contract and current deployment/operations instructions; stop condition is verified live identity,
+health, and required acceptance, or a verified rollback/block. The test-receipt -> protected
+`stable` promotion/rollback skills describe the deferred target and become executable for prod only
+after the release owner doc activates that model. Required operator authority remains as named by
+the active channel contract [`docs/RELEASE_CHANNELS/README.md :: Promotion model`].
 
 Human exception loop: triggered only by an explicit canonical authority category such as an
 irreversible external action, strategic choice, or genuinely ambiguous authority. Technical
@@ -691,7 +1232,7 @@ Candidate hooks:
 | Hook class | Event type | Target form | Should become hook? | Reason | Risk | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | block dangerous Bash commands | PreToolUse | Claude hook | yes, human-gated allowlist | Prevent destructive operations before shell execution | false positives | hook posture is documented but no repo-level Claude settings file is present [`.claude/hooks/README.md`:1-50] |
-| block prod/vault/secret/migration commands | PreToolUse | Claude hook + manual exception | yes | Prod/stable/vault are stop-condition surfaces | blocking legitimate ops | [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35] |
+| block CURRENT production/vault/secret/migration commands and TARGET/DEFERRED `stable` mutation | PreToolUse | Claude hook + manual exception | yes | Current production and protected authority are stop-condition surfaces; dormant `stable` must not be treated as the current deployment channel | blocking legitimate authorized operations | [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35] |
 | verify repo root and branch | SessionStart / PreToolUse | hook invoking script | yes | Redirect and branch drift are local-session risks | low | [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
 | run formatter/lint subset after edits | PostToolUse / Stop | script, not hook for all edits | maybe | Deterministic validation belongs in scripts; hook should only suggest or receipt | latency | [docs/development/DEV_WORKFLOW.md:60-83] |
 | reduce long test logs | PostToolUse | hook or wrapper script | maybe | Saves tokens after command output | hiding evidence | [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82] |
@@ -705,7 +1246,12 @@ Tasks that should stay scripts: source-anchor validation, branch/worktree prefli
 
 Tasks that belong in GitHub Actions: issue/PR contract validation, PR checks, project projection, post-merge watchdog, and artifact-only CI failure context collection. These are GitHub event concerns, not local editor session concerns [`.github/workflows/issue-pr-governance.yml`:3-12], [`.github/workflows/project-status-reconcile.yml`:3-23].
 
-Forbidden or human-gated hooks: any hook that writes GitHub state, merges, pushes, executes production migrations, edits vault/HKA content, or applies promotion. Those cross authority boundaries and must use explicit commands, PRs, or operator acknowledgement [docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md:30-45], [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
+Forbidden or human-gated hooks: any hook that writes GitHub state, merges, pushes, executes CURRENT
+production migrations, edits vault/HKA content, crosses a BuilderOps authority class through a
+`PromotionIntent`, or invokes TARGET/DEFERRED `promote-*`/`stable` release mutation. Those actions
+must use their explicit current or target workflow, PR, and operator authority; a target release
+skill is not executable for current production until the release owner doc activates that model
+[docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md:30-45], [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
 
 ## 11. GitHub Event Automation Assessment
 
@@ -745,36 +1291,66 @@ review gate rather than the Codex verdict path
 integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local hook
 documentation only [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50].
 
-No patch/merge authority should be enabled until branch protection and required guardrails are documented and enforced. `main` now enforces one required status check (`Unit tests (not pg)`) but no review or contract check, and repo auto-merge is disabled.
+Do not widen **new** event-driven, dispatcher, GitHub Action, or other platform-native patch/merge
+principal authority until its permissions, exact-head evidence gates, containment, recovery, and
+branch guardrails are documented and enforced. This restriction does not suspend the current
+`verification-and-closure` authority: Tier 1 and eligible Tier 2 work may complete an unattended
+governed **explicit merge** when their exact-head gates pass. `main` currently requires `Unit tests
+(not pg)` while other applicable checks remain skill-enforced; `allow_auto_merge=false` disables
+GitHub's auto-merge feature, not the existing explicit-merge path.
 
 ## 13. Branch Protection And Merge Guardrails
 
-Current observed state:
+Current observed state, refreshed through read-only GitHub API calls on 2026-08-11:
 
-- `main` is the default branch and is protected by a single required status check: `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on 2026-07-29 returned `contexts=["Unit tests (not pg)"]`, `strict=false`, `enforce_admins=true`, `required_pull_request_reviews=null`. (The same call returned HTTP 404 `Branch not protected` on 2026-07-08; protection was added between those observations — see `docs/development/GITHUB_GOVERNANCE_SETUP.md :: Governance receipts`.)
-- `stable` is protected with strict required checks `smoke`, `smoke-docker`, and `pr-contract`; required approving review count is 0 and CODEOWNERS review is not required by branch protection.
-- Repository auto-merge is disabled: `allow_auto_merge=false`.
+- `main` is the default branch and is protected by a single required status check,
+  `Unit tests (not pg)`; `strict=false`, `enforce_admins=true`, and
+  `required_pull_request_reviews=null`.
+- `stable` is protected with strict required checks `smoke`, `smoke-docker`, and `pr-contract`;
+  required approving review count is 0 and CODEOWNERS review is not required by branch protection.
+  The live compare reports `stable...main` as diverged (`main` 2,402 commits ahead and 74 behind),
+  consistent with the release owner doc's dormant-`stable` warning.
+- Repository auto-merge is disabled: `allow_auto_merge=false`. Governed delivery uses an explicit
+  merge after the applicable exact-head gates; disabled GitHub auto-merge is not evidence that
+  autonomous delivery is absent.
 - CODEOWNERS exists and names Rasmus for prod-critical files, promotion skills, and migrations [`.github/CODEOWNERS`:1-9].
 - Docs claim required checks were added to `stable` on 2026-05-10 [docs/development/GITHUB_GOVERNANCE_SETUP.md:303-319].
 
-Required target state before autonomous merge is safe:
+Required target state before widening merge authority to a new event-driven or platform-native
+principal is safe:
 
 - ~~Protect `main` or make the autonomous target a protected branch.~~ Done: `main` is protected (verified 2026-07-29).
 - Require the actual checks used by the Builder System (`pr-contract`, CI/smoke/import-linter as appropriate). Partially done: `main` requires `Unit tests (not pg)` only; `pr-contract`, `smoke`, `smoke-docker`, and import-linter still run without being required on `main`.
 - Decide whether CODEOWNERS review is required for prod-critical paths; current `stable` branch protection does not require it.
-- Keep auto-merge disabled until evidence pack, review gate, and closure gate are deterministic enough to audit.
-- Limit autonomous-merge eligibility to docs-only/governance Tier 1 or low-risk code after guardrails are enforced; prod/stable, migrations, release, vault/HKA/MEM authority, and external-facing irreversible changes remain human/operator exception paths [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35], [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
+- Keep GitHub auto-merge disabled until that distinct platform feature has an auditable evidence,
+  review, closure, and recovery contract. This does not block the CURRENT Tier 1 and eligible Tier
+  2 explicit-merge path governed by `verification-and-closure`.
+- Limit any **new** event-driven/platform-native merge principal to an explicitly admitted risk
+  envelope. CURRENT production follows `main`; TARGET/DEFERRED gated-`stable` mutation, migrations,
+  release, vault/HKA/MEM authority, and external-facing irreversible changes retain the human or
+  operator authority named by their active contracts [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35], [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
 
-Conclusion: autonomous merge to `main` is not yet fully platform-safe. Platform protection now blocks a merge while `Unit tests (not pg)` is red, but it does not enforce `pr-contract`, smoke, import-linter, or any review requirement; those remain skill-enforced [`.codex/skills/verification-and-closure/SKILL.md`:95-115].
+Conclusion: widening merge authority to a **new** event-driven or platform-native principal is not
+yet fully platform-safe. Platform protection blocks a merge while `Unit tests (not pg)` is red, but
+does not enforce `pr-contract`, smoke, import-linter, or a review requirement; those remain
+skill-enforced. Separately, CURRENT Tier 1 and eligible Tier 2 unattended explicit merges remain
+authorized through `verification-and-closure` after the applicable exact-head gates pass
+[`.codex/skills/verification-and-closure/SKILL.md`:95-115].
 
 ## 14. Human Exception Model
 
-Rasmus may be called only for:
+The canonical escalation classifier owns the route. Rasmus may be called only when it establishes a
+real owner/operator authority category, including:
 
-- safety-critical cases: prod/stable, secrets, migrations, vault/HKA/MEM authority, irreversible/external-facing actions.
-- authority-critical cases: owner-doc/product authority, release operator acknowledgement, governance boundary crossings.
-- intent-critical ambiguity: strategic direction or preference cannot be inferred from docs/source anchors.
-- autonomous-failure-critical cases: bounded repair/review/rescue loops failed, stronger autonomous diagnosis cannot produce a safe bounded replan, and continuing would require an explicit authority category.
+- security, privacy, secrets/credentials, protected state, production/release, migrations,
+  vault/HKA/MEM authority, or environment decisions whose contract reserves human authority;
+- irreversible or external-facing actions and consequences;
+- strategic product/portfolio, legal/ethical, or cost/risk choices;
+- guardrail bypass, policy exception, expanded permission, or residual-risk acceptance outside
+  agent authority;
+- contradictory, absent, or genuinely ambiguous authority; or
+- an explicit protected operator gate or a failed autonomous path whose next safe step requires one
+  of the authority categories above.
 
 Technical failures, repair-budget exhaustion, host/schema compatibility pauses,
 or static-quality findings do not independently qualify. They route through the
@@ -818,7 +1394,7 @@ Where to store/post:
 | post-merge docs classifier | Event-driven docs loop | skill + watchdog | watchdog nudges human/agent | docs drift | artifact-only diff classifier then comment-only |
 | exception router | Standard escalation | labels/fallback policy | ad hoc blocker comments | unusable escalations | Human Exception packet template + label/comment helper |
 | hook layer | Local safety/token reduction | `.claude` search | no hooks | branch/root/prod mistakes | SessionStart/PreToolUse hooks that call existing scripts |
-| main branch protection | Platform guardrails | `gh api main protection` | skill discipline only | unsafe autonomous merge | protect `main` with required checks |
+| incomplete required-check coverage on `main` | Platform guardrails do not yet enforce every Builder System gate | `gh api main protection`, governance setup, verification skill | `Unit tests (not pg)` is protected; other applicable gates remain skill-enforced | unsafe automation if skill gates are bypassed | reconcile required checks with the proportional delivery contract before widening merge automation |
 | auto-merge policy | Closure automation | repo settings | disabled | unclear authority | document eligibility after branch protection |
 
 ## 16. Mermaid Diagrams Required
@@ -835,11 +1411,27 @@ flowchart LR
   Repo --> CI["CI + governance workflows"]
   CI --> Review["Review / verification gate"]
   Review --> Merge["Merge + closure"]
+  Merge --> Candidate["Authorized candidate under CURRENT channel contract"]
+  Candidate --> Deploy["Deploy exact authorized SHA / image"]
+  Deploy --> Live{"Live identity, environment, and health proven?"}
+  Live -->|yes| Accept{"Required feature / owner acceptance satisfied?"}
+  Accept -->|yes or not required| Operate["Accepted operation"]
+  Live -->|no| Rollback["Authorized rollback; candidate not accepted"]
+  Accept -->|no| Rollback
+  Rollback --> RollbackVerify{"Rollback identity and health verified?"}
+  RollbackVerify -->|yes| PreviousGood["Operate previous-good state; failed candidate remains unaccepted"]
+  RollbackVerify -->|no| IncidentBlock["Protected incident / technical or authority block; no accepted operation"]
+  Operate --> Observe["Observe product and delivery evidence"]
+  PreviousGood --> Observe
+  Observe --> Intake["Incident / defect / improvement intake"]
+  Intake --> Issues
+  Intake --> BuilderOps
   Merge --> Docs
   Agents --> BuilderOps["BuilderOps records"]
   BuilderOps --> Learning["Learning retrospective"]
   Learning --> Docs
-  Review --> Exception["Human exception path"]
+  Review --> Triage["Classifier / recovery"]
+  Triage --> Exception["Human exception only for authority"]
   Exception --> Rasmus
 ```
 
@@ -859,15 +1451,36 @@ flowchart TD
   Followup --> Issue
 ```
 
-### End-To-End Builder System Flowchart
+### L0 End-To-End Builder System Delivery And Operations Flow
 
 ```mermaid
 flowchart TD
-  Intent --> DocsAuthoring --> DocsToIssue --> Readiness --> Dispatcher --> Claim --> Implement --> LocalValidation --> PublishPR --> PRContract --> CI --> ReviewGate --> MergeGate --> Closure --> PostMergeDocs --> Learning
+  Intent --> DocsAuthoring --> DocsToIssue --> Readiness --> Dispatcher --> Claim --> Implement --> LocalValidation --> PublishPR --> PRContract --> CI --> DeliveryPath --> MergeGate --> Closure --> PostMergeDocs
   Readiness -->|bad contract| IssueRepair
   CI -->|fail| CIRepair --> CI
+  DeliveryPath -->|full path| ReviewGate
+  DeliveryPath -->|light path| MergeGate
   ReviewGate -->|findings| ReviewRepair --> CI
-  MergeGate -->|unsafe| HumanException
+  ReviewGate -->|clean| MergeGate
+  MergeGate -->|cannot proceed| Triage
+  Triage -->|technical route| Recover
+  Triage -->|explicit authority category| HumanException
+  Closure --> Candidate["authorized candidate under CURRENT channel contract"]
+  Candidate --> Deploy["deploy exact authorized SHA / image"]
+  Deploy --> LiveReady{"live identity + environment + health proven?"}
+  LiveReady -->|yes| Acceptance{"required feature / owner acceptance satisfied?"}
+  Acceptance -->|yes or not required| AcceptedOperation["accepted operation"]
+  LiveReady -->|no| Rollback["authorized rollback; candidate not accepted"]
+  Acceptance -->|no| Rollback
+  Rollback --> RollbackVerification{"rollback identity + health verified?"}
+  RollbackVerification -->|yes| PreviousGoodOperation["operate previous-good state; failed candidate unaccepted"]
+  RollbackVerification -->|no| IncidentBlock["protected incident / technical or authority block; no accepted operation"]
+  AcceptedOperation --> Observe["operate + observe"]
+  PreviousGoodOperation --> Observe
+  Observe --> Intake["incident / defect / improvement intake"]
+  Intake -->|verified bug or improvement| BugToIssue["bug-to-issue"]
+  BugToIssue --> Readiness
+  Intake -->|capability, policy, or docs learning| Learning
   PostMergeDocs -->|docs changed| DocsAuthoring
   Learning -->|retro edit| DocsAuthoring
 ```
@@ -883,6 +1496,15 @@ flowchart TD
   Preflight --> Claim["claim lease"]
   Claim --> GithubClaim["remove agent:ready + In Progress"]
   GithubClaim --> Work["work + heartbeat"]
+  Work --> Interrupted["interrupted"]
+  Interrupted --> Reconstruct["resume-work: reconstruct Issue / head / lease / worktree / PR"]
+  Reconstruct --> Revalidate{"Issue, head, and lease still authoritative?"}
+  Revalidate -->|same unexpired lease + unchanged authority| Continue["single authorized continuation"]
+  Continue --> Work
+  Revalidate -->|lease expired only| StaleTakeover["governed stale takeover"]
+  StaleTakeover --> Continue
+  Revalidate -->|unexpired foreign lease| RejectTakeover["reject takeover; technical block"]
+  Revalidate -->|contradictory or missing authority| AuthorityBlock["authority block / canonical escalation classifier"]
   Work --> Complete["complete/release"]
 ```
 
@@ -927,7 +1549,9 @@ stateDiagram-v2
   pr_contract --> CI
   CI --> ci_repair
   ci_repair --> CI
-  CI --> review_gate
+  CI --> delivery_path
+  delivery_path --> merge_eligible: light path
+  delivery_path --> review_gate: full path
   review_gate --> review_repair
   review_repair --> CI
   review_gate --> merge_eligible
@@ -991,30 +1615,22 @@ flowchart TD
   Decision -->|reject| Close["Close/block/discard"]
 ```
 
-## 17. Recommended Implementation Sequence
+## 17. Target Automation Dependency Principles
 
-| PR | Goal | Mode | Why now | Rollback | Human exception risk |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Land this process map | docs-only | Required before automating dispatch/routing | Revert doc PR | low |
-| 2 | Add deterministic readiness/`Verify:` checker that reports only | observe-only | No dispatcher automation before readiness is deterministic | Remove workflow/script | low |
-| 3 | CI failure context artifact builder on `workflow_run` — delivered by PR #3222 | artifact-only | Context is now available before any future CI self-heal | Disable workflow | low |
-| 4 | Add evidence pack builder for PRs | artifact-only | Closure needs one auditable packet | Disable workflow | low |
-| 4a | Emit a current-head, idempotent verification request after successful `CI Smoke` — delivered by #3602 | artifact-only | Makes the verification handoff observable without granting GitHub Actions agent or closure authority | Disable workflow | low |
-| 5 | Protect `main` with documented required checks | manual exception gate | No autonomous merge before branch protection | Remove rule | medium, platform authority |
-| 6 | Add post-merge docs classifier artifact | artifact-only | Watchdog currently nudges but does not classify | Disable workflow | low |
-| 7 | Add local Claude/Codex session hooks for repo root, branch, and dangerous command blocking | hybrid: script + agent | Reduces local safety failures and token reloads | Remove hook config | medium, false positives |
-| 8 | Add comment-only CI repair agent using failure context | comment-only | Suggest fixes without patch authority | Disable Action/comment command | medium |
-| 9 | Add patch-branch CI repair for low-risk deterministic failures | patch-branch | Only after context and guardrails exist | Disable patch mode | high |
-| 10 | Add autonomous closure for docs-only/governance Tier 1 with protected branch and evidence pack | autonomous-closure | Only after branch protection, evidence, and review gates are enforceable | Disable closure workflow | high |
+This process architecture is not a backlog or implementation sequence. Any automation proposal must
+be reconciled against live Issues, current owner docs, and delivered mechanisms before work is
+created. The durable dependency principles are:
 
-Rules applied:
-
-- Process map first.
-- No autonomous merge before branch protection.
-- No CI self-heal before CI failure context collector.
-- No routine human review gate.
-- No broad skill rewrite.
-- No full SkillOpt system yet.
-- Docs-as-code/spec structure remains primary authority.
-- Dispatcher/routing is documented before automating dispatch.
-- Rasmus is exception authority, not routine reviewer/dispatcher/triager/closer.
+- establish a bounded source contract before automating execution;
+- add observe-only evidence and explicit freshness before granting mutation authority;
+- make readiness deterministic enough for the scope before automating dispatch;
+- collect failure context before enabling automated repair;
+- bind proof to the exact change before automating closure;
+- enforce the proportional delivery contract and required branch protections before widening merge
+  automation;
+- preserve explicit operator gates for production, irreversible, external-facing, migration, and
+  other contractually protected effects;
+- keep docs-as-code and source systems authoritative while representations remain rebuildable;
+- add no routine human review gate where the proportional delivery path does not require one;
+- treat Rasmus as exception and strategic authority, not routine dispatcher, triager, reviewer, or
+  closer.
