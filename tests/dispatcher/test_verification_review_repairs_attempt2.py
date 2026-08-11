@@ -269,7 +269,8 @@ def test_codex_nonzero_exit_drains_stderr_and_rejects_valid_receipt(
         def poll(self):
             return self.returncode
 
-        def wait(self):
+        def wait(self, timeout=None):
+            assert timeout == 0.25, "terminal wait must remain bounded"
             assert stderr.drained, "stderr must be drained before waiting"
             return self.returncode
 
