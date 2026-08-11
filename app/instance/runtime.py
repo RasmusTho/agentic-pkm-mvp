@@ -2658,6 +2658,60 @@ def _release_instance_state_deployment_lease(
         return receipt | {"released": True, "reason": "abandoned-deployment"}
 
 
+def _recover_lost_ownership_lease(
+    *,
+    channel: str,
+    instance_state_root: Path,
+    host_global_root: Path,
+    backup_root: Path,
+    quiescence_proof_path: Path,
+    owner_receipt_path: Path,
+    vault_binding_id: str,
+) -> dict[str, object]:
+    """Recover one uniquely proven missing lease inside the stopped fence."""
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    state_mount = _assert_mount_root(instance_state_root, "instance-state")
+    ownership_root = _assert_mount_root(host_global_root, "host-global")
+    layout = InstanceStateLayout.for_channel(state_mount, channel)
+    layout.require_existing()
+    proof = _load_deployment_quiescence_proof(quiescence_proof_path)
+    proof.require_canonical_authority(
+        channel_id=channel,
+        host_global_root=ownership_root,
+        owner_receipt_path=owner_receipt_path,
+    )
+    registry = VaultRegistryStore(layout.registry_path).load()
+    registration = registry.registrations.get(vault_binding_id)
+    if registration is None or len(registry.registrations) != 1:
+        raise InstanceStatePreflightError(
+            "lost ownership recovery requires exactly one registered owner"
+        )
+    backup = InstanceStateBackup(layout, OwnershipLedger(ownership_root))
+    with _deployment_admission_locked(ownership_root):
+        with _producer_transition_locked(layout):
+            receipt = backup.create_lost_lease_recovery_backup(
+                backup_root,
+                quiescence_proof=proof,
+                owner_receipt_path=owner_receipt_path,
+                vault_binding_id=vault_binding_id,
+            )
+            lease = backup.ledger.recover_missing_active(
+                channel_id=channel,
+                vault_binding_id=vault_binding_id,
+                root=Path(registration.path),
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
+    return {
+        "channel": channel,
+        "recovered": True,
+        "backup_verified": receipt.manifest_path.is_file(),
+        "lease_state": lease.state,
+        "recovery_receipt": "lost-lease-recovery-v1",
+    }
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
@@ -3418,6 +3472,14 @@ def main(argv: list[str] | None = None) -> int:
     release.add_argument("--host-global-root", type=Path, required=True)
     release.add_argument("--controller-pid", type=int, required=True)
     release.add_argument("--controller-start-token", required=True)
+    recover = subparsers.add_parser("deployment-recover-lost-lease")
+    recover.add_argument("--channel", required=True)
+    recover.add_argument("--instance-state-root", type=Path, required=True)
+    recover.add_argument("--host-global-root", type=Path, required=True)
+    recover.add_argument("--backup-root", type=Path, required=True)
+    recover.add_argument("--quiescence-proof-path", type=Path, required=True)
+    recover.add_argument("--owner-receipt-path", type=Path, required=True)
+    recover.add_argument("--vault-binding-id", required=True)
     prove = subparsers.add_parser("deployment-prove")
     prove.add_argument("--channel", required=True)
     prove.add_argument("--host-global-root", type=Path, required=True)
@@ -3608,6 +3670,17 @@ def main(argv: list[str] | None = None) -> int:
                 sort_keys=True,
             )
         )
+        return 0
+    if args.command == "deployment-recover-lost-lease":
+        print(json.dumps(_recover_lost_ownership_lease(
+            channel=args.channel,
+            instance_state_root=args.instance_state_root,
+            host_global_root=args.host_global_root,
+            backup_root=args.backup_root,
+            quiescence_proof_path=args.quiescence_proof_path,
+            owner_receipt_path=args.owner_receipt_path,
+            vault_binding_id=args.vault_binding_id,
+        ), sort_keys=True))
         return 0
     if args.command == "deployment-prove":
         proof = _prove_instance_state_quiescence(

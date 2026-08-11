@@ -37,6 +37,7 @@ from app.instance.runtime import (
     _deployment_fence_path,
     _deployment_lease_path,
     _finish_instance_state_deployment,
+    _recover_lost_ownership_lease,
     _preflight_runtime,
     _prove_instance_state_quiescence,
 )
@@ -505,6 +506,83 @@ def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> Non
     assert producer.index(" stop api worker watcher") < producer.index("deployment-finish")
     assert "deployment-prove" in producer
     assert "probe_count" in WRITER_INVENTORY_HELPER.read_text(encoding="utf-8")
+
+
+def _prepare_lost_lease_runtime(tmp_path: Path):
+    layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "dev")
+    host_global_root = tmp_path / "host-global"
+    root = tmp_path / "vault"
+    root.mkdir()
+    runtime = InstanceRegistryRuntime.for_paths(layout, host_global_root)
+    registration = runtime._new_registration(root, vault_binding_id="binding-dev")
+    runtime.registry.register(
+        registration,
+        expected_revision=runtime.registry.load().revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    runtime.ledger.load()
+    legacy = tmp_path / "legacy-app-local.md"
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=layout,
+        host_global_root=host_global_root,
+        legacy_path=legacy,
+        owners=[
+            {
+                "channel_id": "dev",
+                "vault_binding_id": "binding-dev",
+                "root": str(root),
+            }
+        ],
+    )
+    return runtime, proof, owner_receipt
+
+
+def test_fenced_lost_lease_recovery_restores_single_registered_owner(tmp_path) -> None:
+    runtime, proof, owner_receipt = _prepare_lost_lease_runtime(tmp_path)
+    result = _recover_lost_ownership_lease(
+        channel="dev",
+        instance_state_root=runtime.layout.root.parent,
+        host_global_root=runtime.ledger.root,
+        backup_root=tmp_path / "backup",
+        quiescence_proof_path=runtime.ledger.root / "deployment-quiescence-proof.json",
+        owner_receipt_path=owner_receipt,
+        vault_binding_id="binding-dev",
+    )
+    assert result["recovered"] is True
+    assert result["backup_verified"] is True
+    assert runtime.ledger.active_owner("binding-dev") is not None
+    assert (tmp_path / "backup" / "manifest.json").is_file()
+
+
+def test_fenced_lost_lease_recovery_rejects_non_unique_owner(tmp_path) -> None:
+    runtime, proof, owner_receipt = _prepare_lost_lease_runtime(tmp_path)
+    (tmp_path / "foreign-vault").mkdir()
+    runtime.ledger.reserve(
+        channel_id="test",
+        vault_binding_id="foreign-binding",
+        root=tmp_path / "foreign-vault",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file() and path.name != "bootstrap.lock"
+    }
+    with pytest.raises(InstanceStatePreflightError, match="unambiguous owner inventory"):
+        _recover_lost_ownership_lease(
+            channel="dev",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root,
+            backup_root=tmp_path / "backup",
+            quiescence_proof_path=runtime.ledger.root / "deployment-quiescence-proof.json",
+            owner_receipt_path=owner_receipt,
+            vault_binding_id="binding-dev",
+        )
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file() and path.name != "bootstrap.lock"
+    } == before
 
 
 def test_diagnostic_export_cannot_be_imported_as_final_authority_without_mutation(
