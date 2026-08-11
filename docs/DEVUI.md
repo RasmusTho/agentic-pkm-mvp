@@ -467,8 +467,10 @@ contract that satisfies the Overview boundary for either zone:
 
 This is a source-ownership result, not a new devUI authority. The existing GitHub → Cockpit →
 `devui.composition.v1` chain may transport these facts only after a separately governed source
-contract exists; it may not manufacture them or persist a replacement. Until then, producers and
-the composer must preserve the explicit withdrawal state.
+contract exists; it may not manufacture them or persist a replacement. Because no current source
+was admitted, ARO-02 remains blocked: there are no authorized facts for the producer chain to
+enrich. Until a separately governed source contract exists, producers and the composer must
+preserve the explicit withdrawal state.
 
 ### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
 

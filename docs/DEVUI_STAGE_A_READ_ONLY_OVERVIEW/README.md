@@ -23,7 +23,7 @@ navigation. Visual implementation additionally waits for a governed Yggdrasil ha
 
 | Surface | Current delivered fact | Remaining target |
 | --- | --- | --- |
-| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | Explicit Overview candidates only after source authority is accepted |
+| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 remains blocked |
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | `agent:needs-human` may place work in a Cockpit band, but no serialized canonical owner-authority category/governing-source fact reaches Overview | Exact source-owned owner-question facts, or an honest withdrawal |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
@@ -33,7 +33,9 @@ navigation. Visual implementation additionally waits for a governed Yggdrasil ha
 
 ## Authority-resolution gate
 
-ARO-01 is the only owner-decision child. It must name, in an accepted owner/source contract:
+ARO-01 was the only owner-decision child. Its accepted resolution recorded that no current source
+owns either Overview fact, so neither zone may be enriched from current inputs. A future source
+contract would have to name:
 
 1. the canonical existing source and serialized field that owns one of
    `irreversible_external_effect`, `security_privacy_cost_commitment`,
@@ -45,17 +47,16 @@ ARO-01 is the only owner-decision child. It must name, in an accepted owner/sour
 4. whether the current GitHub → Cockpit → `devui.composition.v1` producer chain can transport those
    exact facts without acquiring authority.
 
-The decision may choose that no current source owns either fact. In that case the corresponding
-zone remains withdrawn and ARO-02 stays blocked or is superseded. `agent:needs-human`, `done`, a
-merge, Issue closure, availability, or a terminal verification receipt is never itself the missing
-category or `ready_to_try` fact.
+The recorded no-source resolution keeps the corresponding zones withdrawn and ARO-02 blocked or
+superseded. `agent:needs-human`, `done`, a merge, Issue closure, availability, or a terminal
+verification receipt is never itself the missing category or `ready_to_try` fact.
 
 ## Dependency order and readiness
 
 | Order | Task | Initial label | Exact executable trigger |
 | --- | --- | --- | --- |
-| 1 | ARO-01 — Authorize Overview Source Facts | `agent:needs-human` | Owner accepts the exact source/serialization contract above |
-| 2 | ARO-02 — Enrich Overview Producer Facts | `agent:blocked` | ARO-01 accepts facts transportable through the bounded current producer chain |
+| 1 | ARO-01 — Authorize Overview Source Facts | Closed #4742; withdrawal recorded by PR #4751 | No current source owns either Overview fact |
+| 2 | ARO-02 — Enrich Overview Producer Facts | `agent:blocked` | A separately governed source contract admits transportable facts, or ARO-02 is superseded |
 | 3 | ARO-03 — Expose the Local Overview GET Route | `agent:blocked` | ARO-02 merges; ARO-03 proves its route calls the production producer and delivered composer |
 | 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus delivered #4768 local Focus route and an optional local SoI destination |
 | 5 | ARO-05 — Validate the Overview Yggdrasil Design | `agent:blocked` | Stable ARO-02/03/04 fixtures plus passing governed design-system preflight |
@@ -102,8 +103,8 @@ pickup issue.
 ## Relationship to GitHub issues
 
 Parent [#4741](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4741) is the blocked validation
-hub. ARO-01 is [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742)
-(`agent:needs-human`); ARO-02 through ARO-08 are
+hub. ARO-01 is [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742), closed with its
+withdrawal recorded by PR #4751; ARO-02 through ARO-08 are
 [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) through
 [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). The separate
 [Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
