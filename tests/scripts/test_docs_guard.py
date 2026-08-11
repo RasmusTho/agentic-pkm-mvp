@@ -33,10 +33,10 @@ def _guard_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _guard_result(repo: Path) -> subprocess.CompletedProcess[str]:
+def _guard_result(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     environment = {**os.environ, "GITHUB_BASE_REF": "HEAD~1"}
     return subprocess.run(
-        [sys.executable, "scripts/docs_guard.py"],
+        [sys.executable, "scripts/docs_guard.py", *args],
         cwd=repo,
         env=environment,
         capture_output=True,
@@ -59,6 +59,111 @@ def test_mixed_runtime_and_governance_change_still_requires_temporal_owner_doc(
 
     assert result.returncode == 1
     assert "temporal code/config changed" in result.stdout
+
+
+def test_primary_swedish_documentation_fails_with_evidence(tmp_path: Path) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "docs/SWEDISH.md").write_text(
+        """# Beslut
+
+Det här dokumentet är skrivet på svenska och ska därför stoppas av kontrollen.
+Vi behöver beskriva vad som händer, hur arbetet ska göras och varför beslutet
+är viktigt. Dokumentet måste vara tydligt för den som ska läsa det senare.
+""",
+        encoding="utf-8",
+    )
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "swedish-doc"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == 1
+    assert "Docs language guard" in result.stdout
+    assert "docs/SWEDISH.md" in result.stdout
+    assert '"detected_primary_language": "swedish"' in result.stdout
+
+
+def test_primary_german_documentation_fails_too(tmp_path: Path) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "docs/GERMAN.md").write_text(
+        """# Entscheidung
+
+Das ist ein Dokument und die Regeln sind nicht auf Englisch. Der Text muss
+mit dem System geprüft werden, weil die Dokumentation für alle verständlich
+sein soll. Wenn das Dokument nicht passt, wird der Test fehlschlagen.
+""",
+        encoding="utf-8",
+    )
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "german-doc"], repo)
+
+    result = _guard_result(repo, "--language-only")
+
+    assert result.returncode == 1
+    assert '"detected_primary_language": "german"' in result.stdout
+
+
+def test_non_latin_primary_prose_in_root_documentation_fails(tmp_path: Path) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "CONTRIBUTING.md").write_text(
+        """# Правила
+
+Этот документ описывает правила проекта и порядок работы. Каждый участник
+должен соблюдать решения владельца, проверять изменения и сохранять историю.
+Документация должна быть понятной, точной и доступной для проверки.
+""",
+        encoding="utf-8",
+    )
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "non-latin-root-doc"], repo)
+
+    result = _guard_result(repo, "--language-only")
+
+    assert result.returncode == 1
+    assert "CONTRIBUTING.md" in result.stdout
+    assert '"detected_primary_language": "non_latin"' in result.stdout
+
+
+def test_bounded_swedish_examples_in_english_docs_are_allowed(tmp_path: Path) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "docs/EXAMPLE.md").write_text(
+        """# Localized example
+
+This document explains an English contract for a localized user interface.
+The primary prose remains English, including the purpose, constraints,
+expected behavior, verification method, and owner-facing consequences.
+
+```text
+Spara den här anteckningen och öppna den senare.
+```
+
+The fenced string is test data and does not change the document language.
+""",
+        encoding="utf-8",
+    )
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "localized-example"], repo)
+
+    result = _guard_result(repo, "--language-only")
+
+    assert result.returncode == 0
+    assert "Docs language guard: OK" in result.stdout
+
+
+def test_product_vault_markdown_is_not_repository_documentation(tmp_path: Path) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "vault").mkdir()
+    (repo / "vault/anteckning.md").write_text(
+        "Det här är en svensk anteckning i produktens flerspråkiga valv. " * 8,
+        encoding="utf-8",
+    )
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "vault-fixture"], repo)
+
+    result = _guard_result(repo, "--language-only")
+
+    assert result.returncode == 0
+    assert "Docs language guard: OK" in result.stdout
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,48 @@
+import argparse
 import json
 import os
 import subprocess
 import sys
 
-from docs_guard_logic import TEMPORAL_DOCS, requires_temporal_owner_doc
+from docs_guard_logic import (
+    TEMPORAL_DOCS,
+    non_english_documentation,
+    requires_temporal_owner_doc,
+)
+
+
+parser = argparse.ArgumentParser(description="Validate repository documentation guardrails.")
+parser.add_argument(
+    "--language-only",
+    action="store_true",
+    help="Run only the full-repository English documentation policy.",
+)
+args = parser.parse_args()
+
+tracked_docs_raw = subprocess.check_output(
+    ["git", "ls-files", "-z", "--", "*.md", "*.mdx", "*.rst"]
+)
+tracked_docs = [
+    path.decode("utf-8") for path in tracked_docs_raw.split(b"\0") if path
+]
+language_violations = non_english_documentation(tracked_docs)
+if language_violations:
+    print("Docs language guard: repository documentation must use English as primary prose.")
+    print(
+        json.dumps(
+            {
+                "violations": language_violations,
+                "scope": "governed repository documentation; product/vault/test corpus excluded",
+                "allowed": "bounded non-English examples inside otherwise-English documentation",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    sys.exit(1)
+if args.language_only:
+    print("Docs language guard: OK")
+    sys.exit(0)
 
 def _resolves(ref: str) -> bool:
     return (

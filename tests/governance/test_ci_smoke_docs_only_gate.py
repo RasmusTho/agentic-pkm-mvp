@@ -230,6 +230,19 @@ def test_docs_guard_runs_on_the_pr_path_for_governance_and_doc_changes() -> None
     assert "steps.changes.outputs.heavy_smoke != 'true'" in guard_step
 
 
+def test_documentation_language_guard_runs_on_every_pr_shape() -> None:
+    job = _smoke_job_text()
+    start = job.index("- name: Documentation language guard")
+    end = job.index("- name: Docs guard", start)
+    step = job[start:end]
+
+    assert "python3 scripts/docs_guard.py --language-only" in step
+    assert "if:" not in step, (
+        "the English documentation policy must also cover docs changed by "
+        "implementation PRs"
+    )
+
+
 def test_heavy_smoke_stays_off_the_docs_surface() -> None:
     # The inverse assertion: heavy_smoke must NOT be widened to the doc surface.
     # Every step it gates is runtime-code-only, so including docs/** there would
