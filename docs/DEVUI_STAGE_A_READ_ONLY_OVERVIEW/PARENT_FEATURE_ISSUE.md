@@ -13,11 +13,11 @@ Last reviewed: 2026-08-11
 
 ## Context
 
-The pure `devui-overview-view.v1` composer is delivered, but the current producer chain lacks the
-canonical source facts required to populate **Needs you** and **Ready to try**. The Overview also
-lacks a local GET route, real typed navigation destinations, a governed design, a browser shell,
-accessibility proof, and an owner pilot. The parent coordinates validation only; it is never ready
-work.
+The pure `devui-overview-view.v1` composer and the direct-loopback local GET route are delivered,
+but the current producer chain lacks the canonical source facts required to populate **Needs you**
+and **Ready to try**. The Overview still lacks real typed navigation destinations, a governed
+design, a browser shell, accessibility proof, and an owner pilot. The parent coordinates validation
+only; it is never ready work.
 
 ## Scope
 
