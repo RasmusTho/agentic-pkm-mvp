@@ -166,14 +166,13 @@ TEMPORAL_DOCS = frozenset(
 )
 TEMPORAL_CODE_PREFIXES = ("app/", "scripts/", "config/", "docs/settings/")
 # Maps each governance-only enforcement script to its docs/development/ owner
-# doc. None means no doc has been assigned yet for that script: it falls back
-# to accepting any docs/development/ touch (the pre-existing, looser
-# behavior) instead of a false claim of a specific pairing that doesn't exist.
+# doc. Optional values retain the safe fallback for a future unassigned entry,
+# but every current enforcement script has an explicit paired contract.
 GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
     {
-        "scripts/docs_guard.py": None,
-        "scripts/docs_guard_logic.py": None,
-        "scripts/git_hygiene.py": None,
+        "scripts/docs_guard.py": "docs/development/DOCUMENTATION_GUARD.md",
+        "scripts/docs_guard_logic.py": "docs/development/DOCUMENTATION_GUARD.md",
+        "scripts/git_hygiene.py": "docs/development/GIT_HYGIENE.md",
         "scripts/select_pr_tests.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
     }
 )
