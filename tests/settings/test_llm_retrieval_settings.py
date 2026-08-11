@@ -36,7 +36,7 @@ def _bundle() -> SettingsBundle:
 def _clean_env(monkeypatch: pytest.MonkeyPatch):
     for key in (
         "LLM_TIMEOUT", "LLM_TEMPERATURE", "REASONING_MODEL", "MERGE_LLM_MODEL",
-        "RERANK_ENABLE", "RERANK_PROVIDER", "RERANK_TOP_K", "RETRIEVAL_RERANK", "PKM_SETTINGS_PROFILE",
+        "RERANK_ENABLE", "RERANK_PROVIDER", "RERANK_TOP_K", "RETRIEVAL_RERANK", "RETRIEVAL_RERANK_TOP_K", "PKM_SETTINGS_PROFILE",
     ):
         monkeypatch.delenv(key, raising=False)
     reset_retrieval_tuning_cache()
@@ -97,6 +97,11 @@ def test_empty_settings_and_legacy_env_preserve_llm_and_rerank_behavior(monkeypa
     assert "deprecated" in str(wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"])
     assert wave_one.wave_one_explain()["retrieval.rerank"] == {
         "value": "always", "origin": "env:RERANK_ENABLE (deprecated)", "tier": "lab"
+    }
+    monkeypatch.setenv("RETRIEVAL_RERANK_TOP_K", "8")
+    reset_retrieval_tuning_cache()
+    assert wave_one.wave_one_explain()["retrieval.rerank.top_k"] == {
+        "value": 8, "origin": "env:RETRIEVAL_RERANK_TOP_K", "tier": "lab"
     }
 
 

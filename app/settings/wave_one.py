@@ -113,7 +113,15 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
         },
         "retrieval.rerank.top_k": {
             "value": effective_retrieval.rerank_top_k,
-            "origin": "env:RERANK_TOP_K (deprecated)" if _override("RERANK_TOP_K") else _vault_shared_origin("retrieval.md"),
+            "origin": (
+                "env:RETRIEVAL_RERANK_TOP_K"
+                if _override("RETRIEVAL_RERANK_TOP_K")
+                else (
+                    "env:RERANK_TOP_K (deprecated)"
+                    if _override("RERANK_TOP_K")
+                    else _vault_shared_origin("retrieval.md")
+                )
+            ),
             "tier": "lab",
         },
     }
