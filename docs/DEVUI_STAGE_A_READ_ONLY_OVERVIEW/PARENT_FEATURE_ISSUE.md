@@ -1,11 +1,13 @@
-State: Active blocked validation hub #4741; children #4742–#4749 are filed and no implementation delivery is claimed.
+State: Active blocked validation hub #4741; #4742 is closed with withdrawal, #4743 is superseded,
+#4744 delivered the direct-loopback Overview route, and #4745–#4749 remain blocked pending their
+own prerequisites.
 Doc role: Parent feature issue contract
 Authority: The capability README owns stable scope and order. The live GitHub parent owns backlog and validation state after filing.
 Owner: Builder System governance
 Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-11
 
 # Parent feature issue — devUI Stage A Read-Only Overview
 
