@@ -633,8 +633,8 @@ Delivered now:
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; the local Overview route; Focus route/UI and
-Overview-to-Focus navigation; provider conversation runtime; authenticated command preview/Start/Hold;
+surface; the local Overview route; Focus route/UI (the route remains undelivered until executable
+prerequisite #4768 is delivered) and Overview-to-Focus navigation; provider conversation runtime; authenticated command preview/Start/Hold;
 the Builder System Control lens; visual shell; owner pilot and tried-by-owner acceptance; and
 ADR-0065 dispositions.
 

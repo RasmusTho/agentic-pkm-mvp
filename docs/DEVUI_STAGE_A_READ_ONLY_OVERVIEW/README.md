@@ -1,4 +1,4 @@
-State: Accepted target-state breakdown with blocked validation parent #4741 and children #4742–#4749 filed; no remaining Stage A implementation is claimed.
+State: Accepted target-state breakdown with blocked validation parent #4741 and children #4742–#4749 filed; Focus-route prerequisite #4768 is ready; no remaining Stage A implementation is claimed.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
@@ -56,8 +56,8 @@ category or `ready_to_try` fact.
 | --- | --- | --- | --- |
 | 1 | ARO-01 — Authorize Overview Source Facts | `agent:needs-human` | Owner accepts the exact source/serialization contract above |
 | 2 | ARO-02 — Enrich Overview Producer Facts | `agent:blocked` | ARO-01 accepts facts transportable through the bounded current producer chain |
-| 3 | ARO-03 — Expose the Local Overview GET Route | `agent:blocked` | ARO-02 merges with production-call-site evidence |
-| 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus real local Focus and optional SoI destination contracts/routes |
+| 3 | ARO-03 — Expose the Local Overview GET Route | `agent:blocked` | ARO-02 merges; ARO-03 proves its route calls the production producer and delivered composer |
+| 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus delivered #4768 local Focus route and an optional local SoI destination |
 | 5 | ARO-05 — Validate the Overview Yggdrasil Design | `agent:blocked` | Stable ARO-02/03/04 fixtures plus passing governed design-system preflight |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 handoff and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | ARO-06 merged at an exact testable SHA |
@@ -105,7 +105,9 @@ Parent [#4741](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4741) is the 
 hub. ARO-01 is [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742)
 (`agent:needs-human`); ARO-02 through ARO-08 are
 [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) through
-[#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). GitHub owns
+[#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). The separate
+[Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
+`agent:ready` and must deliver before ARO-04 marks a Focus destination available. GitHub owns
 backlog state; this directory owns the stable breakdown and validation path.
 
 ## Governing and supporting sources

@@ -108,8 +108,8 @@ work.
 | --- | --- | --- | --- |
 | ARO-01 — Authorize Overview Source Facts | [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742) | `agent:needs-human` | Owner accepts the exact source/serialization contract |
 | ARO-02 — Enrich Overview Producer Facts | [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) | `agent:blocked` | accepted #4742 transportable through bounded current producer chain |
-| ARO-03 — Expose Local Overview GET Route | [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) | `agent:blocked` | #4743 merged with production-call-site evidence |
-| ARO-04 — Bind Typed Overview Navigation | [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) | `agent:blocked` | #4744 plus actual local Focus/optional SoI destinations |
+| ARO-03 — Expose Local Overview GET Route | [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) | `agent:blocked` | #4743 merged; #4744 proves route → production producer → delivered composer |
+| ARO-04 — Bind Typed Overview Navigation | [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) | `agent:blocked` | #4744 plus delivered [#4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) local Focus route and optional SoI destination |
 | ARO-05 — Validate Overview Yggdrasil Design | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | `agent:blocked` | stable #4743/#4744/#4745 fixtures plus design preflight |
 | ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | `agent:blocked` | #4744/#4745 merged and #4746 accepted |
 | ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | `agent:blocked` | exact merged #4747 SHA |

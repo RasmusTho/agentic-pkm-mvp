@@ -5,7 +5,7 @@ task_id: ARO-04
 github_issue: 4745
 source_anchor: "docs/DEVUI.md :: DEVUI-OVERVIEW-BOUNDARY — server-declared read model"
 parent_capability: devUI Stage A Read-Only Overview
-prerequisites: [ARO-03, local Focus destination contract]
+prerequisites: [ARO-03, Focus route #4768]
 depends_on: [EXPOSE_LOCAL_OVERVIEW_GET_ROUTE.md]
 can_parallelize_with: []
 recommended_capability: "Codex Terra / high"
@@ -130,5 +130,6 @@ not authorized by this child.
 ## Related GitHub Issues
 
 Filed as blocked child [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745); the exact
-next trigger is #4744 delivery plus an actual admitted local Focus destination contract/route (and
-a local SoI route before any SoI reference is marked available).
+next trigger is #4744 delivery plus the merged admitted local
+[Focus route #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) (and a local SoI
+route before any SoI reference is marked available).
