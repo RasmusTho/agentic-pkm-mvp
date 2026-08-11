@@ -228,13 +228,15 @@ with Python isolation flags before it reads anything and imports no application/
 Before the barrier releases, the parent captures
 the root's full PID-version/unique-id/parent-unique-id/coalition identity and requires two stable,
 count-matched snapshots whose complete member set is exactly baseline plus that paused root. Any
-other member, identity change, release failure, or root loss fails setup before the model command
-can exec or spawn descendants; bounded process-group cleanup is then sufficient. The same root PID
+other member, identity change, or root loss fails setup before release, so the model command cannot
+exec or spawn descendants. The same root PID
 survives the direct exec only after attachment has armed containment cleanup. The barrier write end
 is parent-only and never inherited, while the wrapper owns only the read end, marks it
-non-inheritable, and exits without exec on EOF or an invalid release token. Before release, failure
-cleanup handles only the live Popen root and never probes or signals a numeric process group. After
-release, the count-witnessed audit-token coalition cleanup is the sole whole-tree authority; raw
+non-inheritable, and exits without exec on EOF or an invalid release token. Before an attempted
+release, failure cleanup handles only the live Popen root and never probes or signals a numeric
+process group. Any release attempt, including a partial write or an indeterminate exception, enters
+the post-release state. After that point, count-witnessed audit-token coalition cleanup is the sole
+whole-tree authority; raw
 PID, process-group, and Tagged-process tracking are not used for the Darwin profile. The fence
 does not grant the model child GitHub authority: the installed-main cycle remains
 `github.merge.dry_run`, and BCP-06 stays disabled.

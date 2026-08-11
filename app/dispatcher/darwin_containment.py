@@ -94,17 +94,18 @@ class DarwinLaunchBarrier:
             if self._release_attempted or self._reader is not None or self._writer is None:
                 raise ValueError("Darwin launch barrier is unavailable")
             self._release_attempted = True
+            # Delivery becomes indeterminate before ``write`` returns. From
+            # this point cleanup must use coalition authority.
+            self._may_have_released = True
             try:
                 written = os.write(self._writer, RELEASE_TOKEN)
-            except OSError:
-                self._may_have_released = True
+            except BaseException:
                 try:
                     os.close(self._writer)
                 finally:
                     self._writer = None
                 raise
             if written == len(RELEASE_TOKEN):
-                self._may_have_released = True
                 try:
                     os.close(self._writer)
                 finally:

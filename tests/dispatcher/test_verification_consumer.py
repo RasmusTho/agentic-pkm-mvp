@@ -6006,6 +6006,119 @@ def test_barrier_capture_failure_closes_without_coordinator_release(
     assert process.group_signals == []
 
 
+def test_barrier_after_spawn_failure_reaps_exact_root_before_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class Barrier:
+        command = ["barrier", "coordinator"]
+        pass_fds = (71,)
+
+        def after_spawn(self) -> None:
+            events.append("after_spawn")
+            raise RuntimeError("barrier handoff failed")
+
+        def close(self) -> None:
+            events.append("close")
+            raise OSError("barrier close failed")
+
+    class BarrierContainment(_ProvenContainment):
+        def launch_barrier(self, _command: list[str]) -> Barrier:
+            events.append("barrier")
+            return Barrier()
+
+    process = _AuthorityLossProcess([])
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not use PGID")),
+    )
+
+    with pytest.raises(RuntimeError, match="barrier handoff failed"):
+        _authority_loss_launcher(
+            tmp_path,
+            containment_factory=BarrierContainment,
+            cleanup_tracker_factory=_ProvenContainment,
+        ).launch({"head_sha": HEAD})
+
+    assert events == ["barrier", "after_spawn", "close"]
+    assert process.terminate_calls == 1
+    assert process.wait_calls == 1
+
+
+def test_barrier_release_cleanup_runs_coalition_after_direct_root_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Barrier:
+        command = ["barrier", "coordinator"]
+        pass_fds = (71,)
+        may_have_released = False
+
+        def after_spawn(self) -> None:
+            return None
+
+        def release(self) -> None:
+            self.may_have_released = True
+
+        def close(self) -> None:
+            return None
+
+    class BarrierContainment(_ProvenContainment):
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+
+        def launch_barrier(self, _command: list[str]) -> Barrier:
+            return Barrier()
+
+        def capture_launch_root(self, root_pid: int) -> tuple[str, int]:
+            return ("identity", root_pid)
+
+        def attach(self, root_pid: int, identity: object | None = None) -> None:
+            assert identity == ("identity", root_pid)
+            super().attach(root_pid)
+
+        def cleanup(self) -> bool:
+            self.cleanup_calls += 1
+            return True
+
+    class DirectRootFailureProcess(_AuthorityLossProcess):
+        pid = 42_026
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            raise RuntimeError("root adapter failed")
+
+        def wait(self, timeout: float | None = None) -> int:
+            raise RuntimeError("root adapter failed")
+
+    process = DirectRootFailureProcess([])
+    containment = BarrierContainment()
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+
+    with pytest.raises(RuntimeError, match="verification coordinator process failed"):
+        _authority_loss_launcher(
+            tmp_path,
+            containment_factory=lambda: containment,
+            cleanup_tracker_factory=_ProvenContainment,
+        ).launch({"head_sha": HEAD})
+
+    assert containment.cleanup_calls == 1
+
+
 class _EscapedDescendantContainment(_ProvenContainment):
     def __init__(self, process: _CleanExitDetachedDescendantProcess, *, proven: bool) -> None:
         self.process = process
@@ -6166,6 +6279,86 @@ def test_background_authority_loss_rejects_late_stdout(
 
     assert error.receipt["session_id"] is None
     assert process.stdout.reads == 1
+
+
+def test_heartbeat_cleanup_wins_after_stdout_eof_while_coordinator_is_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EOF must not let terminal waiting starve the authority-loss writer."""
+
+    class EofLiveProcess:
+        def __init__(self) -> None:
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+            self.returncode: int | None = None
+            self.pid = 42_027
+            self.descendant_alive = True
+            self.group_signals: list[tuple[int, int]] = []
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("codex", timeout)
+            return self.returncode
+
+        def killpg(self, process_group_id: int, sig: int) -> None:
+            self.group_signals.append((process_group_id, sig))
+            assert process_group_id == self.pid
+            if sig == verification_consumer.signal.SIGTERM:
+                self.returncode = -verification_consumer.signal.SIGTERM
+            elif sig == verification_consumer.signal.SIGKILL:
+                self.descendant_alive = False
+
+    process = EofLiveProcess()
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    monkeypatch.setattr(verification_consumer.os, "killpg", process.killpg)
+    event_wait = verification_consumer.threading.Event.wait
+
+    def accelerated_wait(event, timeout=None):
+        if timeout is not None:
+            timeout = min(timeout, 0.01)
+        return event_wait(event, timeout)
+
+    monkeypatch.setattr(
+        verification_consumer.threading.Event,
+        "wait",
+        accelerated_wait,
+    )
+    outcome: dict[str, BaseException] = {}
+    finished = Event()
+
+    def launch() -> None:
+        try:
+            _authority_loss_launcher(tmp_path).launch(
+                {"head_sha": HEAD},
+                on_heartbeat=lambda: (_ for _ in ()).throw(
+                    RuntimeError("verification lease heartbeat rejected")
+                ),
+            )
+        except BaseException as exc:  # noqa: BLE001 - asserted thread outcome
+            outcome["error"] = exc
+        finally:
+            finished.set()
+
+    worker = Thread(target=launch, daemon=True)
+    worker.start()
+    assert event_wait(finished, 1), "authority-loss cleanup was starved by EOF wait"
+    worker.join(timeout=1)
+
+    error = outcome.get("error")
+    assert isinstance(error, CodexExecFailure), outcome
+    assert error.receipt["outcome"] == "heartbeat_authority_lost"
+    assert process.group_signals == [
+        (process.pid, verification_consumer.signal.SIGTERM),
+        (process.pid, 0),
+        (process.pid, verification_consumer.signal.SIGKILL),
+    ]
 
 
 # The pre-#4012 harness joined the launcher worker with a fixed 0.5 second

@@ -2887,7 +2887,10 @@ class CodexExecLauncher:
         process: subprocess.Popen[str] | None = None
         process_group_id: int | None = None
         containment_proven = False
-        process_lock = threading.Lock()
+        # Foreground completion, heartbeat loss, and the parent watchdog all
+        # write process/barrier/containment state. Re-entrancy lets shared
+        # cleanup helpers serialize the full lifecycle.
+        process_lock = threading.RLock()
         barrier: Any | None = None
         lines: Iterable[str | bytes]
 
@@ -2925,38 +2928,42 @@ class CodexExecLauncher:
                 return False
 
         def reap_direct_root() -> bool:
-            if process is None:
-                return False
-            try:
-                if process.poll() is not None:
-                    return True
-            except Exception:
-                return False
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            except Exception:
-                return False
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+            with process_lock:
+                if process is None:
+                    return False
                 try:
-                    process.kill()
-                    process.wait(timeout=5)
+                    if process.poll() is not None:
+                        return True
                 except Exception:
                     return False
-            except Exception:
-                return False
-            return True
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    return False
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                        process.wait(timeout=5)
+                    except Exception:
+                        return False
+                except Exception:
+                    return False
+                return True
 
         def cleanup_darwin_barrier_after_release() -> bool:
-            if not reap_direct_root():
-                return False
-            try:
-                return bool(containment.cleanup())
-            except Exception:
-                return False
+            # In R, direct-root reaping is best effort. The audited coalition
+            # cleanup must run even if that adapter fails.
+            with process_lock:
+                root_reaped = reap_direct_root()
+                try:
+                    coalition_clean = bool(containment.cleanup())
+                except Exception:
+                    coalition_clean = False
+                return root_reaped and coalition_clean
 
         def terminate_and_reap_child() -> None:
             nonlocal containment_proven, process_group_id
@@ -3048,27 +3055,34 @@ class CodexExecLauncher:
             )
             barrier = cast(Any, barrier_factory)(command) if has_darwin_barrier else None
             try:
-                if barrier is None:
-                    process = subprocess.Popen(
-                        command,
-                        cwd=self.worktree,
-                        env=env,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                        start_new_session=True,
-                    )
-                else:
-                    process = subprocess.Popen(
-                        barrier.command,
-                        cwd=self.worktree,
-                        env=env,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                        start_new_session=True,
-                        pass_fds=barrier.pass_fds,
-                    )
-                    barrier.after_spawn()
+                with process_lock:
+                    if barrier is None:
+                        process = subprocess.Popen(
+                            command,
+                            cwd=self.worktree,
+                            env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True,
+                        )
+                    else:
+                        process = subprocess.Popen(
+                            barrier.command,
+                            cwd=self.worktree,
+                            env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True,
+                            pass_fds=barrier.pass_fds,
+                        )
+                        barrier.after_spawn()
             except Exception:
                 if barrier is not None:
-                    barrier.close()
+                    try:
+                        barrier.close()
+                    except Exception:
+                        pass
+                # U-state failure: release was never attempted, so only the
+                # exact Popen root may be reaped.
+                reap_direct_root()
                 raise
             try:
                 process_group_id = getattr(process, "pid", None)
@@ -3109,7 +3123,11 @@ class CodexExecLauncher:
 
             def watch_parent_liveness() -> None:
                 while not stop_heartbeat.wait(0.25):
-                    if process is None or process.poll() is None:
+                    with process_lock:
+                        parent_exited = (
+                            process is not None and process.poll() is not None
+                        )
+                    if not parent_exited:
                         continue
                     # A normal parent may exit just before the reader drains
                     # its final buffered events and observes EOF. Only treat
@@ -3126,6 +3144,30 @@ class CodexExecLauncher:
                             outcome="parent_exit_authority_lost",
                         )
                     return
+
+            def wait_for_process_exit() -> bool:
+                """Wait in bounded, lock-serialized slices.
+
+                Stdout can reach EOF before a live coordinator exits. Do not
+                retain ``process_lock`` across that wait: an authority-loss
+                writer must be able to acquire the lifecycle lock and run its
+                mandated cleanup. Each process operation remains serialized.
+                """
+
+                while not authority_lost.is_set():
+                    with process_lock:
+                        if process is None:
+                            raise RuntimeError("verification coordinator missing")
+                        try:
+                            process.wait(timeout=0.25)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        else:
+                            return True
+                    # Test doubles may time out synchronously; yield after
+                    # releasing the lifecycle lock so cleanup cannot starve.
+                    time.sleep(0.001)
+                return False
 
             try:
                 parent_watchdog_thread = threading.Thread(
@@ -3252,30 +3294,33 @@ class CodexExecLauncher:
         if self.runner is subprocess.run:
             assert process is not None
             try:
-                if authority_lost.is_set():
+                if authority_lost.is_set() or not wait_for_process_exit():
                     stop_heartbeat.set()
                     terminate_and_reap_child()
                 else:
-                    process.wait()
-                    # A clean direct-parent exit is not sufficient to release
-                    # coordinator authority: descendants can detach their stdio
-                    # yet remain in the private process group. Remove any such
-                    # residual without accepting a terminal receipt early.
-                    if barrier is not None:
-                        process_group_id = None
-                        containment_proven = cleanup_darwin_barrier_after_release()
-                    elif process_group_is_alive():
-                        terminate_and_reap_child()
-                    else:
-                        process_group_id = None
-                        containment_proven = cleanup_process_tree()
+                    with process_lock:
+                        # A clean direct-parent exit is not sufficient to release
+                        # coordinator authority: descendants can detach their stdio
+                        # yet remain in the private process group. Remove any such
+                        # residual without accepting a terminal receipt early.
+                        if barrier is not None:
+                            process_group_id = None
+                            containment_proven = (
+                                cleanup_darwin_barrier_after_release()
+                            )
+                        elif process_group_is_alive():
+                            terminate_and_reap_child()
+                        else:
+                            process_group_id = None
+                            containment_proven = cleanup_process_tree()
             except Exception:
                 stop_heartbeat.set()
                 terminate_and_reap_child()
                 raise RuntimeError("verification coordinator process failed") from None
             if stderr_thread:
                 stderr_thread.join(timeout=1)
-            returncode = process.returncode
+            with process_lock:
+                returncode = process.returncode
             stop_heartbeat.set()
             if heartbeat_thread:
                 heartbeat_thread.join(timeout=1)

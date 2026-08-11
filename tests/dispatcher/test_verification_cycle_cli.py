@@ -884,7 +884,7 @@ def test_darwin_launch_barrier_release_is_one_shot_and_conservative(
         monkeypatch.setattr(darwin_containment.os, "write", lambda *_args: 0)
         with pytest.raises(OSError, match="partial"):
             barrier.release()
-        assert barrier.may_have_released is False
+        assert barrier.may_have_released is True
         with pytest.raises(ValueError, match="unavailable"):
             barrier.release()
     finally:
@@ -903,6 +903,24 @@ def test_darwin_launch_barrier_marks_unknown_write_failure_released(
             lambda *_args: (_ for _ in ()).throw(OSError("unknown write")),
         )
         with pytest.raises(OSError, match="unknown write"):
+            barrier.release()
+        assert barrier.may_have_released is True
+    finally:
+        barrier.close()
+
+
+def test_darwin_launch_barrier_marks_non_oserror_write_failure_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    barrier = darwin_containment.DarwinLaunchBarrier(["coordinator"])
+    barrier.after_spawn()
+    try:
+        monkeypatch.setattr(
+            darwin_containment.os,
+            "write",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("unknown delivery")),
+        )
+        with pytest.raises(RuntimeError, match="unknown delivery"):
             barrier.release()
         assert barrier.may_have_released is True
     finally:
