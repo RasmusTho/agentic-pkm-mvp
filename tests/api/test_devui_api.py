@@ -23,6 +23,7 @@ from app.builderops.ckm.contracts import (
     canonical_digest,
     canonical_query_digest,
 )
+from tests._route_introspection import openapi_paths
 
 
 def _focus_inputs(subject: str) -> dict:
@@ -108,8 +109,7 @@ def test_focus_route_is_get_only_and_stateless(monkeypatch) -> None:
     assert client.get("/api/devui/focus", params={"subject": subject}).status_code == 200
     assert calls == [subject, subject]
     assert client.post("/api/devui/focus", params={"subject": subject}).status_code == 405
-    route = next(route for route in app.routes if getattr(route, "path", None) == "/api/devui/focus")
-    assert route.methods == {"GET"}
+    assert set(openapi_paths(app)["/api/devui/focus"]) == {"get"}
 
 
 def test_focus_route_reuses_delivered_composer_without_root_join(monkeypatch) -> None:
@@ -242,12 +242,7 @@ def test_devui_composition_route_is_get_only_and_read_only(monkeypatch) -> None:
     assert seen == [Path("/state/builderops.sqlite3")]
 
     assert client.post("/api/devui/composition").status_code == 405
-    route = next(
-        route
-        for route in app.routes
-        if getattr(route, "path", None) == "/api/devui/composition"
-    )
-    assert route.methods == {"GET"}
+    assert set(openapi_paths(app)["/api/devui/composition"]) == {"get"}
 
 
 def test_devui_composition_refuses_non_loopback_even_with_api_key(
@@ -534,10 +529,7 @@ def test_overview_route_is_get_only() -> None:
     for method in (client.post, client.put, client.patch, client.delete):
         assert method("/api/devui/overview").status_code == 405
 
-    route = next(
-        route for route in app.routes if getattr(route, "path", None) == "/api/devui/overview"
-    )
-    assert route.methods == {"GET"}
+    assert set(openapi_paths(app)["/api/devui/overview"]) == {"get"}
 
 
 def test_overview_route_uses_live_composition_and_delivered_composer(monkeypatch) -> None:

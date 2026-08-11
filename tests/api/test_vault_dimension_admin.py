@@ -28,6 +28,7 @@ from app.instance.runtime import main as instance_runtime_main
 from app.instance.vault_dimensions import parse_dimensions
 from tests._mvr03_principal_harness import provisioned_instance
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+from tests._route_introspection import openapi_paths
 
 DIMENSIONS_URL = "/api/instance/dimensions"
 
@@ -63,7 +64,7 @@ def test_production_dimension_commands_drive_registry(instance, client) -> None:
     registry_path = str(runtime.layout.registry_path)
 
     # -- the router is actually mounted in the live app -------------------------------
-    mounted = {route.path for route in app.routes}
+    mounted = set(openapi_paths(app))
     assert DIMENSIONS_URL in mounted
     assert f"{DIMENSIONS_URL}/{{dimension_id}}/resolve" in mounted
 
