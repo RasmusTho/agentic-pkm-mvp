@@ -1,8 +1,0 @@
-version: 1
-prompts:
-  - id: classifier.v1
-    path: docs/settings/prompts/classifier.v1.md
-    status: active
-  - id: ask.answer.v1
-    path: docs/settings/prompts/ask.answer.v1.md
-    status: active

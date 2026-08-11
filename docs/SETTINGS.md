@@ -84,18 +84,18 @@ Current artifacts:
 - Panel action wiring: `docs/settings/panel-actions.md` and `docs/settings/panel-action-wiring.yaml`
 - Flow settings: `docs/settings/flows.settings.yaml`
 
-## Prompt Registry
+## Prompt settings
 
-Prompts live as files in settings, with a small registry manifest for discovery and validation:
+The ASK system prompt is canonical vault settings at
+`<vault>/settings/prompts/ask.md`. It is seeded for a newly initialized vault,
+loaded through the Settings Spine, and exposes its effective origin through
+`settings-explain`. When the file is absent, the code registry default
+`DEFAULT_ASK_SYSTEM_PROMPT` preserves the historical behavior exactly.
 
-- Registry manifest: `docs/settings/prompts/registry.yaml`
-- Prompt files: `docs/settings/prompts/*.md` (Markdown + frontmatter + body)
-
-The registry enables:
-- deterministic discovery (no implicit globbing)
-- strict validation (frontmatter id match, required fields)
-- future governance (deprecation, allowed models, eval suite binding)
-- linkage to architectural standards (MCP/A2A/JSON Schema/etc)
+Legacy repository prompt mirrors and their registry were retired; they are not
+runtime input. The classifier's schema-constrained instructions remain
+code-owned because they are coupled to its completion schema; this slice does
+not migrate that separate classifier contract.
 
 ## Standards Registry
 

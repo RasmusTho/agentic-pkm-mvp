@@ -14,5 +14,4 @@ allowed_stores:
   - ObjectStore
   - VectorIndex
 settings_refs:
-  - docs/settings/prompts/registry.yaml
   - docs/settings/standards.yaml

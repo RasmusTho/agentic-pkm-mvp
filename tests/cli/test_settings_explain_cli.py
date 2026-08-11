@@ -34,6 +34,18 @@ def test_settings_explain_surfaces_explicit_environment(monkeypatch, tmp_path) -
     assert payload["database_url"].endswith("/app_dev")
 
 
+def test_explain_prompt_origin(monkeypatch, tmp_path) -> None:
+    vault = tmp_path / "vault"
+    prompt = vault / "settings" / "prompts" / "ask.md"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Use this vault prompt.", encoding="utf-8")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+
+    payload = build_settings_explain_payload()
+
+    assert payload["prompts"]["ask.system_prompt"]["origin"] == "vault-shared:prompts/ask.md"
+
+
 def test_settings_explain_includes_watcher_gate_and_allowlist(monkeypatch, tmp_path) -> None:
     vault = tmp_path / "vault"
     settings_dir = vault / "@Settings"

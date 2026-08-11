@@ -12,6 +12,7 @@ from uuid import uuid4
 from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
+from app.settings.models import DEFAULT_ASK_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from app.write_guard import WriteGuard
@@ -618,6 +619,7 @@ class VaultManager:
             machine_role=machine_role,
         ):
             path = settings_dir / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
             if self.markdown_store.write_missing(path, frontmatter, body):
                 created.append(str(path.relative_to(expanded)))
             else:
@@ -954,6 +956,11 @@ def _initial_settings_files(
             "# Vault Settings\nThis file identifies the logical Design Handoff vault.\nIt may be shared across machines through Git.\n",
         ),
         *_static_shared_settings_seeds(),
+        (
+            "prompts/ask.md",
+            {"scope": "vault-shared", "kind": "ask-system-prompt"},
+            DEFAULT_ASK_SYSTEM_PROMPT + "\n",
+        ),
         (
             "local.md",
             {
