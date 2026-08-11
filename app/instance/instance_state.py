@@ -624,6 +624,77 @@ class InstanceStateBackup:
         )
         return InstanceStateBackupReceipt(manifest_path)
 
+    def create_lost_lease_recovery_backup(
+        self,
+        backup_root: Path,
+        *,
+        quiescence_proof: DeploymentQuiescenceProof | None,
+        owner_receipt_path: Path | None,
+        vault_binding_id: str,
+    ) -> InstanceStateBackupReceipt:
+        """Capture a verified pre-mutation snapshot for the narrow lost-lease path.
+
+        The ordinary backup validator quite correctly rejects an inconsistent
+        registry/ledger pair.  Recovery needs a backup of that pair before it
+        repairs it, so this variant validates schema, permissions, key
+        authentication, unique registration, and the absence of every current
+        lease while preserving the original bytes unchanged.
+        """
+
+        if quiescence_proof is None:
+            raise InstanceStatePreflightError("canonical quiescence authority is required")
+        owner_payload = quiescence_proof.require_canonical_authority(
+            channel_id=self.layout.channel_id,
+            host_global_root=self.ledger.root,
+            owner_receipt_path=owner_receipt_path,
+        )
+        del owner_payload
+        self.layout.require_existing()
+        registry_store = VaultRegistryStore(self.layout.registry_path)
+        registry = registry_store.load()
+        if set(registry.registrations) != {vault_binding_id}:
+            raise InstanceStatePreflightError(
+                "lost ownership recovery requires exactly one registered owner"
+            )
+        registration = registry.registrations[vault_binding_id]
+        root = Path(registration.path).expanduser().resolve(strict=False)
+        if not root.is_dir():
+            raise InstanceStatePreflightError(
+                "lost ownership recovery requires a materialized registered root"
+            )
+        try:
+            current = self.ledger.require_existing()
+        except LedgerError as exc:
+            raise InstanceStatePreflightError("lost ownership recovery backup verification failed") from exc
+        if current.leases or current.tombstones or current.transfer is not None:
+            raise InstanceStatePreflightError(
+                "lost ownership recovery requires an unambiguous owner inventory"
+            )
+        payloads = self.ledger.capture_backup_artifacts(
+            capture_registry_artifacts=registry_store.capture_backup_artifacts,
+        )
+        checksums = {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
+        manifest = {
+            "schema": _BACKUP_SCHEMA,
+            "channel_id": self.layout.channel_id,
+            "registry_checksum": checksums["vault-registry.md"],
+            "ownership_key_id": current.key_id,
+            "ownership_generation": current.generation,
+            "recovery_candidate": vault_binding_id,
+            "checksums": checksums,
+        }
+        destination = Path(backup_root).expanduser().resolve(strict=False)
+        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(destination, 0o700)
+        for name, payload in payloads.items():
+            _atomic_private_write(destination / name, payload)
+        manifest_path = destination / "manifest.json"
+        _atomic_private_write(
+            manifest_path,
+            (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        )
+        return InstanceStateBackupReceipt(manifest_path)
+
     def restore(
         self,
         backup_root: Path,

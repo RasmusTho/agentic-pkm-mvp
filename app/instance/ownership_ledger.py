@@ -654,6 +654,44 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return active
 
+    def recover_missing_active(
+        self,
+        *,
+        channel_id: str,
+        vault_binding_id: str,
+        root: Path,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        """Reconstruct one lost active lease after an external fenced proof.
+
+        This is intentionally stricter than normal registration recovery: the
+        host ledger must contain no live or pending owner at all.  The caller
+        supplies the stopped-window/quiescence and backup proof; this method
+        only performs the authenticated ledger transaction.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            if current.transfer is not None or current.tombstones:
+                raise LedgerError("lost ownership recovery found non-empty transition history")
+            if current.leases:
+                raise LedgerError("lost ownership recovery found a foreign or pending owner")
+            candidate = self._lease_for_root(
+                channel_id=channel_id,
+                vault_binding_id=vault_binding_id,
+                root=root,
+                key=key,
+                state="active",
+            )
+            self._assert_no_collision(current, candidate, allow_same_channel_nested=False)
+            self._write_ledger_locked(
+                self._replace(current, leases={vault_binding_id: candidate}), key
+            )
+            return candidate
+
     def reserve(
         self,
         *,

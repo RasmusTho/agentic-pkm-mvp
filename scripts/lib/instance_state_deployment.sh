@@ -75,6 +75,31 @@ _instance_state_deployment_host_ownership_path() {
   esac
 }
 
+# Explicit operator recovery for exactly one missing active ownership lease.
+# This is deliberately not called by deploy/start: the failed deployment must
+# already have left its host-global restart fence and proved quiescence in
+# place, and the operator must name the existing binding. No JSON file is
+# edited by this path and it never starts a writer.
+recover_lost_instance_state_lease() {
+  local compose_function="$1"
+  local channel="$2"
+  local binding_id="${INSTANCE_LOST_LEASE_BINDING_ID:-}"
+  local backup_root="${INSTANCE_STATE_RECOVERY_BACKUP_PATH:-/app/instance-ownership/backups/${channel}/lost-lease-recovery}"
+  if [ -z "${binding_id}" ]; then
+    echo "instance state recovery: INSTANCE_LOST_LEASE_BINDING_ID is required" >&2
+    return 78
+  fi
+  "${compose_function}" run --rm --no-deps -T instance-state-init \
+    python -m app.instance.runtime deployment-recover-lost-lease \
+      --channel "${channel}" \
+      --instance-state-root /app/instance-state \
+      --host-global-root /app/instance-ownership \
+      --backup-root "${backup_root}" \
+      --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
+      --owner-receipt-path /app/instance-ownership/legacy-owner-inventory.json \
+      --vault-binding-id "${binding_id}"
+}
+
 # MVR-01B deploy/start producer. The caller supplies its channel-aware compose
 # function so the same fenced sequence is used by pinned deploys and local
 # full-system starts.

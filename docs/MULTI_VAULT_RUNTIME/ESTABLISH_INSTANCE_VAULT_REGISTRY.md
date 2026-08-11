@@ -287,6 +287,16 @@ then carries only its mapped acceptance criteria and validation commands:
    new-schema mutation stays dormant until 01C performs the guarded authority cutover. This slice,
    not SETTINGS-05, owns creation of the protected store, final legacy-writer fence, final export,
    and backup/restore posture.
+
+   A stranded dev deployment with exactly one durable registration and a missing active lease has
+   one explicit recovery route: after the existing host-global restart fence, two-pass quiescence
+   proof, and drained owner inventory are present, the operator invokes the fenced
+   `deployment-recover-lost-lease` command with the existing binding ID. The command first writes
+   and verifies a protected backup through `InstanceStateBackup`, then reconstructs the lease through
+   the capability-guarded ownership ledger. It refuses foreign or pending owners, multiple
+   registrations, missing roots, invalid proof, or backup failure; ordinary deployment/startup
+   remains fail-closed and never calls this recovery implicitly. Receipts contain only redacted
+   status and opaque binding identity.
 3. **MVR-01C — multi-registration rollback lineage:** explicit scalar target, authenticated
    mutation-filtering gateway/mount restriction, minimum-runtime floor, roll-forward merge, and
    atomic unsealing of second-registration producers only after those rollback mechanisms pass
