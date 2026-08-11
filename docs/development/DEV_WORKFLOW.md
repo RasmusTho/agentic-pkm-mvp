@@ -293,6 +293,7 @@ Use this lane only when:
   - `.github/github-governance.yml`
   - `.github/ISSUE_TEMPLATE/**`
   - `.github/pull_request_template.md`
+  - `.github/workflows/ci-smoke.yaml`
   - `.github/workflows/issue-pr-governance.yml`
   - `Makefile`
   - `scripts/docs_guard.py`
@@ -324,6 +325,7 @@ Use this lane only when:
   - `tests/architecture/test_agent_skill_entrypoints.py`
   - `tests/architecture/test_pr_hot_path_governance.py`
   - `tests/governance/test_codex_agents_contract.py`
+  - `tests/governance/test_ci_smoke_docs_only_gate.py`
   - `tests/governance/test_issue_pr_governance.py`
   - `tests/governance/test_known_defects_registry.py`
   - `tests/governance/test_skills_consistency_lint.py`
