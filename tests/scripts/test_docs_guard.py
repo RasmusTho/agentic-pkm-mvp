@@ -181,6 +181,13 @@ phải được kiểm tra trước khi hợp nhất vì chất lượng và s�
 rất quan trọng đối với tất cả người dùng.
 """,
         "SHORT_CHINESE.md": "# 规则\n\n本文说明项目规则和工作方式。\n",
+        "ALIAS_TABLE.md": """# Innehåll
+
+| English | en |
+| --- | --- |
+| Det här dokumentet beskriver vad som ska göras | Vi behöver förstå hur arbetet ska genomföras |
+| Den här texten måste vara tydlig | Därför ska varje beslut vara enkelt att följa |
+""",
     }
     for name, content in documents.items():
         (repo / "docs" / name).write_text(content, encoding="utf-8")
@@ -229,6 +236,10 @@ Complexity: O(n). Schema: Item{id, version, checksum}. Exit code: 0.
 | --- | --- | --- | --- |
 | ε | ζ | η | θ |
 | ι | κ | λ | μ |
+""",
+        "REPEATED_AMBIGUOUS.md": """# Concise English
+
+Her view, her note, her decision.
 """,
         "EXAMPLES.md": """# Examples
 

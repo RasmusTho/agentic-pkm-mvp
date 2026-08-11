@@ -110,12 +110,37 @@ _FENCED_BLOCK_RE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
 _NON_PROSE_RE = re.compile(r"`[^`\n]+`|https?://\S+|<!--.*?-->", re.DOTALL)
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 _TABLE_SEPARATOR_CELL_RE = re.compile(r":?-{3,}:?")
-_LOCALIZATION_TABLE_LABELS = frozenset(
-    """
-    en english sv swedish de german fr french es spanish it italian nl dutch
-    pl polish pt portuguese tr turkish vi vietnamese ru russian ja japanese zh
-    chinese
-    """.split()
+_LOCALIZATION_TABLE_IDENTITIES = MappingProxyType(
+    {
+        "en": "english",
+        "english": "english",
+        "sv": "swedish",
+        "swedish": "swedish",
+        "de": "german",
+        "german": "german",
+        "fr": "french",
+        "french": "french",
+        "es": "spanish",
+        "spanish": "spanish",
+        "it": "italian",
+        "italian": "italian",
+        "nl": "dutch",
+        "dutch": "dutch",
+        "pl": "polish",
+        "polish": "polish",
+        "pt": "portuguese",
+        "portuguese": "portuguese",
+        "tr": "turkish",
+        "turkish": "turkish",
+        "vi": "vietnamese",
+        "vietnamese": "vietnamese",
+        "ru": "russian",
+        "russian": "russian",
+        "ja": "japanese",
+        "japanese": "japanese",
+        "zh": "chinese",
+        "chinese": "chinese",
+    }
 )
 _MIN_NON_ENGLISH_MARKERS = 8
 _MIN_NON_ENGLISH_SHARE = 0.35
@@ -123,6 +148,7 @@ _MIN_MEDIUM_NON_ENGLISH_MARKERS = 5
 _MIN_MEDIUM_NON_ENGLISH_UNIQUE_MARKERS = 4
 _MIN_MEDIUM_NON_ENGLISH_SHARE = 0.65
 _MIN_SHORT_NON_ENGLISH_MARKERS = 3
+_MIN_SHORT_NON_ENGLISH_UNIQUE_MARKERS = 2
 _MIN_SHORT_NON_ENGLISH_SHARE = 0.80
 _MIN_NON_LATIN_LETTERS = 20
 _MIN_SHORT_NON_LATIN_LETTERS = 8
@@ -193,10 +219,12 @@ def _strip_explicit_localization_tables(text: str) -> str:
             and len(header) == len(separator)
             and all(_TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator)
         )
-        language_columns = sum(
-            cell in _LOCALIZATION_TABLE_LABELS for cell in header
-        )
-        if not is_table or language_columns < 2:
+        language_identities = {
+            _LOCALIZATION_TABLE_IDENTITIES[cell]
+            for cell in header
+            if cell in _LOCALIZATION_TABLE_IDENTITIES
+        }
+        if not is_table or len(language_identities) < 2:
             kept.append(lines[index])
             index += 1
             continue
@@ -239,6 +267,7 @@ def _primary_non_english_language(text: str) -> tuple[str, int, int, float] | No
     )
     short_document_match = (
         non_english_hits >= _MIN_SHORT_NON_ENGLISH_MARKERS
+        and non_english_unique_hits >= _MIN_SHORT_NON_ENGLISH_UNIQUE_MARKERS
         and non_english_share >= _MIN_SHORT_NON_ENGLISH_SHARE
     )
     if long_document_match or medium_document_match or short_document_match:
