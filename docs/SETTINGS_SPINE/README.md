@@ -27,7 +27,9 @@ writers. Findings F1-F7 and invariants SET-1..SET-7:
 | 4 | [RECEIPT_EVERY_SETTINGS_WRITE.md](RECEIPT_EVERY_SETTINGS_WRITE.md) | Every settings writer (API, watcher delta, auto-heal, agent) emits a durable actor-tagged receipt | SET-3 | 1 |
 | 5A–5C | [REBIND_ON_VAULT_SELECTION.md](REBIND_ON_VAULT_SELECTION.md#bounded-implementation-issue-decomposition) | Durable dormant record → dormant watcher reconciler → picker/API activation and aggregate proof | SET-7 | 1, 3, 4, MVR-01B #3854, MVR-01C #3855; then serial A→B→C |
 | 6 | [PROMPTS_AS_SETTINGS.md](PROMPTS_AS_SETTINGS.md) | `settings/prompts/*.md` become the runtime prompt SoT; validation loader migrated, stale mirrors retired once superseded | SET-6 | 3 |
-| 7 | [DEHARDCODE_WAVE_ONE.md](DEHARDCODE_WAVE_ONE.md) | Highest-value hardcoded values (models/voices/rerank/thresholds/watcher tunables) migrate into the registry, tier-gated | SET-4/SET-1 | 2, 3 |
+| 7A | [LLM_AND_RETRIEVAL_SETTINGS.md](LLM_AND_RETRIEVAL_SETTINGS.md) | Model routing and rerank tuning migrate into the registry, tier-gated | SET-4/SET-1 | 2, 3 |
+| 7B | [TTS_SETTINGS.md](TTS_SETTINGS.md) | TTS voices and explicit fallback policy migrate into the registry | SET-4/SET-1 | 7A |
+| 7C | [WATCHER_AND_TUNING_SETTINGS.md](WATCHER_AND_TUNING_SETTINGS.md) | Watcher tunables and curation/expansion thresholds migrate through the existing reload path | SET-4/SET-1 | 7B |
 | 8 | [CONSOLIDATE_SETTINGS_OWNER_DOCS.md](CONSOLIDATE_SETTINGS_OWNER_DOCS.md) | One settings owner doc; orphan schema deleted; location wording reconciled; parent-closure handoff | SET-6 | 1-7 (all — its closure handoff verifies the full capability checklist) |
 
 Tasks 1 and 2 can run in parallel (disjoint surfaces: ingestion wiring vs default declarations).
@@ -35,6 +37,10 @@ After task 1, tasks 3 and 4 may run in parallel. SETTINGS-05 starts only after b
 MVR-01B/#3854 plus MVR-01C/#3855 have established protected instance-state and guarded authority
 cutover. Its three implementation children then run serially: durable record (dormant), watcher
 reconciler (still dormant from picker), and production activation/aggregate proof.
+
+SETTINGS-07 is serial: 7A establishes registry/explain use at model and retrieval consumers, 7B
+adds the TTS synthesis consumer, and 7C adds watcher reload plus threshold production paths. Each
+child posts a receipt to #3156 before the next child is readied.
 
 ## Capability acceptance criteria
 
@@ -90,6 +96,10 @@ Tasks 1, 3, 4, 5 and 7 all touch the settings read/write path. The seams:
 - **No-vault boot is a standing regression gate (all tasks).** Every task's validation includes
   the no-vault tests; a task that makes boot require a vault is rejected regardless of its other
   merits (#2005).
+- **Wave-one preserves one effective bundle (tasks 7A→7B→7C).** Later children may consume the
+  registry/explain mechanics established by predecessors, but may not create a second loader or
+  fallback hierarchy. On partial failure, the existing last-valid plus degraded posture holds;
+  code-default fallback is not an accepted interim state.
 
 ## Verification path
 
@@ -110,7 +120,8 @@ single owner) is the final child and carries the parent-closure handoff.
 
 Parent feature issue #3156; children #3159 (01), #3160 (02), #3161 (03), #3162 (04), #3163
 (SETTINGS-05 blocked validation hub; three serial implementation children are extracted from its
-stable decomposition after this repair), #3164 (06), #3165 (07), #3166 (08) — live map and
+stable decomposition after this repair), #3164 (06), #3165 (07 validation hub), #4796 (07A),
+#4797 (07B), #4798 (07C), and #3166 (08) — live map and
 lifecycle rules in `PARENT_FEATURE_ISSUE.md`.
 Reconciliation (do not duplicate): task 5 builds the live rebind that #3119's closing fix
 (PR #3126, visible-warning only) deliberately deferred, superseding #2476's "do not converge"
