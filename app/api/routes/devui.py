@@ -11,6 +11,8 @@ from app.api.routes.cockpit import read_registry as read_cockpit_registry
 from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.config import load_paths as load_builderops_paths
 from app.builderops.devui_composition import compose_owner_snapshot
+from app.builderops.devui_focus import FocusContractError, compose_focus_view
+from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
 
 
 _LOCAL_ONLY_DETAIL = "devUI composition is available only to a local caller"
@@ -99,6 +101,19 @@ async def composition() -> dict[str, Any]:
         cockpit_reader=read_cockpit_registry,
         ckm_reader=_read_ckm_capabilities,
     )
+
+
+@router.get("/focus")
+async def focus(subject: str) -> dict[str, Any]:
+    """Compose one admitted, stateless Focus read without joining root payloads."""
+
+    try:
+        return compose_focus_view(**read_focus_inputs(subject))
+    except (FocusInputError, FocusContractError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="devUI Focus subject is unavailable or unsupported",
+        ) from exc
 
 
 __all__ = ["router"]
