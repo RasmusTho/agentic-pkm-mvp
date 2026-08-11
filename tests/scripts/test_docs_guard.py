@@ -150,6 +150,120 @@ The fenced string is test data and does not change the document language.
     assert "Docs language guard: OK" in result.stdout
 
 
+def test_language_guard_rejects_adversarial_primary_non_english_docs(
+    tmp_path: Path,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    documents = {
+        "SHORT_SWEDISH.md": "# Beslut\n\nDet här beskriver hur arbetet ska göras.\n",
+        "POLISH.md": """# Zasady
+
+Ten dokument opisuje zasady projektu oraz sposób pracy zespołu. Każda zmiana
+powinna zostać sprawdzona przed połączeniem, ponieważ jakość i bezpieczeństwo
+systemu są ważne dla wszystkich użytkowników. Dokumentacja musi być jasna,
+dokładna i dostępna.
+""",
+        "PORTUGUESE.md": """# Regras
+
+Este documento descreve as regras e como a equipe deve trabalhar. As mudanças
+são verificadas antes da entrega.
+""",
+        "TURKISH.md": """# Kurallar
+
+Bu belge projenin kurallarını ve ekibin çalışma biçimini açıklar. Her değişiklik
+birleştirilmeden önce doğrulanmalıdır çünkü sistemin kalitesi ve güvenliği tüm
+kullanıcılar için önemlidir. Belgeler açık ve doğru olmalıdır.
+""",
+        "VIETNAMESE.md": """# Quy tắc
+
+Tài liệu này mô tả các quy tắc của dự án và cách nhóm làm việc. Mọi thay đổi
+phải được kiểm tra trước khi hợp nhất vì chất lượng và sự an toàn của hệ thống
+rất quan trọng đối với tất cả người dùng.
+""",
+        "SHORT_CHINESE.md": "# 规则\n\n本文说明项目规则和工作方式。\n",
+        "ALIAS_TABLE.md": """# Innehåll
+
+| English | en |
+| --- | --- |
+| Det här dokumentet beskriver vad som ska göras | Vi behöver förstå hur arbetet ska genomföras |
+| Den här texten måste vara tydlig | Därför ska varje beslut vara enkelt att följa |
+""",
+    }
+    for name, content in documents.items():
+        (repo / "docs" / name).write_text(content, encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "adversarial-non-english-docs"], repo)
+
+    result = _guard_result(repo, "--language-only")
+
+    assert result.returncode == 1
+    for name in documents:
+        assert f'"path": "docs/{name}"' in result.stdout
+
+
+def test_language_guard_allows_adversarial_english_and_localization_docs(
+    tmp_path: Path,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    documents = {
+        "LOCALIZATION.md": """# Labels
+
+This table defines bounded localization strings for the interface.
+
+| Key | English | Swedish |
+| --- | --- | --- |
+| save | Save the note | Spara den här anteckningen |
+| open | Open the note | Öppna den här anteckningen |
+| clear | This must be clear | Det här måste vara tydligt |
+| next | What happens next | Vad händer efter detta |
+| where | Where is it | Var är den |
+
+The table is localization data, while the governing contract remains English.
+""",
+        "TECHNICAL.md": """# API matrix
+
+| Method | Path | Status | Notes |
+| --- | --- | --- | --- |
+| GET | /v1/items | 200 | idempotent |
+| POST | /v1/items | 202 | queued |
+| DELETE | /v1/items/{id} | 204 | terminal |
+
+Complexity: O(n). Schema: Item{id, version, checksum}. Exit code: 0.
+""",
+        "MATH_TABLE.md": """# Symbol table
+
+| α | β | γ | δ |
+| --- | --- | --- | --- |
+| ε | ζ | η | θ |
+| ι | κ | λ | μ |
+""",
+        "REPEATED_AMBIGUOUS.md": """# Concise English
+
+Her view, her note, her decision.
+""",
+        "EXAMPLES.md": """# Examples
+
+This document defines the contract and its verification evidence.
+
+```text
+Det här dokumentet är på svenska och ska inte påverka kontrollen.
+```
+
+Use `Spara den här anteckningen` for the Swedish locale. The primary prose
+remains English and the example is explicitly bounded.
+""",
+    }
+    for name, content in documents.items():
+        (repo / "docs" / name).write_text(content, encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "adversarial-allowed-docs"], repo)
+
+    result = _guard_result(repo, "--language-only")
+
+    assert result.returncode == 0, result.stdout
+    assert "Docs language guard: OK" in result.stdout
+
+
 def test_product_vault_markdown_is_not_repository_documentation(tmp_path: Path) -> None:
     repo = _guard_repo(tmp_path)
     (repo / "vault").mkdir()
