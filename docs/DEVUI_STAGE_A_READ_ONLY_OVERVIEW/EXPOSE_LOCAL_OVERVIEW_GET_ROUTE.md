@@ -129,3 +129,12 @@ calls the delivered composer with no candidates. It does not call a producer-enr
 
 Delivered by [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) / PR #4772 as the
 direct-loopback, no-candidate route after the accepted ARO-01 withdrawal decision.
+
+## Delivery status
+
+The delivered route is PR #4772 at head
+`7b1f83d4a0b6bdd75071959c41146c70012a29d2`, merged as
+`24371d8bf3289dad631c2986f44865794897f32c`. Its separate ARO-03 contract and route-test-selection
+recovery is PR #4789 at head `c5f4fab08d58b5efb8d52a457bfa9eaf555824bd`, merged as
+`989a8d73d52b75c3a038ba1d3f93c78e03d98065`. These delivery facts do not create a producer fact,
+typed navigation, browser UI, accessibility proof, owner-pilot result, or `ready_to_try` fact.

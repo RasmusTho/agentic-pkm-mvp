@@ -5,7 +5,9 @@ Owner: Builder System governance
 Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-12
+Last verified against: `origin/main` `989a8d73d52b75c3a038ba1d3f93c78e03d98065` and live GitHub
+Issue/PR state; the delivery ledger below records the exact PR heads and merge commits it cites.
 
 # Parent feature issue — devUI Stage A Read-Only Overview
 
@@ -120,9 +122,9 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 
 | Child | Issue | PR | SHA | CI | Blocker | Next |
 | --- | --- | --- | --- | --- | --- | --- |
-| #4742 ARO-01 | open / needs-human | none | none | not started | canonical source decision absent | record owner decision |
+| #4742 ARO-01 | closed / withdrawal recorded | #4751 | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`; merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | merged receipt | no current source owns either Overview fact | preserve explicit withdrawals |
 | #4743 ARO-02 | open / blocked | none | none | not started | #4742 | revalidate after accepted source contract |
-| #4744 ARO-03 | open / blocked | #4772 | 24371d8bf3289dad631c2986f44865794897f32c | exact-head recovery pending | contract-and-CI-selection recovery #4786 | verification-and-closure after #4786 receipt |
+| #4744 ARO-03 | open / blocked | #4772; supporting #4789 | #4772 head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`; merge `24371d8bf3289dad631c2986f44865794897f32c`. #4789 head `c5f4fab08d58b5efb8d52a457bfa9eaf555824bd`; merge `989a8d73d52b75c3a038ba1d3f93c78e03d98065` | route delivered; contract/CI-selection recovery merged | parent validation remains open | later verification-and-closure for #4744 |
 | #4745 ARO-04 | open / blocked | none | none | not started | #4744 + real destinations | revalidate after destination routes exist |
 | #4746 ARO-05 | open / blocked | none | none | not started | stable fixtures + design preflight | run governed handoff when inputs exist |
 | #4747 ARO-06 | open / blocked | none | none | not started | #4744/#4745/#4746 | revalidate after accepted handoff |
