@@ -13,6 +13,7 @@ from app.builderops.config import load_paths as load_builderops_paths
 from app.builderops.devui_composition import compose_owner_snapshot
 from app.builderops.devui_focus import FocusContractError, compose_focus_view
 from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
+from app.builderops.devui_overview import compose_overview_view
 
 
 _LOCAL_ONLY_DETAIL = "devUI composition is available only to a local caller"
@@ -101,6 +102,17 @@ async def composition() -> dict[str, Any]:
         cockpit_reader=read_cockpit_registry,
         ckm_reader=_read_ckm_capabilities,
     )
+
+
+@router.get("/overview")
+async def overview() -> dict[str, Any]:
+    """Compose one admitted, stateless Overview projection without source enrichment."""
+
+    composition = compose_owner_snapshot(
+        cockpit_reader=read_cockpit_registry,
+        ckm_reader=_read_ckm_capabilities,
+    )
+    return compose_overview_view(composition=composition)
 
 
 @router.get("/focus")

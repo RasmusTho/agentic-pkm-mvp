@@ -452,7 +452,8 @@ selection state.
 The pure composer is implemented in `app/builderops/devui_overview.py`. It accepts only the
 composition envelope, explicit producer evidence, and typed root references; without actionable
 producer evidence it reports the affected **Needs you** or **Ready to try** classification as
-withdrawn. This does not deliver producer enrichment, a local route, or a visual shell.
+withdrawn. This does not deliver producer enrichment or a visual shell; the admitted local GET
+route rebuilds the composition and passes no candidates to this composer.
 
 #### ARO-01 source-authority resolution (2026-08-10)
 
@@ -468,9 +469,18 @@ contract that satisfies the Overview boundary for either zone:
 This is a source-ownership result, not a new devUI authority. The existing GitHub → Cockpit →
 `devui.composition.v1` chain may transport these facts only after a separately governed source
 contract exists; it may not manufacture them or persist a replacement. Because no current source
-was admitted, ARO-02 remains blocked: there are no authorized facts for the producer chain to
+was admitted, ARO-02 was superseded: there are no authorized facts for the producer chain to
 enrich. Until a separately governed source contract exists, producers and the composer must
 preserve the explicit withdrawal state.
+
+#### ARO dependency/status truth
+
+ARO-02 / [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) is superseded by the
+accepted no-source decision: there is no producer enrichment to implement until a separately
+governed source contract exists. ARO-03 / [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744)
+therefore exposes the existing `devui-overview-view.v1` composer through the admitted local GET
+route without candidates. It preserves the composer's `classification_withdrawn` limitations for
+both **Needs you** and **Ready to try**, rather than fabricating facts or measured-empty claims.
 
 ### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
 

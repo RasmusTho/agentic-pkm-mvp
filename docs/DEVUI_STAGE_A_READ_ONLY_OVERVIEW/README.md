@@ -56,10 +56,10 @@ verification receipt is never itself the missing category or `ready_to_try` fact
 | Order | Task | Initial label | Exact executable trigger |
 | --- | --- | --- | --- |
 | 1 | ARO-01 — Authorize Overview Source Facts | Closed #4742; withdrawal recorded by PR #4751 | No current source owns either Overview fact |
-| 2 | ARO-02 — Enrich Overview Producer Facts | `agent:blocked` | A separately governed source contract admits transportable facts, or ARO-02 is superseded |
-| 3 | ARO-03 — Expose the Local Overview GET Route | `agent:blocked` | ARO-02 merges; ARO-03 proves its route calls the production producer and delivered composer |
+| 2 | ARO-02 — Enrich Overview Producer Facts | Superseded #4743 | The accepted no-source decision leaves no producer facts to enrich; a future source contract requires a new governed slice |
+| 3 | ARO-03 — Expose the Local Overview GET Route | Delivered #4744 | The route rebuilds the production composition and calls the delivered composer without candidates |
 | 4 | ARO-04 — Bind Typed Overview Navigation | `agent:blocked` | ARO-03 plus delivered #4768 local Focus route and an optional local SoI destination |
-| 5 | ARO-05 — Validate the Overview Yggdrasil Design | `agent:blocked` | Stable ARO-02/03/04 fixtures plus passing governed design-system preflight |
+| 5 | ARO-05 — Validate the Overview Yggdrasil Design | `agent:blocked` | Stable ARO-03/04 fixtures plus passing governed design-system preflight |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 handoff and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | ARO-06 merged at an exact testable SHA |
 | 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | ARO-07 receipt and stable local source fixtures |
@@ -104,11 +104,14 @@ pickup issue.
 
 Parent [#4741](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4741) is the blocked validation
 hub. ARO-01 is [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742), closed with its
-withdrawal recorded by PR #4751; ARO-02 through ARO-08 are
-[#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) through
+withdrawal recorded by PR #4751; ARO-02 / [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743)
+is superseded by that no-source decision, and ARO-03 / [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744)
+is delivered as the no-candidate local projection route. ARO-04 through ARO-08 remain
+[#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) through
 [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). The separate
 [Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
-`agent:ready` and must deliver before ARO-04 marks a Focus destination available. GitHub owns
+delivered by PR #4771; ARO-04 still needs its own typed-navigation contract before it marks a
+Focus destination available. GitHub owns
 backlog state; this directory owns the stable breakdown and validation path.
 
 ## Governing and supporting sources

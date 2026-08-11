@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import app.auth as auth_module
 from app.api.app import app
 from app.api.routes import devui as devui_route
+from app.builderops.devui_composition import compose_owner_snapshot
 from app.builderops.ckm.contracts import (
     CkmContractError,
     CkmStateIdentity,
@@ -481,3 +482,86 @@ def test_devui_composition_isolates_non_utf8_provider_strings(monkeypatch) -> No
     assert response.status_code == 200
     assert response.json()["providers"]["work"]["status"] == "available"
     assert response.json()["providers"]["capabilities"]["status"] == "refused"
+
+
+def test_overview_route_reuses_local_admission_and_exact_contract(monkeypatch) -> None:
+    composition = {"contract_version": "devui.composition.v1"}
+    expected = {"contract_version": "devui-overview-view.v1", "now": []}
+
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: composition)
+    monkeypatch.setattr(devui_route, "compose_overview_view", lambda **_: expected)
+
+    client = TestClient(app)
+    assert client.get("/api/devui/overview").json() == expected
+    assert (
+        TestClient(app, client=("203.0.113.10", 50000)).get("/api/devui/overview").status_code
+        == 403
+    )
+    assert (
+        client.get("/api/devui/overview", headers={"X-Forwarded-For": "203.0.113.10"}).status_code
+        == 403
+    )
+
+
+def test_overview_route_preserves_no_source_withdrawals(monkeypatch) -> None:
+    cockpit = {
+        "authority": "read_time_join",
+        "generated_at": "2026-08-08T21:00:00+00:00",
+        "claim": {"kind": "counted", "text": "one thread", "as_of": "2026-08-08T21:00:00+00:00"},
+        "sources": [_dispatcher_source("2026-08-08T21:00:00+00:00")],
+        "unread_planes": [],
+        "withdrawn_counts": [],
+    }
+    composition = compose_owner_snapshot(
+        cockpit_reader=lambda: cockpit,
+        ckm_reader=_empty_ckm_envelope,
+    )
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: composition)
+
+    payload = TestClient(app).get("/api/devui/overview").json()
+
+    assert payload["needs_you"] == []
+    assert payload["ready_to_try"] == []
+    assert {(item["zone"], item["kind"]) for item in payload["limitations"]} == {
+        ("needs_you", "classification_withdrawn"),
+        ("ready_to_try", "classification_withdrawn"),
+    }
+
+
+def test_overview_route_is_get_only() -> None:
+    client = TestClient(app)
+
+    for method in (client.post, client.put, client.patch, client.delete):
+        assert method("/api/devui/overview").status_code == 405
+
+    route = next(
+        route for route in app.routes if getattr(route, "path", None) == "/api/devui/overview"
+    )
+    assert route.methods == {"GET"}
+
+
+def test_overview_route_uses_live_composition_and_delivered_composer(monkeypatch) -> None:
+    composition = {"contract_version": "devui.composition.v1"}
+    seen: dict[str, object] = {}
+
+    def composition_reader(**kwargs: object) -> dict:
+        seen["composition"] = kwargs
+        return composition
+
+    def overview_composer(**kwargs: object) -> dict:
+        seen["overview"] = kwargs
+        return {"contract_version": "devui-overview-view.v1"}
+
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", composition_reader)
+    monkeypatch.setattr(devui_route, "compose_overview_view", overview_composer)
+
+    response = TestClient(app).get("/api/devui/overview")
+
+    assert response.status_code == 200
+    assert seen == {
+        "composition": {
+            "cockpit_reader": devui_route.read_cockpit_registry,
+            "ckm_reader": devui_route._read_ckm_capabilities,
+        },
+        "overview": {"composition": composition},
+    }
