@@ -21,6 +21,14 @@ review_gate: exact-head API review and CI
 
 # Expose the Local Overview GET Route
 
+## Delivery status
+
+Delivered by #4744 / PR #4772 at implementation head
+`7b1f83d4a0b6bdd75071959c41146c70012a29d2` and merge
+`24371d8bf3289dad631c2986f44865794897f32c`. The direct-loopback route calls the live composition
+readers and the delivered composer without candidates. It delivers no producer enrichment, typed
+navigation, browser UI, design, accessibility proof, or owner pilot.
+
 ## Purpose
 
 Expose the accepted production Overview as one bounded local GET endpoint.
@@ -72,7 +80,7 @@ A separate route proof prevents the browser shell from becoming an implicit sour
 - Sync/deployment impact: local API route only
 - External boundary impact: single-operator local admission
 - New or changed contract: local GET `/api/devui/overview`
-- Owner-doc impact: none until capability acceptance
+- Owner-doc impact: current-state route delivery recorded; complete capability acceptance remains pending
 - Transition debt impact: exposes the canonical read model without duplicate logic
 - Fitness rule impact: local-admission, method, envelope, statelessness tests
 
@@ -84,23 +92,23 @@ readers plus the delivered composer without candidates.
 
 ## Acceptance Criteria
 
-- [ ] Local direct requests return exact `devui-overview-view.v1`; non-local or every forwarded
+- [x] Local direct requests return exact `devui-overview-view.v1`; non-local or every forwarded
       identity is rejected.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_reuses_local_admission_and_exact_contract`
-- [ ] POST, PUT, PATCH, and DELETE are unavailable and the route has no command or mutation dependency.
+- [x] POST, PUT, PATCH, and DELETE are unavailable and the route has no command or mutation dependency.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_get_only`
-- [ ] With no current source contract, `needs_you` and `ready_to_try` remain withdrawn rather than
+- [x] With no current source contract, `needs_you` and `ready_to_try` remain withdrawn rather than
       becoming fabricated facts or measured-empty claims.
   - Verify: `tests/api/test_devui_api.py::test_overview_route_preserves_no_source_withdrawals`
-- [ ] The endpoint recomposes each request and creates no cache, store, session, or durable selection.
+- [x] The endpoint recomposes each request and creates no cache, store, session, or durable selection.
   - Verify: `tests/api/test_devui_api.py::test_overview_route_is_get_only`
-- [ ] The route calls the live production composition readers and then the delivered composer in the
+- [x] The route calls the live production composition readers and then the delivered composer in the
       same request instead of reimplementing zone rules or depending on superseded #4743 enrichment.
   - Verify: `tests/api/test_devui_api.py::test_overview_route_uses_live_composition_and_delivered_composer`
 
 ## How to Verify (Pre-Merge)
 
-- Run the five named tests and full `tests/api/test_devui_api.py`.
+- Run the four unique named tests and full `tests/api/test_devui_api.py`.
 - Run `git diff --check` and prove exact-file scope.
 
 ## Suggested Validation
