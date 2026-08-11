@@ -144,9 +144,8 @@ def test_builder_vault_deliberation_contract_is_shared_and_discoverable() -> Non
 
 
 def test_builder_vault_deliberation_contract_closes_cross_device_failure_modes() -> None:
-    contract = _read(
-        ".codex/skills/_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md"
-    )
+    contract = _read(".codex/skills/_shared/BUILDER_VAULT_DELIBERATION_CONTRACT.md")
+    normalized_contract = " ".join(contract.split())
 
     assert "shared_vault_root` to resolve to the same directory" in contract
     assert "agent-delivery/{Backlog,Ready,In Progress,Review,Blocked,Done}/" in contract
@@ -158,6 +157,20 @@ def test_builder_vault_deliberation_contract_closes_cross_device_failure_modes()
     assert "Never stream bytes into a final pathname" in contract
     assert "remove temp, and `fsync`" in contract
     assert "exclusive create or no-overwrite link" not in contract
+    assert "`none` for every other entry type" in contract
+    assert (
+        "valid `archive` that cites the current resolution and manifest is not post-resolution activity"
+        in normalized_contract
+    )
+
+
+def test_builder_vault_deliberation_hooks_do_not_make_closure_block_on_discovery() -> None:
+    parent_closure = _read("docs/development/PARENT_ISSUE_CLOSURE.md")
+    review = " ".join(_read(".codex/skills/builder-vault-review/SKILL.md").split())
+
+    assert "When `builder-vault-deliberation` discovery is available" in parent_closure
+    assert "unavailable or no-match discovery" in parent_closure
+    assert "valid archive that cites the current resolution and manifest remains `archived`" in review
 
 
 def test_skill_readme_resume_work_summary_matches_recovery_order() -> None:

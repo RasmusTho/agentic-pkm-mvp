@@ -85,7 +85,7 @@ actor_type: human | agent | automation
 actor_id: <stable non-secret identity>
 client_id: codex | claude-code | <other declared client>
 session_ref: <non-secret task/session reference or none>
-subject: <one line; required on open, repeated nowhere else>
+subject: <one line on open; `none` for every other entry type>
 target_entry_id: <entry id or none>
 target_artifact_sha256: <whole-file SHA-256 or none>
 basis_manifest_sha256: <manifest SHA-256 or none>
@@ -113,7 +113,8 @@ Rules:
 - `archive` cites both the exact resolution entry and the manifest reviewed before archive. Archive
   is a derived visibility state, not a directory move or deletion.
 - For `resolution` and `archive`, the cited basis manifest covers every valid entry preceding that
-  disposition. The disposition entry itself is not post-basis activity; any other later valid entry
+  disposition. The disposition entry itself is not post-basis activity. A valid `archive` that cites
+  the current resolution and manifest is not post-resolution activity; any other later valid entry
   is.
 - Unknown fields, unknown entry types, missing required hashes, dangling targets, hash mismatches,
   cycles, self-targets, and cross-thread targets fail closed.
@@ -191,9 +192,10 @@ Readers reduce only validated entries:
 - `answered`: at least one valid reply exists, no valid current resolution;
 - `resolved`: the latest unconflicted resolution cites a complete manifest and no later valid entry
   changes the considered set;
-- `archived`: a valid archive cites the current valid resolution and manifest;
-- `needs_review`: activity exists after the latest resolution, a disposition basis is stale, or
-  multiple otherwise valid dispositions disagree;
+- `archived`: a valid archive cites the current valid resolution and manifest, and no later valid
+  entry exists;
+- `needs_review`: non-archive activity exists after the latest resolution, a disposition basis is
+  stale, or multiple otherwise valid dispositions disagree;
 - `conflicted`: any identity, hash, target, correction, manifest, or iCloud conflict is unresolved;
 - `orphaned`: the thread lacks one valid open entry or contains dangling/cross-thread lineage.
 

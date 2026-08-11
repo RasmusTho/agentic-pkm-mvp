@@ -8,7 +8,7 @@ Temporal class: Point-in-time audit; refresh live-state claims rather than treat
 
 ## Question And Method
 
-Can Codex and Claude Code agents on the MacBook and Mac mini share durable asynchronous BuilderOps
+Can Codex and Claude Code agents on separate builder hosts share durable asynchronous BuilderOps
 deliberation without creating a second task, decision, promotion, or delivery authority?
 
 Three independent read-only evidence passes covered BuilderOps authority/storage, the Mimer client

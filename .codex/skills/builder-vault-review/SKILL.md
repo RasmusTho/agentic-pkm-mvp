@@ -38,7 +38,8 @@ This is a cold-path health review. It is not a delivery, merge, closure, or prom
 - `orphaned`: no single valid open entry exists, or a target/hash/manifest edge is missing.
 - `conflicted`: duplicate IDs, differing immutable bytes, incomparable corrections/dispositions, or
   an iCloud conflict artifact exists.
-- `changed_after_resolution`: valid later activity invalidates the latest resolution basis.
+- `changed_after_resolution`: valid non-archive activity after the latest resolution invalidates its
+  basis. A valid archive that cites the current resolution and manifest remains `archived`.
 - `healthy`: none of the above applies.
 
 ## Disposition
