@@ -14,7 +14,7 @@ related_docs:
   - app/knowledge/write_ops.py
 ---
 
-State: Active specification with bounded implementation shipped behind `CANVAS_ENABLED`. Session logs, in-place body editing, governance-routing, and API/CLI session lifecycle landed via PRs #605/#618/#619/#626; owner-doc promotion now records the surface as materially supported while hybrid Panel/Chat behavior remains future work. Phase 5 (durable chat artifact, closing D-4 on epic #2778) is specified below and not yet implemented.
+State: Active specification with bounded implementation shipped behind `CANVAS_ENABLED`. Session logs, in-place body editing, governance-routing, and API/CLI session lifecycle landed via PRs #605/#618/#619/#626; owner-doc promotion now records the surface as materially supported while hybrid Panel/Chat behavior remains future work. Phase 5 (durable chat artifact, closing D-4 on epic #2778) shipped through #2806 / PR #2873 and #2807 / PR #3486.
 Owner: v6.0 architecture owner
 Last reviewed: 2026-07-02
 
@@ -232,36 +232,33 @@ relation semantics, defined in Task 1 and consumed by Task 2's implementation.
 - **Invariant.** The `note_uuid` frontmatter field is the durable source of the note↔chat
   relationship; its registration in `RELATION_TAXONOMY.md` (Task 1) is documentation/discoverability,
   never a runtime precondition for the field to function.
-- **Partial-failure path: Task 2 ships before Task 1.** Nothing breaks. `note_uuid` on a chat
-  artifact works identically whether or not `chat_for`/`has_chats` exist yet in
-  `RELATION_TAXONOMY.md` — the field is read/written directly, not looked up through the taxonomy at
-  runtime. Task 2's issue (#2807) is blocked on Task 1 (#2806) anyway, but that is a **process
-  ordering choice** (review the schema/relation decision in docs before code encodes it), not a hard
-  runtime dependency.
-- **Partial-failure path: Task 1's schema decision changes after Task 2 starts.** Task 1 is docs-only
-  and cheap to amend; if the `note_uuid` field name or the relation type name changed after Task 2
-  began implementation, Task 2 would need a follow-up commit to match — bounded rework, not data loss,
-  since no chat artifacts would yet exist on disk with the old field name (Task 2 hasn't merged).
+- **Delivered ordering.** Task 1 merged first through #2806 / PR #2873; Task 2 then merged through
+  #2807 / PR #3486. `note_uuid` remains the direct durable relation at runtime; the taxonomy is
+  documentation/discoverability, not a runtime lookup precondition.
 - **No seam risk to note content.** Neither task's failure mode, in either order, touches the vault
   note's own content or frontmatter — the invariant that content authority stays with the note
   (see `DEFINE_CHAT_ARTIFACT_DURABILITY.md :: Reconciliation`) holds regardless of Phase 5's internal
   sequencing.
 
-Phase 5 acceptance:
+Phase 5 acceptance (verified 2026-08-12):
 
-- [ ] `chat_for`/`has_chats` are registered in `docs/CONCEPTS/RELATION_TAXONOMY.md`.
-- [ ] `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` carries a session/chat-history row.
-- [ ] Chat-session writes (`open_session`/`append_turn`/`close_session`) assert WriteGuard at the
-      production call site and route through KnowledgePort.
-- [ ] Chat-session artifacts carry a durable `note_uuid` field, resolved via `ensure_note_uuid`.
-- [ ] `load_chat_sessions_for_note` finds a note's sessions by `note_uuid`, surviving a note rename.
-- [ ] No Phase 1–4 canvas behavior regresses (full canvas test sweep green).
+- [x] `chat_for`/`has_chats` are registered in `docs/CONCEPTS/RELATION_TAXONOMY.md` (#2806 / PR #2873).
+- [x] `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` carries a session/chat-history row
+      (#2806 / PR #2873).
+- [x] Chat-session writes (`open_session`/`append_turn`/`close_session`) assert WriteGuard at the
+      production call site and route through KnowledgePort (#2807 / PR #3486).
+- [x] Chat-session artifacts carry a durable `note_uuid` field, resolved via `ensure_note_uuid`
+      (#2807 / PR #3486).
+- [x] `load_chat_sessions_for_note` finds a note's sessions by `note_uuid`, surviving a note rename
+      (#2807 / PR #3486).
+- [x] No Phase 1–4 canvas behavior regresses: `pytest -q tests/chat
+      tests/companion_ui/test_canvas_*.py tests/api/test_canvas*.py` passed (367 passed, 2026-08-12).
 - [x] `docs/architecture/runtime-semantics.md` D-4 is ratified (PR #2803, merged 2026-07-02), naming
       the artifact class as "HKA-owned like class 1/3, related 1:N to its parent vault note via SIP" —
       consistent with this phase's classification.
 
-Phase 5 parent feature issue: **#2805** — live validation hub; closes only after both children
-(#2806, #2807) are delivered and the Phase 5 acceptance checklist above is fully checked.
+Phase 5 parent feature issue: **#2805** — validation hub; its children are delivered and this
+checklist is complete. The parent closes after this current-state documentation update merges.
 
 ### Carried governance intent in routed proposal payloads (#1772)
 
