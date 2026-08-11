@@ -7,26 +7,16 @@ workflow transition.
 
 from __future__ import annotations
 
-import hashlib
+import json
 import os
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from pathlib import Path
+import subprocess
 from typing import Any
-
-from app.builderops.cockpit_github_plane import fetch_github_live
 
 
 _ISSUE_SUBJECT = re.compile(r"github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)\Z")
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_CAPABILITIES: Mapping[str, tuple[str, str, str]] = {
-    "devui_focus": (
-        "devUI Focus + Conversation Port",
-        "docs/DEVUI.md",
-        "DEVUI-FCP-BOUNDARY",
-    ),
-}
 
 
 class FocusInputError(ValueError):
@@ -99,57 +89,45 @@ def _read_issue_inputs(subject_id: str, match: re.Match[str]) -> dict[str, Any]:
     configured_repo = os.environ.get("COCKPIT_GITHUB_REPO")
     if configured_repo != repository:
         raise FocusInputError("requested Issue repository is not configured for the local read")
-    result = fetch_github_live(configured_repo)
-    if result.snapshot is None:
-        raise FocusInputError("selected Issue source is unavailable")
-    issue = result.snapshot.issues.get(int(number_text))
-    if issue is None:
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repository}/issues/{number_text}"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=20,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise FocusInputError("selected Issue source is unavailable") from exc
+    if result.returncode != 0:
         raise FocusInputError("selected Issue is unavailable or unsupported")
+    try:
+        issue = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise FocusInputError("selected Issue source is unavailable") from exc
+    if not isinstance(issue, Mapping) or issue.get("pull_request"):
+        raise FocusInputError("selected Issue is unavailable or unsupported")
+    title = issue.get("title")
+    html_url = issue.get("html_url")
+    updated_at = issue.get("updated_at")
+    if not all(isinstance(value, str) and value for value in (title, html_url, updated_at)):
+        raise FocusInputError("selected Issue source is unavailable")
     source_ref = _source_ref(
         source_type="github_issue",
-        source_id=f"{repository}#{issue.number}",
-        locator=issue.html_url,
-        version=result.snapshot.read_at,
+        source_id=f"{repository}#{number_text}",
+        locator=html_url,
+        version=updated_at,
     )
+    captured_at = datetime.now(timezone.utc).isoformat()
     return _common_inputs(
         subject={
             "kind": "issue",
             "stable_id": subject_id,
             "authority_ref": source_ref,
-            "title": issue.title,
-        },
-        source_ref=source_ref,
-        summary=f"Read the governed Issue: {issue.title}",
-        captured_at=result.snapshot.read_at,
-    )
-
-
-def _read_capability_inputs(subject_id: str) -> dict[str, Any]:
-    capability = _CAPABILITIES.get(subject_id)
-    if capability is None:
-        raise FocusInputError("selected capability is unsupported")
-    title, relative_path, anchor = capability
-    path = _REPO_ROOT / relative_path
-    try:
-        content = path.read_bytes()
-    except OSError as exc:
-        raise FocusInputError("selected capability owner document is unavailable") from exc
-    captured_at = datetime.now(timezone.utc).isoformat()
-    source_ref = {
-        "source_type": "owner_document",
-        "source_id": f"{relative_path}#{anchor}",
-        "locator": f"{relative_path}#{anchor}",
-        "content_hash": hashlib.sha256(content).hexdigest(),
-    }
-    return _common_inputs(
-        subject={
-            "kind": "capability",
-            "stable_id": subject_id,
-            "authority_ref": source_ref,
             "title": title,
         },
         source_ref=source_ref,
-        summary=f"Read the governed capability: {title}",
+        summary=f"Read the governed Issue: {title}",
         captured_at=captured_at,
     )
 
@@ -162,7 +140,7 @@ def read_focus_inputs(subject_id: str) -> dict[str, Any]:
     match = _ISSUE_SUBJECT.fullmatch(subject_id)
     if match is not None:
         return _read_issue_inputs(subject_id, match)
-    return _read_capability_inputs(subject_id)
+    raise FocusInputError("selected subject is unsupported")
 
 
 __all__ = ["FocusInputError", "read_focus_inputs"]

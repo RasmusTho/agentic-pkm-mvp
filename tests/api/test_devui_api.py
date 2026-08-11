@@ -62,8 +62,9 @@ def _focus_inputs(subject: str) -> dict:
     }
 
 
-def test_focus_route_returns_subject_matched_projection() -> None:
-    subject = "devui_focus"
+def test_focus_route_returns_subject_matched_projection(monkeypatch) -> None:
+    subject = "github:RasmusTho/agentic-pkm-mvp#4768"
+    monkeypatch.setattr(devui_route, "read_focus_inputs", lambda requested: _focus_inputs(requested))
 
     response = TestClient(app).get("/api/devui/focus", params={"subject": subject})
 
