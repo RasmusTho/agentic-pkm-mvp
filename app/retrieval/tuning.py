@@ -27,7 +27,7 @@ import os
 from pydantic import ValidationError
 
 from app.settings.models import RetrievalTuning
-from app.settings.runtime import get_settings_bundle
+from app.settings.runtime import get_settings_bundle, subscribe_settings
 from app.settings.tiering import is_lab_profile
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -79,6 +79,7 @@ def _base_tuning() -> RetrievalTuning:
         update={
             "rerank_top_k": RetrievalTuning().rerank_top_k,
             "rerank_provider": RetrievalTuning().rerank_provider,
+            "rerank": RetrievalTuning().rerank,
         }
     )
 
@@ -187,6 +188,12 @@ def get_retrieval_tuning() -> RetrievalTuning:
     if _CACHED is None:
         _CACHED = _resolve_retrieval_tuning()
     return _CACHED
+
+
+# A settings reload replaces the bundle atomically.  Clear this module's
+# process cache at the same boundary so the next retrieval operation observes
+# the new generation instead of retaining stale tuning until restart.
+subscribe_settings(lambda _bundle: reset_retrieval_tuning_cache(), replay=False)
 
 
 __all__ = [

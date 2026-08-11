@@ -49,6 +49,15 @@ def reasoning_model() -> str:
     return configured or env_default("REASONING_MODEL")
 
 
+def default_chat_model() -> str:
+    """Resolve the legacy service caller's model without bypassing the spine."""
+    raw = _override("LLM_MODEL") or _override("MERGE_LLM_MODEL")
+    if raw is not None:
+        return raw
+    routing = get_settings_bundle().llm_routing
+    return routing.default_chat.primary.model or routing.default_chat_model or env_default("MERGE_LLM_MODEL")
+
+
 def rerank_provider() -> str:
     raw = _override("RERANK_PROVIDER")
     if raw is not None:
@@ -60,7 +69,9 @@ def rerank_provider() -> str:
 
 def wave_one_explain() -> dict[str, dict[str, object]]:
     """Safe, explicit origin/tier evidence for migrated SETTINGS-07A keys."""
-    bundle = get_settings_bundle()
+    from app.retrieval.tuning import get_retrieval_tuning
+
+    effective_retrieval = get_retrieval_tuning()
     return {
         "llm.timeout_seconds": {
             "value": llm_timeout_seconds(),
@@ -77,13 +88,18 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
             "origin": "env:REASONING_MODEL (deprecated)" if _override("REASONING_MODEL") else _vault_shared_origin("llm_routing.md"),
             "tier": "operator",
         },
+        "llm.default_chat_model": {
+            "value": default_chat_model(),
+            "origin": "env:LLM_MODEL (deprecated)" if _override("LLM_MODEL") else ("env:MERGE_LLM_MODEL (deprecated)" if _override("MERGE_LLM_MODEL") else _vault_shared_origin("llm_routing.md")),
+            "tier": "operator",
+        },
         "retrieval.rerank.provider": {
             "value": rerank_provider(),
             "origin": "env:RERANK_PROVIDER (deprecated)" if _override("RERANK_PROVIDER") else (_vault_shared_origin("retrieval.md") if is_lab_profile() else "registry default (operator profile)"),
             "tier": "lab",
         },
         "retrieval.rerank.top_k": {
-            "value": bundle.retrieval_tuning.rerank_top_k if is_lab_profile() else 100,
+            "value": effective_retrieval.rerank_top_k,
             "origin": "env:RERANK_TOP_K (deprecated)" if _override("RERANK_TOP_K") else _vault_shared_origin("retrieval.md"),
             "tier": "lab",
         },

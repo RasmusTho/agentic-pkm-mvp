@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from click.testing import CliRunner
 
 from app.retrieval.rerank.provider import MockCrossEncoderReranker, get_reranker
 from app.retrieval.tuning import get_retrieval_tuning, reset_retrieval_tuning_cache
@@ -9,6 +10,7 @@ from app.services import llm
 from app.reasoning.provider import OllamaDeliberationAgent
 from app.settings import wave_one
 from app.settings.models import LLMRoutingSettings, RetrievalTuning, SettingsBundle
+from app.cli import settings_explain_key
 
 
 pytestmark = pytest.mark.not_pg
@@ -20,6 +22,7 @@ def _bundle() -> SettingsBundle:
             timeout_seconds=17.0,
             temperature=0.7,
             reasoning_model="vault-reasoning-model",
+            default_chat_model="vault-chat-model",
         ),
         retrieval_tuning=RetrievalTuning(
             rerank="always",
@@ -51,6 +54,7 @@ def test_vault_settings_reach_model_and_rerank_production_consumers(monkeypatch:
     assert wave_one.llm_timeout_seconds() == 17.0
     assert wave_one.llm_temperature() == 0.7
     assert wave_one.reasoning_model() == "vault-reasoning-model"
+    assert llm._default_model() == "vault-chat-model"
     captured: dict[str, float] = {}
 
     def fake_ollama(_system, _user, _model, temperature, *, timeout, **_kwargs):
@@ -96,3 +100,14 @@ def test_llm_and_rerank_lab_keys_are_inert_for_operator_profile(monkeypatch: pyt
     assert wave_one.rerank_provider() == "none"
     assert get_retrieval_tuning().rerank_top_k == 100
     assert wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"] == "registry default (operator profile)"
+    assert get_retrieval_tuning().rerank == "off"
+
+
+def test_settings_explain_key_reports_effective_origin_and_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.cli.build_settings_explain_payload",
+        lambda: {"settings": {"retrieval.rerank.top_k": {"value": 7, "origin": "vault", "tier": "lab"}}},
+    )
+    result = CliRunner().invoke(settings_explain_key, ["retrieval.rerank.top_k"])
+    assert result.exit_code == 0
+    assert '"tier": "lab"' in result.output

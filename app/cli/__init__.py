@@ -1516,6 +1516,17 @@ def promote_consume(limit: int | None) -> None:
 def settings() -> None:
     ...
 
+
+@settings.command("explain", help="Explain one effective Settings Spine key (JSON).")
+@click.argument("key")
+def settings_explain_key(key: str) -> None:
+    values = build_settings_explain_payload().get("settings", {})
+    value = values.get(key)
+    if value is None:
+        available = ", ".join(sorted(values))
+        raise click.ClickException(f"unknown settings key {key!r}; available: {available}")
+    click.echo(json.dumps({key: value}, ensure_ascii=False, sort_keys=True))
+
 @cli.command("settings-validate", help="Validate settings registries and cross-references.")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON output.")
 def settings_validate_alias(as_json: bool) -> None:

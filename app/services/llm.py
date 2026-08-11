@@ -11,8 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from app.llm.trace import log_llm_call
-from app.settings.env_defaults import env_default
-from app.settings.wave_one import llm_temperature, llm_timeout_seconds
+from app.settings.wave_one import default_chat_model, llm_temperature, llm_timeout_seconds
 
 
 _DISPATCH_PROVIDERS = frozenset({"mock", "ollama", "openai", "deepseek"})
@@ -245,7 +244,7 @@ def _normalize_model(value: str | None) -> str | None:
 
 
 def _default_model() -> str:
-    return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", env_default("MERGE_LLM_MODEL")))
+    return default_chat_model()
 
 
 def _mock_response_for_kind(kind: str | None) -> str:

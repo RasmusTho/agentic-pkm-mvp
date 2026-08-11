@@ -124,7 +124,8 @@ Env overrides (resolved once at process start, not per query): `RETRIEVAL_FUSION
 reverting to the default. The existing `RERANK_ENABLE`/`RERANK_TOP_K`/`RERANK_PROVIDER` env vars
 keep working as overrides into this surface (compat): `RERANK_ENABLE` truthy maps to `rerank="always"`
 when the new `RETRIEVAL_RERANK` knob is unset; `RERANK_TOP_K` maps to `rerank_top_k` when
-`RETRIEVAL_RERANK_TOP_K` is unset; `RERANK_PROVIDER` is unrelated to this config shape and continues
+`RETRIEVAL_RERANK_TOP_K` is unset; `RERANK_PROVIDER` is a deprecated one-release bootstrap override
+for the vault-backed `settings/retrieval.md` reranker implementation selection and continues
 to select the reranker implementation directly (`app/retrieval/rerank/provider.py`).
 
 **Live serving path — durable index via a cache-through (KERNEL-05, #2870; G1res-1, #2981):** the
@@ -210,8 +211,9 @@ default). It is still controlled by env vars, same effective knobs as before (AD
 compat preserved):
 - `RERANK_ENABLE=1` to enable reordering (maps to `rerank="always"`)
 - `RERANK_TOP_K` to limit how many results the reranker returns explicitly (maps to `rerank_top_k`)
-- `RERANK_PROVIDER` selects the implementation (`none`, `mock`, `ce_local`, `ce_http`) — unrelated to
-  the `RetrievalTuning` shape, read directly by `app/retrieval/rerank/provider.py`
+- `RERANK_PROVIDER` selects the implementation (`none`, `mock`, `ce_local`, `ce_http`) as a deprecated
+  one-release override of `settings/retrieval.md`, resolved by the `RetrievalTuning` shape and
+  consumed by `app/retrieval/rerank/provider.py`
 - `rerank="conditional"` (deterministic score-margin gate, implemented — ADR-0059 D3 step 5 /
   #3407, selectable, not default) — see *Scoring* above
 

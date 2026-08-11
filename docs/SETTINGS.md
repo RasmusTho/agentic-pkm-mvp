@@ -34,7 +34,7 @@ Compiler:
 - `python -m app.cli settings compile`
 
 Runtime settings cover the panel action catalog, watcher policy, and compiled runtime bundles under `runtime/settings/`.
-Today, `python -m app.cli settings-explain` is a narrow operator-facing diagnostics surface for environment/database state plus panel-action and watcher provenance/gating; it is not a full dump of every compiled runtime YAML.
+Today, `python -m app.cli settings-explain` is an operator-facing diagnostics surface for environment/database state, panel-action and watcher provenance/gating, and migrated LLM/retrieval settings. Use `python -m app.cli settings explain <key>` for a single effective Settings Spine key, including its origin and tier; it is not a full dump of every compiled runtime YAML.
 Compiled bundle files such as `runtime/settings/llm_routing.yaml` remain the direct artifact for the broader runtime payload, while `python -m app.cli settings-validate` checks registries, panel/watcher source artifacts, and any compiled-runtime unresolved-secret sentinels visible locally.
 They also include task-specific LLM routing policy via `<vault>/settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
 
@@ -50,7 +50,7 @@ The active settings model separates:
 Core rules:
 - normal runtime defaults to `PKM_SETTINGS_PROFILE=operator`
 - lab/experimental controls require explicit `PKM_SETTINGS_PROFILE=lab`
-- provenance and precedence should remain inspectable, with `settings-explain` focused on watcher/panel operator diagnostics and `settings-validate` covering registry/source consistency plus local unresolved-secret checks
+- provenance and precedence should remain inspectable, with `settings-explain` and `settings explain <key>` covering watcher/panel and migrated LLM/retrieval diagnostics, and `settings-validate` covering registry/source consistency plus local unresolved-secret checks
 
 High-impact examples:
 - Operator-facing:
@@ -153,7 +153,7 @@ The registry lists canonical event IDs, producers/consumers, and optional schema
 
 ## Operational guidance
 - Use `python -m app.cli settings-validate --json` to validate registries, panel/watcher source artifacts, and locally compiled unresolved-secret sentinels.
-- Use `python -m app.cli settings-explain --json` to inspect environment/database resolution plus watcher/panel provenance and gate state.
+- Use `python -m app.cli settings-explain --json` to inspect environment/database resolution plus watcher/panel and migrated LLM/retrieval provenance. Use `python -m app.cli settings explain retrieval.rerank.top_k` for one effective key with its origin and tier.
 - When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.
 - Treat `<vault>/settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.
 - Migrate an existing vault only through the explicit governed command:
