@@ -24,6 +24,110 @@ from app.builderops.ckm.contracts import (
 )
 
 
+def _focus_inputs(subject: str) -> dict:
+    authority_ref = {
+        "source_type": "github_issue",
+        "source_id": "RasmusTho/agentic-pkm-mvp#4768",
+        "version": "2026-08-11T17:53:40+00:00",
+        "locator": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768",
+    }
+    claim = {
+        "claim_id": "governing-subject",
+        "claim": "The selected Issue is readable.",
+        "source_ref": authority_ref,
+        "availability": "available",
+        "freshness": "fresh",
+        "coverage": "complete",
+        "cardinality": "nonempty",
+        "linkage": "linked",
+        "captured_at": "2026-08-11T17:53:40+00:00",
+        "limitation": None,
+    }
+    return {
+        "subject": {
+            "kind": "issue",
+            "stable_id": subject,
+            "authority_ref": authority_ref,
+            "title": "Expose an admitted local Focus GET route",
+        },
+        "owner_intent": {"summary": "Read one governed Issue.", "source_ref": authority_ref},
+        "governing_sources": [claim],
+        "evidence": [{**claim, "claim_id": "subject-read"}],
+        "receipts": [],
+        "risks": [],
+        "next_legal_step": {"workflow_ref": None, "actor_class": "system", "legality": "unavailable", "reason": "Read only."},
+        "execution_observations": [],
+        "conversation_port": {"availability": "unsupported", "reason": "Not delivered."},
+        "limitations": [],
+    }
+
+
+def test_focus_route_returns_subject_matched_projection() -> None:
+    subject = "devui_focus"
+
+    response = TestClient(app).get("/api/devui/focus", params={"subject": subject})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "focus-view.v1"
+    assert payload["subject"]["stable_id"] == subject
+
+
+def test_focus_route_fails_closed_for_unadmitted_or_unsupported_subjects(monkeypatch) -> None:
+    def must_not_read(subject: str) -> dict:
+        raise AssertionError(f"Focus inputs must not be read for unadmitted request: {subject}")
+
+    monkeypatch.setattr(devui_route, "read_focus_inputs", must_not_read)
+    remote = TestClient(app, client=("203.0.113.10", 50000))
+    assert remote.get("/api/devui/focus", params={"subject": "devui_focus"}).status_code == 403
+
+    monkeypatch.setattr(
+        devui_route,
+        "read_focus_inputs",
+        lambda subject: (_ for _ in ()).throw(devui_route.FocusInputError("unsupported")),
+    )
+    response = TestClient(app).get("/api/devui/focus", params={"subject": "provider:session:1"})
+    assert response.status_code == 404
+    assert response.headers.get("location") is None
+    assert TestClient(app).get("/api/devui/focus", params={"subject": ""}).status_code == 404
+
+
+def test_focus_route_is_get_only_and_stateless(monkeypatch) -> None:
+    subject = "github:RasmusTho/agentic-pkm-mvp#4768"
+    calls: list[str] = []
+
+    def reader(requested: str) -> dict:
+        calls.append(requested)
+        return _focus_inputs(requested)
+
+    monkeypatch.setattr(devui_route, "read_focus_inputs", reader)
+    client = TestClient(app)
+    assert client.get("/api/devui/focus", params={"subject": subject}).status_code == 200
+    assert client.get("/api/devui/focus", params={"subject": subject}).status_code == 200
+    assert calls == [subject, subject]
+    assert client.post("/api/devui/focus", params={"subject": subject}).status_code == 405
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/api/devui/focus")
+    assert route.methods == {"GET"}
+
+
+def test_focus_route_reuses_delivered_composer_without_root_join(monkeypatch) -> None:
+    subject = "github:RasmusTho/agentic-pkm-mvp#4768"
+    inputs = _focus_inputs(subject)
+    seen: dict[str, object] = {}
+
+    def composer(**kwargs: object) -> dict:
+        seen.update(kwargs)
+        return {"contract_version": "focus-view.v1", "subject": kwargs["subject"]}
+
+    monkeypatch.setattr(devui_route, "read_focus_inputs", lambda requested: inputs)
+    monkeypatch.setattr(devui_route, "compose_focus_view", composer)
+    response = TestClient(app).get("/api/devui/focus", params={"subject": subject})
+
+    assert response.status_code == 200
+    assert seen == inputs
+    assert "composition" not in seen
+
+
 def _dispatcher_source(read_at: str) -> dict:
     return {
         "name": "dispatcher-store",
