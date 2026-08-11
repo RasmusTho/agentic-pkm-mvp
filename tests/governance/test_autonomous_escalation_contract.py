@@ -7,7 +7,6 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE_CONTRACT = ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
 PROCESS_MAP = ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 AGENTS = ROOT / "AGENTS.md"
-OWNER_DECISION_PROFILE = ROOT / ".codex/skills/owner-decision-brief/SKILL.md"
 
 
 def test_retry_exhaustion_alone_cannot_require_human_exception() -> None:
@@ -69,35 +68,6 @@ def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
 
     assert "A retry count, a failed local/CI/type check" in agents
     assert "only its explicit authority categories may create `agent:needs-human`" in agents
-
-
-def test_contract_dominates_source_drift_before_owner_escalation() -> None:
-    profile = OWNER_DECISION_PROFILE.read_text(encoding="utf-8")
-    normalized = " ".join(profile.split())
-
-    assert "## Contract-dominance preflight" in profile
-    assert "current governing Issue body" in profile
-    assert "acceptance criteria and `Verify:` targets" in normalized
-    assert "missing implementation on current `main`" in normalized
-    assert "integration or rebase conflict" in normalized
-    assert "technical evidence, not as proof that product value is undecided" in normalized
-    assert "bounded integration or recovery" in normalized
-    assert "leave a `blocked_technical` receipt" in normalized
-    assert "do not convert it to an owner ask" in normalized
-
-
-def test_platform_containment_recovery_scenario_forbids_manufactured_owner_choice() -> None:
-    profile = OWNER_DECISION_PROFILE.read_text(encoding="utf-8")
-    scenario = profile.split("Regression scenario:", maxsplit=1)[1]
-    normalized = " ".join(scenario.split())
-
-    assert "strict platform containment" in normalized
-    assert "protected fail-closed invariant" in normalized
-    assert "preserved recovery cannot rebase mechanically" in normalized
-    assert "bounded port/recovery" in normalized
-    assert "current-head verification" in normalized
-    assert 'Offering the owner “restore the contract, retire it, or defer” is forbidden' in normalized
-    assert "unless current authority explicitly reopened" in normalized
 
 
 def test_repair_budget_policy_is_consistent_across_governing_surfaces() -> None:

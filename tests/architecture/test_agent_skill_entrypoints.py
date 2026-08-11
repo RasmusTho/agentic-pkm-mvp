@@ -82,6 +82,35 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
+def test_contract_dominates_source_drift_before_owner_escalation() -> None:
+    profile = _read(".codex/skills/owner-decision-brief/SKILL.md")
+    normalized = " ".join(profile.split())
+
+    assert "## Contract-dominance preflight" in profile
+    assert "current governing Issue body" in profile
+    assert "acceptance criteria and `Verify:` targets" in normalized
+    assert "missing implementation on current `main`" in normalized
+    assert "integration or rebase conflict" in normalized
+    assert "technical evidence, not as proof that product value is undecided" in normalized
+    assert "bounded integration or recovery" in normalized
+    assert "leave a `blocked_technical` receipt" in normalized
+    assert "do not convert it to an owner ask" in normalized
+
+
+def test_platform_containment_recovery_scenario_forbids_manufactured_owner_choice() -> None:
+    profile = _read(".codex/skills/owner-decision-brief/SKILL.md")
+    scenario = profile.split("Regression scenario:", maxsplit=1)[1]
+    normalized = " ".join(scenario.split())
+
+    assert "strict platform containment" in normalized
+    assert "protected fail-closed invariant" in normalized
+    assert "preserved recovery cannot rebase mechanically" in normalized
+    assert "bounded port/recovery" in normalized
+    assert "current-head verification" in normalized
+    assert 'Offering the owner “restore the contract, retire it, or defer” is forbidden' in normalized
+    assert "unless current authority explicitly reopened" in normalized
+
+
 def test_builder_thread_contract_is_executable_and_discoverable() -> None:
     index = _read(".codex/skills/README.md")
     contract = _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md")
