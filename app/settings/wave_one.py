@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 from app.settings.env_defaults import env_default
+from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
 from app.settings.runtime import get_settings_bundle
 from app.settings.tiering import is_lab_profile
 
@@ -17,6 +18,11 @@ from app.settings.tiering import is_lab_profile
 def _override(name: str) -> str | None:
     value = os.getenv(name)
     return value.strip() if value and value.strip() else None
+
+
+def _vault_shared_origin(relative_path: str) -> str:
+    """Format canonical provenance without introducing a second path authority."""
+    return f"vault-shared:{CANONICAL_SETTINGS_DIR_NAME}/{relative_path}"
 
 
 def llm_timeout_seconds() -> float:
@@ -58,27 +64,27 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
     return {
         "llm.timeout_seconds": {
             "value": llm_timeout_seconds(),
-            "origin": "env:LLM_TIMEOUT (deprecated)" if _override("LLM_TIMEOUT") else "vault-shared:settings/llm_routing.md",
+            "origin": "env:LLM_TIMEOUT (deprecated)" if _override("LLM_TIMEOUT") else _vault_shared_origin("llm_routing.md"),
             "tier": "operator",
         },
         "llm.temperature": {
             "value": llm_temperature(),
-            "origin": "env:LLM_TEMPERATURE (deprecated)" if _override("LLM_TEMPERATURE") else ("vault-shared:settings/llm_routing.md" if is_lab_profile() else "registry default (operator profile)"),
+            "origin": "env:LLM_TEMPERATURE (deprecated)" if _override("LLM_TEMPERATURE") else (_vault_shared_origin("llm_routing.md") if is_lab_profile() else "registry default (operator profile)"),
             "tier": "lab",
         },
         "llm.reasoning_model": {
             "value": reasoning_model(),
-            "origin": "env:REASONING_MODEL (deprecated)" if _override("REASONING_MODEL") else "vault-shared:settings/llm_routing.md",
+            "origin": "env:REASONING_MODEL (deprecated)" if _override("REASONING_MODEL") else _vault_shared_origin("llm_routing.md"),
             "tier": "operator",
         },
         "retrieval.rerank.provider": {
             "value": rerank_provider(),
-            "origin": "env:RERANK_PROVIDER (deprecated)" if _override("RERANK_PROVIDER") else ("vault-shared:settings/retrieval.md" if is_lab_profile() else "registry default (operator profile)"),
+            "origin": "env:RERANK_PROVIDER (deprecated)" if _override("RERANK_PROVIDER") else (_vault_shared_origin("retrieval.md") if is_lab_profile() else "registry default (operator profile)"),
             "tier": "lab",
         },
         "retrieval.rerank.top_k": {
             "value": bundle.retrieval_tuning.rerank_top_k if is_lab_profile() else 100,
-            "origin": "env:RERANK_TOP_K (deprecated)" if _override("RERANK_TOP_K") else "vault-shared:settings/retrieval.md",
+            "origin": "env:RERANK_TOP_K (deprecated)" if _override("RERANK_TOP_K") else _vault_shared_origin("retrieval.md"),
             "tier": "lab",
         },
     }
