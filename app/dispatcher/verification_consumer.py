@@ -3103,7 +3103,10 @@ class CodexExecLauncher:
                     barrier.release()
             except Exception:
                 if barrier is not None:
-                    barrier.close()
+                    try:
+                        barrier.close()
+                    except Exception:
+                        pass
                 terminate_and_reap_child()
                 raise RuntimeError("verification coordinator setup failed") from None
 

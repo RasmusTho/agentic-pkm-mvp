@@ -6053,6 +6053,128 @@ def test_barrier_after_spawn_failure_reaps_exact_root_before_release(
     assert process.wait_calls == 1
 
 
+def test_barrier_capture_failure_close_error_still_reaps_u_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Barrier:
+        command = ["barrier", "coordinator"]
+        pass_fds = (71,)
+        may_have_released = False
+
+        def after_spawn(self) -> None:
+            return None
+
+        def close(self) -> None:
+            raise OSError("barrier close failed")
+
+    class FailingCaptureContainment(_ProvenContainment):
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+
+        def launch_barrier(self, _command: list[str]) -> Barrier:
+            return Barrier()
+
+        def capture_launch_root(self, _root_pid: int) -> object:
+            raise RuntimeError("root identity unavailable")
+
+        def cleanup(self) -> bool:
+            self.cleanup_calls += 1
+            return True
+
+    class LiveRootProcess(_AuthorityLossProcess):
+        pid = 42_028
+
+    process = LiveRootProcess([])
+    containment = FailingCaptureContainment()
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not use PGID")),
+    )
+
+    with pytest.raises(RuntimeError, match="verification coordinator setup failed"):
+        _authority_loss_launcher(
+            tmp_path,
+            containment_factory=lambda: containment,
+            cleanup_tracker_factory=_ProvenContainment,
+        ).launch({"head_sha": HEAD})
+
+    assert process.terminate_calls == 1
+    assert process.wait_calls == 1
+    assert containment.cleanup_calls == 0
+
+
+def test_barrier_release_failure_close_error_still_cleans_r_coalition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Barrier:
+        command = ["barrier", "coordinator"]
+        pass_fds = (71,)
+        may_have_released = False
+
+        def after_spawn(self) -> None:
+            return None
+
+        def release(self) -> None:
+            self.may_have_released = True
+            raise RuntimeError("release delivery indeterminate")
+
+        def close(self) -> None:
+            raise OSError("barrier close failed")
+
+    class BarrierContainment(_ProvenContainment):
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+
+        def launch_barrier(self, _command: list[str]) -> Barrier:
+            return Barrier()
+
+        def capture_launch_root(self, root_pid: int) -> tuple[str, int]:
+            return ("identity", root_pid)
+
+        def attach(self, root_pid: int, identity: object | None = None) -> None:
+            assert identity == ("identity", root_pid)
+            super().attach(root_pid)
+
+        def cleanup(self) -> bool:
+            self.cleanup_calls += 1
+            return True
+
+    class LiveRootProcess(_AuthorityLossProcess):
+        pid = 42_029
+
+    process = LiveRootProcess([])
+    containment = BarrierContainment()
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not use PGID")),
+    )
+
+    with pytest.raises(RuntimeError, match="verification coordinator setup failed"):
+        _authority_loss_launcher(
+            tmp_path,
+            containment_factory=lambda: containment,
+            cleanup_tracker_factory=_ProvenContainment,
+        ).launch({"head_sha": HEAD})
+
+    assert process.terminate_calls == 1
+    assert process.wait_calls == 1
+    assert containment.cleanup_calls == 1
+
+
 def test_barrier_release_cleanup_runs_coalition_after_direct_root_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
