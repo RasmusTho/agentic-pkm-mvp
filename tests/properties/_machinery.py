@@ -469,11 +469,11 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
-    ("app/vault/manager.py", 841): (
+    ("app/vault/manager.py", 843): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
-        "reaching this line. Line drifted 716 -> 841 (site unchanged) when "
+        "reaching this line. Line drifted 716 -> 841 -> 843 (site unchanged) when "
         "#3452 added conflict-quarantine receipt policy above the manager."
     ),
     ("app/vault/settings_service.py", 617): (
