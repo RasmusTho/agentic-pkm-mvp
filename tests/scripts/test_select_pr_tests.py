@@ -13,6 +13,15 @@ from scripts.select_pr_tests import select_tests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_stage_a_aro03_contract_selects_route_tests() -> None:
+    for path in selector.ARO03_ROUTE_CONTRACT_PATHS:
+        selection = select_tests([path])
+
+        assert selection.full_suite is False
+        assert selection.unowned_paths == ()
+        assert set(selector.ARO03_ROUTE_TESTS) <= set(selection.targets)
+
+
 def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     selection = select_tests(["companion-ui/companion-app/src/workspace.ts", "tests/api/test_status_api.py"])
 
