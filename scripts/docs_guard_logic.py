@@ -77,14 +77,55 @@ _NON_ENGLISH_MARKERS = MappingProxyType(
             wanneer waar hoe waarom na vóór zonder tussen omdat daarom
             """.split()
         ),
+        "polish": frozenset(
+            """
+            ten ta te i nie jest są dla oraz każdy każda każde musi muszą
+            powinien powinna powinno przed po bez między ponieważ dlatego
+            który która które jak gdzie kiedy przez nad pod wszystkich być
+            """.split()
+        ),
+        "portuguese": frozenset(
+            """
+            os um uma e é são não com para em de do da dos das este esta estes
+            estas que quem sobre por como também pode deve nós vocês eles elas
+            mas ou se quando onde porque depois antes sem entre
+            """.split()
+        ),
+        "turkish": frozenset(
+            """
+            bu ve bir için ile değil olan olarak önce sonra çünkü ancak veya
+            nasıl neden nerede her tüm gerekir olmalıdır tarafından arasında
+            üzerinde
+            """.split()
+        ),
+        "vietnamese": frozenset(
+            """
+            và là của cho trong không với một những các được phải trước sau vì
+            nhưng hoặc nếu khi nơi như này đó mọi đều rất đối tất cả
+            """.split()
+        ),
     }
 )
 _FENCED_BLOCK_RE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
 _NON_PROSE_RE = re.compile(r"`[^`\n]+`|https?://\S+|<!--.*?-->", re.DOTALL)
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+_TABLE_SEPARATOR_CELL_RE = re.compile(r":?-{3,}:?")
+_LOCALIZATION_TABLE_LABELS = frozenset(
+    """
+    en english sv swedish de german fr french es spanish it italian nl dutch
+    pl polish pt portuguese tr turkish vi vietnamese ru russian ja japanese zh
+    chinese
+    """.split()
+)
 _MIN_NON_ENGLISH_MARKERS = 8
 _MIN_NON_ENGLISH_SHARE = 0.35
+_MIN_MEDIUM_NON_ENGLISH_MARKERS = 5
+_MIN_MEDIUM_NON_ENGLISH_UNIQUE_MARKERS = 4
+_MIN_MEDIUM_NON_ENGLISH_SHARE = 0.65
+_MIN_SHORT_NON_ENGLISH_MARKERS = 3
+_MIN_SHORT_NON_ENGLISH_SHARE = 0.80
 _MIN_NON_LATIN_LETTERS = 20
+_MIN_SHORT_NON_LATIN_LETTERS = 8
 _MIN_NON_LATIN_SHARE = 0.30
 
 TEMPORAL_DOCS = frozenset(
@@ -126,8 +167,53 @@ def is_governed_documentation_path(path: str) -> bool:
     return "/" not in path or path.startswith(DOCUMENTATION_PREFIXES)
 
 
+def _markdown_table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return []
+    stripped = stripped.removeprefix("|").removesuffix("|")
+    return [cell.strip().casefold() for cell in stripped.split("|")]
+
+
+def _strip_explicit_localization_tables(text: str) -> str:
+    """Remove Markdown tables whose headers explicitly name two languages."""
+
+    lines = text.splitlines()
+    kept: list[str] = []
+    index = 0
+    while index < len(lines):
+        header = _markdown_table_cells(lines[index])
+        separator = (
+            _markdown_table_cells(lines[index + 1])
+            if index + 1 < len(lines)
+            else []
+        )
+        is_table = (
+            len(header) >= 2
+            and len(header) == len(separator)
+            and all(_TABLE_SEPARATOR_CELL_RE.fullmatch(cell) for cell in separator)
+        )
+        language_columns = sum(
+            cell in _LOCALIZATION_TABLE_LABELS for cell in header
+        )
+        if not is_table or language_columns < 2:
+            kept.append(lines[index])
+            index += 1
+            continue
+
+        index += 2
+        while index < len(lines) and _markdown_table_cells(lines[index]):
+            index += 1
+        kept.append("")
+    return "\n".join(kept)
+
+
 def _primary_non_english_language(text: str) -> tuple[str, int, int, float] | None:
-    prose = _NON_PROSE_RE.sub(" ", _FENCED_BLOCK_RE.sub(" ", text))
+    prose_without_fences = _FENCED_BLOCK_RE.sub(" ", text)
+    prose_without_localization_tables = _strip_explicit_localization_tables(
+        prose_without_fences
+    )
+    prose = _NON_PROSE_RE.sub(" ", prose_without_localization_tables)
     tokens = [token.lower() for token in _WORD_RE.findall(prose)]
     english_hits = sum(token in _ENGLISH_MARKERS for token in tokens)
     language, non_english_hits = max(
@@ -139,26 +225,55 @@ def _primary_non_english_language(text: str) -> tuple[str, int, int, float] | No
     )
     marker_total = english_hits + non_english_hits
     non_english_share = non_english_hits / marker_total if marker_total else 0.0
-    if (
+    non_english_unique_hits = len(
+        set(tokens).intersection(_NON_ENGLISH_MARKERS[language])
+    )
+    long_document_match = (
         non_english_hits >= _MIN_NON_ENGLISH_MARKERS
         and non_english_share >= _MIN_NON_ENGLISH_SHARE
-    ):
+    )
+    medium_document_match = (
+        non_english_hits >= _MIN_MEDIUM_NON_ENGLISH_MARKERS
+        and non_english_unique_hits >= _MIN_MEDIUM_NON_ENGLISH_UNIQUE_MARKERS
+        and non_english_share >= _MIN_MEDIUM_NON_ENGLISH_SHARE
+    )
+    short_document_match = (
+        non_english_hits >= _MIN_SHORT_NON_ENGLISH_MARKERS
+        and non_english_share >= _MIN_SHORT_NON_ENGLISH_SHARE
+    )
+    if long_document_match or medium_document_match or short_document_match:
         return language, non_english_hits, english_hits, non_english_share
 
     letters = [character for character in prose if character.isalpha()]
-    non_latin_letters = sum(
-        "LATIN" not in unicodedata.name(character, "") for character in letters
+    non_latin_names = [
+        unicodedata.name(character, "")
+        for character in letters
+        if "LATIN" not in unicodedata.name(character, "")
+    ]
+    non_latin_letters = len(non_latin_names)
+    short_non_latin_letters = sum(
+        "GREEK" not in character_name for character_name in non_latin_names
     )
     non_latin_share = non_latin_letters / len(letters) if letters else 0.0
-    if (
+    long_non_latin_match = (
         non_latin_letters >= _MIN_NON_LATIN_LETTERS
         and non_latin_share >= _MIN_NON_LATIN_SHARE
-    ):
+    )
+    short_non_latin_match = (
+        short_non_latin_letters >= _MIN_SHORT_NON_LATIN_LETTERS
+        and short_non_latin_letters / len(letters) >= _MIN_NON_LATIN_SHARE
+        if letters
+        else False
+    )
+    if long_non_latin_match or short_non_latin_match:
+        matched_non_latin_letters = (
+            non_latin_letters if long_non_latin_match else short_non_latin_letters
+        )
         return (
             "non_latin",
-            non_latin_letters,
-            len(letters) - non_latin_letters,
-            non_latin_share,
+            matched_non_latin_letters,
+            len(letters) - matched_non_latin_letters,
+            matched_non_latin_letters / len(letters),
         )
     return None
 

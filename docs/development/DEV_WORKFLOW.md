@@ -73,9 +73,17 @@ corpora as documentation; those surfaces contain Swedish and other languages by 
 
 `python3 scripts/docs_guard.py --language-only` scans the complete tracked documentation surface on
 every PR, including implementation PRs. It removes fenced code, inline code, URLs, and comments
-before applying a deterministic primary-language check. Bounded quotations, localization strings,
-and SV/EN examples are permitted inside an otherwise-English document. A document whose primary
-prose is detected as non-English fails with the path and marker evidence; there is no per-file bypass.
+before applying a deterministic primary-language check. Explicit bilingual Markdown tables whose
+headers name at least two languages are treated as localization data, while ordinary technical
+tables remain part of the prose check. Bounded quotations, localization strings, and SV/EN examples
+are permitted inside an otherwise-English document. A document whose primary prose is detected as
+non-English fails with the path and marker evidence; there is no per-file bypass.
+
+The dependency-free detector uses closed-class markers for common Latin-script languages and a
+Unicode-script threshold for non-Latin prose. It is intentionally a CI fitness heuristic, not
+universal language identification: very terse text with too little language evidence, an uncommon
+Latin-script language outside the marker sets, or an unlabeled mixed-language table can remain
+ambiguous. Review remains responsible for those cases.
 
 - Docs-only changes:
   - run any repo docs validation command if one exists
