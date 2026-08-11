@@ -594,7 +594,7 @@ def test_static_selector_targets_are_collectable() -> None:
         for _, _, subsystem_targets in selector.SUBSYSTEMS
         for target in subsystem_targets
         if target.split("::", 1)[0].endswith(".py")
-    )
+    ) + selector.STATIC_SELECTOR_NODE_ID_TARGETS
 
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", *targets],

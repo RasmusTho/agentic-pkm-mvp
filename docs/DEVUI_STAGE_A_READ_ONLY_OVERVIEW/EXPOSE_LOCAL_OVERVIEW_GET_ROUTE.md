@@ -84,8 +84,8 @@ calls the delivered composer with no candidates. It does not call a producer-enr
 
 ## Acceptance Criteria
 
-- [ ] Local direct and accepted proxy requests return exact `devui-overview-view.v1`; non-local or
-      ambiguous forwarded identity is rejected.
+- [ ] Local direct requests return exact `devui-overview-view.v1`; any forwarded, non-local, or
+      ambiguous identity is rejected.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_reuses_local_admission_and_exact_contract`
 - [ ] The no-candidate direct loopback preserves explicit source withdrawals instead of inferring
       owner authority or readiness.

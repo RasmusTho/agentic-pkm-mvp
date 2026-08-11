@@ -107,6 +107,11 @@ ARO03_ROUTE_TESTS = (
     "tests/api/test_devui_api.py::test_overview_route_uses_live_composition_and_delivered_composer",
 )
 
+# Node-id targets outside SUBSYSTEMS still need the always-run static census.
+# Otherwise a renamed ARO-03 route proof could be filtered out before CI asks
+# pytest to collect it, leaving the exact-path selector green without proof.
+STATIC_SELECTOR_NODE_ID_TARGETS = ARO03_ROUTE_TESTS
+
 GOVERNANCE_TARGETS = (
     "tests/governance",
     "tests/scripts",
