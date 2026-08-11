@@ -22,6 +22,7 @@ _FORWARDED_IDENTITY_HEADERS = frozenset(
         "cf-connecting-ip",
         "forwarded",
         "true-client-ip",
+        "via",
         "x-client-ip",
         "x-envoy-external-address",
         "x-original-forwarded-for",

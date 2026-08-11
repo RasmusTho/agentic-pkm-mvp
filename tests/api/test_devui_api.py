@@ -303,6 +303,7 @@ def test_devui_composition_refuses_other_forwarded_identity_headers() -> None:
 
     for name, value in (
         ("Forwarded", "for=127.0.0.1"),
+        ("Via", "1.1 local-proxy"),
         ("X-Real-IP", "127.0.0.1"),
         ("CF-Connecting-IP", "127.0.0.1"),
         ("X-Original-Forwarded-For", "127.0.0.1"),
@@ -501,6 +502,18 @@ def test_overview_route_reuses_local_admission_and_exact_contract(monkeypatch) -
         client.get("/api/devui/overview", headers={"X-Forwarded-For": "203.0.113.10"}).status_code
         == 403
     )
+
+
+def test_overview_route_rejects_via_forwarded_identity(monkeypatch) -> None:
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {})
+    monkeypatch.setattr(devui_route, "compose_overview_view", lambda **_: {})
+
+    response = TestClient(app).get(
+        "/api/devui/overview",
+        headers={"Via": "1.1 local-proxy"},
+    )
+
+    assert response.status_code == 403
 
 
 def test_overview_route_preserves_no_source_withdrawals(monkeypatch) -> None:
