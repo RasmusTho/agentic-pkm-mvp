@@ -87,14 +87,28 @@ def test_contract_dominates_source_drift_before_owner_escalation() -> None:
     normalized = " ".join(profile.split())
 
     assert "## Contract-dominance preflight" in profile
-    assert "current governing Issue body" in profile
-    assert "acceptance criteria and `Verify:` targets" in normalized
+    assert "First identify the live contract that actually governs the work" in profile
+    assert "When a governing Issue is present" in normalized
+    assert "When no Issue contract exists" in normalized
+    assert "Do not manufacture an Issue/AC dependency" in normalized
+    assert "acceptance criteria, and `Verify:` targets" in normalized
     assert "missing implementation on current `main`" in normalized
     assert "integration or rebase conflict" in normalized
     assert "technical evidence, not as proof that product value is undecided" in normalized
     assert "bounded integration or recovery" in normalized
     assert "leave a `blocked_technical` receipt" in normalized
     assert "do not convert it to an owner ask" in normalized
+
+
+def test_contract_dominance_allows_only_evidence_backed_owner_scope_reopening() -> None:
+    profile = _read(".codex/skills/owner-decision-brief/SKILL.md")
+    normalized = " ".join(profile.split())
+
+    assert "current, applicable authority explicitly reopens" in normalized
+    assert "applicable owner decision register, owner document, or governing contract" in normalized
+    assert "identifies the value/scope as owner-reserved" in normalized
+    assert "asks the owner to decide whether to change it" in normalized
+    assert "Technical drift remains `blocked_technical`" in normalized
 
 
 def test_platform_containment_recovery_scenario_forbids_manufactured_owner_choice() -> None:

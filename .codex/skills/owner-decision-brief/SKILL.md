@@ -54,23 +54,30 @@ record, and report the decision afterwards.
 Before creating an owner ask, adding `agent:needs-human`, or presenting options, apply the portable
 method's contract-dominance preflight against live repository authority:
 
-1. Read the current governing Issue body, its acceptance criteria and `Verify:` targets, the named
-   owner-doc anchors, and any protected invariant or explicit operator gate that constrains the
-   apparent choice.
+1. First identify the live contract that actually governs the work. When a governing Issue is
+   present, read its current body, acceptance criteria, and `Verify:` targets. When no Issue
+   contract exists (for example, a bounded Direct Repair), read that PR or workflow contract
+   instead. In either case, read the applicable named owner-doc anchors and any protected
+   invariant or explicit operator gate that constrains the apparent choice. Do not manufacture an
+   Issue/AC dependency for a contract that does not have one.
 2. Compare the contract with current Git and PR reality. Treat a missing implementation on current
    `main`, an integration or rebase conflict, source drift, and a recovery branch that cannot be
    transplanted mechanically as technical evidence, not as proof that product value is undecided.
 3. Discard any proposed option that would weaken, retire, or supersede the established contract
-   unless a current authority has explicitly reopened that value, mandate, or scope for owner
-   decision. Agent uncertainty about why code moved is not such authority.
+   unless current, applicable authority explicitly reopens that owner-reserved value, mandate, or
+   scope for an owner decision. A genuine reopening needs evidence in the applicable owner decision
+   register, owner document, or governing contract that both identifies the value/scope as
+   owner-reserved and asks the owner to decide whether to change it. Agent uncertainty about why
+   code moved, source drift, or a failed recovery is not such authority.
 4. When the contract selects the outcome but the implementation path is uncertain, choose the
    smallest contract-compliant bounded integration or recovery, apply the required review and
    verification gates, and report the result afterwards. If that path cannot proceed, leave a
    `blocked_technical` receipt with the exact unblock condition; do not convert it to an owner ask.
 
-Only an explicit choice that would change established product or operator value, owner mandate,
-scope authority, or another human-reserved authority may pass this preflight. Contractual operator
-gates remain unconditional as defined above.
+Only an evidence-backed choice that would change established product or operator value,
+owner-reserved scope authority, owner mandate, or another human-reserved authority may pass this
+preflight. Technical drift remains `blocked_technical` unless that separate, applicable reopening
+evidence exists. Contractual operator gates remain unconditional as defined above.
 
 Regression scenario: an Issue requires strict platform containment through technical acceptance
 criteria and a protected fail-closed invariant; current `main` temporarily lacks the implementation,
