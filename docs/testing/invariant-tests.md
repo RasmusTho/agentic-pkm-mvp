@@ -752,6 +752,15 @@ retrievable; a blind ingester says so).
 
 ## Schema-batch deferred invariants
 
+### mirrors_declare_and_check_drift
+
+- **Purpose:** Any retained descriptive mirror of a runtime value is generated
+  from its canonical source or removed; an executable static check detects a
+  stale legacy prompt mirror.
+- **Current enforcement:** `static_test` —
+  `tests/architecture/test_prompt_mirror_drift.py::test_mirrors_are_generated_or_absent`.
+- **Related issues:** #3164 (SET-6).
+
 The [schemas/contracts batch](../../schemas/README.md) explicitly deferred a set of cross-field and
 runtime invariants to this registry because declarative JSON Schema cannot fully express them. They are
 captured here with the structurally-enforced part marked `schema_enforced` and the residual part marked

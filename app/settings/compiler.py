@@ -25,6 +25,7 @@ from .docs import BEGIN, END, inject_reference, render_reference
 from .loader import read_text, split_sections
 from .models import (
     ClassifierSettings,
+    AskSettings,
     GlobalSettings,
     InstanceSettings,
     LLMRoutingSettings,
@@ -36,6 +37,7 @@ from .models import (
     YggdrasilPaths,
     EmbeddingProfiles,
 )
+from .prompts import resolve_ask_system_prompt
 from .parsers import parse_section
 from .writeback import write_markdown_via_knowledge_port, writeback_settings_block
 
@@ -552,6 +554,12 @@ def compile_all(
                 )
         else:
             agents_cfg[agent_name] = resolve_secret(merged)
+
+    ask_settings = agents_cfg.get("ask")
+    if not isinstance(ask_settings, AskSettings):
+        ask_settings = AskSettings()
+    ask_prompt, _ = resolve_ask_system_prompt(resolved_vault_root)
+    agents_cfg["ask"] = ask_settings.model_copy(update={"system_prompt": ask_prompt})
     bundle.agents = agents_cfg
 
     # Validate every specialised source before creating or replacing any runtime

@@ -86,7 +86,7 @@ mutation route.
 ## Related Docs
 
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: CW-2, I-A1, I-A2`
-- `docs/settings/prompts/*` (classifier prompt is a descriptive mirror; SoT stays in code)
+- `app/components/llm/intent_classifier.py` (classifier instructions stay code-owned and schema-bound)
 - `docs/ARCHITECTURE.md` (typed-boundary description at promotion)
 
 ## Related GitHub Issues

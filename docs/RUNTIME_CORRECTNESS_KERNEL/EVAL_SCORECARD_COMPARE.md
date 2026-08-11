@@ -36,9 +36,9 @@ Note: the audit's `evaluate_vs_baseline("ce_local", k=10)` phrasing is imprecise
   on already-produced scorecards).
 - Document in `docs/eval.md` (writeback) that any **Router or Synthesizer model or prompt-version
   change** must attach a compare artifact to the PR.
-- Update the prompt-contract mirror docs (`docs/settings/prompts/classifier.v1.md`,
-  `docs/settings/prompts/ask.answer.v1.md`) to reference the **pinned output schema version** each
-  prompt produces (invariant I-C3: prompt version ↔ schema version bound).
+- Preserve the schema-bound classifier contract when changing its prompt; the
+  retired repository mirrors are not an authority surface. ASK's canonical
+  prompt is now `<vault>/settings/prompts/ask.md`.
 
 ## Concretely
 
@@ -64,8 +64,8 @@ regress the governance-critical decision — exactly the unverifiable-upgrade ri
 - [ ] `docs/eval.md` states that Router/Synthesizer model or prompt-version changes require a compare
       artifact on the PR.
       Verify: doc writeback at `docs/eval.md :: Scorecard compare`
-- [ ] Prompt-contract mirrors reference the pinned output schema version they produce.
-      Verify: doc writeback at `docs/settings/prompts/classifier.v1.md :: Output schema version` and `docs/settings/prompts/ask.answer.v1.md :: Output schema version`
+- [ ] Prompt authority is named at its live source.
+      Verify: doc writeback at `docs/SETTINGS.md :: Prompt settings`.
 
 ## How to Verify (Pre-Merge)
 
@@ -86,7 +86,7 @@ regress the governance-critical decision — exactly the unverifiable-upgrade ri
 
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: §5.3`
 - `docs/eval.md :: Scorecard shape (eval_scorecard.v1)`, `app/eval/run.py`, `app/eval/benchmark.py`
-- `docs/settings/prompts/classifier.v1.md`, `docs/settings/prompts/ask.answer.v1.md` (I-C3 mirrors)
+- `docs/SETTINGS.md :: Prompt settings`
 
 ## Related GitHub Issues
 

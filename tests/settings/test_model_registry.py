@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from app.components.settings.models_loader import load_model_registry, load_models
-from app.components.settings.prompts_loader import load_prompts
 
 pytestmark = pytest.mark.not_pg
 
@@ -27,13 +26,3 @@ def test_models_load_and_match_manifest() -> None:
     assert models["openai.chat.gpt_5_4_mini"].provider == "openai"
     assert models["mock.embed"].kind == "embedding"
     assert models["mock.embed"].dims is not None
-
-
-def test_prompt_allowed_models_exist_in_model_registry() -> None:
-    models = load_models()
-    model_ids = set(models.keys())
-
-    prompts = load_prompts()
-    for pid, p in prompts.items():
-        for mid in p.allowed_models:
-            assert mid in model_ids, f"{pid} references unknown model id: {mid}"

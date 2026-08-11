@@ -12,7 +12,6 @@ from app.agents.panel_agent.wiring import (
     _load_yaml as load_wiring_yaml,
     _parse_wiring as parse_wiring,
 )
-from app.components.settings.prompts_loader import load_prompts
 from app.components.settings.standards_loader import load_standards_registry
 from app.components.settings.tools_loader import load_tools
 from app.components.settings.agents_loader import load_agents
@@ -25,6 +24,7 @@ from app.index.ingest_md import parse_markdown
 from app.settings.panel_actions import resolve_panel_actions_root
 from app.settings.panel_actions_settings import load_panel_actions_settings, panel_action_ids
 from app.settings.watcher_settings import _settings_file, _read_frontmatter, invalid_allowed_actions, load_watcher_settings
+from app.settings.prompts import validate_canonical_prompts
 
 
 @dataclass(frozen=True)
@@ -246,10 +246,8 @@ def _validate_embedding_provider_configuration() -> list[ValidationIssue]:
 def validate_settings() -> List[ValidationIssue]:
     issues: List[ValidationIssue] = []
 
-    try:
-        prompts = load_prompts()
-    except Exception as exc:  # pragma: no cover - fatal load
-        return [ValidationIssue(code="prompts.load_failed", message=str(exc))]
+    for message in validate_canonical_prompts():
+        issues.append(ValidationIssue(code="prompts.invalid", message=message, ref="settings/prompts"))
 
     try:
         _ = load_standards_registry()
@@ -275,44 +273,15 @@ def validate_settings() -> List[ValidationIssue]:
         graphs = {}
 
     try:
-        models = load_models()
+        _ = load_models()
     except Exception as exc:
         issues.append(ValidationIssue(code="models.load_failed", message=str(exc)))
-        models = {}
 
     try:
         events = load_events()
     except Exception as exc:
         issues.append(ValidationIssue(code="events.load_failed", message=str(exc)))
         events = {}
-
-    model_ids = set(models.keys())
-    for pid, p in prompts.items():
-        for mid in p.allowed_models:
-            if mid not in model_ids:
-                issues.append(
-                    ValidationIssue(
-                        code="prompts.unknown_model",
-                        message=f"Prompt {pid} references unknown model id: {mid}",
-                        ref=f"prompt:{pid}",
-                    )
-                )
-        if p.inputs_schema and not Path(p.inputs_schema).exists():
-            issues.append(
-                ValidationIssue(
-                    code="prompts.missing_inputs_schema",
-                    message=f"Prompt {pid} inputs_schema missing: {p.inputs_schema}",
-                    ref=f"prompt:{pid}",
-                )
-            )
-        if p.outputs_schema and not Path(p.outputs_schema).exists():
-            issues.append(
-                ValidationIssue(
-                    code="prompts.missing_outputs_schema",
-                    message=f"Prompt {pid} outputs_schema missing: {p.outputs_schema}",
-                    ref=f"prompt:{pid}",
-                )
-            )
 
     tool_ids = set(tools.keys())
     for aid, a in agents.items():

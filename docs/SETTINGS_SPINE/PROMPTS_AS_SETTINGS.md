@@ -25,6 +25,14 @@ that gap by making the answer path read the vault file — it does not delete th
 
 ## What This Task Does
 
+Current implementation: ASK resolves `<vault>/settings/prompts/ask.md` through
+the Settings Spine, seeded vaults contain that file, and an absent file falls
+back to `DEFAULT_ASK_SYSTEM_PROMPT`. The legacy repository prompt registry and
+loader are retired; `settings-explain` reports the effective prompt origin.
+The classifier mirror was retired as non-runtime input: its actual
+schema-constrained instruction remains code-owned, so this slice does not
+move that separate contract into a vault file.
+
 - Seeds `<vault>/settings/prompts/ask.md` (canonical location per SETTINGS-03) from the current
   constant and makes the runtime resolve `AskSettings.system_prompt` from it through the spine
   (registry default = the code constant, vault file overrides — normal precedence, hot-reloaded

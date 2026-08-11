@@ -14,6 +14,7 @@ from app.settings.panel_actions_settings import load_panel_actions_settings, pan
 from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.settings.watcher_settings import invalid_allowed_actions, load_watcher_settings, resolve_auto_exec_state
 from app.settings.runtime import get_settings_bundle
+from app.settings.prompts import resolve_ask_system_prompt
 
 
 # group 1 = "://user:", group 2 = "@" — replaces only the password portion
@@ -66,6 +67,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
     allowed_action_ids = sorted(panel_action_ids(panel_settings))
     invalid_actions = invalid_allowed_actions(watcher_settings, allowed_action_ids)
     write_guard = DEFAULT_CONTRACT.evaluate()
+    _, ask_prompt_origin = resolve_ask_system_prompt()
     settings_provider = None
     settings_model = None
     settings_base_url = None
@@ -166,6 +168,7 @@ def build_settings_explain_payload() -> dict[str, Any]:
                 "openai_base_url": "env:OPENAI_BASE_URL" if env_base_url else ("settings:providers.default_chat.base_url" if settings_base_url else "unresolved"),
             },
         },
+        "prompts": {"ask.system_prompt": {"origin": ask_prompt_origin}},
     }
 
 
