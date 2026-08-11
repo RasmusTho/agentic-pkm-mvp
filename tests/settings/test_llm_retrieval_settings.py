@@ -36,7 +36,7 @@ def _bundle() -> SettingsBundle:
 def _clean_env(monkeypatch: pytest.MonkeyPatch):
     for key in (
         "LLM_TIMEOUT", "LLM_TEMPERATURE", "REASONING_MODEL", "MERGE_LLM_MODEL",
-        "RERANK_ENABLE", "RERANK_PROVIDER", "RERANK_TOP_K", "PKM_SETTINGS_PROFILE",
+        "RERANK_ENABLE", "RERANK_PROVIDER", "RERANK_TOP_K", "RETRIEVAL_RERANK", "PKM_SETTINGS_PROFILE",
     ):
         monkeypatch.delenv(key, raising=False)
     reset_retrieval_tuning_cache()
@@ -71,6 +71,9 @@ def test_vault_settings_reach_model_and_rerank_production_consumers(monkeypatch:
     explained = wave_one.wave_one_explain()
     assert explained["retrieval.rerank.top_k"]["origin"] == "vault-shared:settings/retrieval.md"
     assert explained["retrieval.rerank.top_k"]["tier"] == "lab"
+    assert explained["retrieval.rerank"] == {
+        "value": "always", "origin": "vault-shared:settings/retrieval.md", "tier": "lab"
+    }
 
 
 def test_empty_settings_and_legacy_env_preserve_llm_and_rerank_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,12 +88,16 @@ def test_empty_settings_and_legacy_env_preserve_llm_and_rerank_behavior(monkeypa
     monkeypatch.setenv("REASONING_MODEL", "legacy-reasoning")
     monkeypatch.setenv("RERANK_PROVIDER", "mock_ce")
     monkeypatch.setenv("RERANK_TOP_K", "9")
+    monkeypatch.setenv("RERANK_ENABLE", "1")
     assert wave_one.llm_timeout_seconds() == 31.0
     assert wave_one.llm_temperature() == 0.25
     assert wave_one.reasoning_model() == "legacy-reasoning"
     assert isinstance(get_reranker(), MockCrossEncoderReranker)
     assert get_retrieval_tuning().rerank_top_k == 9
     assert "deprecated" in str(wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"])
+    assert wave_one.wave_one_explain()["retrieval.rerank"] == {
+        "value": "always", "origin": "env:RERANK_ENABLE (deprecated)", "tier": "lab"
+    }
 
 
 def test_llm_and_rerank_lab_keys_are_inert_for_operator_profile(monkeypatch: pytest.MonkeyPatch) -> None:

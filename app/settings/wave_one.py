@@ -98,6 +98,19 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
             "origin": "env:RERANK_PROVIDER (deprecated)" if _override("RERANK_PROVIDER") else (_vault_shared_origin("retrieval.md") if is_lab_profile() else "registry default (operator profile)"),
             "tier": "lab",
         },
+        "retrieval.rerank": {
+            "value": effective_retrieval.rerank,
+            "origin": (
+                "env:RETRIEVAL_RERANK"
+                if _override("RETRIEVAL_RERANK")
+                else (
+                    "env:RERANK_ENABLE (deprecated)"
+                    if (_override("RERANK_ENABLE") or "").lower() in {"1", "true", "yes", "on"}
+                    else (_vault_shared_origin("retrieval.md") if is_lab_profile() else "registry default (operator profile)")
+                )
+            ),
+            "tier": "lab",
+        },
         "retrieval.rerank.top_k": {
             "value": effective_retrieval.rerank_top_k,
             "origin": "env:RERANK_TOP_K (deprecated)" if _override("RERANK_TOP_K") else _vault_shared_origin("retrieval.md"),
