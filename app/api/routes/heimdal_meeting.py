@@ -183,7 +183,6 @@ def close_session(
         finalization = {
             "status": "failed",
             "error": type(exc).__name__,
-            "message": str(exc),
         }
     response = _session_response(session, replay=not newly_closed, trace_id=trace_id)
     payload = response.model_dump(exclude_none=True)
