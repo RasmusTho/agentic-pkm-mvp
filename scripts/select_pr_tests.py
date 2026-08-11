@@ -89,6 +89,29 @@ DOCS_ONLY_EXCLUDED_EXACT = {
     "docs/architecture/cross-scope-flow.md",
 }
 
+# ARO-03 is an executable route contract despite living in the Stage A docs
+# directory.  Its direct supporting documents specify the admitted Overview
+# route that these four production-path tests protect; generic docs coverage
+# alone would otherwise leave a contract-only change without route proof.
+ARO03_ROUTE_CONTRACT_PATHS = (
+    "docs/DEVUI.md",
+    "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md",
+    "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/PARENT_FEATURE_ISSUE.md",
+    "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/EXPOSE_LOCAL_OVERVIEW_GET_ROUTE.md",
+)
+
+ARO03_ROUTE_TESTS = (
+    "tests/api/test_devui_api.py::test_overview_route_reuses_local_admission_and_exact_contract",
+    "tests/api/test_devui_api.py::test_overview_route_preserves_no_source_withdrawals",
+    "tests/api/test_devui_api.py::test_overview_route_is_get_only",
+    "tests/api/test_devui_api.py::test_overview_route_uses_live_composition_and_delivered_composer",
+)
+
+# Node-id targets outside SUBSYSTEMS still need the always-run static census.
+# Otherwise a renamed ARO-03 route proof could be filtered out before CI asks
+# pytest to collect it, leaving the exact-path selector green without proof.
+STATIC_SELECTOR_NODE_ID_TARGETS = ARO03_ROUTE_TESTS
+
 GOVERNANCE_TARGETS = (
     "tests/governance",
     "tests/scripts",
@@ -1081,6 +1104,9 @@ def select_tests(changed_files: list[str]) -> Selection:
 
     changed_tests = _changed_test_targets(paths)
     targets = list(ALWAYS_TARGETS)
+
+    if any(path in ARO03_ROUTE_CONTRACT_PATHS for path in paths):
+        targets.extend(ARO03_ROUTE_TESTS)
 
     governance_only = _is_governance_only(paths)
     docs_only = _is_docs_only(paths) if not governance_only else False

@@ -13,6 +13,15 @@ from scripts.select_pr_tests import select_tests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_stage_a_aro03_contract_selects_route_tests() -> None:
+    for path in selector.ARO03_ROUTE_CONTRACT_PATHS:
+        selection = select_tests([path])
+
+        assert selection.full_suite is False
+        assert selection.unowned_paths == ()
+        assert set(selector.ARO03_ROUTE_TESTS) <= set(selection.targets)
+
+
 def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     selection = select_tests(["companion-ui/companion-app/src/workspace.ts", "tests/api/test_status_api.py"])
 
@@ -585,7 +594,7 @@ def test_static_selector_targets_are_collectable() -> None:
         for _, _, subsystem_targets in selector.SUBSYSTEMS
         for target in subsystem_targets
         if target.split("::", 1)[0].endswith(".py")
-    )
+    ) + selector.STATIC_SELECTOR_NODE_ID_TARGETS
 
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", *targets],

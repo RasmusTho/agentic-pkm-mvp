@@ -643,12 +643,14 @@ Delivered now:
   #4710 / PR #4711;
 - the pure `devui-overview-view.v1` server-side composer, which preserves missing producer
   classification as an explicit withdrawal rather than an empty owner or ready list;
+- admitted local GET `/api/devui/overview`, rebuilding live composition and invoking the delivered
+  Overview composer without candidates, delivered by #4744 / PR #4772;
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
 - parts of the BuilderOps API/PostgreSQL control-plane development baseline.
 
 Not delivered now: one devUI shell; request/preview/authenticated approval in one owner experience;
 PostgreSQL authority cutover; full live run controls; receipt-to-CKM reassessment in the unified
-surface; the local Overview route; Focus browser UI, capability-subject route, and Overview-to-Focus
+surface; Focus browser UI, capability-subject route, and Overview-to-Focus
 navigation; provider conversation runtime; authenticated command preview/Start/Hold;
 the Builder System Control lens; visual shell; owner pilot and tried-by-owner acceptance; and
 ADR-0065 dispositions.

@@ -1,12 +1,12 @@
 ---
 name: Expose the Local Overview GET Route
-description: Expose the delivered composer over one local-only GET endpoint using the accepted production producer result.
+description: Expose the delivered composer over one local-only direct-loopback GET endpoint with no Overview candidates.
 task_id: ARO-03
 github_issue: 4744
 source_anchor: "docs/plans/DEVUI_IMPLEMENTATION.md :: Stage A — see: coherent read-only devUI"
 parent_capability: devUI Stage A Read-Only Overview
-prerequisites: [ARO-02]
-depends_on: [ENRICH_OVERVIEW_PRODUCER_FACTS.md]
+prerequisites: [ARO-01]
+depends_on: []
 can_parallelize_with: []
 recommended_capability: "Codex Terra / high"
 capability_rationale: "Small API slice with strict local admission, method, and semantic-envelope invariants."
@@ -23,7 +23,7 @@ review_gate: exact-head API review and CI
 
 ## Purpose
 
-Expose the accepted production Overview as one bounded local GET endpoint.
+Expose the delivered no-candidate Overview as one bounded local GET endpoint.
 
 ## Context
 
@@ -34,19 +34,20 @@ write path, cache, browser classification, or alternate composer.
 
 ## Scope
 
-- Add `/api/devui/overview` as a per-request projection over ARO-02 and the delivered composer.
-- Reuse existing local admission and preserve all semantic provider/candidate state.
+- Add `/api/devui/overview` as a per-request direct loopback over live composition and the delivered composer with no candidates.
+- Reuse existing local admission and preserve the composer's explicit withdrawal state.
 - Add no static assets, navigation destination, command, or write method.
 
 ## What This Task Does
 
-- Reuses local admission, ARO-02 production output, and the delivered composer.
+- Reuses local admission, live composition, and the delivered composer without candidates.
 - Returns the exact semantic envelope per request and rejects every mutation method.
 
 ## Concretely
 
-`GET /api/devui/overview` returns `devui-overview-view.v1`; a forwarded or non-local request is
-rejected and `POST /api/devui/overview` is unavailable.
+`GET /api/devui/overview` returns `devui-overview-view.v1` from live composition and the delivered
+composer with no candidates; a forwarded or non-local request is rejected and `POST /api/devui/overview`
+is unavailable.
 
 ## Why This Matters
 
@@ -78,28 +79,26 @@ A separate route proof prevents the browser shell from becoming an implicit sour
 
 ## Constraints
 
-Implementation is limited to `app/api/routes/devui.py` and `tests/api/test_devui_api.py`. It reuses
-the route's existing local-admission dependency and calls ARO-02 plus the delivered composer.
+The delivered route reuses the existing local-admission dependency, builds live composition, and
+calls the delivered composer with no candidates. It does not call a producer-enrichment path.
 
 ## Acceptance Criteria
 
-- [ ] Local direct and accepted proxy requests return exact `devui-overview-view.v1`; non-local or
-      ambiguous forwarded identity is rejected.
+- [ ] Local direct requests return exact `devui-overview-view.v1`; any forwarded, non-local, or
+      ambiguous identity is rejected.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_reuses_local_admission_and_exact_contract`
+- [ ] The no-candidate direct loopback preserves explicit source withdrawals instead of inferring
+      owner authority or readiness.
+  - Verify: `tests/api/test_devui_api.py :: test_overview_route_preserves_no_source_withdrawals`
 - [ ] POST, PUT, PATCH, and DELETE are unavailable and the route has no command or mutation dependency.
   - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_get_only`
-- [ ] Available, partial, refused, and mixed-provider inputs preserve provider identity,
-      freshness, completeness, refusal, linkage, withdrawals, and limitations.
-  - Verify: `tests/api/test_devui_api.py :: test_overview_route_preserves_semantic_provider_envelopes`
-- [ ] The endpoint recomposes each request and creates no cache, store, session, or durable selection.
-  - Verify: `tests/api/test_devui_api.py :: test_overview_route_is_rebuildable_and_stateless`
-- [ ] The route calls ARO-02's production producer and then the delivered composer in the same
-      request instead of reimplementing zone rules or relying on an unconnected composer test.
-  - Verify: `tests/api/test_devui_api.py :: test_overview_route_uses_production_producer_and_delivered_composer`
+- [ ] The route uses live composition and the delivered composer in the same request, without a
+      candidate producer or reimplementation of zone rules.
+  - Verify: `tests/api/test_devui_api.py :: test_overview_route_uses_live_composition_and_delivered_composer`
 
 ## How to Verify (Pre-Merge)
 
-- Run the five named tests and full `tests/api/test_devui_api.py`.
+- Run the four named route tests and full `tests/api/test_devui_api.py`.
 - Run `git diff --check` and prove exact-file scope.
 
 ## Suggested Validation
@@ -128,5 +127,5 @@ the route's existing local-admission dependency and calls ARO-02 plus the delive
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) on #4743's
-exact merged producer receipt.
+Delivered by [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) / PR #4772 as the
+direct-loopback, no-candidate route after the accepted ARO-01 withdrawal decision.
