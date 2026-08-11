@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from app.builderops.devui_overview import compose_overview_view
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,3 +42,35 @@ def test_conversation_port_adds_no_authority_or_store() -> None:
         "create_task",
         "execute_command",
     } & {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+
+
+def test_overview_source_authority_contract_is_explicit() -> None:
+    """The production Overview composer withdraws zones without a source owner."""
+
+    result = compose_overview_view(
+        composition={
+            "contract_version": "devui.composition.v1",
+            "authority": "projection_only",
+            "captured_at": "2026-08-11T00:00:00Z",
+            "providers": {
+                "work": {
+                    "provider": "builderops_cockpit",
+                    "status": "available",
+                    "authority": "read_time_join",
+                    "captured_at": "2026-08-11T00:00:00Z",
+                    "snapshot": {"watermark": "work:0"},
+                    "completeness": {"claim": {"kind": "counted"}},
+                }
+            },
+        }
+    )
+
+    assert result["needs_you"] == []
+    assert result["ready_to_try"] == []
+    assert {
+        (withdrawal["zone"], withdrawal["reason"])
+        for withdrawal in result["limitations"]
+    } == {
+        ("needs_you", "the producer supplied no actionable classification evidence"),
+        ("ready_to_try", "the producer supplied no actionable classification evidence"),
+    }
