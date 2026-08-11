@@ -124,6 +124,21 @@ flowchart LR
 | CKM | Evaluate delivery/TCD evidence | Advance attempts or convert scores into lifecycle |
 | Project | Provide optional visibility | Gate pickup, verification, or terminality |
 
+### SBS reconciliation
+
+This is Builder System research, not a new Product/Runtime SBS subsystem. The table reconciles
+every structural claim in sections 4–8 against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and
+`docs/architecture/SBS_OPERATING_MODEL.md`; it does not enact any disposition.
+
+| Structural claim | SBS disposition | Stewardship consequence |
+|---|---|---|
+| A fenced verification and deterministic-closure worker pool over the existing BuilderOps ledger | **Conforms to** the Builder System / CES boundary: delivery workers are development-time machinery, not a Product SBS control boundary. | Keep BuilderOps as the durable authority; no Product SBS owner or new ledger is created. |
+| Artifact discovery, cursor/watermark, and resource admission | **Extends** the existing Builder System workflow map, not the Product SBS: it supplies an installed adapter to the existing artifact producer and task/lease authority. | Reuse #4168/BuilderOps; any executable contract change follows normal Issue/PR review. |
+| Separate model, host-test, API, executor, and merge capacities | **Conforms to** OEF's observability boundary and the Builder System authority model: capacity is an operational constraint, never lifecycle authority. | OEF may observe and fitness-gate; it must not schedule, claim, or merge. |
+| Verification/closure split and the lifecycle crosswalk | **Proposes reshaping** the current #3604 Builder workflow contract, not `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. | Before implementation, route the #3604 amendment through CES / `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` and the normal owner-decision/ADR path if it changes a Product SBS contract. |
+| devUI, Cockpit, CKM, OEF, skill, and automation adapters remain evidence/request consumers | **Conforms to** the projection-versus-authority separation in the SBS and Builder System model. | No projection gains a queue, scheduler, lifecycle store, or policy authority. |
+| Installed scheduler/pool operations, recovery, and doctor evidence | **Extends** Builder System operational machinery only; it does not instantiate a new Product service or change Product SBS ownership. | Govern installation, rollback, and operational receipts through the existing installed-host and BuilderOps paths. |
+
 ## 5. Concurrency and fencing
 
 The smallest correct fence wins.
@@ -243,23 +258,28 @@ proves an installed verification/closure pickup loop.
 These are candidates for later promotion into the single registry at
 `docs/testing/invariant-tests.md`; this audit does not fork that registry.
 
-| ID | Class | Invariant |
-|---|---|---|
-| BVC-01 | MUST | One active canonical chain per repository + PR + stage; every head-bound effect names the exact head. |
-| BVC-02 | GATE | A worker acts only under a current task/effect fence; capacity admission is never authority. |
-| BVC-03 | GATE | Model, host-test, API, executor, and merge capacity are separate resources; none becomes a repository mutex. |
-| BVC-04 | MUST | Every external effect has one operation key; timeout becomes unknown and requires readback. |
-| BVC-05 | GATE | Merge binds head, base, manifest/policy, credential generation, CI/review, and conditional/queue fence. |
-| BVC-06 | MUST | Closure binds repository + PR + merge SHA + contract/stage and deduplicates event/recovery triggers. |
-| BVC-07 | GATE | Delivery is not terminal before acceptance-profile closure, owner-doc decision, and final readback. |
-| BVC-08 | MUST | Projection/OEF/Cockpit/devUI/CKM/learning/TCD cannot mutate lifecycle or policy. |
-| BVC-09 | DOCTOR | Queue, phase latency, capacity, contention, churn, retries, unknowns, merge wait, closure lag, and freshness are observable. |
-| BVC-10 | GATE | `Needs you` requires a canonical Human Exception; technical/capacity blockage stays distinct. |
-| BVC-11 | MUST | Object kind, external lifecycle, operational phase, and blocker reason remain orthogonal. |
-| BVC-12 | DOCTOR | Installed scheduler, pools, executor, and recovery expose version, health, capacity, and last terminal receipt. |
-| BVC-13 | MUST | More capacity cannot weaken repair budgets, review, exact-head evidence, or defect accounting. |
-| BVC-14 | GATE | Drain/restart leaves no orphaned lease, unknown effect, or closure obligation. |
-| BVC-15 | MUST | Every eligible current-head full-path CI success becomes durably admitted, superseded, or explicitly refused; host outage and artifact expiry cannot silently erase pre-ingest work. |
+The **minimal kernel** is BVC-01–08, BVC-10, BVC-14, and BVC-15: together they preserve
+identity fencing, effect safety, terminality, non-authority, human-exception classification, recovery,
+and no-loss admission. BVC-09 and BVC-11–13 are defense in depth: they make scaling observable,
+unambiguous, operable, and resistant to quality regression, but do not replace a minimal-kernel gate.
+
+| ID | Class | Enforcement status (current evidence) | Kernel | Invariant | Evidence |
+|---|---|---|---|---|---|
+| BVC-01 | MUST | Exists — keep on the API path; violated today by the legacy global singleton. | Minimal | One active canonical chain per repository + PR + stage; every head-bound effect names the exact head. | `app/dispatcher/verification_api.py:596-635`; `app/dispatcher/verification_consumer.py:4470-4659`; `app/dispatcher/verification_dispatch.py:1774-1825` |
+| BVC-02 | GATE | Exists — keep for task/effect claims; New for explicit admission-versus-authority enforcement. | Minimal | A worker acts only under a current task/effect fence; capacity admission is never authority. | `app/builderops/control_plane/store.py:1798-2087,2186-2495`; `app/dispatcher/verification_api.py:596-635` |
+| BVC-03 | GATE | Violated today: the legacy path serializes a global subscription and installed admission is incomplete. | Minimal | Model, host-test, API, executor, and merge capacity are separate resources; none becomes a repository mutex. | `app/dispatcher/verification_dispatch.py:317-318,1774-1825`; `app/dispatcher/verification_consumer.py:912-928,1172-1261` |
+| BVC-04 | MUST | Exists — keep for durable outbox identity and recovery; extend the same rule to every new effect. | Minimal | Every external effect has one operation key; timeout becomes unknown and requires readback. | `app/builderops/control_plane/store.py:1989-2087,2186-2495`; `app/dispatcher/verification_merge.py:457-689` |
+| BVC-05 | GATE | Exists — keep for head/pre-effect revalidation and transport refusal; New conditional/queue transport remains required. | Minimal | Merge binds head, base, manifest/policy, credential generation, CI/review, and conditional/queue fence. | `app/dispatcher/verification_consumer.py:5097-5313`; `app/dispatcher/verification_merge.py:457-689`; `app/dispatcher/verification_github.py:912-937` |
+| BVC-06 | MUST | Violated today: the contract exists but a closure consumer/reconciler is not shipped. | Minimal | Closure binds repository + PR + merge SHA + contract/stage and deduplicates event/recovery triggers. | `.github/workflows/post-merge-owner-doc-watchdog.yml:256-350,387-490`; `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md:170-172,734` |
+| BVC-07 | GATE | Exists — keep as terminal policy; violated today where the missing closure worker leaves the suffix incomplete. | Minimal | Delivery is not terminal before acceptance-profile closure, owner-doc decision, and final readback. | `.codex/skills/verification-and-closure/SKILL.md:449-505,554-641`; `.github/workflows/post-merge-docs-classifier.yml:3-83` |
+| BVC-08 | MUST | Exists — keep. | Minimal | Projection/OEF/Cockpit/devUI/CKM/learning/TCD cannot mutate lifecycle or policy. | `docs/DEVUI.md:32-60,84-113,381-456,514-554`; `app/builderops/devui_composition.py:370-459`; `app/api/routes/cockpit.py:66-81` |
+| BVC-09 | DOCTOR | Violated today: health data exists but live metrics export only a subset. | Defense in depth | Queue, phase latency, capacity, contention, churn, retries, unknowns, merge wait, closure lag, and freshness are observable. | `app/builderops/control_plane/health.py:68-147,167-232`; `app/builderops/control_plane/service.py:527-554` |
+| BVC-10 | GATE | Exists — keep. | Minimal | `Needs you` requires a canonical Human Exception; technical/capacity blockage stays distinct. | `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md:405-437`; `app/dispatcher/verification_consumer.py:452-480` |
+| BVC-11 | MUST | Violated today: labels, Project, dispatcher, DDO, and projections use conflicting vocabularies. | Defense in depth | Object kind, external lifecycle, operational phase, and blocker reason remain orthogonal. | `AGENTS.md:104-110`; `.codex/skills/_shared/LABEL_TAXONOMY.md:8-35`; `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md:11-44` |
+| BVC-12 | DOCTOR | Violated today: no installed scheduler/pool proves the required operational receipt. | Defense in depth | Installed scheduler, pools, executor, and recovery expose version, health, capacity, and last terminal receipt. | `app/dispatcher/verification_consumer.py:912-928,1172-1261`; `app/builderops/control_plane/health.py:17-30,68-147` |
+| BVC-13 | MUST | Exists — keep for current exact-head/review and bounded-repair policy; extend it to added capacity. | Defense in depth | More capacity cannot weaken repair budgets, review, exact-head evidence, or defect accounting. | `.codex/skills/pr-integration/SKILL.md:93-112`; `.codex/skills/verification-and-closure/SKILL.md:145-228` |
+| BVC-14 | GATE | New: current recovery primitives need a drain/restart closure-obligation gate. | Minimal | Drain/restart leaves no orphaned lease, unknown effect, or closure obligation. | `app/builderops/control_plane/store.py:2186-2495`; `app/builderops/control_plane/health.py:167-232` |
+| BVC-15 | MUST | Violated today: bounded discovery and artifact expiry exist, but no installed caller proves no-loss admission. | Minimal | Every eligible current-head full-path CI success becomes durably admitted, superseded, or explicitly refused; host outage and artifact expiry cannot silently erase pre-ingest work. | `.github/workflows/verification-dispatch-request.yml:93-175,190-213`; `app/dispatcher/verification_consumer.py:321-331,912-928,1172-1261` |
 
 ## 11. Resolved questions
 
@@ -292,10 +312,22 @@ Issue cannot hold the slice.
 | #3793 / BCP-06 | Installed activation, legacy retirement, and rollback after acceptance. |
 | #3690 / BCP-07 | Owner-doc enactment after proved installed reality. |
 
-After owner acceptance, `feature-breakdown` should test this provisional slice map: lifecycle
-crosswalk; discovery/admission; verification pool; closure worker; conditional merge/queue;
-OEF/doctor; devUI/Cockpit/CKM adapters; skill/automation conformance; and load/crash/drain/quality
-acceptance. This is a decomposition hypothesis, not permission to create nine Issues.
+After owner acceptance, `feature-breakdown` should use the following dependency-ordered, provisional
+handoff. It extends the reconciliation above; it neither creates nor reopens an Issue. Each row is a
+candidate bounded task, not permission to create the listed work.
+
+| Order | Candidate bounded task and reconciled authority | Depends on | Verify: acceptance kernel |
+|---|---|---|---|
+| 1 | Amend #3604 with the four-axis lifecycle crosswalk and the verification/closure split; keep #4163 as the DDO parent, not a second verifier. | Target acceptance | `Verify:` the #3604 contract names PR/head and merge-SHA fences, separates capacity from authority, and contains no cross-stage global singleton. |
+| 2 | Extend #4168/BuilderOps with artifact discovery, durable cursor/watermark, and no-loss admission obligations; do not add a ledger. | 1 | `Verify:` a focused test proves each eligible current-head CI success is admitted, superseded, or explicitly refused across duplicate delivery and expired-artifact recovery. |
+| 3 | Add configurable verification resource admission/pool behavior on the existing API path; retire or contain the legacy global singleton under #3793 / BCP-06. | 1, 2 | `Verify:` focused concurrency tests show independent PR/head runs progress concurrently while each resource cap and per-run fence remains enforced. |
+| 4 | Add the #3604 deterministic closure worker and recovery reconciler using #4168 effect identity. | 1, 2 | `Verify:` merge-SHA keyed duplicate event/recovery tests perform one idempotent terminal suffix and leave no unresolved closure obligation. |
+| 5 | Add conditional merge/queue transport only after the existing revalidation contract is preserved. | 1, 3 | `Verify:` base/head/manifest or credential drift prevents merge; an unknown result is read back before retry or success. |
+| 6 | Extend OEF/doctor and #4169's evidence/request projections for capacity, lag, freshness, and refusal without lifecycle authority. | 2–5 | `Verify:` doctor/metrics fixtures expose queue age, capacity, contention, unknown-effect, merge/closure lag, and a stale/refusal state; projection tests prove no lifecycle mutation. |
+| 7 | Reconcile affected skills/automations with the implemented contracts, retaining `verification-and-closure` as the terminal policy. | 2–6 | `Verify:` contract tests and exact-head handoff fixtures show `publish-pr`/`pr-integration` do not claim terminal delivery and no adapter creates a second scheduler or ledger. |
+| 8 | Run #4170 load, crash, drain, quality, and TCD acceptance; only then activate/retire through #3793 / BCP-06 and enact owner docs through #3690 / BCP-07. | 2–7 | `Verify:` installed-host receipts demonstrate the accepted throughput profile, crash/recovery and drain invariants, quality/repair budgets, and rollback/owner-doc decisions. |
+
+This dependency order is a decomposition hypothesis, not permission to create eight Issues.
 
 ## 13. Evidence anchors
 
