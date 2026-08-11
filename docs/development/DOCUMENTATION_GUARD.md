@@ -26,9 +26,9 @@ latter check; it does not bypass the language policy.
 consumed by the runner. Its `GOVERNANCE_TEMPORAL_ENFORCEMENT` mapping is a
 deliberate exception for governance-only enforcement scripts: each listed
 script has to change with its named `docs/development/` contract. An unrelated
-development document is not sufficient, and mixing a non-governance temporal
-path into the same change still requires the normal high-risk temporal owner
-document.
+development document is not sufficient. Mixing a non-governance temporal path
+into the same change requires both every changed governance script's paired
+contract and the normal high-risk temporal owner document.
 
 This document is the paired owner contract for both `scripts/docs_guard.py`
 and `scripts/docs_guard_logic.py`. When either script's policy, base/diff

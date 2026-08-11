@@ -61,6 +61,21 @@ def test_mixed_runtime_and_governance_change_still_requires_temporal_owner_doc(
     assert "temporal code/config changed" in result.stdout
 
 
+def test_governance_script_and_high_risk_temporal_doc_require_both_owner_docs(
+    tmp_path: Path,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/git_hygiene.py").write_text("# governance\n", encoding="utf-8")
+    (repo / "docs/STATUS.md").write_text("temporal writeback\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "mixed-governance-temporal"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == 1
+    assert "temporal code/config changed" in result.stdout
+
+
 def test_primary_swedish_documentation_fails_with_evidence(tmp_path: Path) -> None:
     repo = _guard_repo(tmp_path)
     (repo / "docs/SWEDISH.md").write_text(

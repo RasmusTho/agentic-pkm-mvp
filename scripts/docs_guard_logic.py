@@ -351,14 +351,15 @@ def requires_temporal_owner_doc(changed: list[str]) -> bool:
         for path in changed
         if any(path.startswith(prefix) for prefix in TEMPORAL_CODE_PREFIXES)
     ]
-    if not temporal_paths or any(path in TEMPORAL_DOCS for path in changed):
+    if not temporal_paths:
         return False
 
-    governance_only = all(
-        path in GOVERNANCE_TEMPORAL_ENFORCEMENT for path in temporal_paths
-    )
-    if not governance_only:
-        return True
+    governance_paths = [
+        path for path in temporal_paths if path in GOVERNANCE_TEMPORAL_ENFORCEMENT
+    ]
+    non_governance_paths = [
+        path for path in temporal_paths if path not in GOVERNANCE_TEMPORAL_ENFORCEMENT
+    ]
 
     any_development_doc_touched = any(
         path.startswith("docs/development/") for path in changed
@@ -370,5 +371,9 @@ def requires_temporal_owner_doc(changed: list[str]) -> bool:
             return any_development_doc_touched
         return owner_doc in changed
 
-    owner_docs_satisfied = all(owner_doc_satisfied(path) for path in temporal_paths)
+    owner_docs_satisfied = all(owner_doc_satisfied(path) for path in governance_paths)
+    high_risk_temporal_doc_touched = any(path in TEMPORAL_DOCS for path in changed)
+
+    if non_governance_paths:
+        return not (owner_docs_satisfied and high_risk_temporal_doc_touched)
     return not owner_docs_satisfied
