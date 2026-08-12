@@ -56,6 +56,9 @@ from tests.dispatcher.verification_helpers import (
     request,
     verified_attempt_receipt,
 )
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_phase_kwargs,
+)
 from tests.dispatcher.builderops_verification_fakes import (
     FakeBuilderOpsClient,
     FakeVerificationOutbox,
@@ -1172,6 +1175,7 @@ def _open_neutralized_recovery_evidence(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
     comments = [
         {
@@ -1526,6 +1530,7 @@ def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
     raced_body = (
         "Governing-Issue: #3603\n\nRefs #3603\nFixes #4999\n\n"
@@ -1604,6 +1609,7 @@ def test_merged_recovery_accepts_terminal_newline_canonical_body_without_budget_
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
     crashed_pr = merged_pr(body=original_body[:-1])
 
@@ -1686,8 +1692,14 @@ def test_merged_recovery_classifies_pre_4010_legacy_lf_less_body_as_restored(
     neutral_pr = eligible_pr(body=plan["neutralized_body"])
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
+        authority_comment=authority_comment,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(
+            authority,
+            neutral_pr,
+            authority_comment=authority_comment,
+        ),
     )
     crashed_pr = merged_pr(body=original_body[:-1])
 
@@ -1974,7 +1986,10 @@ def _merge_comments(
     }
     phases = [
         build_verified_merge_phase(
-            authority_receipt=authority, phase="prepared", pr=neutral
+            authority_receipt=authority,
+            phase="prepared",
+            pr=neutral,
+            **projection_phase_kwargs(authority, neutral),
         ),
         build_verified_merge_phase(
             authority_receipt=authority, phase="merged", pr=merged_neutral

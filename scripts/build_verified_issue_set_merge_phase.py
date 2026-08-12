@@ -18,6 +18,16 @@ def _mapping(path: Path) -> dict[str, object]:
     return value
 
 
+def _nested_mapping(path: Path, key: str) -> dict[str, object]:
+    value = _mapping(path)
+    nested = value.get(key)
+    if nested is None:
+        return value
+    if not isinstance(nested, dict):
+        raise ValueError(f"{path} field {key} must contain a JSON object")
+    return nested
+
+
 def _issue_numbers(path: Path | None) -> list[int]:
     if path is None:
         return []
@@ -32,6 +42,19 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--authority-json", type=Path, required=True)
     parser.add_argument("--authority-comment-json", type=Path)
     parser.add_argument(
+        "--projection-convergence-json",
+        type=Path,
+        help=(
+            "authenticated verified-merge-closing-projection-convergence.v1 "
+            "receipt; required for every new phase"
+        ),
+    )
+    parser.add_argument(
+        "--final-projection-observation-json",
+        type=Path,
+        help="fresh same-snapshot empty closing projection; required for prepared",
+    )
+    parser.add_argument(
         "--phase",
         choices=("prepared", "merged", "reconciled", "restored"),
         required=True,
@@ -45,6 +68,15 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.projection_convergence_json is None:
+        raise ValueError("phase requires projection convergence")
+    if (
+        args.phase == "prepared"
+        and args.final_projection_observation_json is None
+    ):
+        raise ValueError(
+            "prepared phase requires projection convergence and final observation"
+        )
     result = build_verified_merge_phase(
         authority_receipt=_mapping(args.authority_json),
         authority_comment=(
@@ -54,6 +86,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         phase=args.phase,
         pr=_mapping(args.pr_json),
+        projection_convergence_receipt=(
+            _nested_mapping(
+                args.projection_convergence_json, "convergence_receipt"
+            )
+            if args.projection_convergence_json is not None
+            else None
+        ),
+        final_projection_observation=(
+            _nested_mapping(
+                args.final_projection_observation_json,
+                "final_projection_observation",
+            )
+            if args.final_projection_observation_json is not None
+            else None
+        ),
         closed_issues=_issue_numbers(args.closed_issues_json),
         reopened_unauthorized_issues=_issue_numbers(args.reopened_issues_json),
     )

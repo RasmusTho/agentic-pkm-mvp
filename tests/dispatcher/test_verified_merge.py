@@ -31,6 +31,9 @@ from app.dispatcher.verified_merge import (
     restored_body_matches_authority,
     verified_merge_body_sha256,
 )
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_phase_kwargs,
+)
 
 
 HEAD = "a" * 40
@@ -371,13 +374,15 @@ def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> No
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutralized_body = str(plan["neutralized_body"])
-    assert not neutralized_body.endswith("\n")
-    github_stored_body = neutralized_body + "\n"
+    assert neutralized_body.endswith("\n")
+    neutralized_without_terminal_lf = neutralized_body[:-1]
+    neutral_pr = _pr(neutralized_without_terminal_lf)
 
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
-        pr=_pr(github_stored_body),
+        pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
 
     assert prepared["phase_receipt"]["head_sha"] == HEAD
@@ -393,12 +398,14 @@ def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() 
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
 
-    with pytest.raises(ValueError, match="live state is malformed"):
+    with pytest.raises(ValueError, match="is malformed"):
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="prepared",
             pr=_pr(str(plan["neutralized_body"]) + "substantive drift"),
+            **projection_phase_kwargs(authority, neutral_pr),
         )
 
 
@@ -509,6 +516,11 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
         authority_comment=authority_comment,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(
+            authority,
+            neutral_pr,
+            authority_comment=authority_comment,
+        ),
     )
 
     assert prepared["phase_receipt"]["authority_sha256"] == hashlib.sha256(
@@ -523,12 +535,17 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
         "created_at": "2026-07-21T16:32:11Z",
         "updated_at": "2026-07-21T16:32:11Z",
     }
-    with pytest.raises(ValueError, match="live state is malformed"):
+    with pytest.raises(ValueError, match="is malformed"):
         build_verified_merge_phase(
             authority_receipt=authority,
             authority_comment=post_cutoff,
             phase="prepared",
             pr=neutral_pr,
+            **projection_phase_kwargs(
+                authority,
+                neutral_pr,
+                authority_comment=authority_comment,
+            ),
         )
 
     for cr_body in (neutralized + "\r", neutralized.replace("Refs", "Refs\r", 1)):
@@ -541,12 +558,17 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
             + json.dumps(cr_authority, sort_keys=True, separators=(",", ":"))
             + "\n```"
         )
-        with pytest.raises(ValueError, match="live state is malformed"):
+        with pytest.raises(ValueError, match="is malformed"):
             build_verified_merge_phase(
                 authority_receipt=cr_authority,
                 authority_comment=cr_comment,
                 phase="prepared",
                 pr=_pr(cr_body),
+                **projection_phase_kwargs(
+                    authority,
+                    neutral_pr,
+                    authority_comment=authority_comment,
+                ),
             )
 
 
@@ -562,6 +584,11 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         authority_comment=authority_comment,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(
+            authority,
+            neutral_pr,
+            authority_comment=authority_comment,
+        ),
     )
     merged_pr = {
         **neutral_pr,
@@ -920,6 +947,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
     merged_pr = {
         **neutral_pr,
@@ -994,6 +1022,7 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
     crashed_pr = {
         **neutral_pr,
@@ -1026,6 +1055,7 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
     raced_pr = {
         **neutral_pr,
@@ -1088,6 +1118,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
     merged = build_verified_merge_phase(
         authority_receipt=authority,
@@ -1202,12 +1233,22 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
     authority_path = tmp_path / "authority.json"
     pr_path = tmp_path / "pr.json"
     closed_path = tmp_path / "closed.json"
+    convergence_path = tmp_path / "convergence.json"
     output_path = tmp_path / "phase.json"
     authority_path.write_text(
         json.dumps(plan["authority_receipt"]), encoding="utf-8"
     )
     pr_path.write_text(json.dumps(merged_pr), encoding="utf-8")
     closed_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
+    convergence_path.write_text(
+        json.dumps(
+            projection_phase_kwargs(
+                plan["authority_receipt"],
+                _pr(str(plan["neutralized_body"])),
+            )["projection_convergence_receipt"]
+        ),
+        encoding="utf-8",
+    )
 
     completed = subprocess.run(
         [
@@ -1218,6 +1259,8 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
             str(authority_path),
             "--phase",
             "restored",
+            "--projection-convergence-json",
+            str(convergence_path),
             "--pr-json",
             str(pr_path),
             "--closed-issues-json",
