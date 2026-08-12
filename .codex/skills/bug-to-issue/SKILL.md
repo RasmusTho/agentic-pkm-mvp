@@ -66,6 +66,30 @@ python3 .codex/skills/bug-to-issue/scripts/known_defects.py intake \
   --trigger "<explicit re-evaluation or promotion trigger>"
 ```
 
+Diagnostic or audit probes must validate candidate P2 payloads with the
+non-mutating `--dry-run` mode before any registry write. This mode validates
+the complete payload and emits a non-authoritative candidate entry, but
+deliberately does not discover, create, lock, or append to the registry:
+
+```bash
+python3 .codex/skills/bug-to-issue/scripts/known_defects.py intake \
+  --dry-run \
+  --classification confirmed-defect \
+  --severity P2 \
+  --source-pr <PR> \
+  --source-sha <FULL_40_CHARACTER_SHA> \
+  --review-url <PR_OR_REVIEW_THREAD_URL> \
+  --symptom "<reproducible symptom>" \
+  --evidence "<concrete review or reproduction evidence>" \
+  --impact "<who or what is affected>" \
+  --workaround "<known workaround or 'none known'>" \
+  --trigger "<explicit re-evaluation or promotion trigger>"
+```
+
+The returned `dry_run` receipt is not registry authority and is never a
+promotion path. Perform normal intake only after the diagnostic result has
+been reviewed and a durable deferred-defect write is intended.
+
 The helper:
 
 - rejects maintainability and unproven classifications without GitHub mutation;
