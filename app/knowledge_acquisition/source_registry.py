@@ -23,11 +23,11 @@ memory backend must never be a lesser contract than Postgres):
 - unique ``(collection_kind, collection_ref, account_binding_id)`` -- no
   duplicate bindings (``DuplicateBindingError``).
 - **exactly one enabled ``inbox_playlist`` per ``account_binding_id``** --
-  newly registered inbox_playlist rows always start disabled; the ONLY way to
-  activate one is the atomic :meth:`SourceRegistry.set_inbox` swap, which
-  disables whichever inbox was previously enabled (if any) and enables the
-  target in one atomic operation. This makes "more than one enabled inbox"
-  structurally unreachable rather than merely checked.
+  newly registered inbox_playlist rows always start disabled. The generic
+  atomic :meth:`SourceRegistry.set_inbox` operation swaps the enabled row;
+  the V1-only :meth:`SourceRegistry.select_inbox_if_absent_or_same` operation
+  atomically refuses to swap a different selection. This makes "more than one
+  enabled inbox" structurally unreachable rather than merely checked.
 - authenticated ``inbox_playlist``, ``owned_playlist``, and
   ``liked_videos`` bindings require ``account_binding_id``; only public
   playlists and RSS subscription feeds may be account-less. Every present
@@ -157,6 +157,10 @@ class SourceRegistryValidationError(ValueError):
 
 class DuplicateBindingError(ValueError):
     """Raised when (collection_kind, collection_ref, account_binding_id) already exists."""
+
+
+class InboxAlreadySelectedError(ValueError):
+    """Raised when the V1 no-swap selector finds a different enabled Inbox."""
 
 
 class SourceUnsupportedError(ValueError):
@@ -595,6 +599,40 @@ class _MemorySourceRegistryBackend:
             updated_target = replace(target, enabled=True, updated_at=now)
             self._rows[binding_id] = updated_target
             return _copy_binding(updated_target)
+
+    def select_inbox_if_absent_or_same(
+        self, account_binding_id: str | None, binding_id: str
+    ) -> SourceBinding:
+        with self._lock:
+            target = self._rows.get(binding_id)
+            if target is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            if target.collection_kind != "inbox_playlist":
+                raise ValueError(
+                    f"binding {binding_id} is not an inbox_playlist (kind={target.collection_kind!r})"
+                )
+            if target.account_binding_id != account_binding_id:
+                raise ValueError("binding does not belong to the given account_binding_id")
+
+            enabled = next(
+                (
+                    row
+                    for row in self._rows.values()
+                    if row.collection_kind == "inbox_playlist"
+                    and row.account_binding_id == account_binding_id
+                    and row.enabled
+                ),
+                None,
+            )
+            if enabled is not None and enabled.binding_id != binding_id:
+                raise InboxAlreadySelectedError(
+                    "a different Inbox is already selected for this account"
+                )
+            if target.enabled:
+                return _copy_binding(target)
+            updated = replace(target, enabled=True, updated_at=_now_iso())
+            self._rows[binding_id] = updated
+            return _copy_binding(updated)
 
     def update_state(
         self,
@@ -1039,6 +1077,81 @@ class _PgSourceRegistryBackend:
         assert result is not None  # just wrote it
         return result
 
+    def select_inbox_if_absent_or_same(
+        self, account_binding_id: str | None, binding_id: str
+    ) -> SourceBinding:
+        """Serialize the V1 no-swap decision per account in one transaction."""
+        from psycopg.errors import UniqueViolation  # noqa: PLC0415
+
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            conn.autocommit = False
+            cur = conn.cursor()
+            try:
+                # The transaction-scoped advisory lock covers the absence case,
+                # where no enabled row exists yet and therefore no row lock can
+                # serialize two different first selections.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (account_binding_id or _NULL_ACCOUNT_SENTINEL,),
+                )
+                cur.execute(
+                    f"SELECT {_COLUMNS_SQL} FROM {_TABLE} "
+                    "WHERE binding_id = %s FOR UPDATE",
+                    (binding_id,),
+                )
+                target_row = cur.fetchone()
+                if target_row is None:
+                    raise KeyError(f"no such binding: {binding_id}")
+                target = _row_to_binding(tuple(target_row))
+                kind, acct = target.collection_kind, target.account_binding_id
+                if kind != "inbox_playlist":
+                    raise ValueError(
+                        f"binding {binding_id} is not an inbox_playlist (kind={kind!r})"
+                    )
+                if acct != account_binding_id:
+                    raise ValueError(
+                        "binding does not belong to the given account_binding_id"
+                    )
+                cur.execute(
+                    f"SELECT binding_id FROM {_TABLE} "
+                    "WHERE collection_kind = 'inbox_playlist' "
+                    "AND account_binding_id IS NOT DISTINCT FROM %s "
+                    "AND enabled = true FOR UPDATE",
+                    (account_binding_id,),
+                )
+                enabled = cur.fetchone()
+                if enabled is not None and enabled[0] != binding_id:
+                    raise InboxAlreadySelectedError(
+                        "a different Inbox is already selected for this account"
+                    )
+                if target.enabled:
+                    conn.commit()
+                    return target
+                now = _now_iso()
+                cur.execute(
+                    f"UPDATE {_TABLE} SET enabled = true, updated_at = %s::timestamptz "
+                    f"WHERE binding_id = %s RETURNING {_COLUMNS_SQL}",
+                    (now, binding_id),
+                )
+                row = cur.fetchone()
+                assert row is not None
+                conn.commit()
+                return _row_to_binding(tuple(row))
+            except UniqueViolation as exc:
+                conn.rollback()
+                raise InboxAlreadySelectedError(
+                    "a different Inbox is already selected for this account"
+                ) from exc
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.autocommit = True
+        finally:
+            conn.close()
+
     def update_state(
         self,
         binding_id: str,
@@ -1266,6 +1379,18 @@ class SourceRegistry:
         operation -- a second enabled inbox is structurally impossible.
         """
         return self._backend.set_inbox(_normalize_account_binding_id(account_binding_id), binding_id)
+
+    def select_inbox_if_absent_or_same(
+        self, account_binding_id: str | None, binding_id: str
+    ) -> SourceBinding:
+        """Enable the V1 Inbox only when none or this same binding is enabled.
+
+        Unlike :meth:`set_inbox`, this operation never swaps a different Inbox
+        out. The check and enable are one backend-atomic operation.
+        """
+        return self._backend.select_inbox_if_absent_or_same(
+            _normalize_account_binding_id(account_binding_id), binding_id
+        )
 
     def rename(self, binding_id: str, title: str) -> SourceBinding:
         """Change only ``title``; identity, cursor, and policy are untouched."""

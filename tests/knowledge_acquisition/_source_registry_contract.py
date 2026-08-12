@@ -15,12 +15,16 @@ collect anything here as a test.
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from typing import Callable
 
 import pytest
 
 from app.knowledge_acquisition.source_registry import (
     DuplicateBindingError,
+    InboxAlreadySelectedError,
+    SourceBinding,
     SourceRegistry,
     SourceRegistryValidationError,
     SourceUnsupportedError,
@@ -141,6 +145,61 @@ def assert_single_enabled_inbox_and_swap(make_registry: RegistryFactory) -> None
     other_acct = _acct()
     with pytest.raises(ValueError):
         reg.set_inbox(other_acct, second.binding_id)
+
+
+def assert_v1_inbox_selection_is_atomic(make_registry: RegistryFactory) -> None:
+    """Concurrent V1 selections admit one playlist and refuse the other."""
+    reg = make_registry()
+    acct = _acct()
+    first = reg.register(
+        collection_kind="inbox_playlist",
+        collection_ref=f"PLfixtureV1A{uuid.uuid4().hex}",
+        account_binding_id=acct,
+        title="V1 Inbox A",
+    )
+    second = reg.register(
+        collection_kind="inbox_playlist",
+        collection_ref=f"PLfixtureV1B{uuid.uuid4().hex}",
+        account_binding_id=acct,
+        title="V1 Inbox B",
+    )
+    barrier = Barrier(3)
+
+    def _select(binding_id: str) -> SourceBinding | InboxAlreadySelectedError:
+        barrier.wait()
+        try:
+            return reg.select_inbox_if_absent_or_same(acct, binding_id)
+        except InboxAlreadySelectedError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(_select, first.binding_id),
+            pool.submit(_select, second.binding_id),
+        ]
+        barrier.wait()
+        outcomes = [future.result(timeout=10) for future in futures]
+
+    selected = [item for item in outcomes if isinstance(item, SourceBinding)]
+    refused = [
+        item for item in outcomes if isinstance(item, InboxAlreadySelectedError)
+    ]
+    assert len(selected) == 1
+    assert len(refused) == 1
+    enabled = [
+        row
+        for row in reg.list_for_account(acct)
+        if row.collection_kind == "inbox_playlist" and row.enabled
+    ]
+    assert enabled == selected
+    same = reg.select_inbox_if_absent_or_same(acct, selected[0].binding_id)
+    assert same == selected[0]
+
+    # The generic administrative operation deliberately retains swap semantics.
+    loser_id = second.binding_id if selected[0].binding_id == first.binding_id else first.binding_id
+    swapped = reg.set_inbox(acct, loser_id)
+    assert swapped.binding_id == loser_id
+    assert swapped.enabled is True
 
 
 def assert_duplicate_binding_refused(make_registry: RegistryFactory) -> None:
@@ -624,6 +683,7 @@ def assert_inbox_poll_outcomes(make_registry: RegistryFactory) -> None:
 ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
+    assert_v1_inbox_selection_is_atomic,
     assert_duplicate_binding_refused,
     assert_account_binding_nullability_by_kind,
     assert_account_binding_uuid_contract,

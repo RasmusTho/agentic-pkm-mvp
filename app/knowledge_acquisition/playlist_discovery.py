@@ -21,7 +21,11 @@ from app.knowledge_acquisition.acquisition_requests import (
     DiscoveryTrigger,
     request_identity,
 )
-from app.knowledge_acquisition.source_registry import SourceBinding, SourceRegistry
+from app.knowledge_acquisition.source_registry import (
+    InboxAlreadySelectedError,
+    SourceBinding,
+    SourceRegistry,
+)
 from app.knowledge_acquisition.youtube_api_client import (
     NotModified,
     PlaylistItemsPage,
@@ -515,33 +519,39 @@ class YouTubeInboxSyncV1:
             raise V1InboxConfigurationError("V1 requires exactly one enabled Inbox")
         if enabled:
             if enabled[0].collection_ref == playlist_ref:
-                return enabled[0]
-            raise V1InboxConfigurationError(
-                "V1 already has an enabled Inbox; generic multi-playlist configuration is unavailable"
+                target = enabled[0]
+            else:
+                raise V1InboxConfigurationError(
+                    "V1 already has an enabled Inbox; generic multi-playlist configuration is unavailable"
+                )
+        else:
+            existing = next(
+                (
+                    row
+                    for row in rows
+                    if row.collection_kind == V1_COLLECTION_KIND
+                    and row.collection_ref == playlist_ref
+                ),
+                None,
             )
-
-        existing = next(
-            (
-                row
-                for row in rows
-                if row.collection_kind == V1_COLLECTION_KIND
-                and row.collection_ref == playlist_ref
-            ),
-            None,
-        )
-        target = existing or self._registry_call(
-            lambda: self._registry.register(
-                collection_kind=V1_COLLECTION_KIND,
-                collection_ref=playlist_ref,
-                title=title,
-                account_binding_id=self._account_binding_id,
+            target = existing or self._registry_call(
+                lambda: self._registry.register(
+                    collection_kind=V1_COLLECTION_KIND,
+                    collection_ref=playlist_ref,
+                    title=title,
+                    account_binding_id=self._account_binding_id,
+                )
             )
-        )
-        return self._registry_call(
-            lambda: self._registry.set_inbox(
+        try:
+            return self._registry.select_inbox_if_absent_or_same(
                 self._account_binding_id, target.binding_id
             )
-        )
+        except InboxAlreadySelectedError:
+            raise V1InboxConfigurationError(
+                "V1 already has an enabled Inbox; generic multi-playlist configuration is unavailable"
+            ) from None
+        except Exception:
+            _raise_persistence_error()
 
     def sync_now(self) -> dict[str, Any]:
         """Run one synchronous production poll and return a secret-free receipt."""

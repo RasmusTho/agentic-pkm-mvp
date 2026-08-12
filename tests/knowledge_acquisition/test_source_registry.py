@@ -32,6 +32,7 @@ from tests.knowledge_acquisition._source_registry_contract import (
     assert_provenance_is_strict_portable_json,
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
+    assert_v1_inbox_selection_is_atomic,
     assert_title_rename_preserves_binding,
     assert_watch_later_and_history_refused,
 )
@@ -60,6 +61,10 @@ def test_registry_round_trip_memory_and_contract_fields() -> None:
 
 def test_single_enabled_inbox_enforced_and_swap_atomic() -> None:
     assert_single_enabled_inbox_and_swap(_make_registry)
+
+
+def test_v1_inbox_selection_is_atomic() -> None:
+    assert_v1_inbox_selection_is_atomic(_make_registry)
 
 
 def test_duplicate_binding_refused() -> None:
