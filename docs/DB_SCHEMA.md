@@ -753,7 +753,8 @@ audited `app/heimdal/entity_review_operation_journal.py` autocreate shape;
 `ensure_journal_schema()` is assert-only outside tests (`STORE_SCHEMA_AUTOCREATE=1` opts test
 fixtures into create-on-demand):
 - `entity_review_operations`
-  - `operation_id` (`uuid`, PK) — deterministic over the INV-EROJ-2 tuple (active vault identity,
+  - `operation_id` (`uuid`, PK) — deterministic over the INV-EROJ-2 tuple (the selection-owned,
+    vault-scoped `active_vault_id`,
     queue entry id, decision-list position, SHA-256 digest of the exact human decision mapping,
     original `from_id`, original `into_id`)
   - `vault_identity` (`text`)

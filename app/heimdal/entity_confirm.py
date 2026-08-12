@@ -487,7 +487,21 @@ def apply_human_review_decisions(
             "(EROJ-01, INV-EROJ-3), so nothing was applied"
         )
 
-    vault_identity = register.vault_identity
+    if journal is not None and ordered_terminals:
+        if vault_root.expanduser().resolve() != register.vault_root:
+            raise EntityConfirmError(
+                "apply_human_review_decisions: vault_root does not match the "
+                "EntityRegister vault; refusing to claim an operation"
+            )
+        try:
+            vault_identity = register.operation_vault_identity
+        except EntityRegisterError as exc:
+            raise EntityConfirmError(
+                "apply_human_review_decisions: refusing entity-review operation "
+                f"identity: {exc}"
+            ) from exc
+    else:
+        vault_identity = register.vault_identity
 
     for index, effective_decision in ordered_terminals:
         merged = False
