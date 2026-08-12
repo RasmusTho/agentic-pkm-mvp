@@ -1663,6 +1663,9 @@ def test_full_deploy_invalid_migration_receipt_fails_before_mutation(
         )
     target = _commit_migration(root, "untrusted_receipt.py")
     env["FAKE_SHA"] = target
+    # CI exports the real checkout on PYTHONPATH.  The harness's explicit
+    # top-level package must still make the isolated classifier authoritative.
+    env["PYTHONPATH"] = str(REPO_ROOT)
 
     result = _run_deploy(root, env, target, channel="dev")
 

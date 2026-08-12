@@ -105,9 +105,20 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "ops/deployments").mkdir(parents=True)
     (root / "tmp").mkdir(parents=True)
     (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
+    (root / "app/__init__.py").write_text(
+        '"""Isolated deploy-harness application package."""\n'
+        "from pkgutil import extend_path\n"
+        "__path__ = extend_path(__path__, __name__)\n",
+        encoding="utf-8",
+    )
+    (root / "app/release_channels/__init__.py").write_text(
+        '"""Isolated release-channel package with fixture fallthrough."""\n'
+        "from pkgutil import extend_path\n"
+        "__path__ = extend_path(__path__, __name__)\n",
+        encoding="utf-8",
+    )
 
     for relative in (
-        "app/release_channels/__init__.py",
         "app/release_channels/reversibility.py",
         "app/ops/__init__.py",
         "app/ops/host_secret_contract.py",
