@@ -8,7 +8,7 @@ Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
 Last reviewed: 2026-08-12
-Last verified against: `origin/main` `efbf1acd554455b446c7507216664ed653db429c` and live GitHub
+Last verified against: `origin/main` `efbf1acd529e127803da0a6d56b384d7fb8c2bd8` and live GitHub
 Issue/PR state; the delivery ledger below records the exact PR heads and merge commits it cites.
 
 # Parent feature issue — devUI Stage A Read-Only Overview
