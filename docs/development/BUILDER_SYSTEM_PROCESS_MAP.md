@@ -684,7 +684,7 @@ Read-only GitHub evidence used:
 | PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |
 | PR contract validator | implemented | `issue-pr-governance.yml` | Check PR body lane/issue/paths/BuilderOps routing | PR body/files | Failed or passed check | GitHub Action | [`.github/workflows/issue-pr-governance.yml`:79-218] |
 | review gate | partially_implemented | Local convergence review through `review_before_ci_gate.py`, final `/code-review` skill in `verification-and-closure`, optional Codex verdict resolver | Review high-risk mechanisms before expensive proof and independently review current PR head before merge | Local publishable diff plus convergence packet; current PR diff | Findings/pass | Local receipt, agent comments, or blocked-technical receipt | [scripts/review_before_ci_gate.py], [`.codex/skills/verification-and-closure/SKILL.md`:116-225], [app/dispatcher/poll_backoff.py:21] |
-| merge gate | implemented light path / partially_implemented full path | `verification-and-closure`, `scripts/await_pr_checks.sh`; full path also uses `scripts/prepare_verified_issue_set_merge.py`, `scripts/build_verified_issue_set_merge_phase.py`; live `main` protection plus workflow-enforced gates | Decide merge eligibility with tier-selected depth; fence mutable PR-body closure authority only on the full path | Light: current-SHA CI + exact single-issue ACs. Full: CI/review/exact closing-issue ACs plus governing issue-set contract | Light: governed explicit merge + native closure readback. Full: exact-head explicit merge or block with trusted authority and durable prepared/merged/reconciled/restored phase receipts plus exact closure attribution | REST merge plus explicit issue mutations against the authorized target; GitHub auto-merge remains disabled | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`], [`app/dispatcher/verification_consumer.py`], live `main` protection readback dated 2026-08-11 |
+| merge gate | implemented light path / partially_implemented full path | `verification-and-closure`, `scripts/await_pr_checks.sh`; full path also uses `scripts/prepare_verified_issue_set_merge.py`, `scripts/await_verified_merge_projection_convergence.py`, `scripts/build_verified_issue_set_merge_phase.py`; live `main` protection plus workflow-enforced gates | Decide merge eligibility with tier-selected depth; fence mutable PR-body closure authority only on the full path | Light: current-SHA CI + exact single-issue ACs. Full: CI/review/exact closing-issue ACs plus governing issue-set contract, post-edit `pr-contract`, authenticated empty-read quorum, and a fresh final empty read | Light: governed explicit merge + native closure readback. Full: exact-head explicit merge or block with one reusable trusted authority, durable convergence proof, prepared/merged/reconciled/restored phase receipts, and exact closure attribution | REST merge plus explicit issue mutations against the authorized target; the convergence helper is read-only and GitHub auto-merge remains disabled | [`.codex/skills/verification-and-closure/SKILL.md`], [`app/dispatcher/verified_merge.py`], [`app/dispatcher/verification_consumer.py`], live `main` protection readback dated 2026-08-11 |
 | issue closure worker | partially_implemented | `verification-and-closure` | Close issues and set Done | Merged PR | Closed issue, labels removed, receipts | GitHub | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
 | post-merge docs/spec classifier | partially_implemented | `post-merge-owner-doc` skill, classifier and watchdog workflows | Decide owner-doc update/follow-up/no-change | Merged PR diff plus canonical body authority or one unique trusted same-head merge-authority receipt during neutralization | Docs PR, follow-up issue, or PR-specific receipt on every closed child and distinct open governing parent; issue-free receipt on PR | Agent/GitHub Action nudge | [`.codex/skills/post-merge-owner-doc/SKILL.md`], [`.github/workflows/post-merge-docs-classifier.yml`], [`.github/workflows/post-merge-owner-doc-watchdog.yml`] |
 | autonomous closure gate | implicit | `verification-and-closure` prerequisites | Ensure closure is safe | ACs, CI, review, owner-doc receipt | Delivery receipt | Agent | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
@@ -1161,7 +1161,10 @@ names an explicit authority category; evidence is a blocker receipt or follow-up
 
 Closure loop: triggered after merge/verification; actor is verification-and-closure; authoritative
 state is Issue/PR/dispatcher, with Project optional. A crash in the open neutralized window resumes
-only from exact receipt/body/budget truth plus a continuous `prepared` phase; a crash after merge
+only from exact receipt/body/budget truth, authenticated projection convergence, and a continuous
+`prepared` phase. A restored canonical PR with exactly one trusted same-head authority and zero
+phase receipts reuses that immutable authority and resumes at convergence; it never posts a duplicate.
+A crash after merge
 resumes from the same trusted authority plus the continuous durable phase ledger. It returns to done
 only after the restored phase, exact live authorized closure attribution with no unauthorized
 closure, labels removed, owner-doc receipt, and dispatcher complete/release when applicable.
@@ -1174,7 +1177,14 @@ The neutralized-body `pr-contract` window is receipt-authenticated: `Refs` plus
 `Verified-Closing-Issues` pass only when one trusted, non-conflicting exact-head authority receipt
 matches the live body digest and its exact governing, closing, and cumulative supporting sets. The
 verification-dispatch producer reads at most `closingIssuesReferences(first: 11)` in one GraphQL call
-and fails before pagination when the ten-closing-issue contract is exceeded.
+and fails before pagination when the ten-closing-issue contract is exceeded. After the authenticated
+body edit, `verified-merge-closing-projection-convergence.v1` requires a newly created successful
+same-head `pr-contract`, two complete empty same-identity GraphQL observations separated by bounded
+backoff, and one fresh final empty read before `prepared`. Any regression, stale edit/check,
+head/body/title/default-branch drift, incomplete pagination, API/rate-limit ambiguity, or timeout
+fails closed. Failure restores only the authority-authenticated canonical body with no phase, merge, Issue, dispatcher, or lifecycle effect;
+it also performs no post-merge effect. Repeated reads do not replace the unchanged
+post-merge event enumeration and exact closure-attribution reconciliation.
 
 Same-head deployed-v1 recovery preserves historical attempts and repair budget only when the fresh
 v2 artifact retains the exact legacy supporting set and its authenticated closing set stays within

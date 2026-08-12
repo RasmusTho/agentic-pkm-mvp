@@ -450,23 +450,36 @@ same exact head back to the ordinary verified-merge sequence below.
    finish those commits first and restart at step 1 on the new head. A readiness statement is never
    reusable across heads, and the planner refuses neutralization when the precondition is unmet
 3. replace the live PR body with the plan's neutralized body, which converts every authenticated
-   closer to evidence-only `Refs`; immediately re-read the PR and fail closed unless the head and
-   neutralized body matches the plan under the terminal-LF-only canonical digest contract above, the
-   title and body contain no canonical or malformed closing attempt, and `closingIssuesReferences`
-   is empty. Because the body edit triggers
+   closer to evidence-only `Refs`. Resolve exactly one trusted same-head authority receipt and reuse
+   it when the canonical body was restored with zero phase receipts; never post a duplicate authority receipt
+   for that head/run. Immediately re-read the PR and fail closed unless the head
+   and neutralized body match the plan under the terminal-LF-only canonical digest contract above,
+   the title and body contain no canonical or malformed closing attempt, and every bounded GraphQL
+   snapshot proves complete, unpaginated `closingIssuesReferences` evidence. Because the body edit triggers
    governance again, the triggered `pr-contract` must authenticate the trusted, non-conflicting
    exact-head authority receipt against the complete neutralized body issue set; fabricated
    `Refs`/`Verified-Closing-Issues` text is never sufficient. Wait for the latest `pr-contract` run
-   triggered by that `edited` event to finish green on the same exact head, then re-read the head,
-   body, title, and empty closing references once more. Never reuse the pre-edit green `pr-contract`
+   created after that authenticated body edit to finish green on the same exact head; bind its
+   authority/body/edit/default-branch identity into
+   `verified-merge-closing-projection-convergence.v1`. Then run
+   `scripts/await_verified_merge_projection_convergence.py`: require at least two empty admissible reads separated by bounded backoff
+   and one fresh final empty read. A later non-empty read, API or
+   rate-limit ambiguity, pagination, head/body/title/main/edit drift, authority conflict, or timeout
+   fails closed; restore only the authority-authenticated canonical body and perform no phase,
+   merge, Issue, dispatcher, or lifecycle effect. Never reuse the pre-edit green `pr-contract`
    result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
    `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
-   exact neutralized PR snapshot. For the pre-#4010 legacy exception, also pass the complete trusted
+   exact convergence receipt plus the fresh final projection snapshot through
+   `--projection-convergence-json` and `--final-projection-observation-json`; `prepared` refuses
+   missing, forged, stale, cross-head, cross-run, or body-mismatched convergence proof. For the
+   pre-#4010 legacy exception, also pass the complete trusted
    authority comment through `--authority-comment-json`; the receipt payload alone does not prove
    cutoff provenance. Require a single continuous prepared/merged/reconciled/restored
    phase ledger; duplicate identical receipts are idempotent, while missing, stale, forged, or
-   conflicting receipts fail closed
+   conflicting receipts fail closed. Pass the same authenticated convergence JSON to every later
+   phase build so `merged`, `reconciled`, and `restored` preserve the digest already bound by
+   `prepared`; the CLI refuses to construct a new phase without it
 5. merge through the exact-head REST endpoint using the verified SHA and only the plan's fixed
    non-closing commit title/message. Never use GitHub-synthesized or caller-supplied free-form merge
    text. A body/head/closing-link change before this request is a hard stop; never restore closers and
@@ -475,8 +488,11 @@ same exact head back to the ordinary verified-merge sequence below.
 6. verify merge success and re-fetch the merge commit to prove its title/message contains no
    canonical or malformed closing attempt, then post the authority-bound `merged` phase receipt
 7. on resume, recover either authenticated interruption window without restarting accounting. If the
-   exact-head PR is still open with the neutralized body, require the unique trusted exact-run
-   authority receipt, its exact body digest/issue sets/repair accounting, and a continuous `prepared`
+   exact-head PR is restored canonical with exactly one trusted exact-run authority receipt and zero
+   phase receipts, reuse that receipt and restart at the post-edit authenticated convergence gate
+   without posting another authority. If it is still open with the neutralized body, require the
+   same unique receipt, its exact body digest/issue sets/compatibility-named `repair_budget`
+   accounting projection, authenticated convergence proof, and a continuous `prepared`
    phase before resuming the pre-merge sequence. If the live PR is merged-but-incomplete,
    authenticate the same exact authority receipt and latest continuous phase, prove the live merge
    identity, and resume at the first missing phase. Missing, forged, stale, conflicting,
@@ -534,6 +550,12 @@ same exact head back to the ordinary verified-merge sequence below.
 
 A neutralized body's lifetime is bounded by the one merge attempt that justified it. It is never a
 durable PR state, so it must not outlive its exact head.
+
+The same body-only restoration applies when authenticated projection convergence times out or fails:
+restore the authority receipt's canonical-body digest, leave its immutable authority and any existing
+phase receipts untouched, and perform no merge, Issue, dispatcher, lifecycle, or post-merge effect.
+Once restored, a later attempt on the unchanged head must reuse the one trusted authority receipt and
+restart at the post-edit `pr-contract`/convergence gate; it must never post a second receipt.
 
 Whenever a new head is observed on a PR whose body is still neutralized — a repair commit, a rebase,
 a base-branch update, an abandoned attempt, or a resumed session — restore the canonical body before

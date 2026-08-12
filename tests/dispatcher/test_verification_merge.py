@@ -29,6 +29,9 @@ from app.dispatcher.verified_merge import (
     fixed_verified_merge_commit_title,
     prepare_verified_merge,
 )
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_phase_kwargs,
+)
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
 from tests.dispatcher.verification_helpers import HEAD, REPO, request
 
@@ -1363,6 +1366,7 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
         authority_receipt=authority_receipt,
         phase="prepared",
         pr=prepared_pr,
+        **projection_phase_kwargs(authority_receipt, prepared_pr),
     )
     comments = [
         {
