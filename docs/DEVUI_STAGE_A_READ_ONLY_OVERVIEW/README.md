@@ -68,7 +68,7 @@ verification receipt is never itself the missing category or `ready_to_try` fact
 | 5 | ARO-05 — Validate the Overview Yggdrasil Design | `agent:blocked` | Stable ARO-03/04 fixtures plus passing governed design-system preflight |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | `agent:blocked` | Accepted ARO-05 handoff and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | `agent:blocked` | ARO-06 merged at an exact testable SHA |
-| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | ARO-07 receipt and stable local source fixtures |
+| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4748 receipt, repaired pilot contract, Demerzel prod access, #4747 selectors, receipt-sourced deployed URL/SHA, and disposable-state classification |
 
 No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a
 pickup issue.
@@ -104,7 +104,11 @@ pickup issue.
       print, JavaScript-off, many-at-once, complete-empty, partial, stale, missing, refused, and
       unlinked states without browser reclassification.
 - [ ] The owner pilot answers Now, Needs you, and Ready to try without a false decision, readiness,
-      durable acceptance, or dependency on opening standalone subsystem UIs.
+      durable acceptance, or dependency on opening standalone subsystem UIs. It runs only on the
+      receipt-sourced Demerzel production deployment (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård),
+      proves the deployed SHA across CI/review/deploy receipt, `/version`, `/api/health.version`,
+      and gateway marker, and records the disposable-state Overview → server-supplied Focus →
+      return journey with zero effects/errors/storage/unauthorized writes and durable evidence.
 
 ## Relationship to GitHub issues
 
@@ -115,7 +119,10 @@ is superseded by that no-source decision, and ARO-03 / [#4744](https://github.co
 is delivered as the no-candidate local projection route; its contract and route-test selection were
 reconciled by merged PR #4789. ARO-04 through ARO-08 remain
 [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) through
-[#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). The separate
+[#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). ARO-08 is a
+future executable production pilot only: its actual URL/SHA must be sourced later from #4747,
+#4748, and deployment receipts, and it must not imply that deployment or owner validation happened.
+The separate
 [Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
 delivered by PR #4771; ARO-04 still needs its own typed-navigation contract before it marks a
 Focus destination available. GitHub owns
