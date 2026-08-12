@@ -178,20 +178,49 @@ export PYTHONPATH="${PWD}:${PWD}/companion-ui/companion-app${PYTHONPATH:+:${PYTH
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py \
   --resource pytest-not-pg \
   --execution-id <issue-or-pr>:<sha> \
-  -- zsh -c 'find tests -mindepth 1 -maxdepth 1 \
-    \( -type d -name "__pycache__" -prune \) -o \
-    \( -type d -o \( -type f -name "test_*.py" \) \) -print0 | \
-    LC_ALL=C sort -z | \
-    xargs -0 -n 1 python3 -m pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin \
-      -p xdist.plugin -q -m "not pg"'
+  -- zsh -o pipefail -c '
+    shard_list="$(mktemp)" || exit $?
+    trap "rm -f -- \"$shard_list\"" EXIT
+    find tests -mindepth 1 -maxdepth 1 \
+      \( -type d -name "__pycache__" -prune \) -o \
+      \( -type d -o \( -type f -name "test_*.py" \) \) -print0 | \
+      LC_ALL=C sort -z >"$shard_list"
+    discovery_pipeline_status=$?
+    (( discovery_pipeline_status == 0 )) || exit "$discovery_pipeline_status"
+    selected_shards=()
+    while IFS= read -r -d "" shard; do
+      if [[ -d "$shard" ]]; then
+        collectible="$(find "$shard" -type f -name "test_*.py" -print -quit)"
+        discovery_status=$?
+        (( discovery_status == 0 )) || exit "$discovery_status"
+        [[ -n "$collectible" ]] || continue
+      fi
+      selected_shards+=("$shard")
+    done <"$shard_list"
+    (( ${#selected_shards[@]} > 0 )) || { print -u2 -- "no collectible not-pg shards discovered"; exit 1; }
+    failed=0
+    for shard in "${selected_shards[@]}"; do
+      python3 -m pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -p xdist.plugin \
+        -q -m "not pg" "$shard"
+      shard_status=$?
+      if (( shard_status != 0 )); then
+        print -u2 -- "uncovered shard: $shard (pytest exit $shard_status)"
+        failed=1
+      fi
+    done
+    (( failed == 0 ))'
 ```
 
 The explicit `PYTHONPATH` is part of this one sanctioned command because tests outside
 `tests/companion_ui` import the nested `companion_ui` package during collection. Do not add
 one-off path exports to Issue or PR handoffs. Record the canonical command's host-resource failure,
-the fallback command, and every failed shard. A fallback run is complete only when every shard
-passes; if a shard cannot run, record the uncovered shard as a validation gap rather than claiming
-the full `not pg` selection passed.
+the fallback command, and every failed shard. The command selects a directory only after finding a
+collectible `test_*.py` file beneath it, so helper-only directories are never passed to pytest. Its
+`pipefail` discovery pipeline is checked before its output is used, and its per-directory collection
+checks fail the leased command before a partial shard list can produce a receipt. A fallback run is complete only when every selected shard
+passes; if a shard cannot run, the command reports it as an `uncovered shard` and exits nonzero, so
+record the uncovered shard as a validation gap rather than claiming the full `not pg` selection
+passed.
 
 The full non-PG suite is host-global. The wrapper above holds an atomic repo-common kernel lock for
 the entire child process and releases it automatically when the process exits. A chat handshake,
