@@ -13,9 +13,10 @@ Source of truth: This document owns the owner experience. Accepted ADRs and link
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
 Last reviewed: 2026-08-12
-Last verified against: `origin/main` `989a8d73d52b75c3a038ba1d3f93c78e03d98065`, including the
-merged withdrawal receipt in PR #4751, the admitted direct-loopback Overview route in PR #4772,
-and the ARO-03 contract and route-test-selection recovery in PR #4789; ADR-0057,
+Last verified against: `origin/main` `efbf1acd554455b446c7507216664ed653db429c`, including the
+merged withdrawal receipt in PR #4751, the admitted local Focus route in PR #4771, the admitted
+direct-loopback Overview route in PR #4772, the ARO-03 contract and route-test-selection recovery
+in PR #4789, and the `Via`-transit admission repair in PR #4792; ADR-0057,
 ADR-0062, ADR-0064, ADR-0065, the CKM and BuilderOps Cockpit owner contracts, the Deterministic
 Delivery Orchestration specification, the merged Builder System process clarification in PR #4692,
 the advisory Builder System devUI execution audit in PR #4689, and the merged Focus and Conversation

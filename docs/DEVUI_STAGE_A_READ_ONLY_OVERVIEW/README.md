@@ -8,8 +8,9 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
 Last reviewed: 2026-08-12
-Last verified against: `origin/main` `989a8d73d52b75c3a038ba1d3f93c78e03d98065`, live GitHub
-state for #4742–#4749 and #4786, and merged PRs #4751, #4772, and #4789.
+Last verified against: `origin/main` `efbf1acd554455b446c7507216664ed653db429c`, live GitHub
+state for #4742–#4749, #4768, #4786, and #4791, and merged PRs #4751, #4771, #4772, #4789, and
+#4792.
 
 # devUI Stage A Read-Only Overview
 
@@ -20,8 +21,9 @@ Complete the remaining read-only Overview path without reimplementing the delive
 PR to invent owner attention or trial readiness.
 
 The capability is deliberately blocked. No current producer exposes the canonical source facts
-needed for **Needs you** or **Ready to try**, and no local Focus or SoI destination exists for typed
-navigation. Visual implementation additionally waits for a governed Yggdrasil handoff.
+needed for **Needs you** or **Ready to try**. The delivered local Focus route does not by itself
+authorize an Overview typed-navigation destination, and no local SoI destination exists. Visual
+implementation additionally waits for a governed Yggdrasil handoff.
 
 ## Current-to-target truth
 
