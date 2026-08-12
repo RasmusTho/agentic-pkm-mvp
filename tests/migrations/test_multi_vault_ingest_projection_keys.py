@@ -11,6 +11,8 @@ def test_membership_key_and_chunk_fk_follow_effective_lineage() -> None:
     assert "ARRAY['object_id','set_id']" in source
     assert "FOREIGN KEY (vault_binding_id, chunk_id)" in source
     assert "REFERENCES public.chunks (vault_binding_id, id)" in source
+    assert "chunks inbound FK census is not exactly one" in source
+    assert "child_ns.nspname <> 'public'" in source
 
 
 def test_ingest_rekey_reuses_delivered_binding_or_fails_unchanged() -> None:
@@ -19,3 +21,5 @@ def test_ingest_rekey_reuses_delivered_binding_or_fails_unchanged() -> None:
     assert "never assigns bindings" in source
     assert "LOCK TABLE public.chunks" in source
     assert "UPDATE public" not in source
+    assert "CREATE OR REPLACE VIEW public.view_chunks_missing_embeddings" in source
+    assert "e.vault_binding_id=c.vault_binding_id" in source
