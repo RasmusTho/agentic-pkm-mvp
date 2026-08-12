@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-from app.journaling.day_context import DayContextItem, assemble_day_context
+from app.journaling.day_context import DayContextBundle, DayContextItem, assemble_day_context
 from app.journaling.draft import (
     JOURNAL_DRAFT_WRITE_ACTION,
     JournalDraftBlockedError,
@@ -706,20 +706,23 @@ def test_non_proposal_capture_posture_blocks_before_cognition_or_staging(
     assert not list(root.glob("**/drafts/journal/*.md"))
 
 
-def test_colliding_session_and_context_identity_blocks_before_cognition(
+def _colliding_session_and_context(
     tmp_path: Path,
-) -> None:
+    *,
+    transcript_review_state: str,
+    context_review_state: str,
+) -> tuple[Path, VaultContext, DayContextBundle]:
     root, context, original_session_id, _capture = _seed_inputs(tmp_path)
     session = next((root / ".chats" / "reflection").glob("*.md"))
     session.write_text(
-        session.read_text(encoding="utf-8").replace(
-            f"session_id: {original_session_id}", "session_id: collision.md"
-        ),
+        session.read_text(encoding="utf-8")
+        .replace(f"session_id: {original_session_id}", "session_id: collision.md")
+        .replace("type: chat-session", f"type: chat-session\nreview_state: {transcript_review_state}"),
         encoding="utf-8",
     )
     colliding_context = root / "session:collision.md"
     colliding_context.write_text(
-        "---\nreview_state: accepted\n---\ncontext\n", encoding="utf-8"
+        f"---\nreview_state: {context_review_state}\n---\ncontext\n", encoding="utf-8"
     )
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
     sections = dict(bundle.sections)
@@ -733,7 +736,37 @@ def test_colliding_session_and_context_identity_blocks_before_cognition(
             )
         }
     )
-    bundle = bundle.model_copy(update={"sections": sections})
+    return root, context, bundle.model_copy(update={"sections": sections})
+
+
+def test_colliding_source_ids_do_not_share_admission(tmp_path: Path) -> None:
+    root, context, bundle = _colliding_session_and_context(
+        tmp_path,
+        transcript_review_state="revised",
+        context_review_state="accepted",
+    )
+
+    with pytest.raises(JournalDraftBlockedError, match="revised_read_only"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id="collision.md",
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=_empty_reasoning,
+        )
+
+    assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_rejected_source_with_colliding_id_blocks_before_cognition(
+    tmp_path: Path,
+) -> None:
+    root, context, bundle = _colliding_session_and_context(
+        tmp_path,
+        transcript_review_state="rejected",
+        context_review_state="accepted",
+    )
     cognition_called = False
 
     def forbidden_cognition(
@@ -744,7 +777,7 @@ def test_colliding_session_and_context_identity_blocks_before_cognition(
         cognition_called = True
         return ReasoningOutput()
 
-    with pytest.raises(JournalDraftBlockedError, match="source identity collision"):
+    with pytest.raises(JournalDraftBlockedError, match="contradicted_or_rejected"):
         draft_journal_entry(
             vault_context=context,
             for_date=DAY,
@@ -756,6 +789,34 @@ def test_colliding_session_and_context_identity_blocks_before_cognition(
 
     assert cognition_called is False
     assert not list(root.glob("**/drafts/journal/*.md"))
+
+
+def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
+    root, context, bundle = _colliding_session_and_context(
+        tmp_path,
+        transcript_review_state="draft",
+        context_review_state="accepted",
+    )
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id="collision.md",
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+        reasoning_fn=_empty_reasoning,
+    )
+
+    frontmatter, _body = _read_result(root, result.path)
+    receipt = frontmatter["activation_receipts"][-1]
+    admitted = receipt["payload"]["admitted_artifact_ids"]
+    assert len(admitted) == 2
+    assert len(set(admitted)) == 2
+    assert frontmatter["sources"] == ["session:collision.md", "session:collision.md"]
+    assert [source.role for source in result.compilation_draft.source_refs] == [
+        "conversation",
+        "system_context",
+    ]
 
 
 def test_activation_receipt_resolves_after_restart(tmp_path: Path) -> None:

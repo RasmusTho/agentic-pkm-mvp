@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import errno
+from enum import Enum
 import fcntl
 import json
 import os
@@ -77,6 +78,36 @@ class ReasoningFunction(Protocol):
     def __call__(
         self, object_ids: Sequence[str], *, trace_id: str | None = None
     ) -> ReasoningOutput: ...
+
+
+class SourceKind(str, Enum):
+    """Typed origin of one journal input occurrence."""
+
+    TRANSCRIPT = "transcript"
+    DAY_CONTEXT = "day_context"
+
+
+@dataclass(frozen=True)
+class SourceIdentity:
+    """Collision-free identity for one occurrence entering trust admission."""
+
+    source_kind: SourceKind
+    external_id: str
+    occurrence: int
+
+    def __post_init__(self) -> None:
+        if not self.external_id.strip():
+            raise ValueError("journal source identity requires a non-empty external_id")
+        if self.occurrence <= 0:
+            raise ValueError("journal source identity occurrence must be positive")
+
+    @property
+    def admission_id(self) -> str:
+        external_id = self.external_id.strip()
+        return (
+            f"journal-source:{self.source_kind.value}:{self.occurrence}:"
+            f"{len(external_id)}:{external_id}"
+        )
 
 
 @dataclass(frozen=True)
@@ -154,14 +185,17 @@ def draft_journal_entry(
 
         _validate_session_citations(vault_root, sessions)
         _validate_context_citations(vault_root, context_items)
-        source_ids = tuple(session.source_id for session in sessions) + tuple(
-            item.provenance_ref for item in context_items
+        source_identities = _source_identities(sessions, context_items)
+        source_ids = tuple(identity.admission_id for identity in source_identities)
+        review_states = _source_review_states(
+            vault_root, sessions, context_items, source_identities
         )
-        _reject_colliding_source_ids(source_ids)
-        review_states = _source_review_states(vault_root, sessions, context_items)
         activation = evaluate_journal_draft_activation(
             source_ids,
-            review_states=review_states,
+            review_states={
+                identity.admission_id: review_states[identity]
+                for identity in source_identities
+            },
             posture=activation_posture,
             now=now,
         )
@@ -178,6 +212,7 @@ def draft_journal_entry(
             vault_root=vault_root,
             sessions=sessions,
             context_items=context_items,
+            source_identities=source_identities,
         )
         cognition, cognition_body = _run_cognition(
             reasoning_fn,
@@ -191,6 +226,7 @@ def draft_journal_entry(
             is_addendum=is_addendum,
             cognition_body=cognition_body,
         )
+        context_identities = source_identities[len(sessions) :]
         source_refs = tuple(
             SourceRef(
                 artifact_id=session.source_id,
@@ -204,9 +240,9 @@ def draft_journal_entry(
                 artifact_id=item.provenance_ref,
                 note_path=_reference_path(item.provenance_ref),
                 role="system_context",
-                review_state=_review_state_value(review_states[item.provenance_ref]),
+                review_state=_review_state_value(review_states[identity]),
             )
-            for item in context_items
+            for item, identity in zip(context_items, context_identities, strict=True)
         )
         compilation = build_cited_unreviewed_compilation_draft(
             ProposalContext(
@@ -249,7 +285,7 @@ def draft_journal_entry(
                 "capability": JOURNAL_DRAFT_CAPABILITY_ID,
                 "cognition": cognition,
             },
-            "sources": list(source_ids),
+            "sources": [identity.external_id for identity in source_identities],
             "activation_receipt_id": activation.receipt.receipt_id,
             "activation_receipts": receipts,
             "created": created,
@@ -596,29 +632,42 @@ def _source_review_states(
     vault_root: Path,
     sessions: tuple[_ResolvedSession, ...],
     context_items: tuple[DayContextItem, ...],
-) -> dict[str, ReviewState | None]:
-    states = {session.source_id: session.review_state for session in sessions}
-    for item in context_items:
+    source_identities: tuple[SourceIdentity, ...],
+) -> dict[SourceIdentity, ReviewState | None]:
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
+    states = {
+        identity: session.review_state
+        for session, identity in zip(sessions, session_identities, strict=True)
+    }
+    for item, identity in zip(context_items, context_identities, strict=True):
         path = vault_root / _reference_path(item.provenance_ref)
         state: ReviewState | None = None
         if path.suffix.lower() == ".md":
             frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
             state = _review_state(frontmatter, default=None)
-        states[item.provenance_ref] = state
+        states[identity] = state
     return states
 
 
-def _reject_colliding_source_ids(source_ids: tuple[str, ...]) -> None:
-    seen: set[str] = set()
-    collisions: list[str] = []
-    for source_id in source_ids:
-        if source_id in seen and source_id not in collisions:
-            collisions.append(source_id)
-        seen.add(source_id)
-    if collisions:
-        raise JournalDraftBlockedError(
-            "journal draft source identity collision: " + ", ".join(collisions)
-        )
+def _source_identities(
+    sessions: tuple[_ResolvedSession, ...],
+    context_items: tuple[DayContextItem, ...],
+) -> tuple[SourceIdentity, ...]:
+    counts: dict[tuple[SourceKind, str], int] = {}
+
+    def occurrence(source_kind: SourceKind, external_id: str) -> SourceIdentity:
+        normalized_id = external_id.strip()
+        key = (source_kind, normalized_id)
+        counts[key] = counts.get(key, 0) + 1
+        return SourceIdentity(source_kind, normalized_id, counts[key])
+
+    return tuple(
+        occurrence(SourceKind.TRANSCRIPT, session.source_id) for session in sessions
+    ) + tuple(
+        occurrence(SourceKind.DAY_CONTEXT, item.provenance_ref)
+        for item in context_items
+    )
 
 
 def _review_state_value(state: ReviewState | None) -> str:
@@ -643,6 +692,7 @@ def _materialize_reasoning_sources(
     vault_root: Path,
     sessions: tuple[_ResolvedSession, ...],
     context_items: tuple[DayContextItem, ...],
+    source_identities: tuple[SourceIdentity, ...],
 ) -> tuple[MaterializedReasoningInput, ...]:
     """Project JRNL inputs into UUID-addressable reasoning objects.
 
@@ -651,19 +701,21 @@ def _materialize_reasoning_sources(
     instead of manufacturing new identities on every pass.
     """
 
+    session_identities = source_identities[: len(sessions)]
+    context_identities = source_identities[len(sessions) :]
     raw_sources: list[ReasoningSourceInput] = [
         ReasoningSourceInput(
-            source_id=session.source_id,
+            source_id=identity.admission_id,
             text="\n".join(session.owner_turns),
         )
-        for session in sessions
+        for session, identity in zip(sessions, session_identities, strict=True)
     ]
     raw_sources.extend(
         ReasoningSourceInput(
-            source_id=item.provenance_ref,
+            source_id=identity.admission_id,
             text=json.dumps(item.content, sort_keys=True, ensure_ascii=False),
         )
-        for item in context_items
+        for item, identity in zip(context_items, context_identities, strict=True)
     )
     try:
         return materialize_reasoning_inputs(
@@ -923,6 +975,8 @@ __all__ = [
     "JOURNAL_DRAFT_WRITE_ACTION",
     "JournalDraftBlockedError",
     "JournalDraftResult",
+    "SourceIdentity",
+    "SourceKind",
     "UnresolvableJournalCitationError",
     "draft_journal_entry",
     "resolve_journal_draft_activation_receipt",
