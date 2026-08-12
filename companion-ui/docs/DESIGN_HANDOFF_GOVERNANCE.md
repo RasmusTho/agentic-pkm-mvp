@@ -5,7 +5,7 @@ Owner: Companion UI / interaction model
 Temporal class: stable
 Review cadence: event-driven
 Source of truth: authoritative for the handoff chain
-Last reviewed: 2026-06-10
+Last reviewed: 2026-08-12
 Last verified against: companion-ui/design_handoff/, companion-ui/prompts/claude-design/README.md, companion-ui/prompts/claude-design/YGGDRASIL_HANDOFF_TEMPLATE.md, companion-ui/companion-app/colors_and_type.css, .codex/skills/yggdrasil-design-handoff/SKILL.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, companion-ui/design_handoff/2026-05-14-claude-design-package/README.md, companion-ui/design_handoff/2026-05-14-handoff-governance-pack/, companion-ui/design_handoff/2026-06-09-system-entry-point/, issue #901
 
 # Design Handoff Governance
@@ -39,6 +39,162 @@ Each step-to-step transition is a **crossing**. The crossings that require expli
 
 Crossings A (exploration → handoff) and E (merge → receipt) are automatic / no formal gate required.
 
+## Visual-work classification
+
+Before visual generation or reuse normalization, classify the complete requested scope through
+`.codex/skills/yggdrasil-design-handoff/SKILL.md :: Required method`:
+
+- `exact_shipped_reuse` means every visual and interaction decision maps to an exact shipped
+  component or pattern and an exact accepted token declaration at a named commit and content hash.
+  Only this class may use constrained reuse.
+- `novel` includes every proposed component, geometry system, token, typography source, motion
+  language, icon language, interaction class, authority affordance, or extension.
+- `mixed` contains exact reuse plus at least one novel, unresolved, or out-of-envelope decision.
+- `unknown` has incomplete source, hash, decision, state, accessibility, or transformation evidence.
+
+`novel`, `mixed`, and `unknown` always require the live Yggdrasil design-system gate below. Tool or
+MCP unavailability never changes the classification. The gate remains blocking rather than turning
+copied repository assets into permission to generate a visual.
+
+## Exact shipped-pattern reuse
+
+An implementation or normalization task classified as `exact_shipped_reuse` may use a separately
+reviewed constrained-reuse package instead of running external design generation. This is a narrow
+provenance route, not a generic offline design fallback. It may adapt exact shipped behavior only
+through the transformations listed in its receipt: bounded layout reflow, content binding,
+interaction binding, and local-system-font/no-egress normalization. It must add no visual or
+interaction decision of its own.
+
+The constrained package is guidance and provenance only. It does not become architecture or
+runtime authority, does not itself accept a consuming Issue, and does not skip the normal bounded
+Issue, PR, implementation, or validation chain. Any unrecorded implementation or final visual delta
+reclassifies the work as `mixed` or `novel` and requires the live design-system gate.
+
+### `yggdrasil-constrained-reuse.v1` receipt
+
+The receipt is a JSON record. YAML below shows the required shape; it is not a second serialization
+format. Both content hashes use the UTF-8 bytes produced by the RFC 8785 JSON Canonicalization
+Scheme (JCS): object keys are lexicographically sorted, insignificant whitespace is absent, and
+arrays preserved in declared order remain order-significant. `payload_sha256` hashes exactly
+`provenance_payload`.
+`receipt_sha256` hashes exactly the object containing `payload_sha256` and `independent_review`; it
+does not hash itself. This makes the complete reviewed envelope content-addressed without a
+self-reference.
+
+```yaml
+payload_sha256: sha256:<64 lowercase hex>
+provenance_payload:
+  contract_version: yggdrasil-constrained-reuse.v1
+  repository_commit: <40 lowercase hex>
+  authorship:
+    author_identity: <agent or human principal>
+    created_at: <RFC3339>
+  authority_claims:
+    live_design_system_selection: not_claimed
+    live_mcp_system_id: not_claimed
+    live_project: not_claimed
+    live_token_parity: not_claimed
+  sources:
+    - source_id: <unique id>
+      source_path: <repository-relative path>
+      stable_ref: <component, selector, test, or pattern reference>
+      source_role: component|pattern
+      content_sha256: sha256:<64 lowercase hex>
+  tokens:
+    source_path: companion-ui/companion-app/colors_and_type.css
+    content_sha256: sha256:<64 lowercase hex>
+    declarations:
+      - token_id: <unique id>
+        declaration: <exact accepted CSS declaration bytes>
+        declaration_sha256: sha256:<64 lowercase hex>
+  allowed_transformations:
+    - transformation_id: <unique id>
+      kind: layout_reflow|content_binding|interaction_binding|local_system_font_no_egress_normalization
+      source_ids: [<source_id>]
+      exact_rule: <bounded transformation with no new visual decision>
+  decision_inventory:
+    - decision_id: <unique id>
+      target_ref: <target component, selector, behavior, or state>
+      source_ids: [<source_id>]
+      token_ids: [<token_id>]
+      transformation_ids: [<transformation_id>]
+  target_artifacts:
+    - target_path: <repository-relative or package-relative path>
+      content_sha256: sha256:<64 lowercase hex>
+  zero_novel_visual_language:
+    asserted: true
+    new_components: []
+    new_geometry_systems: []
+    new_tokens: []
+    new_typography_sources: []
+    new_motion_languages: []
+    new_icon_languages: []
+    new_interaction_classes: []
+    new_authority_affordances: []
+  no_egress:
+    external_font_imports_removed:
+      - declaration: <exact external import bytes>
+        declaration_sha256: sha256:<64 lowercase hex>
+    font_normalization:
+      mode: local_system_only
+      mappings:
+        - source_token_id: <token_id>
+          source_declaration_sha256: sha256:<matching accepted declaration hash>
+          normalized_declaration: <exact local-system-font declaration bytes>
+          normalized_declaration_sha256: sha256:<64 lowercase hex>
+    local_asset_refs: [<target artifact ref>]
+    cross_origin_request_count: 0
+    network_evidence_ref: <repository-relative or package-relative evidence path>
+    network_evidence_sha256: sha256:<64 lowercase hex>
+    csp_relaxations: []
+  state_matrix:
+    - state_id: <state required by the consuming contract>
+      fixture_ref: <stable source fixture>
+      decision_ids: [<decision_id>]
+      expected_behavior: <server-preserving treatment>
+      evidence_ref: <repository-relative or package-relative evidence path>
+      evidence_sha256: sha256:<64 lowercase hex>
+  accessibility_matrix:
+    - mode: desktop|narrow|zoom_200|keyboard|screen_reader|print|javascript_off
+      requirement: <bounded expected behavior>
+      decision_ids: [<decision_id>]
+      evidence_ref: <repository-relative or package-relative evidence path>
+      evidence_sha256: sha256:<64 lowercase hex>
+independent_review:
+  reviewer_identity: <agent or human distinct from the receipt author>
+  independent_from_author: true
+  independence_basis: <separate principal and fresh review context>
+  reviewed_payload_sha256: sha256:<same payload hash>
+  reviewed_at: <RFC3339>
+  verdict: pass
+  findings: []
+receipt_sha256: sha256:<hash of payload_sha256 plus independent_review>
+```
+
+The source list names every reused component and pattern. The token list names every reused token by
+its exact accepted declaration, not only by the containing file. The decision inventory is complete:
+every target visual, interaction, state, and accessibility decision maps to source, token, and any
+allowed transformation. The state matrix covers every state named by the consuming contract and
+stable fixtures; the accessibility matrix contains every applicable listed mode. The independent
+reviewer identity must differ from `author_identity`, must state its independence basis, and must
+review the exact payload hash. The receipt hash then binds that review to the payload.
+
+### Constrained-reuse validation and refusal rules
+
+Reject the receipt if a required field or matrix row is absent; an identifier is duplicated; a
+source, token, target, evidence, payload, or receipt hash does not match; a decision has no exact
+source; a transformation is unlisted or outside the admitted kinds; any zero-novel list is
+non-empty; the zero-novel assertion is not true; an external-font removal or local-font mapping is
+unhashed or unbound to an accepted token declaration; a cross-origin request or CSP relaxation
+exists; or independent review is missing, shares the author identity, lacks an independence basis,
+is non-passing, or is bound to a different payload hash. Unknown or mixed scope returns to the live
+gate; it never degrades into partial constrained reuse.
+
+Every authority-claim value above is the literal `not_claimed`. `yggdrasil-constrained-reuse.v1` is
+not `yggdrasil-design-handoff.v1`; a copied token sheet proves repository provenance only and
+cannot satisfy a live handoff receipt. A constrained receipt must not name or imply live MCP system
+selection, a live design project, or live token parity.
+
 ## Yggdrasil design-system gate
 
 Every UI, component, interaction, prototype, or visual-audit exploration must use the canonical
@@ -58,8 +214,9 @@ a Crossing-B cleanup task.
 - Reuse established tokens and components. Any proposed extension stays explicit in
   `open-questions.md` until normalized; it must not be silently used as if already canonical.
 
-Visual similarity, a copied color value, or the system being marked “default” is not proof that the
-project used the design system. A failed or ambiguous gate blocks generation and Crossing B.
+Visual similarity, a copied color value, a copied token sheet, or the system being marked “default”
+is not proof that the project used the design system. A failed or ambiguous gate blocks generation and Crossing B.
+Repository token provenance cannot satisfy a live handoff receipt.
 
 **Adoption boundary:** PR #4239 (2026-07-28). This gate does not retroactively change a retained
 package's recorded crossing state. Packages accepted before that merge keep their historical
