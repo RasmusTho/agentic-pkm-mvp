@@ -356,6 +356,39 @@ def test_drain_one_sanitizes_transient_youtube_plugin_failure(
     assert "credential-material" not in persisted
 
 
+@pytest.mark.parametrize(
+    "provider_detail",
+    ("HTTP Error 403: Forbidden", "Sign in to confirm you are not a bot"),
+)
+def test_drain_one_keeps_transient_provider_access_failures_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider_detail: str
+) -> None:
+    """Provider throttling and bot checks are not durable source-gone outcomes."""
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(q, conn)
+    claimed = q.claim_batch(1, conn=conn)
+
+    monkeypatch.setattr(
+        plugin,
+        "yt_dlp_extract_info",
+        lambda _url: (_ for _ in ()).throw(plugin.CaptionAcquisitionError(provider_detail)),
+    )
+
+    result = drain_one(
+        claimed[0],
+        vault_context=_vault(tmp_path / "vault"),
+        queue=q,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert result.status == "pending"
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "network_error"
+    assert result.last_failure["error"] == "RetryableSourceAcquisitionError: YouTube source fetch failed"
+
+
 def test_drain_one_maps_pipeline_dead_letter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

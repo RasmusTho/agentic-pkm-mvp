@@ -92,14 +92,9 @@ def _caption_failure_for_queue(exc: youtube_plugin.CaptionAcquisitionError) -> R
     detail = str(exc).casefold()
     inaccessible_markers = (
         "private",
-        "not available",
-        "unavailable",
         "not found",
         "does not exist",
         "has been removed",
-        "sign in",
-        "sign-in",
-        "http error 403",
         "http error 404",
     )
     if any(marker in detail for marker in inaccessible_markers):
