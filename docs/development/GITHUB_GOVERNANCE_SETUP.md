@@ -219,8 +219,8 @@ pairings.  A path may be governance-lane admissible without needing that
 temporal-owner-doc exception, and an entry in the map may require a pairing
 without broadening the admission gate.  In particular,
 `scripts/docs_guard_logic.py` is in the executable admission allowlist because
-it is edited with `scripts/docs_guard.py`, while its `None` mapping remains the
-separate owner-assignment work tracked by #3952.
+it is edited with `scripts/docs_guard.py`; its distinct temporal role is the
+explicit pairing with `docs/development/DOCUMENTATION_GUARD.md`.
 
 This document therefore records the split of responsibilities rather than
 maintaining a fourth partial allowlist.
