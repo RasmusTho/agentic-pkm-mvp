@@ -82,6 +82,88 @@ def test_repo_skill_index_describes_connected_workflow_paths() -> None:
     assert "agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure" in text
 
 
+def _owner_decision_contract_preflight() -> str:
+    return _section_between(
+        _read(".codex/skills/owner-decision-brief/SKILL.md"),
+        "## Contract-dominance preflight",
+        "## Local vault-binding preflight",
+    )
+
+
+def test_owner_decision_preflight_selects_applicable_contract_without_manufacturing_issue_authority() -> None:
+    preflight = " ".join(_owner_decision_contract_preflight().split())
+
+    assert "live contract that actually governs the work" in preflight
+    assert "governing Issue" in preflight
+    assert "acceptance criteria" in preflight
+    assert "`Verify:` targets" in preflight
+    assert "Direct Repair" in preflight
+    assert "workflow contract" in preflight
+    assert "Do not manufacture an Issue or acceptance-criterion dependency" in preflight
+    assert "protected invariant" in preflight
+    assert "operator gate" in preflight
+
+
+def test_owner_decision_preflight_allows_evidence_backed_owner_reserved_reopening() -> None:
+    preflight = " ".join(_owner_decision_contract_preflight().split())
+
+    assert "evidence-backed proposal to change the established contract" in preflight
+    assert "owner-reserved value, mandate, or scope" in preflight
+    assert "genuinely requires the owner to decide" in preflight
+    assert "Do not require the owner to have already approved the change" in preflight
+
+
+def test_owner_decision_preflight_keeps_technical_drift_blocked_without_missing_authority() -> None:
+    preflight = " ".join(_owner_decision_contract_preflight().split())
+
+    for technical_evidence in (
+        "missing implementation",
+        "integration or rebase conflict",
+        "source drift",
+        "failed recovery",
+    ):
+        assert technical_evidence in preflight
+    assert "technical evidence" in preflight
+    assert "no authority is missing" in preflight
+    assert "`blocked_technical`" in preflight
+
+
+def test_owner_decision_preflight_preserves_escalation_classifier_authority() -> None:
+    preflight = " ".join(_owner_decision_contract_preflight().split())
+
+    assert (
+        "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: "
+        "Escalation Classifier"
+    ) in preflight
+    assert "Contradictory source authority remains `needs_owner`" in preflight
+    assert "every other explicit `needs_owner` authority category in that classifier" in preflight
+    assert "every other explicit category in that classifier" not in preflight
+    assert "Every non-`needs_owner` route" in preflight
+    assert "protected-finding, follow-up, or deferred disposition" in preflight
+    assert "must not be reclassified here" in preflight
+
+
+def test_owner_decision_profile_delegates_classification_and_preserves_operator_gates() -> None:
+    profile = _read(".codex/skills/owner-decision-brief/SKILL.md")
+    preflight = _owner_decision_contract_preflight()
+    normalized = " ".join(preflight.split())
+    classifier = _section_between(
+        _read("docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"),
+        "## Escalation Classifier",
+        "### Packet Schema",
+    )
+
+    assert "delegate terminal routing to the canonical classifier" in normalized
+    assert "do not copy or redefine its route table here" in normalized.lower()
+    assert "| `auto_repair` |" not in preflight
+    assert "| `auto_backoff` |" not in preflight
+    for route in ("auto_repair", "auto_backoff", "blocked_technical", "needs_owner"):
+        assert f"| `{route}` |" in classifier
+    assert "## Contractual operator gates" in profile
+    assert "Never use the decision ownership gate to remove an unconditional operator gate" in profile
+    assert "Contractual operator gates still fire exactly as their owning workflows define" in preflight
+
+
 def test_builder_thread_contract_is_executable_and_discoverable() -> None:
     index = _read(".codex/skills/README.md")
     contract = _read(".codex/skills/_shared/BUILDER_THREAD_CONTRACT.md")
