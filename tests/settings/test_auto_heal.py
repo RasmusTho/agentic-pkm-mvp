@@ -66,6 +66,8 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
         ---
         ## Rerank
         ```yaml settings
+        configured_keys:
+          - rerank
         rerank_top_k: invalid
         ```
         """,
@@ -105,6 +107,19 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
     assert "configured_keys" not in retrieval_md
     projection = (runtime_dir / "retrieval_tuning.yaml").read_text(encoding="utf-8")
     assert "configured_keys:" in projection
+
+    # A valid-but-polluted source is also repaired at the compiler ingress
+    # boundary, not accepted as user authority on a later compile.
+    retrieval_path = vault / "retrieval.md"
+    retrieval_path.write_text(
+        retrieval_path.read_text(encoding="utf-8").replace(
+            "rerank_top_k: 100", "configured_keys:\n  - rerank\nrerank_top_k: 100"
+        ),
+        encoding="utf-8",
+    )
+    recompiled = compiler.compile_all(auto_heal=True)
+    assert recompiled.retrieval_tuning.configured_keys == ["rerank_top_k"]
+    assert "configured_keys:" not in retrieval_path.read_text(encoding="utf-8")
 
 
 def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> None:

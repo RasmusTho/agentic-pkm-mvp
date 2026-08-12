@@ -495,14 +495,26 @@ def compile_all(
     if "llm_routing" in file_paths:
         _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, writeback_allowed(file_paths["llm_routing"]), vault_root=resolved_vault_root)
 
-    retrieval_payload = _merge_sections(file_sections.get("retrieval", {}))
-    retrieval_source_keys = sorted(retrieval_payload)
+    raw_retrieval_payload = _merge_sections(file_sections.get("retrieval", {}))
+    # This key belongs solely to the compiled projection.  Older preview
+    # builds may have leaked it into vault markdown; treat that as a repairable
+    # ingress violation before deriving source identity or any writeback data.
+    leaked_retrieval_metadata = "configured_keys" in raw_retrieval_payload
+    retrieval_payload = {
+        key: value
+        for key, value in raw_retrieval_payload.items()
+        if key != "configured_keys"
+    }
+    retrieval_source_keys = sorted(
+        key for key in retrieval_payload if key in RetrievalTuning.model_fields and key != "configured_keys"
+    )
     retrieval_model, retrieval_canonical, retrieval_fixed = _hydrate_model(
         payload=retrieval_payload, model_cls=RetrievalTuning
     )
     # Provenance is a compiler projection, never user-authored settings payload.
     # Keep it out of the auto-heal canonical/writeback mapping below.
     retrieval_model = retrieval_model.model_copy(update={"configured_keys": retrieval_source_keys})
+    retrieval_fixed = retrieval_fixed or leaked_retrieval_metadata
     bundle.retrieval_tuning = retrieval_model
     if retrieval_fixed and "retrieval" in file_paths and writeback_allowed(file_paths["retrieval"]):
         writeback_settings_block(
