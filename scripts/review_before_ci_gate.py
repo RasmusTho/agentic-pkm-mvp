@@ -48,6 +48,8 @@ class ReviewBeforeCiGate:
     may_handoff_to_ci: bool
     preserves_ci_authority: bool
     bypass_reason: str | None
+    stateful_fallback: bool
+    stateful_fallback_matrix_complete: bool
     changed_files: list[str]
     matched_surfaces: list[str]
     required_local_checks: list[str]
@@ -62,6 +64,8 @@ def evaluate_review_before_ci_gate(
     bypass_reason: str | None = None,
     risk_surfaces: Sequence[str] = (),
     risk_assessment_complete: bool = False,
+    stateful_fallback: bool = False,
+    stateful_fallback_matrix_complete: bool = False,
 ) -> ReviewBeforeCiGate:
     """Return local review-before-CI gate guidance for a PR prep stage."""
 
@@ -77,6 +81,14 @@ def evaluate_review_before_ci_gate(
         raise ReviewBeforeCiGateError("at least one changed file is required")
 
     risks = _normalize_risk_surfaces(risk_surfaces)
+    if stateful_fallback_matrix_complete and not stateful_fallback:
+        raise ReviewBeforeCiGateError(
+            "stateful_fallback_matrix_complete requires stateful_fallback"
+        )
+    if stateful_fallback and not risks:
+        raise ReviewBeforeCiGateError(
+            "stateful_fallback requires at least one declared high-risk surface"
+        )
     if risks and normalized_lane not in RISK_REVIEW_LANES:
         raise ReviewBeforeCiGateError(
             "risk_surfaces are valid only for implementation, governance, or direct-repair lanes"
@@ -104,9 +116,25 @@ def evaluate_review_before_ci_gate(
             review_gate_complete=False,
             may_handoff_to_ci=True,
             bypass_reason=bypass,
+            stateful_fallback=stateful_fallback,
+            stateful_fallback_matrix_complete=stateful_fallback_matrix_complete,
             files=files,
             matched=matched,
             summary="local review-before-CI gate bypassed with explicit reason; required GitHub checks still apply",
+        )
+    if stateful_fallback and not stateful_fallback_matrix_complete:
+        return _gate(
+            normalized_lane,
+            "required",
+            required,
+            review_gate_complete=False,
+            may_handoff_to_ci=False,
+            bypass_reason=None,
+            stateful_fallback=True,
+            stateful_fallback_matrix_complete=False,
+            files=files,
+            matched=matched,
+            summary="complete the executable stateful fallback boundary matrix before expensive validation or CI",
         )
     if required and not review_gate_complete:
         return _gate(
@@ -116,6 +144,8 @@ def evaluate_review_before_ci_gate(
             review_gate_complete=False,
             may_handoff_to_ci=False,
             bypass_reason=None,
+            stateful_fallback=stateful_fallback,
+            stateful_fallback_matrix_complete=stateful_fallback_matrix_complete,
             files=files,
             matched=matched,
             summary="run cheap local review/contract checks before expensive validation or CI",
@@ -128,6 +158,8 @@ def evaluate_review_before_ci_gate(
             review_gate_complete=True,
             may_handoff_to_ci=True,
             bypass_reason=None,
+            stateful_fallback=stateful_fallback,
+            stateful_fallback_matrix_complete=stateful_fallback_matrix_complete,
             files=files,
             matched=matched,
             summary="local review-before-CI gate satisfied; continue to GitHub CI handoff",
@@ -139,6 +171,8 @@ def evaluate_review_before_ci_gate(
         review_gate_complete=False,
         may_handoff_to_ci=True,
         bypass_reason=None,
+        stateful_fallback=stateful_fallback,
+        stateful_fallback_matrix_complete=stateful_fallback_matrix_complete,
         files=files,
         matched=matched,
         summary="docs/governance review-before-CI gate is not required for this lane/surface",
@@ -153,6 +187,8 @@ def _gate(
     review_gate_complete: bool,
     may_handoff_to_ci: bool,
     bypass_reason: str | None,
+    stateful_fallback: bool,
+    stateful_fallback_matrix_complete: bool,
     files: list[str],
     matched: list[str],
     summary: str,
@@ -165,9 +201,11 @@ def _gate(
         may_handoff_to_ci=may_handoff_to_ci,
         preserves_ci_authority=True,
         bypass_reason=bypass_reason,
+        stateful_fallback=stateful_fallback,
+        stateful_fallback_matrix_complete=stateful_fallback_matrix_complete,
         changed_files=files,
         matched_surfaces=matched,
-        required_local_checks=_required_checks(matched),
+        required_local_checks=_required_checks(matched, stateful_fallback=stateful_fallback),
         summary=summary,
     )
 
@@ -187,7 +225,9 @@ def _matched_surfaces(
     return sorted(matched)
 
 
-def _required_checks(matched: Sequence[str]) -> list[str]:
+def _required_checks(
+    matched: Sequence[str], *, stateful_fallback: bool = False
+) -> list[str]:
     if not matched:
         return []
     checks: list[str] = []
@@ -206,6 +246,10 @@ def _required_checks(matched: Sequence[str]) -> list[str]:
                 "build the mechanism convergence packet (invariants, states, transitions, crash ordering, producers/consumers/recovery, locks, and test map)",
                 "run a fresh independent high-capability review of the local publishable SHA and convergence packet before selected expensive validation",
             ]
+        )
+    if stateful_fallback:
+        checks.append(
+            "complete one executable stateful fallback boundary matrix (production entrypoints, eligible versus terminal failure classes, effective provider/model identity, current and legacy success/failure resume lineage, and adjacent authority-isolation paths)"
         )
     return checks
 
@@ -244,6 +288,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bypass-reason")
     parser.add_argument("--risk-surface", action="append", default=[])
     parser.add_argument("--risk-assessment-complete", action="store_true")
+    parser.add_argument("--stateful-fallback", action="store_true")
+    parser.add_argument("--stateful-fallback-matrix-complete", action="store_true")
     return parser
 
 
@@ -257,6 +303,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             bypass_reason=args.bypass_reason,
             risk_surfaces=args.risk_surface,
             risk_assessment_complete=args.risk_assessment_complete,
+            stateful_fallback=args.stateful_fallback,
+            stateful_fallback_matrix_complete=args.stateful_fallback_matrix_complete,
         )
     except ReviewBeforeCiGateError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), file=sys.stderr)
