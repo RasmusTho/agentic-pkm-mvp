@@ -9,6 +9,7 @@ on:
       - 'app/web/**'
       - 'tests/companion_ui/**'
       - '.github/workflows/browser-runtime.yml'
+  workflow_dispatch:
 
 concurrency:
   group: companion-ui-browser-runtime-${{ github.ref }}
@@ -24,9 +25,17 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       COMPANION_UI_BROWSER_TESTS: "1"
+      DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview
+      DEVUI_OVERVIEW_JUNIT: ${{ runner.temp }}/devui-overview/junit.xml
+      DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/devui-overview-browser-accessibility.v1.json
+      DEVUI_OVERVIEW_TRACE_DIR: ${{ runner.temp }}/devui-overview/traces
+      DEVUI_OVERVIEW_SCREENSHOT_DIR: ${{ runner.temp }}/devui-overview/screenshots
+      DEVUI_OVERVIEW_MANIFEST: ${{ runner.temp }}/devui-overview/manifest.json
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -42,6 +51,41 @@ jobs:
       - name: Install Playwright Chromium
         run: |
           python -m playwright install --with-deps chromium
+
+      # #4833: workflow_dispatch resolves the operator-selected published ref
+      # to github.sha. The checkout above pins that immutable commit, while this
+      # dispatch-only gate rejects absent, empty, or skipped #4836 journeys.
+      - name: Run exact-ref Overview browser journeys
+        id: overview-journeys
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "$DEVUI_OVERVIEW_EVIDENCE_DIR" \
+            "$(dirname "$DEVUI_OVERVIEW_RECEIPT")" \
+            "$DEVUI_OVERVIEW_TRACE_DIR" \
+            "$DEVUI_OVERVIEW_SCREENSHOT_DIR"
+          test -f tests/companion_ui/test_devui_overview_journeys.py
+          pytest -q \
+            --junitxml="$DEVUI_OVERVIEW_JUNIT" \
+            tests/companion_ui/test_devui_overview_journeys.py
+          python - "$DEVUI_OVERVIEW_JUNIT" <<'PY'
+          from pathlib import Path
+          import sys
+          import xml.etree.ElementTree as ET
+
+          junit_path = Path(sys.argv[1])
+          root = ET.parse(junit_path).getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+          collected = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
+          skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
+          if collected == 0:
+              raise SystemExit("required Overview journey collection is empty")
+          if skipped:
+              raise SystemExit(
+                  f"required Overview journeys were skipped: skipped={skipped}"
+              )
+          PY
 
       # Deterministic, fully offline (rendered HTML + ESM stubs, no live vault):
       # this is a real regression gate, so it is NOT continue-on-error.
@@ -73,3 +117,132 @@ jobs:
         continue-on-error: true
         run: |
           pytest -q tests/companion_ui/test_mermaid_browser.py
+
+      # Always retain a diagnostic manifest for an explicit dispatch. A green
+      # journey step is accepted only when the separate receipt, trace, and
+      # screenshot evidence exists; missing evidence cannot false-green.
+      - name: Build exact-SHA Overview evidence manifest
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        env:
+          DEVUI_OVERVIEW_JOURNEY_OUTCOME: ${{ steps.overview-journeys.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEVUI_OVERVIEW_EVIDENCE_DIR"
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import xml.etree.ElementTree as ET
+
+          evidence_dir = Path(os.environ["DEVUI_OVERVIEW_EVIDENCE_DIR"])
+          junit_path = Path(os.environ["DEVUI_OVERVIEW_JUNIT"])
+          receipt_path = Path(os.environ["DEVUI_OVERVIEW_RECEIPT"])
+          trace_dir = Path(os.environ["DEVUI_OVERVIEW_TRACE_DIR"])
+          screenshot_dir = Path(os.environ["DEVUI_OVERVIEW_SCREENSHOT_DIR"])
+          manifest_path = Path(os.environ["DEVUI_OVERVIEW_MANIFEST"])
+          github_sha = os.environ["GITHUB_SHA"]
+          checkout_sha = subprocess.run(
+              ["git", "rev-parse", "HEAD"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.strip()
+
+          traces = sorted(
+              path
+              for path in trace_dir.rglob("*")
+              if path.is_file() and path.stat().st_size > 0
+          )
+          screenshots = sorted(
+              path
+              for path in screenshot_dir.rglob("*")
+              if path.is_file() and path.stat().st_size > 0
+          )
+          receipt_valid = False
+          if receipt_path.is_file() and receipt_path.stat().st_size > 0:
+              try:
+                  receipt_valid = isinstance(
+                      json.loads(receipt_path.read_text(encoding="utf-8")), dict
+                  )
+              except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                  receipt_valid = False
+
+          files = [
+              path
+              for path in [junit_path, receipt_path]
+              if path.is_file() and path.stat().st_size > 0
+          ]
+          files.extend(traces)
+          files.extend(screenshots)
+
+          junit_summary = None
+          if junit_path.is_file():
+              root = ET.parse(junit_path).getroot()
+              suites = (
+                  [root]
+                  if root.tag == "testsuite"
+                  else list(root.findall("testsuite"))
+              )
+              junit_summary = {
+                  key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
+                  for key in ("tests", "failures", "errors", "skipped")
+              }
+
+          missing = []
+          if not junit_path.is_file():
+              missing.append("junit")
+          if not receipt_valid:
+              missing.append("receipt")
+          if not traces:
+              missing.append("trace")
+          if not screenshots:
+              missing.append("screenshot")
+
+          payload = {
+              "artifact_name": f"devui-overview-browser-exact-{github_sha}",
+              "checkout_sha": checkout_sha,
+              "github_ref": os.environ["GITHUB_REF"],
+              "github_sha": github_sha,
+              "journey_outcome": os.environ["DEVUI_OVERVIEW_JOURNEY_OUTCOME"],
+              "junit": junit_summary,
+              "missing_evidence": missing,
+              "files": [
+                  {
+                      "path": str(path.relative_to(evidence_dir)),
+                      "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                  }
+                  for path in sorted(files)
+              ],
+          }
+          manifest_path.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          if checkout_sha != github_sha:
+              raise SystemExit(
+                  f"exact-ref mismatch: checkout={checkout_sha} github={github_sha}"
+              )
+          if payload["journey_outcome"] == "success" and missing:
+              raise SystemExit(
+                  "successful Overview journeys lack required evidence: "
+                  + ", ".join(missing)
+              )
+          PY
+
+      - name: Upload exact-SHA Overview browser evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: devui-overview-browser-exact-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/devui-overview/junit.xml
+            ${{ runner.temp }}/devui-overview/manifest.json
+            ${{ runner.temp }}/devui-overview/receipts/**
+            ${{ runner.temp }}/devui-overview/traces/**
+            ${{ runner.temp }}/devui-overview/screenshots/**
+          if-no-files-found: error

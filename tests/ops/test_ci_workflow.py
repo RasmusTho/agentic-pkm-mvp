@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
+
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +23,29 @@ FAILURE_CONTEXT_WORKFLOW = WORKFLOWS_DIR / "pr-ci-failure-context.yml"
 
 def _smoke_text() -> str:
     return CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _browser_text() -> str:
+    return BROWSER_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _workflow_step(workflow: str, name: str, next_name: str | None = None) -> str:
+    start = workflow.index(f"- name: {name}")
+    if next_name is None:
+        return workflow[start:]
+    return workflow[start : workflow.index(f"- name: {next_name}", start)]
+
+
+def _workflow_run(name: str) -> str:
+    workflow = yaml.safe_load(_browser_text())
+    steps = workflow["jobs"]["companion-ui-browser-runtime"]["steps"]
+    return next(step["run"] for step in steps if step.get("name") == name)
+
+
+def _python_heredoc(script: str) -> str:
+    match = re.search(r"<<'PY'\n(?P<body>.*?)\nPY(?:\n|$)", script, re.DOTALL)
+    assert match is not None
+    return match.group("body")
 
 
 def _unit_tests_job_text() -> str:
@@ -227,6 +257,198 @@ def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_m
     assert "'Dockerfile'" in image
     assert "paths:" in import_linter
     assert "'app/**'" in import_linter
+
+
+def test_browser_runtime_supports_exact_ref_dispatch_without_pull_request_trigger() -> None:
+    browser = _browser_text()
+    triggers = browser[: browser.index("concurrency:")]
+    checkout = _workflow_step(browser, "Checkout", "Setup Python")
+
+    assert "push:" in triggers
+    assert "branches: [main]" in triggers
+    assert "workflow_dispatch:" in triggers
+    assert "pull_request:" not in triggers
+    assert "ref: ${{ github.sha }}" in checkout
+    for existing_blocking_module in (
+        "tests/companion_ui/test_runtime_unavailable_browser.py",
+        "tests/companion_ui/test_overlay_history_browser.py",
+        "tests/companion_ui/test_cockpit_journeys.py",
+    ):
+        assert f"pytest -q {existing_blocking_module}" in browser
+
+
+def test_browser_runtime_dispatch_requires_non_skipped_overview_journeys(
+    tmp_path: Path,
+) -> None:
+    step = _workflow_step(
+        _browser_text(),
+        "Run exact-ref Overview browser journeys",
+        "Run deterministic Companion UI browser-runtime tests",
+    )
+
+    assert "if: github.event_name == 'workflow_dispatch'" in step
+    assert "set -euo pipefail" in step
+    assert "test -f tests/companion_ui/test_devui_overview_journeys.py" in step
+    assert "--junitxml=\"$DEVUI_OVERVIEW_JUNIT\"" in step
+    assert "tests/companion_ui/test_devui_overview_journeys.py" in step
+    assert "required Overview journey collection is empty" in step
+    assert "required Overview journeys were skipped" in step
+    assert "\n        continue-on-error:" not in step
+
+    junit_guard = _python_heredoc(
+        _workflow_run("Run exact-ref Overview browser journeys")
+    )
+    junit_path = tmp_path / "junit.xml"
+    scenarios = (
+        ({"tests": "0", "skipped": "0"}, False, "collection is empty"),
+        ({"tests": "2", "skipped": "1"}, False, "journeys were skipped"),
+        ({"tests": "2", "skipped": "0"}, True, ""),
+    )
+    for attributes, should_pass, expected_error in scenarios:
+        rendered = " ".join(f'{key}="{value}"' for key, value in attributes.items())
+        junit_path.write_text(
+            f"<testsuites><testsuite {rendered}/></testsuites>\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, "-", str(junit_path)],
+            input=junit_guard,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is should_pass
+        assert expected_error in result.stderr
+
+
+def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
+    tmp_path: Path,
+) -> None:
+    browser = _browser_text()
+    manifest = _workflow_step(
+        browser,
+        "Build exact-SHA Overview evidence manifest",
+        "Upload exact-SHA Overview browser evidence",
+    )
+    upload = _workflow_step(browser, "Upload exact-SHA Overview browser evidence")
+
+    assert "DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview" in browser
+    assert "DEVUI_OVERVIEW_JUNIT:" in browser
+    assert (
+        "DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/"
+        "devui-overview-browser-accessibility.v1.json"
+    ) in browser
+    assert "DEVUI_OVERVIEW_TRACE_DIR:" in browser
+    assert "DEVUI_OVERVIEW_SCREENSHOT_DIR:" in browser
+    assert "DEVUI_OVERVIEW_MANIFEST: ${{ runner.temp }}/devui-overview/manifest.json" in browser
+    assert '["git", "rev-parse", "HEAD"]' in manifest
+    assert "GITHUB_SHA" in manifest
+    assert 'missing.append("junit")' in manifest
+    assert 'missing.append("receipt")' in manifest
+    assert "path.stat().st_size > 0" in manifest
+    assert "json.loads(receipt_path.read_text" in manifest
+    assert "trace" in manifest
+    assert "screenshot" in manifest
+    assert "name: devui-overview-browser-exact-${{ github.sha }}" in upload
+    assert "${{ runner.temp }}/devui-overview/junit.xml" in upload
+    assert "${{ runner.temp }}/devui-overview/manifest.json" in upload
+    assert "${{ runner.temp }}/devui-overview/receipts/**" in upload
+    assert "${{ runner.temp }}/devui-overview/traces/**" in upload
+    assert "${{ runner.temp }}/devui-overview/screenshots/**" in upload
+    assert "if-no-files-found: error" in upload
+
+    evidence_dir = tmp_path / "devui-overview"
+    receipt_path = evidence_dir / "receipts" / "devui-overview-browser-accessibility.v1.json"
+    trace_path = evidence_dir / "traces" / "trace.zip"
+    screenshot_path = evidence_dir / "screenshots" / "overview.png"
+    junit_path = evidence_dir / "junit.xml"
+    for parent in (receipt_path.parent, trace_path.parent, screenshot_path.parent):
+        parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text('{"contract": "devui-overview-browser-accessibility.v1"}\n', encoding="utf-8")
+    trace_path.write_bytes(b"trace")
+    screenshot_path.write_bytes(b"screenshot")
+    junit_path.write_text(
+        '<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0"/></testsuites>\n',
+        encoding="utf-8",
+    )
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    manifest_path = evidence_dir / "manifest.json"
+    env = os.environ | {
+        "DEVUI_OVERVIEW_EVIDENCE_DIR": str(evidence_dir),
+        "DEVUI_OVERVIEW_JUNIT": str(junit_path),
+        "DEVUI_OVERVIEW_RECEIPT": str(receipt_path),
+        "DEVUI_OVERVIEW_TRACE_DIR": str(trace_path.parent),
+        "DEVUI_OVERVIEW_SCREENSHOT_DIR": str(screenshot_path.parent),
+        "DEVUI_OVERVIEW_MANIFEST": str(manifest_path),
+        "DEVUI_OVERVIEW_JOURNEY_OUTCOME": "success",
+        "GITHUB_REF": "refs/heads/codex/exact-ref-proof",
+        "GITHUB_SHA": head_sha,
+    }
+    manifest_run = _workflow_run("Build exact-SHA Overview evidence manifest").replace(
+        "python - <<'PY'", f'"{sys.executable}" - <<\'PY\'', 1
+    )
+    result = subprocess.run(
+        ["bash", "-c", manifest_run],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["artifact_name"] == f"devui-overview-browser-exact-{head_sha}"
+    assert payload["checkout_sha"] == head_sha
+    assert payload["github_sha"] == head_sha
+    assert payload["missing_evidence"] == []
+    assert {item["path"] for item in payload["files"]} == {
+        "junit.xml",
+        "receipts/devui-overview-browser-accessibility.v1.json",
+        "screenshots/overview.png",
+        "traces/trace.zip",
+    }
+
+    mismatch_result = subprocess.run(
+        ["bash", "-c", manifest_run],
+        cwd=REPO_ROOT,
+        env=env | {"GITHUB_SHA": "0" * 40},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert mismatch_result.returncode != 0
+    assert "exact-ref mismatch" in mismatch_result.stderr
+
+    screenshot_path.unlink()
+    missing_result = subprocess.run(
+        ["bash", "-c", manifest_run],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing_result.returncode != 0
+    assert "lack required evidence: screenshot" in missing_result.stderr
+
+
+def test_browser_runtime_exact_ref_contract_is_owner_documented() -> None:
+    strategy = (
+        REPO_ROOT / "docs" / "development" / "TEST_STRATEGY_HOT_PATH.md"
+    ).read_text(encoding="utf-8")
+    normalized_strategy = " ".join(strategy.split())
+
+    assert "#4836" in strategy
+    assert "workflow_dispatch" in strategy
+    assert ".github/workflows/browser-runtime.yml" in strategy
+    assert "${{ github.sha }}" in strategy
+    assert "ordinary PR unit CI does not provide" in normalized_strategy
 
 
 def test_legacy_smoke_workflow_is_retired_without_stale_references() -> None:

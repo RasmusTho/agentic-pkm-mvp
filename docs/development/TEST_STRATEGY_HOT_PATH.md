@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
 Last reviewed: 2026-08-12
-Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
+Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
 
 # Test Strategy for the Hot Path
 
@@ -67,6 +67,18 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   fails the changing PR instead of first turning `main`'s post-merge smoke red. The docker-compose
   integration itself (mounts, launcher sequence, seeded vault) remains post-merge-only coverage.
 - E2E tests under `tests/e2e/` run after merge and in the nightly suite, not on ordinary PRs. Opt-in classes (live LLM, browser, human UAT, eval) remain in their dedicated post-merge or nightly lanes.
+- Combined devUI shell recovery #4836 has an explicit pre-merge exception to that post-merge
+  browser default: after publishing the candidate ref, an operator must dispatch
+  `.github/workflows/browser-runtime.yml` against that exact ref (for example,
+  `gh workflow run browser-runtime.yml --ref <published-candidate-ref>`). Native
+  `workflow_dispatch` resolution binds the pinned checkout and the evidence artifact to exact
+  `${{ github.sha }}`. The dispatch fails when
+  `tests/companion_ui/test_devui_overview_journeys.py` is absent, collects zero tests, fails, or
+  skips any required journey; a green run also requires its JUnit result, Overview browser receipt,
+  Playwright trace, screenshots, and hashed manifest in the exact-SHA artifact. The workflow retains
+  its push-to-`main` path and deliberately has no `pull_request` trigger. The ordinary PR unit CI
+  does not provide this browser proof. Neither a local screenshot nor a post-merge run substitutes
+  for the exact published #4836 candidate run.
 
 ## Check Levels
 
@@ -125,6 +137,9 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Runtime PRs should run focused tests first and add smoke only when the runtime surface is actually touched.
 - Subsystem-scoped CI must be conservative: workflow/test configuration, dependency files, migrations, and shared fixtures choose the broad deterministic suite. Unmapped runtime paths fail selection until an owner is declared; they must never silently borrow the whole repository's suite.
 - E2E coverage is reserved for post-merge, nightly, or explicit manual verification.
+- When a governing contract names an exact-ref browser proof, dispatch the dedicated workflow only
+  after publishing the candidate and authenticate the result and artifacts against its resolved
+  SHA; do not reinterpret ordinary unit CI as browser evidence.
 - Slow or flaky test classes should be marked and routed to their dedicated subsystem, nightly, or manual workflow. They must not install dependencies or invoke pytest on unrelated PRs.
 - Direct repair PRs are classified by the surfaces they touch, not by whether they carry a governing issue.
 - Failing required checks must be classified, not ignored as out-of-scope.
