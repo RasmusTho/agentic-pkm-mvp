@@ -70,6 +70,23 @@ class _RecCursor:
         if norm.startswith("select to_regclass(%s) as oid"):
             self._fetch = (params[0],)
             return
+        if "from (values ('store_objects'), ('store_vector_index')" in norm:
+            self._fetchall = [
+                ("store_objects", ["vault_binding_id", "object_id"], True),
+                ("store_vector_index", ["vault_binding_id", "object_id"], True),
+                (
+                    "store_relations",
+                    ["vault_binding_id", "src_id", "dst_id", "rel"],
+                    True,
+                ),
+                (
+                    "store_relation_memberships",
+                    ["vault_binding_id", "src_id", "rel", "value"],
+                    True,
+                ),
+                ("vector_index_meta", ["vault_binding_id", "id"], True),
+            ]
+            return
         if "from information_schema.columns" in norm or "from pg_attribute" in norm:
             self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
             return

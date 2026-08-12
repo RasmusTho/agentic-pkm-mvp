@@ -27,6 +27,7 @@ from app.agents.panel.filters import strip_ai_panels
 from app.components.embeddings import EmbeddingIdentity
 from app.index.artifact_metadata import canonicalize_indexable_text, compute_content_hash
 from app.ingest.chunk_policy import CHUNK_POLICY_VERSION
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.settings.models import SettingsBundle
 
 pytestmark = pytest.mark.not_pg
@@ -98,8 +99,9 @@ def _seed_legacy_panel_vector(*, source_ref: str) -> tuple[object, str]:
             provenance["content_hash"] = compute_content_hash("")
             vector_payload["provenance"] = provenance
             cur.execute(
-                "UPDATE store_vector_index SET payload = %s::jsonb WHERE object_id = %s",
-                (json.dumps(vector_payload), oid),
+                "UPDATE store_vector_index SET payload = %s::jsonb "
+                "WHERE vault_binding_id = %s AND object_id = %s",
+                (json.dumps(vector_payload), COMPATIBILITY_BINDING_ID, oid),
             )
 
     return oid, panel_only
@@ -253,8 +255,10 @@ def test_doctor_lists_stale_candidates(tmp_path, monkeypatch) -> None:
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE store_objects SET payload = payload || '{\"text\": \"changed content\", \"content\": \"changed content\"}'::jsonb WHERE object_id = %s",
-                    (oid,),
+                    "UPDATE store_objects SET payload = payload || "
+                    "'{\"text\": \"changed content\", \"content\": \"changed content\"}'::jsonb "
+                    "WHERE vault_binding_id = %s AND object_id = %s",
+                    (COMPATIBILITY_BINDING_ID, oid),
                 )
 
         reset_diagnose_cache()
@@ -423,8 +427,13 @@ Transient panel text.
                     "UPDATE store_objects "
                     "SET payload = payload || "
                     "jsonb_build_object('content', %s::text, 'text', %s::text) "
-                    "WHERE object_id = %s",
-                    (changed_content, "legacy shadow text", stale_oid),
+                    "WHERE vault_binding_id = %s AND object_id = %s",
+                    (
+                        changed_content,
+                        "legacy shadow text",
+                        COMPATIBILITY_BINDING_ID,
+                        stale_oid,
+                    ),
                 )
 
         import importlib
@@ -529,8 +538,9 @@ def test_reconcile_purges_vector_for_present_non_indexable_source(tmp_path, monk
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE store_objects SET payload = %s::jsonb WHERE object_id = %s",
-                    (json.dumps(authoritative_payload), oid),
+                    "UPDATE store_objects SET payload = %s::jsonb "
+                    "WHERE vault_binding_id = %s AND object_id = %s",
+                    (json.dumps(authoritative_payload), COMPATIBILITY_BINDING_ID, oid),
                 )
 
         result = CliRunner().invoke(
@@ -748,8 +758,13 @@ def test_reconcile_reclassifies_source_update_before_conditional_purge(
                 with _connect() as conn:
                     with conn.cursor() as cur:
                         cur.execute(
-                            "UPDATE store_objects SET payload = %s::jsonb WHERE object_id = %s",
-                            (json.dumps({"content": repaired_raw, "text": "stale alias"}), oid),
+                            "UPDATE store_objects SET payload = %s::jsonb "
+                            "WHERE vault_binding_id = %s AND object_id = %s",
+                            (
+                                json.dumps({"content": repaired_raw, "text": "stale alias"}),
+                                COMPATIBILITY_BINDING_ID,
+                                oid,
+                            ),
                         )
                 raced = True
             return result
@@ -832,7 +847,11 @@ def test_reconcile_reclassifies_source_delete_before_conditional_purge(
             if not raced:
                 with _connect() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("DELETE FROM store_objects WHERE object_id = %s", (oid,))
+                        cur.execute(
+                            "DELETE FROM store_objects "
+                            "WHERE vault_binding_id = %s AND object_id = %s",
+                            (COMPATIBILITY_BINDING_ID, oid),
+                        )
                 raced = True
             return result
 
@@ -903,8 +922,13 @@ def test_reconcile_absent_source_retains_vector_payload_fallback(tmp_path, monke
                 cur.execute(
                     "UPDATE store_vector_index "
                     "SET provider = %s, model = %s "
-                    "WHERE object_id = %s",
-                    ("legacy-provider", "legacy-model", oid),
+                    "WHERE vault_binding_id = %s AND object_id = %s",
+                    (
+                        "legacy-provider",
+                        "legacy-model",
+                        COMPATIBILITY_BINDING_ID,
+                        oid,
+                    ),
                 )
                 cur.execute(
                     "SELECT count(*) AS total FROM store_objects WHERE object_id = %s",

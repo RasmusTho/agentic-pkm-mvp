@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06) + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-02)
+Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py + app/services/vault_sync.py + app/alembic/versions/c7f4b1a83d29_mvr05a0_file_state_binding_key.py + app/alembic/versions/d1e8a0c5f37b_mvr05a1_objects_agent_memories_adoption.py + app/db/db.py + tests/architecture/durable_table_classification.json (2026-08-12)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -21,6 +21,12 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   "run migrations" hint instead of creating schema. Test fixtures opt in to create-on-demand via
   `STORE_SCHEMA_AUTOCREATE=1`. Schema parity between the migration and the audited
   `_ensure_tables()` shape is asserted by `tests/migrations/test_store_schema_parity.py`.
+- MVR-05A3 revision `e6c4a2b8d1f3` rekeys all five store projections by
+  `vault_binding_id` and converts every live canonical-object child reference in the same
+  forward-only transaction. The migration derives its effective FK inventory from PostgreSQL,
+  preserves FK actions and deferral posture, and refuses any zero/many/cross-binding backfill
+  rather than guessing a binding. The historical `membership.set_id` endpoint is converted only
+  when its live FK targets `store_objects`; the fresh `sets(id)` FK remains unchanged.
 - The **DB outbox** table (canonical queue) is **migration-owned** (KERNEL-05, #2850, follow-up to
   KERNEL-04): Alembic revision `f3a1c9d2e4b7` creates it, and
   `app/services/outbox.py::bootstrap()` is assert-only outside tests — a Postgres runtime with a
@@ -104,10 +110,9 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   any referrer under `app/`, `scripts/` and `.github/` are asserted by
   `tests/architecture/test_multi_vault_projection_inventory.py::test_orphaned_relation_artifacts_are_removed_or_classified`.
   `app/store/relation_index.py` is **not** removed: `app/objects/__init__.py` re-exports it, so
-  production reachability could not be disproved. It is classified in the manifest instead, with the
-  fact that its `link()` inserts six columns (`src_uuid`, `dst_uuid`, `relation_type`, `weight`,
-  `provenance`, `created_at`) that do not exist on the Alembic-owned `relations` table
-  (`id`, `src_id`, `dst_id`, `type`, `payload`) recorded as the finding MVR-05A4 (#4578) inherits.
+  production reachability could not be disproved. Its old six-column statement does not match the
+  Alembic-owned `relations` table; after MVR-05A3 the seam fails before SQL so it cannot create a
+  binding-less row. MVR-05A4 (#4578) owns replacing or deleting that compatibility seam.
 - The **vault-sync `file_state`** table is **migration-owned** (MVR-05A0, #4543): Alembic revision
   `c7f4b1a83d29` creates it, adopts a database where the legacy runtime bootstrap already created
   it, and rekeys it from `path` to `(vault_binding_id, path)`.
@@ -206,14 +211,17 @@ Instead they are:
 
 ## Core Tables (Store)
 
-The active store tables are migration-owned: created by Alembic revision `c2766a04d001`
+The active store tables are migration-owned: created by Alembic revision `c2766a04d001` and
+binding-rekeyed by `e6c4a2b8d1f3`
 (KERNEL-04, #2766), with `app/stores/pg.py::_ensure_tables()` asserting their presence (and running
 the idempotent identity **data** backfill) rather than creating schema outside tests. The shapes
 below mirror the migration (verified per the `Last verified against` frontmatter). They remain
 mirror/projection surfaces and do not hold semantic authority over the note contract.
 
 ### `store_objects`
-- `object_id` (`uuid`, PK)
+- `vault_binding_id` (`text`, `NOT NULL`)
+- `object_id` (`uuid`, `NOT NULL`)
+- `PRIMARY KEY (vault_binding_id, object_id)`; no global one-column unique object-id index
 - `kind` (`text`, `NOT NULL`)
 - `source_ref` (`text`, nullable)
 - `payload` (`jsonb`, `NOT NULL`)
@@ -233,7 +241,9 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
     companion-note identity continuity rather than in this table as semantic authority.
 
 ### `store_vector_index`
-- `object_id` (`uuid`, PK)
+- `vault_binding_id` (`text`, `NOT NULL`)
+- `object_id` (`uuid`, `NOT NULL`)
+- `PRIMARY KEY (vault_binding_id, object_id)`
 - `kind` (`text`, `NOT NULL`)
 - `source_ref` (`text`, nullable)
 - `payload` (`jsonb`, `NOT NULL`)
@@ -246,7 +256,7 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
 - Interpretation:
   - the vector index is a derived runtime artifact, rebuildable from `store_objects` payloads
   - embeddings are stored as a `double precision[]` array; there is no `vector`-extension column, and
-    the primary key is still `object_id` (one row per whole note) — similarity is computed in
+    the primary key is `(vault_binding_id, object_id)` (one row per whole note per binding) — similarity is computed in
     application code
   - every row carries its full generating embedding identity tuple `(provider, model, dim, normalize)`; the index-level primary identity lives in `vector_index_meta`
   - the row `payload` carries the same retrieved-unit metadata as `store_objects` plus
@@ -283,23 +293,27 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
     staleness scan.
 
 ### `store_relations`
+- `vault_binding_id` (`text`, `NOT NULL`)
 - `src_id` (`uuid`, `NOT NULL`)
 - `dst_id` (`uuid`, `NOT NULL`)
 - `rel` (`text`, `NOT NULL`)
 - `payload` (`jsonb`, `NOT NULL`, default `{}`)
 - `created_at` (`timestamptz`, `NOT NULL`, default `now()`)
-- `PRIMARY KEY (src_id, dst_id, rel)`
+- `PRIMARY KEY (vault_binding_id, src_id, dst_id, rel)`
 
 ### `store_relation_memberships`
+- `vault_binding_id` (`text`, `NOT NULL`)
 - `src_id` (`uuid`, `NOT NULL`)
 - `rel` (`text`, `NOT NULL`)
 - `value` (`text`, `NOT NULL`)
 - `payload` (`jsonb`, `NOT NULL`, default `{}`)
 - `created_at` (`timestamptz`, `NOT NULL`, default `now()`)
-- `PRIMARY KEY (src_id, rel, value)`
+- `PRIMARY KEY (vault_binding_id, src_id, rel, value)`
 
 ### `vector_index_meta`
-- `id` (`integer`, PK, `CHECK (id = 1)` — single-row identity record)
+- `vault_binding_id` (`text`, `NOT NULL`)
+- `id` (`integer`, `CHECK (id = 1)`)
+- `PRIMARY KEY (vault_binding_id, id)` — one identity record per binding
 - `identity_json` (`text`, `NOT NULL`) — serialized embedding identity (provider, model, dim, normalize)
 - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
 - Interpretation:
@@ -319,8 +333,9 @@ there is no `search_vector` column anywhere in the schema (active or legacy).
 
 ## #3510 legacy-FK cutover (current reality)
 
-Alembic revision `7e4f2a1c9d30` moves every inventoried live single-column FK that referenced
-`objects.id` to `store_objects.object_id`, preserving its `ON UPDATE`, `ON DELETE`, and deferral
+Alembic revision `7e4f2a1c9d30` first moved every inventoried live single-column FK that referenced
+`objects.id` to `store_objects.object_id`. MVR-05A3 revision `e6c4a2b8d1f3` converts that effective
+inventory to `store_objects(vault_binding_id, object_id)`, preserving its `ON UPDATE`, `ON DELETE`, and deferral
 semantics. Before retargeting it transactionally backfills a missing canonical parent from each
 retained legacy row and refuses unknown, composite, orphaned, or `objects.uuid`-referencing FKs with
 repair-and-rerun guidance; it is forward-only.
@@ -330,7 +345,9 @@ repair-and-rerun guidance; it is forward-only.
 `objects.id` before writing, updating, or deleting the canonical `store_objects` row. Thus an
 historical row whose `id != uuid` has exactly one canonical parent and decision/audit children use
 that `id`; fresh canonical-only ingest uses its canonical id directly. Canonical backfill scans
-`store_objects`, and reset uses ordered deletes so inbound child FKs retain their declared semantics.
+`store_objects`. Store reset takes an explicit binding and deletes only that binding's derived rows
+and CASCADE children. Nullable decisions/audit receipts survive parent deletion with only
+`object_id = NULL`; their known `vault_binding_id` provenance remains.
 
 ### `objects` (legacy, migration-owned since MVR-05A1)
 
@@ -489,8 +506,9 @@ Interpretation:
   minimum-runtime floor; #4543 deliberately does not.
 
 ### `chunks` (legacy)
+- `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `id` (`uuid`, PK)
-- `object_id` (`uuid`, FK → `store_objects.object_id`, `ON DELETE CASCADE` after #3510)
+- `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
 - `idx` (`int`)
 - `offset_start` / `offset_end` (`int`)
 - `text` (`text`)
@@ -512,7 +530,8 @@ precondition is not met — one read reference remains (`app/jobs/backfill.py` u
 own forward-only migration.
 
 - `id` (`uuid`, PK; default varies by migration)
-- `object_id` (`uuid`, FK → `store_objects.object_id`, `ON DELETE CASCADE` after #3510)
+- `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
+- `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
 - `chunk_id` (`uuid`, nullable FK → `chunks.id`, `ON DELETE CASCADE`)
 - `provider` (`text`, default `mock`)
 - `dim` (`int`, default `1536`)
@@ -521,7 +540,9 @@ own forward-only migration.
 
 ### `decisions` (legacy lineage, active writer schema)
 - `id` (`uuid`, PK; default `gen_random_uuid()` after `e1d2c3b4a5f6`)
-- `object_id` (`uuid`, nullable, FK → `store_objects.object_id`, `ON DELETE SET NULL` after
+- `vault_binding_id` (`text`, nullable only for a receipt whose `object_id` was already null)
+- `object_id` (`uuid`, nullable; composite FK with `vault_binding_id` → `store_objects`,
+  `ON DELETE SET NULL (object_id)` after MVR-05A3, preserving binding provenance; previously
   #3510; the pre-cutover `objects.id` FK was realigned to the `audit.object_id` posture by
   `1a739d9494af_decisions_fk_set_null.py`, #2788; it was
   `ON DELETE CASCADE` and `NOT NULL` before this migration, see D-5/D-7 in
@@ -547,11 +568,24 @@ Interpretation:
   `STORE_BACKEND=memory` opt-in (mirrors the KERNEL-03 store-backend contract in
   `app/stores/provider.py::_resolved_backend`).
 
+### `audit` (legacy lineage, active compatibility writer)
+- `id` (`uuid`, PK)
+- `vault_binding_id` (`text`, nullable only when an already-null object reference had no source)
+- `object_id` (`uuid`, nullable; composite FK with `vault_binding_id` → `store_objects`,
+  `ON DELETE SET NULL (object_id)` so the audit row keeps binding provenance)
+- `agent` / `action` (`text`, `NOT NULL`), `ts` (`timestamptz`), `trace_id` (`text`),
+  `details` (`jsonb`)
+- `app/services/audit.py` always supplies the compatibility binding. If its first insert finds no
+  canonical parent, the fallback preserves the attempted object identifier in
+  `details.object_ref`, clears only `object_id`, and retains `vault_binding_id`.
+
 ### `membership` (legacy)
 The legacy baseline retains the **composite** key form:
-- `object_id` (`uuid`, FK → `store_objects.object_id`, `ON DELETE CASCADE` after #3510)
+- `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
+- `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
 - `set_id` (`uuid`, `ON DELETE CASCADE`; fresh lineage keeps its FK to `sets.id`, while #3510
-  retargets only retained legacy objects-as-sets schemas to `store_objects.object_id`)
+  retargets only retained legacy objects-as-sets schemas; MVR-05A3 makes that historical endpoint
+  a composite `store_objects(vault_binding_id, object_id)` FK)
 - `created_at` (`timestamptz`, default `now()`)
 - `PRIMARY KEY (object_id, set_id)`
 

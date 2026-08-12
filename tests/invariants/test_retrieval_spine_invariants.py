@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.components.embeddings import EmbeddingIdentity
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.retrieval import hybrid
 from app.stores import get_vector_index, reset_store_backends
 
@@ -163,20 +164,29 @@ def test_identity_converges(tmp_path, monkeypatch) -> None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s::jsonb, now(), now())
+                    INSERT INTO store_objects (
+                        vault_binding_id, object_id, kind, source_ref, payload, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s::jsonb, now(), now())
                     """,
-                    (oid, "note", "tests/identity-converges", json.dumps({"text": text})),
+                    (
+                        COMPATIBILITY_BINDING_ID,
+                        oid,
+                        "note",
+                        "tests/identity-converges",
+                        json.dumps({"text": text}),
+                    ),
                 )
                 cur.execute(
                     """
                     INSERT INTO store_vector_index (
-                        object_id, kind, source_ref, payload, embedding,
+                        vault_binding_id, object_id, kind, source_ref, payload, embedding,
                         dim, model, provider, normalize, updated_at
                     )
-                    VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, now())
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, now())
                     """,
                     (
+                        COMPATIBILITY_BINDING_ID,
                         oid,
                         "note",
                         "tests/identity-converges",
@@ -196,11 +206,14 @@ def test_identity_converges(tmp_path, monkeypatch) -> None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO vector_index_meta (id, identity_json, updated_at)
-                    VALUES (1, %s, now())
-                    ON CONFLICT (id) DO UPDATE SET identity_json = EXCLUDED.identity_json, updated_at = now()
+                    INSERT INTO vector_index_meta (
+                        vault_binding_id, id, identity_json, updated_at
+                    )
+                    VALUES (%s, 1, %s, now())
+                    ON CONFLICT (vault_binding_id, id) DO UPDATE
+                    SET identity_json = EXCLUDED.identity_json, updated_at = now()
                     """,
-                    (json.dumps(asdict(new_identity)),),
+                    (COMPATIBILITY_BINDING_ID, json.dumps(asdict(new_identity))),
                 )
             conn.commit()
 

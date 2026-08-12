@@ -20,6 +20,7 @@ from app.cli import cli
 from app.components.embeddings import EmbeddingIdentity
 from app.db.dsn import resolve_dsn
 from app.index import doctor as doctor_mod
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.stores import pg as pg_store
 from app.stores import reset_store_backends
 
@@ -58,11 +59,12 @@ def pg_env(monkeypatch):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO vector_index_meta (id, identity_json, updated_at)
-                VALUES (1, %s, now())
-                ON CONFLICT (id) DO UPDATE SET identity_json = EXCLUDED.identity_json
+                INSERT INTO vector_index_meta (vault_binding_id, id, identity_json, updated_at)
+                VALUES (%s, 1, %s, now())
+                ON CONFLICT (vault_binding_id, id) DO UPDATE
+                SET identity_json = EXCLUDED.identity_json
                 """,
-                (json.dumps(asdict(PRIMARY)),),
+                (COMPATIBILITY_BINDING_ID, json.dumps(asdict(PRIMARY))),
             )
         conn.commit()
     yield
@@ -77,14 +79,22 @@ def _seed_row(identity: EmbeddingIdentity, *, embedding: list[float]) -> None:
             cur.execute(
                 """
                 INSERT INTO store_vector_index (
-                    object_id, kind, source_ref, payload, embedding,
+                    vault_binding_id, object_id, kind, source_ref, payload, embedding,
                     dim, model, provider, normalize, updated_at
                 )
-                VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, now())
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, now())
                 """,
                 (
-                    uuid4(), "note", "tests/doctor-mixed", json.dumps({"text": "seed"}),
-                    embedding, identity.dim, identity.model, identity.provider, identity.normalize,
+                    COMPATIBILITY_BINDING_ID,
+                    uuid4(),
+                    "note",
+                    "tests/doctor-mixed",
+                    json.dumps({"text": "seed"}),
+                    embedding,
+                    identity.dim,
+                    identity.model,
+                    identity.provider,
+                    identity.normalize,
                 ),
             )
         conn.commit()

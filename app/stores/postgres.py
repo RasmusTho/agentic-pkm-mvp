@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 
+from app.db.db import COMPATIBILITY_BINDING_ID
 from app.db.decisions_schema import assert_decisions_schema
 
 from .pg import PgObjectStore
@@ -41,10 +42,19 @@ class PgDecisions:
                 assert_decisions_schema(conn)
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO decisions (id, object_id, agent, kind, key, value, created_at) "
-                        "VALUES (%s,%s,%s,%s,%s,%s::jsonb, now()) "
+                        "INSERT INTO decisions ("
+                        "id, vault_binding_id, object_id, agent, kind, key, value, created_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb, now()) "
                         "RETURNING id",
-                        (str(uuid4()), object_id, agent, kind, key, json.dumps(value)),
+                        (
+                            str(uuid4()),
+                            COMPATIBILITY_BINDING_ID,
+                            object_id,
+                            agent,
+                            kind,
+                            key,
+                            json.dumps(value),
+                        ),
                     )
                     row = cur.fetchone()
             return {"id": (row[0] if isinstance(row, (list, tuple)) else row.get("id"))}

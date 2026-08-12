@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+
 
 _CANONICAL_RETAINED_IDENTITY_FROM_SQL = """
 FROM store_objects canonical
-LEFT JOIN objects legacy ON legacy.id = canonical.object_id
+LEFT JOIN objects legacy
+  ON legacy.vault_binding_id = canonical.vault_binding_id
+ AND legacy.id = canonical.object_id
 """
 
 
@@ -31,7 +35,12 @@ def _validated_retained_mapping(
     return object_id
 
 
-def resolve_vault_uuid_with_connection(conn: Any, vault_uuid: str) -> str:
+def resolve_vault_uuid_with_connection(
+    conn: Any,
+    vault_uuid: str,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> str:
     """Resolve a retained vault UUID to one unambiguous canonical object id."""
     with conn.cursor() as cur:
         cur.execute(
@@ -41,14 +50,14 @@ def resolve_vault_uuid_with_connection(conn: Any, vault_uuid: str) -> str:
                    EXISTS (
                        SELECT 1
                        FROM store_objects
-                       WHERE object_id = %s
+                       WHERE vault_binding_id = %s AND object_id = %s
                    ) AS canonical_alias_exists
             FROM objects
-            WHERE uuid = %s
+            WHERE vault_binding_id = %s AND uuid = %s
             ORDER BY id
             LIMIT 1
             """,
-            (vault_uuid, vault_uuid),
+            (vault_binding_id, vault_uuid, vault_binding_id, vault_uuid),
         )
         row = cur.fetchone()
     if not row:
@@ -66,19 +75,27 @@ def resolve_vault_uuid_with_connection(conn: Any, vault_uuid: str) -> str:
     )
 
 
-def vault_uuid_to_canonical_id_map_with_connection(conn: Any) -> dict[str, str]:
+def vault_uuid_to_canonical_id_map_with_connection(
+    conn: Any, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, str]:
     """Return retained vault UUID -> canonical id from the shared identity join."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT canonical.object_id, "
             "COALESCE(legacy.uuid, canonical.object_id) AS vault_uuid, "
             "CASE WHEN legacy.uuid IS NULL THEN 0 ELSE "
-            "(SELECT count(*) FROM objects duplicate WHERE duplicate.uuid = legacy.uuid) END "
+            "(SELECT count(*) FROM objects duplicate "
+            "WHERE duplicate.vault_binding_id = canonical.vault_binding_id "
+            "AND duplicate.uuid = legacy.uuid) END "
             "AS match_count, "
             "CASE WHEN legacy.uuid IS NULL THEN false ELSE EXISTS ("
-            "SELECT 1 FROM store_objects alias WHERE alias.object_id = legacy.uuid) END "
+            "SELECT 1 FROM store_objects alias "
+            "WHERE alias.vault_binding_id = canonical.vault_binding_id "
+            "AND alias.object_id = legacy.uuid) END "
             "AS canonical_alias_exists "
             + _CANONICAL_RETAINED_IDENTITY_FROM_SQL
+            + " WHERE canonical.vault_binding_id = %s",
+            (vault_binding_id,),
         )
         rows = cur.fetchall()
     result: dict[str, str] = {}
@@ -98,23 +115,33 @@ def vault_uuid_to_canonical_id_map_with_connection(conn: Any) -> dict[str, str]:
     return result
 
 
-def retained_vault_uuid_with_connection(conn: Any, object_id: str) -> str | None:
+def retained_vault_uuid_with_connection(
+    conn: Any,
+    object_id: str,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> str | None:
     """Resolve canonical id -> retained vault UUID without inventing an alias."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT legacy.uuid AS vault_uuid, "
             "CASE WHEN legacy.uuid IS NULL THEN 0 ELSE "
-            "(SELECT count(*) FROM objects duplicate WHERE duplicate.uuid = legacy.uuid) END "
+            "(SELECT count(*) FROM objects duplicate "
+            "WHERE duplicate.vault_binding_id = canonical.vault_binding_id "
+            "AND duplicate.uuid = legacy.uuid) END "
             "AS match_count, "
             "CASE WHEN legacy.uuid IS NULL THEN false ELSE EXISTS ("
-            "SELECT 1 FROM store_objects alias WHERE alias.object_id = legacy.uuid) END "
+            "SELECT 1 FROM store_objects alias "
+            "WHERE alias.vault_binding_id = canonical.vault_binding_id "
+            "AND alias.object_id = legacy.uuid) END "
             "AS canonical_alias_exists, "
             "EXISTS (SELECT 1 FROM objects requested_alias "
-            "WHERE requested_alias.uuid = canonical.object_id "
+            "WHERE requested_alias.vault_binding_id = canonical.vault_binding_id "
+            "AND requested_alias.uuid = canonical.object_id "
             "AND requested_alias.id <> canonical.object_id) AS requested_alias_exists "
             + _CANONICAL_RETAINED_IDENTITY_FROM_SQL
-            + " WHERE canonical.object_id = %s",
-            (object_id,),
+            + " WHERE canonical.vault_binding_id = %s AND canonical.object_id = %s",
+            (vault_binding_id, object_id),
         )
         row = cur.fetchone()
     if not row:

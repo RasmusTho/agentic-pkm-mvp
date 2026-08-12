@@ -27,6 +27,7 @@ import pytest
 import app.db.db as db_module
 import app.services.audit as audit_module
 from app.services.audit import audit_event
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 pytestmark = pytest.mark.not_pg
 
@@ -171,9 +172,10 @@ def test_audit_event_writes_when_cached_backend_hint_is_pg_without_store_backend
     assert len(connection.cursor_instance.statements) == 1
     statement, params = connection.cursor_instance.statements[0]
     assert "INSERT INTO audit" in statement
-    # params order: (id, object_id, agent, action, ts, trace_id, details)
-    assert params[5] == "t-2406"   # trace_id
-    assert params[3] == "test.event"  # action (mapped from event)
+    # params order: (id, vault_binding_id, object_id, agent, action, ts, trace_id, details)
+    assert params[1] == COMPATIBILITY_BINDING_ID
+    assert params[6] == "t-2406"  # trace_id
+    assert params[4] == "test.event"  # action (mapped from event)
 
 
 def test_audit_event_writes_when_settings_backend_is_pg_without_store_backend_env(
@@ -206,6 +208,7 @@ def test_audit_event_writes_when_settings_backend_is_pg_without_store_backend_en
     assert len(connection.cursor_instance.statements) == 1
     statement, params = connection.cursor_instance.statements[0]
     assert "INSERT INTO audit" in statement
-    # params order: (id, object_id, agent, action, ts, trace_id, details)
-    assert params[5] == "t-settings-pg"   # trace_id
-    assert params[3] == "test.settings"   # action (mapped from event)
+    # params order: (id, vault_binding_id, object_id, agent, action, ts, trace_id, details)
+    assert params[1] == COMPATIBILITY_BINDING_ID
+    assert params[6] == "t-settings-pg"  # trace_id
+    assert params[4] == "test.settings"  # action (mapped from event)

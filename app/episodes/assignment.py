@@ -105,7 +105,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
 from app.jobs.episodes_projection import EPISODES_TABLE
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -607,7 +607,11 @@ def _merged_episode_ref(existing: Any, episode_ids: Iterable[str]) -> list[str]:
 
 
 def _read_bundle_payload(cur: Any, table: str, object_id: str) -> dict[str, Any] | None:
-    cur.execute(f"SELECT payload FROM {table} WHERE object_id = %s::uuid", (object_id,))
+    cur.execute(
+        f"SELECT payload FROM {table} "
+        "WHERE vault_binding_id = %s AND object_id = %s::uuid",
+        (COMPATIBILITY_BINDING_ID, object_id),
+    )
     row = cur.fetchone()
     if row is None:
         return None
@@ -628,8 +632,8 @@ def _jsonb_set_episode_ref(cur: Any, table: str, object_id: str, value: str | li
     cur.execute(
         f"UPDATE {table} SET "
         f"payload = jsonb_set(coalesce(payload, '{{}}'::jsonb), '{{episode_ref}}', %s::jsonb), "
-        f"updated_at = now() WHERE object_id = %s::uuid",
-        (json.dumps(value), object_id),
+        f"updated_at = now() WHERE vault_binding_id = %s AND object_id = %s::uuid",
+        (json.dumps(value), COMPATIBILITY_BINDING_ID, object_id),
     )
 
 

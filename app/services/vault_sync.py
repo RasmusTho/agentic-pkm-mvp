@@ -230,8 +230,9 @@ def _merge_canonical_payload(
     """Merge watcher-owned fields without erasing richer canonical metadata."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT payload FROM store_objects WHERE object_id = %s FOR UPDATE",
-            (object_id,),
+            "SELECT payload FROM store_objects "
+            "WHERE vault_binding_id = %s AND object_id = %s FOR UPDATE",
+            (_binding_id(), object_id),
         )
         row = cur.fetchone()
     existing: Any = row.get("payload") if isinstance(row, dict) else (row[0] if row else {})
@@ -288,19 +289,24 @@ def _object_materialization_state(
         cur.execute(
             """
             SELECT
-              EXISTS(SELECT 1 FROM store_objects WHERE object_id = %s) AS canonical_exists,
-              EXISTS(SELECT 1 FROM objects WHERE id = %s OR uuid = %s) AS mirror_exists,
+              EXISTS(SELECT 1 FROM store_objects
+                     WHERE vault_binding_id = %s AND object_id = %s) AS canonical_exists,
+              EXISTS(SELECT 1 FROM objects
+                     WHERE vault_binding_id = %s AND (id = %s OR uuid = %s)) AS mirror_exists,
               COALESCE((
                 SELECT source_ref IS NOT DISTINCT FROM %s
                 FROM store_objects
-                WHERE object_id = %s
+                WHERE vault_binding_id = %s AND object_id = %s
               ), FALSE) AS locator_complete
             """,
             (
+                _binding_id(),
                 canonical_object_id,
+                _binding_id(),
                 uuid_value,
                 uuid_value,
                 expected_source_ref,
+                _binding_id(),
                 canonical_object_id,
             ),
         )

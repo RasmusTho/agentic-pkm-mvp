@@ -58,6 +58,7 @@ import pytest
 from app.services import vault_sync
 from app.services.decisions import insert_decision, latest_decision, _MEM_DECISIONS
 from app.stores.memory import MemoryVectorIndex
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 
 # ---------------------------------------------------------------------------
@@ -100,15 +101,34 @@ class _FakeCursor:
         if normalized.startswith("select to_regclass(%s) as oid"):
             self._fetchone = (params[0],)
             return
-        if "from pg_attribute" in normalized:
+        if "from (values ('store_objects')" in normalized:
+            self._fetchall = [
+                ("store_objects", ["vault_binding_id", "object_id"], True),
+                ("store_vector_index", ["vault_binding_id", "object_id"], True),
+                (
+                    "store_relations",
+                    ["vault_binding_id", "src_id", "dst_id", "rel"],
+                    True,
+                ),
+                (
+                    "store_relation_memberships",
+                    ["vault_binding_id", "src_id", "rel", "value"],
+                    True,
+                ),
+                ("vector_index_meta", ["vault_binding_id", "id"], True),
+            ]
+            return
+        if normalized.startswith("select attname as column_name from pg_attribute"):
             self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
             return
         if normalized.startswith("update store_vector_index"):
             return
         if normalized.startswith(
-            "select payload from store_objects where object_id = %s for update"
+            "select payload from store_objects "
+            "where vault_binding_id = %s and object_id = %s for update"
         ):
-            (object_id,) = params
+            binding_id, object_id = params
+            assert binding_id == COMPATIBILITY_BINDING_ID
             row = self.conn.store_objects.get(str(object_id))
             self._fetchone = (row["payload"],) if row else None
             return
@@ -117,7 +137,8 @@ class _FakeCursor:
         # because `ON CONFLICT (id)` / `(uuid)` no longer match a unique index
         # once the key is `(vault_binding_id, id)`.
         if normalized.startswith("insert into objects(vault_binding_id, id, kind, payload, path)"):
-            _binding_id, object_id, kind, payload_json, path = params
+            binding_id, object_id, kind, payload_json, path = params
+            assert binding_id == COMPATIBILITY_BINDING_ID
             self.conn.objects[object_id] = {
                 "id": object_id,
                 "kind": kind,
@@ -129,7 +150,8 @@ class _FakeCursor:
         if normalized.startswith(
             "insert into objects(vault_binding_id, uuid, kind, payload, path)"
         ):
-            _binding_id, object_id, kind, payload_json, path = params
+            binding_id, object_id, kind, payload_json, path = params
+            assert binding_id == COMPATIBILITY_BINDING_ID
             self.conn.objects[object_id] = {
                 "id": object_id,
                 "kind": kind,
@@ -139,7 +161,8 @@ class _FakeCursor:
             self.rowcount = 1
             return
         if normalized.startswith("insert into store_objects"):
-            object_id, kind, source_ref, payload_json = params
+            binding_id, object_id, kind, source_ref, payload_json = params
+            assert binding_id == COMPATIBILITY_BINDING_ID
             self.conn.store_objects[str(object_id)] = {
                 "object_id": str(object_id),
                 "kind": kind,
@@ -149,7 +172,9 @@ class _FakeCursor:
             self.rowcount = 1
             return
         if normalized.startswith("select id::text, count(*) over ()"):
-            canonical_alias, uuid_value = params
+            alias_binding_id, canonical_alias, object_binding_id, uuid_value = params
+            assert alias_binding_id == object_binding_id == COMPATIBILITY_BINDING_ID
+            assert canonical_alias == uuid_value
             row = next(
                 (
                     candidate
@@ -165,10 +190,25 @@ class _FakeCursor:
             )
             return
         if normalized.startswith("select exists(select 1 from store_objects"):
-            canonical_id, _id, uuid_value, expected, _again = params
+            (
+                canonical_binding_id,
+                canonical_id,
+                mirror_binding_id,
+                mirror_id,
+                uuid_value,
+                expected,
+                locator_binding_id,
+                locator_id,
+            ) = params
+            assert {
+                canonical_binding_id,
+                mirror_binding_id,
+                locator_binding_id,
+            } == {COMPATIBILITY_BINDING_ID}
+            assert canonical_id == mirror_id == uuid_value == locator_id
             canonical = str(canonical_id) in self.conn.store_objects
             mirror = any(
-                str(row.get("uuid") or row["id"]) == uuid_value
+                str(row.get("uuid") or row["id"]) in {mirror_id, uuid_value}
                 for row in self.conn.objects.values()
             )
             self._fetchone = (
@@ -178,7 +218,8 @@ class _FakeCursor:
             )
             return
         if normalized.startswith("update store_objects"):
-            source_ref, object_id = params
+            source_ref, binding_id, object_id = params
+            assert binding_id == COMPATIBILITY_BINDING_ID
             row = self.conn.store_objects.get(str(object_id))
             if row is not None:
                 row["source_ref"] = source_ref

@@ -11,6 +11,7 @@ from uuid import UUID
 import click
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.index.artifact_metadata import (
     build_indexed_unit_payload,
     canonicalize_indexable_text,
@@ -389,13 +390,20 @@ def _mismatched_rows(primary: EmbeddingIdentity, limit: int | None) -> List[dict
                 SELECT object_id, kind, source_ref, payload,
                        provider, model, dim, normalize
                 FROM store_vector_index
-                WHERE provider IS DISTINCT FROM %s
+                WHERE vault_binding_id = %s
+                  AND (provider IS DISTINCT FROM %s
                    OR model IS DISTINCT FROM %s
                    OR dim IS DISTINCT FROM %s
-                   OR normalize IS DISTINCT FROM %s
+                   OR normalize IS DISTINCT FROM %s)
                 ORDER BY object_id
             """
-            params: list = [primary.provider, primary.model, primary.dim, primary.normalize]
+            params: list = [
+                COMPATIBILITY_BINDING_ID,
+                primary.provider,
+                primary.model,
+                primary.dim,
+                primary.normalize,
+            ]
             if limit is not None:
                 sql_text += " LIMIT %s"
                 params.append(limit)
@@ -423,11 +431,14 @@ def _stale_content_hash_rows(limit: int | None) -> List[dict]:
                        v.payload->'provenance'->>'content_hash' AS stored_hash,
                        o.payload AS current_payload
                 FROM store_vector_index AS v
-                JOIN store_objects AS o ON o.object_id = v.object_id
-                WHERE v.payload->'provenance'->>'content_hash' IS NOT NULL
+                JOIN store_objects AS o
+                  ON o.vault_binding_id = v.vault_binding_id
+                 AND o.object_id = v.object_id
+                WHERE v.vault_binding_id = %s
+                  AND v.payload->'provenance'->>'content_hash' IS NOT NULL
                 ORDER BY v.object_id
             """
-            cur.execute(sql_text)
+            cur.execute(sql_text, (COMPATIBILITY_BINDING_ID,))
             candidates = list(cur.fetchall())
 
     stale = [
@@ -461,9 +472,13 @@ def _present_non_indexable_rows(limit: int | None) -> List[dict]:
                        v.dim AS dim, v.normalize AS normalize,
                        o.payload AS current_payload
                 FROM store_vector_index AS v
-                JOIN store_objects AS o ON o.object_id = v.object_id
+                JOIN store_objects AS o
+                  ON o.vault_binding_id = v.vault_binding_id
+                 AND o.object_id = v.object_id
+                WHERE v.vault_binding_id = %s
                 ORDER BY v.object_id
-                """
+                """,
+                (COMPATIBILITY_BINDING_ID,),
             )
             candidates = list(cur.fetchall())
 
@@ -489,8 +504,9 @@ def _reconcile_object_payload(object_id, vector_payload: dict | None) -> Tuple[d
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT payload FROM store_objects WHERE object_id = %s LIMIT 1",
-                (object_id,),
+                "SELECT payload FROM store_objects "
+                "WHERE vault_binding_id = %s AND object_id = %s LIMIT 1",
+                (COMPATIBILITY_BINDING_ID, object_id),
             )
             row = cur.fetchone()
     if row is not None:

@@ -7,6 +7,7 @@ import uuid
 import psycopg
 import pytest
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from tests.migrations.decisions_schema_helpers import migrated_decisions_db
 
 
@@ -20,17 +21,29 @@ def test_decisions_fk_set_null(monkeypatch: pytest.MonkeyPatch) -> None:
     with migrated_decisions_db(monkeypatch) as dsn:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute(
-                "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, %s, %s::jsonb)",
-                (object_id, "note", "{}"),
+                "INSERT INTO store_objects (vault_binding_id, object_id, kind, payload) "
+                "VALUES (%s, %s, %s, %s::jsonb)",
+                (COMPATIBILITY_BINDING_ID, object_id, "note", "{}"),
             )
             conn.execute(
                 """
-                INSERT INTO decisions (id, object_id, agent, kind, key, value)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                INSERT INTO decisions (id, vault_binding_id, object_id, agent, kind, key, value)
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
                 """,
-                (decision_id, object_id, "test", "classification", "type", "{}"),
+                (
+                    decision_id,
+                    COMPATIBILITY_BINDING_ID,
+                    object_id,
+                    "test",
+                    "classification",
+                    "type",
+                    "{}",
+                ),
             )
-            conn.execute("DELETE FROM store_objects WHERE object_id = %s", (object_id,))
+            conn.execute(
+                "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
+                (COMPATIBILITY_BINDING_ID, object_id),
+            )
             row = conn.execute(
                 "SELECT object_id FROM decisions WHERE id = %s", (decision_id,)
             ).fetchone()

@@ -19,17 +19,24 @@ def test_truncate_reset_names_canonical_fk_cascade_consumers(monkeypatch) -> Non
     pg.truncate_pg_tables()
 
     statements = [call.args[0].lower() for call in cur.execute.call_args_list]
-    assert statements[:4] == [
-        "delete from store_vector_index",
-        "delete from store_relation_memberships",
-        "delete from store_relations",
-        "delete from vector_index_meta",
+    assert statements == [
+        "delete from store_vector_index where vault_binding_id = %s",
+        "delete from store_relation_memberships where vault_binding_id = %s",
+        "delete from store_relations where vault_binding_id = %s",
+        "delete from vector_index_meta where vault_binding_id = %s",
+        "delete from public.chunks where vault_binding_id = %s",
+        "delete from public.embeddings where vault_binding_id = %s",
+        "delete from public.relations where vault_binding_id = %s",
+        "delete from public.membership where vault_binding_id = %s",
+        "delete from store_objects where vault_binding_id = %s",
     ]
-    explicit_consumers = statements[4]
-    for table in ("chunks", "embeddings", "relations", "membership"):
-        assert f"delete from public.{table}" in explicit_consumers
-    assert statements[5] == "delete from store_objects"
+    assert all(
+        call.args[1] == (pg.COMPATIBILITY_BINDING_ID,)
+        for call in cur.execute.call_args_list
+    )
     assert all("truncate" not in statement and "cascade" not in statement for statement in statements)
+
+
 @pytest.mark.pg
 def test_truncate_reset_observed_semantics_on_migrated_database() -> None:
     """Live check: cascade children are emptied, SET NULL consumers survive."""
@@ -44,19 +51,20 @@ def test_truncate_reset_observed_semantics_on_migrated_database() -> None:
             if not all(reg):
                 pytest.skip("legacy chunk/decision tables absent on this schema")
             cur.execute(
-                "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)"
-                " ON CONFLICT (object_id) DO NOTHING",
-                (object_id,),
+                "INSERT INTO store_objects (vault_binding_id, object_id, kind, payload) "
+                "VALUES (%s, %s, 'note', '{}'::jsonb)"
+                " ON CONFLICT (vault_binding_id, object_id) DO NOTHING",
+                (pg.COMPATIBILITY_BINDING_ID, object_id),
             )
             cur.execute(
-                "INSERT INTO chunks (id, object_id, idx, offset_start, offset_end, text)"
-                " VALUES (%s, %s, 0, 0, 1, 'x')",
-                (str(uuid4()), object_id),
+                "INSERT INTO chunks (id, vault_binding_id, object_id, idx, offset_start, offset_end, text)"
+                " VALUES (%s, %s, %s, 0, 0, 1, 'x')",
+                (str(uuid4()), pg.COMPATIBILITY_BINDING_ID, object_id),
             )
             cur.execute(
-                "INSERT INTO decisions (object_id, agent, kind, key, value)"
-                " VALUES (%s, 'truncate-reset-test', 'k', 'key', '{}'::jsonb)",
-                (object_id,),
+                "INSERT INTO decisions (vault_binding_id, object_id, agent, kind, key, value)"
+                " VALUES (%s, %s, 'truncate-reset-test', 'k', 'key', '{}'::jsonb)",
+                (pg.COMPATIBILITY_BINDING_ID, object_id),
             )
         conn.commit()
 
@@ -64,16 +72,26 @@ def test_truncate_reset_observed_semantics_on_migrated_database() -> None:
 
     with pg._connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) AS n FROM chunks WHERE object_id = %s", (object_id,))
+            cur.execute(
+                "SELECT count(*) AS n FROM chunks "
+                "WHERE vault_binding_id = %s AND object_id = %s",
+                (pg.COMPATIBILITY_BINDING_ID, object_id),
+            )
             row = cur.fetchone()
             chunk_count = row["n"] if isinstance(row, dict) else row[0]
             cur.execute(
                 "SELECT count(*) AS n FROM decisions"
-                " WHERE agent = 'truncate-reset-test' AND object_id IS NULL"
+                " WHERE vault_binding_id = %s"
+                " AND agent = 'truncate-reset-test' AND object_id IS NULL",
+                (pg.COMPATIBILITY_BINDING_ID,),
             )
             row = cur.fetchone()
             surviving = row["n"] if isinstance(row, dict) else row[0]
-            cur.execute("DELETE FROM decisions WHERE agent = 'truncate-reset-test'")
+            cur.execute(
+                "DELETE FROM decisions "
+                "WHERE vault_binding_id = %s AND agent = 'truncate-reset-test'",
+                (pg.COMPATIBILITY_BINDING_ID,),
+            )
         conn.commit()
     assert chunk_count == 0
     assert surviving >= 1

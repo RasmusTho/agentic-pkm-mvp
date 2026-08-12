@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from app.cli import cli
 from app.components.embeddings import get_embedding_client, get_embedding_identity
 from app.db.dsn import resolve_dsn
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app import objects as legacy_store
 from app.objects import DomainObject, ObjectStore
 from app.stores import get_vector_index, reset_store_backends
@@ -255,11 +256,28 @@ def test_index_rebuild_resets_missing_meta(monkeypatch) -> None:
     get_vector_index()
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM vector_index_meta")
-            cur.execute("DELETE FROM store_vector_index")
             cur.execute(
-                "INSERT INTO store_vector_index (object_id, kind, source_ref, payload, embedding, dim, model, updated_at) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, now())",
-                (uuid4(), "note", "stale", json.dumps({}), [0.1, 0.2], 2, "stale-model"),
+                "DELETE FROM vector_index_meta WHERE vault_binding_id = %s",
+                (COMPATIBILITY_BINDING_ID,),
+            )
+            cur.execute(
+                "DELETE FROM store_vector_index WHERE vault_binding_id = %s",
+                (COMPATIBILITY_BINDING_ID,),
+            )
+            cur.execute(
+                "INSERT INTO store_vector_index "
+                "(vault_binding_id, object_id, kind, source_ref, payload, embedding, dim, model, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, now())",
+                (
+                    COMPATIBILITY_BINDING_ID,
+                    uuid4(),
+                    "note",
+                    "stale",
+                    json.dumps({}),
+                    [0.1, 0.2],
+                    2,
+                    "stale-model",
+                ),
             )
 
     runner = CliRunner()
