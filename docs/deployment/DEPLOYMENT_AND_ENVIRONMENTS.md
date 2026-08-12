@@ -329,30 +329,38 @@ because its auth producers are the same processes MVR-01B already fences:
    `worker`, `watcher`, `heimdal-capture-watch`.
 2. `scripts/instance_state_writer_inventory.py prove-quiescent` probes production truth twice
    and `deployment-prove` binds the proof to the channel lease.
-3. `principal-record-floor` runs in that window. It requires the lease in `proved` phase for
-   this channel and nonce, consumes the quiescence proof plus the drained legacy-owner
-   inventory, enumerates `docker-compose.yaml` (failing closed on any unclassified service),
-   and adds the producers MVR-01B does not classify — the Companion proxy, credential
-   rotation, the headless CLI, and bootstrap/init. Only then does it record the floor.
-4. `principal-bootstrap` writes the delegated-role record; it refuses while the floor is
-   absent.
-5. `deployment-finish` closes the window.
+3. `principal-cutover` performs the floor and role stages in one runtime process. It requires
+   the lease in `proved` phase for this channel and nonce, consumes the quiescence proof plus
+   the drained legacy-owner inventory, enumerates `docker-compose.yaml` (failing closed on any
+   unclassified service), and adds the producers MVR-01B does not classify — the Companion
+   proxy, credential rotation, the headless CLI, and bootstrap/init. Only then does it record
+   the floor, re-prove the same lease and registry revision, and bootstrap the role.
+4. `deployment-finish` closes the window.
 
-`require_complete_fence` refuses steps 3–4 if the inventory is incomplete, if writers were not
+`require_complete_fence` refuses step 3 if the inventory is incomplete, if writers were not
 drained, if the inventory was not revalidated after quiescence, if it was probed once, if any
-producer role is missing, or if operations are not fenced. `principal-record-floor` also
-refuses without the proved deployment lease for this channel and nonce, and it preflights the
-auth posture the subsequent role write will use — so a floor can never be recorded on an
-instance where the role could not then be written. A crash before the floor leaves old auth
-state authoritative and the migration untouched.
+producer role is missing, or if operations are not fenced. `principal-cutover` also refuses
+without the proved deployment lease for this channel and nonce, and it preflights the auth
+posture before the floor write. The fact that this invocation advanced the floor is held only
+in process, never accepted from a caller flag. If bootstrap fails before a role record becomes
+durable, the failed-bootstrap role recheck and removal of that attempt's MVR-03 floor and fence
+run under the same principal-store lock used by the bootstrap floor guard and first-role write,
+before the wrapper releases the stopped window. A pre-existing floor is never eligible
+for compensation. If a complete matching role became durable before a later bootstrap step
+failed, it is never rolled back or reported as success. That case, an unreadable registry,
+changed lease, any other ambiguous role state, or failed compensation returns the distinct
+fail-closed status `75`; the wrapper preserves the lease/restart fence for repair instead of
+restarting old producers. A crash before the floor leaves old auth state authoritative and the
+migration untouched.
 
-> **Not yet automated.** `scripts/lib/instance_state_deployment.sh` does **not** invoke steps
-> 3–4. Wiring them requires the credential/listener posture and the native launcher paths to be
-> available inside the `instance-state-init` one-shot, which that service does not currently
-> have; a half-wired cutover would record the floor and then fail the role write, leaving the
-> instance fenced and rollback-blocked. Until that plumbing ships, an operator runs steps 3–4
-> explicitly inside the stopped window using the commands below. This is tracked as bounded
-> follow-up work on #3857.
+**Automated, explicit activation (#4524).** `scripts/lib/instance_state_deployment.sh` invokes
+step 3 between `deployment-prove` and `deployment-finish` only when
+`MVR03_PRINCIPAL_CUTOVER=1`. Deploying a capable image without that opt-in never advances the
+floor. The `instance-state-init` one-shot consumes the same generated runtime-env credential
+layer and `COMPANION_UI_PROXY_HOSTS` declaration as `api`; it does not receive the API's
+unrelated Heimdal/GitHub host-secret layer. The exact three native launcher producers are
+mounted read-only under `/run/principal-fence-native-producers`, and a missing declared path
+fails before the floor is written.
 
 **Rollback: credential-only images are blocked.** While the floor exists,
 `_preflight_scalar_rollback` raises `CapabilityNotReadyError` before materializing any legacy
@@ -369,30 +377,26 @@ divergent, or ambiguous auth state fails closed without overwriting either linea
 may be lowered only by a later explicitly verified reversible migration — never by a scalar
 rollback.
 
-**Cutover commands (run inside the stopped window, between `deployment-prove` and
-`deployment-finish`).** Both refuse outside that window.
+**Cutover operation.** Run one ordinary governed channel deploy/start with the explicit
+one-time opt-in; the wrapper owns the stopped-window operation and its compensation ordering:
 
 ```bash
-REG=/app/instance-state/agentic-pkm/vault-registry.md
-OWN=/app/instance-ownership
-
-python -m app.instance.runtime principal-record-floor \
-  --channel "$CHANNEL" --registry-path "$REG" --host-global-root "$OWN" \
-  --inventory-path "$OWN/legacy-owner-inventory.json" \
-  --quiescence-proof-path "$OWN/deployment-quiescence-proof.json" \
-  --compose-base <mounted docker-compose.yaml> \
-  --native-producer-root <mounted repo root> \
-  [--loopback-listener]
-
-python -m app.instance.runtime principal-bootstrap \
-  --registry-path "$REG" [--loopback-listener] [--existing-install]
+MVR03_PRINCIPAL_CUTOVER=1 scripts/deploy_channel.sh deploy <dev|test|prod> <sha>
 ```
 
 The posture is **read** from server configuration (`API_KEY`, `COMPANION_UI_PROXY_HOSTS`), so
 the subjects bound at bootstrap are the ones the request path will actually admit.
-`--loopback-listener` declares that this deployment exposes a loopback-local listener, which
-makes `trusted_loopback` a *bindable* subject; every request still proves loopback
-independently in `app/auth.py::resolve_auth_subject` before that subject is used.
+`config/deploy/{dev,test,prod}.env` explicitly sets
+`MVR03_PRINCIPAL_LOOPBACK_LISTENER=0`: Docker-published traffic is not proven loopback inside
+the API container. A future/native channel may declare `1` only when its effective listener is
+proved loopback-local. Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` pin
+that declaration from the selected channel file rather than trusting ambient shell state. The
+wrapper passes the resulting `--loopback-listener` declaration to the atomic cutover. A bare
+`scripts/start_full_system.sh` invocation uses its existing implicit `dev` channel for this
+declaration too, rather than accepting an undeclared ambient value. Every
+request still proves loopback independently in
+`app/auth.py::resolve_auth_subject` before that subject is used. `API_KEY` remains config input,
+never argv, command output, or a receipt.
 
 **Governed commands (run against a live instance, outside the cutover window).**
 

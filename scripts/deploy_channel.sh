@@ -29,6 +29,8 @@ Environment:
   DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED=1
                                     acknowledge only the embedding-index rebuild transition
   DEPLOY_HEALTH_TIMEOUT_SECONDS=90  health gate timeout
+  MVR03_PRINCIPAL_CUTOVER=1         explicitly activate the one-time principal floor/role cutover
+  MVR03_PRINCIPAL_LOOPBACK_LISTENER is pinned from config/deploy/<channel>.env (0 or 1)
 EOF
 }
 
@@ -106,6 +108,26 @@ receipt_dir="${ROOT}/ops/deployments"
 promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
 health_timeout="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
+
+# Pin the topology declaration from the governed channel file before the
+# shared deployment wrapper runs. Do not inherit an ambient shell value across
+# channels: Docker-published dev/test/prod API traffic is not proven loopback
+# inside the container, while a future channel may explicitly declare 1.
+if [ "${action}" = "deploy" ] && [ "${MVR03_PRINCIPAL_CUTOVER:-0}" = "1" ]; then
+  mvr03_principal_loopback_listener="$(
+    awk -F= '/^MVR03_PRINCIPAL_LOOPBACK_LISTENER=/{print $2; exit}' "${pin_file}"
+  )"
+  case "${mvr03_principal_loopback_listener}" in
+    0|1)
+      export MVR03_PRINCIPAL_LOOPBACK_LISTENER="${mvr03_principal_loopback_listener}"
+      ;;
+    *)
+      echo "MVR03_PRINCIPAL_LOOPBACK_LISTENER is missing or invalid for the selected channel" >&2
+      exit 78
+      ;;
+  esac
+  unset mvr03_principal_loopback_listener
+fi
 
 read_pin() {
   local file="$1"
