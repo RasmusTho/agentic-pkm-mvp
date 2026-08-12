@@ -447,7 +447,7 @@ def upgrade() -> None:
                   JOIN pg_namespace n ON n.oid = t.relnamespace
                  WHERE c.conrelid = 'public.store_objects'::regclass
                    AND c.contype = 'u'
-                   AND (SELECT array_agg(a.attname ORDER BY k.ordinality)
+                   AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality)
                           FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality)
                           JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
                        = ARRAY['object_id']::text[]
@@ -461,7 +461,7 @@ def upgrade() -> None:
                  WHERE indrelid = 'public.store_objects'::regclass
                    AND indisunique AND NOT indisprimary
                    AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = indexrelid)
-                   AND (SELECT array_agg(a.attname ORDER BY k.ordinality)
+                   AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality)
                           FROM unnest(indkey::smallint[]) WITH ORDINALITY k(attnum, ordinality)
                           JOIN pg_attribute a ON a.attrelid = indrelid AND a.attnum = k.attnum)
                        = ARRAY['object_id']::text[]
