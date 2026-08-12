@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -495,7 +496,13 @@ def test_dead_letter_item_scoped_and_attempts_exhaustion(
     for _attempt in range(DEFAULT_MAX_ATTEMPTS):
         claimed_c = q.claim_batch(1, now=far_future, conn=conn)
         assert [c.request_id for c in claimed_c] == [row_c.request_id]
-        q.fail(row_c.request_id, reason_code="network_error", error="boom", conn=conn)
+        q.fail(
+            row_c.request_id,
+            expected_attempt=claimed_c[0].attempts,
+            reason_code="network_error",
+            error="boom",
+            conn=conn,
+        )
     final_c = q.get(row_c.request_id)
     assert final_c.status == "dead_lettered"
     assert final_c.attempts == DEFAULT_MAX_ATTEMPTS
@@ -528,8 +535,15 @@ def test_backoff_gate_and_priority_order(monkeypatch: pytest.MonkeyPatch) -> Non
         assert compute_backoff_seconds(attempt) >= compute_backoff_seconds(attempt, rng=lambda: 0.0)
 
     row = _enqueue(q, conn, item="aaaaaaaaaaa", priority="normal")
-    q.claim_batch(1, now=now, conn=conn)
-    q.fail(row.request_id, reason_code="network_error", error="transient", now=now, conn=conn)
+    claimed = q.claim_batch(1, now=now, conn=conn)[0]
+    q.fail(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="network_error",
+        error="transient",
+        now=now,
+        conn=conn,
+    )
 
     gated = q.get(row.request_id)
     assert gated.status == "pending"
@@ -538,10 +552,16 @@ def test_backoff_gate_and_priority_order(monkeypatch: pytest.MonkeyPatch) -> Non
 
     # claim_batch respects the gate.
     assert q.claim_batch(5, now=now + timedelta(seconds=30), conn=conn) == []
-    assert [r.request_id for r in q.claim_batch(5, now=gate + timedelta(seconds=1), conn=conn)] == [
-        row.request_id
-    ]
-    q.fail(row.request_id, reason_code="network_error", error="still down", now=now, conn=conn)
+    reclaimed = q.claim_batch(5, now=gate + timedelta(seconds=1), conn=conn)
+    assert [r.request_id for r in reclaimed] == [row.request_id]
+    q.fail(
+        row.request_id,
+        expected_attempt=reclaimed[0].attempts,
+        reason_code="network_error",
+        error="still down",
+        now=now,
+        conn=conn,
+    )
 
     # Priority order: high (inbox-discovered) before normal, then requested_at.
     older_normal = _enqueue(q, conn, item="bbbbbbbbbbb", priority="normal", binding=str(uuid.uuid4()))
@@ -567,7 +587,7 @@ def test_event_idempotency_keys_per_attempt(monkeypatch: pytest.MonkeyPatch) -> 
     assert len(conn.rows_for(ACQUISITION_REQUESTED_TOPIC)) == 1
 
     # Attempt 1 started event.
-    q.claim_batch(1, conn=conn)
+    claimed = q.claim_batch(1, conn=conn)[0]
     started = conn.rows_for(ACQUISITION_STARTED_TOPIC)
     assert len(started) == 1
 
@@ -582,15 +602,29 @@ def test_event_idempotency_keys_per_attempt(monkeypatch: pytest.MonkeyPatch) -> 
 
     # A NEW attempt is a distinct event.
     now = datetime.now(timezone.utc)
-    q.fail(row.request_id, reason_code="network_error", error="t1", now=now, conn=conn)
-    q.claim_batch(1, now=now + timedelta(hours=7), conn=conn)
+    q.fail(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="network_error",
+        error="t1",
+        now=now,
+        conn=conn,
+    )
+    claimed_again = q.claim_batch(1, now=now + timedelta(hours=7), conn=conn)[0]
     started_after = conn.rows_for(ACQUISITION_STARTED_TOPIC)
     assert len(started_after) == 2
     attempts_seen = {p["attempt"] for p in conn.payloads_for(ACQUISITION_STARTED_TOPIC)}
     assert attempts_seen == {1, 2}
 
     # failed events are attempt-scoped too.
-    q.fail(row.request_id, reason_code="network_error", error="t2", now=now, conn=conn)
+    q.fail(
+        row.request_id,
+        expected_attempt=claimed_again.attempts,
+        reason_code="network_error",
+        error="t2",
+        now=now,
+        conn=conn,
+    )
     failed_payloads = [
         p for p in conn.payloads_for(ACQUISITION_FAILED_TOPIC) if p["request_id"] == row.request_id
     ]
@@ -661,8 +695,14 @@ def test_explicit_dead_letter_is_terminal() -> None:
     conn = FakeOutboxConn()
     q = _queue()
     row = _enqueue(q, conn)
-    q.claim_batch(1, conn=conn)
-    q.dead_letter(row.request_id, reason_code="pipeline_dead_letter", error="stage dead-letter", conn=conn)
+    claimed = q.claim_batch(1, conn=conn)[0]
+    q.dead_letter(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="pipeline_dead_letter",
+        error="stage dead-letter",
+        conn=conn,
+    )
     final = q.get(row.request_id)
     assert final.status == "dead_lettered"
     assert final.last_failure["reason_code"] == "pipeline_dead_letter"
@@ -682,14 +722,25 @@ def test_terminal_request_not_reopened_by_stale_drainer_fail() -> None:
     conn = FakeOutboxConn()
     q = _queue()
     row = _enqueue(q, conn)
-    q.claim_batch(1, conn=conn)  # drainer A claims
+    attempt_one = q.claim_batch(1, conn=conn)[0]  # drainer A claims
     future = datetime.now(timezone.utc) + timedelta(hours=1)
     assert q.reset_stale_in_progress(older_than_seconds=900, now=future) == 1
-    q.claim_batch(1, now=future, conn=conn)  # drainer B claims (attempt 2)
-    q.complete(row.request_id, content_identity="cid-b", conn=conn)
+    attempt_two = q.claim_batch(1, now=future, conn=conn)[0]
+    q.complete(
+        row.request_id,
+        expected_attempt=attempt_two.attempts,
+        content_identity="cid-b",
+        conn=conn,
+    )
 
     failed_before = len(conn.rows_for(ACQUISITION_FAILED_TOPIC))
-    late = q.fail(row.request_id, reason_code="network_error", error="drainer A woke up", conn=conn)
+    late = q.fail(
+        row.request_id,
+        expected_attempt=attempt_one.attempts,
+        reason_code="network_error",
+        error="drainer A woke up",
+        conn=conn,
+    )
     assert late.status == "completed"
     assert late.content_identity == "cid-b"
     assert len(conn.rows_for(ACQUISITION_FAILED_TOPIC)) == failed_before
@@ -703,8 +754,14 @@ def test_dead_letter_after_retryable_fail_same_attempt_keeps_terminal_event() ->
     conn = FakeOutboxConn()
     q = _queue()
     row = _enqueue(q, conn)
-    q.claim_batch(1, conn=conn)
-    q.fail(row.request_id, reason_code="network_error", error="transient", conn=conn)
+    claimed = q.claim_batch(1, conn=conn)[0]
+    q.fail(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="network_error",
+        error="transient",
+        conn=conn,
+    )
     # Stage dead-letter surfaces before any new claim: explicit terminal outcome.
     q.dead_letter(row.request_id, reason_code="pipeline_dead_letter", error="stage", conn=conn)
     failed = conn.payloads_for(ACQUISITION_FAILED_TOPIC)
@@ -720,9 +777,9 @@ def test_transitions_on_unclaimed_row_are_loud() -> None:
     q = _queue()
     row = _enqueue(q, conn)  # pending, never claimed
     with pytest.raises(AcquisitionRequestValidationError):
-        q.complete(row.request_id, content_identity="cid-x", conn=conn)
+        q.complete(row.request_id, expected_attempt=1, content_identity="cid-x", conn=conn)
     with pytest.raises(AcquisitionRequestValidationError):
-        q.fail(row.request_id, reason_code="network_error", conn=conn)
+        q.fail(row.request_id, expected_attempt=1, reason_code="network_error", conn=conn)
     assert q.get(row.request_id).status == "pending"
     assert conn.payloads_for(ACQUISITION_FAILED_TOPIC) == []
 
@@ -731,8 +788,14 @@ def test_naive_injected_clock_is_treated_as_utc() -> None:
     conn = FakeOutboxConn()
     q = _queue()
     row = _enqueue(q, conn)
-    q.claim_batch(1, conn=conn)
-    q.fail(row.request_id, reason_code="network_error", error="t", conn=conn)
+    claimed = q.claim_batch(1, conn=conn)[0]
+    q.fail(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="network_error",
+        error="t",
+        conn=conn,
+    )
     naive_future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=7)
     claimed = q.claim_batch(1, now=naive_future, conn=conn)  # must not TypeError
     assert [c.request_id for c in claimed] == [row.request_id]
@@ -787,6 +850,147 @@ def test_enqueue_rejects_string_extractor_ids() -> None:
     q = _queue()
     with pytest.raises(AcquisitionRequestValidationError):
         _enqueue(q, conn, policy_snapshot={"policy_version": 1, "extractor_ids": "summary"})
+
+
+def test_enqueue_rejects_invalid_extractor_requirements() -> None:
+    from app.knowledge_acquisition.acquisition_requests import AcquisitionRequestValidationError
+
+    conn = FakeOutboxConn()
+    q = _queue()
+    with pytest.raises(AcquisitionRequestValidationError):
+        _enqueue(
+            q,
+            conn,
+            policy_snapshot={
+                "policy_version": 1,
+                "extractor_ids": ["summary"],
+                "extractor_requirements": {"summary": "best_effort"},
+            },
+        )
+
+
+def test_drain_passes_extractor_requirements_and_completes_optional_failure() -> None:
+    from app.knowledge_acquisition.acquire import AcquireStageReceipt, AcquisitionReceipt
+
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(
+        q,
+        conn,
+        policy_snapshot={
+            "policy_version": 1,
+            "extractor_ids": ["summary"],
+            "extractor_requirements": {"summary": "optional_for_materialization"},
+        },
+    )
+    claimed = q.claim_batch(1, conn=conn)
+    calls: list[dict[str, Any]] = []
+
+    def fake_acquire(*args: Any, **kwargs: Any) -> AcquisitionReceipt:
+        calls.append(kwargs)
+        return AcquisitionReceipt(
+            source_kind="youtube_url",
+            item_ref=VIDEO_ID,
+            content_identity="sha256:optional-gap",
+            raw_record_id="raw-optional-gap",
+            is_new_raw=True,
+            acquisition_method="caption_track",
+            stages=(
+                AcquireStageReceipt(
+                    stage="candidate",
+                    status="written_degraded",
+                    artifact_path="Sources/degraded.md",
+                ),
+            ),
+            dead_lettered=("summary",),
+            optional_dead_lettered=("summary",),
+        )
+
+    result = drain_one(
+        claimed[0], vault_context=None, queue=q, conn=conn, acquire_fn=fake_acquire
+    )
+
+    assert calls[0]["extractor_requirements"] == {
+        "summary": "optional_for_materialization"
+    }
+    assert result.status == "completed"
+    assert result.artifact_path == "Sources/degraded.md"
+
+
+def test_drain_terminally_dead_letters_pipeline_configuration_failure() -> None:
+    from app.knowledge_acquisition.acquire import TerminalAcquisitionError
+
+    conn = FakeOutboxConn()
+    q = _queue()
+    row = _enqueue(q, conn)
+    claimed = q.claim_batch(1, conn=conn)
+
+    def fail_terminal(*_args: Any, **_kwargs: Any) -> None:
+        raise TerminalAcquisitionError("unknown extractor")
+
+    result = drain_one(
+        claimed[0], vault_context=None, queue=q, conn=conn, acquire_fn=fail_terminal
+    )
+
+    assert result.request_id == row.request_id
+    assert result.status == "dead_lettered"
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "pipeline_configuration_or_persistence"
+
+
+@pytest.mark.parametrize(
+    "malformed_policy",
+    [
+        {"policy_version": 1, "extractor_ids": "summary"},
+        {
+            "policy_version": 1,
+            "extractor_ids": ["summary"],
+            "extractor_requirements": ["required_for_materialization"],
+        },
+    ],
+)
+def test_drain_terminally_disposes_stale_malformed_extractor_policy(
+    malformed_policy: dict[str, Any],
+) -> None:
+    """A legacy/corrupt queue row cannot strand the drainer before acquisition."""
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(q, conn)
+    claimed = q.claim_batch(1, conn=conn)[0]
+    stale = replace(claimed, policy_snapshot=malformed_policy)
+    calls: list[object] = []
+
+    result = drain_one(
+        stale,
+        vault_context=None,
+        queue=q,
+        conn=conn,
+        acquire_fn=lambda *_args, **_kwargs: calls.append(object()),
+    )
+
+    assert result.status == "dead_lettered"
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "policy_invalid"
+    assert calls == []
+
+
+def test_enqueue_rejects_requirement_map_that_does_not_match_selected_extractors() -> None:
+    from app.knowledge_acquisition.acquisition_requests import AcquisitionRequestValidationError
+
+    conn = FakeOutboxConn()
+    q = _queue()
+    with pytest.raises(AcquisitionRequestValidationError):
+        _enqueue(
+            q,
+            conn,
+            policy_snapshot={
+                "policy_version": 1,
+                "extractor_ids": ["summary", "claims"],
+                "extractor_requirements": {
+                    "summary": "required_for_materialization"
+                },
+            },
+        )
 
 
 def test_drain_one_dead_letters_unknown_source_kind() -> None:

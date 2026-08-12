@@ -322,6 +322,41 @@ def test_new_inbox_item_enqueues_once_at_production_call_site(
     assert len(outbox.rows_for(YOUTUBE_SOURCE_DISCOVERED_TOPIC)) == 1
 
 
+def test_registry_materialization_policy_survives_discovery_into_queue(
+    outbox: FakeOutboxConn,
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    requests = AcquisitionRequests.for_runtime()
+    row = registry.register(
+        collection_kind="inbox_playlist",
+        collection_ref=PLAYLIST_A,
+        title="Synthetic policy Inbox",
+        account_binding_id=account,
+        acquisition_policy={
+            "extractor_ids": ["summary"],
+            "extractor_requirements": {
+                "summary": "optional_for_materialization"
+            },
+        },
+    )
+    binding = registry.set_inbox(account, row.binding_id)
+
+    poll_source(
+        binding,
+        api_client=StubApiClient(_page(_item("pli-policy", VIDEO_A))),
+        requests=requests,
+        registry=registry,
+    )
+
+    queued = requests.list_all()
+    assert len(queued) == 1
+    assert queued[0].policy_snapshot["extractor_requirements"] == {
+        "summary": "optional_for_materialization"
+    }
+
+
 @pytest.mark.parametrize("failure_stage", ["read", "write"])
 def test_enqueue_failure_blocks_cursor_prefix(
     outbox: FakeOutboxConn, failure_stage: str

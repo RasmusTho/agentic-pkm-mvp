@@ -41,7 +41,7 @@ mechanism).
 | `cursor` | opaque JSON per adapter (see §Cursor discipline); mutated only by its adapter |
 | `last_attempt_at` / `last_success_at` | timestamps of the last poll attempt / last successful poll |
 | `last_error` | JSON `{reason_code, detail, at}` or null; cleared on success |
-| `acquisition_policy` | JSON: `{mode, extractor_ids, captions, media}` — see §Acquisition policy |
+| `acquisition_policy` | JSON: `{mode, extractor_ids, extractor_requirements, captions, media}` — see §Acquisition policy |
 | `provenance` | JSON: how the binding was created — `{origin: user_pick \| takeout_import \| manual_add, at, detail}` |
 | `created_at` / `updated_at` | timestamps |
 
@@ -78,6 +78,12 @@ discoveries only (no retroactive re-acquisition without explicit backfill).
 
 Only `acquire_transcript` is reachable through the shipped V1 Inbox operator route. The other
 stored modes remain future-facing registry vocabulary and do not expand the V1 product contract.
+
+When `extractor_requirements` is present, it must classify every selected `extractor_id` exactly
+once as `required_for_materialization` or `optional_for_materialization`. Registry validation,
+discovery request snapshots, queue validation, and drain execution preserve this declaration
+unchanged. Missing declarations retain the V1 compatibility default: every selected extractor is
+required. A malformed or mismatched declaration is rejected before extractor execution.
 
 ## AcquisitionRequest (YSS-04; produced by YSS-05/07/08, drained by YSS-06)
 
@@ -116,6 +122,12 @@ State rules:
   `terminal: true` and is listable/retryable by operator command.
 - Restart recovery: rows stuck `in_progress` past a stale threshold are reset to `pending` (the
   drain re-run converges through KA idempotency).
+- Every completion, retry, or terminal transition from `in_progress` carries the claimant's
+  expected attempt generation. Memory and Postgres writers compare request id, status, and attempt
+  atomically; a stale attempt cannot mutate a newer `in_progress` claimant or emit its outcome.
+  Explicit terminal cleanup from `pending` remains generation-less because no claimant owns it,
+  but its atomic writer predicate is `status = pending`; a concurrent claim makes that cleanup a
+  guard miss instead of disposing the new `in_progress` attempt.
 
 ## Cursor discipline (YSS-05/07; guarded by YSS-06)
 

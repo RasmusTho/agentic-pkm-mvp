@@ -84,7 +84,7 @@ Keep storage technology from becoming architecture by routing persistence throug
 
 ## Transitional Implementation Notes
 
-Existing ObjectStore, VectorIndex, RelationIndex, DB outbox, and other store interfaces should be mapped to StorePort classes during implementation slices before wider storage replacement work.
+Existing ObjectStore, VectorIndex, RelationIndex, DB outbox, and other store interfaces should be mapped to StorePort classes during implementation slices before wider storage replacement work. The transitional `ObjectStore.create_object_once` / StorePort `put_if_absent` seam provides atomic immutable identity creation for raw evidence, normalized transcripts, and immutable extraction runs; ordinary `save_object` retains its existing upsert semantics for explicitly replaceable projections.
 
 ## Open Questions
 

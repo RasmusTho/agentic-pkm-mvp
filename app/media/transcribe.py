@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
 from app.diarization.hook import apply_diarization
 from app.index.outbox import append_jsonl
 from app.observability.log import span, with_trace_id
+from app.source_egress import assert_source_egress_allowed
 
 _MODEL_CACHE: Dict[Tuple[str, str], WhisperModel] = {}
 
@@ -125,6 +126,7 @@ def _is_temporary(path: Path) -> bool:
 
 @span("transcribe")
 def transcribe_source(source: str, *, trace_id: str | None = None) -> Dict[str, Any]:
+    assert_source_egress_allowed("transcribe_source")
     trace_id = with_trace_id(trace_id)
     audio_path = download_audio(source)
     wav_path = ffmpeg_to_wav(audio_path)

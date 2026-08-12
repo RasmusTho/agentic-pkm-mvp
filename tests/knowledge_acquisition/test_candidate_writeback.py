@@ -13,6 +13,7 @@ import errno
 import json
 import os
 from pathlib import Path
+import threading
 
 import pytest
 import yaml
@@ -720,3 +721,53 @@ def test_candidate_write_result_is_frozen_dataclass() -> None:
     )
     with pytest.raises(Exception):
         result.status = "blocked"  # type: ignore[misc]
+
+
+def test_replay_proposal_race_reconciles_loser_after_candidate_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    candidate = _assembled_candidate()
+    candidate = replace(
+        candidate,
+        raw_record_id="raw-race",
+        normalized_artifact_id="normalized-race",
+        extraction_artifact_ids=("extract-race",),
+    )
+    barrier = threading.Barrier(2)
+    original_probe = candidate_writeback.candidate_note_exists_durable
+    calls = {"count": 0}
+    calls_lock = threading.Lock()
+
+    def synchronized_probe(*args, **kwargs):
+        with calls_lock:
+            calls["count"] += 1
+            call_number = calls["count"]
+        result = original_probe(*args, **kwargs)
+        if call_number <= 2:
+            barrier.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(
+        candidate_writeback, "candidate_note_exists_durable", synchronized_probe
+    )
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _index: write_candidate_note(
+                    candidate,
+                    vault_context=vault,
+                    write_guard=_allowing_guard(),
+                    proposal_on_existing=True,
+                ),
+                range(2),
+            )
+        )
+
+    assert {result.status for result in results} == {"written", "proposal_written"}
+    assert len(list(vault_root.rglob("*.md"))) == 2
+    assert len(list(vault_root.rglob("*.meta.md"))) == 1

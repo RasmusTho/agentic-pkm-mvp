@@ -8,10 +8,21 @@ record while the prior record is left untouched (never overwritten).
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
+from datetime import datetime, timezone
+
 import pytest
 
 from app import objects as object_store_module
 from app.knowledge_acquisition import youtube_plugin as plugin
+from app.knowledge_acquisition.raw_record import (
+    RawRecordIntegrityError,
+    get_raw_record,
+    persist_raw_record,
+    raw_record_object_id,
+)
+from app.objects import DomainObject, ObjectStore
 from app.stores import reset_store_backends
 
 FAKE_URL = "https://www.youtube.com/watch?v=abcdefghijk"
@@ -90,3 +101,46 @@ def test_changed_content_new_record(monkeypatch):
     assert updated is not None
     assert updated["metadata"]["title"] == "Updated Title"
     assert updated["caption_body"] == "updated transcript body"
+
+
+def test_raw_identity_is_atomic_first_write_wins_under_concurrency() -> None:
+    barrier = threading.Barrier(2)
+
+    def persist(marker: str):
+        barrier.wait(timeout=5)
+        return persist_raw_record(
+            source_kind="youtube_url",
+            item_ref="abcdefghijk",
+            content_identity="sha256:concurrent-raw",
+            payload={"marker": marker},
+            source_ref=f"test:{marker}",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(persist, ("a", "b")))
+
+    assert sorted(result.is_new for result in results) == [False, True]
+    assert results[0].record == results[1].record
+    stored = get_raw_record(results[0].object_id)
+    assert stored == results[0].record
+
+
+def test_get_raw_record_rejects_non_raw_kind() -> None:
+    object_id = raw_record_object_id(
+        source_kind="youtube_url",
+        item_ref="abcdefghijk",
+        content_identity="sha256:not-raw",
+    )
+    ObjectStore().save_object(
+        DomainObject(
+            uuid=str(object_id),
+            kind="knowledge_acquisition.normalized_transcript",
+            payload={"source_kind": "youtube_url"},
+            source_ref="test:not-raw",
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+    )
+
+    with pytest.raises(RawRecordIntegrityError):
+        get_raw_record(object_id)
