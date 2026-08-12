@@ -46,9 +46,11 @@ authentication surface and exposes no scheduler, backfill, or multi-playlist ope
 Use a user-owned Google Cloud OAuth client with the YouTube Data API v3 enabled and the minimal
 `youtube.readonly` scope. Provision client identifiers and `YOUTUBE_TOKEN_STORE_KEY` through the
 local secret boundary. Values never belong in tracked config, vault content, logs, events, or
-receipts. Start the delivered device flow with
-`YouTubeAccountBinder.start_device_connection()`, then call
-`finish_device_connection()` after consent and retain the returned non-secret binding id.
+receipts. Start and complete device consent only through
+`PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev connect`, which serializes account
+admission and retains the returned non-secret binding id. `YouTubeAccountBinder` remains the
+internal service composed by that command; calling its start/finish methods directly is not a
+supported operator route because it bypasses the one-account CLI boundary.
 
 ## Manual Inbox route
 
