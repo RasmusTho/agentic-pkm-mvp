@@ -40,6 +40,14 @@ work, route through the Builder System boundary/artifact map. Boundary tasks nam
 not treat builder learning or BuilderOps records as runtime/user memory without Product System
 authority.
 
+When the input is accepted architecture-research or design material rather than an already
+authoritative owner document/specification, require the upstream explicit disposition and durable
+`PromotionIntent` accepted-transition `BuilderOpsReceipt` evidence before creating a specification
+directory, parent feature issue, or child issue. Preserve its source reference in the handoff;
+after materialization, record its result references and transition the same intent to `promoted`.
+This check does not add a PromotionIntent wrapper to ordinary breakdown from an
+already-authoritative, bounded owner document or specification.
+
 Key distinction:
 - The specification describes **what the system needs to do**.
 - The GitHub issues describe **what work to pick up next**.
