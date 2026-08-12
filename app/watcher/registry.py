@@ -1058,6 +1058,11 @@ def _collect_changed_entries(
     scanned_paths: list[str] = []
     for rel, mtime, path in _scan_markdown_many(cfg.vault_path, scan_roots, spec.scope_glob):
         summary["scanned_files"] = int(summary["scanned_files"]) + 1
+        # Settings sources are scanned outside a narrow content scope so their
+        # runtime configuration can reload.  They must not, however, make a
+        # blind content scope look healthy.
+        if _matches_scope(rel, spec.scope_glob):
+            summary["scope_matched_files"] = int(summary.get("scope_matched_files", 0)) + 1
         rel_str = str(rel)
         scanned_paths.append(rel_str)
         last_mtime = state.last_mtime(rel_str)
@@ -1428,6 +1433,7 @@ def _run_spec_tick(
         "rate_limited": state.rate_limited,
         "enqueue_failures_total": state.enqueue_failures_total,
         "scanned_files": 0,
+        "scope_matched_files": 0,
         "hashed_files": 0,
         "bytes_read": 0,
         "scope_glob": spec.scope_glob,
@@ -1551,9 +1557,10 @@ def _run_spec_tick(
                     removed_delta.errors
                 )
 
-    if int(summary.get("scanned_files", 0)) == 0:
+    if int(summary.get("scope_matched_files", 0)) == 0:
         # The scope glob's directory exists, but the tick matched zero
-        # candidate files — the watcher is running but blind (#2988).
+        # content files — the watcher is running but blind (#2988). Settings
+        # sources may still be scanned/reloaded outside that content scope.
         state.scope_status = "zero_match"
         summary["scope_status"] = "zero_match"
         _warn_scope_once_per_interval(

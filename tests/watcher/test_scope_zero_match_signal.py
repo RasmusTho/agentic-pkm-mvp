@@ -82,7 +82,8 @@ def test_zero_match_sets_degraded_heartbeat(
 
     summaries = registry.run_registry_once(config_path)
     summary = summaries["ingest"]
-    assert summary.get("scanned_files") == 0
+    assert summary.get("scanned_files") == 1
+    assert summary.get("scope_matched_files") == 0
     assert summary.get("scope_status") == "zero_match"
 
     import json
@@ -101,6 +102,28 @@ def test_zero_match_sets_degraded_heartbeat(
     registry.run_registry_once(config_path)
     messages_second = [rec.getMessage() for rec in caplog.records]
     assert not any("zero" in msg.lower() and "ingest" in msg for msg in messages_second)
+
+
+def test_settings_sources_do_not_mask_scope_zero_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    initialize_test_vault(vault_root)
+    scope_dir = vault_root / "📥 Inbox"
+    scope_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = tmp_path / "watchers.yaml"
+    _write_config(config_path)
+    _base_env(monkeypatch, vault_root=vault_root, tmp_path=tmp_path, scope_glob="📥 Inbox/*.md")
+
+    summary = registry.run_registry_once(config_path)["ingest"]
+
+    # Canonical settings remain a reloadable scan target outside this narrow
+    # content scope, but they cannot suppress the zero-match health signal.
+    assert summary.get("scanned_files") == 1
+    assert summary.get("scope_matched_files") == 0
+    assert summary.get("settings_source_reloads_in_tick") == 1
+    assert summary.get("scope_status") == "zero_match"
 
 
 def test_missing_scope_prefix_warns(
