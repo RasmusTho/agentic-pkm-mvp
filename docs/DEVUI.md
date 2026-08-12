@@ -417,10 +417,14 @@ soi_evidence_lens: SoIEvidenceReference.v1 | null
 limitations: [Limitation.v1]
 ```
 
-`OverviewItem.v1` carries one typed subject reference, a server-declared zone, a source-backed
-reason for that placement, independent source freshness/completeness/cardinality/linkage/refusal
-or withdrawal evidence, and typed navigation references only. It does not copy a Focus payload, a
-SoI payload, a delivery run, or a Builder System Control payload into a shared object.
+`OverviewItem.v1` carries one typed subject reference, a required nonblank source-owned
+`display_label`, a server-declared zone, a source-backed reason for that placement, independent
+source freshness/completeness/cardinality/linkage/refusal or withdrawal evidence, and typed
+navigation references only. The label is source-owned presentation text, preserved byte-for-byte
+through classification and withdrawal; it is not identity, authority, ranking, or navigation.
+`subject_ref.source_id` remains the stable technical identity, while `reason` remains the
+source-owned placement/why-now statement. It does not copy a Focus payload, a SoI payload, a
+delivery run, or a Builder System Control payload into a shared object.
 
 The three zones have strict eligibility:
 
