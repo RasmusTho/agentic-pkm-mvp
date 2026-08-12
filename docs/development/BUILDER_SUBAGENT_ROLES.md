@@ -61,8 +61,10 @@ Five execution roles. Each maps to exactly one canonical skill and stays in its 
 The host-local verification dispatch consumer may launch or resume the coordinator session for this
 adapter, but it does not broaden the adapter's authority. Every independent review and re-review is
 a fresh session; only the coordinator may resume its recorded session after restart. Repair attempts
-are accounted across the whole PR as two standard attempts followed by at most two
-strongest-capability attempts.
+use evidence-based convergence across the whole PR: the ledger retains every monotonic round, TCD
+selects capability, every substantive repair receives a fresh independent review, and the loop stops
+only on documented non-progress, technical impasse, scope expansion, or authority conflict rather
+than a fixed attempt count.
 
 ## Skill-to-role routing matrix
 

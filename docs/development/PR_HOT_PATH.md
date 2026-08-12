@@ -295,8 +295,8 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
   closes only the authenticated issue set, reconciles any body-race closure attributable to that PR,
   proves every and only authenticated issue is closed with delivery attribution, restores the
   authenticated body, resumes an open neutralized `prepared` window from exact receipt/body/phase
-  truth, and resumes a crashed post-merge sequence idempotently without resetting attempts or the
-  2+2 repair budget. Explicit expected-issue closes require a null closer plus the delivery actor/time
+  truth, and resumes a crashed post-merge sequence idempotently without resetting attempts or repair
+  accounting. Explicit expected-issue closes require a null closer plus the delivery actor/time
   fence; automatic closes require the exact target PR/repository/merge SHA
 - a neutralized PR body may not outlive its merge attempt: neutralization requires a head-bound
   readiness statement that CI and review are green and no further commits are anticipated, and a head

@@ -255,7 +255,7 @@ evidence; and any failed governing acceptance criterion, `Verify:` target, contr
 gate. When the evidence is insufficient to distinguish a protected failure from a true P2, the
 review is inconclusive and the merge block remains while evidence is recovered.
 
-P2/P3 findings never consume repair attempts, trigger mechanism convergence, or count toward the
+P2/P3 findings consume no repair attempts, never trigger mechanism convergence, or count toward the
 low-convergence circuit breaker. A reviewer remains independent, current-SHA CI remains mandatory,
 and issue acceptance/`Verify:`, authority, verified-merge, and closure gates remain fail-closed
 regardless of finding severity.
@@ -323,32 +323,29 @@ finding and does not re-trigger review.
   independent pre-expensive-gate review defined in
   `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate`. Resume the expensive
   sequence only after that review is clean. Preserve the existing mechanism/domain binding and
-  attempt count; this replan does not reset budget. After any resulting P0/P1 repair, one new clean
+  attempt history; this replan does not reset accounting. After any resulting P0/P1 repair, one new clean
   independent final review on the repaired current head SHA is required.
-- Repair budget applies only to blocking P0/P1 findings and is per stable failure mechanism and
-  failure domain: two standard repair attempts followed, when needed, by two strongest-capability
-  repair attempts for that same key. The closed domains are review/code correctness,
-  static-quality, lease/concurrency, and deployment/model-schema compatibility. Multiple blocking
-  findings may share one mechanism; the same finding must not be rebound to another mechanism or
-  domain to reset accounting. P2/P3 findings consume no budget.
-- Once 2 standard fix attempts have been spent on one mechanism/domain key and a blocking finding
-  for that key remains or reappears, treat that as a **capability-escalation trigger**, not an
-  automatic owner escalation.
-  Start a fresh repair context at the strongest available capability selected through `AGENTS.md ::
-  Total Cost of Development` and the current platform configuration, and pass it all prior findings,
-  attempted fixes, changed mechanisms, and relevant evidence. Do not duplicate a provider/model
-  ladder here; the canonical policy and live configuration may select any available agent family.
-- Permit at most 2 additional capability-escalated fix attempts for that same mechanism/domain key.
-  Independently re-review after each substantive attempt, and record the
-  selected model/agent family, reasoning level, prior context supplied, fallback (if any), and outcome
-  for every escalated round.
-- After one key's budget of 2 standard plus 2 escalated fix attempts is exhausted, or when the
-  strongest available capability cannot run or repeatedly fails, classify the stop under
-  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Continue with bounded
-  technical recovery, backoff, or a blocked-technical receipt when safe; route through
-  `owner-decision-brief` only if that classifier identifies an explicit authority/scope category.
-  Do not reset an existing finding's binding, and do not ask the owner merely because the
-  standard-capability attempts failed. Budget exhaustion alone does not create a Human Exception.
+- There is no global numeric repair-attempt budget. Continue a bounded, in-scope repair/re-review
+  loop only while each round records measurable progress: a finding closes or narrows, the failure
+  mechanism changes with evidence, validation coverage improves, or diagnostic uncertainty is
+  reduced. A fresh finding alone is not progress if it repeats the same unresolved mechanism.
+- Repeated findings or a round without measurable progress are **capability-escalation and bounded
+  replan triggers**, not automatic stop counters. Select the next capability through `AGENTS.md ::
+  Total Cost of Development` and current platform configuration, start a fresh repair context when
+  that improves independence, and pass it all prior findings, attempted fixes, changed mechanisms,
+  validation evidence, and the last progress assessment. When TCD selects a strongest-capability
+  repair, use the configured strongest capability with high or xhigh reasoning. Do not duplicate a
+  provider/model ladder here; the canonical policy and live configuration govern.
+- Independently re-review after every substantive repair and record the selected capability,
+  reasoning level, prior context supplied, fallback (if any), progress evidence, and outcome. Keep
+  each finding bound to its original stable mechanism and failure domain; P2/P3 dispositions never
+  enter this repair loop.
+- Stop only on evidence of non-convergence or a hard gate: the strongest feasible bounded diagnosis
+  repeats the same mechanism without new evidence or progress, the required capability or validation
+  cannot run after bounded recovery/backoff, branch/head truth cannot be proved, or the next repair
+  needs scope or authority expansion. Classify that stop under
+  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, preserve the
+  merge block, and route through `owner-decision-brief` only for an explicit authority category.
 - Record each round's outcome and the final round count in the delivery receipt so convergence is
   auditable after merge.
 
@@ -396,19 +393,20 @@ of the otherwise identical body with exactly one terminal LF may authenticate wh
 the LF-less form when the authenticated comment `created_at` and `updated_at` both precede #4010's
 `2026-07-21T16:32:11Z` merge cutoff. Check normal canonical equality first so unchanged two-LF bodies
 remain valid; the legacy fallback rejects any CR/CRLF, spaces, interior drift, post-cutoff receipt,
-or other receipt/live-state mismatch. Preserve receipt identity, phase continuity, and repair budget.
+or other receipt/live-state mismatch. Preserve receipt identity, phase continuity, and repair accounting.
 
 For the singular pre-#4010 immutable PR #4052 compatibility deadlock, current-main/base-side
 recovery may attach an additional auditable `pr-contract` result only after re-reading repository,
 PR, fixed head, title, canonical neutralized body, empty closing links, issue sets, unique trusted
-authority receipt, continuous `prepared` phase, and unchanged repair budget. It uses the current-main
+authority receipt, continuous `prepared` phase, and unchanged repair-accounting projection. It uses the current-main
 validator and fails closed for mutable/foreign/unprepared, stale/forged/conflicting, noncanonical, or
 drifted contexts. It is not a branch-protection waiver: it neither replaces unrelated checks nor
 merges, restores closers, posts phases, closes issues, or changes dispatcher accounting. Hand the
 same exact head back to the ordinary verified-merge sequence below.
 
 1. freeze the authenticated v2 context (`run_id`, repository, PR, exact head, governing issue,
-   `closing_issues`, durable `supporting_issues`, attempts, and 2+2 repair-budget projection); re-read
+   `closing_issues`, durable `supporting_issues`, attempts, and the compatibility-named
+   `repair_budget` accounting projection); re-read
    the live PR title/body/head and GitHub `closingIssuesReferences`, and reject any mismatch or title
    closing attempt even when an earlier `pr-contract` run was green
 2. run `scripts/prepare_verified_issue_set_merge.py` against those snapshots; require its
@@ -450,12 +448,12 @@ same exact head back to the ordinary verified-merge sequence below.
    canonical or malformed closing attempt, then post the authority-bound `merged` phase receipt
 7. on resume, recover either authenticated interruption window without restarting accounting. If the
    exact-head PR is still open with the neutralized body, require the unique trusted exact-run
-   authority receipt, its exact body digest/issue sets/repair budget, and a continuous `prepared`
+   authority receipt, its exact body digest/issue sets/repair accounting, and a continuous `prepared`
    phase before resuming the pre-merge sequence. If the live PR is merged-but-incomplete,
    authenticate the same exact authority receipt and latest continuous phase, prove the live merge
    identity, and resume at the first missing phase. Missing, forged, stale, conflicting,
    body-mismatched, or unphased recovery evidence fails closed. Resume either path without resetting
-   attempts or the 2+2 repair budget, and never reject an authenticated interrupted delivery merely
+   attempts or repair accounting, and never reject an authenticated interrupted delivery merely
    because its neutralized or merged PR no longer satisfies canonical pre-merge intake
 8. re-read post-merge closing references and issue state before explicit closure. Independently
    enumerate every non-PR `closed` candidate at or after `merged_at` through the repository

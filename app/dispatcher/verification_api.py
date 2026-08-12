@@ -26,7 +26,7 @@ from app.builderops.control_plane.client import (
 )
 from app.dispatcher.verification_dispatch import (
     ACTIVE_STATES,
-    REPAIR_ATTEMPT_LIMITS,
+    REPAIR_ATTEMPT_KINDS,
     REPAIR_BUDGET_POLICY_LEGACY,
     REPAIR_BUDGET_POLICY_MECHANISM,
     TERMINAL_STATES,
@@ -905,7 +905,7 @@ class BuilderOpsVerificationLedger:
         lease_id: str,
         idempotency_key: str | None = None,
     ) -> int:
-        if kind not in {*REPAIR_ATTEMPT_LIMITS, "review", "verification"}:
+        if kind not in {*REPAIR_ATTEMPT_KINDS, "review", "verification"}:
             raise ValueError("invalid verification attempt kind")
         snapshot = self._snapshot(run_id)
         lease = self._assert_lease(snapshot, holder, lease_id)
@@ -1068,7 +1068,7 @@ class BuilderOpsVerificationLedger:
             last_seen: dict[tuple[str, str], int] = {}
             for index, row in enumerate(attempts):
                 if (
-                    row.get("kind") in REPAIR_ATTEMPT_LIMITS
+                    row.get("kind") in REPAIR_ATTEMPT_KINDS
                     and isinstance(row.get("failure_domain"), str)
                     and isinstance(row.get("mechanism_id"), str)
                 ):
