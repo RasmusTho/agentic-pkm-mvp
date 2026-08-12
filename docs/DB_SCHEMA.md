@@ -704,16 +704,25 @@ truthiness:
 A required enqueue that raises is caught by the reconciliation loop, counted as an error, and
 surfaced as an `unable to reconcile deletion` message.
 
-**Known gap: an unlanded tombstone is not retried.** The deletion is not made re-observable, so it is
-still lost — honestly reported now, but lost. Closing that needs `app/services/vault_sync.py::delete_note`
-classified first: it is step 1 of this path, it opens an unconditional `conn_rw()` with no
-memory-mode guard, and in a runtime that names no database it *raises* before the tombstone emitter
-is ever consulted. A retry layer built above that seam cannot terminate — two independent review
-rounds on PR #4138 demonstrated exactly that, once as a retention silently undone by the bare
-`refresh_snapshot()` in `app/runtime/runtime_loop.py`, once as a permanent per-tick error loop with
-an unbounded sidecar. The prerequisite and a decided termination policy are carried by #4468;
-`tests/watcher/test_vault_watcher_delete_required_outbox.py::test_the_tick_terminates_when_no_database_is_named`
-runs the real `delete_note` so the gap stays visible instead of being stubbed away.
+**Termination policy for an unlanded tombstone.** `vault_sync.delete_note` first applies the same
+self-owned connection classification as the outbox policy. An unnamed `STORE_BACKEND=memory` runtime
+does not open the synthesized fallback DSN; it returns `False`, so the watcher can resolve the
+missing durable queue explicitly. A named database remains required (including an explicit DSN under
+the memory backend), so configured-runtime delivery semantics still fail loud rather than silently
+skip.
+
+The watcher retries an unreconciled deletion at most **three total observations**. Retryable entries
+live in `<snapshot>.unreconciled-deletions.json`, not in the snapshot itself. Every `VaultWatcher`
+snapshot writer — including the bare `refresh_snapshot()` callers in the runtime and CLI — merges that
+bounded state back before saving, so it cannot be silently erased between ticks. A landed tombstone or
+rename removes the entry immediately. On the third unsuccessful observation the entry is removed, the
+run records `unreconciled_deletions_terminated=1`, and an operator-visible retry-budget-exhausted
+warning is emitted with the normal watcher-run receipt. Thus a permanently absent database has two
+bounded retry errors followed by a terminal report, not a permanent per-tick error loop or an
+unbounded retention sidecar. Coverage:
+`tests/services/test_vault_sync_delete_note_policy.py::test_delete_note_memory_mode_does_not_connect`
+and
+`tests/watcher/test_vault_watcher_delete_required_outbox.py::test_unreconciled_delete_retries_then_terminates`.
 
 ### Producers that read a normal return as a commit
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,12 +53,35 @@ from app.objects import (
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
 from app.domain.state_axes import normalize_artifact_state_axes
-from app.services.outbox import insert_object_and_outbox
+from app.config.database import runtime_database_is_named
+from app.services.outbox import insert_object_and_outbox, self_owned_write_would_skip
 from app.services.settings import policy
 
 
 def _conn():
     return conn_rw()
+
+
+_DEFAULT_CONN = _conn
+
+
+def _delete_note_conn():
+    """Open the self-owned vault-sync connection, or skip an unnamed memory DB.
+
+    This is deliberately *not* the module-wide ``_conn`` helper: #4468 owns
+    only ``delete_note``. Applying this optional-memory classification to every
+    vault-sync producer would silently alter unrelated write semantics.
+    """
+    # The module's established test/adapter seam replaces ``_conn`` with a
+    # caller-supplied transaction. That is not a self-owned connection and
+    # must retain supplied-connection semantics, exactly like outbox callers
+    # that pass ``conn=``. Production keeps the original function.
+    if _conn is not _DEFAULT_CONN:
+        return _conn()
+    required_db = runtime_database_is_named(os.environ)
+    if self_owned_write_would_skip(required_db=required_db):
+        return None
+    return _conn()
 
 
 def _prepare(conn: psycopg.Connection) -> None:
@@ -530,7 +554,15 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
     deleted = False
     remaining_for_uuid: int | None = None
     delete_payload: dict[str, Any] | None = None
-    with _conn() as conn:
+    conn = _delete_note_conn()
+    if conn is None:
+        # ``delete_note`` owns both the derived-store delete and its atomic
+        # outbox tombstone. An unnamed memory runtime owns neither, so the
+        # watcher receives the non-raising "not reconciled here" outcome it
+        # can retry under its bounded policy. A named database remains
+        # required even under STORE_BACKEND=memory.
+        return False
+    with conn:
         _prepare(conn)
         state = _get_state_by_path(conn, resolved_path, binding_id=binding_id)
         effective_uuid = (uuid_value or (state or {}).get("uuid") or "").strip() or None
