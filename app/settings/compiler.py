@@ -492,8 +492,9 @@ def compile_all(
         _update_reference(file_paths["llm_routing"], "LLM routing", bundle.llm_routing, writeback_allowed(file_paths["llm_routing"]), vault_root=resolved_vault_root)
 
     retrieval_payload = _merge_sections(file_sections.get("retrieval", {}))
+    retrieval_source_keys = sorted(retrieval_payload)
     retrieval_model, retrieval_canonical, retrieval_fixed = _hydrate_model(
-        payload=retrieval_payload, model_cls=RetrievalTuning
+        payload={**retrieval_payload, "configured_keys": retrieval_source_keys}, model_cls=RetrievalTuning
     )
     bundle.retrieval_tuning = retrieval_model
     if retrieval_fixed and "retrieval" in file_paths and writeback_allowed(file_paths["retrieval"]):

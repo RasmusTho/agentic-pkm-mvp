@@ -28,6 +28,7 @@ def _bundle() -> SettingsBundle:
             rerank="always",
             rerank_provider="mock_ce",
             rerank_top_k=7,
+            configured_keys=["rerank", "rerank_provider", "rerank_top_k"],
         ),
     )
 
@@ -109,7 +110,6 @@ def test_llm_and_rerank_lab_keys_are_inert_for_operator_profile(monkeypatch: pyt
     monkeypatch.setattr(wave_one, "get_settings_bundle", _bundle)
     monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", _bundle)
     assert wave_one.llm_temperature() == 0.0
-    assert wave_one.rerank_provider() == "none"
     assert get_retrieval_tuning().rerank_top_k == 100
     assert wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"] == "registry default (operator profile)"
     assert get_retrieval_tuning().rerank == "off"

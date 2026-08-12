@@ -58,20 +58,11 @@ def default_chat_model() -> str:
     return routing.default_chat.primary.model or routing.default_chat_model or env_default("MERGE_LLM_MODEL")
 
 
-def rerank_provider() -> str:
-    raw = _override("RERANK_PROVIDER")
-    if raw is not None:
-        return raw
-    if not is_lab_profile():
-        return env_default("RERANK_PROVIDER")
-    return get_settings_bundle().retrieval_tuning.rerank_provider
-
-
 def wave_one_explain() -> dict[str, dict[str, object]]:
     """Safe, explicit origin/tier evidence for migrated SETTINGS-07A keys."""
-    from app.retrieval.tuning import get_retrieval_tuning
+    from app.retrieval.tuning import get_effective_retrieval_resolution
 
-    effective_retrieval = get_retrieval_tuning()
+    effective_retrieval = get_effective_retrieval_resolution()
     return {
         "llm.timeout_seconds": {
             "value": llm_timeout_seconds(),
@@ -94,34 +85,18 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
             "tier": "operator",
         },
         "retrieval.rerank.provider": {
-            "value": rerank_provider(),
-            "origin": "env:RERANK_PROVIDER (deprecated)" if _override("RERANK_PROVIDER") else (_vault_shared_origin("retrieval.md") if is_lab_profile() else "registry default (operator profile)"),
-            "tier": "lab",
+            "value": effective_retrieval.rerank_provider.value,
+            "origin": effective_retrieval.rerank_provider.origin,
+            "tier": effective_retrieval.rerank_provider.tier,
         },
         "retrieval.rerank": {
-            "value": effective_retrieval.rerank,
-            "origin": (
-                "env:RETRIEVAL_RERANK"
-                if _override("RETRIEVAL_RERANK")
-                else (
-                    "env:RERANK_ENABLE (deprecated)"
-                    if (_override("RERANK_ENABLE") or "").lower() in {"1", "true", "yes", "on"}
-                    else (_vault_shared_origin("retrieval.md") if is_lab_profile() else "registry default (operator profile)")
-                )
-            ),
-            "tier": "lab",
+            "value": effective_retrieval.rerank.value,
+            "origin": effective_retrieval.rerank.origin,
+            "tier": effective_retrieval.rerank.tier,
         },
         "retrieval.rerank.top_k": {
-            "value": effective_retrieval.rerank_top_k,
-            "origin": (
-                "env:RETRIEVAL_RERANK_TOP_K"
-                if _override("RETRIEVAL_RERANK_TOP_K")
-                else (
-                    "env:RERANK_TOP_K (deprecated)"
-                    if _override("RERANK_TOP_K")
-                    else _vault_shared_origin("retrieval.md")
-                )
-            ),
-            "tier": "lab",
+            "value": effective_retrieval.rerank_top_k.value,
+            "origin": effective_retrieval.rerank_top_k.origin,
+            "tier": effective_retrieval.rerank_top_k.tier,
         },
     }

@@ -23,6 +23,7 @@ this module.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from pydantic import ValidationError
 
@@ -33,6 +34,22 @@ from app.settings.tiering import is_lab_profile
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 _CACHED: RetrievalTuning | None = None
+_CACHED_RESOLUTION: "EffectiveRetrievalResolution | None" = None
+
+
+@dataclass(frozen=True)
+class EffectiveSetting:
+    value: object
+    origin: str
+    tier: str
+
+
+@dataclass(frozen=True)
+class EffectiveRetrievalResolution:
+    tuning: RetrievalTuning
+    rerank: EffectiveSetting
+    rerank_provider: EffectiveSetting
+    rerank_top_k: EffectiveSetting
 
 
 class RetrievalTuningError(ValueError):
@@ -61,8 +78,9 @@ def reset_retrieval_tuning_cache() -> None:
     the autouse fixture in ``tests/conftest.py``) so a monkeypatched env var in one test never leaks
     a stale resolution into the next.
     """
-    global _CACHED
+    global _CACHED, _CACHED_RESOLUTION
     _CACHED = None
+    _CACHED_RESOLUTION = None
 
 
 def _base_tuning() -> RetrievalTuning:
@@ -114,9 +132,18 @@ def _env(key: str) -> str:
     return os.getenv(key, "").strip()
 
 
-def _resolve_retrieval_tuning() -> RetrievalTuning:
+def _resolve_retrieval_tuning() -> EffectiveRetrievalResolution:
     base = _base_tuning()
-    data = base.model_dump()
+    data = base.model_dump(exclude={"configured_keys"})
+    lab = is_lab_profile()
+    defaults = RetrievalTuning()
+    source_keys = base.configured_keys
+    registry_origin = "registry default" if lab else "registry default (operator profile)"
+    rerank_origin = "vault-shared:settings/retrieval.md" if lab and "rerank" in source_keys else registry_origin
+    provider_origin = "vault-shared:settings/retrieval.md" if lab and "rerank_provider" in source_keys else registry_origin
+    top_k_origin = "vault-shared:settings/retrieval.md" if lab and "rerank_top_k" in source_keys else registry_origin
+    if not lab:
+        data.update({"rerank": defaults.rerank, "rerank_provider": defaults.rerank_provider, "rerank_top_k": defaults.rerank_top_k})
 
     fusion_raw = _env("RETRIEVAL_FUSION")
     if fusion_raw:
@@ -147,12 +174,14 @@ def _resolve_retrieval_tuning() -> RetrievalTuning:
     rerank_raw = _env("RETRIEVAL_RERANK")
     if rerank_raw:
         data["rerank"] = rerank_raw.lower()
+        rerank_origin = "env:RETRIEVAL_RERANK"
     else:
         # Back-compat (#3404 AC3): RERANK_ENABLE truthy maps to the new surface's "always" when the
         # new explicit knob is not set. RERANK_ENABLE has no "off" spelling distinct from unset in
         # today's behavior (app/retrieval/hook_adapter.py), so it is only ever a one-way promotion.
         if _env("RERANK_ENABLE").lower() in _TRUE_VALUES:
             data["rerank"] = "always"
+            rerank_origin = "env:RERANK_ENABLE (deprecated)"
 
     # RETRIEVAL_RERANK_TOP_K (new) wins over legacy RERANK_TOP_K when both are set.
     rerank_top_k_raw = _env("RETRIEVAL_RERANK_TOP_K") or _env("RERANK_TOP_K")
@@ -160,6 +189,12 @@ def _resolve_retrieval_tuning() -> RetrievalTuning:
         data["rerank_top_k"] = _parse_int(
             rerank_top_k_raw, env_key="RETRIEVAL_RERANK_TOP_K/RERANK_TOP_K"
         )
+        top_k_origin = "env:RETRIEVAL_RERANK_TOP_K" if _env("RETRIEVAL_RERANK_TOP_K") else "env:RERANK_TOP_K (deprecated)"
+
+    provider_raw = _env("RERANK_PROVIDER")
+    if provider_raw:
+        data["rerank_provider"] = provider_raw
+        provider_origin = "env:RERANK_PROVIDER (deprecated)"
 
     margin_raw = _env("RETRIEVAL_RERANK_SCORE_MARGIN")
     if margin_raw:
@@ -175,7 +210,12 @@ def _resolve_retrieval_tuning() -> RetrievalTuning:
     # fusion="rrf" and rerank="conditional" are implemented (ADR-0059 D3 step 5, #3407) and resolve
     # like any other valid config value. Neither is the shipped default; a default flip is a
     # separate owner call gated on eval evidence, recorded against ADR-0059 — not enforced here.
-    return resolved
+    return EffectiveRetrievalResolution(
+        tuning=resolved,
+        rerank=EffectiveSetting(resolved.rerank, rerank_origin, "lab"),
+        rerank_provider=EffectiveSetting(resolved.rerank_provider, provider_origin, "lab"),
+        rerank_top_k=EffectiveSetting(resolved.rerank_top_k, top_k_origin, "lab"),
+    )
 
 
 def get_retrieval_tuning() -> RetrievalTuning:
@@ -184,10 +224,17 @@ def get_retrieval_tuning() -> RetrievalTuning:
     Resolves once and caches; an invalid or unimplemented resolution is never cached (so a fixed
     override on the next call re-resolves rather than staying stuck raising).
     """
-    global _CACHED
-    if _CACHED is None:
-        _CACHED = _resolve_retrieval_tuning()
+    global _CACHED, _CACHED_RESOLUTION
+    if _CACHED_RESOLUTION is None:
+        _CACHED_RESOLUTION = _resolve_retrieval_tuning()
+        _CACHED = _CACHED_RESOLUTION.tuning
     return _CACHED
+
+
+def get_effective_retrieval_resolution() -> EffectiveRetrievalResolution:
+    get_retrieval_tuning()
+    assert _CACHED_RESOLUTION is not None
+    return _CACHED_RESOLUTION
 
 
 # A settings reload replaces the bundle atomically.  Clear this module's

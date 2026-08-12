@@ -370,6 +370,10 @@ class RetrievalTuning(BaseModel):
         default="none",
         description="Reranker implementation selector. RERANK_PROVIDER remains a one-release override.",
     )
+    configured_keys: list[str] = Field(
+        default_factory=list,
+        description="Compiler-projected set of explicitly configured retrieval keys; not user-authored authority.",
+    )
     rerank_top_k: int = Field(
         default=100,
         ge=1,

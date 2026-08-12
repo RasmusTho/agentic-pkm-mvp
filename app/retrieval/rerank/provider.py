@@ -8,7 +8,7 @@ from typing import Iterable, List, Protocol
 
 import httpx
 
-from app.settings.wave_one import rerank_provider
+from app.retrieval.tuning import get_effective_retrieval_resolution
 
 
 @dataclass(frozen=True)
@@ -187,7 +187,7 @@ def _ngram_phrases(tokens: list[str], max_n: int = 3) -> set[str]:
 
 
 def select_provider(name: str | None = None) -> BaseReranker:
-    spec = (name or rerank_provider()).strip().lower()
+    spec = (name or str(get_effective_retrieval_resolution().rerank_provider.value)).strip().lower()
     try:
         if spec in ("none", "", "off", "disabled"):
             return NoneReranker()

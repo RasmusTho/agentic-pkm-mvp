@@ -209,6 +209,12 @@ Optional operational-scope filtering:
 Rerank is opt-in, gated by the `RetrievalTuning.rerank` field (see *Scoring* above; `off` by
 default). It is still controlled by env vars, same effective knobs as before (ADR-0059 D3, #3404 —
 compat preserved):
+
+The effective gate, provider, and top-k resolve once as one settings record: operator profiles use
+the registry `off`/`none`/`100` posture unless an explicit environment override is present; lab
+profiles use an explicitly configured `settings/retrieval.md` key, otherwise that same registry
+posture. `settings explain retrieval.rerank`, `.provider`, and `.top_k` report the exact effective
+value, origin, and tier consumed by the reranker.
 - `RERANK_ENABLE=1` to enable reordering (maps to `rerank="always"`)
 - `RERANK_TOP_K` to limit how many results the reranker returns explicitly (maps to `rerank_top_k`)
 - `RERANK_PROVIDER` selects the implementation (`none`, `mock`, `ce_local`, `ce_http`) as a deprecated
