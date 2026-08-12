@@ -1264,7 +1264,11 @@ def drain_one(
     (config errors such as ``DatabaseNotConfiguredError`` included) propagate
     loud rather than being folded into queue state.
     """
-    from app.knowledge_acquisition.acquire import AcquisitionError, acquire_youtube
+    from app.knowledge_acquisition.acquire import (
+        AcquisitionError,
+        RetryableSourceAcquisitionError,
+        acquire_youtube,
+    )
     from app.write_guard import DEFAULT_WRITE_GUARD
 
     if request.source_kind != YOUTUBE_SOURCE_KIND:
@@ -1338,7 +1342,7 @@ def drain_one(
     except AcquisitionError as exc:
         return queue.fail(
             request.request_id,
-            reason_code="network_error",
+            reason_code=(exc.reason_code if isinstance(exc, RetryableSourceAcquisitionError) else "network_error"),
             error=exc,
             now=now,
             conn=conn,

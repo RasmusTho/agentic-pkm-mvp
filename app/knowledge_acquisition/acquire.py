@@ -74,6 +74,43 @@ class AcquisitionError(RuntimeError):
     """A new-item acquisition could not complete (item-scoped, loud, traced)."""
 
 
+class RetryableSourceAcquisitionError(AcquisitionError):
+    """Expected source-access failure with a safe queue failure classification."""
+
+    def __init__(self, *, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+def _caption_failure_for_queue(exc: youtube_plugin.CaptionAcquisitionError) -> RetryableSourceAcquisitionError:
+    """Classify the plugin's expected access failures without persisting provider text.
+
+    ``CaptionAcquisitionError`` is the plugin boundary's explicit operational
+    failure type.  Its detail can include a provider response or a source URL,
+    neither of which belongs in a durable queue row or outbox event.
+    """
+    detail = str(exc).casefold()
+    inaccessible_markers = (
+        "private",
+        "not available",
+        "unavailable",
+        "not found",
+        "does not exist",
+        "has been removed",
+        "sign in",
+        "sign-in",
+        "http error 403",
+        "http error 404",
+    )
+    if any(marker in detail for marker in inaccessible_markers):
+        return RetryableSourceAcquisitionError(
+            reason_code="source_gone", message="YouTube source is inaccessible"
+        )
+    return RetryableSourceAcquisitionError(
+        reason_code="network_error", message="YouTube source fetch failed"
+    )
+
+
 class DatabaseNotConfiguredError(RuntimeError):
     """Raised when the acquisition entrypoint runs without a configured runtime DB.
 
@@ -220,7 +257,10 @@ def acquire_youtube(
     fetch = fetch_fn or youtube_plugin.fetch
     video_id = youtube_plugin.extract_video_id(url_or_id)
 
-    outcome = fetch(url_or_id)
+    try:
+        outcome = fetch(url_or_id)
+    except youtube_plugin.CaptionAcquisitionError as exc:
+        raise _caption_failure_for_queue(exc) from exc
     if not outcome.ok:
         # No raw record was fabricated (youtube_plugin.fetch returns object_id=None on this
         # path) — nothing to dead-letter at a KA-06 stage because there is no raw/content
@@ -419,6 +459,7 @@ def _reload_raw(*, source_kind: str, item_ref: str, content_identity: str) -> di
 __all__ = [
     "YOUTUBE_SOURCE_KIND",
     "AcquisitionError",
+    "RetryableSourceAcquisitionError",
     "DatabaseNotConfiguredError",
     "AcquireStageReceipt",
     "AcquisitionReceipt",

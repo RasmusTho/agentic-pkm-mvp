@@ -282,6 +282,108 @@ def test_request_durable_before_drain_and_restart_converges(monkeypatch: pytest.
 # ---------------------------------------------------------------------------
 
 
+def test_drain_one_requeues_private_youtube_plugin_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Expected inaccessible-source failures never strand a claimed request."""
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(q, conn)
+    claimed = q.claim_batch(1, conn=conn)
+
+    monkeypatch.setattr(
+        plugin,
+        "yt_dlp_extract_info",
+        lambda _url: (_ for _ in ()).throw(
+            plugin.CaptionAcquisitionError("private video at https://provider.test/watch?token=secret")
+        ),
+    )
+
+    result = drain_one(
+        claimed[0],
+        vault_context=_vault(tmp_path / "vault"),
+        queue=q,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert result.status == "pending"
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "source_gone"
+    assert result.last_failure["error"] == "RetryableSourceAcquisitionError: YouTube source is inaccessible"
+    assert result.next_attempt_at is not None
+    failed = conn.payloads_for(ACQUISITION_FAILED_TOPIC)
+    assert len(failed) == 1
+    assert failed[0]["reason_code"] == "source_gone"
+    assert failed[0]["terminal"] is False
+
+
+def test_drain_one_sanitizes_transient_youtube_plugin_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Transient caption egress is retryable and stores no provider detail."""
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(q, conn)
+    claimed = q.claim_batch(1, conn=conn)
+    _stub_caption_fetch(monkeypatch)
+    monkeypatch.setattr(
+        plugin,
+        "fetch_caption_body",
+        lambda _url: (_ for _ in ()).throw(
+            plugin.CaptionAcquisitionError("upstream timeout cookie=credential-material")
+        ),
+    )
+
+    result = drain_one(
+        claimed[0],
+        vault_context=_vault(tmp_path / "vault"),
+        queue=q,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert result.status == "pending"
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "network_error"
+    assert result.last_failure["error"] == "RetryableSourceAcquisitionError: YouTube source fetch failed"
+    assert result.next_attempt_at is not None
+    failed = conn.payloads_for(ACQUISITION_FAILED_TOPIC)
+    assert len(failed) == 1
+    assert failed[0]["reason_code"] == "network_error"
+    assert failed[0]["terminal"] is False
+    persisted = json.dumps({"failure": result.last_failure, "event": failed[0]})
+    assert "credential-material" not in persisted
+
+
+def test_drain_one_maps_pipeline_dead_letter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Existing stage dead-letter behavior remains terminal and item-scoped."""
+    _stub_caption_fetch(monkeypatch)
+    clear_registry()
+    summary_extractor.register(complete=_stub_completion("not json at all"))
+    conn = FakeOutboxConn()
+    q = _queue()
+    _enqueue(q, conn)
+    claimed = q.claim_batch(1, conn=conn)
+
+    result = drain_one(
+        claimed[0],
+        vault_context=_vault(tmp_path / "vault"),
+        queue=q,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+
+    assert result.status == "dead_lettered"
+    assert result.last_failure is not None
+    assert result.last_failure["reason_code"] == "pipeline_dead_letter"
+    failed = conn.payloads_for(ACQUISITION_FAILED_TOPIC)
+    assert len(failed) == 1
+    assert failed[0]["terminal"] is True
+
+
 def test_writeguard_block_reported_and_retryable_at_call_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
