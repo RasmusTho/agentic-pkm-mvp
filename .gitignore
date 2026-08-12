@@ -64,10 +64,6 @@ tmp/index.jsonl
 /runtime/eval/
 /runtime/relevance/
 /runtime/activation/
-# YouTube OAuth token ciphertext and the dev connect lease are app-local
-# runtime state. Keep this narrowly anchored so app/knowledge_acquisition and
-# tests/knowledge_acquisition remain fully visible to Git.
-/runtime/knowledge_acquisition/
 # Settings-compiler swap artifacts written as dot-prefixed *siblings* of
 # runtime/settings/ (app/settings/compiler.py): .settings.lock, .settings.next,
 # .settings.previous, and .settings.staged-* temp dirs. The /runtime/settings/
