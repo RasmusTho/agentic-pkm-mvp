@@ -29,7 +29,7 @@ implementation additionally waits for a governed Yggdrasil handoff.
 
 | Surface | Current delivered fact | Remaining target |
 | --- | --- | --- |
-| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 remains blocked |
+| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 is closed/superseded without producer delivery |
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | `agent:needs-human` may place work in a Cockpit band, but no serialized canonical owner-authority category/governing-source fact reaches Overview | Exact source-owned owner-question facts, or an honest withdrawal |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
