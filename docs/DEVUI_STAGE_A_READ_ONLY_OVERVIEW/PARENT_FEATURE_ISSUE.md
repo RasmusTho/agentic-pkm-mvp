@@ -18,8 +18,9 @@ Issue/PR state; the delivery ledger below records the exact PR heads and merge c
 The pure `devui-overview-view.v1` composer and the admitted direct-loopback Overview GET route are
 delivered, but the current producer chain lacks the canonical source facts required to populate
 **Needs you** and **Ready to try**. The Overview still lacks governed typed navigation destinations,
-a governed design, a browser shell, accessibility proof, and an owner pilot. The parent coordinates
-validation only; it is never ready work.
+a governed design, a browser shell, accessibility proof, and an owner pilot. The final ARO-08 pilot
+is a future executable Demerzel production validation, not a deployed or passed capability claim.
+The parent coordinates validation only; it is never ready work.
 
 ## Scope
 
@@ -28,13 +29,15 @@ validation only; it is never ready work.
   dependency order after their observable gates pass.
 - Preserve producer-declared classification, withdrawals, evidence state, and root separation.
 - Keep the delivered composer excluded and preserve the GET-only, local, read-only boundary.
-- Maintain the child ledger and final receipts on this parent.
+- Maintain the child ledger and final receipts on this parent, including the production-pilot
+  identity/evidence contract after #4748.
 
 ## Source Anchors
 
 - `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Authority-resolution gate`
 - `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Cross-task invariants`
 - `docs/DEVUI.md :: DEVUI-OVERVIEW-BOUNDARY — server-declared read model`
+- `docs/DEVUI.md :: Owner-experience acceptance criteria`
 - `docs/plans/DEVUI_IMPLEMENTATION.md :: Stage A — see: coherent read-only devUI`
 
 ## SBS Impact
@@ -48,7 +51,8 @@ validation only; it is never ready work.
 - Human knowledge impact: none
 - Memory impact: no Product/Runtime or user-memory impact
 - Retrieval/context impact: no new retrieval or context store
-- Sync/deployment impact: single-operator local devUI only
+- Sync/deployment impact: the future ARO-08 consumes an existing Demerzel production deployment
+  receipt only (`pkm-prod`, `PKM_ENVIRONMENT=prod`, Midgård); it does not deploy or promote
 - External boundary impact: governed Yggdrasil design handoff only
 - New or changed contract: producer serialization and local route/navigation bindings; no new composer contract
 - Owner-doc impact: ARO-01 may amend the owning source contract; final acceptance may reconcile current-state truth
@@ -64,6 +68,9 @@ validation only; it is never ready work.
 - Visual children wait for the governed Yggdrasil handoff; nonvisual children do not wait on design.
 - No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
   canonical category or receipt-backed `ready_to_try` evidence.
+- ARO-08 remains serially blocked after #4748 until the repaired source contract, Demerzel
+  authentication/access, #4747 server-supplied Focus selectors, receipt-sourced deployed URL/SHA,
+  and disposable-state classification are all available. It never invents a URL or deployed SHA.
 
 ## Acceptance Criteria
 
@@ -77,7 +84,11 @@ validation only; it is never ready work.
       browser classification or persistence.
   - Verify: `tests/companion_ui/test_devui_overview_journeys.py :: test_overview_accessibility_and_layout_matrix`
 - [ ] The owner pilot records exact SHA, source conditions, answers, reconstruction steps, and a
-      pass/fail disposition for all three zones.
+      pass/fail disposition for all three zones; it proves the receipt-sourced deployed SHA across
+      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, then records
+      the disposable-state Overview → server-supplied Focus → return Playwright journey with zero
+      effects, errors, storage, or unauthorized writes and durable trace/screenshot/checksum/
+      manifest evidence plus owner acknowledgement.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] Current-state owner docs change only after all capability receipts support the claim.
   - Verify: doc writeback at `docs/DEVUI.md :: Current state and target`
@@ -93,7 +104,9 @@ validation only; it is never ready work.
 
 - Run every child's named tests and attach exact PR, merge SHA, and CI receipts here.
 - Re-read live source authority, Issue labels, dependencies, and destination routes before promoting any child.
-- Validate the design receipt before visual implementation and the browser matrix before the pilot.
+- Validate the design receipt before visual implementation, the browser matrix before the pilot, and
+  the ARO-08 receipt-sourced production identity/disposable-state prerequisites before any owner
+  journey.
 - Close the parent only after the ledger and owner-doc truth are reconciled.
 
 ## Source Docs
@@ -119,7 +132,7 @@ validation only; it is never ready work.
 | ARO-05 — Validate Overview Yggdrasil Design | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | `agent:blocked` | preserved ARO-01 withdrawal plus stable ARO-03/#4744 and ARO-04/#4745 fixtures, then governed design preflight |
 | ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | `agent:blocked` | #4744/#4745 merged and #4746 accepted |
 | ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | `agent:blocked` | exact merged #4747 SHA |
-| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | #4748 receipt and stable local fixtures |
+| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | serially after #4748: repaired pilot contract, Demerzel prod access, #4747 selectors, receipt-sourced deployed URL/SHA, and disposable-state classification |
 
 <!-- builderops:epic-delivery-ledger v1 epic=#4741 -->
 Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
@@ -133,17 +146,21 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 | #4746 ARO-05 | open / blocked | none | none | not started | preserved ARO-01 withdrawal; stable ARO-03/#4744 and ARO-04/#4745 fixtures; fail-closed governed design preflight | run the handoff only after the live system selection and token-parity preflight are proven; no readiness or generation from the recorded repo token digest alone |
 | #4747 ARO-06 | open / blocked | none | none | not started | #4744/#4745/#4746 | revalidate after accepted handoff |
 | #4748 ARO-07 | open / blocked | none | none | not started | #4747 | validate exact merged shell SHA |
-| #4749 ARO-08 | open / blocked | none | none | not started | #4748 | run owner pilot after browser receipt |
+| #4749 ARO-08 | open / blocked | none | none | not started | #4748 plus repaired pilot contract, Demerzel access, #4747 selectors, receipt-sourced production URL/SHA, and disposable-state classification | run the zero-effect production pilot only after every prerequisite receipt; POST-PASS current-state writeback is separate |
 <!-- /builderops:epic-delivery-ledger -->
 
 ## Verification Path
 
 Each child resolves every named Verify target on its PR and posts a compact exact-SHA receipt to
 the parent. ARO-01 records the accepted source contract; each downstream task rereads its direct
-dependency before any readiness transition.
+dependency before any readiness transition. ARO-08 additionally takes its deployed URL/SHA only
+from the #4747/#4748/deployment receipts and records every required identity/effect proof in the
+structured owner-pilot ledger.
 
 ## Validation / Acceptance Path
 
 The parent remains open and `agent:blocked` while source facts, producer output, route, typed
-destinations, design, shell, browser proof, and owner-pilot evidence are validated together. The
-parent never receives `agent:ready` and performs no implementation itself.
+destinations, design, shell, browser proof, deployment identity, and owner-pilot evidence are
+validated together. The parent never receives `agent:ready` and performs no implementation itself.
+Only a PASS pilot may begin a separate `docs/DEVUI.md` current-state writeback; no current-state
+claim is made by this target-state contract.

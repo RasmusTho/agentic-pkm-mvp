@@ -1,15 +1,15 @@
 ---
 name: Run the Read-Only Owner Pilot
-description: Validate that the owner can answer the three Stage A questions from the exact read-only shell without false authority or durable acceptance.
+description: Run the future deployed-production owner pilot only after the exact browser-proof, deployment, and disposable-state receipts exist; it records answerability without false authority or durable acceptance.
 task_id: ARO-08
 github_issue: 4749
-source_anchor: "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Capability acceptance"
+source_anchor: "docs/DEVUI.md :: Owner-experience acceptance criteria"
 parent_capability: devUI Stage A Read-Only Overview
 prerequisites: [ARO-07]
 depends_on: [PROVE_OVERVIEW_BROWSER_ACCESSIBILITY.md]
 can_parallelize_with: []
-recommended_capability: "Owner walkthrough with Codex Terra / medium evidence capture"
-capability_rationale: "The final check is an operator usability receipt over fixed read-only behavior, not implementation or an authority decision."
+recommended_capability: "Owner walkthrough with Codex Terra / high evidence capture"
+capability_rationale: "The final check is a production-bound, zero-effect usability receipt that joins exact deployment identity, browser proof, and owner acknowledgement without performing a deployment."
 execution_context: fresh_issue_agent
 issue_local_helper_budget: 0
 context_cost_estimate: medium
@@ -23,26 +23,43 @@ review_gate: owner-acknowledged exact-SHA validation receipt
 
 ## Purpose
 
-Validate the three owner questions on the exact proven read-only shell.
+Run the three owner questions on the exact deployed, proven read-only shell without creating any
+owner decision, acceptance, browser-persistence, or runtime-write state.
 
 ## Context
 
 Parent: #4741
 
-Verify on one exact SHA and controlled source fixtures that the owner can answer **What should I
+After all prerequisites are receipted, verify on one exact deployed SHA and disposable test-only
+state that the owner can answer **What should I
 understand now?**, **Where is my authority actually needed?**, and **What is truly ready to try?**
 without opening standalone source UIs or creating a durable acceptance state.
 
+This is a future executable pilot contract, not evidence that the shell has been deployed or that a
+pilot has passed. The live URL and deployed SHA are intentionally absent until the #4747, #4748,
+and deployment receipts supply them.
+
 ## Scope
 
-- Run five predefined read-only owner scenarios over stable local fixtures and one exact SHA.
-- Record answers, evidence path, source conditions, reconstruction steps, and dispositions.
+- Run the five predefined owner scenarios against Demerzel production: Compose project `pkm-prod`,
+  `PKM_ENVIRONMENT=prod`, and the Midgård prod vault. The current promotion ref is `main`; the
+  `stable` ref is dormant. This task does not promote, deploy, restart, or change either ref.
+- Obtain the exact deployed URL and SHA only from the #4747/#4748/deployment receipts. Require that
+  SHA to agree across the current CI/review/deploy receipt, `/version`, `/api/health.version`, and
+  the authenticated gateway marker before the journey begins.
+- Use a disposable, test-only state matrix classified and approved before the pilot. It must not
+  rely on a local fixture or real owner/prod data.
+- Record answers, evidence path, source conditions, reconstruction steps, Playwright trace,
+  screenshots, checksums, manifest, and disposition in the final structured pilot ledger.
 - Return discovered defects/gaps to their owning blocked contract without implementing repairs.
 
 ## What This Task Does
 
-- Runs the predefined three-zone, degraded-state, navigation, and no-durable-decision scenarios.
-- Captures exact answers and reconstruction burden at one SHA.
+- Runs the predefined three-zone, degraded-state, and no-durable-decision scenarios plus a real
+  **Overview → server-supplied Focus link → return** Playwright journey.
+- Captures exact answers and reconstruction burden at the receipt-sourced deployed SHA and URL.
+- Proves zero effects: no page or console errors, browser persistence/storage, unauthorized writes,
+  commands, provider sessions, or durable acceptance state.
 - Hands parent closure forward only if every disposition passes.
 
 ## Concretely
@@ -56,22 +73,22 @@ The final outcome is reduced truthful reconstruction, which repository tests alo
 
 ## Source Anchors
 
+- `docs/DEVUI.md :: Owner-experience acceptance criteria`
 - `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: Capability acceptance`
-- `docs/DEVUI.md :: Completion gate`
 - `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/PROVE_OVERVIEW_BROWSER_ACCESSIBILITY.md :: Acceptance Criteria`
 
 ## SBS Impact
 
 - Primary subsystem: Builder System / devUI owner validation
 - Secondary subsystem(s): none
-- Write class: owner-validation receipt only
+- Write class: durable owner-validation evidence only; no product or runtime write
 - Authority impact: none; the pilot creates no decision or acceptance state
 - Persistence impact: validation receipt only
 - Derived/rebuildable impact: validates one exact rebuildable shell SHA
 - Human knowledge impact: none
 - Memory impact: none
-- Retrieval/context impact: stable local fixtures only
-- Sync/deployment impact: none
+- Retrieval/context impact: receipt-sourced production URL with disposable test-only state only
+- Sync/deployment impact: consumes an existing Demerzel production deployment receipt; performs no deployment
 - External boundary impact: named owner walkthrough
 - New or changed contract: final owner-pilot receipt
 - Owner-doc impact: supplies evidence for later current-state reconciliation
@@ -80,13 +97,25 @@ The final outcome is reduced truthful reconstruction, which repository tests alo
 
 ## Constraints
 
-This task owns the parent-validation receipt only. It changes no production code. Any defect,
-source-authority gap, design gap, or inaccessible journey is filed separately and blocks the pilot.
+This task owns the parent-validation receipt only. It changes no production code and does not deploy,
+promote, restart, or mutate production. Any defect, source-authority gap, design gap, inaccessible
+journey, identity mismatch, effect, error, storage use, or unauthorized write is returned to its
+owning blocked contract and blocks the pilot.
+
+Prerequisites are strict and serial: (1) #4748 delivery and exact browser/accessibility receipt;
+(2) this repaired source contract; (3) Demerzel authentication and access; (4) #4747's deployed
+route and server-supplied Focus selectors; (5) the receipt-sourced exact deployed SHA and URL; and
+(6) approved disposable-state classification. The pilot must not be claimed or made ready from this
+document alone.
 
 ## Acceptance Criteria
 
-- [ ] For each zone, the receipt records the exact answer, evidence path, source conditions, elapsed
-      reconstruction steps, and pass/fail disposition.
+- [ ] The pilot obtains its exact deployed URL and SHA from the #4747/#4748/deployment receipts and
+      proves equality across the current CI/review/deploy receipt, `/version`,
+      `/api/health.version`, and gateway marker before the journey.
+  - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
+- [ ] For each zone, the final structured ledger records the exact answer, evidence path, source
+      conditions, elapsed reconstruction steps, and pass/fail disposition.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
 - [ ] The owner identifies every degraded/withdrawn state without reading it as empty, healthy,
       decided, delivered, or ready.
@@ -94,20 +123,33 @@ source-authority gap, design gap, or inaccessible journey is filed separately an
 - [ ] Needs-you never presents a technical block and Ready-to-try never follows merge/done/closure
       without the accepted explicit source facts.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
-- [ ] Focus/optional SoI navigation preserves subject/evidence context or is visibly unavailable;
-      no standalone subsystem UI is required for the tested answers.
+- [ ] A Playwright journey follows Overview to a server-supplied Focus link and returns while
+      preserving subject/evidence context; no standalone subsystem UI is required for the tested
+      answers.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
-- [ ] The pilot creates no tried/accepted/dismissed state, task, command, provider session, or write receipt.
+- [ ] The disposable test-only state matrix produces no effects, page or console errors, browser
+      persistence/storage, or unauthorized writes; traces, screenshots, checksums, and manifest
+      are durable and bound to the deployed identity.
   - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
+- [ ] The owner explicitly acknowledges the bounded result; the pilot creates no tried/accepted/
+      dismissed state, task, command, provider session, or product/runtime write receipt.
+  - Verify: runtime receipt: devui-stage-a-read-only-owner-pilot.v1
+- [ ] A current-state writeback to `docs/DEVUI.md` is proposed only after PASS and remains outside
+      this task before that result.
+  - Verify: doc writeback at `docs/DEVUI.md :: Current state and target`
 
 ## How to Verify (Pre-Merge)
 
-- Confirm the ARO-07 receipt and exact SHA, then run the five named pilot checks.
-- Post the signed/acknowledged result and any blockers to the parent; do not repair them here.
+- Confirm every strict prerequisite, including #4748, the repaired source contract, Demerzel access,
+  #4747 selectors, the receipt-sourced URL/SHA, and disposable-state classification.
+- Run the five named pilot checks and the Overview → Focus → return Playwright journey.
+- Post the owner-acknowledged structured result and any blockers to the parent; do not repair them
+  here. Only a PASS may trigger a separate current-state owner-doc writeback decision.
 
 ## Suggested Validation
 
-- Validate every named pilot scenario against the exact ARO-07 receipt and SHA.
+- Validate every named pilot scenario, deployment-identity agreement, disposable-state boundary,
+  no-effect evidence, and durable evidence manifest against the receipt-sourced deployed URL/SHA.
 
 ## Out of Scope
 
@@ -130,5 +172,6 @@ source-authority gap, design gap, or inaccessible journey is filed separately an
 
 ## Related GitHub Issues
 
-Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) on #4748's
-exact browser/accessibility receipt and stable local fixtures.
+Filed as blocked child [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) serially
+after #4748. It awaits the repaired contract, Demerzel prod access, #4747 selectors, #4748's exact
+browser/accessibility receipt, receipt-sourced deployed URL/SHA, and disposable-state classification.
