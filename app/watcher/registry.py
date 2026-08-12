@@ -1062,7 +1062,7 @@ def _collect_changed_entries(
         # runtime configuration can reload.  They must not, however, make a
         # blind content scope look healthy.
         if _matches_scope(rel, spec.scope_glob):
-            summary["scope_matched_files"] = int(summary["scope_matched_files"]) + 1
+            summary["scope_matched_files"] = int(summary.get("scope_matched_files", 0)) + 1
         rel_str = str(rel)
         scanned_paths.append(rel_str)
         last_mtime = state.last_mtime(rel_str)
