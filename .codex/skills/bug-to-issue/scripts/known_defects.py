@@ -1373,6 +1373,21 @@ def intake_defect(
     )
 
 
+def validate_intake_dry_run(defect: KnownDefect) -> dict[str, Any]:
+    """Return a validated candidate entry without accessing registry authority.
+
+    A dry run deliberately does not discover, create, lock, or append to a
+    registry.  Its result is diagnostic output only; callers must run normal
+    intake to obtain a durable registry receipt.
+    """
+    return {
+        "schema": "known-defect-receipt.v1",
+        "status": "dry_run",
+        "defect_id": defect.defect_id,
+        "candidate_entry": defect.render_entry(phase="final"),
+    }
+
+
 def lookup_defect(
     defect_id: str,
     gateway: RegistryGateway,
@@ -1898,6 +1913,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     intake.add_argument("--registry-issue", type=int)
+    intake.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "validate and render the candidate entry without reading or mutating "
+            "the Known Defects registry"
+        ),
+    )
 
     lookup = subparsers.add_parser("lookup", help="look up one deterministic defect id")
     _add_common_repo_argument(lookup)
@@ -1952,10 +1975,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     defect_key=args.defect_key,
                     defect_id_override=args.defect_id,
                 )
-                receipt = intake_defect(
-                    defect,
-                    GhRegistryGateway(repo),
-                    registry_issue=args.registry_issue,
+                receipt = (
+                    validate_intake_dry_run(defect)
+                    if args.dry_run
+                    else intake_defect(
+                        defect,
+                        GhRegistryGateway(repo),
+                        registry_issue=args.registry_issue,
+                    )
                 )
         elif args.command == "lookup":
             receipt = lookup_defect(args.defect_id, GhRegistryGateway(repo))
