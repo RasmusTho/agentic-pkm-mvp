@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -296,6 +298,50 @@ def test_v1_selects_exactly_one_enabled_inbox(outbox: FakeOutboxConn) -> None:
     assert stored_misbound is not None
     assert stored_misbound.cursor == {}
     assert stored_misbound.last_success_at is None
+
+
+def test_concurrent_different_v1_inbox_selections_refuse_one(
+    outbox: FakeOutboxConn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del outbox
+    account = str(uuid.uuid4())
+    registry = SourceRegistry.for_runtime()
+    service = _service(
+        account, registry, AcquisitionRequests.for_runtime(), StubApiClient(_page())
+    )
+    barrier = Barrier(3)
+    atomic_select = registry.select_inbox_if_absent_or_same
+
+    def _synchronized_select(account_binding_id: str | None, binding_id: str):
+        barrier.wait()
+        return atomic_select(account_binding_id, binding_id)
+
+    monkeypatch.setattr(
+        registry, "select_inbox_if_absent_or_same", _synchronized_select
+    )
+
+    def _select(playlist_ref: str):
+        try:
+            return service.select_inbox(playlist_ref=playlist_ref, title="Inbox")
+        except V1InboxConfigurationError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_select, ref) for ref in (PLAYLIST_A, PLAYLIST_B)]
+        barrier.wait()
+        outcomes = [future.result(timeout=10) for future in futures]
+
+    selected = [item for item in outcomes if not isinstance(item, Exception)]
+    refused = [item for item in outcomes if isinstance(item, V1InboxConfigurationError)]
+    assert len(selected) == 1
+    assert len(refused) == 1
+    assert "already has an enabled Inbox" in str(refused[0])
+    enabled = [
+        row
+        for row in registry.list_for_account(account)
+        if row.collection_kind == "inbox_playlist" and row.enabled
+    ]
+    assert enabled == selected
 
 
 def test_new_inbox_item_enqueues_once_at_production_call_site(

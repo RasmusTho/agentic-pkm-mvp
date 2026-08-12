@@ -1,4 +1,4 @@
-State: Pragmatic V1 operator contract. No dedicated CLI or Companion UI is delivered by V1.
+State: Pragmatic V1 operator contract. A narrow dev-only Inbox CLI is delivered; no broad CLI or Companion UI is delivered by V1.
 Doc role: Operator runbook
 Authority: Owns the currently delivered manual route for one YouTube account and one Inbox.
 
@@ -16,14 +16,42 @@ V1 provides core application routes, not a broad command family:
 There is no automatic scheduler, next-sync promise, UI setup wizard, multi-playlist
 configuration, Takeout/RSS import, backfill command, analytics view, or full-media route.
 
+## Dev command
+
+Provision `YOUTUBE_OAUTH_CLIENT_ID`, `YOUTUBE_OAUTH_CLIENT_SECRET`, and
+`YOUTUBE_TOKEN_STORE_KEY` through the local host-secret boundary, then select the explicit dev
+environment. Do not place credential values in arguments, shell history, logs, or receipts. The
+supported entrypoint refuses any environment other than `dev` before it constructs an OAuth or
+YouTube API client:
+
+```bash
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev connect
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev select \
+  --account-binding-id <binding-id> --playlist-id <owned-playlist-id>
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev sync \
+  --account-binding-id <binding-id>
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev status \
+  --account-binding-id <binding-id>
+```
+
+`connect` prints the provider's device-consent URL and user code, waits for approval, and returns
+the non-secret binding id. `select` resolves the stable id against playlists owned by that OAuth
+account and refuses a different second Inbox. `sync` performs exactly one synchronous V1 poll;
+`status` emits only the sanitized account and Inbox views. This route uses OAuth with the minimal
+`youtube.readonly` scope for both consent and YouTube Data API access. It has no public API-key
+authentication surface and exposes no scheduler, backfill, or multi-playlist operations.
+
 ## One-time local OAuth setup
 
 Use a user-owned Google Cloud OAuth client with the YouTube Data API v3 enabled and the minimal
 `youtube.readonly` scope. Provision client identifiers and `YOUTUBE_TOKEN_STORE_KEY` through the
 local secret boundary. Values never belong in tracked config, vault content, logs, events, or
-receipts. Start the delivered device flow with
-`YouTubeAccountBinder.start_device_connection()`, then call
-`finish_device_connection()` after consent and retain the returned non-secret binding id.
+receipts. Start and complete device consent only through
+`PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev connect`, which composes the shared
+`YouTubeAccountBinder` writer boundary and retains the returned non-secret binding id. The binder
+owns channel-wide writer admission, one-account enforcement, and restart reconciliation; the CLI
+does not implement a second lock or credential state machine. Calling binder methods directly is
+an internal application route, not a supported operator invocation.
 
 ## Manual Inbox route
 
