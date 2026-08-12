@@ -287,6 +287,16 @@ Docs-authoring rules:
 
 Governance lane is the separate PR path for bounded repository-governance changes that are not product/runtime implementation but are broader than docs-only authoring.
 
+The executable authority for these surfaces is
+`.github/workflows/issue-pr-governance.yml`'s
+`governanceAllowedExact` and `governanceAllowedPrefixes`.  The list below is
+the intentionally checked human-readable mirror; the governance regression
+suite rejects drift between the two.  It is distinct from
+`scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT`, which is a
+narrow temporal owner-doc pairing map rather than a governance-lane admission
+allowlist.  `GITHUB_GOVERNANCE_SETUP.md` records this ownership decision
+instead of maintaining a second partial list.
+
 Use this lane only when:
 
 - changed files stay inside approved governance surfaces:
