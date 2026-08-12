@@ -990,8 +990,8 @@ class AcquisitionRequests:
         # Normalize: the stored snapshot always mirrors the authoritative
         # policy_version column, so no later reader can see the two disagree.
         snapshot["policy_version"] = policy_version
-        if snapshot.get("extractor_ids") is not None:
-            extractor_ids = snapshot["extractor_ids"]
+        extractor_ids = snapshot.get("extractor_ids")
+        if extractor_ids is not None:
             if not isinstance(extractor_ids, list) or not all(
                 isinstance(x, str) and x.strip() for x in extractor_ids
             ):
@@ -1016,7 +1016,7 @@ class AcquisitionRequests:
                     "policy_snapshot.extractor_requirements must map non-empty extractor ids "
                     "to a required/optional materialization classification"
                 )
-            selected = tuple(snapshot.get("extractor_ids") or ("summary",))
+            selected = tuple(extractor_ids or ("summary",))
             if set(extractor_requirements) != set(selected):
                 raise AcquisitionRequestValidationError(
                     "policy_snapshot.extractor_requirements must classify every selected "

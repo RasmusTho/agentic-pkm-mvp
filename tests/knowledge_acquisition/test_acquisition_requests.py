@@ -869,6 +869,25 @@ def test_enqueue_rejects_invalid_extractor_requirements() -> None:
         )
 
 
+def test_enqueue_accepts_summary_requirements_when_extractor_ids_are_omitted() -> None:
+    conn = FakeOutboxConn()
+    q = _queue()
+
+    row = _enqueue(
+        q,
+        conn,
+        policy_snapshot={
+            "policy_version": 1,
+            "extractor_requirements": {"summary": "required_for_materialization"},
+        },
+    )
+
+    assert row.policy_snapshot == {
+        "policy_version": 1,
+        "extractor_requirements": {"summary": "required_for_materialization"},
+    }
+
+
 def test_drain_passes_extractor_requirements_and_completes_optional_failure() -> None:
     from app.knowledge_acquisition.acquire import AcquireStageReceipt, AcquisitionReceipt
 
