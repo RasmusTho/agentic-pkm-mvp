@@ -9,7 +9,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable
 
 import pytest
 from click.testing import CliRunner
@@ -911,94 +910,204 @@ def test_fast_lane_state_never_becomes_delivery_authority(tmp_path: Path) -> Non
 
 _RUN_STATE_MODULE = "app.builderops.epic_run_state"
 _RUN_STATE_FUNCTIONS = frozenset(
+    {"_save_epic_run_state_to_path", "save_epic_run_state", "update_epic_run_state"}
+)
+_PRIVATE_WRITER_FUNCTIONS = frozenset(
     {
-        "_locked_run_state",
-        "_save_epic_run_state_to_path",
+        "create_epic_run_state",
+        "create_independent_issue_run_state",
         "save_epic_run_state",
         "update_epic_run_state",
     }
 )
+_UNKNOWN_BINDING = "unknown"
 
 
-def _dotted_expression_name(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        prefix = _dotted_expression_name(node.value)
-        return f"{prefix}.{node.attr}" if prefix else None
-    return None
+class _RunStateBindingResolver(ast.NodeVisitor):
+    def __init__(self, tree: ast.Module, *, defining_module: bool) -> None:
+        self.parents: dict[ast.AST, ast.AST] = {
+            child: parent
+            for parent in ast.walk(tree)
+            for child in ast.iter_child_nodes(parent)
+        }
+        self.scopes: list[ast.AST] = [tree]
+        self.events: dict[ast.AST, dict[str, list[tuple[int, int, object]]]] = {
+            tree: {}
+        }
+        if defining_module:
+            for name in _RUN_STATE_FUNCTIONS:
+                self._bind(name, f"function:{name}", lineno=0, col_offset=0)
+        self.visit(tree)
 
+    def _bind(
+        self,
+        name: str,
+        value: object,
+        *,
+        lineno: int,
+        col_offset: int,
+    ) -> None:
+        self.events[self.scopes[-1]].setdefault(name, []).append(
+            (lineno, col_offset, value)
+        )
 
-def _run_state_call_resolver(
-    tree: ast.AST, *, defining_module: bool
-) -> Callable[[ast.Call], str | None]:
-    direct_bindings = (
-        {name: name for name in _RUN_STATE_FUNCTIONS} if defining_module else {}
-    )
-    module_bindings: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == _RUN_STATE_MODULE:
-            for alias in node.names:
-                if alias.name in _RUN_STATE_FUNCTIONS:
-                    direct_bindings[alias.asname or alias.name] = alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module == "app.builderops":
-            for alias in node.names:
-                if alias.name == "epic_run_state":
-                    module_bindings.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == _RUN_STATE_MODULE:
-                    module_bindings.add(alias.asname or alias.name)
+    def _bind_target(self, target: ast.AST, value: object, node: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            self._bind(
+                target.id,
+                value,
+                lineno=getattr(node, "lineno", 0),
+                col_offset=getattr(node, "col_offset", 0),
+            )
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                self._bind_target(item, _UNKNOWN_BINDING, node)
 
-    def resolve(call: ast.Call) -> str | None:
-        dotted_name = _dotted_expression_name(call.func)
-        if dotted_name is None:
-            return None
-        direct = direct_bindings.get(dotted_name)
-        if direct is not None:
-            return direct
-        for module_binding in module_bindings:
-            prefix = f"{module_binding}."
-            if dotted_name.startswith(prefix):
-                function_name = dotted_name.removeprefix(prefix)
-                if function_name in _RUN_STATE_FUNCTIONS:
-                    return function_name
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            binding: object = _UNKNOWN_BINDING
+            if node.module == _RUN_STATE_MODULE and alias.name in _RUN_STATE_FUNCTIONS:
+                binding = f"function:{alias.name}"
+            elif node.module == "app.builderops" and alias.name == "epic_run_state":
+                binding = f"module:{_RUN_STATE_MODULE}"
+            self._bind(
+                alias.asname or alias.name,
+                binding,
+                lineno=node.lineno,
+                col_offset=node.col_offset,
+            )
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            bound_name = alias.asname or alias.name.split(".", 1)[0]
+            binding = (
+                f"module:{_RUN_STATE_MODULE}"
+                if alias.name == _RUN_STATE_MODULE and alias.asname
+                else _UNKNOWN_BINDING
+            )
+            self._bind(
+                bound_name,
+                binding,
+                lineno=node.lineno,
+                col_offset=node.col_offset,
+            )
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._bind_target(target, node.value, node)
+        self.generic_visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._bind_target(node.target, node.value or _UNKNOWN_BINDING, node)
+        if node.value is not None:
+            self.visit(node.value)
+
+    def _visit_nested_scope(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
+    ) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._bind(
+                node.name,
+                _UNKNOWN_BINDING,
+                lineno=node.lineno,
+                col_offset=node.col_offset,
+            )
+        self.events[node] = {}
+        self.scopes.append(node)
+        arguments = (
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        )
+        if node.args.vararg is not None:
+            arguments = (*arguments, node.args.vararg)
+        if node.args.kwarg is not None:
+            arguments = (*arguments, node.args.kwarg)
+        for argument in arguments:
+            self._bind(argument.arg, _UNKNOWN_BINDING, lineno=0, col_offset=0)
+        for statement in node.body if not isinstance(node, ast.Lambda) else [node.body]:
+            self.visit(statement)
+        self.scopes.pop()
+
+    visit_FunctionDef = _visit_nested_scope
+    visit_AsyncFunctionDef = _visit_nested_scope
+    visit_Lambda = _visit_nested_scope
+
+    def _scope(self, node: ast.AST) -> ast.AST:
+        current: ast.AST | None = node
+        while current is not None:
+            if current in self.events:
+                return current
+            current = self.parents.get(current)
+        raise AssertionError("AST node has no lexical scope")
+
+    def _resolve_name(
+        self, name: str, node: ast.AST, seen: set[tuple[ast.AST, str]]
+    ) -> str | None:
+        scope = self._scope(node)
+        while True:
+            key = (scope, name)
+            if key in seen:
+                return None
+            seen.add(key)
+            bindings = self.events[scope].get(name, [])
+            position = (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+            prior = [event for event in bindings if event[:2] <= position]
+            if prior:
+                value = max(prior, key=lambda event: event[:2])[2]
+                if value == _UNKNOWN_BINDING:
+                    return None
+                if isinstance(value, str):
+                    return value
+                return self._resolve_expression(value, value, seen)
+            if bindings and not isinstance(scope, ast.Module):
+                return None
+            parent = self.parents.get(scope)
+            if parent is None:
+                return None
+            scope = self._scope(parent)
+
+    def _resolve_expression(
+        self, expression: ast.AST, node: ast.AST, seen: set[tuple[ast.AST, str]]
+    ) -> str | None:
+        if isinstance(expression, ast.Name):
+            return self._resolve_name(expression.id, node, seen)
+        if isinstance(expression, ast.Attribute):
+            base = self._resolve_expression(expression.value, node, seen)
+            if base == f"module:{_RUN_STATE_MODULE}" and expression.attr in _RUN_STATE_FUNCTIONS:
+                return f"function:{expression.attr}"
         return None
 
-    return resolve
+    def resolve_call(self, call: ast.Call) -> str | None:
+        resolved = self._resolve_expression(call.func, call, set())
+        return resolved.removeprefix("function:") if resolved else None
 
 
 def _run_state_writer_violations(
     source: str, *, source_label: str, defining_module: bool = False
 ) -> list[str]:
     tree = ast.parse(source, filename=source_label)
-    resolve_call = _run_state_call_resolver(tree, defining_module=defining_module)
-    parents = {
-        child: parent
-        for parent in ast.walk(tree)
-        for child in ast.iter_child_nodes(parent)
-    }
+    resolver = _RunStateBindingResolver(tree, defining_module=defining_module)
     violations: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        function_name = resolve_call(node)
+        function_name = resolver.resolve_call(node)
         if function_name == "save_epic_run_state":
             violations.append(f"{source_label}:{node.lineno}:public-save")
             continue
         if function_name != "_save_epic_run_state_to_path":
             continue
-
-        ancestor = parents.get(node)
-        while ancestor is not None:
-            if isinstance(ancestor, ast.With) and any(
-                isinstance(item.context_expr, ast.Call)
-                and resolve_call(item.context_expr) == "_locked_run_state"
-                for item in ancestor.items
-            ):
-                break
-            ancestor = parents.get(ancestor)
-        else:
+        ancestor = resolver.parents.get(node)
+        while ancestor is not None and not isinstance(
+            ancestor, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+        ):
+            ancestor = resolver.parents.get(ancestor)
+        if (
+            not defining_module
+            or not isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef))
+            or ancestor.name not in _PRIVATE_WRITER_FUNCTIONS
+        ):
             violations.append(f"{source_label}:{node.lineno}:raw-save")
     return violations
 
@@ -1007,10 +1116,13 @@ def _run_state_update_owner_violations(
     source: str, *, source_label: str
 ) -> list[str]:
     tree = ast.parse(source, filename=source_label)
-    resolve_call = _run_state_call_resolver(tree, defining_module=False)
+    resolver = _RunStateBindingResolver(tree, defining_module=False)
     violations: list[str] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or resolve_call(node) != "update_epic_run_state":
+        if (
+            not isinstance(node, ast.Call)
+            or resolver.resolve_call(node) != "update_epic_run_state"
+        ):
             continue
         keyword_names = {keyword.arg for keyword in node.keywords}
         if not {
@@ -1046,13 +1158,10 @@ persist({})
 from app.builderops import epic_run_state as run_state
 run_state._save_epic_run_state_to_path({}, path=path, run_id='run')
 """
-    locked_private_alias = """
-from app.builderops.epic_run_state import (
-    _locked_run_state as state_lock,
-    _save_epic_run_state_to_path as persist_locked,
-)
-with state_lock(path):
-    persist_locked({}, path=path, run_id='run')
+    assigned_private_alias = """
+from app.builderops.epic_run_state import _save_epic_run_state_to_path as raw_save
+persist = raw_save
+persist({}, path=path, run_id='run')
 """
     unrelated_method = """
 class Decoy:
@@ -1068,10 +1177,34 @@ Decoy().save_epic_run_state({})
         module_alias, source_label="module_alias.py"
     ) == ["module_alias.py:3:raw-save"]
     assert _run_state_writer_violations(
-        locked_private_alias, source_label="locked_private_alias.py"
-    ) == []
+        assigned_private_alias, source_label="assigned_private_alias.py"
+    ) == ["assigned_private_alias.py:4:raw-save"]
     assert _run_state_writer_violations(
         unrelated_method, source_label="unrelated_method.py"
+    ) == []
+
+
+def test_run_state_writer_census_rejects_deferred_private_calls_without_shadow_false_positives() -> None:
+    deferred_private_call = """
+def create_epic_run_state(path, state):
+    with _locked_run_state(path):
+        def deferred():
+            _save_epic_run_state_to_path(state, path=path, run_id='run')
+    deferred()
+"""
+    shadowed_import = """
+from app.builderops.epic_run_state import save_epic_run_state as persist
+def local_writer(persist):
+    persist({})
+"""
+
+    assert _run_state_writer_violations(
+        deferred_private_call,
+        source_label="epic_run_state.py",
+        defining_module=True,
+    ) == ["epic_run_state.py:5:raw-save"]
+    assert _run_state_writer_violations(
+        shadowed_import, source_label="shadowed_import.py"
     ) == []
 
 
@@ -1106,6 +1239,16 @@ class Decoy:
         return run_id
 Decoy().update_epic_run_state('run')
 """
+    assigned_alias = """
+from app.builderops.epic_run_state import update_epic_run_state as update
+mutate = update
+mutate('run')
+"""
+    shadowed_alias = """
+from app.builderops.epic_run_state import update_epic_run_state as mutate
+def local_update(mutate):
+    mutate('run')
+"""
 
     assert _run_state_update_owner_violations(
         unsafe_alias, source_label="unsafe_alias.py"
@@ -1115,6 +1258,12 @@ Decoy().update_epic_run_state('run')
     ) == []
     assert _run_state_update_owner_violations(
         unrelated_method, source_label="unrelated_method.py"
+    ) == []
+    assert _run_state_update_owner_violations(
+        assigned_alias, source_label="assigned_alias.py"
+    ) == ["assigned_alias.py:4"]
+    assert _run_state_update_owner_violations(
+        shadowed_alias, source_label="shadowed_alias.py"
     ) == []
 
 
@@ -1208,6 +1357,43 @@ def test_atomic_replace_failure_preserves_state_and_retry_succeeds(
     ]
     assert load_epic_run_state(run_id, root=tmp_path) == updated
     assert not temp_path.exists()
+
+
+def test_private_writer_requires_active_lock_for_exact_state_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_a = new_epic_run_state(3229, "exact-lock-a")
+    state_b = new_epic_run_state(3230, "exact-lock-b")
+    path_a = epic_run_state_path("exact-lock-a", root=tmp_path)
+    path_b = epic_run_state_path("exact-lock-b", root=tmp_path)
+
+    with pytest.raises(EpicRunStateError, match="active lock for the exact state path"):
+        epic_run_state_module._save_epic_run_state_to_path(
+            state_a, path=path_a, run_id="exact-lock-a"
+        )
+
+    with epic_run_state_module._locked_run_state(path_a):
+        with pytest.raises(
+            EpicRunStateError, match="active lock for the exact state path"
+        ):
+            epic_run_state_module._save_epic_run_state_to_path(
+                state_b, path=path_b, run_id="exact-lock-b"
+            )
+        epic_run_state_module._save_epic_run_state_to_path(
+            state_a, path=path_a, run_id="exact-lock-a"
+        )
+        current_pid = os.getpid()
+        monkeypatch.setattr(epic_run_state_module.os, "getpid", lambda: current_pid + 1)
+        with pytest.raises(
+            EpicRunStateError, match="active lock for the exact state path"
+        ):
+            epic_run_state_module._save_epic_run_state_to_path(
+                state_a, path=path_a, run_id="exact-lock-a"
+            )
+        monkeypatch.undo()
+
+    assert load_epic_run_state("exact-lock-a", root=tmp_path) == state_a
+    assert not path_b.exists()
 
 
 def test_independent_or_ambiguous_expected_owner_mismatch_writes_nothing(

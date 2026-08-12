@@ -63,6 +63,7 @@ _UPDATE_FIELDS = (
 )
 _THREAD_LOCKS_GUARD = threading.Lock()
 _THREAD_LOCKS: dict[Path, threading.Lock] = {}
+_ACTIVE_RUN_STATE_LOCKS = threading.local()
 
 
 class EpicRunStateError(ValueError):
@@ -258,6 +259,7 @@ def _save_epic_run_state_to_path(
 ) -> Path:
     """Persist to the caller's already-authorized path without changing identity."""
 
+    _assert_run_state_lock_held(path)
     normalized = normalize_epic_run_state(state)
     normalized_run_id = validate_run_id(normalized["run_id"])
     expected_run_id = validate_run_id(run_id)
@@ -839,6 +841,7 @@ def _pretty_dumps(value: Any) -> str:
 
 @contextmanager
 def _locked_run_state(path: Path) -> Iterator[None]:
+    state_path = path.resolve(strict=False)
     lock_path = path.with_name(f".{path.name}.lock")
     thread_lock = _thread_lock_for(lock_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -846,11 +849,31 @@ def _locked_run_state(path: Path) -> Iterator[None]:
         with lock_path.open("a+", encoding="utf-8") as lock_file:
             if fcntl is not None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            active_locks = _active_run_state_locks()
+            active_lock = (os.getpid(), state_path)
+            active_locks.add(active_lock)
             try:
                 yield
             finally:
+                active_locks.remove(active_lock)
                 if fcntl is not None:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _active_run_state_locks() -> set[tuple[int, Path]]:
+    active_locks = getattr(_ACTIVE_RUN_STATE_LOCKS, "locks", None)
+    if active_locks is None:
+        active_locks = set()
+        _ACTIVE_RUN_STATE_LOCKS.locks = active_locks
+    return active_locks
+
+
+def _assert_run_state_lock_held(path: Path) -> None:
+    active_lock = (os.getpid(), path.resolve(strict=False))
+    if active_lock not in _active_run_state_locks():
+        raise EpicRunStateError(
+            "run-state persistence requires the active lock for the exact state path"
+        )
 
 
 def _thread_lock_for(lock_path: Path) -> threading.Lock:
