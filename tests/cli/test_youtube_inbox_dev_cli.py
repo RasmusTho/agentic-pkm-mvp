@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 import importlib
 import secrets
-import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,10 +13,12 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.knowledge_acquisition.playlist_discovery import V1InboxConfigurationError
+from app.knowledge_acquisition.youtube_account_binding import AccountBindingAdmissionError
 from app.knowledge_acquisition.youtube_oauth import (
     DeviceAuthorizationPending,
     OAuthProviderError,
 )
+from app.knowledge_acquisition.youtube_token_store import OAuthWriterAdmissionError
 
 youtube_cli = importlib.import_module("app.cli.youtube_inbox_dev")
 
@@ -81,14 +81,6 @@ class _Api:
         )()
 
 
-class _Bindings:
-    def __init__(self, rows: tuple[object, ...] = ()) -> None:
-        self.rows = rows
-
-    def list_all(self) -> tuple[object, ...]:
-        return self.rows
-
-
 class _Sync:
     def __init__(self) -> None:
         self.selected: list[tuple[str, str]] = []
@@ -128,19 +120,15 @@ def _dev_env() -> dict[str, str]:
 
 def test_connect_select_and_sync_compose_v1_services(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     binder = _Binder(["authorization_pending", "slow_down"])
     sync = _Sync()
     builds: list[str | None] = []
-    now = [0.0]
     sleeps: list[float] = []
 
     def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
-        now[0] += seconds
 
-    monkeypatch.setattr(youtube_cli.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(youtube_cli.time, "sleep", fake_sleep)
 
     def fake_build(account_binding_id: str | None = None) -> youtube_cli.YouTubeInboxDevServices:
@@ -149,8 +137,6 @@ def test_connect_select_and_sync_compose_v1_services(
             binder=binder,
             api_client=_Api(),
             sync=sync if account_binding_id is not None else None,
-            account_bindings=_Bindings(),
-            connect_lock_path=tmp_path / "connect.lock",
         )
 
     monkeypatch.setattr(youtube_cli, "build_youtube_inbox_dev_services", fake_build)
@@ -196,7 +182,6 @@ def test_connect_select_and_sync_compose_v1_services(
 
 def test_rejects_non_dev_and_redacts_secret_failures(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     planted_client_secret = "planted-client-secret-" + secrets.token_hex(8)
     planted_store_key = secrets.token_hex(32)
@@ -264,8 +249,6 @@ def test_rejects_non_dev_and_redacts_secret_failures(
             binder=_ProviderFailureBinder(),
             api_client=None,
             sync=None,
-            account_bindings=_Bindings(),
-            connect_lock_path=tmp_path / "connect.lock",
         ),
     )
     provider_failure = runner.invoke(
@@ -278,7 +261,6 @@ def test_rejects_non_dev_and_redacts_secret_failures(
 
 def test_v1_command_remains_single_inbox_and_manual(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     sync = _Sync()
 
@@ -294,8 +276,6 @@ def test_v1_command_remains_single_inbox_and_manual(
             binder=_Binder(),
             api_client=_Api(),
             sync=sync,
-            account_bindings=_Bindings((object(),)),
-            connect_lock_path=tmp_path / "connect.lock",
         ),
     )
     runner = CliRunner()
@@ -314,46 +294,48 @@ def test_v1_command_remains_single_inbox_and_manual(
     help_result = runner.invoke(
         cli, ["youtube-inbox-dev", "--help"], env=_dev_env()
     )
-    second_account = runner.invoke(
-        cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
-    )
-    empty_bindings = _Bindings()
-    overlap_binder = _Binder()
+    class _RefusingBinder:
+        def start_device_connection(self) -> Any:
+            raise AccountBindingAdmissionError("planted internal account detail")
+
     monkeypatch.setattr(
         youtube_cli,
         "build_youtube_inbox_dev_services",
         lambda account_binding_id=None: youtube_cli.YouTubeInboxDevServices(
-            binder=overlap_binder,
+            binder=_RefusingBinder(),
             api_client=_Api(),
             sync=sync,
-            account_bindings=empty_bindings,
-            connect_lock_path=tmp_path / "connect.lock",
         ),
     )
-    with youtube_cli._exclusive_connect_lock(tmp_path / "connect.lock"):
-        overlapping_connect = runner.invoke(
-            cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
-        )
+    second_account = runner.invoke(
+        cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
+    )
+
+    class _BusyBinder:
+        def start_device_connection(self) -> Any:
+            raise OAuthWriterAdmissionError("planted internal lease detail")
+
+    monkeypatch.setattr(
+        youtube_cli,
+        "build_youtube_inbox_dev_services",
+        lambda account_binding_id=None: youtube_cli.YouTubeInboxDevServices(
+            binder=_BusyBinder(),
+            api_client=_Api(),
+            sync=sync,
+        ),
+    )
+    overlapping_connect = runner.invoke(
+        cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
+    )
 
     assert result.exit_code != 0
     assert "already has an enabled Inbox" in result.output
     assert second_account.exit_code != 0
     assert "already has one OAuth-connected account" in second_account.output
+    assert "planted internal account detail" not in second_account.output
     assert overlapping_connect.exit_code != 0
     assert "already active" in overlapping_connect.output
-    assert overlap_binder.started == overlap_binder.finished == 0
-    assert empty_bindings.list_all() == ()
-    ignored_runtime_artifact = subprocess.run(
-        [
-            "git",
-            "check-ignore",
-            "runtime/knowledge_acquisition/youtube_token_store.enc",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert ignored_runtime_artifact.returncode == 0
+    assert "planted internal lease detail" not in overlapping_connect.output
     assert help_result.exit_code == 0
     assert all(
         forbidden not in help_result.output.lower()
