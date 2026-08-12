@@ -70,7 +70,7 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 ### `app/store`
 
-**Files (3):** `membership_store.py`, `relation_index.py`, `vector_index.py`
+**Files (2):** `membership_store.py`, `vector_index.py`
 
 **Removed (KERNEL-03, #2765):** `object_store.py` and `vector_store.py` — the legacy write generation is gone. `DomainObject` and the `ObjectStore` facade are owned by `app/objects` and write only through the `app.stores` provider seam, with no silent in-memory fallback. Guard: `tests/architecture/test_single_store_writer.py`.
 

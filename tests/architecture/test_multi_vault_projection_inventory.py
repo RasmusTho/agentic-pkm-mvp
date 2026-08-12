@@ -866,24 +866,13 @@ def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
     )
 
     manifest = load_manifest()
-    assert LEGACY_RELATION_INDEX.exists(), (
-        "app/store/relation_index.py was removed, but its unreachability was not "
-        "provable when this slice ran: app/objects/__init__.py re-exports it. If it is "
-        "genuinely unreachable now, replace this assertion with the proof."
-    )
+    assert not LEGACY_RELATION_INDEX.exists()
     assert manifest["relations"]["classification"] in CLASSIFICATIONS
     assert all(
         producer["module"] != "app/store/relation_index.py"
         for producer in manifest["relations"]["producers"]
     ), "a seam that refuses before SQL is not a durable mutation producer"
-    from app.store.relation_index import RelationIndex
-
-    with pytest.raises(RuntimeError, match=r"MVR-05A4.*before SQL"):
-        RelationIndex().link("src", "dst", "rel", 1.0, {})
-    assert "relation_index" in manifest["relations"]["reason"], (
-        "the `relations` classification reason must state the producer mismatch it is "
-        "standing in for, so MVR-05A4 inherits the finding rather than rediscovering it."
-    )
+    assert "retired" in manifest["relations"]["reason"]
 
 
 def test_the_manifest_is_checked_in_and_machine_readable() -> None:

@@ -192,6 +192,8 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
             """,
             "CREATE INDEX IF NOT EXISTS chunks_object_binding_idx "
             "ON chunks (vault_binding_id, object_id)",
+            "ALTER TABLE chunks ADD CONSTRAINT chunks_binding_id_key "
+            "UNIQUE (vault_binding_id, id)",
         ),
     ),
     (
@@ -201,7 +203,7 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
             CREATE TABLE IF NOT EXISTS embeddings (
                 id UUID PRIMARY KEY,
                 object_id UUID NOT NULL,
-                chunk_id UUID REFERENCES chunks(id) ON DELETE CASCADE,
+                chunk_id UUID,
                 provider TEXT DEFAULT 'mock',
                 dim INTEGER NOT NULL DEFAULT 1536,
                 embedding VECTOR,
@@ -210,6 +212,10 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
                 CONSTRAINT embeddings_object_id_fkey
                     FOREIGN KEY (vault_binding_id, object_id)
                     REFERENCES store_objects (vault_binding_id, object_id)
+                    ON DELETE CASCADE,
+                CONSTRAINT embeddings_chunk_id_fkey
+                    FOREIGN KEY (vault_binding_id, chunk_id)
+                    REFERENCES chunks (vault_binding_id, id)
                     ON DELETE CASCADE
             )
             """,
@@ -222,7 +228,7 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             """
             CREATE TABLE IF NOT EXISTS relations (
-                id UUID PRIMARY KEY,
+                id UUID NOT NULL,
                 src_id UUID NOT NULL,
                 dst_id UUID NOT NULL,
                 type TEXT NOT NULL,
@@ -271,7 +277,8 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
                 CONSTRAINT membership_object_id_fkey
                     FOREIGN KEY (vault_binding_id, object_id)
                     REFERENCES store_objects (vault_binding_id, object_id)
-                    ON DELETE CASCADE
+                    ON DELETE CASCADE,
+                PRIMARY KEY (vault_binding_id, id)
             )
             """,
             "CREATE INDEX IF NOT EXISTS membership_object_binding_idx "

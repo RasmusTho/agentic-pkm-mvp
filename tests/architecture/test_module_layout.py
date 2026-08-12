@@ -39,7 +39,7 @@ def test_no_duplicate_relation_index_module() -> None:
         for path in (REPO_ROOT / "app").glob("store*/relation_index.py")
     )
 
-    assert relation_index_modules == ["app/store/relation_index.py"]
+    assert relation_index_modules == []
     assert (REPO_ROOT / "app" / "stores" / "relation_candidates.py").is_file()
 
 

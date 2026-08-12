@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Dict, Any, List
-from app.store.relation_index import RelationEdge, GraphSlice
+from app.objects.relation_types import RelationEdge, GraphSlice
 
 
 class FakeRelationIndex:

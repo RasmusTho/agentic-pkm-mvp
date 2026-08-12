@@ -30,7 +30,8 @@ from uuid import UUID
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED
 from app.services.outbox import insert_object_and_outbox, payload_fingerprint
-from app.store.relation_index import RelationEdge, GraphSlice, RelationIndex
+from app.objects.relation_types import RelationEdge, GraphSlice
+from app.stores.base import RelationIndex
 from app.store.vector_index import ScoredNeighbor, VectorIndex
 from app.stores import resolve_object_store_port
 
