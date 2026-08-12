@@ -21,6 +21,17 @@ LEGACY_SYSTEM_SETTINGS = LEGACY_SYSTEM_SETTINGS_DIR / "system-settings.yaml"
 LEGACY_HEALTH_SETTINGS = Path("_system") / "Settings" / "health.md"
 
 
+def canonical_settings_origin(relative_path: Path | str) -> str:
+    """Format one canonical settings provenance without creating path authority."""
+
+    relative = Path(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(
+            f"settings origin path must be canonical-relative: {relative}"
+        )
+    return f"vault-shared:{CANONICAL_SETTINGS_DIR_NAME}/{relative.as_posix()}"
+
+
 def canonical_settings_root(vault_root: Path) -> Path:
     root = Path(vault_root).expanduser().resolve()
     return contained_settings_path(root, root / CANONICAL_SETTINGS_DIR_NAME)
@@ -155,6 +166,7 @@ __all__ = [
     "LEGACY_HEALTH_SETTINGS",
     "LEGACY_SYSTEM_SETTINGS",
     "LEGACY_SYSTEM_SETTINGS_DIR",
+    "canonical_settings_origin",
     "canonical_settings_root",
     "contained_settings_path",
     "resolve_compiled_sources",

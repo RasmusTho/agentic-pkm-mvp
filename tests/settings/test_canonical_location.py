@@ -15,6 +15,7 @@ from app.settings import compiler
 import app.settings.migration as migration_module
 from app.settings.health_settings import load_health_settings
 from app.settings.locations import (
+    canonical_settings_origin,
     contained_settings_path,
     read_settings_mapping,
     resolve_compiled_sources,
@@ -30,6 +31,15 @@ from app.write_guard import WritesBlockedError
 def _write_settings_markdown(path: Path, payload: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"# Settings\n\n```yaml settings\n{payload}```\n", encoding="utf-8")
+
+
+def test_canonical_settings_origin_uses_the_single_location_authority() -> None:
+    assert (
+        canonical_settings_origin("llm_routing.md")
+        == "vault-shared:settings/llm_routing.md"
+    )
+    with pytest.raises(ValueError, match="canonical-relative"):
+        canonical_settings_origin("../llm_routing.md")
 
 
 def test_all_stacks_read_canonical_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

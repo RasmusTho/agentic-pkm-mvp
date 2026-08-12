@@ -9,13 +9,11 @@ from app.components.embeddings import EmbeddingIdentity, resolve_embedding_ident
 from app.components.settings.models_loader import load_models
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 from app.settings.env_defaults import env_default
-from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
+from app.settings.locations import canonical_settings_origin
 from app.settings.runtime import get_settings_bundle
 
 
-_LLM_ROUTING_VAULT_ORIGIN = (
-    f"vault-shared:{CANONICAL_SETTINGS_DIR_NAME}/llm_routing.md"
-)
+_LLM_ROUTING_VAULT_ORIGIN = canonical_settings_origin("llm_routing.md")
 
 
 class _UnsetSettingsBundle:

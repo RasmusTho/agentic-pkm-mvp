@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 
 from app.settings.env_defaults import env_default
-from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
+from app.settings.locations import canonical_settings_origin
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 from app.settings.runtime import get_settings_bundle
 from app.settings.tiering import is_lab_profile
@@ -23,7 +23,7 @@ def _override(name: str) -> str | None:
 
 def _vault_shared_origin(relative_path: str) -> str:
     """Format canonical provenance without introducing a second path authority."""
-    return f"vault-shared:{CANONICAL_SETTINGS_DIR_NAME}/{relative_path}"
+    return canonical_settings_origin(relative_path)
 
 
 def _normalized_provider(value: str | None) -> str:
