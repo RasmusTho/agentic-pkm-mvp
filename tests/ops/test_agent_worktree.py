@@ -833,6 +833,428 @@ def test_lifecycle_register_heartbeat_release_and_report(
     assert records[str(worktree.resolve())]["status"] == "complete"
 
 
+@pytest.mark.parametrize("slow_operation", ("register", "heartbeat", "release", "complete"))
+def test_lifecycle_identity_lookup_does_not_block_unrelated_heartbeat(
+    tmp_path,
+    monkeypatch,
+    slow_operation,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+
+    def _record(worktree: Path, branch: str, owner: str) -> dict[str, object]:
+        return {
+            "path": str(worktree.resolve()),
+            "branch": branch,
+            "generation": GENERATION,
+            "owner": owner,
+            "status": "active",
+            "registered_at": 10,
+            "heartbeat_at": 20,
+            "expires_at": 1000,
+        }
+
+    records = {
+        str(unrelated.resolve()): _record(
+            unrelated, "codex/unrelated", "unrelated-owner"
+        )
+    }
+    if slow_operation != "register":
+        records[str(target.resolve())] = _record(
+            target, "codex/target", "target-owner"
+        )
+    registry_path.write_text(
+        json.dumps({"schema": agent_worktree.REGISTRY_SCHEMA, "worktrees": records}),
+        encoding="utf-8",
+    )
+
+    lookup_started = threading.Event()
+    allow_lookup = threading.Event()
+    unrelated_finished = threading.Event()
+    errors: list[BaseException] = []
+
+    def identity(_cwd: Path, worktree: Path) -> tuple[Path, str]:
+        canonical = worktree.resolve()
+        if canonical == target.resolve():
+            lookup_started.set()
+            assert allow_lookup.wait(2)
+            return canonical, "codex/target"
+        return canonical, "codex/unrelated"
+
+    monkeypatch.setattr(agent_worktree, "_worktree_identity", identity)
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_generation",
+        lambda _cwd, _worktree, *, create: GENERATION,
+    )
+
+    def run_slow_operation() -> None:
+        try:
+            if slow_operation == "register":
+                agent_worktree.register_worktree(
+                    repo,
+                    worktree=target,
+                    owner="target-owner",
+                    registry_path=registry_path,
+                    now=30,
+                )
+            elif slow_operation == "heartbeat":
+                agent_worktree.heartbeat_worktree(
+                    repo,
+                    worktree=target,
+                    owner="target-owner",
+                    registry_path=registry_path,
+                    now=30,
+                )
+            elif slow_operation == "release":
+                agent_worktree.release_worktree(
+                    repo,
+                    worktree=target,
+                    owner="target-owner",
+                    registry_path=registry_path,
+                    now=30,
+                )
+            else:
+                agent_worktree.complete_worktree(
+                    repo,
+                    worktree=target,
+                    owner="target-owner",
+                    registry_path=registry_path,
+                    now=30,
+                )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    def heartbeat_unrelated() -> None:
+        try:
+            agent_worktree.heartbeat_worktree(
+                repo,
+                worktree=unrelated,
+                owner="unrelated-owner",
+                registry_path=registry_path,
+                now=40,
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+        finally:
+            unrelated_finished.set()
+
+    slow = threading.Thread(target=run_slow_operation)
+    slow.start()
+    assert lookup_started.wait(1)
+    heartbeat = threading.Thread(target=heartbeat_unrelated)
+    heartbeat.start()
+    try:
+        assert unrelated_finished.wait(1), (
+            "slow live identity lookup held the shared lifecycle registry lock"
+        )
+    finally:
+        allow_lookup.set()
+        slow.join()
+        heartbeat.join()
+
+    assert errors == []
+    persisted = agent_worktree.load_lifecycle_records(
+        repo, registry_path=registry_path
+    )
+    assert persisted[str(unrelated.resolve())]["heartbeat_at"] == 40
+
+
+@pytest.mark.parametrize(
+    "identity_change", ("path", "branch", "owner", "status", "generation")
+)
+@pytest.mark.parametrize("operation", ("register", "heartbeat", "release", "complete"))
+def test_lifecycle_write_rejects_identity_changed_before_commit(
+    tmp_path,
+    monkeypatch,
+    identity_change,
+    operation,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "target"
+    worktree.mkdir()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    _write_lifecycle_record(
+        registry_path,
+        worktree,
+        branch="codex/target",
+        generation=GENERATION,
+        status="active",
+    )
+    mutation_applied = False
+
+    monkeypatch.setattr(
+        agent_worktree,
+        "_worktree_identity",
+        lambda _cwd, _worktree: (worktree.resolve(), "codex/target"),
+    )
+
+    def generation(_cwd: Path, _worktree: Path, *, create: bool) -> str:
+        nonlocal mutation_applied
+        del create
+        if not mutation_applied:
+            mutation_applied = True
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            key = str(worktree.resolve())
+            record = payload["worktrees"][key]
+            if identity_change == "path":
+                payload["worktrees"][str(replacement.resolve())] = payload[
+                    "worktrees"
+                ].pop(key)
+                record = payload["worktrees"][str(replacement.resolve())]
+                record["path"] = str(replacement.resolve())
+            elif identity_change == "branch":
+                record["branch"] = "codex/replaced"
+            elif identity_change == "owner":
+                record["owner"] = "replacement-owner"
+            elif identity_change == "status":
+                record["status"] = "complete"
+                record["complete_at"] = 25
+            else:
+                record["generation"] = "b" * 32
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+        return GENERATION
+
+    monkeypatch.setattr(agent_worktree, "_worktree_generation", generation)
+
+    with pytest.raises(
+        agent_worktree.WorktreeLifecycleError,
+        match="(matching lifecycle registration|lifecycle registration changed)",
+    ):
+        if operation == "register":
+            agent_worktree.register_worktree(
+                repo,
+                worktree=worktree,
+                owner="active-owner",
+                registry_path=registry_path,
+                now=40,
+            )
+        elif operation == "heartbeat":
+            agent_worktree.heartbeat_worktree(
+                repo,
+                worktree=worktree,
+                owner="active-owner",
+                registry_path=registry_path,
+                now=40,
+            )
+        elif operation == "release":
+            agent_worktree.release_worktree(
+                repo,
+                worktree=worktree,
+                owner="active-owner",
+                registry_path=registry_path,
+                now=40,
+            )
+        else:
+            agent_worktree.complete_worktree(
+                repo,
+                worktree=worktree,
+                owner="active-owner",
+                registry_path=registry_path,
+                now=40,
+            )
+
+    persisted = agent_worktree.load_lifecycle_records(
+        repo, registry_path=registry_path
+    )
+    expected_key = (
+        str(replacement.resolve())
+        if identity_change == "path"
+        else str(worktree.resolve())
+    )
+    assert set(persisted) == {expected_key}
+    record = persisted[expected_key]
+    assert record["heartbeat_at"] == 20
+    if identity_change == "path":
+        assert record["path"] == str(replacement.resolve())
+    elif identity_change == "branch":
+        assert record["branch"] == "codex/replaced"
+    elif identity_change == "owner":
+        assert record["owner"] == "replacement-owner"
+    elif identity_change == "status":
+        assert record["status"] == "complete"
+    else:
+        assert record["generation"] == "b" * 32
+
+
+def test_concurrent_fresh_registration_keeps_registry_and_marker_generation_equal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "target"
+    worktree.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    marker = tmp_path / "git-state" / agent_worktree.GENERATION_MARKER
+    absent_observations = threading.Barrier(2)
+    exists_calls = 0
+    exists_calls_lock = threading.Lock()
+    replace_calls = 0
+    real_exists = Path.exists
+    real_replace = os.replace
+
+    def identity(_cwd: Path, _worktree: Path) -> tuple[Path, str]:
+        return worktree.resolve(), "codex/target"
+
+    def git_path(_args: list[str], _cwd: Path) -> str:
+        return str(marker)
+
+    def synchronized_exists(path: Path) -> bool:
+        nonlocal exists_calls
+        if path != marker:
+            return real_exists(path)
+        with exists_calls_lock:
+            exists_calls += 1
+            call = exists_calls
+        if call <= 2:
+            absent_observations.wait(timeout=2)
+            return False
+        return real_exists(path)
+
+    def tracked_replace(source, destination) -> None:
+        nonlocal replace_calls
+        if Path(destination) == marker:
+            replace_calls += 1
+        real_replace(source, destination)
+
+    monkeypatch.setattr(agent_worktree, "_worktree_identity", identity)
+    monkeypatch.setattr(agent_worktree.git_hygiene, "run_git", git_path)
+    monkeypatch.setattr(Path, "exists", synchronized_exists)
+    monkeypatch.setattr(os, "replace", tracked_replace)
+
+    results: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+
+    def register(owner: str) -> None:
+        try:
+            results.append(
+                agent_worktree.register_worktree(
+                    repo,
+                    worktree=worktree,
+                    owner=owner,
+                    registry_path=registry_path,
+                    now=40,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    first = threading.Thread(target=register, args=("first-owner",))
+    second = threading.Thread(target=register, args=("second-owner",))
+    first.start()
+    second.start()
+    first.join(2)
+    second.join(2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert exists_calls >= 3
+    assert replace_calls == 1
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], agent_worktree.WorktreeLifecycleError)
+    persisted = agent_worktree.load_lifecycle_records(
+        repo, registry_path=registry_path
+    )[str(worktree.resolve())]
+    assert marker.read_text(encoding="utf-8").strip() == persisted["generation"]
+
+
+def test_concurrent_legacy_generation_migration_keeps_registry_and_marker_equal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    worktree = tmp_path / "target"
+    worktree.mkdir()
+    registry_path = tmp_path / "agent-worktrees.json"
+    _write_lifecycle_record(registry_path, worktree, status="active")
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    payload["worktrees"][str(worktree.resolve())].pop("generation")
+    registry_path.write_text(json.dumps(payload), encoding="utf-8")
+    marker = tmp_path / "git-state" / agent_worktree.GENERATION_MARKER
+    absent_observations = threading.Barrier(2)
+    exists_calls = 0
+    exists_calls_lock = threading.Lock()
+    replace_calls = 0
+    real_exists = Path.exists
+    real_replace = os.replace
+
+    def identity(_cwd: Path, _worktree: Path) -> tuple[Path, str]:
+        return worktree.resolve(), "codex/eligible"
+
+    def git_path(_args: list[str], _cwd: Path) -> str:
+        return str(marker)
+
+    def synchronized_exists(path: Path) -> bool:
+        nonlocal exists_calls
+        if path != marker:
+            return real_exists(path)
+        with exists_calls_lock:
+            exists_calls += 1
+            call = exists_calls
+        if call <= 2:
+            absent_observations.wait(timeout=2)
+            return False
+        return real_exists(path)
+
+    def tracked_replace(source, destination) -> None:
+        nonlocal replace_calls
+        if Path(destination) == marker:
+            replace_calls += 1
+        real_replace(source, destination)
+
+    monkeypatch.setattr(agent_worktree, "_worktree_identity", identity)
+    monkeypatch.setattr(agent_worktree.git_hygiene, "run_git", git_path)
+    monkeypatch.setattr(Path, "exists", synchronized_exists)
+    monkeypatch.setattr(os, "replace", tracked_replace)
+
+    results: list[dict[str, object]] = []
+    errors: list[BaseException] = []
+
+    def heartbeat(now: int) -> None:
+        try:
+            results.append(
+                agent_worktree.heartbeat_worktree(
+                    repo,
+                    worktree=worktree,
+                    owner="active-owner",
+                    registry_path=registry_path,
+                    now=now,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    first = threading.Thread(target=heartbeat, args=(40,))
+    second = threading.Thread(target=heartbeat, args=(41,))
+    first.start()
+    second.start()
+    first.join(2)
+    second.join(2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert exists_calls >= 3
+    assert replace_calls == 1
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], agent_worktree.WorktreeLifecycleError)
+    persisted = agent_worktree.load_lifecycle_records(
+        repo, registry_path=registry_path
+    )[str(worktree.resolve())]
+    assert marker.read_text(encoding="utf-8").strip() == persisted["generation"]
+
+
 @pytest.mark.parametrize("status", ("active", "released", "complete"))
 def test_existing_lifecycle_record_migrates_generation_before_update(
     tmp_path,

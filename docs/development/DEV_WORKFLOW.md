@@ -529,6 +529,13 @@ Enforcement surfaces:
   forward on the new record (`prior_bindings`, deduplicated by branch and bounded to the 8 most
   recent) rather than dropping it. Broad `git worktree prune`
   remains report-only. The current checkout is always skipped.
+  Registration, heartbeat, release, and completion resolve potentially slow live Git identity and
+  generation-marker state without holding the shared lifecycle-registry lock. Each update first
+  snapshots any existing target authority under a short lock, captures live path, branch, and
+  generation outside it, and serializes first-time generation-marker creation with a checkout-local
+  lock. It then re-reads the registry at the atomic write boundary and refuses the write if the
+  target path, branch, owner, generation, or lifecycle state changed. Unrelated lifecycle writers
+  therefore remain independent without weakening generation-bound, fail-closed cleanup authority.
 - Stash cleanup within the same apply run only ever drops a stash it resolved as a
   `preserve-local-drift`-marked, age-eligible candidate; it never drops by a stale positional
   index. `stash@{N}` is a position in the stash reflog, not a stable name — worktree paths and
