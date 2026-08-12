@@ -206,7 +206,7 @@ workflow — see `## App-agent skill family (product-lane)` below for the full d
 - Design handoff path:
   `yggdrasil-design-handoff -> governed exploration/handoff -> disposition (PromotionIntent when crossing authority classes) -> (Companion UI: Crossing B -> normalized spec | other surface: local owner doc/spec) -> docs-to-issue`
 - Architecture research path:
-  `architecture-research -> explicit disposition + PromotionIntent/BuilderOpsReceipt -> feature-breakdown -> issue-to-code` (audit doc publishes via `publish-pr`; findings reconcile against open epics instead of creating parallel hubs)
+  `architecture-research -> explicit disposition + accepted PromotionIntent/BuilderOpsReceipt -> feature-breakdown -> promoted receipt -> issue-to-code` (audit doc publishes via `publish-pr`; findings reconcile against open epics instead of creating parallel hubs)
 - Maintenance-learning intake path:
   `capture-learning -> learning-to-issue` (when the signal is ready for the backlog) or `learning-retrospective -> learning-to-issue` (when batched retro signals mature into bounded issues)
 - Temporal audit path:

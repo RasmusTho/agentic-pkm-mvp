@@ -93,21 +93,23 @@ GitHub state.
   accepted, rejected, deferred, or requiring an owner decision. Rejected and deferred findings do
   not enter backlog creation.
 - For an accepted finding that crosses from research evidence into a normative specification,
-  parent feature, or GitHub backlog, create and durably transition the existing BuilderOps
-  `PromotionIntent` through `BuilderOpsPromotionGateway`. Its source references, target authority
-  surface/ref, intended output, and resulting `BuilderOpsReceipt` are the required handoff
-  evidence. A research audit, task list, or chat transcript alone is not authority to invoke
-  `feature-breakdown` or create a backlog artifact.
-- Only after that promoted handoff evidence exists, convert the accepted findings into a
+  parent feature, or GitHub backlog, create and transition the existing BuilderOps
+  `PromotionIntent` to `accepted` through `BuilderOpsPromotionGateway`. Its source references,
+  target authority surface/ref, intended output, and accepted-transition `BuilderOpsReceipt` are
+  the required handoff evidence. A research audit, task list, or chat transcript alone is not
+  authority to invoke `feature-breakdown` or create a backlog artifact.
+- Only after that accepted handoff evidence exists, convert the accepted findings into a
   dependency-ordered task list inside the audit doc, each task with `Verify:`-able acceptance
   kernel.
 - **Reconcile against open epics and issues before creating anything.** Search existing epics,
   spec directories, and issues; where a task overlaps, extend or supersede explicitly (name the
   issue and which half stays where — see the audit's reconciliation-notes pattern) instead of
   filing a parallel hub.
-- Hand the PromotionIntent-backed, reconciled backlog to
+- Hand the accepted-PromotionIntent-backed, reconciled backlog to
   `.codex/skills/feature-breakdown/SKILL.md` to produce the specification directory, parent
-  feature issue, and child issues. This skill does not file implementation issues directly.
+  feature issue, and child issues. Record their resulting source/result references, then use the
+  same gateway to transition the intent to `promoted`. This skill does not file implementation
+  issues directly.
 
 ## Working rules
 

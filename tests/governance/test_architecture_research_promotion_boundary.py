@@ -10,9 +10,10 @@ def test_research_handoff_requires_promotion_intent() -> None:
     )
 
     assert "Record an explicit disposition for every finding" in skill
-    assert "create and durably transition the existing BuilderOps" in skill
+    assert "transition the existing BuilderOps" in skill
+    assert "`PromotionIntent` to `accepted`" in skill
     assert "PromotionIntent" in skill
-    assert "A research audit, task list, or chat transcript alone is not authority" in skill
+    assert "chat transcript alone is not" in skill
 
 
 def test_promoted_research_handoff_is_allowed() -> None:
@@ -23,6 +24,7 @@ def test_promoted_research_handoff_is_allowed() -> None:
         encoding="utf-8"
     )
 
-    assert "PromotionIntent-backed, reconciled backlog" in research_skill
-    assert "source and result references" in breakdown_skill
+    assert "accepted-PromotionIntent-backed, reconciled backlog" in research_skill
+    assert "accepted-transition `BuilderOpsReceipt`" in breakdown_skill
+    assert "record its result references and transition the same intent to `promoted`" in breakdown_skill
     assert "does not add a PromotionIntent wrapper to ordinary breakdown" in breakdown_skill
