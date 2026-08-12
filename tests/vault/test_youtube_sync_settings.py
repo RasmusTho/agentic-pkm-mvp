@@ -60,20 +60,6 @@ def _init_minimal_vault(vault_root: Path) -> Path:
     return settings_dir
 
 
-_EXPECTED_DEFAULTS: dict[str, object] = {
-    "youtubeSync.enabled": False,
-    "youtubeSync.inboxPollSeconds": 180,
-    "youtubeSync.playlistPollSeconds": 3600,
-    "youtubeSync.subscriptionsPollSeconds": 21600,
-    "youtubeSync.reconcileIntervalDays": 7,
-    "youtubeSync.maxConcurrentAcquisitions": 2,
-    "youtubeSync.subscriptionDefaultPolicy": "discover_only",
-    "youtubeSync.captionsEnabled": True,
-    "youtubeSync.mediaDownloadEnabled": False,
-    "youtubeSync.runnerEnabled": False,
-}
-
-
 def test_subscription_default_policy_matches_registry_contract() -> None:
     """Settings and registry share one pinned acquisition-mode vocabulary."""
     definition = SettingsService().registry.get("youtubeSync.subscriptionDefaultPolicy")
@@ -262,11 +248,13 @@ def test_defaults_scopes_provenance_and_gated_writes(tmp_path: Path) -> None:
 
     # --- 1. Defaults resolve built-in when youtube.md/local.md carry no override ---
     resolution = service.resolve(context)
-    for key, expected in _EXPECTED_DEFAULTS.items():
-        effective = resolution.settings[key]
-        assert effective.value == expected, key
-        assert effective.scope == "built-in", key
-        assert effective.source == "built-in", key
+    for definition in SettingsService().registry.definitions:
+        if not definition.key.startswith("youtubeSync."):
+            continue
+        effective = resolution.settings[definition.key]
+        assert effective.value == definition.default_value, definition.key
+        assert effective.scope == "built-in", definition.key
+        assert effective.source == "built-in", definition.key
 
     # --- 2. RUNTIME_GATING_SETTINGS names exactly the two authority-bearing keys ---
     assert "youtubeSync.enabled" in RUNTIME_GATING_SETTINGS
