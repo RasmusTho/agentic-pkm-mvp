@@ -185,6 +185,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py \
       \( -type d -name "__pycache__" -prune \) -o \
       \( -type d -o \( -type f -name "test_*.py" \) \) -print0 | \
       LC_ALL=C sort -z >"$shard_list"
+    discovery_pipeline_status=$?
+    (( discovery_pipeline_status == 0 )) || exit "$discovery_pipeline_status"
     selected_shards=()
     while IFS= read -r -d "" shard; do
       if [[ -d "$shard" ]]; then
@@ -214,8 +216,8 @@ The explicit `PYTHONPATH` is part of this one sanctioned command because tests o
 one-off path exports to Issue or PR handoffs. Record the canonical command's host-resource failure,
 the fallback command, and every failed shard. The command selects a directory only after finding a
 collectible `test_*.py` file beneath it, so helper-only directories are never passed to pytest. Its
-`pipefail` discovery pipeline and per-directory collection checks fail the leased command before a
-partial shard list can produce a receipt. A fallback run is complete only when every selected shard
+`pipefail` discovery pipeline is checked before its output is used, and its per-directory collection
+checks fail the leased command before a partial shard list can produce a receipt. A fallback run is complete only when every selected shard
 passes; if a shard cannot run, the command reports it as an `uncovered shard` and exits nonzero, so
 record the uncovered shard as a validation gap rather than claiming the full `not pg` selection
 passed.

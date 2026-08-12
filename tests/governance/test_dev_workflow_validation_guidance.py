@@ -41,6 +41,8 @@ def test_local_fallback_preserves_discovery_pipeline_failure() -> None:
 
     assert "-- zsh -o pipefail -c '" in text
     assert 'LC_ALL=C sort -z >"$shard_list"' in text
+    assert 'discovery_pipeline_status=$?' in text
+    assert '(( discovery_pipeline_status == 0 )) || exit "$discovery_pipeline_status"' in text
     assert '(( discovery_status == 0 )) || exit "$discovery_status"' in text
     assert "partial shard list can produce a receipt" in text
     assert 'print -u2 -- "uncovered shard: $shard (pytest exit $shard_status)"' in text
