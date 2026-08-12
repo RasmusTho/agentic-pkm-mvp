@@ -750,7 +750,7 @@ def _build_context_pack(
         },
         "coordination": {
             "routine_worker_to_worker": "prohibited",
-            "discovered_overlap": "typed-coordinator-exception",
+            "discovered_overlap": "reject-whole-explicit-set-before-dispatch",
             "coordinator_scope": "cross_issue_only",
             "worker_scope": "one_issue_end_to_end",
             "issue_local_helper_budget": candidate["issue_local_helper_budget"],

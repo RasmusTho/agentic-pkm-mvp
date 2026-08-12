@@ -551,7 +551,7 @@ def test_fast_lane_context_pack_is_minimal_and_receipted() -> None:
     assert pack["return_schema"]["schema_name"] == "subagent_handoff_receipt"
     assert pack["coordination"] == {
         "routine_worker_to_worker": "prohibited",
-        "discovered_overlap": "typed-coordinator-exception",
+        "discovered_overlap": "reject-whole-explicit-set-before-dispatch",
         "coordinator_scope": "cross_issue_only",
         "worker_scope": "one_issue_end_to_end",
         "issue_local_helper_budget": 0,

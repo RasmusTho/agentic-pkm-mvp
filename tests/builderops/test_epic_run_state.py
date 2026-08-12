@@ -477,6 +477,66 @@ def test_concurrent_updates_are_serialized(tmp_path: Path) -> None:
     assert final_state["validation_status"]["4111"] == {"pytest": "passed"}
 
 
+def test_update_cannot_retarget_the_locked_run_path(tmp_path: Path) -> None:
+    source_run_id = "run-identity-source"
+    target_run_id = "run-identity-target"
+    create_epic_run_state(
+        3229,
+        source_run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "source"}],
+    )
+    create_epic_run_state(
+        3230,
+        target_run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3250, "state": "target"}],
+    )
+    source_path = epic_run_state_path(source_run_id, root=tmp_path)
+    target_path = epic_run_state_path(target_run_id, root=tmp_path)
+    source_before = source_path.read_bytes()
+    target_before = target_path.read_bytes()
+
+    def retarget(state: dict[str, object]) -> dict[str, object]:
+        state["run_id"] = target_run_id
+        return state
+
+    with pytest.raises(EpicRunStateError, match="must not change run_id"):
+        update_epic_run_state(source_run_id, root=tmp_path, updater=retarget)
+
+    assert source_path.read_bytes() == source_before
+    assert target_path.read_bytes() == target_before
+
+
+def test_update_cannot_change_loaded_owner_without_an_expected_owner(
+    tmp_path: Path,
+) -> None:
+    epic_run_id = "run-identity-epic-owner"
+    independent_run_id = "run-identity-independent-owner"
+    create_epic_run_state(3229, epic_run_id, root=tmp_path)
+    create_independent_issue_run_state(
+        [4164, 4165], independent_run_id, root=tmp_path
+    )
+
+    def change_epic_owner(state: dict[str, object]) -> dict[str, object]:
+        state["epic_issue_number"] = 3230
+        return state
+
+    def change_independent_owner(state: dict[str, object]) -> dict[str, object]:
+        state["independent_issue_numbers"] = [4200]
+        return state
+
+    for run_id, updater in (
+        (epic_run_id, change_epic_owner),
+        (independent_run_id, change_independent_owner),
+    ):
+        path = epic_run_state_path(run_id, root=tmp_path)
+        before = path.read_bytes()
+        with pytest.raises(EpicRunStateError, match="must not change run owner"):
+            update_epic_run_state(run_id, root=tmp_path, updater=updater)
+        assert path.read_bytes() == before
+
+
 def test_dispatcher_status_is_recorded_as_local_snapshot() -> None:
     state = new_epic_run_state(3229, "run-dispatcher-status")
 
@@ -519,6 +579,35 @@ def test_create_rejects_epic_mismatch_for_existing_run(tmp_path: Path) -> None:
 
     with pytest.raises(EpicRunStateError, match="already belongs to epic 3229"):
         create_epic_run_state(3230, "run-owned", root=tmp_path)
+
+
+def test_create_has_no_overwrite_owner_transfer_escape_hatch(tmp_path: Path) -> None:
+    run_id = "run-owner-cannot-be-overwritten"
+    create_epic_run_state(
+        3229,
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "queued"}],
+    )
+    path = epic_run_state_path(run_id, root=tmp_path)
+    before = path.read_bytes()
+
+    with pytest.raises(EpicRunStateError, match="already belongs to epic 3229"):
+        create_epic_run_state(3230, run_id, root=tmp_path, overwrite=True)
+
+    assert path.read_bytes() == before
+
+
+def test_public_save_cannot_transfer_existing_run_owner(tmp_path: Path) -> None:
+    run_id = "run-public-save-owner"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+    path = epic_run_state_path(run_id, root=tmp_path)
+    before = path.read_bytes()
+
+    with pytest.raises(EpicRunStateError, match="must not change run owner"):
+        save_epic_run_state(new_epic_run_state(3230, run_id), root=tmp_path)
+
+    assert path.read_bytes() == before
 
 
 def test_apply_update_rejects_unknown_fields() -> None:
@@ -819,16 +908,49 @@ def test_fast_lane_state_never_becomes_delivery_authority(tmp_path: Path) -> Non
 
 
 def test_no_unlocked_run_state_writer_in_app() -> None:
-    defining_module = REPO_ROOT / "app/builderops/epic_run_state.py"
     violations: list[str] = []
     for source_path in sorted((REPO_ROOT / "app").rglob("*.py")):
-        if source_path == defining_module:
-            continue
-        for line_number, line in enumerate(
-            source_path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            if "save_epic_run_state" in line:
-                violations.append(f"{source_path.relative_to(REPO_ROOT)}:{line_number}")
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        parents = {
+            child: parent
+            for parent in ast.walk(tree)
+            for child in ast.iter_child_nodes(parent)
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else None
+            )
+            if function_name == "save_epic_run_state":
+                violations.append(
+                    f"{source_path.relative_to(REPO_ROOT)}:{node.lineno}:public-save"
+                )
+                continue
+            if function_name != "_save_epic_run_state_to_path":
+                continue
+
+            ancestor = parents.get(node)
+            inside_run_state_lock = False
+            while ancestor is not None:
+                if isinstance(ancestor, ast.With):
+                    inside_run_state_lock = any(
+                        isinstance(item.context_expr, ast.Call)
+                        and isinstance(item.context_expr.func, ast.Name)
+                        and item.context_expr.func.id == "_locked_run_state"
+                        for item in ancestor.items
+                    )
+                    if inside_run_state_lock:
+                        break
+                ancestor = parents.get(ancestor)
+            if not inside_run_state_lock:
+                violations.append(
+                    f"{source_path.relative_to(REPO_ROOT)}:{node.lineno}:raw-save"
+                )
 
     assert violations == []
 
@@ -1136,10 +1258,14 @@ def test_independent_run_state_creation_serializes_across_processes(
                 process.wait(timeout=5)
             assert not path.exists()
 
-            # The winner writes a different independent scope under the lock.
-            save_epic_run_state(
-                new_independent_issue_run_state([4164, 4165], run_id),
-                root=tmp_path,
+            # The winner writes a different independent scope while this test
+            # already holds the production lock; the public save wrapper would
+            # correctly try to acquire that same non-reentrant lock again.
+            path.write_text(
+                serialize_epic_run_state(
+                    new_independent_issue_run_state([4164, 4165], run_id)
+                ),
+                encoding="utf-8",
             )
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
