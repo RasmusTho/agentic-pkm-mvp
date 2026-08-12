@@ -36,9 +36,10 @@ _MIXED_ROW_COUNT = 2
 def mixed_identity_doctor_env(monkeypatch: pytest.MonkeyPatch):
     """Route diagnose_index's pg-only inspection seams to canned values.
 
-    The memory backend supplies the vector index; ``doctor_mod.PgVectorIndex``
-    is pointed at ``MemoryVectorIndex`` so the pg diagnosis branch (where the
-    mixed-identity computation lives) executes without a live database.
+    The memory backend supplies the vector index; the lazy Postgres diagnostic
+    adapter is replaced with a complete in-process tuple so the pg diagnosis
+    branch (where the mixed-identity computation lives) executes without a live
+    database.
     """
     monkeypatch.setenv("STORE_BACKEND", "memory")
     reset_store_backends()
@@ -66,32 +67,26 @@ def mixed_identity_doctor_env(monkeypatch: pytest.MonkeyPatch):
         },
     ]
 
-    monkeypatch.setattr(doctor_mod, "PgVectorIndex", MemoryVectorIndex)
-    monkeypatch.setattr(
-        doctor_mod,
-        "inspect_pg_index_state",
-        lambda: {
+    def inspect_pg_index_state() -> dict[str, object]:
+        return {
             "rows": 5,
             "identity_present": True,
             "dims": [primary.dim],
             "rows_wrong_dim": 0,
-        },
-    )
+        }
     monkeypatch.setattr(
         doctor_mod, "inspect_unembedded_pg_objects", lambda **_kwargs: (0, [])
     )
     monkeypatch.setattr(
-        doctor_mod, "inspect_pg_identity_tuples", lambda: identity_tuples
-    )
-    monkeypatch.setattr(
         doctor_mod,
-        "inspect_pg_metadata_completeness",
-        lambda **_kwargs: {"missing_count": 0},
-    )
-    monkeypatch.setattr(
-        doctor_mod,
-        "inspect_pg_content_hash_staleness",
-        lambda **_kwargs: {"stale_count": 0},
+        "_load_pg_diagnostics",
+        lambda: (
+            MemoryVectorIndex,
+            lambda **_kwargs: {"stale_count": 0},
+            lambda: identity_tuples,
+            inspect_pg_index_state,
+            lambda **_kwargs: {"missing_count": 0},
+        ),
     )
     yield
     reset_store_backends()

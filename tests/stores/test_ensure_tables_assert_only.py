@@ -18,6 +18,7 @@ import psycopg
 import pytest
 
 from app.db.errors import StoreSchemaMissingError
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 pytestmark = pytest.mark.pg
 
@@ -169,16 +170,20 @@ def test_null_dim_row_repaired_and_queryable(scratch_db, monkeypatch: pytest.Mon
         # one row written before dim existed.
         conn.execute("ALTER TABLE store_vector_index ALTER COLUMN dim DROP NOT NULL")
         conn.execute(
-            "INSERT INTO vector_index_meta (id, identity_json) VALUES (1, %s)",
-            (json.dumps({"provider": "ollama", "model": "m", "dim": 4, "normalize": True}),),
+            "INSERT INTO vector_index_meta (vault_binding_id, id, identity_json) "
+            "VALUES (%s, 1, %s)",
+            (
+                COMPATIBILITY_BINDING_ID,
+                json.dumps({"provider": "ollama", "model": "m", "dim": 4, "normalize": True}),
+            ),
         )
         conn.execute(
             """
             INSERT INTO store_vector_index
-                (object_id, kind, source_ref, payload, embedding, dim, model)
-            VALUES (%s, 'note', 'test://legacy', '{}'::jsonb, %s, NULL, 'm')
+                (vault_binding_id, object_id, kind, source_ref, payload, embedding, dim, model)
+            VALUES (%s, %s, 'note', 'test://legacy', '{}'::jsonb, %s, NULL, 'm')
             """,
-            (object_id, [1.0, 0.0, 0.0, 0.0]),
+            (COMPATIBILITY_BINDING_ID, object_id, [1.0, 0.0, 0.0, 0.0]),
         )
 
     index = pg_module.PgVectorIndex()  # preflight runs the data repair

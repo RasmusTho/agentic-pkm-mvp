@@ -21,6 +21,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.jobs.decisions_projection import (
     doctor_decisions_projection,
     rebuild_decisions_projection,
@@ -80,8 +81,9 @@ def _insert_object(dsn: str) -> str:
     oid = str(uuid.uuid4())
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, %s, %s::jsonb)",
-            (oid, "note", "{}"),
+            "INSERT INTO store_objects (vault_binding_id, object_id, kind, payload) "
+            "VALUES (%s, %s, %s, %s::jsonb)",
+            (COMPATIBILITY_BINDING_ID, oid, "note", "{}"),
         )
         conn.execute(
             "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, %s, %s::jsonb)",

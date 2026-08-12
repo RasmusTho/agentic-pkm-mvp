@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.jobs.decisions_export import (
     DecisionExportError,
     _created_at_iso,
@@ -183,8 +184,9 @@ def _insert_object(dsn: str, *, object_id: str | None = None, obj_uuid: str | No
     ouuid = obj_uuid or oid
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, %s, %s::jsonb)",
-            (oid, "note", "{}"),
+            "INSERT INTO store_objects (vault_binding_id, object_id, kind, payload) "
+            "VALUES (%s, %s, %s, %s::jsonb)",
+            (COMPATIBILITY_BINDING_ID, oid, "note", "{}"),
         )
         conn.execute(
             "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, %s, %s::jsonb)",
@@ -210,9 +212,19 @@ def _insert_legacy_decision_row(
     row_id = str(uuid.uuid4())
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO decisions (id, object_id, agent, kind, key, value, created_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s)",
-            (row_id, object_id, agent, kind, key, json.dumps(value), created_at),
+            "INSERT INTO decisions "
+            "(id, vault_binding_id, object_id, agent, kind, key, value, created_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s)",
+            (
+                row_id,
+                COMPATIBILITY_BINDING_ID,
+                object_id,
+                agent,
+                kind,
+                key,
+                json.dumps(value),
+                created_at,
+            ),
         )
     return row_id
 
@@ -392,7 +404,10 @@ def test_export_raises_when_object_deleted_sets_object_id_null(
         created_at=datetime(2026, 5, 1, 8, 0, 0, tzinfo=timezone.utc),
     )
     with psycopg.connect(scratch_db, autocommit=True) as conn:
-        conn.execute("DELETE FROM store_objects WHERE object_id = %s", (oid,))
+        conn.execute(
+            "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
+            (COMPATIBILITY_BINDING_ID, oid),
+        )
         row = conn.execute("SELECT object_id FROM decisions").fetchone()
     assert row[0] is None  # FK SET NULL fired
 

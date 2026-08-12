@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.jobs.decisions_projection import (
     _resolve_target_object_id,
     doctor_decisions_projection,
@@ -113,9 +114,10 @@ def _insert_object(dsn: str, *, object_id: str | None = None, obj_uuid: str | No
     ouuid = obj_uuid or oid
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, source_ref, payload) "
-            "VALUES (%s, 'note', 'test://decision-projection', '{}'::jsonb)",
-            (oid,),
+            "INSERT INTO store_objects "
+            "(vault_binding_id, object_id, kind, source_ref, payload) "
+            "VALUES (%s, %s, 'note', 'test://decision-projection', '{}'::jsonb)",
+            (COMPATIBILITY_BINDING_ID, oid),
         )
         conn.execute(
             "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, %s, %s::jsonb)",
@@ -237,9 +239,10 @@ def test_receipt_and_projection_fail_loud_on_post_cutover_cross_key_collision(
     _insert_object(scratch_db, object_id=canonical_id, obj_uuid=retained_uuid)
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, source_ref, payload) "
-            "VALUES (%s, 'note', 'test://collision', '{}'::jsonb)",
-            (retained_uuid,),
+            "INSERT INTO store_objects "
+            "(vault_binding_id, object_id, kind, source_ref, payload) "
+            "VALUES (%s, %s, 'note', 'test://collision', '{}'::jsonb)",
+            (COMPATIBILITY_BINDING_ID, retained_uuid),
         )
 
     import app.receipts.decision_receipt_log as receipt_log

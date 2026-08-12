@@ -87,7 +87,11 @@ def test_truncate_reset_observed_semantics_on_migrated_database() -> None:
             )
             row = cur.fetchone()
             surviving = row["n"] if isinstance(row, dict) else row[0]
-            cur.execute("DELETE FROM decisions WHERE agent = 'truncate-reset-test'")
+            cur.execute(
+                "DELETE FROM decisions "
+                "WHERE vault_binding_id = %s AND agent = 'truncate-reset-test'",
+                (pg.COMPATIBILITY_BINDING_ID,),
+            )
         conn.commit()
     assert chunk_count == 0
     assert surviving >= 1

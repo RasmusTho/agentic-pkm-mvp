@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 
 from app.db.dsn import resolve_dsn
 from app.ingest.vault_root import ingest_vault_root
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
 from app.settings import settings
 from app.stores import pg as pg_store
@@ -112,14 +113,16 @@ def test_filesystem_vault_adapter_upsert_creates_canonical_decision_parent(
 
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
         canonical = conn.execute(
-            "SELECT object_id, source_ref FROM store_objects WHERE object_id = %s",
-            (object_id,),
+            "SELECT object_id, source_ref FROM store_objects "
+            "WHERE vault_binding_id = %s AND object_id = %s",
+            (COMPATIBILITY_BINDING_ID, object_id),
         ).fetchone()
         legacy = conn.execute("SELECT id FROM objects WHERE id = %s", (object_id,)).fetchone()
         conn.execute(
-            "INSERT INTO decisions (id, object_id, agent, kind, key, value) "
-            "VALUES (%s, %s, 'test', 'classification', 'classification', '{}'::jsonb)",
-            (str(uuid4()), object_id),
+            "INSERT INTO decisions "
+            "(id, vault_binding_id, object_id, agent, kind, key, value) "
+            "VALUES (%s, %s, %s, 'test', 'classification', 'classification', '{}'::jsonb)",
+            (str(uuid4()), COMPATIBILITY_BINDING_ID, object_id),
         )
 
     assert canonical is not None

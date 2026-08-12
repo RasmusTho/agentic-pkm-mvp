@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 import yaml
 from psycopg import sql
 
@@ -341,10 +343,11 @@ def test_sync_markdown_edit_preserves_richer_canonical_payload(tmp_path, monkeyp
                 """
                 update store_objects
                 set payload = payload || %s::jsonb
-                where object_id = %s
+                where vault_binding_id = %s and object_id = %s
                 """,
                 (
                     '{"episode_ref":"episode:1","trust":"reviewed","language":"sv","stable_id":"stable:1"}',
+                    COMPATIBILITY_BINDING_ID,
                     uuid_value,
                 ),
             )
@@ -429,9 +432,13 @@ def test_pure_rename_preserves_richer_canonical_payload(tmp_path, monkeypatch) -
                 """
                 update store_objects
                 set payload = payload || %s::jsonb
-                where object_id = %s
+                where vault_binding_id = %s and object_id = %s
                 """,
-                ('{"episode_ref":"episode:2","ingest_fingerprint":"fingerprint:2"}', uuid_value),
+                (
+                    '{"episode_ref":"episode:2","ingest_fingerprint":"fingerprint:2"}',
+                    COMPATIBILITY_BINDING_ID,
+                    uuid_value,
+                ),
             )
 
         old_path.rename(new_path)

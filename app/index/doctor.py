@@ -14,23 +14,36 @@ try:  # Runtime type hints without hard dependencies at import time
 except Exception:  # pragma: no cover - memory backend optional in some contexts
     MemoryVectorIndex = None  # type: ignore
 
-try:
-    from app.stores.pg import (
+_RECONCILE_HINT = "python -m app.cli index reconcile"
+
+
+def _load_pg_diagnostics() -> tuple[Any, Any, Any, Any, Any] | None:
+    """Load the optional Postgres diagnostic adapter after this module initializes.
+
+    ``app.stores.pg`` imports indexable-text helpers whose panel dependencies
+    eventually import the health contract, and the health contract imports this
+    module.  Eagerly importing the adapter here therefore turns a valid
+    Postgres installation into a false ``PgVectorIndex = None`` result depending
+    on import order.  Keep the optional boundary lazy so a completed doctor
+    module is already available when that dependency chain returns to it.
+    """
+    try:
+        from app.stores.pg import (
+            PgVectorIndex,
+            inspect_pg_content_hash_staleness,
+            inspect_pg_identity_tuples,
+            inspect_pg_index_state,
+            inspect_pg_metadata_completeness,
+        )
+    except Exception:  # pragma: no cover - pg backend optional in some contexts
+        return None
+    return (
         PgVectorIndex,
         inspect_pg_content_hash_staleness,
         inspect_pg_identity_tuples,
         inspect_pg_index_state,
         inspect_pg_metadata_completeness,
     )
-except Exception:  # pragma: no cover - pg backend optional in some contexts
-    PgVectorIndex = None  # type: ignore
-    inspect_pg_index_state = None  # type: ignore
-    inspect_pg_identity_tuples = None  # type: ignore
-    inspect_pg_metadata_completeness = None  # type: ignore
-    inspect_pg_content_hash_staleness = None  # type: ignore
-
-
-_RECONCILE_HINT = "python -m app.cli index reconcile"
 
 
 def _identity_tuple(entry: Dict[str, Any]) -> tuple:
@@ -157,9 +170,25 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
                 issues.append(f"Identity mismatch for {field}: expected {expected_val}, stored {stored_val}.")
 
     pg_state: dict[str, Any] | None = None
-    if PgVectorIndex is not None and isinstance(vector_index, PgVectorIndex):  # type: ignore[arg-type]
+    pg_diagnostics = _load_pg_diagnostics()
+    if pg_diagnostics is not None:
+        (
+            pg_vector_index_type,
+            inspect_pg_content_hash_staleness,
+            inspect_pg_identity_tuples,
+            inspect_pg_index_state,
+            inspect_pg_metadata_completeness,
+        ) = pg_diagnostics
+    else:
+        pg_vector_index_type = None
+        inspect_pg_content_hash_staleness = None
+        inspect_pg_identity_tuples = None
+        inspect_pg_index_state = None
+        inspect_pg_metadata_completeness = None
+    if pg_vector_index_type is not None and isinstance(vector_index, pg_vector_index_type):
         if inspect_pg_index_state is not None:
             pg_state = inspect_pg_index_state()
+            assert pg_state is not None
             empty_index = int(pg_state.get("rows") or 0) == 0
             if not pg_state.get("identity_present"):
                 if empty_index:
@@ -332,11 +361,12 @@ class IndexDriftError(AssertionError):
 
 def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
     """Return count and sample object ids present in ``store_objects`` but unembedded."""
-    if PgVectorIndex is None:
+    try:
+        from app.stores.pg import _connect  # local import: pg backend is optional
+    except Exception:  # pragma: no cover - pg backend optional in some contexts
         return 0, []
 
     from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
-    from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -392,9 +422,6 @@ def inspect_vault_coverage_gap(*, limit: int = 5) -> Dict[str, Any]:
     is bound or the Postgres backend is unavailable, so callers can treat the scan as
     best-effort rather than failing the whole diagnosis.
     """
-    if PgVectorIndex is None:
-        return {"error": "Postgres backend not available"}
-
     try:
         from app.config.paths import resolve_optional_vault_root
         from app.vault.manager import iter_vault_markdown_files
@@ -416,8 +443,12 @@ def inspect_vault_coverage_gap(*, limit: int = 5) -> Dict[str, Any]:
     if not vault_paths:
         return {"checked": 0, "missing_count": 0, "missing_sample_paths": []}
 
+    try:
+        from app.stores.pg import _connect  # local import: pg backend is optional
+    except Exception:  # pragma: no cover - pg backend optional in some contexts
+        return {"error": "Postgres backend not available"}
+
     from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
-    from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -448,11 +479,12 @@ def verify_object_embedded(object_id: str) -> None:
     and the indexer regression tests call it rather than re-implementing the
     assertion inline.
     """
-    if PgVectorIndex is None:
-        raise RuntimeError("Postgres backend is required to verify embedding drift.")
+    try:
+        from app.stores.pg import _connect  # local import: pg backend is optional
+    except Exception as exc:  # pragma: no cover - pg backend optional in some contexts
+        raise RuntimeError("Postgres backend is required to verify embedding drift.") from exc
 
     from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
-    from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
         with conn.cursor() as cur:

@@ -560,8 +560,9 @@ def test_unchanged_post_migration_sync_heals_incomplete_canonical_locator(
             "SELECT source_ref FROM store_objects WHERE object_id = %s", (object_id,)
         ).fetchone() == (str(note.resolve()),)
         conn.execute(
-            "UPDATE store_objects SET source_ref = NULL WHERE object_id = %s",
-            (object_id,),
+            "UPDATE store_objects SET source_ref = NULL "
+            "WHERE vault_binding_id = %s AND object_id = %s",
+            (COMPATIBILITY_BINDING_ID, object_id),
         )
 
     monkeypatch.setenv("VAULT_ROOT", str(vault))
@@ -910,8 +911,9 @@ def test_runtime_identity_resolver_rejects_post_cutover_cross_key_collision(
     # cross-key collision invariant after an earlier successful lookup.
     with psycopg.connect(scratch_dsn) as conn:
         conn.execute(
-            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, 'note', '{}'::jsonb)",
-            (vault_uuid,),
+            "INSERT INTO store_objects (vault_binding_id, object_id, kind, payload) "
+            "VALUES (%s, %s, 'note', '{}'::jsonb)",
+            (COMPATIBILITY_BINDING_ID, vault_uuid),
         )
 
     with pytest.raises(RuntimeError, match="cross-key identity collision"):
@@ -1075,7 +1077,9 @@ def test_migration_retargets_every_reviewed_consumer_with_live_rows(scratch_dsn:
         rows = conn.execute(
             "SELECT conrelid::regclass::text, a.attname, confrelid::regclass::text, c.confdeltype "
             "FROM pg_constraint c "
-            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] "
+            "JOIN unnest(c.conkey) WITH ORDINALITY child_key(attnum, ordinality) ON true "
+            "JOIN pg_attribute a ON a.attrelid = c.conrelid "
+            "AND a.attnum = child_key.attnum AND a.attname <> 'vault_binding_id' "
             "WHERE c.contype = 'f' "
             "  AND c.confrelid IN ('public.store_objects'::regclass, 'public.objects'::regclass) "
             "ORDER BY 1, 2"

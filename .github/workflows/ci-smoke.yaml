@@ -769,7 +769,6 @@ jobs:
               - 'app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py'
               - 'app/knowledge_acquisition/youtube_api_client.py'
               - 'app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py'
-              - 'tests/index/test_provenance_stamp.py'
               - 'tests/indexer/test_outbox_roundtrip_pg.py'
               - 'tests/knowledge_acquisition/test_youtube_api_quota_pg.py'
               # Entity-review operation journal (EROJ-01, #4350): every
@@ -801,9 +800,27 @@ jobs:
               # are what caught the fixture regression during review.
               - 'tests/migrations/test_legacy_objects_fk_migration.py'
               - 'tests/migrations/test_store_schema_parity.py'
+              - 'tests/migrations/test_decisions_fk_set_null.py'
               - 'tests/integration/test_multi_vault_projection_isolation.py'
+              - 'tests/integration/test_decisions_rebuild_from_log_only.py'
+              - 'tests/integration/test_vault_sync_atomicity.py'
+              - 'tests/ingest/test_vault_root_ingest_pg.py'
+              - 'tests/jobs/test_decisions_export.py'
+              - 'tests/jobs/test_decisions_projection_rebuild.py'
+              - 'tests/cli/test_index_doctor_mixed.py'
+              - 'tests/cli/test_index_rebuild_cli.py'
+              - 'tests/cli/test_index_reconcile.py'
+              - 'tests/index/test_identity_migration.py'
+              - 'tests/index/test_provenance_stamp.py'
+              - 'tests/indexer/test_mixed_identity_detection.py'
+              - 'tests/invariants/test_retrieval_spine_invariants.py'
+              - 'tests/stores/test_decisions_fk_semantics.py'
+              - 'tests/stores/test_ensure_tables_assert_only.py'
               - 'tests/stores/test_multi_vault_store_reset_scope.py'
               - 'tests/stores/test_pg_truncate_reset.py'
+              - 'tests/stores/test_pg_vector_index.py'
+              - 'tests/stores/test_store_contract_pg.py'
+              - 'tests/stores/test_vector_generation_identity.py'
               - 'tests/services/test_audit_writer.py'
               - 'tests/architecture/test_multi_vault_projection_inventory.py'
               - 'tests/architecture/test_durable_table_ownership.py'
@@ -840,7 +857,12 @@ jobs:
           set -o pipefail
           pytest -q -m "pg" \
             tests/index/test_provenance_stamp.py \
+            tests/index/test_identity_migration.py \
             tests/indexer/test_outbox_roundtrip_pg.py \
+            tests/indexer/test_mixed_identity_detection.py \
+            tests/cli/test_index_doctor_mixed.py \
+            tests/cli/test_index_rebuild_cli.py \
+            tests/cli/test_index_reconcile.py \
             tests/knowledge_acquisition/test_youtube_api_quota_pg.py \
             tests/heimdal/test_entity_review_operation_journal.py \
             tests/migrations/test_entity_review_operation_journal_schema_parity.py \
@@ -848,9 +870,21 @@ jobs:
             tests/migrations/test_objects_adoption.py \
             tests/migrations/test_legacy_objects_fk_migration.py \
             tests/migrations/test_store_schema_parity.py \
+            tests/migrations/test_decisions_fk_set_null.py \
+            tests/integration/test_decisions_rebuild_from_log_only.py \
             tests/integration/test_multi_vault_projection_isolation.py \
+            tests/integration/test_vault_sync_atomicity.py \
+            tests/ingest/test_vault_root_ingest_pg.py \
+            tests/invariants/test_retrieval_spine_invariants.py \
+            tests/jobs/test_decisions_export.py \
+            tests/jobs/test_decisions_projection_rebuild.py \
+            tests/stores/test_decisions_fk_semantics.py \
+            tests/stores/test_ensure_tables_assert_only.py \
             tests/stores/test_multi_vault_store_reset_scope.py \
             tests/stores/test_pg_truncate_reset.py \
+            tests/stores/test_pg_vector_index.py \
+            tests/stores/test_store_contract_pg.py \
+            tests/stores/test_vector_generation_identity.py \
             tests/services/test_audit_writer.py \
             tests/migrations/test_outbox_schema_parity.py \
             tests/services/test_outbox_bootstrap_assert_only.py \

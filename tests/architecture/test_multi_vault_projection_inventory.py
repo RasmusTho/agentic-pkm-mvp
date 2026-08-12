@@ -468,6 +468,158 @@ def test_store_object_composite_key_producer_inventory_is_exact() -> None:
         )
 
 
+def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
+    """Current-shape fixtures cannot silently retain global object identity.
+
+    The only unbound mutations are the exact historical-lineage seeds that run
+    before MVR-05A3 and prove its adoption/refusal behavior.  A new fixture is
+    post-cutover by default and must name ``vault_binding_id``; adding another
+    legacy seed requires an explicit update to this receipt and therefore a
+    review of why the old shape is still needed.
+    """
+    object_identity_tables = (
+        "store_objects",
+        "store_vector_index",
+        "store_relations",
+        "store_relation_memberships",
+        "vector_index_meta",
+        "chunks",
+        "embeddings",
+        "relations",
+        "membership",
+        "decisions",
+        "audit",
+    )
+    mutation = re.compile(
+        r"(?is)\b(insert\s+into|update|delete\s+from)\s+"
+        rf"(?:public\.)?({'|'.join(object_identity_tables)})\b"
+    )
+    observed: Counter[tuple[str, str | None, str, str]] = Counter()
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        for statement in _resolver(path).sql_statements():
+            matches = list(mutation.finditer(statement.text))
+            for index, match in enumerate(matches):
+                next_mutation = (
+                    matches[index + 1].start()
+                    if index + 1 < len(matches)
+                    else len(statement.text)
+                )
+                semicolon = statement.text.find(";", match.end())
+                boundary = (
+                    min(semicolon, next_mutation)
+                    if semicolon >= 0
+                    else next_mutation
+                )
+                mutation_text = statement.text[match.start() : boundary]
+                if "vault_binding_id" in mutation_text.lower():
+                    continue
+                observed[
+                    (
+                        path.relative_to(REPO_ROOT).as_posix(),
+                        statement.function,
+                        " ".join(match.group(1).lower().split()),
+                        match.group(2).lower(),
+                    )
+                ] += 1
+
+    expected = Counter(
+        {
+            (
+                "tests/integration/test_single_vault_compatibility.py",
+                "test_file_state_rekey_preserves_single_vault_sync",
+                "insert into",
+                "store_objects",
+            ): 1,
+            (
+                "tests/integration/test_single_vault_compatibility.py",
+                "test_objects_rekey_preserves_single_vault_behaviour",
+                "insert into",
+                "store_objects",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_keyed_fks_preserve_actions_and_nullable_receipt_provenance",
+                "insert into",
+                "store_objects",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_keyed_fks_preserve_actions_and_nullable_receipt_provenance",
+                "insert into",
+                "decisions",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_keyed_fks_preserve_actions_and_nullable_receipt_provenance",
+                "insert into",
+                "audit",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_legacy_objects_fk_migration_backfills_existing_parents",
+                "insert into",
+                "decisions",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_active_decision_writer_preflights_before_receipt_on_pre_cutover_schema",
+                "insert into",
+                "store_objects",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_decisions_projection_rebuild_rejects_legacy_parent_before_truncate",
+                "insert into",
+                "decisions",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_migration_rejects_cross_key_canonical_identity_collision",
+                "insert into",
+                "store_objects",
+            ): 1,
+            **{
+                (
+                    "tests/migrations/test_legacy_objects_fk_migration.py",
+                    "test_migration_retargets_every_reviewed_consumer_with_live_rows",
+                    "insert into",
+                    table,
+                ): 1
+                for table in (
+                    "chunks",
+                    "embeddings",
+                    "relations",
+                    "membership",
+                    "decisions",
+                    "audit",
+                )
+            },
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_backfill_is_parent_provable_or_fails_before_conversion",
+                "insert into",
+                "store_objects",
+            ): 3,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_backfill_is_parent_provable_or_fails_before_conversion",
+                "insert into",
+                "store_relations",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_backfill_is_parent_provable_or_fails_before_conversion",
+                "insert into",
+                "vector_index_meta",
+            ): 1,
+        }
+    )
+    assert observed == expected, (
+        "every current-shape object-identity fixture mutation must name vault_binding_id; "
+        f"unbound fixture delta: added={observed - expected}, removed={expected - observed}"
+    )
+
+
 def test_no_executed_sql_statement_is_invisible_to_the_scan() -> None:
     """No SQL call under ``app/**`` resolves to nothing at all.
 
