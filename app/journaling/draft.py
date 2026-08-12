@@ -98,6 +98,8 @@ class SourceIdentity:
     def __post_init__(self) -> None:
         if not self.external_id.strip():
             raise ValueError("journal source identity requires a non-empty external_id")
+        if self.external_id != self.external_id.strip():
+            raise ValueError("journal source identity external_id must be canonical")
         if self.occurrence <= 0:
             raise ValueError("journal source identity occurrence must be positive")
 
@@ -237,8 +239,8 @@ def draft_journal_entry(
             for session in sessions
         ) + tuple(
             SourceRef(
-                artifact_id=item.provenance_ref,
-                note_path=_reference_path(item.provenance_ref),
+                artifact_id=identity.external_id,
+                note_path=_reference_path(identity.external_id),
                 role="system_context",
                 review_state=_review_state_value(review_states[identity]),
             )
@@ -641,7 +643,7 @@ def _source_review_states(
         for session, identity in zip(sessions, session_identities, strict=True)
     }
     for item, identity in zip(context_items, context_identities, strict=True):
-        path = vault_root / _reference_path(item.provenance_ref)
+        path = vault_root / _reference_path(identity.external_id)
         state: ReviewState | None = None
         if path.suffix.lower() == ".md":
             frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
@@ -658,6 +660,11 @@ def _source_identities(
 
     def occurrence(source_kind: SourceKind, external_id: str) -> SourceIdentity:
         normalized_id = external_id.strip()
+        if external_id != normalized_id:
+            raise UnresolvableJournalCitationError(
+                "journal source identity contains surrounding whitespace: "
+                f"{external_id!r}"
+            )
         key = (source_kind, normalized_id)
         counts[key] = counts.get(key, 0) + 1
         return SourceIdentity(source_kind, normalized_id, counts[key])

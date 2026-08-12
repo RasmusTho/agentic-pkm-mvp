@@ -717,7 +717,10 @@ def _colliding_session_and_context(
     session.write_text(
         session.read_text(encoding="utf-8")
         .replace(f"session_id: {original_session_id}", "session_id: collision.md")
-        .replace("type: chat-session", f"type: chat-session\nreview_state: {transcript_review_state}"),
+        .replace(
+            "type: chat-session",
+            f"type: chat-session\nreview_state: {transcript_review_state}",
+        ),
         encoding="utf-8",
     )
     colliding_context = root / "session:collision.md"
@@ -817,6 +820,51 @@ def test_every_source_occurrence_independently_admitted(tmp_path: Path) -> None:
         "conversation",
         "system_context",
     ]
+
+
+def test_noncanonical_source_reference_blocks_before_admission(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    rejected = root / "source.md"
+    rejected.write_text("---\nreview_state: rejected\n---\nrejected\n", encoding="utf-8")
+    aliased = root / " source.md"
+    aliased.write_text("---\nreview_state: accepted\n---\naccepted\n", encoding="utf-8")
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    sections = dict(bundle.sections)
+    sections["captures"] = sections["captures"].model_copy(
+        update={
+            "items": (
+                DayContextItem(
+                    provenance_ref=" source.md",
+                    content={"summary": "ambiguous whitespace alias"},
+                ),
+            )
+        }
+    )
+    cognition_called = False
+
+    def forbidden_cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(
+        UnresolvableJournalCitationError,
+        match="source identity contains surrounding whitespace",
+    ):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle.model_copy(update={"sections": sections}),
+            write_guard=_allowing_guard(),
+            reasoning_fn=forbidden_cognition,
+        )
+
+    assert cognition_called is False
+    assert not list(root.glob("**/drafts/journal/*.md"))
 
 
 def test_activation_receipt_resolves_after_restart(tmp_path: Path) -> None:
