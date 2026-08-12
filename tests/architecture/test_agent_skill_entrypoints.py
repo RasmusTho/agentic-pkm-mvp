@@ -374,7 +374,13 @@ def test_independent_fast_lane_has_no_routine_worker_coordination() -> None:
     runner = _read("companion-ui/prompts/codex/deliver-epic-autonomous-runner.md")
     for surface in (skill, runner):
         assert "Routine worker-to-worker coordination is prohibited" in surface or "Workers do not message one another routinely" in surface
-        assert "typed coordinator exception" in surface
+        normalized = " ".join(surface.split())
+        assert (
+            "Discovered overlap raises `EpicDispatchError` and rejects the whole "
+            "explicit set before dispatch; it never partially admits or pauses issues."
+            in normalized
+        )
+        assert "typed coordinator exception" not in surface
         assert "two workers" in surface
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 import threading
@@ -753,14 +754,153 @@ def test_cli_rejects_epic_mismatch_before_writing(tmp_path: Path) -> None:
 
 
 def test_fast_lane_state_never_becomes_delivery_authority(tmp_path: Path) -> None:
-    state = new_independent_issue_run_state([4164, 4165], "fast-lane-state")
-    assert state["epic_issue_number"] is None
-    assert state["independent_issue_numbers"] == [4164, 4165]
-    assert "parent_closure" not in state
-    assert "github_mutations" not in state
+    candidates_file = tmp_path / "candidates.json"
+    candidates = []
+    for issue_number, touched_file in ((4164, "app/a.py"), (4165, "app/b.py")):
+        candidates.append(
+            {
+                "issue_number": issue_number,
+                "title": f"independent child {issue_number}",
+                "url": f"https://example.test/issues/{issue_number}",
+                "state": "OPEN",
+                "labels": ["agent:ready", "type:task"],
+                "project_status": "Ready",
+                "risk": "high",
+                "expected_value": "medium",
+                "runtime_hint": None,
+                "likely_touched_files": [touched_file],
+                "validation_resources": [],
+                "owner_docs": ["docs/development/BUILDER_SUBAGENT_ROLES.md"],
+                "owner_doc_writeback_required": False,
+                "dependencies": [],
+                "dependencies_satisfied": False,
+                "dependencies_known": True,
+                "strict_ready": True,
+                "authority_ambiguous": False,
+                "has_migration": False,
+                "contract_surfaces": [],
+                "source_anchors": [f"#{issue_number}"],
+                "known_constraints": ["run-state remains evidence-only"],
+                "validation": ["pytest -q tests/builderops/test_epic_run_state.py"],
+                "issue_local_helper_budget": 0,
+                "issue_local_helper_rationale": None,
+            }
+        )
+    candidates_file.write_text(json.dumps({"candidates": candidates}), encoding="utf-8")
 
-    create_epic_run_state(3229, "separate-epic", root=tmp_path)
-    assert epic_run_state_path("separate-epic", root=tmp_path).exists()
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "dispatch-plan",
+            "--independent-issue",
+            "4164",
+            "--independent-issue",
+            "4165",
+            "--run-id",
+            "fast-lane-state",
+            "--root",
+            str(tmp_path),
+            "--candidates-file",
+            str(candidates_file),
+            "--json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["scope"] == {
+        "kind": "independent_issue_set",
+        "issue_numbers": [4164, 4165],
+        "parent_closure": "prohibited-without-real-governed-parent",
+    }
+    assert plan["github_mutations"] == []
+    assert plan["agent_spawns"] == []
+    assert not epic_run_state_path("fast-lane-state", root=tmp_path).exists()
+
+
+def test_no_unlocked_run_state_writer_in_app() -> None:
+    defining_module = REPO_ROOT / "app/builderops/epic_run_state.py"
+    violations: list[str] = []
+    for source_path in sorted((REPO_ROOT / "app").rglob("*.py")):
+        if source_path == defining_module:
+            continue
+        for line_number, line in enumerate(
+            source_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if "save_epic_run_state" in line:
+                violations.append(f"{source_path.relative_to(REPO_ROOT)}:{line_number}")
+
+    assert violations == []
+
+
+def test_all_app_run_state_update_callers_supply_locked_owner_expectation() -> None:
+    defining_module = REPO_ROOT / "app/builderops/epic_run_state.py"
+    violations: list[str] = []
+    for source_path in sorted((REPO_ROOT / "app").rglob("*.py")):
+        if source_path == defining_module:
+            continue
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function_name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else None
+            )
+            if function_name != "update_epic_run_state":
+                continue
+            keyword_names = {keyword.arg for keyword in node.keywords}
+            if not {
+                "expected_epic_issue_number",
+                "expected_independent_issue_numbers",
+            }.intersection(keyword_names):
+                violations.append(f"{source_path.relative_to(REPO_ROOT)}:{node.lineno}")
+
+    assert violations == []
+
+
+def test_run_owner_is_rechecked_inside_the_update_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "owner-recheck"
+    create_epic_run_state(
+        3229,
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "queued"}],
+    )
+    monkeypatch.setattr(
+        builderops_cli,
+        "load_epic_run_state",
+        lambda *_args, **_kwargs: new_epic_run_state(3230, run_id),
+    )
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "record",
+            "--epic-issue-number",
+            "3230",
+            "--run-id",
+            run_id,
+            "--root",
+            str(tmp_path),
+            "--update-json",
+            json.dumps(
+                {"child_queue": [{"issue_number": 9999, "state": "must-not-write"}]}
+            ),
+            "--json",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "already belongs to epic 3229" in result.output
+    persisted = load_epic_run_state(run_id, root=tmp_path)
+    assert persisted["epic_issue_number"] == 3229
+    assert persisted["child_queue"] == [{"issue_number": 3247, "state": "queued"}]
 
 
 def _record_run_state(

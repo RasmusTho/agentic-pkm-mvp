@@ -69,8 +69,9 @@ still run as fresh issue agents in a serial queue. Each worker gets exactly one 
 worktree, branch, PR, `Verify:` ledger, known constraints, helper budget (`0` or `1`), and compact
 terminal receipt. Helper budget `1` also requires an explicit bounded complexity/TCD rationale.
 Routine worker-to-worker coordination is prohibited: a dependency, shared mutation
-surface, migration, contract overlap, or authority ambiguity is a typed coordinator exception that
-pauses or rejects only the affected wave. The plan and any run-state are evidence-only and
+surface, migration, contract overlap, or authority ambiguity fails admission. Discovered overlap
+raises `EpicDispatchError` and rejects the whole explicit set before dispatch; it never partially
+admits or pauses issues. The coordinator may recompute a later wave from live authority. The plan and any run-state are evidence-only and
 rebuildable from live Issue, dispatcher, PR, CI, review, merge, and closure authority; they never
 authorize effects or parent closure.
 

@@ -248,19 +248,75 @@ def update_epic_run_state(
     *,
     root: Path | str | None = None,
     updater: Callable[[dict[str, Any]], Mapping[str, Any]] | None = None,
+    expected_epic_issue_number: int | None = None,
+    expected_independent_issue_numbers: list[int] | None = None,
     **updates: Any,
 ) -> dict[str, Any]:
     """Load, update, persist, and return a local epic run-state file."""
 
     path = epic_run_state_path(run_id, root=root)
+    expected_owner = _normalize_expected_run_owner(
+        expected_epic_issue_number=expected_epic_issue_number,
+        expected_independent_issue_numbers=expected_independent_issue_numbers,
+    )
     with _locked_run_state(path):
         state = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
+        _assert_expected_run_owner(state, run_id=run_id, expected_owner=expected_owner)
         if updater is not None:
             state = normalize_epic_run_state(updater(_json_clone(state)))
         if updates:
             state = apply_epic_run_update(state, **updates)
+        _assert_expected_run_owner(state, run_id=run_id, expected_owner=expected_owner)
         save_epic_run_state(state, root=root)
         return state
+
+
+def _normalize_expected_run_owner(
+    *,
+    expected_epic_issue_number: int | None,
+    expected_independent_issue_numbers: list[int] | None,
+) -> tuple[int | None, list[int]] | None:
+    if (
+        expected_epic_issue_number is None
+        and expected_independent_issue_numbers is None
+    ):
+        return None
+    if (
+        expected_epic_issue_number is not None
+        and expected_independent_issue_numbers is not None
+    ):
+        raise EpicRunStateError(
+            "expected run owner must be an epic or independent issue set, not both"
+        )
+    if expected_epic_issue_number is not None:
+        return (_normalize_epic_issue_number(expected_epic_issue_number), [])
+    return (
+        None,
+        _normalize_independent_issue_numbers(expected_independent_issue_numbers),
+    )
+
+
+def _assert_expected_run_owner(
+    state: Mapping[str, Any],
+    *,
+    run_id: str,
+    expected_owner: tuple[int | None, list[int]] | None,
+) -> None:
+    if expected_owner is None:
+        return
+    actual_owner = (
+        state["epic_issue_number"],
+        state.get("independent_issue_numbers", []),
+    )
+    if actual_owner == expected_owner:
+        return
+    if actual_owner[0] is not None:
+        owner_description = f"epic {actual_owner[0]}"
+    else:
+        owner_description = f"independent issues {actual_owner[1]}"
+    raise EpicRunStateError(
+        f"run_id {run_id!r} already belongs to {owner_description}"
+    )
 
 
 def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str, Any]:

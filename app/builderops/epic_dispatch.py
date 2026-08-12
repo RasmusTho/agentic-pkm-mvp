@@ -1015,6 +1015,9 @@ def _validate_independent_fast_lane_admission(
     by_number = {candidate["issue_number"]: candidate for candidate in candidates}
     if (
         len(candidates) != len(independent_issue_numbers)
+        # Defense-in-depth: scope normalization and the length/set checks make
+        # duplicate candidate numbers unreachable today. Keep this explicit so
+        # future admission refactors cannot silently collapse duplicates here.
         or len(by_number) != len(candidates)
         or set(by_number) != set(independent_issue_numbers)
     ):

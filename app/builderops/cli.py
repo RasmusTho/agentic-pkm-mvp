@@ -2324,7 +2324,15 @@ def record_epic_run_state(
                     f"{existing_state['epic_issue_number']}"
                 )
             state = (
-                update_epic_run_state(run_id, root=root, **updates)
+                update_epic_run_state(
+                    run_id,
+                    root=root,
+                    expected_epic_issue_number=epic_issue_number,
+                    expected_independent_issue_numbers=(
+                        list(independent_issues) if independent_issues else None
+                    ),
+                    **updates,
+                )
                 if updates
                 else existing_state
             )
@@ -2695,6 +2703,7 @@ def record_ci_handoff(
                 state = update_epic_run_state(
                     run_id,
                     root=root,
+                    expected_epic_issue_number=epic_issue_number,
                     ci_handoffs=[handoff],
                 )
             else:
