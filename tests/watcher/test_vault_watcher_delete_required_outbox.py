@@ -272,6 +272,67 @@ def test_recreated_path_clears_an_old_delete_retry(
     assert first_new_delete["unreconciled_deletions_terminated"] == 0
 
 
+def test_terminal_delete_does_not_restart_after_limit_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The max-notes branch advances the terminal observation too."""
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _tick(vault, snapshot_path)
+    time.sleep(0.01)
+    note.unlink()
+
+    for _ in range(2):
+        _tick(vault, snapshot_path)
+
+    # Force the third observation through the early limit-exceeded exit.
+    extra = vault / "Concepts" / "extra.md"
+    extra.write_text("changed", encoding="utf-8")
+    terminal, _ = vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=0,
+        force=False,
+    )
+    assert terminal["unreconciled_deletions_terminated"] == 1
+
+    next_tick, _ = _tick(vault, snapshot_path)
+    assert next_tick["deleted"] == 0
+    assert next_tick["unreconciled_deletions_terminated"] == 0
+
+
+def test_terminal_report_recovers_after_receipt_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snapshot then receipt crash leaves a recoverable terminal report."""
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    _tick(vault, snapshot_path)
+    time.sleep(0.01)
+    note.unlink()
+    _tick(vault, snapshot_path)
+    _tick(vault, snapshot_path)
+
+    monkeypatch.setattr(vault_watcher, "_emit_run_event", lambda *a, **_: (_ for _ in ()).throw(RuntimeError("crash")))
+    with pytest.raises(RuntimeError, match="crash"):
+        _tick(vault, snapshot_path)
+
+    monkeypatch.undo()
+    recovered, messages = _tick(vault, snapshot_path)
+    assert recovered["deleted"] == 0
+    assert recovered["unreconciled_deletions_terminated"] == 1
+    assert any("recovered terminal report" in message for message in messages)
+
+
 def test_rename_supersedes_the_tombstone(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
