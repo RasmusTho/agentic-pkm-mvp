@@ -99,6 +99,20 @@ def upgrade() -> None:
           IF membership_fk.conname IS NULL THEN
             RAISE EXCEPTION USING MESSAGE='MVR-05A4 membership.set_id FK missing';
           END IF;
+          -- set_id is intentionally branch-specific: fresh membership points
+          -- to sets(id); the historical post-MVR-05A3 endpoint is composite
+          -- store_objects(binding, object_id).  Anything else is not guessed.
+          IF membership_columns = ARRAY['id']::text[] THEN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint c
+              WHERE c.conname=membership_fk.conname AND c.confrelid='public.sets'::regclass
+                AND cardinality(c.conkey)=1 AND cardinality(c.confkey)=1) THEN
+              RAISE EXCEPTION USING MESSAGE='MVR-05A4 unsupported fresh membership.set_id FK';
+            END IF;
+          ELSIF NOT EXISTS (SELECT 1 FROM pg_constraint c
+              WHERE c.conname=membership_fk.conname AND c.confrelid='public.store_objects'::regclass
+                AND cardinality(c.conkey)=2 AND cardinality(c.confkey)=2) THEN
+            RAISE EXCEPTION USING MESSAGE='MVR-05A4 unsupported historical membership set endpoint';
+          END IF;
 
           -- No re-attribution: MVR-05A3 must already have supplied every key.
           SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad

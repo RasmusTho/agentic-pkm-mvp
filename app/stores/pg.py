@@ -228,7 +228,7 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             """
             CREATE TABLE IF NOT EXISTS relations (
-                id UUID NOT NULL,
+                id UUID PRIMARY KEY,
                 src_id UUID NOT NULL,
                 dst_id UUID NOT NULL,
                 type TEXT NOT NULL,
@@ -255,7 +255,7 @@ _MIGRATION_OWNED_AUTOCREATE_SQL: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             """
             CREATE TABLE IF NOT EXISTS sets (
-                id UUID PRIMARY KEY,
+                id UUID NOT NULL,
                 name TEXT UNIQUE NOT NULL,
                 meta JSONB NOT NULL DEFAULT '{}'::jsonb
             )
