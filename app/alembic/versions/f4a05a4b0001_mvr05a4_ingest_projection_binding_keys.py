@@ -74,11 +74,19 @@ def upgrade() -> None:
           END IF;
           SELECT string_agg(conname, ', ' ORDER BY conname) INTO bad
             FROM pg_constraint c
+            JOIN pg_class child ON child.oid=c.conrelid
+            JOIN pg_namespace child_ns ON child_ns.oid=child.relnamespace
            WHERE c.contype='f' AND c.confrelid='public.chunks'::regclass
-             AND c.conname <> chunk_fk.conname;
+             AND (child_ns.nspname <> 'public' OR child.relname <> 'embeddings'
+                  OR c.conname <> chunk_fk.conname
+                  OR cardinality(c.conkey) <> 1 OR cardinality(c.confkey) <> 1);
           IF bad IS NOT NULL THEN
             RAISE EXCEPTION USING MESSAGE = format('MVR-05A4 unknown chunks inbound FK(s): %s', bad),
               HINT = 'Inventory the consumer before retrying.';
+          END IF;
+          IF (SELECT count(*) FROM pg_constraint c
+               WHERE c.contype='f' AND c.confrelid='public.chunks'::regclass) <> 1 THEN
+            RAISE EXCEPTION USING MESSAGE='MVR-05A4 chunks inbound FK census is not exactly one';
           END IF;
           SELECT string_agg(conname, ', ' ORDER BY conname) INTO bad
             FROM pg_constraint c
@@ -143,6 +151,23 @@ def upgrade() -> None:
                          chunk_fk.conname, match_clause, update_action, delete_action, deferrable_clause);
           CREATE INDEX IF NOT EXISTS embeddings_chunk_binding_idx
             ON public.embeddings (vault_binding_id, chunk_id);
+          -- Retained derived views are reads too: every join carries the same
+          -- binding, so a duplicate UUID in B cannot satisfy a row in A.
+          CREATE OR REPLACE VIEW public.view_chunks_missing_embeddings AS
+            SELECT c.vault_binding_id, c.object_id::text AS object_id,
+                   count(*) AS chunk_count
+              FROM public.chunks c
+             WHERE NOT EXISTS (SELECT 1 FROM public.embeddings e
+                WHERE e.vault_binding_id=c.vault_binding_id AND e.chunk_id=c.id)
+             GROUP BY c.vault_binding_id, c.object_id;
+          CREATE OR REPLACE VIEW public.view_objects_ready_for_projection AS
+            SELECT d.vault_binding_id, d.object_id::text AS object_id,
+                   coalesce(d.value->>'type','') AS type,
+                   coalesce(d.value->>'trust','') AS trust, d.created_at
+              FROM public.decisions d
+             WHERE d.key='classification' AND coalesce(d.value->>'type','') <> ''
+               AND NOT EXISTS (SELECT 1 FROM public.membership m
+                 WHERE m.vault_binding_id=d.vault_binding_id AND m.object_id=d.object_id);
         END $mvr05a4$;
         """
     )
