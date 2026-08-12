@@ -142,8 +142,9 @@ before exposing owner language.
 - **INV-DDO-4 — no synthetic epic.** An exact explicit issue set is valid scope. Parent closure is
   attempted only when a real governed parent relationship and its acceptance contract exist.
 - **INV-DDO-5 — independence eliminates coordination.** Independent workers exchange no messages.
-  A discovered overlap emits a typed exception and recomputes the wave; it does not start informal
-  cross-worker coordination.
+  In epic scope, a discovered overlap emits a typed coordinator exception and recomputes the wave.
+  The explicit independent fast lane instead rejects the whole set before dispatch and may recompute
+  a later set from live authority. Neither mode starts informal cross-worker coordination.
 - **INV-DDO-6 — effects are idempotent and fenced.** Every external effect has a stable identity,
   expected-state guard, read-before-write check, durable worker/run correlation, and reconciliation
   path. Duplicate delivery events produce one logical effect. Every non-start causal event must

@@ -244,6 +244,26 @@ def test_codex_and_claude_use_same_minimal_context_pack_schema() -> None:
     )
 
 
+def test_context_pack_overlap_policy_matches_dispatch_scope() -> None:
+    epic_plan = build_dispatch_plan(
+        epic_issue_number=3229,
+        run_id="run-epic-overlap-policy",
+        candidates=[_candidate(3001, risk="high", files=["app/a.py"])],
+    )
+    independent_plan = build_dispatch_plan(
+        independent_issue_numbers=[3002],
+        run_id="run-independent-overlap-policy",
+        candidates=[_candidate(3002, risk="high", files=["app/b.py"])],
+    )
+
+    assert epic_plan["context_packs"][0]["coordination"]["discovered_overlap"] == (
+        "typed-coordinator-exception"
+    )
+    assert independent_plan["context_packs"][0]["coordination"]["discovered_overlap"] == (
+        "reject-whole-explicit-set-before-dispatch"
+    )
+
+
 def test_context_pack_carries_bounded_issue_local_helper_budget() -> None:
     plan = build_dispatch_plan(
         epic_issue_number=3229,
