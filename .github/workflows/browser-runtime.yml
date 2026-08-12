@@ -25,12 +25,6 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       COMPANION_UI_BROWSER_TESTS: "1"
-      DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview
-      DEVUI_OVERVIEW_JUNIT: ${{ runner.temp }}/devui-overview/junit.xml
-      DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/devui-overview-browser-accessibility.v1.json
-      DEVUI_OVERVIEW_TRACE_DIR: ${{ runner.temp }}/devui-overview/traces
-      DEVUI_OVERVIEW_SCREENSHOT_DIR: ${{ runner.temp }}/devui-overview/screenshots
-      DEVUI_OVERVIEW_MANIFEST: ${{ runner.temp }}/devui-overview/manifest.json
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,6 +52,12 @@ jobs:
       - name: Run exact-ref Overview browser journeys
         id: overview-journeys
         if: github.event_name == 'workflow_dispatch'
+        env:
+          DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview
+          DEVUI_OVERVIEW_JUNIT: ${{ runner.temp }}/devui-overview/junit.xml
+          DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/devui-overview-browser-accessibility.v1.json
+          DEVUI_OVERVIEW_TRACE_DIR: ${{ runner.temp }}/devui-overview/traces
+          DEVUI_OVERVIEW_SCREENSHOT_DIR: ${{ runner.temp }}/devui-overview/screenshots
         run: |
           set -euo pipefail
           mkdir -p \
@@ -124,6 +124,12 @@ jobs:
       - name: Build exact-SHA Overview evidence manifest
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         env:
+          DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview
+          DEVUI_OVERVIEW_JUNIT: ${{ runner.temp }}/devui-overview/junit.xml
+          DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/devui-overview-browser-accessibility.v1.json
+          DEVUI_OVERVIEW_TRACE_DIR: ${{ runner.temp }}/devui-overview/traces
+          DEVUI_OVERVIEW_SCREENSHOT_DIR: ${{ runner.temp }}/devui-overview/screenshots
+          DEVUI_OVERVIEW_MANIFEST: ${{ runner.temp }}/devui-overview/manifest.json
           DEVUI_OVERVIEW_JOURNEY_OUTCOME: ${{ steps.overview-journeys.outcome }}
         run: |
           set -euo pipefail
@@ -135,8 +141,51 @@ jobs:
           import json
           import os
           from pathlib import Path
+          import re
           import subprocess
           import xml.etree.ElementTree as ET
+
+          RECEIPT_CONTRACT = "devui-overview-browser-accessibility.v1"
+          RECEIPT_TEST_MODULE = (
+              "tests/companion_ui/test_devui_overview_journeys.py"
+          )
+          RECEIPT_FIXTURE_KEYS = {
+              "connected-overview-focus",
+              "hostile-source-state-matrix",
+          }
+          RECEIPT_TOKEN_SHA256 = (
+              "7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1"
+          )
+          RECEIPT_ACCESSIBILITY_CHECKS = {
+              "desktop",
+              "narrow",
+              "zoom-200",
+              "keyboard",
+              "screen-reader-name-focus-order",
+              "print",
+              "javascript-off",
+          }
+          RECEIPT_KEYS = {
+              "contract_version",
+              "github_sha",
+              "test_module",
+              "fixture_versions",
+              "token_sha256",
+              "screenshots",
+              "accessibility_results",
+              "failures",
+              "unresolved_visual_questions",
+          }
+
+          def nonempty_string(value: object) -> bool:
+              return isinstance(value, str) and bool(value.strip())
+
+          def string_list(value: object, *, allow_empty: bool) -> bool:
+              return (
+                  isinstance(value, list)
+                  and (allow_empty or bool(value))
+                  and all(nonempty_string(item) for item in value)
+              )
 
           evidence_dir = Path(os.environ["DEVUI_OVERVIEW_EVIDENCE_DIR"])
           junit_path = Path(os.environ["DEVUI_OVERVIEW_JUNIT"])
@@ -162,14 +211,107 @@ jobs:
               for path in screenshot_dir.rglob("*")
               if path.is_file() and path.stat().st_size > 0
           )
-          receipt_valid = False
+          screenshot_paths = [
+              path.relative_to(evidence_dir).as_posix() for path in screenshots
+          ]
+          receipt = None
+          receipt_errors = []
           if receipt_path.is_file() and receipt_path.stat().st_size > 0:
               try:
-                  receipt_valid = isinstance(
-                      json.loads(receipt_path.read_text(encoding="utf-8")), dict
-                  )
+                  candidate = json.loads(receipt_path.read_text(encoding="utf-8"))
               except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                  receipt_valid = False
+                  receipt_errors.append("receipt is not valid UTF-8 JSON")
+              else:
+                  if not isinstance(candidate, dict):
+                      receipt_errors.append("receipt must be a JSON object")
+                  else:
+                      missing_keys = sorted(RECEIPT_KEYS - set(candidate))
+                      unexpected_keys = sorted(set(candidate) - RECEIPT_KEYS)
+                      if missing_keys:
+                          receipt_errors.append(
+                              "missing keys=" + ",".join(missing_keys)
+                          )
+                      if unexpected_keys:
+                          receipt_errors.append(
+                              "unexpected keys=" + ",".join(unexpected_keys)
+                          )
+                      if candidate.get("contract_version") != RECEIPT_CONTRACT:
+                          receipt_errors.append("contract_version mismatch")
+                      if candidate.get("github_sha") != github_sha:
+                          receipt_errors.append("github_sha mismatch")
+                      if candidate.get("test_module") != RECEIPT_TEST_MODULE:
+                          receipt_errors.append("test_module mismatch")
+
+                      fixture_versions = candidate.get("fixture_versions")
+                      if not (
+                          isinstance(fixture_versions, dict)
+                          and set(fixture_versions) == RECEIPT_FIXTURE_KEYS
+                          and all(
+                              nonempty_string(key) and nonempty_string(value)
+                              for key, value in fixture_versions.items()
+                          )
+                      ):
+                          receipt_errors.append(
+                              "fixture_versions must name the exact required fixtures"
+                          )
+
+                      token_sha256 = candidate.get("token_sha256")
+                      if (
+                          not isinstance(token_sha256, str)
+                          or not re.fullmatch(r"[0-9a-f]{64}", token_sha256)
+                          or token_sha256 != RECEIPT_TOKEN_SHA256
+                      ):
+                          receipt_errors.append(
+                              "token_sha256 must match the binding token source"
+                          )
+
+                      declared_screenshots = candidate.get("screenshots")
+                      if not string_list(declared_screenshots, allow_empty=False):
+                          receipt_errors.append(
+                              "screenshots must be a nonempty string list"
+                          )
+                      elif (
+                          len(set(declared_screenshots)) != len(declared_screenshots)
+                          or sorted(declared_screenshots) != screenshot_paths
+                      ):
+                          receipt_errors.append(
+                              "screenshots do not match archived evidence"
+                          )
+
+                      accessibility = candidate.get("accessibility_results")
+                      if not (
+                          isinstance(accessibility, dict)
+                          and set(accessibility) == {"status", "checks"}
+                          and accessibility.get("status") == "passed"
+                          and string_list(accessibility.get("checks"), allow_empty=False)
+                          and set(accessibility["checks"])
+                          == RECEIPT_ACCESSIBILITY_CHECKS
+                          and len(accessibility["checks"])
+                          == len(RECEIPT_ACCESSIBILITY_CHECKS)
+                      ):
+                          receipt_errors.append(
+                              "accessibility_results must contain passed status "
+                              "and the exact required checks"
+                          )
+
+                      failures = candidate.get("failures")
+                      if not string_list(failures, allow_empty=True):
+                          receipt_errors.append("failures must be a string list")
+                      elif failures:
+                          receipt_errors.append(
+                              "failures must be empty for successful evidence"
+                          )
+
+                      unresolved = candidate.get("unresolved_visual_questions")
+                      if not string_list(unresolved, allow_empty=True):
+                          receipt_errors.append(
+                              "unresolved_visual_questions must be a string list"
+                          )
+
+                      if not receipt_errors:
+                          receipt = candidate
+          else:
+              receipt_errors.append("receipt file is missing or empty")
 
           files = [
               path
@@ -180,6 +322,7 @@ jobs:
           files.extend(screenshots)
 
           junit_summary = None
+          junit_valid = False
           if junit_path.is_file():
               root = ET.parse(junit_path).getroot()
               suites = (
@@ -191,11 +334,17 @@ jobs:
                   key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
                   for key in ("tests", "failures", "errors", "skipped")
               }
+              junit_valid = (
+                  junit_summary["tests"] > 0
+                  and junit_summary["failures"] == 0
+                  and junit_summary["errors"] == 0
+                  and junit_summary["skipped"] == 0
+              )
 
           missing = []
-          if not junit_path.is_file():
+          if not junit_valid:
               missing.append("junit")
-          if not receipt_valid:
+          if receipt_errors:
               missing.append("receipt")
           if not traces:
               missing.append("trace")
@@ -209,6 +358,8 @@ jobs:
               "github_sha": github_sha,
               "journey_outcome": os.environ["DEVUI_OVERVIEW_JOURNEY_OUTCOME"],
               "junit": junit_summary,
+              "receipt": receipt,
+              "receipt_validation_errors": receipt_errors,
               "missing_evidence": missing,
               "files": [
                   {
@@ -226,6 +377,11 @@ jobs:
           if checkout_sha != github_sha:
               raise SystemExit(
                   f"exact-ref mismatch: checkout={checkout_sha} github={github_sha}"
+              )
+          if payload["journey_outcome"] == "success" and receipt_errors:
+              raise SystemExit(
+                  "successful Overview journeys have invalid receipt: "
+                  + "; ".join(receipt_errors)
               )
           if payload["journey_outcome"] == "success" and missing:
               raise SystemExit(

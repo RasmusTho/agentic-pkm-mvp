@@ -37,9 +37,16 @@ def _workflow_step(workflow: str, name: str, next_name: str | None = None) -> st
 
 
 def _workflow_run(name: str) -> str:
+    return _browser_step(name)["run"]
+
+
+def _browser_job() -> dict:
     workflow = yaml.safe_load(_browser_text())
-    steps = workflow["jobs"]["companion-ui-browser-runtime"]["steps"]
-    return next(step["run"] for step in steps if step.get("name") == name)
+    return workflow["jobs"]["companion-ui-browser-runtime"]
+
+
+def _browser_step(name: str) -> dict:
+    return next(step for step in _browser_job()["steps"] if step.get("name") == name)
 
 
 def _python_heredoc(script: str) -> str:
@@ -269,6 +276,34 @@ def test_browser_runtime_supports_exact_ref_dispatch_without_pull_request_trigge
     assert "workflow_dispatch:" in triggers
     assert "pull_request:" not in triggers
     assert "ref: ${{ github.sha }}" in checkout
+
+    job = _browser_job()
+    job_without_steps = {key: value for key, value in job.items() if key != "steps"}
+    assert "${{ runner." not in json.dumps(job_without_steps), (
+        "runner context is unavailable while jobs.<job_id>.env is evaluated"
+    )
+    journey_env = _browser_step("Run exact-ref Overview browser journeys")["env"]
+    manifest_env = _browser_step("Build exact-SHA Overview evidence manifest")["env"]
+    expected_runner_temp_env = {
+        "DEVUI_OVERVIEW_EVIDENCE_DIR": "${{ runner.temp }}/devui-overview",
+        "DEVUI_OVERVIEW_JUNIT": "${{ runner.temp }}/devui-overview/junit.xml",
+        "DEVUI_OVERVIEW_RECEIPT": (
+            "${{ runner.temp }}/devui-overview/receipts/"
+            "devui-overview-browser-accessibility.v1.json"
+        ),
+        "DEVUI_OVERVIEW_TRACE_DIR": "${{ runner.temp }}/devui-overview/traces",
+        "DEVUI_OVERVIEW_SCREENSHOT_DIR": (
+            "${{ runner.temp }}/devui-overview/screenshots"
+        ),
+    }
+    assert journey_env == expected_runner_temp_env
+    assert manifest_env == expected_runner_temp_env | {
+        "DEVUI_OVERVIEW_MANIFEST": "${{ runner.temp }}/devui-overview/manifest.json",
+        "DEVUI_OVERVIEW_JOURNEY_OUTCOME": "${{ steps.overview-journeys.outcome }}",
+    }
+    assert "${{ runner.temp }}" in _browser_step(
+        "Upload exact-SHA Overview browser evidence"
+    )["with"]["path"]
     for existing_blocking_module in (
         "tests/companion_ui/test_runtime_unavailable_browser.py",
         "tests/companion_ui/test_overlay_history_browser.py",
@@ -332,21 +367,24 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
     )
     upload = _workflow_step(browser, "Upload exact-SHA Overview browser evidence")
 
-    assert "DEVUI_OVERVIEW_EVIDENCE_DIR: ${{ runner.temp }}/devui-overview" in browser
-    assert "DEVUI_OVERVIEW_JUNIT:" in browser
-    assert (
-        "DEVUI_OVERVIEW_RECEIPT: ${{ runner.temp }}/devui-overview/receipts/"
-        "devui-overview-browser-accessibility.v1.json"
-    ) in browser
-    assert "DEVUI_OVERVIEW_TRACE_DIR:" in browser
-    assert "DEVUI_OVERVIEW_SCREENSHOT_DIR:" in browser
-    assert "DEVUI_OVERVIEW_MANIFEST: ${{ runner.temp }}/devui-overview/manifest.json" in browser
     assert '["git", "rev-parse", "HEAD"]' in manifest
     assert "GITHUB_SHA" in manifest
     assert 'missing.append("junit")' in manifest
     assert 'missing.append("receipt")' in manifest
     assert "path.stat().st_size > 0" in manifest
     assert "json.loads(receipt_path.read_text" in manifest
+    for required_receipt_field in (
+        "contract_version",
+        "github_sha",
+        "test_module",
+        "fixture_versions",
+        "token_sha256",
+        "screenshots",
+        "accessibility_results",
+        "failures",
+        "unresolved_visual_questions",
+    ):
+        assert f'"{required_receipt_field}"' in manifest
     assert "trace" in manifest
     assert "screenshot" in manifest
     assert "name: devui-overview-browser-exact-${{ github.sha }}" in upload
@@ -364,7 +402,6 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
     junit_path = evidence_dir / "junit.xml"
     for parent in (receipt_path.parent, trace_path.parent, screenshot_path.parent):
         parent.mkdir(parents=True, exist_ok=True)
-    receipt_path.write_text('{"contract": "devui-overview-browser-accessibility.v1"}\n', encoding="utf-8")
     trace_path.write_bytes(b"trace")
     screenshot_path.write_bytes(b"screenshot")
     junit_path.write_text(
@@ -393,20 +430,58 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
     manifest_run = _workflow_run("Build exact-SHA Overview evidence manifest").replace(
         "python - <<'PY'", f'"{sys.executable}" - <<\'PY\'', 1
     )
-    result = subprocess.run(
-        ["bash", "-c", manifest_run],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+
+    valid_receipt = {
+        "contract_version": "devui-overview-browser-accessibility.v1",
+        "github_sha": head_sha,
+        "test_module": "tests/companion_ui/test_devui_overview_journeys.py",
+        "fixture_versions": {
+            "connected-overview-focus": "v1",
+            "hostile-source-state-matrix": "v1",
+        },
+        "token_sha256": (
+            "7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1"
+        ),
+        "screenshots": ["screenshots/overview.png"],
+        "accessibility_results": {
+            "status": "passed",
+            "checks": [
+                "desktop",
+                "narrow",
+                "zoom-200",
+                "keyboard",
+                "screen-reader-name-focus-order",
+                "print",
+                "javascript-off",
+            ],
+        },
+        "failures": [],
+        "unresolved_visual_questions": [],
+    }
+
+    def run_manifest(receipt: dict, *, run_env: dict | None = None):
+        receipt_path.write_text(
+            json.dumps(receipt, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            ["bash", "-c", manifest_run],
+            cwd=REPO_ROOT,
+            env=run_env or env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    result = run_manifest(valid_receipt)
     assert result.returncode == 0, result.stderr
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert payload["artifact_name"] == f"devui-overview-browser-exact-{head_sha}"
     assert payload["checkout_sha"] == head_sha
     assert payload["github_sha"] == head_sha
     assert payload["missing_evidence"] == []
+    assert payload["receipt_validation_errors"] == []
+    assert payload["receipt"] == valid_receipt
     assert {item["path"] for item in payload["files"]} == {
         "junit.xml",
         "receipts/devui-overview-browser-accessibility.v1.json",
@@ -414,28 +489,85 @@ def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(
         "traces/trace.zip",
     }
 
-    mismatch_result = subprocess.run(
-        ["bash", "-c", manifest_run],
-        cwd=REPO_ROOT,
-        env=env | {"GITHUB_SHA": "0" * 40},
-        text=True,
-        capture_output=True,
-        check=False,
+    invalid_receipts = (
+        ({}, "missing keys="),
+        (
+            valid_receipt | {"contract_version": "foreign-receipt.v1"},
+            "contract_version mismatch",
+        ),
+        (
+            valid_receipt | {"github_sha": "0" * 40},
+            "github_sha mismatch",
+        ),
+        (
+            valid_receipt | {"test_module": "tests/companion_ui/test_other.py"},
+            "test_module mismatch",
+        ),
+        (
+            valid_receipt | {"fixture_versions": {}},
+            "fixture_versions must name the exact required fixtures",
+        ),
+        (
+            valid_receipt | {"fixture_versions": {"foreign-fixture": "v1"}},
+            "fixture_versions must name the exact required fixtures",
+        ),
+        (
+            valid_receipt | {"token_sha256": "not-a-sha"},
+            "token_sha256 must match the binding token source",
+        ),
+        (
+            valid_receipt | {"token_sha256": "a" * 64},
+            "token_sha256 must match the binding token source",
+        ),
+        (
+            valid_receipt | {"screenshots": ["screenshots/foreign.png"]},
+            "screenshots do not match archived evidence",
+        ),
+        (
+            valid_receipt
+            | {
+                "accessibility_results": {
+                    "status": "failed",
+                    "checks": ["keyboard"],
+                }
+            },
+            "accessibility_results must contain passed status",
+        ),
+        (
+            valid_receipt
+            | {
+                "accessibility_results": {
+                    "status": "passed",
+                    "checks": ["keyboard"],
+                }
+            },
+            "accessibility_results must contain passed status",
+        ),
+        (
+            valid_receipt | {"failures": ["page error"]},
+            "failures must be empty for successful evidence",
+        ),
+        (
+            valid_receipt | {"unresolved_visual_questions": None},
+            "unresolved_visual_questions must be a string list",
+        ),
+    )
+    for invalid_receipt, expected_error in invalid_receipts:
+        invalid_result = run_manifest(invalid_receipt)
+        assert invalid_result.returncode != 0
+        assert expected_error in invalid_result.stderr
+
+    mismatch_result = run_manifest(
+        valid_receipt,
+        run_env=env | {"GITHUB_SHA": "0" * 40},
     )
     assert mismatch_result.returncode != 0
     assert "exact-ref mismatch" in mismatch_result.stderr
 
     screenshot_path.unlink()
-    missing_result = subprocess.run(
-        ["bash", "-c", manifest_run],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    missing_result = run_manifest(valid_receipt)
     assert missing_result.returncode != 0
-    assert "lack required evidence: screenshot" in missing_result.stderr
+    assert "screenshots do not match archived evidence" in missing_result.stderr
 
 
 def test_browser_runtime_exact_ref_contract_is_owner_documented() -> None:
@@ -449,6 +581,28 @@ def test_browser_runtime_exact_ref_contract_is_owner_documented() -> None:
     assert ".github/workflows/browser-runtime.yml" in strategy
     assert "${{ github.sha }}" in strategy
     assert "ordinary PR unit CI does not provide" in normalized_strategy
+    for receipt_contract_term in (
+        "devui-overview-browser-accessibility.v1",
+        "github_sha",
+        "test-module identity",
+        "fixture versions",
+        "token_sha256",
+        "screenshot list",
+        "Accessibility results",
+        "failures",
+        "unresolved visual questions",
+        "validated receipt",
+    ):
+        assert receipt_contract_term in normalized_strategy
+    for exact_receipt_identity in (
+        "connected-overview-focus",
+        "hostile-source-state-matrix",
+        "7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1",
+        "screen-reader name/focus order",
+        "JavaScript-off",
+    ):
+        assert exact_receipt_identity in normalized_strategy
+    assert "Runner-temporary paths are declared only at step scope" in normalized_strategy
 
 
 def test_legacy_smoke_workflow_is_retired_without_stale_references() -> None:

@@ -75,10 +75,21 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   `${{ github.sha }}`. The dispatch fails when
   `tests/companion_ui/test_devui_overview_journeys.py` is absent, collects zero tests, fails, or
   skips any required journey; a green run also requires its JUnit result, Overview browser receipt,
-  Playwright trace, screenshots, and hashed manifest in the exact-SHA artifact. The workflow retains
-  its push-to-`main` path and deliberately has no `pull_request` trigger. The ordinary PR unit CI
-  does not provide this browser proof. Neither a local screenshot nor a post-merge run substitutes
-  for the exact published #4836 candidate run.
+  Playwright trace, screenshots, and hashed manifest in the exact-SHA artifact. The receipt is the
+  exact `devui-overview-browser-accessibility.v1` object: no fields may be missing or added; its
+  `github_sha` and test-module identity must match the run, and fixture versions must name exactly
+  `connected-overview-focus` and `hostile-source-state-matrix`. `token_sha256` must equal the
+  accepted binding-token SHA-256
+  `7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1`, and the nonempty
+  screenshot list must exactly match the archived screenshots. Accessibility results must report
+  `passed` for exactly desktop, narrow, 200% zoom, keyboard, screen-reader name/focus order, print,
+  and JavaScript-off checks; `failures` must be an empty string list, and unresolved visual
+  questions must be a string list. The hashed manifest embeds that validated receipt and records the
+  receipt, JUnit, trace, and screenshot files consistently. Runner-temporary paths are declared only
+  at step scope, where the `runner` context is available for both push and dispatch evaluation. The
+  workflow retains its push-to-`main` path and deliberately has no `pull_request` trigger. The
+  ordinary PR unit CI does not provide this browser proof. Neither a local screenshot nor a
+  post-merge run substitutes for the exact published #4836 candidate run.
 
 ## Check Levels
 
