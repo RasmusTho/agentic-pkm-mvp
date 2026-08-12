@@ -25,7 +25,9 @@ Deliver useful coordination-cost reduction before the durable reducer and CKM br
   maximum-two-worker pilot budget before dispatch.
 - Updates `deliver-issue-set`, the autonomous runner prompt, and the existing dispatch/run-state
   helpers so workers receive one bounded issue and return one compact terminal receipt.
-- Forbids worker-to-worker messaging unless deterministic evidence invalidates independence.
+- Forbids worker-to-worker messaging. Discovered overlap raises `EpicDispatchError` and rejects the
+  whole explicit set before dispatch; it never partially admits or pauses issues. The coordinator
+  may recompute a later set from live authority.
 - Consumes the structured severity and known-defect contracts from PRs #4159 and #4161 when merged;
   it does not reimplement them.
 

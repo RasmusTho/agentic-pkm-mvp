@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
 import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-import json
 from pathlib import Path
+from typing import Callable
 
 import pytest
 from click.testing import CliRunner
@@ -907,52 +909,170 @@ def test_fast_lane_state_never_becomes_delivery_authority(tmp_path: Path) -> Non
     assert not epic_run_state_path("fast-lane-state", root=tmp_path).exists()
 
 
+_RUN_STATE_MODULE = "app.builderops.epic_run_state"
+_RUN_STATE_FUNCTIONS = frozenset(
+    {
+        "_locked_run_state",
+        "_save_epic_run_state_to_path",
+        "save_epic_run_state",
+        "update_epic_run_state",
+    }
+)
+
+
+def _dotted_expression_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_expression_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else None
+    return None
+
+
+def _run_state_call_resolver(
+    tree: ast.AST, *, defining_module: bool
+) -> Callable[[ast.Call], str | None]:
+    direct_bindings = (
+        {name: name for name in _RUN_STATE_FUNCTIONS} if defining_module else {}
+    )
+    module_bindings: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == _RUN_STATE_MODULE:
+            for alias in node.names:
+                if alias.name in _RUN_STATE_FUNCTIONS:
+                    direct_bindings[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module == "app.builderops":
+            for alias in node.names:
+                if alias.name == "epic_run_state":
+                    module_bindings.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == _RUN_STATE_MODULE:
+                    module_bindings.add(alias.asname or alias.name)
+
+    def resolve(call: ast.Call) -> str | None:
+        dotted_name = _dotted_expression_name(call.func)
+        if dotted_name is None:
+            return None
+        direct = direct_bindings.get(dotted_name)
+        if direct is not None:
+            return direct
+        for module_binding in module_bindings:
+            prefix = f"{module_binding}."
+            if dotted_name.startswith(prefix):
+                function_name = dotted_name.removeprefix(prefix)
+                if function_name in _RUN_STATE_FUNCTIONS:
+                    return function_name
+        return None
+
+    return resolve
+
+
+def _run_state_writer_violations(
+    source: str, *, source_label: str, defining_module: bool = False
+) -> list[str]:
+    tree = ast.parse(source, filename=source_label)
+    resolve_call = _run_state_call_resolver(tree, defining_module=defining_module)
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function_name = resolve_call(node)
+        if function_name == "save_epic_run_state":
+            violations.append(f"{source_label}:{node.lineno}:public-save")
+            continue
+        if function_name != "_save_epic_run_state_to_path":
+            continue
+
+        ancestor = parents.get(node)
+        while ancestor is not None:
+            if isinstance(ancestor, ast.With) and any(
+                isinstance(item.context_expr, ast.Call)
+                and resolve_call(item.context_expr) == "_locked_run_state"
+                for item in ancestor.items
+            ):
+                break
+            ancestor = parents.get(ancestor)
+        else:
+            violations.append(f"{source_label}:{node.lineno}:raw-save")
+    return violations
+
+
+def _run_state_update_owner_violations(
+    source: str, *, source_label: str
+) -> list[str]:
+    tree = ast.parse(source, filename=source_label)
+    resolve_call = _run_state_call_resolver(tree, defining_module=False)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or resolve_call(node) != "update_epic_run_state":
+            continue
+        keyword_names = {keyword.arg for keyword in node.keywords}
+        if not {
+            "expected_epic_issue_number",
+            "expected_independent_issue_numbers",
+        }.intersection(keyword_names):
+            violations.append(f"{source_label}:{node.lineno}")
+    return violations
+
+
 def test_no_unlocked_run_state_writer_in_app() -> None:
+    defining_module = REPO_ROOT / "app/builderops/epic_run_state.py"
     violations: list[str] = []
     for source_path in sorted((REPO_ROOT / "app").rglob("*.py")):
-        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-        parents = {
-            child: parent
-            for parent in ast.walk(tree)
-            for child in ast.iter_child_nodes(parent)
-        }
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            function_name = (
-                node.func.id
-                if isinstance(node.func, ast.Name)
-                else node.func.attr
-                if isinstance(node.func, ast.Attribute)
-                else None
+        source_label = str(source_path.relative_to(REPO_ROOT))
+        violations.extend(
+            _run_state_writer_violations(
+                source_path.read_text(encoding="utf-8"),
+                source_label=source_label,
+                defining_module=source_path == defining_module,
             )
-            if function_name == "save_epic_run_state":
-                violations.append(
-                    f"{source_path.relative_to(REPO_ROOT)}:{node.lineno}:public-save"
-                )
-                continue
-            if function_name != "_save_epic_run_state_to_path":
-                continue
-
-            ancestor = parents.get(node)
-            inside_run_state_lock = False
-            while ancestor is not None:
-                if isinstance(ancestor, ast.With):
-                    inside_run_state_lock = any(
-                        isinstance(item.context_expr, ast.Call)
-                        and isinstance(item.context_expr.func, ast.Name)
-                        and item.context_expr.func.id == "_locked_run_state"
-                        for item in ancestor.items
-                    )
-                    if inside_run_state_lock:
-                        break
-                ancestor = parents.get(ancestor)
-            if not inside_run_state_lock:
-                violations.append(
-                    f"{source_path.relative_to(REPO_ROOT)}:{node.lineno}:raw-save"
-                )
+        )
 
     assert violations == []
+
+
+def test_run_state_writer_census_resolves_import_aliases() -> None:
+    direct_alias = """
+from app.builderops.epic_run_state import save_epic_run_state as persist
+persist({})
+"""
+    module_alias = """
+from app.builderops import epic_run_state as run_state
+run_state._save_epic_run_state_to_path({}, path=path, run_id='run')
+"""
+    locked_private_alias = """
+from app.builderops.epic_run_state import (
+    _locked_run_state as state_lock,
+    _save_epic_run_state_to_path as persist_locked,
+)
+with state_lock(path):
+    persist_locked({}, path=path, run_id='run')
+"""
+    unrelated_method = """
+class Decoy:
+    def save_epic_run_state(self, state):
+        return state
+Decoy().save_epic_run_state({})
+"""
+
+    assert _run_state_writer_violations(
+        direct_alias, source_label="direct_alias.py"
+    ) == ["direct_alias.py:3:public-save"]
+    assert _run_state_writer_violations(
+        module_alias, source_label="module_alias.py"
+    ) == ["module_alias.py:3:raw-save"]
+    assert _run_state_writer_violations(
+        locked_private_alias, source_label="locked_private_alias.py"
+    ) == []
+    assert _run_state_writer_violations(
+        unrelated_method, source_label="unrelated_method.py"
+    ) == []
 
 
 def test_all_app_run_state_update_callers_supply_locked_owner_expectation() -> None:
@@ -961,27 +1081,41 @@ def test_all_app_run_state_update_callers_supply_locked_owner_expectation() -> N
     for source_path in sorted((REPO_ROOT / "app").rglob("*.py")):
         if source_path == defining_module:
             continue
-        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            function_name = (
-                node.func.id
-                if isinstance(node.func, ast.Name)
-                else node.func.attr
-                if isinstance(node.func, ast.Attribute)
-                else None
+        source_label = str(source_path.relative_to(REPO_ROOT))
+        violations.extend(
+            _run_state_update_owner_violations(
+                source_path.read_text(encoding="utf-8"), source_label=source_label
             )
-            if function_name != "update_epic_run_state":
-                continue
-            keyword_names = {keyword.arg for keyword in node.keywords}
-            if not {
-                "expected_epic_issue_number",
-                "expected_independent_issue_numbers",
-            }.intersection(keyword_names):
-                violations.append(f"{source_path.relative_to(REPO_ROOT)}:{node.lineno}")
+        )
 
     assert violations == []
+
+
+def test_run_state_update_census_resolves_import_aliases() -> None:
+    unsafe_alias = """
+from app.builderops.epic_run_state import update_epic_run_state as mutate
+mutate('run', updates={})
+"""
+    safe_module_alias = """
+import app.builderops.epic_run_state as state
+state.update_epic_run_state('run', expected_epic_issue_number=3229)
+"""
+    unrelated_method = """
+class Decoy:
+    def update_epic_run_state(self, run_id):
+        return run_id
+Decoy().update_epic_run_state('run')
+"""
+
+    assert _run_state_update_owner_violations(
+        unsafe_alias, source_label="unsafe_alias.py"
+    ) == ["unsafe_alias.py:3"]
+    assert _run_state_update_owner_violations(
+        safe_module_alias, source_label="safe_module_alias.py"
+    ) == []
+    assert _run_state_update_owner_violations(
+        unrelated_method, source_label="unrelated_method.py"
+    ) == []
 
 
 def test_run_owner_is_rechecked_inside_the_update_lock(
@@ -1023,6 +1157,93 @@ def test_run_owner_is_rechecked_inside_the_update_lock(
     persisted = load_epic_run_state(run_id, root=tmp_path)
     assert persisted["epic_issue_number"] == 3229
     assert persisted["child_queue"] == [{"issue_number": 3247, "state": "queued"}]
+
+
+def test_atomic_replace_failure_preserves_state_and_retry_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "replace-failure-retry"
+    create_epic_run_state(
+        3229,
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "queued"}],
+    )
+    path = epic_run_state_path(run_id, root=tmp_path)
+    original_bytes = path.read_bytes()
+    original_replace = Path.replace
+    failed_once = False
+
+    def fail_first_state_replace(self: Path, target: Path | str) -> Path:
+        nonlocal failed_once
+        if Path(target) == path and not failed_once:
+            failed_once = True
+            raise OSError("injected atomic replace failure")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_first_state_replace)
+
+    with pytest.raises(OSError, match="injected atomic replace failure"):
+        update_epic_run_state(
+            run_id,
+            root=tmp_path,
+            expected_epic_issue_number=3229,
+            child_queue=[{"issue_number": 3248, "state": "queued"}],
+        )
+
+    assert path.read_bytes() == original_bytes
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    assert temp_path.exists()
+
+    updated = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        expected_epic_issue_number=3229,
+        child_queue=[{"issue_number": 3248, "state": "queued"}],
+    )
+
+    assert updated["child_queue"] == [
+        {"issue_number": 3247, "state": "queued"},
+        {"issue_number": 3248, "state": "queued"},
+    ]
+    assert load_epic_run_state(run_id, root=tmp_path) == updated
+    assert not temp_path.exists()
+
+
+def test_independent_or_ambiguous_expected_owner_mismatch_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    run_id = "independent-owner-no-write"
+    create_independent_issue_run_state(
+        [4164, 4165],
+        run_id,
+        root=tmp_path,
+        child_queue=[{"issue_number": 4164, "state": "queued"}],
+    )
+    path = epic_run_state_path(run_id, root=tmp_path)
+    original_bytes = path.read_bytes()
+
+    with pytest.raises(EpicRunStateError, match="already belongs to independent issues"):
+        update_epic_run_state(
+            run_id,
+            root=tmp_path,
+            expected_independent_issue_numbers=[4164, 4200],
+            child_queue=[{"issue_number": 4200, "state": "must-not-write"}],
+        )
+    assert path.read_bytes() == original_bytes
+
+    with pytest.raises(
+        EpicRunStateError,
+        match="expected run owner must be an epic or independent issue set, not both",
+    ):
+        update_epic_run_state(
+            run_id,
+            root=tmp_path,
+            expected_epic_issue_number=3229,
+            expected_independent_issue_numbers=[4164, 4165],
+            child_queue=[{"issue_number": 4165, "state": "must-not-write"}],
+        )
+    assert path.read_bytes() == original_bytes
 
 
 def _record_run_state(

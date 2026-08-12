@@ -372,8 +372,17 @@ def test_subagent_role_governance_is_discoverable() -> None:
 def test_independent_fast_lane_has_no_routine_worker_coordination() -> None:
     skill = _read(".codex/skills/deliver-issue-set/SKILL.md")
     runner = _read("companion-ui/prompts/codex/deliver-epic-autonomous-runner.md")
-    for surface in (skill, runner):
-        assert "Routine worker-to-worker coordination is prohibited" in surface or "Workers do not message one another routinely" in surface
+    fast_lane_task = _read(
+        "docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/"
+        "RUN_INDEPENDENT_ISSUE_FAST_LANE.md"
+    )
+    owner_spec = _read("docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/README.md")
+    for surface in (skill, runner, fast_lane_task):
+        assert (
+            "Routine worker-to-worker coordination is prohibited" in surface
+            or "Workers do not message one another routinely" in surface
+            or "Forbids worker-to-worker messaging" in surface
+        )
         normalized = " ".join(surface.split())
         assert (
             "Discovered overlap raises `EpicDispatchError` and rejects the whole "
@@ -382,6 +391,23 @@ def test_independent_fast_lane_has_no_routine_worker_coordination() -> None:
         )
         assert "typed coordinator exception" not in surface
         assert "two workers" in surface
+
+    normalized_owner_spec = " ".join(owner_spec.split())
+    assert (
+        "In epic scope, a discovered overlap emits a typed coordinator exception "
+        "and recomputes the wave." in normalized_owner_spec
+    )
+    assert (
+        "The explicit independent fast lane instead rejects the whole set before "
+        "dispatch and may recompute a later set from live authority."
+        in normalized_owner_spec
+    )
+    assert (
+        "An explicit fast-lane admission check discovers overlap: no worker starts "
+        "or is contacted; the whole explicit set is rejected before dispatch"
+        in normalized_owner_spec
+    )
+    assert "the affected issue is paused" not in owner_spec
 
 
 def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed() -> None:

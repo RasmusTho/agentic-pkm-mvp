@@ -61,8 +61,8 @@ coordination:
 - strict readiness and independence validation;
 - maximum two workers during the budget-constrained pilot;
 - one Issue, worktree, branch, and PR per worker;
-- no worker communication unless an actual file, schema, migration, contract, or authority overlap
-  is discovered;
+- no worker-to-worker communication; an evidenced file, schema, migration, contract, or authority
+  overlap is handled before dispatch under the scope-specific coordinator policy;
 - one compact terminal receipt per worker;
 - coordinator intervention only for typed exceptions;
 - P0/P1, protected-risk, false-green, malformed, and low-confidence review verdicts block;
@@ -235,8 +235,9 @@ before exposing owner language.
 
 ### Partial-failure paths
 
-- A fast-lane worker discovers overlap: no other worker is contacted; the affected issue is paused,
-  the overlap is recorded, and the next wave is deterministically recomputed.
+- An explicit fast-lane admission check discovers overlap: no worker starts or is contacted; the
+  whole explicit set is rejected before dispatch, the overlap is recorded, and the coordinator may
+  recompute a later set from live authority.
 - A claim succeeds but worker launch is ambiguous: reconcile the lease and durable invocation
   correlation. An unknown-start invocation may be reattached or deterministically read back. The
   same invocation/idempotency key may start only once: `not_started` permits its first start;
@@ -393,7 +394,8 @@ scope.
   exact-SHA CI, independent review, verified-merge, and closure gate passes;
 - P2: deferred evidence through the governed known-defect path, no synchronous repair/re-review;
 - coordinator model use: initial plan/dispatch plus typed exception handling only;
-- no worker-to-worker coordination without evidenced overlap; and
+- no worker-to-worker coordination; evidenced overlap is handled at admission under the
+  scope-specific coordinator policy; and
 - stronger capability reserved for contract/state-machine design and risk review; isolated
   mechanical slices use the balanced default capability.
 
