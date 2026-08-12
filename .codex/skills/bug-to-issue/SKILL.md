@@ -106,8 +106,8 @@ The helper:
 - rejects unlocked or mislabeled registries and parses only exact first-line markers with the
   expected schema shape;
 - detects the exact defect marker across existing registries before appending;
-- posts one compact JSON `known-defect-receipt.v1` with `created`, `duplicate`, `excluded`, or
-  `promotion_required` status.
+- posts one compact JSON `known-defect-receipt.v1` with `created`, `duplicate`, `excluded`,
+  `promotion_required`, or non-authoritative diagnostic `dry_run` status.
 
 Every entry records:
 

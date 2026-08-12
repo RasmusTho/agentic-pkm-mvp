@@ -287,6 +287,10 @@ def test_known_defects_intake_dry_run_does_not_mutate_registry(
     assert receipt["candidate_entry"].startswith(
         "<!-- known-defect-entry:v1 id="
     )
+    skill = (
+        REPO_ROOT / ".codex" / "skills" / "bug-to-issue" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "non-authoritative diagnostic `dry_run` status" in skill
 
 
 def test_entry_records_every_required_field() -> None:
