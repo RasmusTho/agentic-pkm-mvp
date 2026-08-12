@@ -580,14 +580,19 @@ Interpretation:
   `details.object_ref`, clears only `object_id`, and retains `vault_binding_id`.
 
 ### `membership` (legacy)
-The legacy baseline retains the **composite** key form:
+MVR-05A4 derives the effective primary-key lineage from the catalog: the fresh
+chain uses `(vault_binding_id, id)` while the retained historical chain uses
+`(vault_binding_id, object_id, set_id)`. It never infers a key from a later
+`CREATE TABLE IF NOT EXISTS` declaration. Unsupported key or inbound-FK state
+fails before any schema or row change; it does not re-attribute, quarantine,
+copy, or delete rows.
 - `vault_binding_id` (`text`, `NOT NULL` after MVR-05A3)
 - `(vault_binding_id, object_id)` (composite FK → `store_objects`, `ON DELETE CASCADE`)
 - `set_id` (`uuid`, `ON DELETE CASCADE`; fresh lineage keeps its FK to `sets.id`, while #3510
   retargets only retained legacy objects-as-sets schemas; MVR-05A3 makes that historical endpoint
   a composite `store_objects(vault_binding_id, object_id)` FK)
 - `created_at` (`timestamptz`, default `now()`)
-- `PRIMARY KEY (object_id, set_id)`
+- `PRIMARY KEY (vault_binding_id, object_id, set_id)` on the retained lineage
 
 ### Views / Helpers (legacy)
 - `view_chunks_missing_embeddings`

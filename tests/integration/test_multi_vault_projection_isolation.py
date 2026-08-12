@@ -47,7 +47,7 @@ def migrated_store_dsn(monkeypatch: pytest.MonkeyPatch):
             conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
 
-def test_duplicate_uuid_is_namespaced_by_binding_in_store_projections(
+def test_duplicate_uuid_is_namespaced_by_binding_in_ingest_projections(
     migrated_store_dsn: str,
 ) -> None:
     object_id = uuid.uuid4()
@@ -82,6 +82,7 @@ def test_duplicate_uuid_is_namespaced_by_binding_in_store_projections(
                 [(binding,) for binding, _ in rows],
             )
 
+        # Ingest projections have independent provenance even for the same UUID.
         for table in (
             "store_objects",
             "store_vector_index",
