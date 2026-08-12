@@ -8,13 +8,13 @@ from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
 from app.components.llm.fabric import ChatClient, LLMBackendTimeout, LLMRouter, LLMTaskIntent, get_chat_client
+from app.components.llm import router as llm_router
 from app.components.llm.router import LLMRoute
 from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
 from app.stores import get_object_store
-from app.settings.wave_one import reasoning_model
 
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
 
@@ -108,22 +108,13 @@ class MockDeliberationAgent(BaseDeliberationAgent):
 class OllamaDeliberationAgent(BaseDeliberationAgent):
     def __init__(self, *, model: str | None = None) -> None:
         if model is None:
-            self._client = get_chat_client(
-                LLMTaskIntent(task_kind="reasoning", risk="high")
+            effective = llm_router.resolve_effective_reasoning_route(
+                LLMRouter().route(
+                    LLMTaskIntent(task_kind="reasoning", risk="high")
+                ),
+                model_override=os.getenv("REASONING_MODEL"),
             )
-            override_model = (os.getenv("REASONING_MODEL") or "").strip()
-            if override_model:
-                route = self._client.route
-                self._client = ChatClient(
-                    route=LLMRoute(
-                        provider=route.provider,
-                        model=override_model,
-                        mode=route.mode,
-                        reason="deprecated REASONING_MODEL override",
-                        degraded=route.degraded,
-                        embedding_identity=route.embedding_identity,
-                    )
-                )
+            self._client = ChatClient(route=effective.route)
         else:
             self._client = ChatClient(
                 route=LLMRoute(
@@ -219,12 +210,11 @@ def _reasoning_backend() -> str:
 
 def _fallback_reasoning_identity() -> tuple[str, str]:
     """Best-effort identity only when no executable agent was constructed."""
-    provider = os.getenv("LLM_PROVIDER", "").strip().lower()
-    if provider == "llm":
-        provider = "ollama"
-    if provider in {"", "fake"}:
-        provider = "mock" if provider == "fake" else "ollama"
-    return provider, reasoning_model(provider)
+    effective = llm_router.resolve_effective_reasoning_route(
+        LLMRouter().route(LLMTaskIntent(task_kind="reasoning", risk="high")),
+        model_override=os.getenv("REASONING_MODEL"),
+    )
+    return effective.route.provider, effective.route.model
 
 
 def _reasoning_uses_mock_route() -> bool:

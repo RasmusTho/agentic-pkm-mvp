@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import os
 from functools import lru_cache
 from typing import Any, Iterable
@@ -32,6 +32,38 @@ class LLMRoute:
     reason: str
     degraded: bool = False
     embedding_identity: EmbeddingIdentity | None = None
+
+
+@dataclass(frozen=True)
+class EffectiveReasoningRoute:
+    """One selected reasoning route plus its effective model provenance."""
+
+    route: LLMRoute
+    model_origin: str
+
+
+def resolve_effective_reasoning_route(
+    selected_route: LLMRoute,
+    *,
+    model_override: str | None = None,
+    selected_model_origin: str = "registry default",
+) -> EffectiveReasoningRoute:
+    """Apply the legacy model override without re-selecting a provider.
+
+    This resolver is deliberately side-effect-free. Callers capture the
+    provider-neutral route once, then both execution and explain consume the
+    same immutable effective value.
+    """
+    normalized_override = (model_override or "").strip()
+    if normalized_override:
+        return EffectiveReasoningRoute(
+            route=replace(selected_route, model=normalized_override),
+            model_origin="env:REASONING_MODEL (deprecated)",
+        )
+    return EffectiveReasoningRoute(
+        route=selected_route,
+        model_origin=selected_model_origin,
+    )
 
 
 def _normalize(value: str | None) -> str:
@@ -159,6 +191,15 @@ class LLMRouter:
         if "reason" in intent.task_kind or intent.task_kind in {"plan"}:
             return routing.default_reasoning
         return routing.default_chat
+
+    def routing_key_configured(self, key: str) -> bool:
+        """Report configuration provenance from this router's captured bundle."""
+        routing = (
+            getattr(self._settings, "llm_routing", None)
+            if self._settings is not None
+            else None
+        )
+        return bool(routing and key in routing.configured_keys)
 
     @staticmethod
     def _route_to_dict(route: LLMRoute) -> dict[str, Any]:
@@ -578,4 +619,11 @@ class LLMRouter:
         return {intent.task_kind: self.describe_intent(intent) for intent in intents}
 
 
-__all__ = ["LLMTaskIntent", "LLMRoute", "LLMRouteError", "LLMRouter"]
+__all__ = [
+    "EffectiveReasoningRoute",
+    "LLMTaskIntent",
+    "LLMRoute",
+    "LLMRouteError",
+    "LLMRouter",
+    "resolve_effective_reasoning_route",
+]

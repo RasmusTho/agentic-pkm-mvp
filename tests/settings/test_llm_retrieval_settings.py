@@ -116,6 +116,9 @@ def test_empty_settings_and_legacy_env_preserve_llm_and_rerank_behavior(monkeypa
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setattr(wave_one, "get_settings_bundle", SettingsBundle)
     monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", SettingsBundle)
+    monkeypatch.setattr(
+        "app.components.llm.router.get_settings_bundle", SettingsBundle
+    )
     assert wave_one.llm_timeout_seconds() == 60.0
     assert wave_one.llm_temperature() == 0.0
     assert wave_one.reasoning_model() == "llama3.1:8b"
@@ -298,13 +301,22 @@ def test_reasoning_model_preserves_provider_model_identity_and_trace(
     )
     bundle = SettingsBundle(llm_routing=routing)
     monkeypatch.setattr(wave_one, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.llm.router.get_settings_bundle", lambda: bundle
+    )
 
-    assert wave_one.reasoning_model("openai") == "gpt-reasoning"
-    assert wave_one.reasoning_model("ollama") == "llama3.1:8b"
-    assert OllamaDeliberationAgent().model == "llama3.1:8b"
+    assert wave_one.reasoning_model() == "gpt-reasoning"
+    assert OllamaDeliberationAgent().execution_identity() == (
+        "openai",
+        "gpt-reasoning",
+    )
 
     monkeypatch.setenv("REASONING_MODEL", "legacy-reasoning")
-    assert wave_one.reasoning_model("ollama") == "legacy-reasoning"
+    assert wave_one.reasoning_model() == "legacy-reasoning"
+    assert OllamaDeliberationAgent().execution_identity() == (
+        "openai",
+        "legacy-reasoning",
+    )
     monkeypatch.delenv("REASONING_MODEL")
 
 
@@ -379,6 +391,9 @@ def test_registered_cli_reports_effective_llm_provenance(
 ) -> None:
     monkeypatch.setattr(wave_one, "get_settings_bundle", lambda: bundle)
     monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.llm.router.get_settings_bundle", lambda: bundle
+    )
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 

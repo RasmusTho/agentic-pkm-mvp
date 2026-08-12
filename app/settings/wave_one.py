@@ -58,34 +58,28 @@ def llm_temperature(routing: LLMRoutingSettings | None = None) -> float:
     return effective_routing.temperature
 
 
-def _reasoning_resolution(
-    selected_provider: str | None = None,
-    routing: LLMRoutingSettings | None = None,
-) -> tuple[str, str]:
-    raw = _override("REASONING_MODEL")
-    if raw is not None:
-        return raw, "env:REASONING_MODEL (deprecated)"
-    effective_routing = routing or get_settings_bundle().llm_routing
-    route = effective_routing.default_reasoning.primary
-    provider = _normalized_provider(selected_provider or _override("LLM_PROVIDER") or "ollama")
-    route_provider = _normalized_provider(route.provider)
-    if (
-        route.model
-        and route_provider
-        and route_provider == provider
-        and _configured(effective_routing, "default_reasoning")
-    ):
-        route_model = route.model
-        return route_model, _vault_shared_origin("llm_routing.md")
-    if effective_routing.reasoning_model and _configured(
-        effective_routing, "reasoning_model"
-    ):
-        return effective_routing.reasoning_model, _vault_shared_origin("llm_routing.md")
-    return env_default("REASONING_MODEL"), "registry default"
+def _reasoning_resolution() -> tuple[str, str]:
+    from app.components.llm.router import (
+        LLMRouter,
+        LLMTaskIntent,
+        resolve_effective_reasoning_route,
+    )
+
+    router = LLMRouter()
+    effective = resolve_effective_reasoning_route(
+        router.route(LLMTaskIntent(task_kind="reasoning", risk="high")),
+        model_override=_override("REASONING_MODEL"),
+        selected_model_origin=(
+            _vault_shared_origin("llm_routing.md")
+            if router.routing_key_configured("default_reasoning")
+            else "registry default"
+        ),
+    )
+    return effective.route.model, effective.model_origin
 
 
-def reasoning_model(selected_provider: str | None = None) -> str:
-    return _reasoning_resolution(selected_provider)[0]
+def reasoning_model() -> str:
+    return _reasoning_resolution()[0]
 
 
 def _default_chat_resolution(
@@ -131,7 +125,7 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
 
     effective_retrieval = get_effective_retrieval_resolution()
     routing = get_settings_bundle().llm_routing
-    reasoning_value, reasoning_origin = _reasoning_resolution(routing=routing)
+    reasoning_value, reasoning_origin = _reasoning_resolution()
     default_chat_value, default_chat_origin = _default_chat_resolution(routing=routing)
     return {
         "llm.timeout_seconds": {
