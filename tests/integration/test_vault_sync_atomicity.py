@@ -49,39 +49,33 @@ def _drop_schema(dsn: str, schema: str) -> None:
             cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
 
 
-def _ensure_legacy_tables(dsn: str) -> None:
-    """Guarantee ``public.objects``/``file_state``/``outbox`` exist before any
-    test in this module reads or writes them.
+def _ensure_isolated_runtime_tables(dsn: str) -> None:
+    """Produce the runtime tables inside this test's isolated search path.
 
-    ``app.services.vault_sync`` only creates these tables lazily (via
-    ``app.db.db.ensure_schema``) the first time a caller opens a real
-    connection through ``vault_sync._conn()``. Whichever test in this module
-    runs first (file collection order, not test-name order) may do its
-    "before" row-count baseline read before any ``vault_sync`` call has had
-    that chance, and fail with ``UndefinedTable`` on a genuinely fresh
-    Postgres (#2937). Trigger schema creation explicitly up front instead of
-    relying on incidental cross-test ordering.
+    ``vault_sync`` needs the legacy objects/file-state and outbox producers as
+    well as the canonical store producer.  Create them only after the isolated
+    search path is active, so a fresh CI database cannot accidentally fall
+    through to tables left in ``public`` by another test.
 
-    Since MVR-05A0 (#4543) ``file_state`` and ``objects.path`` are owned by
-    Alembic revision ``c7f4b1a83d29``, not by the legacy bootstrap SQL. On a
-    migrated database ``ensure_schema`` finds them already present; on a scratch
-    database it supplies them through the ``STORE_SCHEMA_AUTOCREATE=1``
-    test-fixture opt-in that ``tests/conftest.py`` sets for pg-marked tests.
+    The outbox bootstrap calls ``ensure_schema`` first and both producers honor
+    the explicit ``STORE_SCHEMA_AUTOCREATE=1`` pg-test fixture opt-in.  This is
+    fixture production only; runtime remains assert-only and migration-owned.
     """
-    from app.db.db import ensure_schema
+    from app.services.outbox import bootstrap
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        ensure_schema(conn)
+    with psycopg.connect(dsn) as conn:
+        bootstrap(conn)
+        conn.commit()
 
 
 def _configure_isolated_pg_test(monkeypatch) -> tuple[str, str]:
     base_dsn = _pg_base_dsn()
-    _ensure_legacy_tables(base_dsn)
     schema = f"pgtest_{uuid4().hex}"
     _create_schema(base_dsn, schema)
     dsn = _dsn_with_search_path(base_dsn, schema)
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("DB_DSN", dsn)
+    _ensure_isolated_runtime_tables(dsn)
     # Use the production store-schema producer instead of copying its DDL into
     # this test. The monkeypatched process flag is restored after each case.
     from app.stores import pg as pg_store

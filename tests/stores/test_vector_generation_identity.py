@@ -13,6 +13,7 @@ These tests require a live Postgres backend; they are skipped under `not pg`.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from uuid import uuid4
 
 import psycopg
@@ -67,14 +68,7 @@ def _rewrite_identity_only(new_identity: EmbeddingIdentity) -> None:
                 WHERE vault_binding_id = %s AND id = 1
                 """,
                 (
-                    json.dumps(
-                        {
-                            "provider": new_identity.provider,
-                            "model": new_identity.model,
-                            "dim": new_identity.dim,
-                            "normalize": new_identity.normalize,
-                        }
-                    ),
+                    json.dumps(asdict(new_identity), ensure_ascii=False),
                     COMPATIBILITY_BINDING_ID,
                 ),
             )
