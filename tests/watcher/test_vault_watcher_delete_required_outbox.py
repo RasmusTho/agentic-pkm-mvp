@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -331,6 +332,39 @@ def test_terminal_report_recovers_after_receipt_crash(
     assert recovered["deleted"] == 0
     assert recovered["unreconciled_deletions_terminated"] == 1
     assert any("recovered terminal report" in message for message in messages)
+
+
+def test_fallback_uses_delete_note_observation_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-commit crash retries under delete_note's exact outbox key."""
+    vault, note, _ = _seed(tmp_path, monkeypatch)
+    observed_mtime = 1_770_000_000.25
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(vault_watcher, "find_companion_by_source_ref", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "read_companion", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "resolve_canonical_object_id", lambda note_uuid: note_uuid)
+    monkeypatch.setattr(
+        vault_watcher,
+        "insert_object_and_outbox",
+        lambda *args, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
+
+    outcome = vault_watcher._emit_watcher_delete_event(
+        note,
+        rel_deleted=Path("Concepts/D.md"),
+        vault_root=vault,
+        observed_mtime=observed_mtime,
+    )
+
+    assert outcome == "emitted"
+    assert captured["observation"] == str(
+        datetime.fromtimestamp(observed_mtime, tz=timezone.utc)
+    )
+    assert captured["observation"] != str(observed_mtime)
 
 
 def test_rename_supersedes_the_tombstone(

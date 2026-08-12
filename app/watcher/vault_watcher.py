@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -543,7 +544,16 @@ def _emit_watcher_delete_event(
         payload,
         INGEST_OBJECT_DELETED,
         None,
-        observation=str(observed_mtime) if observed_mtime is not None else None,
+        # delete_note's file_state mtime is a timezone-aware datetime. The
+        # snapshot holds that same stat value as an epoch float, so normalize
+        # it back to the service's exact string form before the outbox hashes
+        # the observation. This keeps commit-before-cleanup crash replay in
+        # the same idempotency domain as delete_note.
+        observation=(
+            str(datetime.fromtimestamp(observed_mtime, tz=timezone.utc))
+            if observed_mtime is not None
+            else None
+        ),
         required_db=required_db,
     )
     return "not_queued" if would_skip else "emitted"
