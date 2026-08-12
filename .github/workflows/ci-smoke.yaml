@@ -9,7 +9,7 @@ on:
     types: [opened, synchronize, reopened, edited]
 
 concurrency:
-  group: ci-smoke-${{ github.ref }}
+  group: ci-smoke-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions: read-all
