@@ -1,26 +1,31 @@
-State: Active blocked validation hub #4741; children #4742–#4749 are filed and no implementation delivery is claimed.
+State: Active blocked validation hub #4741; ARO-01 is closed with its withdrawal recorded, ARO-02
+is closed/superseded, ARO-03 implementation is delivered while #4744 remains open and blocked for
+parent validation, and ARO-04–08 remain blocked.
 Doc role: Parent feature issue contract
 Authority: The capability README owns stable scope and order. The live GitHub parent owns backlog and validation state after filing.
 Owner: Builder System governance
 Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-12
+Last verified against: `origin/main` `efbf1acd529e127803da0a6d56b384d7fb8c2bd8` and live GitHub
+Issue/PR state; the delivery ledger below records the exact PR heads and merge commits it cites.
 
 # Parent feature issue — devUI Stage A Read-Only Overview
 
 ## Context
 
-The pure `devui-overview-view.v1` composer is delivered, but the current producer chain lacks the
-canonical source facts required to populate **Needs you** and **Ready to try**. The Overview also
-lacks a local GET route, real typed navigation destinations, a governed design, a browser shell,
-accessibility proof, and an owner pilot. The parent coordinates validation only; it is never ready
-work.
+The pure `devui-overview-view.v1` composer and the admitted direct-loopback Overview GET route are
+delivered, but the current producer chain lacks the canonical source facts required to populate
+**Needs you** and **Ready to try**. The Overview still lacks governed typed navigation destinations,
+a governed design, a browser shell, accessibility proof, and an owner pilot. The parent coordinates
+validation only; it is never ready work.
 
 ## Scope
 
-- Resolve the exact source authority and serialization boundary before producer code.
-- Deliver ARO-02 through ARO-08 strictly in dependency order after their observable gates pass.
+- Preserve the ARO-01 withdrawal and ARO-02 supersession; do not infer producer delivery from either.
+- Validate delivered ARO-03 route evidence, then deliver ARO-04 through ARO-08 strictly in
+  dependency order after their observable gates pass.
 - Preserve producer-declared classification, withdrawals, evidence state, and root separation.
 - Keep the delivered composer excluded and preserve the GET-only, local, read-only boundary.
 - Maintain the child ledger and final receipts on this parent.
@@ -53,7 +58,8 @@ work.
 ## Constraints
 
 - The delivered composer in `app/builderops/devui_overview.py` is excluded.
-- ARO-01 is `agent:needs-human`; all other children are `agent:blocked` at filing.
+- ARO-01 is closed with its withdrawal recorded; ARO-02 is closed/superseded; ARO-03 is delivered
+  but #4744 remains open and blocked for parent validation; ARO-04 through ARO-08 are blocked.
 - No downstream child becomes ready from this specification or its merge alone.
 - Visual children wait for the governed Yggdrasil handoff; nonvisual children do not wait on design.
 - No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
@@ -106,8 +112,8 @@ work.
 
 | Task | Issue | Initial label | Dependency / exact next trigger |
 | --- | --- | --- | --- |
-| ARO-01 — Authorize Overview Source Facts | [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742) | `agent:needs-human` | Owner accepts the exact source/serialization contract |
-| ARO-02 — Enrich Overview Producer Facts | [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) | `agent:blocked` | accepted #4742 transportable through bounded current producer chain |
+| ARO-01 — Authorize Overview Source Facts | [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742) | closed; withdrawal recorded by PR #4751 | No current source owns either Overview fact |
+| ARO-02 — Enrich Overview Producer Facts | [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) | closed / superseded | The ARO-01 no-source withdrawal leaves no producer facts to enrich; a future source contract requires a new governed slice |
 | ARO-03 — Expose Local Overview GET Route | [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744) | delivered | PR #4772 proves the admitted direct-loopback route → live composition → delivered no-candidate composer |
 | ARO-04 — Bind Typed Overview Navigation | [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) | `agent:blocked` | #4744 plus delivered [#4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) local Focus route and optional SoI destination |
 | ARO-05 — Validate Overview Yggdrasil Design | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | `agent:blocked` | stable #4743/#4744/#4745 fixtures plus design preflight |
@@ -120,10 +126,10 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 
 | Child | Issue | PR | SHA | CI | Blocker | Next |
 | --- | --- | --- | --- | --- | --- | --- |
-| #4742 ARO-01 | open / needs-human | none | none | not started | canonical source decision absent | record owner decision |
-| #4743 ARO-02 | open / blocked | none | none | not started | #4742 | revalidate after accepted source contract |
-| #4744 ARO-03 | open / blocked | #4772 | 24371d8bf3289dad631c2986f44865794897f32c | exact-head recovery pending | contract-and-CI-selection recovery #4786 | verification-and-closure after #4786 receipt |
-| #4745 ARO-04 | open / blocked | none | none | not started | #4744 + real destinations | revalidate after destination routes exist |
+| #4742 ARO-01 | closed / withdrawal recorded | #4751 | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`; merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | merged receipt | no current source owns either Overview fact | preserve explicit withdrawals |
+| #4743 ARO-02 | closed / superseded | #4751 withdrawal evidence | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`; merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | no producer delivery | no current source facts to enrich | create a new governed slice only after a source contract exists |
+| #4744 ARO-03 | open / blocked | #4772; supporting #4789 and #4792 | #4772 head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`; merge `24371d8bf3289dad631c2986f44865794897f32c`. #4789 head `c5f4fab08d58b5efb8d52a457bfa9eaf555824bd`; merge `989a8d73d52b75c3a038ba1d3f93c78e03d98065`. #4792 head `031dbfaa2d6d474bf02e5d778ffb252f0879ae97`; merge `a7f945cb591f24c4f5d85d048187f92a8ed91211` | route delivered; contract/CI-selection and `Via`-admission recoveries merged | parent validation remains open | later verification-and-closure for #4744 |
+| #4745 ARO-04 | open / blocked | #4771 external Focus prerequisite | head `e6f0289636b47841a3505b4eaa851b7cff9d4774`; merge `9f554f2c8e2266365875ba5765a4af23e43692e8` | prerequisite delivered; no typed navigation delivery | #4744 validation plus governed real destinations | revalidate after destination contracts exist |
 | #4746 ARO-05 | open / blocked | none | none | not started | stable fixtures + design preflight | run governed handoff when inputs exist |
 | #4747 ARO-06 | open / blocked | none | none | not started | #4744/#4745/#4746 | revalidate after accepted handoff |
 | #4748 ARO-07 | open / blocked | none | none | not started | #4747 | validate exact merged shell SHA |

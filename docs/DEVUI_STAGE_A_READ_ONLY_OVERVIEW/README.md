@@ -1,11 +1,16 @@
-State: Accepted target-state breakdown with blocked validation parent #4741 and children #4742–#4749 filed; Focus-route prerequisite #4768 is ready; no remaining Stage A implementation is claimed.
+State: Accepted target-state breakdown with blocked validation parent #4741; ARO-01 is closed with
+its withdrawal recorded, ARO-03 is delivered as the direct-loopback local route, and ARO-04–08
+remain blocked; Focus-route prerequisite #4768 is delivered.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
 Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-12
+Last verified against: `origin/main` `efbf1acd529e127803da0a6d56b384d7fb8c2bd8`, live GitHub
+state for #4742–#4749, #4768, #4786, and #4791, and merged PRs #4751, #4771, #4772, #4789, and
+#4792.
 
 # devUI Stage A Read-Only Overview
 
@@ -16,18 +21,19 @@ Complete the remaining read-only Overview path without reimplementing the delive
 PR to invent owner attention or trial readiness.
 
 The capability is deliberately blocked. No current producer exposes the canonical source facts
-needed for **Needs you** or **Ready to try**, and no local Focus or SoI destination exists for typed
-navigation. Visual implementation additionally waits for a governed Yggdrasil handoff.
+needed for **Needs you** or **Ready to try**. The delivered local Focus route does not by itself
+authorize an Overview typed-navigation destination, and no local SoI destination exists. Visual
+implementation additionally waits for a governed Yggdrasil handoff.
 
 ## Current-to-target truth
 
 | Surface | Current delivered fact | Remaining target |
 | --- | --- | --- |
-| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 remains blocked |
+| `devui.composition.v1` | Per-request CKM/Cockpit envelope with independent provider state | No current source owns either Overview fact, so both zones remain withdrawn and ARO-02 is closed/superseded without producer delivery |
 | `devui-overview-view.v1` | Pure composer in `app/builderops/devui_overview.py`, including hostile cross-field validation and typed root-reference preservation | **Excluded from this breakdown; do not duplicate or reopen** |
 | Cockpit producer | `agent:needs-human` may place work in a Cockpit band, but no serialized canonical owner-authority category/governing-source fact reaches Overview | Exact source-owned owner-question facts, or an honest withdrawal |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
-| API | Local-only GET `/api/devui/composition`; no devUI mutation route | Local-only GET `/api/devui/overview` over the accepted producer and delivered composer |
+| API | Local-only GET `/api/devui/composition` and delivered direct-loopback GET `/api/devui/overview`; no devUI mutation route | Typed navigation only after actual local destinations are governed |
 | Navigation | Composer validates typed root references | Resolvable local Focus and optional SoI destinations without joins |
 | Visual shell | No Overview browser shell | Governed Yggdrasil design, read-only shell, browser/accessibility proof, owner pilot |
 
@@ -106,7 +112,8 @@ Parent [#4741](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4741) is the 
 hub. ARO-01 is [#4742](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4742), closed with its
 withdrawal recorded by PR #4751; ARO-02 / [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743)
 is superseded by that no-source decision, and ARO-03 / [#4744](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4744)
-is delivered as the no-candidate local projection route. ARO-04 through ARO-08 remain
+is delivered as the no-candidate local projection route; its contract and route-test selection were
+reconciled by merged PR #4789. ARO-04 through ARO-08 remain
 [#4745](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4745) through
 [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) (`agent:blocked`). The separate
 [Focus-route prerequisite #4768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4768) is
