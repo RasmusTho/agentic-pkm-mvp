@@ -38,6 +38,7 @@ from app.heimdal.raw_read_gate import (
 from app.heimdal.raw_store import (
     RawStoreKeyMissingError,
     all_raw_records,
+    compute_raw_content_identity,
     decrypt_raw_bytes,
     encrypt_raw_bytes,
     get_raw_record_by_content_identity,
@@ -134,20 +135,23 @@ def test_resolve_raw_store_key_valid(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_insert_raw_record_stamps_provenance_in_one_call() -> None:
-    ciphertext, nonce = encrypt_raw_bytes(b"bytes", key=_TEST_KEY)
+    plaintext = b"bytes"
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
+    identity = compute_raw_content_identity(plaintext)
     record, created = insert_raw_record(
-        content_identity="hash-1",
+        content_identity=identity,
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
 
     assert created is True
-    assert record.content_identity == "hash-1"
+    assert record.content_identity == identity
     assert record.capture_chain == ["ios_voice_memos", "icloud_drive", "folder_watch"]
     assert record.sensor == _sensor_block()
     assert record.consent["grant_ref"] == "grant-test"
@@ -165,13 +169,14 @@ def test_insert_raw_record_stamps_provenance_in_one_call() -> None:
 def test_insert_raw_record_requires_provenance_fields(field: str, value: object) -> None:
     ciphertext, nonce = encrypt_raw_bytes(b"bytes", key=_TEST_KEY)
     kwargs = dict(
-        content_identity="hash-missing-field",
+        content_identity=compute_raw_content_identity(b"bytes"),
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
     kwargs[field] = value
@@ -186,13 +191,14 @@ def test_insert_raw_record_requires_provenance_fields(field: str, value: object)
 def test_insert_raw_record_idempotent_by_content_identity() -> None:
     ciphertext, nonce = encrypt_raw_bytes(b"bytes", key=_TEST_KEY)
     kwargs = dict(
-        content_identity="hash-dup",
+        content_identity=compute_raw_content_identity(b"bytes"),
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
 
@@ -206,19 +212,22 @@ def test_insert_raw_record_idempotent_by_content_identity() -> None:
 
 
 def test_get_raw_record_by_content_identity() -> None:
-    ciphertext, nonce = encrypt_raw_bytes(b"bytes", key=_TEST_KEY)
+    plaintext = b"bytes"
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
+    identity = compute_raw_content_identity(plaintext)
     record, _ = insert_raw_record(
-        content_identity="hash-lookup",
+        content_identity=identity,
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
 
-    found = get_raw_record_by_content_identity("hash-lookup")
+    found = get_raw_record_by_content_identity(identity)
     assert found is not None
     assert found.id == record.id
     assert get_raw_record_by_content_identity("no-such-hash") is None
@@ -258,15 +267,17 @@ def test_append_only_enforced_pg() -> None:
     """Real Postgres trigger rejects UPDATE/DELETE against heimdal_raw_record (HEIM-1)."""
     pytest.importorskip("psycopg")
 
-    ciphertext, nonce = encrypt_raw_bytes(b"bytes", key=_TEST_KEY)
+    plaintext = f"bytes-{secrets.token_hex(8)}".encode()
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
     record, _ = insert_raw_record(
-        content_identity=f"hash-pg-{secrets.token_hex(8)}",
+        content_identity=compute_raw_content_identity(plaintext),
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
 
@@ -291,15 +302,17 @@ def test_append_only_enforced_pg() -> None:
 
 
 def _insert_test_record(content_identity: str = "hash-gate-1") -> "raw_store.RawRecord":
-    ciphertext, nonce = encrypt_raw_bytes(b"raw voice memo bytes", key=_TEST_KEY)
+    plaintext = f"raw voice memo bytes:{content_identity}".encode()
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
     record, _ = insert_raw_record(
-        content_identity=content_identity,
+        content_identity=compute_raw_content_identity(plaintext),
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/very/secret/memo.m4a",
     )
     return record
@@ -320,7 +333,7 @@ def test_gated_read_requires_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = read_raw_record(raw_ref, reader="asr_stage", purpose="transcription", key=_TEST_KEY)
 
-    assert result.plaintext == b"raw voice memo bytes"
+    assert result.plaintext == b"raw voice memo bytes:hash-gate-1"
 
     receipts = all_raw_read_receipts()
     assert len(receipts) == 1
@@ -427,15 +440,18 @@ def test_gated_read_exercises_real_production_call_site(monkeypatch: pytest.Monk
     (`app.heimdal._backend.resolve_heimdal_backend`), not a mocked store.
     """
     monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "asr_stage")
-    ciphertext, nonce = encrypt_raw_bytes(b"end-to-end raw bytes", key=_TEST_KEY)
+    plaintext = b"end-to-end raw bytes"
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
+    identity = compute_raw_content_identity(plaintext)
     record, created = insert_raw_record(
-        content_identity="hash-gate-e2e",
+        content_identity=identity,
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
     assert created is True
@@ -444,7 +460,7 @@ def test_gated_read_exercises_real_production_call_site(monkeypatch: pytest.Monk
     result = read_raw_record(raw_ref, reader="asr_stage", purpose="transcription", key=_TEST_KEY)
 
     assert result.plaintext == b"end-to-end raw bytes"
-    assert get_raw_record_by_content_identity("hash-gate-e2e") is not None
+    assert get_raw_record_by_content_identity(identity) is not None
     assert len(all_raw_read_receipts()) == 1
 
 
@@ -454,15 +470,17 @@ def test_append_only_enforced_pg_read_receipt(monkeypatch: pytest.MonkeyPatch) -
     pytest.importorskip("psycopg")
     monkeypatch.setenv("HEIMDAL_RAW_READ_ALLOWLIST", "asr_stage")
 
-    ciphertext, nonce = encrypt_raw_bytes(b"bytes", key=_TEST_KEY)
+    plaintext = f"bytes-{secrets.token_hex(8)}".encode()
+    ciphertext, nonce = encrypt_raw_bytes(plaintext, key=_TEST_KEY)
     record, _ = insert_raw_record(
-        content_identity=f"hash-pg-receipt-{secrets.token_hex(8)}",
+        content_identity=compute_raw_content_identity(plaintext),
         capture_chain=["ios_voice_memos", "icloud_drive", "folder_watch"],
         sensor=_sensor_block(),
         consent=_consent_block(),
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=_TEST_KEY,
         source_path="/tmp/memo.m4a",
     )
     raw_ref = raw_ref_for(record)

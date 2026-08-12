@@ -412,6 +412,7 @@ def admit_capture_file(
             ciphertext=ciphertext,
             nonce=nonce,
             key_ref="v1-process-key",
+            key=encryption_key,
             source_path=str(path),
             payload={"capture_time_metadata": capture_sidecar} if capture_sidecar is not None else None,
         )

@@ -173,7 +173,46 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         bin_dir / "security",
         """#!/usr/bin/env bash
 set -eu
-printf '%064d\n' 0
+if [ -n "${FAKE_SECURITY_EVENT_LOG:-}" ]; then
+  account=""
+  previous=""
+  for argument in "$@"; do
+    if [ "${previous}" = "-a" ]; then
+      account="${argument}"
+      break
+    fi
+    previous="${argument}"
+  done
+  case "${account}" in
+    *:heimdal-raw-migrate:heimdal.raw-store-key)
+      printf 'security migrate-primary\n' >> "${FAKE_SECURITY_EVENT_LOG}"
+      ;;
+    *)
+      printf 'security sibling-or-other\n' >> "${FAKE_SECURITY_EVENT_LOG}"
+      ;;
+  esac
+fi
+case "${FAKE_SECURITY_MODE:-matching}" in
+  missing)
+    echo 'fixture-private-lookup-detail' >&2
+    exit 44
+    ;;
+  malformed)
+    printf '%s\n' 'fixture-private-malformed-material'
+    ;;
+  divergent)
+    case "$*" in
+      *heimdal-api-ingress*) printf '%064d\n' 1 ;;
+      *) printf '%064d\n' 0 ;;
+    esac
+    ;;
+  matching)
+    printf '%064d\n' 0
+    ;;
+  *)
+    exit 45
+    ;;
+esac
 """,
     )
     _write_executable(

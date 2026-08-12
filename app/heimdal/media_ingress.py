@@ -464,6 +464,7 @@ def admit_media_bytes(
             ciphertext=ciphertext,
             nonce=nonce,
             key_ref="v1-process-key",
+            key=encryption_key,
             source_path=MEDIA_INGRESS_SOURCE_PATH,
             payload=lineage,
         )

@@ -831,6 +831,16 @@ jobs:
               - 'tests/instance/test_file_state_binding_key.py'
               - 'tests/services/test_vault_sync_binding_scope.py'
               - 'tests/integration/test_single_vault_compatibility.py'
+              # HAR-02 (#3848): legacy raw evidence is backfilled into a
+              # migration-owned representation registry. Its rollback,
+              # resume/read-continuity and bootstrap-parity proofs require
+              # real PostgreSQL and therefore must be attached to the PR path.
+              - 'app/heimdal/raw_store.py'
+              - 'app/heimdal/raw_read_gate.py'
+              - 'app/heimdal/retention.py'
+              - 'app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py'
+              - 'tests/heimdal/test_local_archive_migration.py'
+              - 'tests/migrations/test_heimdal_raw_representation_migration.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -891,6 +901,7 @@ jobs:
             tests/instance/test_file_state_binding_key.py \
             tests/services/test_vault_sync_binding_scope.py \
             tests/integration/test_single_vault_compatibility.py \
+            tests/migrations/test_heimdal_raw_representation_migration.py \
             --tb=short \
             | tee pytest-index-pg.log
 

@@ -347,6 +347,16 @@ Companion docs:
 - The API container runs `scripts/start_api.sh` (migrations + `uvicorn`).
 - The worker runs `python -m app.workers.outbox_worker` (consumes DB outbox).
 - The watcher runs `python -m app.cli watcher run` (registry loop; emits `ingest.vault.changed` / `panel.scan.requested` DB outbox events and appends `watcher.run` audit rows to the JSONL event log).
+- Governed channel deploys run the `migrate` service as an explicit one-shot step before recreating
+  long-lived services. When HAR-02's legacy raw-evidence backfill is present, that exact invocation
+  is wrapped with the declared `heimdal-raw-migrate` consumer from the existing shared raw-store-key
+  domain. The trusted migration receipt selects this gate only for HAR-02's exact revision; unrelated
+  inventories perform no raw-key lookup. A value-free resolution preflight runs after migration
+  inventory/dry-run but before any deploy mutation; the exact one-shot wrapper resolves again
+  immediately before Alembic and delivers only a temporary migrate-specific handle. Missing,
+  malformed, or domain-divergent material therefore cannot stop active writers or advance deployment
+  state, and diagnostics remain value-free. This wiring does not create, rotate, read back, or
+  otherwise mutate host secret material.
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.

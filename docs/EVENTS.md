@@ -339,8 +339,9 @@ The *watch* seam: `app/heimdal/capture_adapter.py` is the only component
 that touches the iCloud Shortcut folder or deletes a source file. It
 watches the folder for new voice-memo files (discrete capture, posture A),
 admits each one under an active consent grant, encrypts it at rest, and
-writes it to its own append-only table (`heimdal_raw_record`, migration
-`d5a8e2f1b6c3`).
+writes immutable identity/provenance to `heimdal_raw_record` and the encrypted
+copy to its registered Postgres-hot representation (`heimdal_raw_representation`,
+migration `e7b4c9d2a6f1`).
 
 Contract:
 
@@ -360,16 +361,29 @@ Contract:
   plaintext never reaches the store. The key is a caller-supplied 32-byte
   value from `HEIMDAL_RAW_STORE_KEY` — a missing key refuses loudly
   (`RawStoreKeyMissingError`), never falling back to writing plaintext.
-- **Provenance stamped in the same durable write (KERNEL-06).**
-  `insert_raw_record` writes `content_identity` (sha256 of the raw
+- **Identity, provenance, and the initial representation land atomically
+  (KERNEL-06).** `insert_raw_record` writes `content_identity` (sha256 of the raw
   evidence, the KAP-compatible join key), `capture_chain`
   (`["ios_voice_memos", "icloud_drive", "folder_watch"]` for v1), `sensor`,
-  and `consent` (the resolved `grant_ref`) in the single INSERT that lands
-  the ciphertext — there is no separate "stamp provenance later" step.
-- **Append-only (HEIM-1).** Same discipline as `heimdal_observation_log` /
-  `heimdal_consent_grant`: the Python store exposes no update/delete
-  function, and the Postgres backend installs an identical
-  reject-mutation trigger (migration `d5a8e2f1b6c3`).
+  and `consent` (the resolved `grant_ref`) together with its first registered
+  encrypted representation in one transaction — there is no separate "stamp
+  provenance later" step and no representation-less admitted record.
+- **Identity stays append-only; representation lifecycle is governed
+  (HEIM-1 / INV-HAR-2a).** Ordinary callers cannot rewrite or delete the
+  immutable identity/provenance row. Registered representations are immutable
+  except for guarded active-selection and governed all-copy erasure. The
+  initial insert, every later registration or activation, and the gated read
+  decrypt the selected representation and verify its plaintext SHA-256 against
+  the immutable `content_identity` before changing active state, returning
+  plaintext, or writing a read receipt. A mismatch fails loudly and leaves the
+  prior active representation and receipt state unchanged. The
+  migration transactionally backfills each legacy inline ciphertext as one
+  deterministic active `postgres_hot` representation only after decrypting it
+  with the configured raw-store key and matching its plaintext SHA-256 to the
+  immutable identity. It fails before representation creation/activation or
+  legacy-column removal if the key, bytes, or identity cannot be proven, and
+  is safe to rerun after correction. It does
+  not create a cold locator or perform live relocation.
 - **Idempotent by `content_identity`.** Re-admitting the same raw evidence
   (e.g. a crash-retry before delete-after-ingest fired) does not create a
   duplicate row — a unique index (Postgres) / in-process dict (memory)
@@ -402,7 +416,9 @@ Contract:
   `"heimraw:<uuid>"` from a durable `RawRecord`; callers outside this
   module never see or pass `source_path`, a DB row shape, or the table
   name. `read_raw_record` is the only function that resolves a `raw_ref`
-  back to bytes.
+  back to bytes. After authorization and receipt-store readiness checks, it
+  resolves only the identity's sole active registered representation; callers
+  cannot provide a location or filesystem path.
 - **Allowlist gate (interim CrossScopeFlow stand-in, declared HEIM-5
   gap).** `read_raw_record(raw_ref, reader=..., purpose=...)` refuses
   loudly (`RawReadRefusedError`) unless `reader` is on
@@ -457,6 +473,12 @@ Contract:
   names the bound in force). A `RetentionEnforcementReceipt` is returned
   from every run, including the zero-deletions case (an honestly-receipted
   no-op, never a silent skip).
+- **All registered copies precede success.** The shared raw-store erasure
+  primitive enumerates and deletes every registered representation in one
+  transaction before removing identity. Any copy failure rolls the whole
+  attempt back, so retention cannot append a success receipt while bytes
+  remain. Consent-revocation propagation remains a later runtime, but it must
+  reuse this same primitive rather than deleting a single location.
 - **The one governed exception to append-only (D-RETENTION).**
   `app.heimdal.raw_store.hard_delete_raw_record` is the ONLY function that
   can remove a `heimdal_raw_record` row. The Postgres trigger

@@ -324,6 +324,25 @@ _deploy_channel_needs_capture_secret() {
   return 1
 }
 
+# HAR-02's migration cryptographic preflight is itself a declared raw-store
+# consumer. Restrict this bootstrap to the explicit one-shot migration command
+# used by apply_changed_migrations: implicit dependency starts and unrelated
+# service ups must not receive or borrow its handle. Unlike the API ingress
+# layer, this required migration authority never degrades open — a missing,
+# malformed, or shared-domain-divergent key prevents Docker from starting.
+_deploy_channel_needs_migration_secret() {
+  local channel="${1:?channel required}"
+  shift
+  [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" = "1" ] || return 1
+  [ "${#}" -eq 6 ] || return 1
+  [ "${1}" = "up" ] \
+    && [ "${2}" = "--abort-on-container-exit" ] \
+    && [ "${3}" = "--exit-code-from" ] \
+    && [ "${4}" = "migrate" ] \
+    && [ "${5}" = "--force-recreate" ] \
+    && [ "${6}" = "migrate" ]
+}
+
 # The api process is a declared consumer of heimdal.raw-store-key (#4422): the
 # governed media/screen ingress lanes encrypt through the raw store. Bootstrap
 # fires whenever `up` includes the api service (named explicitly, or implied by
@@ -588,6 +607,21 @@ deploy_channel_compose() {
         --channel "${channel}"
         --consumer heimdal-api-ingress
         -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_API="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
+        "${compose_command[@]}"
+      )
+    fi
+
+    if _deploy_channel_needs_migration_secret "${channel}" "$@"; then
+      # Outermost so any future nested consumer bootstrap may scrub the shared
+      # handle without erasing this migrate-only alias. The alias is only an
+      # env-file path; the bootstrap owns/removes the file and never exports a
+      # raw secret binding into the ambient process environment.
+      compose_command=(
+        sh -c 'cd "$1" && export PYTHONPATH="$1${PYTHONPATH:+:${PYTHONPATH}}" && shift && exec "$@"' _ "${root}"
+        "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
+        --channel "${channel}"
+        --consumer heimdal-raw-migrate
+        -- sh -c 'export HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE="${HOST_SECRET_RUNTIME_ENV_FILE:-/dev/null}"; unset HOST_SECRET_RUNTIME_ENV_FILE; exec "$@"' _
         "${compose_command[@]}"
       )
     fi

@@ -13,12 +13,14 @@ import pytest
 
 from app.release_channels.reversibility import (
     FORWARD_ONLY,
+    HEIMDAL_RAW_REPRESENTATION_MIGRATION,
     REVERSIBLE,
     VALID_MARKERS,
     MigrationClassificationResult,
     MigrationMarkerError,
     check_all_migrations,
     classify_migration,
+    heimdal_raw_representation_migration_pending,
     read_migration_marker,
 )
 
@@ -161,3 +163,133 @@ class TestClassificationReceipt:
         assert receipt["reversible"] == []
         assert receipt["forward_only"] == []
         assert receipt["classification_decisions"] == []
+
+
+def _classification_receipt(
+    *entries: tuple[str, str],
+) -> dict[str, object]:
+    decisions = [
+        {
+            "migration": name,
+            "classification": classification,
+            "is_forward_only": classification == FORWARD_ONLY,
+        }
+        for name, classification in entries
+    ]
+    return {
+        "migrations_checked": len(decisions),
+        "reversible": [
+            name for name, classification in entries if classification == REVERSIBLE
+        ],
+        "forward_only": [
+            name for name, classification in entries if classification == FORWARD_ONLY
+        ],
+        "classification_decisions": decisions,
+    }
+
+
+class TestHeimdalRawMigrationReceiptSelector:
+    @pytest.mark.parametrize(
+        ("entries", "expected"),
+        [
+            ((('unrelated.py', REVERSIBLE),), False),
+            (((HEIMDAL_RAW_REPRESENTATION_MIGRATION, REVERSIBLE),), True),
+            (
+                (
+                    ("unrelated.py", FORWARD_ONLY),
+                    (HEIMDAL_RAW_REPRESENTATION_MIGRATION, REVERSIBLE),
+                ),
+                True,
+            ),
+        ],
+    )
+    def test_exact_filename_selects_pending_state(
+        self,
+        entries: tuple[tuple[str, str], ...],
+        expected: bool,
+    ) -> None:
+        assert heimdal_raw_representation_migration_pending(
+            _classification_receipt(*entries)
+        ) is expected
+
+    @pytest.mark.parametrize(
+        "receipt",
+        [
+            None,
+            {},
+            {
+                "migrations_checked": True,
+                "reversible": [],
+                "forward_only": [],
+                "classification_decisions": [],
+            },
+            {
+                "migrations_checked": 1,
+                "reversible": [],
+                "forward_only": [],
+                "classification_decisions": [],
+            },
+            {
+                "migrations_checked": 1,
+                "reversible": ["nested/migration.py"],
+                "forward_only": [],
+                "classification_decisions": [
+                    {
+                        "migration": "nested/migration.py",
+                        "classification": REVERSIBLE,
+                        "is_forward_only": False,
+                    }
+                ],
+            },
+            {
+                "migrations_checked": 1,
+                "reversible": ["migration.py"],
+                "forward_only": [],
+                "classification_decisions": [
+                    {
+                        "migration": "migration.py",
+                        "classification": FORWARD_ONLY,
+                        "is_forward_only": False,
+                    }
+                ],
+            },
+            {
+                "migrations_checked": 2,
+                "reversible": [
+                    HEIMDAL_RAW_REPRESENTATION_MIGRATION,
+                    HEIMDAL_RAW_REPRESENTATION_MIGRATION,
+                ],
+                "forward_only": [],
+                "classification_decisions": [
+                    {
+                        "migration": HEIMDAL_RAW_REPRESENTATION_MIGRATION,
+                        "classification": REVERSIBLE,
+                        "is_forward_only": False,
+                    },
+                    {
+                        "migration": HEIMDAL_RAW_REPRESENTATION_MIGRATION,
+                        "classification": REVERSIBLE,
+                        "is_forward_only": False,
+                    },
+                ],
+            },
+            {
+                "migrations_checked": 1,
+                "reversible": [],
+                "forward_only": ["migration.py"],
+                "classification_decisions": [
+                    {
+                        "migration": "migration.py",
+                        "classification": REVERSIBLE,
+                        "is_forward_only": False,
+                    }
+                ],
+            },
+        ],
+    )
+    def test_malformed_or_ambiguous_receipt_fails_closed(
+        self,
+        receipt: object,
+    ) -> None:
+        with pytest.raises(MigrationMarkerError, match="^invalid migration receipt$"):
+            heimdal_raw_representation_migration_pending(receipt)

@@ -614,8 +614,8 @@ def test_the_attached_object_ddl_debt_is_exactly_what_is_recorded() -> None:
     MVR-05A2 widened this scan's vocabulary past table-level DDL, because an
     index or trigger dropped and recreated against a migration-owned table is
     the same drop-and-re-add mechanism MVR-05A1 (#4560) removed from
-    `objects_pkey`. Forty-five such statements across fourteen modules already
-    run without an existence probe, including six
+    `objects_pkey`. Forty-one such statements across thirteen modules already
+    run without an existence probe, including five
     `DROP TRIGGER` / `CREATE TRIGGER` pairs —
     `app/heimdal/raw_read_gate.py`'s own docstring records that migration
     `f1c7e2a9b4d6` installs an identical trigger, so a migration owns the object

@@ -87,6 +87,7 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
         ciphertext=ciphertext,
         nonce=nonce,
         key_ref="v1-process-key",
+        key=encryption_key,
         source_path="screen-capture-endpoint",
         payload={"modality": "screen", "bundle_shape": shape},
     )
