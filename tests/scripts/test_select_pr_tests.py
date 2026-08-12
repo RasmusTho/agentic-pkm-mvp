@@ -99,6 +99,16 @@ def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() ->
     assert "tests/ports" in selection.targets
 
 
+def test_vault_sync_delete_seam_selects_vault_lifecycle_coverage() -> None:
+    selection = select_tests(["app/services/vault_sync.py"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert "vault" in selection.subsystems
+    assert "tests/services/test_vault_sync_lifecycle.py" in selection.targets
+    assert "tests/watcher/test_vault_watcher_delete_required_outbox.py" in selection.targets
+
+
 def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci.yml"])
 

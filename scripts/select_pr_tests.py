@@ -308,6 +308,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/instance/",
             "app/knowledge/",
             "app/vault/",
+            # The deletion seam owns vault file-state lifecycle and emits the
+            # watcher-consumed tombstone. It is a vault runtime surface, not a
+            # generic services module; leaving it unowned fail-closes the
+            # required Unit check before its real regression targets run.
+            "app/services/vault_sync.py",
             "tests/instance/",
             "tests/vault/",
             "tests/knowledge/",
@@ -330,6 +335,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/vault",
             "tests/knowledge",
             "tests/ports",
+            "tests/services/test_vault_sync_lifecycle.py",
+            "tests/services/test_vault_sync_atomicity.py",
+            "tests/services/test_vault_sync_delete_note_policy.py",
+            "tests/watcher/test_vault_watcher_delete_required_outbox.py",
             "tests/architecture/test_no_hardcoded_vault_layout.py",
             "tests/agents/test_merge_resolver.py",
             "tests/agents/test_merge_resolver_repo_docs.py",
