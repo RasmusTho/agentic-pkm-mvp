@@ -373,6 +373,7 @@ class RetrievalTuning(BaseModel):
     configured_keys: list[str] = Field(
         default_factory=list,
         description="Compiler-projected set of explicitly configured retrieval keys; not user-authored authority.",
+        json_schema_extra={"internal": True},
     )
     rerank_top_k: int = Field(
         default=100,

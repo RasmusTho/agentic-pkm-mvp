@@ -196,6 +196,10 @@ def _normalize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized["batch_size"] = clamp_int(
             normalized["batch_size"], lo=1, hi=1000, default=100
         )
+    if "rerank_top_k" in normalized:
+        normalized["rerank_top_k"] = clamp_int(
+            normalized["rerank_top_k"], lo=1, hi=10000, default=100
+        )
     if "search_k" in normalized:
         normalized["search_k"] = clamp_int(
             normalized["search_k"], lo=1, hi=20, default=8
@@ -494,8 +498,11 @@ def compile_all(
     retrieval_payload = _merge_sections(file_sections.get("retrieval", {}))
     retrieval_source_keys = sorted(retrieval_payload)
     retrieval_model, retrieval_canonical, retrieval_fixed = _hydrate_model(
-        payload={**retrieval_payload, "configured_keys": retrieval_source_keys}, model_cls=RetrievalTuning
+        payload=retrieval_payload, model_cls=RetrievalTuning
     )
+    # Provenance is a compiler projection, never user-authored settings payload.
+    # Keep it out of the auto-heal canonical/writeback mapping below.
+    retrieval_model = retrieval_model.model_copy(update={"configured_keys": retrieval_source_keys})
     bundle.retrieval_tuning = retrieval_model
     if retrieval_fixed and "retrieval" in file_paths and writeback_allowed(file_paths["retrieval"]):
         writeback_settings_block(

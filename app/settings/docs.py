@@ -24,6 +24,9 @@ def _field_allowed(field) -> Optional[List[str]]:
 def model_meta(model: BaseModel) -> Dict[str, FieldMeta]:
     meta: Dict[str, FieldMeta] = {}
     for name, field in model.__class__.model_fields.items():  # type: ignore[attr-defined]
+        extras = getattr(field, "json_schema_extra", None)
+        if isinstance(extras, dict) and extras.get("internal") is True:
+            continue
         annotation = getattr(field.annotation, "__name__", str(field.annotation))
         default = field.default if field.default is not None else ""
         desc = field.description or ""

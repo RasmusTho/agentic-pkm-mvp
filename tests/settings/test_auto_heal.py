@@ -59,6 +59,18 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
         """,
     )
     _write_md(
+        vault / "retrieval.md",
+        """
+        ---
+        uuid: retrieval
+        ---
+        ## Rerank
+        ```yaml settings
+        rerank_top_k: invalid
+        ```
+        """,
+    )
+    _write_md(
         vault / "agents" / "classifier.md",
         """
         ---
@@ -82,10 +94,17 @@ def test_auto_heal_rewrites_invalid_values(tmp_path, monkeypatch):
 
     assert bundle.global_.timeout_ms == 8000
     assert bundle.agents["classifier"].timeout_ms == 8000
+    assert bundle.retrieval_tuning.rerank_top_k == 100
+    assert bundle.retrieval_tuning.configured_keys == ["rerank_top_k"]
 
     agent_md = (vault / "agents" / "classifier.md").read_text(encoding="utf-8")
     assert "timeout_ms: 8000" in agent_md
     assert "<!-- BEGIN:settings:reference -->" in agent_md
+    retrieval_md = (vault / "retrieval.md").read_text(encoding="utf-8")
+    assert "rerank_top_k: 100" in retrieval_md
+    assert "configured_keys" not in retrieval_md
+    projection = (runtime_dir / "retrieval_tuning.yaml").read_text(encoding="utf-8")
+    assert "configured_keys:" in projection
 
 
 def test_auto_heal_writes_settings_via_knowledge_port(tmp_path, monkeypatch) -> None:
