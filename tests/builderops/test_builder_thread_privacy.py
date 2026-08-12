@@ -34,6 +34,8 @@ def _client(writer: SerializedThreadWriter) -> BuilderThreadClient:
         "C:\\Users\\operator\\.ssh\\id_rsa",
         "\\\\server\\Users\\operator\\.ssh\\id_rsa",
         "\\Users\\operator\\.ssh\\id_rsa",
+        "https://example.test/page?next=%2Froot%2F.ssh%2Fid_rsa",
+        "https://example.test/page#next=%252Froot%252F.ssh%252Fid_rsa",
         "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
     ),
 )
@@ -93,11 +95,20 @@ def test_ordinary_urls_remain_shared_non_sensitive(tmp_path: Path, ordinary_text
     assert writer.accepted_mutation_count == 1
 
 
-def test_recovery_rejects_privacy_invalid_persisted_envelope(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "rejected_content",
+    (
+        "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+        "https://example.test/page?next=%2Froot%2F.ssh%2Fid_rsa",
+    ),
+)
+def test_recovery_rejects_privacy_invalid_persisted_envelope(
+    tmp_path: Path, rejected_content: str
+) -> None:
     _, root = _writer(tmp_path)
     command = {
         "actor": "codex:desktop",
-        "content": "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+        "content": rejected_content,
         "kind": "create",
         "recipient": "claude:mac",
         "request_id": "privacy-recovery-4728",

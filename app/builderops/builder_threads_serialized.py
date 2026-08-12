@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 PRIVACY_CLASS: Literal["shared_non_sensitive"] = "shared_non_sensitive"
@@ -609,7 +609,31 @@ def _contains_private_host_path(value: str) -> bool:
     for match in _PRIVATE_POSIX_PATH.finditer(value):
         if not _is_uri_path_component(value, match.start()):
             return True
-    return _PRIVATE_WINDOWS_PATH.search(value) is not None
+    if _PRIVATE_WINDOWS_PATH.search(value) is not None:
+        return True
+    return any(
+        _contains_private_path_data(component)
+        for uri_match in _URI.finditer(value)
+        for component in _decoded_uri_data(uri_match.group())
+    )
+
+
+def _decoded_uri_data(uri: str) -> tuple[str, str]:
+    parsed = urlsplit(uri)
+    return _decode_uri_component(parsed.query), _decode_uri_component(parsed.fragment)
+
+
+def _decode_uri_component(value: str) -> str:
+    for _ in range(3):
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    return value
+
+
+def _contains_private_path_data(value: str) -> bool:
+    return _PRIVATE_POSIX_PATH.search(value) is not None or _PRIVATE_WINDOWS_PATH.search(value) is not None
 
 
 def _is_uri_path_component(value: str, offset: int) -> bool:
