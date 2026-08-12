@@ -627,7 +627,7 @@
     },
     "heimdal_raw_record": {
       "classification": "explicitly-global",
-      "reason": "`heimdal_raw_record` is the encrypted raw capture record itself, keyed by content identity and written by `app/heimdal/raw_store.py` at ingest. The row exists because a sensor produced bytes, before and independently of any vault; it stores ciphertext, a capture chain and a consent reference, and no vault path. Explicitly global per MVR-05's acceptance criteria.",
+      "reason": "`heimdal_raw_record` is the immutable raw capture identity/provenance row, keyed by content identity and written by `app/heimdal/raw_store.py` at ingest. The row exists because a sensor produced bytes, before and independently of any vault; encrypted copies live in `heimdal_raw_representation`. Explicitly global per MVR-05's acceptance criteria.",
       "owning_revision": "d5a8e2f1b6c3",
       "declaring_revisions": [
         "d5a8e2f1b6c3"
@@ -640,6 +640,28 @@
           "operations": [
             "delete",
             "insert"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
+    },
+    "heimdal_raw_representation": {
+      "classification": "explicitly-global",
+      "reason": "`heimdal_raw_representation` stores registered encrypted copies for a global `heimdal_raw_record` identity. It carries no vault binding and is created, activated, resolved and erased only through `app/heimdal/raw_store.py`; its scope follows the global raw identity it references.",
+      "owning_revision": "e7b4c9d2a6f1",
+      "declaring_revisions": [
+        "e7b4c9d2a6f1"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/heimdal/raw_store.py",
+          "operations": [
+            "delete",
+            "insert",
+            "update"
           ]
         }
       ],

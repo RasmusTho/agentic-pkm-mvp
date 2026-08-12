@@ -50,6 +50,7 @@ from app.heimdal.consent_ledger import (
 )
 from app.heimdal.raw_store import (
     all_raw_records,
+    all_raw_representations,
     get_raw_record_by_content_identity,
     reset_memory_raw_store,
 )
@@ -407,6 +408,8 @@ def test_duplicate_content_identity_is_idempotent(tmp_path: Path) -> None:
     assert result_b.created is False
     assert result_a.record.id == result_b.record.id
     assert len(all_raw_records()) == 1
+    representations = all_raw_representations(result_a.record.id)
+    assert len(representations) == 1 and representations[0].active
     # Both source files are still deleted -- each memo's own copy is redundant
     # once the (shared) content is durably persisted.
     assert not memo_a.exists()

@@ -91,6 +91,15 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     assert "app/alembic/versions/e7a2b9c4d1f8_eroj01_entity_review_operations.py" in job
     assert "tests/heimdal/test_entity_review_operation_journal.py" in job
     assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in job
+    # HAR-02's forward-only raw representation backfill is pg-only. Both the
+    # runtime/migration sources must trigger this PR lane and the exact proof
+    # must appear in its pytest invocation.
+    assert "app/heimdal/raw_store.py" in job
+    assert "app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py" in job
+    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in job
+    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in (
+        INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+    )
     assert '-m "pg"' in job
 
 

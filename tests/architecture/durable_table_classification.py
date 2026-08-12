@@ -1574,7 +1574,7 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
 #: https://github.com/RasmusTho/agentic-pkm-mvp/issues/4598, which owns both the
 #: repair and shrinking this mapping as statements retire.
 #:
-#: The load-bearing entries are the six `drop trigger` / `create trigger` pairs.
+#: The load-bearing entries are the five `drop trigger` / `create trigger` pairs.
 #: `app/heimdal/raw_read_gate.py`'s own module docstring records that migration
 #: `f1c7e2a9b4d6` installs an identical reject-mutation trigger — so a migration
 #: owns the object and the runtime drops and recreates it, which is structurally
@@ -1611,9 +1611,6 @@ RECORDED_ATTACHED_DDL_DEBT: Mapping[tuple[str, str, str], int] = MappingProxyTyp
         ("app/heimdal/raw_read_gate.py", "create index", "heimdal_raw_read_receipt"): 2,
         ("app/heimdal/raw_read_gate.py", "create trigger", "heimdal_raw_read_receipt"): 1,
         ("app/heimdal/raw_read_gate.py", "drop trigger", "heimdal_raw_read_receipt"): 1,
-        ("app/heimdal/raw_store.py", "create index", "heimdal_raw_record"): 2,
-        ("app/heimdal/raw_store.py", "create trigger", "heimdal_raw_record"): 1,
-        ("app/heimdal/raw_store.py", "drop trigger", "heimdal_raw_record"): 1,
         ("app/heimdal/retention.py", "create index", "heimdal_raw_deletion_receipt"): 2,
         ("app/heimdal/retention.py", "create trigger", "heimdal_raw_deletion_receipt"): 1,
         ("app/heimdal/retention.py", "drop trigger", "heimdal_raw_deletion_receipt"): 1,

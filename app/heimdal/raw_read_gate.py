@@ -403,7 +403,12 @@ def read_raw_record(
             f"{_ALLOWLIST_ENV_VAR} to include this reader id if the read is intended."
         )
 
-    record = _resolve_record_by_id(record_id)
+    # Resolve receipt-store readiness before touching representation state.
+    # A successful call may never decrypt bytes when it cannot durably receipt
+    # the read, and unauthorized callers never reach either store.
+    receipt_backend = _backend()
+
+    record = raw_store.resolve_active_raw_record(record_id)
     if record is None:
         raise RawReadRefusedError(
             f"Raw read refused: raw_ref {raw_ref!r} does not resolve to any known raw "
@@ -411,7 +416,18 @@ def read_raw_record(
         )
 
     encryption_key = key if key is not None else raw_store.resolve_raw_store_key()
-    plaintext = raw_store.decrypt_raw_bytes(record.ciphertext, record.nonce, key=encryption_key)
+    try:
+        plaintext = raw_store.decrypt_and_verify_raw_bytes(
+            record.content_identity,
+            record.ciphertext,
+            record.nonce,
+            key=encryption_key,
+        )
+    except raw_store.RawRepresentationIdentityMismatchError as exc:
+        raise RawReadRefusedError(
+            "Raw read refused: active representation does not match immutable content identity. "
+            "No receipt written and no plaintext returned."
+        ) from exc
 
     receipt = RawReadReceipt(
         id=str(uuid4()),
@@ -423,23 +439,9 @@ def read_raw_record(
         payload=dict(payload or {}),
         sequence=-1,
     )
-    persisted_receipt = _backend().append(receipt)
+    persisted_receipt = receipt_backend.append(receipt)
 
     return GatedRawRead(plaintext=plaintext, receipt=persisted_receipt)
-
-
-def _resolve_record_by_id(record_id: str) -> Optional["raw_store.RawRecord"]:
-    """Resolve a raw record by its opaque-handle id without leaking `source_path`.
-
-    Uses the raw store's own diagnostic listing rather than adding a new
-    by-id lookup to `raw_store`'s public surface -- this module is the only
-    caller that needs id-based resolution (every other consumer goes
-    through `content_identity`), so the lookup stays local to the gate.
-    """
-    for row in raw_store.all_raw_records():
-        if row.id == record_id:
-            return row
-    return None
 
 
 def all_raw_read_receipts() -> List[RawReadReceipt]:

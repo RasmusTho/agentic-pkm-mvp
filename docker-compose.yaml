@@ -54,6 +54,15 @@ services:
       - ./config/runtime.defaults.env
       - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
         required: false
+      # HAR-02's one-shot legacy backfill must prove each encrypted copy
+      # against its immutable identity before it can move bytes into the
+      # representation registry. The governed channel deploy wrapper
+      # materializes this migrate-only handle from the declared
+      # `heimdal-raw-migrate` consumer for the exact `up ... migrate`
+      # invocation. No long-lived service reads this handle, and a bare
+      # Compose invocation contributes nothing when the handle is absent.
+      - path: ${HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE:-/dev/null}
+        required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     command: ["/bin/bash", "/app/scripts/run_migrations.sh"]
     environment:

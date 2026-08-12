@@ -48,7 +48,11 @@ from app.heimdal.media_receipts import (
     reset_memory_media_receipts,
 )
 from app.heimdal.raw_read_gate import raw_ref_for
-from app.heimdal.raw_store import all_raw_records, reset_memory_raw_store
+from app.heimdal.raw_store import (
+    all_raw_records,
+    all_raw_representations,
+    reset_memory_raw_store,
+)
 
 pytestmark = pytest.mark.not_pg
 
@@ -288,6 +292,8 @@ def test_receipt_raw_ref_resolves_to_the_object_it_attests_to(client: TestClient
     assert admitted.status_code == 200, admitted.text
 
     record = all_raw_records()[0]
+    representations = all_raw_representations(record.id)
+    assert len(representations) == 1 and representations[0].active
     assert admitted.json()["raw_ref"] == raw_ref_for(record)
     queried = _get_receipts(client, sidecar["capture_id"]).json()["receipts"][0]
     assert queried["raw_ref"] == raw_ref_for(record)
