@@ -7,12 +7,12 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-
-from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 import yaml
 from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from app.db.dsn import resolve_dsn
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 
 def _pg_base_dsn() -> str:
@@ -28,34 +28,27 @@ def _pg_available() -> bool:
         return False
 
 
-def _dsn_with_search_path(dsn: str, schema: str) -> str:
-    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
-    parts = urlsplit(dsn)
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query["options"] = f"-csearch_path={schema},public"
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
-
-
-def _create_schema(dsn: str, schema: str) -> None:
+def _create_database(dsn: str, database: str) -> None:
     with psycopg.connect(dsn, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
 
 
-def _drop_schema(dsn: str, schema: str) -> None:
+def _drop_database(dsn: str, database: str) -> None:
     with psycopg.connect(dsn, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
+        conn.execute(
+            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                sql.Identifier(database)
+            )
+        )
 
 
 def _ensure_isolated_runtime_tables(dsn: str) -> None:
-    """Produce the runtime tables inside this test's isolated search path.
+    """Produce the runtime tables inside this test's isolated database.
 
     ``vault_sync`` needs the legacy objects/file-state and outbox producers as
-    well as the canonical store producer.  Create them only after the isolated
-    search path is active, so a fresh CI database cannot accidentally fall
-    through to tables left in ``public`` by another test.
+    well as the canonical store producer. Create them only after the scratch
+    database is active, so their explicitly-qualified ``public`` tables cannot
+    fall through to rows left behind by another test.
 
     The outbox bootstrap calls ``ensure_schema`` first and both producers honor
     the explicit ``STORE_SCHEMA_AUTOCREATE=1`` pg-test fixture opt-in.  This is
@@ -64,25 +57,31 @@ def _ensure_isolated_runtime_tables(dsn: str) -> None:
     from app.services.outbox import bootstrap
 
     with psycopg.connect(dsn) as conn:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         bootstrap(conn)
         conn.commit()
 
 
 def _configure_isolated_pg_test(monkeypatch) -> tuple[str, str]:
-    base_dsn = _pg_base_dsn()
-    schema = f"pgtest_{uuid4().hex}"
-    _create_schema(base_dsn, schema)
-    dsn = _dsn_with_search_path(base_dsn, schema)
+    admin_dsn = _pg_base_dsn()
+    database = f"scratch_vault_sync_{uuid4().hex[:12]}"
+    _create_database(admin_dsn, database)
+    dsn = make_conninfo(admin_dsn, dbname=database)
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("DB_DSN", dsn)
-    _ensure_isolated_runtime_tables(dsn)
-    # Use the production store-schema producer instead of copying its DDL into
-    # this test. The monkeypatched process flag is restored after each case.
-    from app.stores import pg as pg_store
+    try:
+        _ensure_isolated_runtime_tables(dsn)
+        # Use the production store-schema producer instead of copying its DDL
+        # into this test. The monkeypatched process flag is restored after each
+        # case.
+        from app.stores import pg as pg_store
 
-    monkeypatch.setattr(pg_store, "_TABLES_READY", False)
-    pg_store._ensure_tables()
-    return base_dsn, schema
+        monkeypatch.setattr(pg_store, "_TABLES_READY", False)
+        pg_store._ensure_tables()
+    except Exception:
+        _drop_database(admin_dsn, database)
+        raise
+    return admin_dsn, database
 
 
 def _write_note(path: Path, uuid_value: str, title: str, body: str) -> None:
@@ -162,7 +161,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
         from app.services import vault_sync
@@ -211,7 +210,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         assert _file_state_row_count(dsn) == file_state_before + 1
         assert _outbox_row_count(dsn) == outbox_before + 1
     finally:
-        _drop_schema(base_dsn, schema)
+        _drop_database(admin_dsn, database)
 
 
 @pytest.mark.pg
@@ -220,7 +219,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
         from app.services import vault_sync
@@ -262,7 +261,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
         assert _file_state_row_count(dsn) == file_state_before + 1
         assert _outbox_row_count(dsn) == outbox_before + 1
     finally:
-        _drop_schema(base_dsn, schema)
+        _drop_database(admin_dsn, database)
 
 
 @pytest.mark.pg
@@ -276,7 +275,7 @@ def test_rename_atomic(tmp_path, monkeypatch) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
         from app.services import vault_sync
@@ -314,7 +313,7 @@ def test_rename_atomic(tmp_path, monkeypatch) -> None:
         assert _file_state_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
         assert _objects_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
     finally:
-        _drop_schema(base_dsn, schema)
+        _drop_database(admin_dsn, database)
 
 
 @pytest.mark.pg
@@ -322,7 +321,7 @@ def test_sync_markdown_edit_preserves_richer_canonical_payload(tmp_path, monkeyp
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
         from app.services import vault_sync
@@ -367,7 +366,7 @@ def test_sync_markdown_edit_preserves_richer_canonical_payload(tmp_path, monkeyp
             envelope = json.loads(envelope)
         assert envelope["payload"]["episode_ref"] == "episode:1"
     finally:
-        _drop_schema(base_dsn, schema)
+        _drop_database(admin_dsn, database)
 
 
 @pytest.mark.pg
@@ -378,7 +377,7 @@ def test_real_episode_binding_list_survives_merge_without_type_error(
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
         from app.services import vault_sync
@@ -402,7 +401,7 @@ def test_real_episode_binding_list_survives_merge_without_type_error(
         assert payload["episode_ref"] == ["episode-1a2b3c4d"]
         assert payload["content"] == "bound body edited"
     finally:
-        _drop_schema(base_dsn, schema)
+        _drop_database(admin_dsn, database)
 
 
 @pytest.mark.pg
@@ -410,7 +409,7 @@ def test_pure_rename_preserves_richer_canonical_payload(tmp_path, monkeypatch) -
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    base_dsn, schema = _configure_isolated_pg_test(monkeypatch)
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
         from app.services import vault_sync
@@ -443,4 +442,4 @@ def test_pure_rename_preserves_richer_canonical_payload(tmp_path, monkeypatch) -
         assert payload["ingest_fingerprint"] == "fingerprint:2"
         assert payload["content"] == "unchanged body"
     finally:
-        _drop_schema(base_dsn, schema)
+        _drop_database(admin_dsn, database)

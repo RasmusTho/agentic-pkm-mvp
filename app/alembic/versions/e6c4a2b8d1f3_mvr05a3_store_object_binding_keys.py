@@ -261,7 +261,7 @@ def upgrade() -> None:
               FROM public.store_vector_index v
               LEFT JOIN public.store_objects p ON p.object_id = v.object_id
              GROUP BY v.object_id
-            HAVING count(p.*) <> 1
+            HAVING count(DISTINCT p.vault_binding_id) <> 1
              LIMIT 20;
             IF offending IS NOT NULL THEN
                 RAISE EXCEPTION USING MESSAGE = format(
@@ -273,11 +273,12 @@ def upgrade() -> None:
 
             SELECT string_agg(format('%s->%s', r.src_id, r.dst_id), ', ' ORDER BY 1)
               INTO offending
-              FROM public.store_relations r
+             FROM public.store_relations r
               LEFT JOIN public.store_objects src ON src.object_id = r.src_id
               LEFT JOIN public.store_objects dst ON dst.object_id = r.dst_id
              GROUP BY r.src_id, r.dst_id
-            HAVING count(src.*) <> 1 OR count(dst.*) <> 1
+            HAVING count(DISTINCT src.vault_binding_id) <> 1
+                OR count(DISTINCT dst.vault_binding_id) <> 1
                 OR min(src.vault_binding_id) IS DISTINCT FROM min(dst.vault_binding_id)
              LIMIT 20;
             IF offending IS NOT NULL THEN
@@ -295,7 +296,7 @@ def upgrade() -> None:
               FROM public.store_relation_memberships m
               LEFT JOIN public.store_objects p ON p.object_id = m.src_id
              GROUP BY m.src_id, m.rel, m.value
-            HAVING count(p.*) <> 1
+            HAVING count(DISTINCT p.vault_binding_id) <> 1
              LIMIT 20;
             IF offending IS NOT NULL THEN
                 RAISE EXCEPTION USING MESSAGE = format(
@@ -329,7 +330,8 @@ def upgrade() -> None:
                 EXECUTE format(
                     'SELECT string_agg(c.%1$I::text, '', '' ORDER BY c.%1$I::text) '
                     'FROM public.%2$I c LEFT JOIN public.store_objects p ON p.object_id = c.%1$I '
-                    'WHERE c.%1$I IS NOT NULL GROUP BY c.%1$I HAVING count(p.*) <> 1 LIMIT 20',
+                    'WHERE c.%1$I IS NOT NULL GROUP BY c.%1$I '
+                    'HAVING count(DISTINCT p.vault_binding_id) <> 1 LIMIT 20',
                     fk.column_name, fk.table_name
                 ) INTO offending;
                 IF offending IS NOT NULL THEN
@@ -352,7 +354,8 @@ def upgrade() -> None:
               LEFT JOIN public.store_objects src ON src.object_id = r.src_id
               LEFT JOIN public.store_objects dst ON dst.object_id = r.dst_id
              GROUP BY r.id, r.src_id, r.dst_id
-            HAVING count(src.*) <> 1 OR count(dst.*) <> 1
+            HAVING count(DISTINCT src.vault_binding_id) <> 1
+                OR count(DISTINCT dst.vault_binding_id) <> 1
                 OR min(src.vault_binding_id) IS DISTINCT FROM min(dst.vault_binding_id)
              LIMIT 20;
             IF offending IS NOT NULL THEN
@@ -375,7 +378,8 @@ def upgrade() -> None:
                   LEFT JOIN public.store_objects obj ON obj.object_id = m.object_id
                   LEFT JOIN public.store_objects set_obj ON set_obj.object_id = m.set_id
                  GROUP BY m.object_id, m.set_id
-                HAVING count(obj.*) <> 1 OR count(set_obj.*) <> 1
+                HAVING count(DISTINCT obj.vault_binding_id) <> 1
+                    OR count(DISTINCT set_obj.vault_binding_id) <> 1
                     OR min(obj.vault_binding_id) IS DISTINCT FROM min(set_obj.vault_binding_id)
                  LIMIT 20;
                 IF offending IS NOT NULL THEN

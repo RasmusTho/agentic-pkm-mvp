@@ -578,6 +578,35 @@ def test_post_cutover_store_fixture_mutations_are_binding_scoped() -> None:
                 "insert into",
                 "store_objects",
             ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_backfill_counts_distinct_store_relation_assignments",
+                "insert into",
+                "store_objects",
+            ): 1,
+            (
+                "tests/migrations/test_legacy_objects_fk_migration.py",
+                "test_binding_backfill_counts_distinct_store_relation_assignments",
+                "insert into",
+                "store_relations",
+            ): 1,
+            **{
+                (
+                    "tests/migrations/test_legacy_objects_fk_migration.py",
+                    "test_binding_backfill_counts_distinct_parent_assignments_not_child_rows",
+                    "insert into",
+                    table,
+                ): 1
+                for table in (
+                    "store_objects",
+                    "chunks",
+                    "embeddings",
+                    "relations",
+                    "membership",
+                    "decisions",
+                    "audit",
+                )
+            },
             **{
                 (
                     "tests/migrations/test_legacy_objects_fk_migration.py",
