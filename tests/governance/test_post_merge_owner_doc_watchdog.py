@@ -113,10 +113,14 @@ def _phase_comment(
         ),
         "closed_issues": authority["closing_issues"] if reconciled else [],
         "contract": "verified_issue_set_merge_phase.v1",
+        "final_projection_observation_sha256": (
+            "e" * 64 if phase == "prepared" else None
+        ),
         "head_sha": authority["head_sha"],
         "merge_commit_sha": merge_commit_sha,
         "phase": phase,
         "pr_number": authority["pr_number"],
+        "projection_convergence_sha256": "d" * 64,
         "reopened_unauthorized_issues": [],
         "repository": authority["repository"],
         "run_id": authority["run_id"],
@@ -440,6 +444,13 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
         _phase_comment(authority, phase="merged", merge_commit_sha=merge_sha),
     ]
     raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
+
+    prepared_payload = _receipt_payload(comments[1])
+    merged_payload = _receipt_payload(comments[2])
+    assert prepared_payload["projection_convergence_sha256"] == "d" * 64
+    assert prepared_payload["final_projection_observation_sha256"] == "e" * 64
+    assert merged_payload["projection_convergence_sha256"] == "d" * 64
+    assert merged_payload["final_projection_observation_sha256"] is None
 
     selected = _node(
         "selectWatchdogAuthority(inputs[0])",

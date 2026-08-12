@@ -134,8 +134,9 @@ jobs:
               "pr_number", "repair_budget", "repository", "run_id",
             ].sort();
             const PHASE_FIELDS = [
-              "authority_sha256", "body_sha256", "closed_issues", "contract", "head_sha",
-              "merge_commit_sha", "phase", "pr_number", "reopened_unauthorized_issues",
+              "authority_sha256", "body_sha256", "closed_issues", "contract",
+              "final_projection_observation_sha256", "head_sha", "merge_commit_sha", "phase",
+              "pr_number", "projection_convergence_sha256", "reopened_unauthorized_issues",
               "repository", "run_id",
             ].sort();
 
@@ -267,6 +268,8 @@ jobs:
                 const expectedDigest = phase === "restored"
                   ? authorityReceipt.body_sha256
                   : authorityReceipt.neutralized_body_sha256;
+                const projectionDigest = receipt.projection_convergence_sha256;
+                const finalObservationDigest = receipt.final_projection_observation_sha256;
                 if (
                   !hasExactFields(receipt, PHASE_FIELDS) || phaseIndex < 0 ||
                   receipt.contract !== "verified_issue_set_merge_phase.v1" ||
@@ -276,6 +279,12 @@ jobs:
                   receipt.head_sha !== authorityReceipt.head_sha ||
                   receipt.run_id !== authorityReceipt.run_id ||
                   receipt.body_sha256 !== expectedDigest ||
+                  typeof projectionDigest !== "string" ||
+                  !/^[0-9a-f]{64}$/.test(projectionDigest) ||
+                  (phase === "prepared"
+                    ? typeof finalObservationDigest !== "string" ||
+                      !/^[0-9a-f]{64}$/.test(finalObservationDigest)
+                    : finalObservationDigest !== null) ||
                   !isSortedIssueArray(closed) || !isSortedIssueArray(reopened) ||
                   closed.some(number => reopened.includes(number)) ||
                   (reconciledPhase && !arraysEqual(closed, authorityReceipt.closing_issues)) ||
