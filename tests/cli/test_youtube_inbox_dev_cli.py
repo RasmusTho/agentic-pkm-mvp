@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import importlib
 import secrets
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -342,6 +343,17 @@ def test_v1_command_remains_single_inbox_and_manual(
     assert "already active" in overlapping_connect.output
     assert overlap_binder.started == overlap_binder.finished == 0
     assert empty_bindings.list_all() == ()
+    ignored_runtime_artifact = subprocess.run(
+        [
+            "git",
+            "check-ignore",
+            "runtime/knowledge_acquisition/youtube_token_store.enc",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert ignored_runtime_artifact.returncode == 0
     assert help_result.exit_code == 0
     assert all(
         forbidden not in help_result.output.lower()
