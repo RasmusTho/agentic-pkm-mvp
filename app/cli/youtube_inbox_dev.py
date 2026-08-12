@@ -48,6 +48,7 @@ class YouTubeInboxDevServices:
     binder: Any
     api_client: Any
     sync: Any | None
+    account_bindings: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,12 @@ def _build_youtube_inbox_dev_services(
         source_registry=registry,
     )
     if account_binding_id is None:
-        return YouTubeInboxDevServices(binder=binder, api_client=None, sync=None)
+        return YouTubeInboxDevServices(
+            binder=binder,
+            api_client=None,
+            sync=None,
+            account_bindings=binding_store,
+        )
 
     token_provider = TokenProvider(
         binding_id=account_binding_id,
@@ -138,9 +144,10 @@ def _safe_cli_failure(exc: BaseException) -> click.ClickException:
     if isinstance(exc, AuthDegradedError):
         return click.ClickException(f"YouTube authentication degraded: {exc.reason_code}")
     if isinstance(exc, OAuthProviderError):
-        return click.ClickException(
-            f"YouTube OAuth provider failed: HTTP {exc.status} ({exc.error_code or 'unknown'})"
-        )
+        # ``error_code`` is provider-controlled input. The OAuth layer uses it
+        # for local classification, but this final external boundary never
+        # reflects it (or any provider body fragment) into terminal output.
+        return click.ClickException("YouTube OAuth provider failed; retry device connection")
     if isinstance(exc, KeyError):
         return click.ClickException("The requested YouTube account binding was not found")
     return click.ClickException(
@@ -163,21 +170,30 @@ def youtube_inbox_dev() -> None:
 def connect() -> None:
     try:
         services = build_youtube_inbox_dev_services()
+        if services.account_bindings is None:
+            raise RuntimeError("incomplete YouTube account-binding composition")
+        if services.account_bindings.list_all():
+            raise V1InboxConfigurationError(
+                "V1 already has one OAuth-connected account; a second account is unavailable"
+            )
         connection = services.binder.start_device_connection()
         _emit({"status": "authorization_required", **connection.public_view()})
         handle = getattr(connection, "handle", connection)
-        interval = max(0, int(getattr(handle, "interval", 5)))
+        interval = max(1, int(getattr(handle, "interval", 5)))
         expires_in = max(1, int(getattr(handle, "expires_in", 1800)))
         deadline = time.monotonic() + expires_in
+        delay = interval
         while True:
+            if time.monotonic() + delay > deadline:
+                raise DeviceAuthorizationError("expired_token")
+            time.sleep(delay)
             try:
                 receipt = services.binder.finish_device_connection(connection)
                 _emit(receipt)
                 return
-            except DeviceAuthorizationPending:
-                if time.monotonic() >= deadline:
-                    raise DeviceAuthorizationError("expired_token") from None
-                time.sleep(interval)
+            except DeviceAuthorizationPending as exc:
+                if exc.error_code == "slow_down":
+                    delay += 5
     except click.ClickException:
         raise
     except BaseException as exc:

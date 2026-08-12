@@ -13,6 +13,10 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.knowledge_acquisition.playlist_discovery import V1InboxConfigurationError
+from app.knowledge_acquisition.youtube_oauth import (
+    DeviceAuthorizationPending,
+    OAuthProviderError,
+)
 
 youtube_cli = importlib.import_module("app.cli.youtube_inbox_dev")
 
@@ -21,8 +25,8 @@ pytestmark = pytest.mark.not_pg
 
 @dataclass(frozen=True)
 class _Connection:
-    interval: int = 0
-    expires_in: int = 10
+    interval: int = 2
+    expires_in: int = 30
 
     def public_view(self) -> dict[str, Any]:
         return {
@@ -35,9 +39,10 @@ class _Connection:
 
 
 class _Binder:
-    def __init__(self) -> None:
+    def __init__(self, pending_codes: list[str] | None = None) -> None:
         self.started = 0
         self.finished = 0
+        self.pending_codes = list(pending_codes or [])
 
     def start_device_connection(self) -> _Connection:
         self.started += 1
@@ -46,6 +51,8 @@ class _Binder:
     def finish_device_connection(self, connection: _Connection) -> dict[str, Any]:
         del connection
         self.finished += 1
+        if self.pending_codes:
+            raise DeviceAuthorizationPending(self.pending_codes.pop(0))
         return {
             "status": "connected",
             "account": {"binding_id": "binding-test", "channel_title": "Synthetic channel"},
@@ -70,6 +77,14 @@ class _Api:
                 )
             },
         )()
+
+
+class _Bindings:
+    def __init__(self, rows: tuple[object, ...] = ()) -> None:
+        self.rows = rows
+
+    def list_all(self) -> tuple[object, ...]:
+        return self.rows
 
 
 class _Sync:
@@ -112,9 +127,18 @@ def _dev_env() -> dict[str, str]:
 def test_connect_select_and_sync_compose_v1_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    binder = _Binder()
+    binder = _Binder(["authorization_pending", "slow_down"])
     sync = _Sync()
     builds: list[str | None] = []
+    now = [0.0]
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(youtube_cli.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(youtube_cli.time, "sleep", fake_sleep)
 
     def fake_build(account_binding_id: str | None = None) -> youtube_cli.YouTubeInboxDevServices:
         builds.append(account_binding_id)
@@ -122,6 +146,7 @@ def test_connect_select_and_sync_compose_v1_services(
             binder=binder,
             api_client=_Api(),
             sync=sync if account_binding_id is not None else None,
+            account_bindings=_Bindings(),
         )
 
     monkeypatch.setattr(youtube_cli, "build_youtube_inbox_dev_services", fake_build)
@@ -158,7 +183,9 @@ def test_connect_select_and_sync_compose_v1_services(
     ]
     assert _json_lines(sync_now.output)[0]["enqueued"] == 1
     assert builds == [None, "binding-test", "binding-test"]
-    assert binder.started == binder.finished == 1
+    assert binder.started == 1
+    assert binder.finished == 3
+    assert sleeps == [2, 2, 7]
     assert sync.selected == [("PL_test_owned_inbox", "Synthetic Inbox")]
     assert sync.synced == 1
 
@@ -219,6 +246,29 @@ def test_rejects_non_dev_and_redacts_secret_failures(
         assert planted_client_secret not in result.output
         assert planted_store_key not in result.output
 
+    reflected_provider_value = "reflected-provider-value-" + secrets.token_hex(8)
+
+    class _ProviderFailureBinder:
+        def start_device_connection(self) -> Any:
+            raise OAuthProviderError(status=400, error_code=reflected_provider_value)
+
+    monkeypatch.setattr(
+        youtube_cli,
+        "build_youtube_inbox_dev_services",
+        lambda account_binding_id=None: youtube_cli.YouTubeInboxDevServices(
+            binder=_ProviderFailureBinder(),
+            api_client=None,
+            sync=None,
+            account_bindings=_Bindings(),
+        ),
+    )
+    provider_failure = runner.invoke(
+        cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
+    )
+    assert provider_failure.exit_code != 0
+    assert "OAuth provider failed" in provider_failure.output
+    assert reflected_provider_value not in provider_failure.output
+
 
 def test_v1_command_remains_single_inbox_and_manual(
     monkeypatch: pytest.MonkeyPatch,
@@ -234,7 +284,10 @@ def test_v1_command_remains_single_inbox_and_manual(
         youtube_cli,
         "build_youtube_inbox_dev_services",
         lambda account_binding_id=None: youtube_cli.YouTubeInboxDevServices(
-            binder=_Binder(), api_client=_Api(), sync=sync
+            binder=_Binder(),
+            api_client=_Api(),
+            sync=sync,
+            account_bindings=_Bindings((object(),)),
         ),
     )
     runner = CliRunner()
@@ -253,9 +306,14 @@ def test_v1_command_remains_single_inbox_and_manual(
     help_result = runner.invoke(
         cli, ["youtube-inbox-dev", "--help"], env=_dev_env()
     )
+    second_account = runner.invoke(
+        cli, ["youtube-inbox-dev", "connect"], env=_dev_env()
+    )
 
     assert result.exit_code != 0
     assert "already has an enabled Inbox" in result.output
+    assert second_account.exit_code != 0
+    assert "already has one OAuth-connected account" in second_account.output
     assert help_result.exit_code == 0
     assert all(
         forbidden not in help_result.output.lower()
