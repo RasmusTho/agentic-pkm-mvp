@@ -123,8 +123,15 @@ def test_reuse_receipt_cannot_impersonate_live_handoff_receipt() -> None:
 def test_devui_plan_binds_reuse_exit_to_stable_fixtures_and_novel_delta_gate() -> None:
     devui = _read("docs/DEVUI.md")
     stage = _read("docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md")
+    task = _read(
+        "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/VALIDATE_OVERVIEW_YGGDRASIL_DESIGN.md"
+    )
+    parent = _read("docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/PARENT_FEATURE_ISSUE.md")
     index = _read("docs/DOCS_INDEX.md")
-    joined = " ".join((devui + "\n" + stage + "\n" + index).split())
+    joined = " ".join(
+        (devui + "\n" + stage + "\n" + task + "\n" + parent + "\n" + index).split()
+    )
+    joined_lower = joined.lower()
 
     assert "#4834" in joined
     assert "#4768" in joined
@@ -135,3 +142,6 @@ def test_devui_plan_binds_reuse_exit_to_stable_fixtures_and_novel_delta_gate() -
     assert "novel, mixed, or unknown" in joined
     assert "live Yggdrasil design-system gate" in joined
     assert "#4834 is delivered" not in joined
+    assert "either `yggdrasil-constrained-reuse.v1` or `yggdrasil-design-handoff.v1`" in joined
+    assert "exact shipped reuse does not run or claim the live system/token preflight" in joined_lower
+    assert "#4834 plus delivered #4768" in joined
