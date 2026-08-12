@@ -47,6 +47,10 @@ APP_ROOT = REPO_ROOT / "app"
 # NEVER run against a real vault -- they are not part of this census.
 
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
+    ("app/watcher/vault_watcher.py", 247): (
+        "Watcher hydration mirror: refreshes raw_text after an already-emitted "
+        "ingest/panel transition; emitting another object event would duplicate that transition."
+    ),
     ("app/services/indexer.py", 176): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
