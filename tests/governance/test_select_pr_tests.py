@@ -109,3 +109,14 @@ def test_observability_tracing_module_is_owned_by_promotion_panel() -> None:
     assert selection.unowned_paths == ()
     assert "promotion_panel" in selection.subsystems
     assert "tests/promotion" in selection.targets
+
+
+def test_source_egress_boundary_selects_all_canonical_consumers() -> None:
+    selection = select_tests(["app/source_egress.py"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert "media" in selection.subsystems
+    assert "heimdal_mimer" in selection.subsystems
+    assert "tests/test_transcribe_smoke.py" in selection.targets
+    assert "tests/knowledge_acquisition" in selection.targets

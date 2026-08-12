@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import threading
 from typing import Any, List, Optional
 from uuid import UUID
 
@@ -47,6 +48,7 @@ class DomainObject:
 # read their own committed state: this dictionary has no transaction-aware
 # invalidation protocol and therefore must not act as a Postgres cache (I-S4).
 _MEMORY_STORE: dict[str, DomainObject] = {}
+_MEMORY_STORE_LOCK = threading.RLock()
 
 
 def _normalize_ts(ts: datetime | None) -> datetime:
@@ -57,12 +59,14 @@ def _normalize_ts(ts: datetime | None) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
-def _list_from_memory(kind: Optional[str] = None, limit: int = 100) -> List[DomainObject]:
+def _list_from_memory(
+    kind: Optional[str] = None, limit: int | None = 100
+) -> List[DomainObject]:
     values = list(_MEMORY_STORE.values())
     if kind is not None:
         values = [o for o in values if o.kind == kind]
     values.sort(key=lambda o: o.created_at, reverse=True)
-    return values[:limit]
+    return values if limit is None else values[:limit]
 
 
 def _to_domain(row: dict[str, Any]) -> DomainObject:
@@ -93,7 +97,8 @@ class ObjectStore:
         # errors always propagate now.
         binding = resolve_object_store_port()
         if binding.backend == "memory":
-            return _MEMORY_STORE.get(object_id)
+            with _MEMORY_STORE_LOCK:
+                return _MEMORY_STORE.get(object_id)
         record = binding.store.get(UUID(str(object_id)))
         if not record:
             return None
@@ -111,7 +116,8 @@ class ObjectStore:
 
         binding = resolve_object_store_port()
         if binding.backend == "memory":
-            _MEMORY_STORE[obj.uuid] = obj
+            with _MEMORY_STORE_LOCK:
+                _MEMORY_STORE[obj.uuid] = obj
             return
         binding.store.put(
             UUID(str(obj.uuid)),
@@ -145,21 +151,47 @@ class ObjectStore:
         # commit through another connection, so a process-local cache cannot be
         # invalidated atomically with every canonical write.
 
+    def create_object_once(self, obj: DomainObject) -> bool:
+        """Atomically create an immutable object identity without an upsert fallback.
+
+        Returns ``True`` for the winner and ``False`` when the identity already exists. This
+        StorePort seam is for raw evidence and immutable derived-run artifacts; rebuildable
+        projections that intentionally replace equivalent bytes continue to use ``save_object``.
+        """
+        obj.created_at = _normalize_ts(obj.created_at)
+        binding = resolve_object_store_port()
+        if binding.backend == "memory":
+            with _MEMORY_STORE_LOCK:
+                if obj.uuid in _MEMORY_STORE:
+                    return False
+                _MEMORY_STORE[obj.uuid] = obj
+                return True
+        return bool(
+            binding.store.put_if_absent(
+                UUID(str(obj.uuid)),
+                kind=str(obj.kind or "note"),
+                source_ref=str(obj.source_ref or ""),
+                payload=dict(obj.payload or {}),
+            )
+        )
+
     def list_objects(
         self,
         kind: Optional[str] = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> List[DomainObject]:
         binding = resolve_object_store_port()
         if binding.backend == "memory":
-            return _list_from_memory(kind, limit)
+            with _MEMORY_STORE_LOCK:
+                return _list_from_memory(kind, limit)
         rows = list(binding.store.list_objects(kind=kind, limit=limit))
         return [_to_domain(row if isinstance(row, dict) else dict(row)) for row in rows]
 
     def count_objects(self, kind: Optional[str] = None) -> int:
         binding = resolve_object_store_port()
         if binding.backend == "memory":
-            values = list(_MEMORY_STORE.values())
+            with _MEMORY_STORE_LOCK:
+                values = list(_MEMORY_STORE.values())
             if kind is not None:
                 values = [obj for obj in values if obj.kind == kind]
             return len(values)

@@ -50,6 +50,10 @@ from app.observability.log import json_log
 RAW_RECORD_KIND = "knowledge_acquisition.raw"
 
 
+class RawRecordIntegrityError(RuntimeError):
+    """A deterministic raw identity is occupied by non-raw or inconsistent state."""
+
+
 def raw_record_object_id(*, source_kind: str, item_ref: str, content_identity: str) -> UUID:
     """Deterministic identity for a raw record: (source_kind, item_ref, content_identity)."""
     key = f"{source_kind}:{item_ref}:{content_identity}"
@@ -87,6 +91,13 @@ def persist_raw_record(
 
     existing = store.get_object(str(object_id))
     if existing is not None:
+        record = _validated_raw_payload(
+            existing,
+            object_id=object_id,
+            source_kind=source_kind,
+            item_ref=item_ref,
+            content_identity=content_identity,
+        )
         json_log(
             event="knowledge_acquisition.raw.dedup_noop",
             source_kind=source_kind,
@@ -98,7 +109,7 @@ def persist_raw_record(
             object_id=object_id,
             content_identity=content_identity,
             is_new=False,
-            record=dict(existing.payload),
+            record=record,
         )
 
     record_payload = dict(payload)
@@ -125,7 +136,33 @@ def persist_raw_record(
     )
     # emit_outbox=False: see module docstring — raw fetch is pre-pipeline and
     # must not trigger the indexer/embedding consumer.
-    store.save_object(domain_object, emit_outbox=False)
+    created = store.create_object_once(domain_object)
+    if not created:
+        winner = store.get_object(str(object_id))
+        if winner is None:
+            raise RawRecordIntegrityError(
+                f"raw identity {object_id} lost its atomic create winner"
+            )
+        winner_payload = _validated_raw_payload(
+            winner,
+            object_id=object_id,
+            source_kind=source_kind,
+            item_ref=item_ref,
+            content_identity=content_identity,
+        )
+        json_log(
+            event="knowledge_acquisition.raw.dedup_noop",
+            source_kind=source_kind,
+            item_ref=item_ref,
+            content_identity=content_identity,
+            object_id=str(object_id),
+        )
+        return RawRecordResult(
+            object_id=object_id,
+            content_identity=content_identity,
+            is_new=False,
+            record=winner_payload,
+        )
     json_log(
         event="knowledge_acquisition.raw.persisted",
         source_kind=source_kind,
@@ -160,6 +197,13 @@ def find_raw_record(
     existing = ObjectStore().get_object(str(object_id))
     if existing is None:
         return None
+    record = _validated_raw_payload(
+        existing,
+        object_id=object_id,
+        source_kind=source_kind,
+        item_ref=item_ref,
+        content_identity=content_identity,
+    )
     json_log(
         event="knowledge_acquisition.raw.dedup_noop",
         source_kind=source_kind,
@@ -171,19 +215,81 @@ def find_raw_record(
         object_id=object_id,
         content_identity=content_identity,
         is_new=False,
-        record=dict(existing.payload),
+        record=record,
     )
 
 
-def get_raw_record(object_id: UUID) -> dict[str, Any] | None:
-    existing = ObjectStore().get_object(str(object_id))
+def get_raw_record(object_id: UUID | str) -> dict[str, Any] | None:
+    try:
+        resolved_id = object_id if isinstance(object_id, UUID) else UUID(object_id)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise RawRecordIntegrityError(f"invalid raw object_id {object_id!r}") from exc
+    existing = ObjectStore().get_object(str(resolved_id))
     if existing is None:
         return None
-    return dict(existing.payload)
+    if existing.kind != RAW_RECORD_KIND:
+        raise RawRecordIntegrityError(
+            f"object_id {resolved_id} is {existing.kind!r}, not immutable raw evidence"
+        )
+    record = dict(existing.payload)
+    source_kind = record.get("source_kind")
+    item_ref = record.get("item_ref")
+    content_identity = record.get("content_identity")
+    if not all(
+        isinstance(value, str) and value
+        for value in (source_kind, item_ref, content_identity)
+    ):
+        raise RawRecordIntegrityError(
+            f"raw object {resolved_id} is missing its deterministic identity fields"
+        )
+    assert isinstance(source_kind, str)
+    assert isinstance(item_ref, str)
+    assert isinstance(content_identity, str)
+    expected_id = raw_record_object_id(
+        source_kind=source_kind,
+        item_ref=item_ref,
+        content_identity=content_identity,
+    )
+    if expected_id != resolved_id:
+        raise RawRecordIntegrityError(
+            f"raw object {resolved_id} does not match payload-derived identity {expected_id}"
+        )
+    return record
+
+
+def _validated_raw_payload(
+    existing: DomainObject,
+    *,
+    object_id: UUID,
+    source_kind: str,
+    item_ref: str,
+    content_identity: str,
+) -> dict[str, Any]:
+    if existing.kind != RAW_RECORD_KIND:
+        raise RawRecordIntegrityError(
+            f"raw identity {object_id} is occupied by kind {existing.kind!r}"
+        )
+    record = dict(existing.payload)
+    expected = {
+        "source_kind": source_kind,
+        "item_ref": item_ref,
+        "content_identity": content_identity,
+    }
+    mismatched = {
+        key: record.get(key)
+        for key, value in expected.items()
+        if record.get(key) != value
+    }
+    if mismatched:
+        raise RawRecordIntegrityError(
+            f"raw identity {object_id} has inconsistent identity fields {sorted(mismatched)}"
+        )
+    return record
 
 
 __all__ = [
     "RAW_RECORD_KIND",
+    "RawRecordIntegrityError",
     "RawRecordResult",
     "raw_record_object_id",
     "persist_raw_record",

@@ -459,6 +459,28 @@ def put_object_with_connection(
         )
 
 
+def put_object_if_absent_with_connection(
+    conn,
+    *,
+    object_id: UUID,
+    kind: str,
+    source_ref: str | None,
+    payload: dict,
+) -> bool:
+    """Insert one immutable object, returning whether this caller won the identity."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
+            VALUES (%s, %s, %s, %s::jsonb, now(), now())
+            ON CONFLICT (object_id) DO NOTHING
+            RETURNING object_id
+            """,
+            (object_id, kind, source_ref, json.dumps(payload)),
+        )
+        return cur.fetchone() is not None
+
+
 def resolve_vault_uuid_with_connection(conn, vault_uuid: str) -> str:
     """Resolve a retained vault UUID to one unambiguous canonical object id."""
     return _resolve_vault_uuid_with_connection(conn, vault_uuid)
@@ -540,6 +562,19 @@ class PgObjectStore(ObjectStore):
                 payload=payload,
             )
 
+    def put_if_absent(
+        self, object_id: UUID, *, kind: str, source_ref: str, payload: dict
+    ) -> bool:
+        _ensure_tables()
+        with _connect() as conn:
+            return put_object_if_absent_with_connection(
+                conn,
+                object_id=object_id,
+                kind=kind,
+                source_ref=source_ref,
+                payload=payload,
+            )
+
     def list_by_kind(self, kind: str, *, limit: int = 100) -> Iterable[dict]:
         with _connect() as conn:
             with conn.cursor() as cur:
@@ -555,7 +590,9 @@ class PgObjectStore(ObjectStore):
                 )
                 return cur.fetchall()
 
-    def list_objects(self, kind: str | None = None, *, limit: int = 100) -> Iterable[dict]:
+    def list_objects(
+        self, kind: str | None = None, *, limit: int | None = 100
+    ) -> Iterable[dict]:
         with _connect() as conn:
             with conn.cursor() as cur:
                 table = self._active_table(conn)
@@ -566,20 +603,21 @@ class PgObjectStore(ObjectStore):
                         FROM {table}
                         WHERE kind = %s
                         ORDER BY created_at DESC
-                        LIMIT %s
                         """
                     ).format(table=sql.Identifier(table))
-                    params = (kind, limit)
+                    params: tuple[object, ...] = (kind,)
                 else:
                     stmt = sql.SQL(
                         """
                         SELECT object_id, kind, source_ref, payload, created_at
                         FROM {table}
                         ORDER BY created_at DESC
-                        LIMIT %s
                         """
                     ).format(table=sql.Identifier(table))
-                    params = (limit,)
+                    params = ()
+                if limit is not None:
+                    stmt += sql.SQL(" LIMIT %s")
+                    params = (*params, limit)
                 cur.execute(stmt, params)
                 return cur.fetchall()
 

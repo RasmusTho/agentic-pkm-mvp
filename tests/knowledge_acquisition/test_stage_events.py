@@ -19,6 +19,7 @@ import pytest
 from app.events.models import Event
 from app.knowledge_acquisition.extraction_registry import (
     ExtractorSpec,
+    UnknownExtractorError,
     clear_registry,
     register_extractor,
     run_extractor,
@@ -316,6 +317,87 @@ def test_item_scoped_dead_letter() -> None:
     assert Event.model_validate_json(completed[0]["payload"]).payload["extractor_id"] == "summary"
 
 
+def _make_counting_spec(extractor_id: str, calls: list[str]) -> ExtractorSpec:
+    def _run(_normalized):
+        calls.append(extractor_id)
+        return {"ok": True}
+
+    return ExtractorSpec(
+        extractor_id=extractor_id,
+        version=1,
+        input_content_type="transcript",
+        output_schema_ref="test.counting.v1",
+        run=_run,
+        model_identity=lambda: {"provider": "test", "model": "test"},
+    )
+
+
+def test_unknown_extractor_is_resolved_before_any_sibling_effect() -> None:
+    calls: list[str] = []
+    register_extractor(_make_counting_spec("would_run", calls))
+
+    with pytest.raises(UnknownExtractorError):
+        run_extractors(
+            _normalized_dict(),
+            extractor_ids=["would_run", "not_registered"],
+            conn=FakeOutboxConn(),
+        )
+
+    assert calls == []
+
+
+def test_model_identity_failure_becomes_required_dead_letter() -> None:
+    register_extractor(
+        ExtractorSpec(
+            extractor_id="identity_fails",
+            version=1,
+            input_content_type="transcript",
+            output_schema_ref="test.identity-fails.v1",
+            run=lambda _normalized: {"ok": True},
+            model_identity=lambda: (_ for _ in ()).throw(RuntimeError("identity down")),
+        )
+    )
+    conn = FakeOutboxConn()
+
+    report = run_extractors(
+        _normalized_dict(), extractor_ids=["identity_fails"], conn=conn
+    )
+
+    assert report.successes == ()
+    assert [item.extractor_id for item in report.required_dead_lettered] == [
+        "identity_fails"
+    ]
+    assert len(conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)) == 1
+
+
+def test_extraction_persistence_failure_becomes_required_dead_letter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.knowledge_acquisition.extraction_persistence as persistence
+
+    register_extractor(_make_counting_spec("persist_fails", []))
+    monkeypatch.setattr(
+        persistence,
+        "persist_extraction_result",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("store down")),
+    )
+    conn = FakeOutboxConn()
+
+    report = run_extractors(
+        _normalized_dict(),
+        extractor_ids=["persist_fails"],
+        raw_record_id="raw-1",
+        normalized_artifact_id="normalized-1",
+        conn=conn,
+    )
+
+    assert report.successes == ()
+    assert [item.extractor_id for item in report.required_dead_lettered] == [
+        "persist_fails"
+    ]
+    assert len(conn.rows_for(STAGE_DEAD_LETTERED_TOPIC)) == 1
+
+
 def test_dead_letter_across_sibling_items_unaffected() -> None:
     """A failing stage for ONE raw item does not block a SIBLING raw item's pipeline.
 
@@ -381,4 +463,5 @@ def test_summary_v2_non_finite_confidence_dead_letter_has_v2_identity() -> None:
         stage_version=EXTRACTOR_VERSION,
         content_identity=normalized["source_content_identity"],
         extractor_id="summary",
+        failure_scope="required",
     )
