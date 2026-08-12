@@ -12,11 +12,10 @@ human-visible surfaces.
 Design decisions (per the coordinator's already-made calls, not relitigated
 here):
 
-- **Assembly re-derives from `raw` in-process.** `assemble_candidate()` calls
-  `normalize()` and `run_extractor()` itself rather than accepting a durable
-  extraction-results handoff — KA-04's process-local idempotency cache is an
-  optimization, not a durable store, per the spec's Restart/Durability
-  posture ("Candidate assembly state is derived and re-runnable from raw").
+- **Assembly accepts explicit durable lineage.** The acquisition/replay orchestrators pass the
+  raw-derived normalized and extraction artifacts they just resolved. Direct callers may still
+  re-derive in-process for compatibility, but persisted candidates carry raw, normalized, and
+  extraction artifact ids.
 - **No outbox/stage-event emission.** That is KA-06 (#2801). This module
   never touches `app.outbox.events` (tracked non-idempotent per #2881) or any
   other event-emission seam; the vault write flows into the existing
@@ -24,9 +23,8 @@ here):
 - **Idempotent note write, new-note-per-item.** The vault path is derived
   deterministically from the candidate's `content_identity` (never a random
   uuid), so re-running the same candidate always targets the same path. If a
-  note already exists at that path, the write is a traced no-op — this slice
-  never overwrites an existing artifact (note UPDATES on re-acquisition are
-  out of scope per the spec).
+  note already exists at that path, it is never overwritten. A fresh re-extraction instead writes
+  a versioned `.meta.md` proposal companion through the same atomic governed-write seam.
 
 What this module MUST NOT do (`REFINEMENT_PIPELINE_CONTRACT.md` §"What the
 pipeline MUST NOT do"):
@@ -43,6 +41,7 @@ pipeline MUST NOT do"):
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from dataclasses import dataclass
@@ -61,6 +60,7 @@ from app.knowledge_acquisition.note_renderer import (
     render_review_required_note,
 )
 from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
+from app.knowledge_acquisition.normalize import NormalizedTranscript
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -107,6 +107,10 @@ class Candidate:
     transcript_available: bool
     extractions: tuple[ExtractionResult, ...]
     transcript_segment_count: int = 0
+    raw_record_id: str | None = None
+    normalized_artifact_id: str | None = None
+    extraction_artifact_ids: tuple[str, ...] = ()
+    optional_failures: tuple["ExtractionFailure", ...] = ()
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -130,20 +134,31 @@ class Candidate:
 
 @dataclass(frozen=True)
 class CandidateWriteResult:
-    status: str  # "written" | "already_exists" | "blocked"
+    status: str
     artifact_path: str | None
     content_identity: str
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ExtractionFailure:
+    extractor_id: str
+    requirement: str
+    rerun_handle: str
+    error: str
 
 
 def assemble_candidate(
     raw_record: Mapping[str, Any],
     *,
     extractor_ids: Sequence[str] = ("summary",),
+    normalized: NormalizedTranscript | None = None,
+    extraction_results: Sequence[ExtractionResult] | None = None,
+    raw_record_id: str | None = None,
+    normalized_artifact_id: str | None = None,
+    optional_failures: Sequence[ExtractionFailure] = (),
 ) -> Candidate:
-    """Assemble a `candidate` from a `raw` record, re-deriving `normalized` and
-    every requested extraction in-process (no durable extraction-results
-    handoff; see module docstring).
+    """Assemble a `candidate` from a `raw` record and explicit derived lineage when supplied.
 
     Raises `CandidateAssemblyError` if the raw record is missing required
     fields, wrapping the item-scoped failure a stage would otherwise raise
@@ -163,17 +178,19 @@ def assemble_candidate(
     provenance = raw_record.get("provenance") or {}
 
     try:
-        normalized = normalize(dict(raw_record))
+        normalized_result = normalized or normalize(dict(raw_record))
     except Exception as exc:  # noqa: BLE001 - re-raised as the assembly-scoped error below
         raise CandidateAssemblyError(
             f"normalize() failed for content_identity={content_identity!r}: {exc}"
         ) from exc
 
-    normalized_dict = normalized.as_dict()
-    transcript_segment_count = len(normalized.segments)
-    transcript_available = has_usable_transcript(normalized)
+    normalized_dict = normalized_result.as_dict()
+    transcript_segment_count = len(normalized_result.segments)
+    transcript_available = has_usable_transcript(normalized_result)
     extractions: list[ExtractionResult] = []
-    if transcript_available:
+    if extraction_results is not None:
+        extractions.extend(extraction_results)
+    elif transcript_available:
         for extractor_id in extractor_ids:
             try:
                 extractions.append(run_extractor(extractor_id, normalized_dict))
@@ -195,6 +212,12 @@ def assemble_candidate(
         transcript_available=transcript_available,
         extractions=tuple(extractions),
         transcript_segment_count=transcript_segment_count,
+        raw_record_id=raw_record_id,
+        normalized_artifact_id=normalized_artifact_id,
+        extraction_artifact_ids=tuple(
+            result.artifact_id for result in extractions if result.artifact_id is not None
+        ),
+        optional_failures=tuple(optional_failures),
     )
 
 
@@ -250,21 +273,19 @@ def render_candidate_note(candidate: Candidate) -> str:
         "created": now,
         "updated": now,
     }
+    if candidate.raw_record_id is not None:
+        frontmatter["raw_record_id"] = candidate.raw_record_id
+    if candidate.normalized_artifact_id is not None:
+        frontmatter["normalized_artifact_id"] = candidate.normalized_artifact_id
+    if candidate.extraction_artifact_ids:
+        frontmatter["extraction_artifact_ids"] = list(candidate.extraction_artifact_ids)
+    if candidate.optional_failures:
+        frontmatter["degraded"] = True
+        frontmatter["unavailable_optional_extractors"] = [
+            failure.extractor_id for failure in candidate.optional_failures
+        ]
 
-    summary = candidate.summary_text()
-    confidence = candidate.summary_confidence()
-    proposal_sections: list[ProposalSection] = []
-    if summary is not None and confidence is not None and candidate.transcript_segment_count > 0:
-        proposal_sections.append(
-            ProposalSection(
-                module_id="summary",
-                title="Summary",
-                content=(
-                    f"**Model confidence (non-authoritative):** {confidence:g}\n" "\n" f"{summary}"
-                ),
-            )
-        )
-
+    proposal_sections = _candidate_proposal_sections(candidate)
     coverage = (
         f"{candidate.transcript_segment_count}/{candidate.transcript_segment_count} "
         "normalized segments (100%; complete transcript)"
@@ -288,8 +309,57 @@ def render_candidate_note(candidate: Candidate) -> str:
                 ),
             ),
             ("Coverage", coverage),
+            (
+                "Durable lineage",
+                (
+                    f"raw={candidate.raw_record_id or 'legacy'}; "
+                    f"normalized={candidate.normalized_artifact_id or 'legacy'}; "
+                    f"extractions={','.join(candidate.extraction_artifact_ids) or 'none'}"
+                ),
+            ),
+            (
+                "Materialization status",
+                (
+                    "degraded; optional failures: "
+                    + ", ".join(failure.extractor_id for failure in candidate.optional_failures)
+                    if candidate.optional_failures
+                    else "complete"
+                ),
+            ),
         ),
     )
+
+
+def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
+    """Render reviewable extraction outputs without assigning them authority."""
+    summary = candidate.summary_text()
+    confidence = candidate.summary_confidence()
+    sections: list[ProposalSection] = []
+    if summary is not None and confidence is not None and candidate.transcript_segment_count > 0:
+        sections.append(
+            ProposalSection(
+                module_id="summary",
+                title="Summary",
+                content=(
+                    f"**Model confidence (non-authoritative):** {confidence:g}\n" "\n" f"{summary}"
+                ),
+            )
+        )
+    if candidate.optional_failures:
+        sections.append(
+            ProposalSection(
+                module_id="extraction-gaps",
+                title="Degraded extraction status",
+                content="\n".join(
+                    (
+                        f"- Optional extractor `{failure.extractor_id}` is unavailable. "
+                        f"Rerun handle: `{failure.rerun_handle}`."
+                    )
+                    for failure in candidate.optional_failures
+                ),
+            )
+        )
+    return tuple(sections)
 
 
 def write_candidate_note(
@@ -298,6 +368,7 @@ def write_candidate_note(
     vault_context: VaultContext,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     sources_dir: str = DEFAULT_SOURCES_DIR,
+    proposal_on_existing: bool = False,
 ) -> CandidateWriteResult:
     """The governed vault-write call site: the only place this module touches
     the filesystem.
@@ -313,9 +384,9 @@ def write_candidate_note(
     and the candidate is untouched — nothing durable was written, so it
     remains re-runnable on the very next attempt (not terminal).
 
-    If a note already exists at the deterministic path for this
-    `content_identity`, the write is a traced no-op (`status="already_exists"`)
-    — this slice never overwrites an existing artifact.
+    If a note already exists at the deterministic path for this `content_identity`, it is never
+    overwritten. Ordinary acquisition is a traced no-op; `proposal_on_existing=True` creates a
+    versioned proposal companion for a fresh extraction.
     """
     vault_root = _vault_root(vault_context)
     artifact_path = candidate_note_path(candidate, sources_dir=sources_dir)
@@ -332,6 +403,13 @@ def write_candidate_note(
         ) from exc
 
     if target_exists:
+        if proposal_on_existing and candidate.extraction_artifact_ids:
+            return _write_versioned_proposal(
+                candidate,
+                predecessor_path=artifact_path,
+                vault_root=vault_root,
+                write_guard=write_guard,
+            )
         return CandidateWriteResult(
             status="already_exists",
             artifact_path=artifact_path,
@@ -367,10 +445,105 @@ def write_candidate_note(
             f"{candidate.content_identity!r} at {artifact_path!r}: {exc}"
         ) from exc
 
+    if status == "already_exists" and proposal_on_existing and candidate.extraction_artifact_ids:
+        # Another replay won candidate first-materialization after our initial durable probe.
+        # Reconcile the losing fresh extraction into its own proposal instead of dropping it.
+        return _write_versioned_proposal(
+            candidate,
+            predecessor_path=artifact_path,
+            vault_root=vault_root,
+            write_guard=write_guard,
+        )
     return CandidateWriteResult(
-        status=status,
+        status=(
+            "written_degraded"
+            if status == "written" and candidate.optional_failures
+            else status
+        ),
         artifact_path=artifact_path,
         content_identity=candidate.content_identity,
+    )
+
+
+def _write_versioned_proposal(
+    candidate: Candidate,
+    *,
+    predecessor_path: str,
+    vault_root: Path,
+    write_guard: WriteGuard,
+) -> CandidateWriteResult:
+    """Atomically create one D5 proposal companion without touching predecessor bytes."""
+    identity_material = "\n".join(candidate.extraction_artifact_ids)
+    proposal_reference = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:20]
+    predecessor = PurePosixPath(predecessor_path)
+    max_version = max((item.extractor_version for item in candidate.extractions), default=0)
+    proposal_name = (
+        f"{predecessor.stem}-proposal-extracted-v{max_version}-"
+        f"{proposal_reference}.meta.md"
+    )
+    proposal_path = predecessor.with_name(proposal_name).as_posix()
+    now = _iso(datetime.now(timezone.utc))
+    content = render_review_required_note(
+        frontmatter={
+            "artifact_class": "youtube_source_note_proposal",
+            "authority": {"ai_generated": True, "requires_review": True},
+            "review_state": REVIEW_STATE_DRAFT,
+            "content_identity": candidate.content_identity,
+            "predecessor_ref": predecessor_path,
+            "proposal_reference": proposal_reference,
+            "raw_record_id": candidate.raw_record_id,
+            "normalized_artifact_id": candidate.normalized_artifact_id,
+            "extraction_artifact_ids": list(candidate.extraction_artifact_ids),
+            "write_receipt": f"create-once:{proposal_path}",
+            "created": now,
+            "updated": now,
+        },
+        proposal_sections=(
+            ProposalSection(
+                module_id="reextraction",
+                title="Re-extraction proposal",
+                content=(
+                    "This versioned companion proposes newly extracted material for human "
+                    "review. It does not alter the predecessor candidate."
+                ),
+            ),
+            *_candidate_proposal_sections(candidate),
+        ),
+        evidence=(
+            ("Content identity", candidate.content_identity),
+            ("Predecessor", predecessor_path),
+            ("Proposal reference", proposal_reference),
+            ("Raw record", candidate.raw_record_id or "unknown"),
+            ("Normalized artifact", candidate.normalized_artifact_id or "unknown"),
+            ("Extraction artifacts", ",".join(candidate.extraction_artifact_ids)),
+            ("Write receipt", f"create-once:{proposal_path}"),
+        ),
+    )
+    try:
+        status = create_candidate_note_once(
+            proposal_path,
+            content,
+            vault_root=vault_root,
+            action=CANDIDATE_WRITE_ACTION,
+            write_guard=write_guard,
+        )
+    except WritesBlockedError as exc:
+        return CandidateWriteResult(
+            status="blocked",
+            artifact_path=None,
+            content_identity=candidate.content_identity,
+            reason=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001 - item-scoped writeback error
+        raise CandidateWritebackError(
+            f"versioned proposal write failed for content_identity="
+            f"{candidate.content_identity!r} at {proposal_path!r}: {exc}"
+        ) from exc
+    return CandidateWriteResult(
+        status="proposal_written" if status == "written" else "proposal_already_exists",
+        artifact_path=proposal_path,
+        content_identity=candidate.content_identity,
+        reason=f"write_receipt=create-once:{status}:{proposal_path}",
     )
 
 
@@ -405,6 +578,7 @@ __all__ = [
     "CandidateAssemblyError",
     "CandidateWriteResult",
     "CandidateWritebackError",
+    "ExtractionFailure",
     "assemble_candidate",
     "candidate_note_path",
     "render_candidate_note",

@@ -116,7 +116,16 @@ _KIND_DEFAULT_POLL_INTERVAL_SECONDS: dict[str, int] = {
     "subscription_feed": 21600,
 }
 
-_ALLOWED_POLICY_KEYS: frozenset[str] = frozenset({"mode", "policy_version", "extractor_ids", "captions", "media"})
+_ALLOWED_POLICY_KEYS: frozenset[str] = frozenset(
+    {
+        "mode",
+        "policy_version",
+        "extractor_ids",
+        "extractor_requirements",
+        "captions",
+        "media",
+    }
+)
 _ALLOWED_MEDIA_KEYS: frozenset[str] = frozenset(
     {"enabled", "max_quality", "format", "storage_binding", "min_free_gb", "retention_days", "checksum"}
 )
@@ -316,6 +325,22 @@ def _validate_acquisition_policy_override(override: Any) -> None:
             raise SourceRegistryValidationError("acquisition_policy.extractor_ids must be a list of strings")
         for index, extractor_id in enumerate(extractor_ids):
             _check_portable_string(extractor_id, f"acquisition_policy.extractor_ids[{index}]")
+    if "extractor_requirements" in override:
+        requirements = override["extractor_requirements"]
+        if not isinstance(requirements, dict) or not all(
+            isinstance(key, str)
+            and key
+            and value
+            in {
+                "required_for_materialization",
+                "optional_for_materialization",
+            }
+            for key, value in requirements.items()
+        ):
+            raise SourceRegistryValidationError(
+                "acquisition_policy.extractor_requirements must map extractor ids to "
+                "required_for_materialization or optional_for_materialization"
+            )
     if "captions" in override and not isinstance(override["captions"], bool):
         raise SourceRegistryValidationError("acquisition_policy.captions must be a boolean")
     if "media" in override:
@@ -336,6 +361,14 @@ def _build_acquisition_policy(collection_kind: str, override: dict[str, Any] | N
         merged_media = dict(base["media"])
         merged_media.update(override["media"])
         merged["media"] = merged_media
+    requirements = merged.get("extractor_requirements")
+    if requirements is not None:
+        selected = tuple(merged.get("extractor_ids") or ("summary",))
+        if set(requirements) != set(selected):
+            raise SourceRegistryValidationError(
+                "acquisition_policy.extractor_requirements must classify every selected "
+                "extractor exactly once"
+            )
     return merged
 
 

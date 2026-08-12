@@ -25,6 +25,7 @@ def test_object_store_port_classifies_rebuildable_store(monkeypatch):
     assert binding.rebuild_source
     assert hasattr(binding.store, "put")
     assert hasattr(binding.store, "get")
+    assert hasattr(binding.store, "put_if_absent")
 
 
 def test_object_store_port_selects_store_from_reported_backend(monkeypatch):

@@ -289,6 +289,13 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _validate_expected_attempt(value: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise AcquisitionRequestValidationError(
+            f"expected_attempt must be a positive int, got {value!r}"
+        )
+
+
 def _parse_iso(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
@@ -419,7 +426,12 @@ class _MemoryAcquisitionRequestsBackend:
             return tuple(claimed)
 
     def _mutate(
-        self, request_id: str, *, allowed_from: frozenset[str], **changes: Any
+        self,
+        request_id: str,
+        *,
+        allowed_from: frozenset[str],
+        expected_attempt: int | None = None,
+        **changes: Any,
     ) -> AcquisitionRequest | None:
         """Guarded transition: applies only when the current status is in
         ``allowed_from``. Returns ``None`` on a guard miss (row exists but is in
@@ -431,7 +443,9 @@ class _MemoryAcquisitionRequestsBackend:
         row = self._rows.get(request_id)
         if row is None:
             raise KeyError(f"no such acquisition request: {request_id}")
-        if row.status not in allowed_from:
+        if row.status not in allowed_from or (
+            expected_attempt is not None and row.attempts != expected_attempt
+        ):
             return None
         updated = replace(row, **changes)
         self._rows[request_id] = updated
@@ -443,12 +457,14 @@ class _MemoryAcquisitionRequestsBackend:
         *,
         content_identity: str,
         artifact_path: str | None,
+        expected_attempt: int,
         now: datetime,
     ) -> AcquisitionRequest | None:
         with self._lock:
             return self._mutate(
                 request_id,
                 allowed_from=frozenset({"in_progress"}),
+                expected_attempt=expected_attempt,
                 status="completed",
                 completed_at=_iso(now),
                 next_attempt_at=None,
@@ -463,12 +479,14 @@ class _MemoryAcquisitionRequestsBackend:
         *,
         last_failure: dict[str, Any],
         next_attempt_at: datetime,
+        expected_attempt: int,
         now: datetime,
     ) -> AcquisitionRequest | None:
         with self._lock:
             return self._mutate(
                 request_id,
                 allowed_from=frozenset({"in_progress"}),
+                expected_attempt=expected_attempt,
                 status="pending",
                 last_failure=last_failure,
                 next_attempt_at=_iso(next_attempt_at),
@@ -476,12 +494,23 @@ class _MemoryAcquisitionRequestsBackend:
             )
 
     def set_dead_lettered(
-        self, request_id: str, *, last_failure: dict[str, Any], now: datetime
+        self,
+        request_id: str,
+        *,
+        last_failure: dict[str, Any],
+        expected_attempt: int | None,
+        now: datetime,
     ) -> AcquisitionRequest | None:
+        allowed_from = (
+            frozenset({"pending"})
+            if expected_attempt is None
+            else frozenset({"in_progress"})
+        )
         with self._lock:
             return self._mutate(
                 request_id,
-                allowed_from=frozenset({"in_progress", "pending"}),
+                allowed_from=allowed_from,
+                expected_attempt=expected_attempt,
                 status="dead_lettered",
                 last_failure=last_failure,
                 next_attempt_at=None,
@@ -793,6 +822,7 @@ class _PgAcquisitionRequestsBackend:
         params: tuple[Any, ...],
         *,
         allowed_from: tuple[str, ...],
+        expected_attempt: int | None = None,
     ) -> AcquisitionRequest | None:
         """Guarded single-statement transition (``UPDATE ... RETURNING``).
 
@@ -806,10 +836,14 @@ class _PgAcquisitionRequestsBackend:
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
+            attempt_predicate = "" if expected_attempt is None else " AND attempts = %s"
+            attempt_params: tuple[Any, ...] = (
+                () if expected_attempt is None else (expected_attempt,)
+            )
             cur.execute(
-                f"UPDATE {_TABLE} SET {sets} WHERE request_id = %s AND status = ANY(%s) "
-                f"RETURNING {_COLUMNS_SQL}",
-                (*params, request_id, list(allowed_from)),
+                f"UPDATE {_TABLE} SET {sets} WHERE request_id = %s AND status = ANY(%s)"
+                f"{attempt_predicate} RETURNING {_COLUMNS_SQL}",
+                (*params, request_id, list(allowed_from), *attempt_params),
             )
             row = cur.fetchone()
             if row is not None:
@@ -821,7 +855,13 @@ class _PgAcquisitionRequestsBackend:
             conn.close()
 
     def set_completed(
-        self, request_id: str, *, content_identity: str, artifact_path: str | None, now: datetime
+        self,
+        request_id: str,
+        *,
+        content_identity: str,
+        artifact_path: str | None,
+        expected_attempt: int,
+        now: datetime,
     ) -> AcquisitionRequest | None:
         return self._mutate(
             request_id,
@@ -829,10 +869,17 @@ class _PgAcquisitionRequestsBackend:
             "content_identity = %s, artifact_path = %s, updated_at = %s::timestamptz",
             (_iso(now), content_identity, artifact_path, _iso(now)),
             allowed_from=("in_progress",),
+            expected_attempt=expected_attempt,
         )
 
     def set_failed_retryable(
-        self, request_id: str, *, last_failure: dict[str, Any], next_attempt_at: datetime, now: datetime
+        self,
+        request_id: str,
+        *,
+        last_failure: dict[str, Any],
+        next_attempt_at: datetime,
+        expected_attempt: int,
+        now: datetime,
     ) -> AcquisitionRequest | None:
         return self._mutate(
             request_id,
@@ -840,17 +887,25 @@ class _PgAcquisitionRequestsBackend:
             "updated_at = %s::timestamptz",
             (json.dumps(last_failure), _iso(next_attempt_at), _iso(now)),
             allowed_from=("in_progress",),
+            expected_attempt=expected_attempt,
         )
 
     def set_dead_lettered(
-        self, request_id: str, *, last_failure: dict[str, Any], now: datetime
+        self,
+        request_id: str,
+        *,
+        last_failure: dict[str, Any],
+        expected_attempt: int | None,
+        now: datetime,
     ) -> AcquisitionRequest | None:
+        allowed_from = ("pending",) if expected_attempt is None else ("in_progress",)
         return self._mutate(
             request_id,
             "status = 'dead_lettered', last_failure = %s::jsonb, next_attempt_at = NULL, "
             "updated_at = %s::timestamptz",
             (json.dumps(last_failure), _iso(now)),
-            allowed_from=("in_progress", "pending"),
+            allowed_from=allowed_from,
+            expected_attempt=expected_attempt,
         )
 
     def reset_stale(self, older_than_seconds: int, now: datetime) -> int:
@@ -943,6 +998,30 @@ class AcquisitionRequests:
                 raise AcquisitionRequestValidationError(
                     "policy_snapshot.extractor_ids must be a list of non-empty strings"
                 )
+        if snapshot.get("extractor_requirements") is not None:
+            extractor_requirements = snapshot["extractor_requirements"]
+            if not isinstance(extractor_requirements, dict) or not all(
+                isinstance(key, str)
+                and key.strip()
+                and value
+                in {
+                    "required",
+                    "optional",
+                    "required_for_materialization",
+                    "optional_for_materialization",
+                }
+                for key, value in extractor_requirements.items()
+            ):
+                raise AcquisitionRequestValidationError(
+                    "policy_snapshot.extractor_requirements must map non-empty extractor ids "
+                    "to a required/optional materialization classification"
+                )
+            selected = tuple(snapshot.get("extractor_ids") or ("summary",))
+            if set(extractor_requirements) != set(selected):
+                raise AcquisitionRequestValidationError(
+                    "policy_snapshot.extractor_requirements must classify every selected "
+                    "extractor exactly once"
+                )
 
         moment = _now(now)
         stamp = _iso(moment)
@@ -1034,6 +1113,7 @@ class AcquisitionRequests:
         self,
         request_id: str,
         *,
+        expected_attempt: int,
         content_identity: str,
         artifact_path: str | None = None,
         dedup_noop: bool = False,
@@ -1042,19 +1122,26 @@ class AcquisitionRequests:
     ) -> AcquisitionRequest:
         """Terminal success (INV-YSS-3): candidate written or traced dedup no-op.
 
-        Applies only to a claimed (``in_progress``) request. A late complete on
+        Applies only to the claimed (``in_progress``, matching ``expected_attempt``) request. A late complete on
         an already-terminal row is an idempotent no-op returning the terminal
         row unchanged (no event); completing a never-claimed row is a loud
         caller error.
         """
         if not isinstance(content_identity, str) or not content_identity.strip():
             raise AcquisitionRequestValidationError("content_identity must be a non-empty string")
+        _validate_expected_attempt(expected_attempt)
         moment = _now(now)
         row = self._backend.set_completed(
-            request_id, content_identity=content_identity, artifact_path=artifact_path, now=moment
+            request_id,
+            content_identity=content_identity,
+            artifact_path=artifact_path,
+            expected_attempt=expected_attempt,
+            now=moment,
         )
         if row is None:
-            return self._classify_guard_miss(request_id, action="complete")
+            return self._classify_guard_miss(
+                request_id, action="complete", expected_attempt=expected_attempt
+            )
         payload: dict[str, Any] = {
             "request_id": request_id,
             "attempt": row.attempts,
@@ -1076,6 +1163,7 @@ class AcquisitionRequests:
         self,
         request_id: str,
         *,
+        expected_attempt: int,
         reason_code: str,
         error: BaseException | str | None = None,
         now: datetime | None = None,
@@ -1087,12 +1175,13 @@ class AcquisitionRequests:
         Retryable: back to ``pending`` with a contract backoff gate. Attempts
         exhausted (``>= max_attempts``): explicit item-scoped ``dead_lettered``
         with ``terminal: true``. Applies only to a claimed (``in_progress``)
-        request: a late fail from a stale drainer on an already-terminal row is
+        request generation: a late fail from a stale drainer on an already-terminal row is
         an idempotent no-op (INV-YSS-3 — terminal is terminal), and failing a
         never-claimed row is a loud caller error.
         """
         if not isinstance(reason_code, str) or not reason_code.strip():
             raise AcquisitionRequestValidationError("reason_code must be a non-empty string")
+        _validate_expected_attempt(expected_attempt)
         current = self._backend.get(request_id)
         if current is None:
             raise KeyError(f"no such acquisition request: {request_id}")
@@ -1102,25 +1191,42 @@ class AcquisitionRequests:
             raise AcquisitionRequestValidationError(
                 f"fail requires a claimed (in_progress) request; {request_id} is {current.status!r}"
             )
+        if current.attempts != expected_attempt:
+            return self._classify_guard_miss(
+                request_id, action="fail", expected_attempt=expected_attempt
+            )
         moment = _now(now)
-        attempt = max(1, current.attempts)
+        attempt = expected_attempt
         last_failure = {
             "reason_code": reason_code,
             "error": sanitize_error(error),
             "at": _iso(moment),
         }
         if attempt >= self._max_attempts:
-            row = self._backend.set_dead_lettered(request_id, last_failure=last_failure, now=moment)
+            row = self._backend.set_dead_lettered(
+                request_id,
+                last_failure=last_failure,
+                expected_attempt=expected_attempt,
+                now=moment,
+            )
             if row is None:
-                return self._classify_guard_miss(request_id, action="fail")
+                return self._classify_guard_miss(
+                    request_id, action="fail", expected_attempt=expected_attempt
+                )
             self._emit_failed(row, attempt, reason_code, terminal=True, next_attempt_at=None, conn=conn)
             return row
         gate = moment + timedelta(seconds=compute_backoff_seconds(attempt, rng=rng))
         row = self._backend.set_failed_retryable(
-            request_id, last_failure=last_failure, next_attempt_at=gate, now=moment
+            request_id,
+            last_failure=last_failure,
+            next_attempt_at=gate,
+            expected_attempt=expected_attempt,
+            now=moment,
         )
         if row is None:
-            return self._classify_guard_miss(request_id, action="fail")
+            return self._classify_guard_miss(
+                request_id, action="fail", expected_attempt=expected_attempt
+            )
         self._emit_failed(row, attempt, reason_code, terminal=False, next_attempt_at=_iso(gate), conn=conn)
         return row
 
@@ -1128,6 +1234,7 @@ class AcquisitionRequests:
         self,
         request_id: str,
         *,
+        expected_attempt: int | None = None,
         reason_code: str,
         error: BaseException | str | None = None,
         now: datetime | None = None,
@@ -1135,26 +1242,49 @@ class AcquisitionRequests:
     ) -> AcquisitionRequest:
         """Explicit item-scoped terminal outcome (KA stage dead-letter surfaced).
 
-        Applies from ``in_progress`` or ``pending``; a repeat on an
+        Applies from ``in_progress`` with its expected attempt generation, or from unowned
+        ``pending``; a repeat on an
         already-terminal row is an idempotent no-op (INV-YSS-3).
         """
         if not isinstance(reason_code, str) or not reason_code.strip():
             raise AcquisitionRequestValidationError("reason_code must be a non-empty string")
+        if expected_attempt is not None:
+            _validate_expected_attempt(expected_attempt)
         moment = _now(now)
         last_failure = {
             "reason_code": reason_code,
             "error": sanitize_error(error),
             "at": _iso(moment),
         }
-        row = self._backend.set_dead_lettered(request_id, last_failure=last_failure, now=moment)
+        current = self._backend.get(request_id)
+        if current is None:
+            raise KeyError(f"no such acquisition request: {request_id}")
+        if current.status == "in_progress" and expected_attempt is None:
+            raise AcquisitionRequestValidationError(
+                "dead_letter requires expected_attempt for an in_progress request"
+            )
+        row = self._backend.set_dead_lettered(
+            request_id,
+            last_failure=last_failure,
+            expected_attempt=expected_attempt,
+            now=moment,
+        )
         if row is None:
-            return self._classify_guard_miss(request_id, action="dead_letter")
+            return self._classify_guard_miss(
+                request_id, action="dead_letter", expected_attempt=expected_attempt
+            )
         self._emit_failed(
             row, max(1, row.attempts), reason_code, terminal=True, next_attempt_at=None, conn=conn
         )
         return row
 
-    def _classify_guard_miss(self, request_id: str, *, action: str) -> AcquisitionRequest:
+    def _classify_guard_miss(
+        self,
+        request_id: str,
+        *,
+        action: str,
+        expected_attempt: int | None = None,
+    ) -> AcquisitionRequest:
         """A guarded transition matched no row: terminal ⇒ idempotent no-op
         (return the terminal row unchanged, emit nothing — INV-YSS-3), any other
         disallowed state ⇒ loud caller error, missing ⇒ KeyError."""
@@ -1163,6 +1293,11 @@ class AcquisitionRequests:
             raise KeyError(f"no such acquisition request: {request_id}")
         if current.status in TERMINAL_STATUSES:
             return current
+        if expected_attempt is not None and current.attempts != expected_attempt:
+            raise AcquisitionRequestValidationError(
+                f"{action} belongs to stale attempt {expected_attempt}; "
+                f"request {request_id} is owned by attempt {current.attempts}"
+            )
         raise AcquisitionRequestValidationError(
             f"{action} is not applicable to request {request_id} in status {current.status!r}"
         )
@@ -1244,8 +1379,9 @@ def drain_one(
       candidate write was the traced ``already_exists`` no-op).
     - ``blocked`` (governed WriteGuard denial) → retryable
       ``writeguard_blocked``.
-    - stage dead-letter (``receipt.dead_lettered`` non-empty) →
-      ``pipeline_dead_letter`` — terminal, item-scoped.
+    - required stage dead-letter → ``pipeline_dead_letter`` — terminal, item-scoped.
+    - optional stage dead-letter with a degraded candidate → ``completed``; the candidate and
+      receipt retain the visible evidence gap and rerun handle.
     - raised :class:`AcquisitionError` → retryable ``network_error`` (the
       transient fetch/ASR chain dominates this path; deterministic pipeline
       failures still surface their durable stage dead-letter in lineage and
@@ -1267,6 +1403,7 @@ def drain_one(
     from app.knowledge_acquisition.acquire import (
         AcquisitionError,
         RetryableSourceAcquisitionError,
+        TerminalAcquisitionError,
         acquire_youtube,
     )
     from app.write_guard import DEFAULT_WRITE_GUARD
@@ -1277,6 +1414,7 @@ def drain_one(
         # would wedge the whole drain loop on one row.
         return queue.dead_letter(
             request.request_id,
+            expected_attempt=request.attempts,
             reason_code="source_unsupported",
             error=f"no drain adapter for source_kind {request.source_kind!r}",
             now=now,
@@ -1293,6 +1431,7 @@ def drain_one(
     elif media is not None and media.get("enabled") is True:
         return queue.dead_letter(
             request.request_id,
+            expected_attempt=request.attempts,
             reason_code="media_policy_disabled",
             error="media acquisition is disabled because the archival engine is not delivered",
             now=now,
@@ -1314,6 +1453,7 @@ def drain_one(
     if unsupported_policy is not None:
         return queue.dead_letter(
             request.request_id,
+            expected_attempt=request.attempts,
             reason_code="policy_unsupported",
             error=unsupported_policy,
             now=now,
@@ -1322,10 +1462,32 @@ def drain_one(
 
     raw_extractor_ids = policy.get("extractor_ids") or ()
     if isinstance(raw_extractor_ids, str):
-        raise AcquisitionRequestValidationError(
-            "policy_snapshot.extractor_ids must be a list of strings, not a bare string"
+        return queue.dead_letter(
+            request.request_id,
+            expected_attempt=request.attempts,
+            reason_code="policy_invalid",
+            error="policy_snapshot.extractor_ids must be a list of strings",
+            now=now,
+            conn=conn,
         )
     extractor_ids = tuple(raw_extractor_ids) or ("summary",)
+    raw_extractor_requirements = policy.get("extractor_requirements")
+    if raw_extractor_requirements is not None and not isinstance(
+        raw_extractor_requirements, dict
+    ):
+        return queue.dead_letter(
+            request.request_id,
+            expected_attempt=request.attempts,
+            reason_code="policy_invalid",
+            error="policy_snapshot.extractor_requirements must be an object",
+            now=now,
+            conn=conn,
+        )
+    extractor_requirements = (
+        dict(raw_extractor_requirements)
+        if raw_extractor_requirements is not None
+        else None
+    )
     guard = write_guard if write_guard is not None else DEFAULT_WRITE_GUARD
     fn = acquire_fn or acquire_youtube
 
@@ -1334,14 +1496,25 @@ def drain_one(
             request.source_ref,
             vault_context=vault_context,
             extractor_ids=extractor_ids,
+            extractor_requirements=extractor_requirements,
             write_guard=guard,
             trace_id=request.trace_id,
             conn=conn,
             env=env,
         )
+    except TerminalAcquisitionError as exc:
+        return queue.dead_letter(
+            request.request_id,
+            expected_attempt=request.attempts,
+            reason_code="pipeline_configuration_or_persistence",
+            error=exc,
+            now=now,
+            conn=conn,
+        )
     except AcquisitionError as exc:
         return queue.fail(
             request.request_id,
+            expected_attempt=request.attempts,
             reason_code=(exc.reason_code if isinstance(exc, RetryableSourceAcquisitionError) else "network_error"),
             error=exc,
             now=now,
@@ -1355,17 +1528,34 @@ def drain_one(
         )
         return queue.fail(
             request.request_id,
+            expected_attempt=request.attempts,
             reason_code="writeguard_blocked",
             error=blocked_detail or "candidate write blocked by WriteGuard",
             now=now,
             conn=conn,
         )
 
-    if receipt.dead_lettered:
+    required_dead_lettered = tuple(getattr(receipt, "required_dead_lettered", ()))
+    optional_dead_lettered = tuple(getattr(receipt, "optional_dead_lettered", ()))
+    # Compatibility with pre-policy receipts: an unclassified dead-letter remains required.
+    blocking_dead_lettered = tuple(
+        dict.fromkeys(
+            (
+                *required_dead_lettered,
+                *(
+                    item
+                    for item in receipt.dead_lettered
+                    if item not in optional_dead_lettered
+                ),
+            )
+        )
+    )
+    if blocking_dead_lettered:
         return queue.dead_letter(
             request.request_id,
+            expected_attempt=request.attempts,
             reason_code="pipeline_dead_letter",
-            error=f"stage dead-letter: {', '.join(receipt.dead_lettered)}",
+            error=f"required stage dead-letter: {', '.join(blocking_dead_lettered)}",
             now=now,
             conn=conn,
         )
@@ -1373,6 +1563,7 @@ def drain_one(
     candidate = next((s for s in receipt.stages if s.stage == "candidate"), None)
     return queue.complete(
         request.request_id,
+        expected_attempt=request.attempts,
         content_identity=receipt.content_identity,
         artifact_path=candidate.artifact_path if candidate is not None else None,
         dedup_noop=bool(candidate is not None and candidate.status == "already_exists"),
