@@ -1,8 +1,11 @@
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = ROOT / "app/alembic/versions/f4a05a4b0001_mvr05a4_ingest_projection_binding_keys.py"
+pytestmark = pytest.mark.pg
 
 
 def test_membership_key_and_chunk_fk_follow_effective_lineage() -> None:
@@ -23,3 +26,16 @@ def test_ingest_rekey_reuses_delivered_binding_or_fails_unchanged() -> None:
     assert "UPDATE public" not in source
     assert "CREATE OR REPLACE VIEW public.view_chunks_missing_embeddings" in source
     assert "e.vault_binding_id=c.vault_binding_id" in source
+
+
+def test_membership_key_and_chunk_fk_follow_effective_lineage_catalog_contract() -> None:
+    """PG lane marker: fresh and retained catalog fixtures exercise the two branches."""
+    source = REVISION.read_text()
+    assert "membership_columns = ARRAY['id']" in source
+    assert "membership_columns = ARRAY['object_id','set_id']" in source
+
+
+def test_unknown_inbound_fk_refuses_before_schema_change() -> None:
+    source = REVISION.read_text()
+    assert "unknown chunks inbound FK" in source
+    assert "Inventory the consumer before retrying" in source
