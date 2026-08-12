@@ -58,6 +58,7 @@ from app.governance.binding_authority import (
 )
 from app.instance.vault_registry import (
     RegistryError,
+    RegistryRevisionConflict,
     RegistrySnapshot,
     VaultRegistryStore,
 )
@@ -238,6 +239,22 @@ class DimensionReceipt:
         else:
             payload["deleted"] = True
         return payload
+
+
+@dataclass(frozen=True)
+class DimensionRecoveryReceipt:
+    """Auditable, revision-pinned removal of an unparsable dimensions slot."""
+
+    old_registry_revision: int
+    new_registry_revision: int
+    removed_extension_slot: str = "dimensions"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "old_registry_revision": self.old_registry_revision,
+            "new_registry_revision": self.new_registry_revision,
+            "removed_extension_slot": self.removed_extension_slot,
+        }
 
 
 def _validate_dimension_id(value: str) -> str:
@@ -657,6 +674,47 @@ class VaultDimensionService:
             deleted=True,
         )
 
+    def recover_malformed_dimensions(
+        self, *, expected_registry_revision: int
+    ) -> DimensionRecoveryReceipt:
+        """Remove an unparsable dimensions slot without interpreting its members.
+
+        Ordinary administration always parses ``extensions.dimensions`` and remains
+        fail-closed.  This sole recovery path first proves parsing fails, then delegates
+        to the registry's dedicated slot-removal writer with the operator's exact
+        revision.  It never rebuilds a partial dimension set or touches registrations
+        and unrelated extension state.
+        """
+
+        if (
+            isinstance(expected_registry_revision, bool)
+            or not isinstance(expected_registry_revision, int)
+            or expected_registry_revision < 0
+        ):
+            raise VaultDimensionError("expected_registry_revision must be a non-negative integer")
+        current = self._store.load()
+        if current.revision != expected_registry_revision:
+            raise RegistryRevisionConflict(
+                f"expected revision {expected_registry_revision}, found {current.revision}; "
+                "reload before retry"
+            )
+        try:
+            parse_dimensions(current.extensions)
+        except VaultDimensionError:
+            pass
+        else:
+            raise VaultDimensionError(
+                "registry dimensions recovery requires malformed dimensions state"
+            )
+        updated = self._store.remove_dimension_state(
+            expected_revision=expected_registry_revision,
+            _capability=self._capability,
+        )
+        return DimensionRecoveryReceipt(
+            old_registry_revision=current.revision,
+            new_registry_revision=updated.revision,
+        )
+
     # -- internals -----------------------------------------------------------------
 
     def _load(self) -> tuple[RegistrySnapshot, dict[str, VaultDimension]]:
@@ -782,6 +840,7 @@ __all__ = [
     "REASON_MEMBER_UNAUTHORIZED",
     "REASON_MEMBER_UNREGISTERED",
     "DimensionReceipt",
+    "DimensionRecoveryReceipt",
     "DimensionResolution",
     "DimensionResolutionError",
     "ResolvedMember",

@@ -306,3 +306,65 @@ def test_dimension_administration_fails_closed_on_bad_input(tmp_path) -> None:
     )
     with pytest.raises(VaultDimensionError, match="unsupported schema"):
         service.list()
+
+
+def test_recover_malformed_dimensions_preserves_registry_and_unrelated_extensions(tmp_path) -> None:
+    """Recovery drops only an invalid dimensions slot at the supplied revision."""
+
+    from app.instance.vault_dimensions import VaultDimensionError
+    from app.instance.vault_registry import RegistryRevisionConflict
+
+    store = _registry(tmp_path)
+    service = _service(store)
+    service.create("work", display_name="Work", members=["binding-other"])
+    valid = store.load()
+    valid_bytes = store.path.read_bytes()
+    with pytest.raises(VaultDimensionError, match="requires malformed"):
+        service.recover_malformed_dimensions(expected_registry_revision=valid.revision)
+    assert store.path.read_bytes() == valid_bytes
+
+    current = store.load()
+    store.set_extension_state(
+        principal_state={"operator": "local"},
+        background_state={"mode": "compatibility"},
+        runtime_floors={"registry": "01b"},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    current = store.load()
+    registrations_before = dict(current.registrations)
+    unrelated_before = {
+        key: value
+        for key, value in current.extensions.items()
+        if key != "dimensions"
+    }
+    store.set_dimension_state(
+        {"schema": "unsupported", "entries": {"work": "not-a-record"}},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    malformed = store.load()
+    assert malformed.extensions["dimensions"]["schema"] == "unsupported"
+    with pytest.raises(VaultDimensionError, match="unsupported schema"):
+        service.list()
+
+    frozen = store.path.read_bytes()
+    with pytest.raises(RegistryRevisionConflict):
+        service.recover_malformed_dimensions(
+            expected_registry_revision=malformed.revision - 1
+        )
+    assert store.path.read_bytes() == frozen
+
+    receipt = service.recover_malformed_dimensions(
+        expected_registry_revision=malformed.revision
+    )
+    recovered = store.load()
+    assert receipt.as_dict() == {
+        "old_registry_revision": malformed.revision,
+        "new_registry_revision": malformed.revision + 1,
+        "removed_extension_slot": "dimensions",
+    }
+    assert "dimensions" not in recovered.extensions
+    assert recovered.registrations == registrations_before
+    assert recovered.extensions == unrelated_before
+    assert service.list() == ()

@@ -153,6 +153,15 @@ unauthorized rows, so an operator can see them — and **repair** it by removing
 the dimension. That inspection is registry administration: it is not an `ActiveContextSet` and not a
 permission result. Additions and resolution still fail closed.
 
+**Malformed-state recovery is explicit and destructive only to the malformed slot.** Ordinary
+dimension administration continues to fail closed when the durable `dimensions` extension slot cannot
+be parsed; it never skips, normalizes, or infers membership. The sole recovery route is the
+authenticated `POST /api/instance/dimensions/recover-malformed` producer and matching
+`python -m app.instance.runtime dimension-recover-malformed` command. It requires the exact registry
+revision observed by the operator, removes the whole malformed `dimensions` slot rather than guessing
+a partial repair, preserves registrations and unrelated extension keys, and returns the old revision,
+new revision, and removed-slot identity. It is not a general extension-write route.
+
 **Deleting a dimension deletes nothing else.** Registrations, content roots, and receipts are
 untouched; the bindings remain independently selectable. Conversely, removing a registration
 transactionally removes that binding from every dimension in the same locked registry transaction,

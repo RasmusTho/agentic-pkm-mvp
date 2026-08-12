@@ -394,3 +394,87 @@ def test_admin_can_repair_stale_dimension_membership(instance, client) -> None:
     )
     assert dropped["_exit_code"] == 0 and dropped["deleted"] is True
     assert runtime.registry.load().registrations == registrations_before
+
+
+def test_malformed_dimension_state_requires_explicit_revision_pinned_recovery(instance, client) -> None:
+    """Normal commands fail closed; the dedicated API recovery is revision-pinned."""
+
+    runtime, first, _, _, _ = instance
+    registry_path = str(runtime.layout.registry_path)
+    current = runtime.registry.load()
+    runtime.registry.set_dimension_state(
+        {"schema": "unsupported", "entries": {"work": "not-a-record"}},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    malformed = runtime.registry.load()
+    frozen = runtime.registry.path.read_bytes()
+
+    assert client.get(DIMENSIONS_URL).status_code == 400
+    refused_cli = _cli("dimension-list", "--registry-path", registry_path, "--consumer", "api")
+    assert refused_cli["_exit_code"] == 1 and refused_cli["ok"] is False
+
+    stale = client.post(
+        f"{DIMENSIONS_URL}/recover-malformed",
+        json={"expected_registry_revision": malformed.revision - 1},
+    )
+    assert stale.status_code == 409, stale.text
+    assert runtime.registry.path.read_bytes() == frozen
+
+    recovered = client.post(
+        f"{DIMENSIONS_URL}/recover-malformed",
+        json={"expected_registry_revision": malformed.revision},
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json() == {
+        "old_registry_revision": malformed.revision,
+        "new_registry_revision": malformed.revision + 1,
+        "removed_extension_slot": "dimensions",
+    }
+    assert client.get(DIMENSIONS_URL).json() == {"dimensions": []}
+    assert first.vault_binding_id in runtime.registry.load().registrations
+
+
+def test_dimension_recovery_is_reachable_only_through_governed_producers(instance, client) -> None:
+    """The API and loopback CLI expose one recovery command, never a generic extension writer."""
+
+    runtime, _, _, _, _ = instance
+    registry_path = str(runtime.layout.registry_path)
+    mounted = {route.path for route in app.routes}
+    assert f"{DIMENSIONS_URL}/recover-malformed" in mounted
+    assert not any("extension" in path for path in mounted if path.startswith(DIMENSIONS_URL))
+
+    current = runtime.registry.load()
+    runtime.registry.set_dimension_state(
+        {"schema": "unsupported", "entries": {}},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    malformed = runtime.registry.load()
+    recovered = _cli(
+        "dimension-recover-malformed",
+        "--registry-path",
+        registry_path,
+        "--expected-registry-revision",
+        str(malformed.revision),
+        "--consumer",
+        "api",
+    )
+    assert recovered["_exit_code"] == 0 and recovered["ok"] is True
+    assert recovered["removed_extension_slot"] == "dimensions"
+
+    current = runtime.registry.load()
+    runtime.registry.set_dimension_state(
+        {"schema": "unsupported", "entries": {}},
+        expected_revision=current.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    from app.instance._storage_boundary import CapabilityNotReadyError
+
+    with pytest.raises(CapabilityNotReadyError):
+        # A direct service without the runtime factory's sealed capability cannot recover.
+        from app.instance.vault_dimensions import VaultDimensionService
+
+        VaultDimensionService(runtime.registry).recover_malformed_dimensions(
+            expected_registry_revision=runtime.registry.load().revision
+        )

@@ -744,6 +744,33 @@ class VaultRegistryStore:
             self._write_locked(updated)
             return updated
 
+    def remove_dimension_state(
+        self,
+        *,
+        expected_revision: int,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Remove only the durable MVR-04 extension slot at a pinned revision.
+
+        This deliberately narrow recovery writer exists for a registry whose
+        ``extensions.dimensions`` payload cannot be parsed by the ordinary MVR-04
+        service.  It is not an extension mutation escape hatch: registrations,
+        defaults, and every extension key other than ``dimensions`` are copied from
+        the locked current snapshot unchanged.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            self._assert_revision(current, expected_revision)
+            if "dimensions" not in current.extensions:
+                raise RegistryError("registry dimensions recovery requires a dimensions slot")
+            updated = self._with_registrations(current, dict(current.registrations))
+            updated.extensions.pop("dimensions", None)
+            self._write_locked(updated)
+            return updated
+
     def set_extension_state(
         self,
         *,

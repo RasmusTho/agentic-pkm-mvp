@@ -176,6 +176,16 @@ Dimension metadata and membership survive restart in the registry store. Removin
 dimension is transactional and never changes content; failed persistence leaves prior membership
 truth visible rather than partially applying it.
 
+## Failure Semantics
+
+Ordinary dimension API and CLI administration parses `extensions.dimensions` and fails closed when
+that slot is malformed; it never skips, normalizes, or partially interprets malformed membership.
+The sole recovery operation is the authenticated `POST /api/instance/dimensions/recover-malformed`
+producer and its matching `python -m app.instance.runtime dimension-recover-malformed` command. It
+requires the exact registry revision observed by the operator, removes the entire `dimensions` slot
+only after parsing has failed, preserves registrations and unrelated extension keys, and returns the
+old revision, new revision, and removed-slot identity. It is not a general extension-write route.
+
 ## Related Docs
 
 - `docs/MULTI_VAULT_RUNTIME/README.md`

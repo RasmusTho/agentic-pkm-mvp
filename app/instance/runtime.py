@@ -3078,6 +3078,7 @@ DIMENSION_COMMANDS = (
     "dimension-remove-member",
     "dimension-delete",
     "dimension-resolve",
+    "dimension-recover-malformed",
 )
 
 
@@ -3139,6 +3140,10 @@ def _dimension_command(args: argparse.Namespace) -> int:
                     for member in resolution.members
                 ],
             }
+        elif args.command == "dimension-recover-malformed":
+            payload = service.recover_malformed_dimensions(
+                expected_registry_revision=args.expected_registry_revision
+            ).as_dict()
         elif args.command == "dimension-create":
             payload = service.create(
                 args.dimension_id,
@@ -3497,7 +3502,7 @@ def main(argv: list[str] | None = None) -> int:
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
         command.add_argument("--consumer", default=None)
-        if name != "dimension-list":
+        if name not in {"dimension-list", "dimension-recover-malformed"}:
             command.add_argument("--dimension-id", required=True)
         if name in {"dimension-create", "dimension-rename"}:
             command.add_argument("--display-name", required=True)
@@ -3507,6 +3512,8 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--vault-binding-id", action="append", default=[])
         if name == "dimension-remove-member":
             command.add_argument("--vault-binding-id-value", required=True)
+        if name == "dimension-recover-malformed":
+            command.add_argument("--expected-registry-revision", type=int, required=True)
     for name in PRINCIPAL_COMMANDS:
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
