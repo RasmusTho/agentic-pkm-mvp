@@ -66,11 +66,16 @@ def _reasoning_resolution() -> tuple[str, str]:
     )
 
     router = LLMRouter()
+    selected_route = router.route(
+        LLMTaskIntent(task_kind="reasoning", risk="high")
+    )
     effective = resolve_effective_reasoning_route(
-        router.route(LLMTaskIntent(task_kind="reasoning", risk="high")),
+        selected_route,
         model_override=_override("REASONING_MODEL"),
         selected_model_origin=(
-            _vault_shared_origin("llm_routing.md")
+            "env:LLM_FORCE_MODEL"
+            if _override("LLM_FORCE_MODEL") is not None
+            else _vault_shared_origin("llm_routing.md")
             if router.routing_key_configured("default_reasoning")
             else "registry default"
         ),

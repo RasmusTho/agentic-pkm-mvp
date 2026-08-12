@@ -31,6 +31,7 @@ def _clean_route_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "LLM_FORCE_PROVIDER",
         "LLM_MODEL",
         "LLM_PROVIDER",
+        "LLM_PROVIDER_ENFORCE",
         "MERGE_LLM_MODEL",
         "REASONING_MODEL",
         "REASONING_PROVIDER",
@@ -128,6 +129,25 @@ def test_registered_cli_and_execution_share_compiled_no_env_reasoning_route(
     ]
 
 
+def test_reasoning_explain_reports_force_model_origin(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _compile_openai_reasoning_bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr(llm_router, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(wave_one, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setenv("LLM_FORCE_MODEL", "forced-reasoning-model")
+
+    explained = wave_one.wave_one_explain()["llm.reasoning_model"]
+
+    assert explained == {
+        "origin": "env:LLM_FORCE_MODEL",
+        "tier": "operator",
+        "value": "forced-reasoning-model",
+    }
+
+
 def test_reasoning_route_preserves_override_execution_and_trace_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -211,3 +231,36 @@ def test_reasoning_route_preserves_override_execution_and_trace_identity(
     assert result.status == "failed"
     assert traced["provider"] == "openai"
     assert traced["model"] == "legacy-reasoning"
+
+
+def test_routing_failure_keeps_provider_failure_trace_non_throwing(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _compile_openai_reasoning_bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr(llm_router, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_PROVIDER_ENFORCE", "1")
+    monkeypatch.setenv("REASONING_MODEL", "declared-reasoning-model")
+    monkeypatch.setattr(
+        reasoning_provider,
+        "_load_object_text",
+        lambda _object_id: ("reason over this", {}),
+    )
+    traced: dict[str, object] = {}
+    monkeypatch.setattr(
+        reasoning_provider,
+        "log_llm_call",
+        lambda **kwargs: traced.update(kwargs),
+    )
+
+    result = reasoning_provider.run_reasoning(
+        ReasoningMode.CLAIMS,
+        ["00000000-0000-0000-0000-000000000001"],
+        trace_id="trace-routing-failure",
+    )
+
+    assert result.status == "failed"
+    assert "no routing candidate" in (result.error or "")
+    assert traced["provider"] == "ollama"
+    assert traced["model"] == "declared-reasoning-model"

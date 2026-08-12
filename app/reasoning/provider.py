@@ -209,11 +209,25 @@ def _reasoning_backend() -> str:
 
 
 def _fallback_reasoning_identity() -> tuple[str, str]:
-    """Best-effort identity only when no executable agent was constructed."""
-    effective = llm_router.resolve_effective_reasoning_route(
-        LLMRouter().route(LLMTaskIntent(task_kind="reasoning", risk="high")),
-        model_override=os.getenv("REASONING_MODEL"),
-    )
+    """Best-effort identity only when no executable agent was constructed.
+
+    Routing may itself be the failure being traced.  Reuse the shared resolver
+    when a route can be selected, but never let a second routing failure escape
+    the provider-failure handler.
+    """
+    try:
+        effective = llm_router.resolve_effective_reasoning_route(
+            LLMRouter().route(LLMTaskIntent(task_kind="reasoning", risk="high")),
+            model_override=os.getenv("REASONING_MODEL"),
+        )
+    except Exception:
+        provider = (os.getenv("LLM_PROVIDER") or "unknown").strip().lower()
+        if provider == "llm":
+            provider = "ollama"
+        elif provider == "fake":
+            provider = "mock"
+        model = (os.getenv("REASONING_MODEL") or "unknown").strip() or "unknown"
+        return provider, model
     return effective.route.provider, effective.route.model
 
 
