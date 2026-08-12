@@ -200,30 +200,30 @@ Rules:
 Governance lane is the separate PR path for bounded repository-governance changes that are not product/runtime implementation but are broader than docs-only authoring.
 This includes repo-meta enforcement code and focused tests when they change governance behavior rather than shipped system behavior.
 
-Approved governance surfaces:
+### Approved governance surfaces ownership
 
-- `docs/**`
-- `AGENTS.md`
-- `CLAUDE.md`
-- `.codex/AGENTS.md`
-- `.codex/skills/**`
-- `.github/github-governance.yml`
-- `.github/ISSUE_TEMPLATE/*.yml`
-- `.github/pull_request_template.md`
-- `.github/workflows/issue-pr-governance.yml`
-- `scripts/agent_workspace_cleanup.sh`
-- `scripts/agent_worktree.py`
-- `scripts/docs_guard.py`
-- `scripts/git_hygiene.py`
-- `scripts/git_hygiene_preflight.py`
-- `scripts/git_hygiene_janitor.py`
-- `scripts/reconcile_project_status.py`
-- `scripts/validate_source_anchors.py`
-- `scripts/await_pr_checks.sh`
-- `tests/ops/test_agent_worktree.py`
-- `tests/ops/test_git_hygiene.py`
-- `tests/ops/test_project_status_reconcile.py`
-- `tests/governance/test_known_defects_registry.py`
+The executable source of truth is
+`.github/workflows/issue-pr-governance.yml`'s
+`governanceAllowedExact` and `governanceAllowedPrefixes`.  Its governance
+lane gate is the only list that decides whether an issue-free Governance-lane
+PR is admissible.
+
+`DEV_WORKFLOW.md :: Governance lane` deliberately mirrors that full exact and
+prefix set for contributors.  The regression suite proves that mirror remains
+equal to the workflow; it is not an independent policy list.
+
+`scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` deliberately
+does **not** converge with the admission allowlist.  It is a smaller map of
+temporal enforcement scripts to their required `docs/development/` owner-doc
+pairings.  A path may be governance-lane admissible without needing that
+temporal-owner-doc exception, and an entry in the map may require a pairing
+without broadening the admission gate.  In particular,
+`scripts/docs_guard_logic.py` is in the executable admission allowlist because
+it is edited with `scripts/docs_guard.py`, while its `None` mapping remains the
+separate owner-assignment work tracked by #3952.
+
+This document therefore records the split of responsibilities rather than
+maintaining a fourth partial allowlist.
 
 Rules:
 
