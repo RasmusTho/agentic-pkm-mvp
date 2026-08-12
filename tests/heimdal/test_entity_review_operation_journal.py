@@ -228,6 +228,11 @@ class _CrashingRegister(EntityRegister):
 def _vault_root(tmp_path: Path) -> Path:
     root = tmp_path / "vault"
     root.mkdir(parents=True, exist_ok=True)
+    (root / "settings").mkdir(exist_ok=True)
+    (root / "settings" / "vault.md").write_text(
+        "---\nschema: design-handoff.vault.v1\nvaultId: vault-test\n---\n",
+        encoding="utf-8",
+    )
     return root
 
 
@@ -313,6 +318,54 @@ def _claim_kwargs(
         "from_id": from_id,
         "into_id": into_id,
     }
+
+
+def test_operation_identity_agrees_across_id_present_and_absent_construction(
+    tmp_path: Path,
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    selected = _register(vault_root)
+    path_only = EntityRegister(
+        vault_context=VaultContext(status="selected", active_vault_path=str(vault_root)),
+        write_guard=_allowing_guard(),
+    )
+
+    assert selected.operation_vault_identity == "vault-test"
+    with pytest.raises(EntityRegisterError, match="refusing path fallback"):
+        _ = path_only.operation_vault_identity
+
+
+def test_synthetic_vault_identity_is_refused_for_operation_binding(tmp_path: Path) -> None:
+    first_root = _vault_root(tmp_path / "first")
+    second_root = _vault_root(tmp_path / "second")
+    (first_root / "settings" / "vault.md").write_text(
+        "---\nschema: design-handoff.vault.v1\nvaultId: vault-first\n---\n",
+        encoding="utf-8",
+    )
+    (second_root / "settings" / "vault.md").write_text(
+        "---\nschema: design-handoff.vault.v1\nvaultId: vault-second\n---\n",
+        encoding="utf-8",
+    )
+    first = EntityRegister(
+        vault_context=VaultContext(
+            status="selected",
+            active_vault_id="vault-attacker-controlled-shared",
+            active_vault_path=str(first_root),
+        ),
+        write_guard=_allowing_guard(),
+    )
+    second = EntityRegister(
+        vault_context=VaultContext(
+            status="selected",
+            active_vault_id="vault-attacker-controlled-shared",
+            active_vault_path=str(second_root),
+        ),
+        write_guard=_allowing_guard(),
+    )
+
+    for register in (first, second):
+        with pytest.raises(EntityRegisterError, match="refusing synthetic identity"):
+            _ = register.operation_vault_identity
 
 
 # ---------------------------------------------------------------------------
