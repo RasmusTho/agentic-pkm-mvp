@@ -748,6 +748,25 @@ jobs:
               - 'app/agents/panel/**'
               - 'app/index/**'
               - 'app/stores/pg.py'
+              - 'app/stores/__init__.py'
+              - 'app/stores/base.py'
+              - 'app/objects/__init__.py'
+              - 'app/objects/identity.py'
+              - 'app/db/decisions_schema.py'
+              - 'app/episodes/assignment.py'
+              - 'app/ingest/vault_alpha.py'
+              - 'app/jobs/backfill.py'
+              - 'app/jobs/decisions_projection.py'
+              - 'app/observability/status_service.py'
+              - 'app/instance/binding_ids.py'
+              - 'app/knowledge_acquisition/extraction_persistence.py'
+              - 'app/knowledge_acquisition/raw_record.py'
+              - 'app/services/audit.py'
+              - 'app/services/decisions.py'
+              - 'app/store/membership_store.py'
+              - 'app/store/relation_index.py'
+              - 'app/stores/postgres.py'
+              - 'app/alembic/versions/e6c4a2b8d1f3_mvr05a3_store_object_binding_keys.py'
               - 'app/knowledge_acquisition/youtube_api_client.py'
               - 'app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py'
               - 'tests/index/test_provenance_stamp.py'
@@ -781,6 +800,15 @@ jobs:
               # are guards on the same `objects` table this slice rekeys — they
               # are what caught the fixture regression during review.
               - 'tests/migrations/test_legacy_objects_fk_migration.py'
+              - 'tests/migrations/test_store_schema_parity.py'
+              - 'tests/integration/test_multi_vault_projection_isolation.py'
+              - 'tests/stores/test_multi_vault_store_reset_scope.py'
+              - 'tests/stores/test_pg_truncate_reset.py'
+              - 'tests/services/test_audit_writer.py'
+              - 'tests/architecture/test_multi_vault_projection_inventory.py'
+              - 'tests/architecture/test_durable_table_ownership.py'
+              - 'tests/architecture/durable_table_classification.py'
+              - 'tests/architecture/durable_table_classification.json'
               - 'tests/migrations/test_outbox_schema_parity.py'
               - 'tests/services/test_outbox_bootstrap_assert_only.py'
               - 'tests/instance/test_file_state_binding_key.py'
@@ -819,6 +847,11 @@ jobs:
             tests/migrations/test_file_state_adoption.py \
             tests/migrations/test_objects_adoption.py \
             tests/migrations/test_legacy_objects_fk_migration.py \
+            tests/migrations/test_store_schema_parity.py \
+            tests/integration/test_multi_vault_projection_isolation.py \
+            tests/stores/test_multi_vault_store_reset_scope.py \
+            tests/stores/test_pg_truncate_reset.py \
+            tests/services/test_audit_writer.py \
             tests/migrations/test_outbox_schema_parity.py \
             tests/services/test_outbox_bootstrap_assert_only.py \
             tests/instance/test_file_state_binding_key.py \

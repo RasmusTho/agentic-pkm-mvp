@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 from app.config.database import resolve_runtime_database_url
 from app.db.dsn import connect as _connect, resolve_dsn
 from app.settings import settings
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 
 _SCHEMA_INITIALIZED = False
 
@@ -23,12 +24,11 @@ _SCHEMA_INITIALIZED = False
 # rather than a guess, and MVR-05A's backfill can tell "not yet attributed"
 # from "attributed to binding X" without inspecting the registry.
 #
-# One namespace, one literal, for every table that gains a binding key. Kept in
-# sync with Alembic revisions ``c7f4b1a83d29`` and ``d1e8a0c5f37b`` by
+# One namespace, one literal, for every table that gains a binding key. Defined
+# in the storage-neutral ``app.instance.binding_ids`` module and kept in sync with
+# Alembic revisions ``c7f4b1a83d29`` and ``d1e8a0c5f37b`` by
 # ``tests/migrations/test_file_state_adoption.py`` and
 # ``tests/migrations/test_objects_adoption.py``.
-COMPATIBILITY_BINDING_ID = "legacy-compatibility-binding"
-
 # Retained name from #4543 so existing importers keep working; it is the same
 # sentinel, not a second scheme.
 FILE_STATE_COMPATIBILITY_BINDING_ID = COMPATIBILITY_BINDING_ID

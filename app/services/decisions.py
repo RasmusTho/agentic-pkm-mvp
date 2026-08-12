@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg
 
-from app.db.db import conn_ro, conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_ro, conn_rw
 from app.db.decisions_schema import assert_decisions_schema
 from app.db.dsn import resolve_dsn
 from app.receipts.decision_receipt_log import append_decision_receipt
@@ -47,7 +47,8 @@ def _assert_decisions_fk_cutover_for_dsn(_dsn: str) -> None:
         raise DecisionsSchemaMigrationRequired(
             "#3510 decisions FK migration is required before a durable decision receipt can be "
             "appended: run 'alembic upgrade head' and retry. Expected "
-            "public.decisions(object_id) -> public.store_objects(object_id) ON DELETE SET NULL."
+            "public.decisions(vault_binding_id, object_id) -> "
+            "public.store_objects(vault_binding_id, object_id) ON DELETE SET NULL (object_id)."
         ) from exc
 
 
@@ -167,10 +168,13 @@ def insert_decision(object_id: str, key: str, value: dict[str, Any], trace_id: s
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO decisions (object_id, key, value, created_at)
-                VALUES (%s, %s, %s::jsonb, %s)
+                INSERT INTO decisions (
+                    vault_binding_id, object_id, key, value, created_at
+                )
+                VALUES (%s, %s, %s, %s::jsonb, %s)
                 """,
                 (
+                    COMPATIBILITY_BINDING_ID,
                     object_id,
                     key,
                     json.dumps(stored_value),
@@ -199,11 +203,11 @@ def latest_decision(object_id: str, key: str) -> dict[str, Any] | None:
                 """
                 SELECT object_id, key, value, created_at
                 FROM decisions
-                WHERE object_id = %s AND key = %s
+                WHERE vault_binding_id = %s AND object_id = %s AND key = %s
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (object_id, key),
+                (COMPATIBILITY_BINDING_ID, object_id, key),
             )
             row = cur.fetchone()
             if not row:

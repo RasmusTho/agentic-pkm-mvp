@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.db.db import conn_rw
+from app.db.db import COMPATIBILITY_BINDING_ID, conn_rw
 from app.db.decisions_schema import assert_decisions_schema
 from app.receipts.decision_receipt_log import iter_decision_receipts
 from app.objects.identity import vault_uuid_to_canonical_id_map_with_connection
@@ -64,7 +64,10 @@ def _parse_ts(raw: Any) -> datetime | None:
 
 
 def _existing_object_ids(cur) -> set[str]:
-    cur.execute("SELECT object_id FROM store_objects")
+    cur.execute(
+        "SELECT object_id FROM store_objects WHERE vault_binding_id = %s",
+        (COMPATIBILITY_BINDING_ID,),
+    )
     return {str(r["object_id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
 
 
@@ -102,9 +105,14 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
         with conn.cursor() as cur:
             assert_decisions_schema(conn)
             existing_ids = _existing_object_ids(cur)
-            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(conn)
+            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(
+                conn, vault_binding_id=COMPATIBILITY_BINDING_ID
+            )
 
-            cur.execute("TRUNCATE TABLE decisions")
+            cur.execute(
+                "DELETE FROM decisions WHERE vault_binding_id = %s",
+                (COMPATIBILITY_BINDING_ID,),
+            )
 
             for receipt in receipts:
                 key = receipt.get("key")
@@ -131,10 +139,18 @@ def rebuild_decisions_projection(vault_root: Path | None = None) -> RebuildSumma
                 created = _parse_ts(receipt.get("created_at")) or datetime.now(timezone.utc)
                 cur.execute(
                     """
-                    INSERT INTO decisions (object_id, key, value, created_at)
-                    VALUES (%s, %s, %s::jsonb, %s)
+                    INSERT INTO decisions (
+                        vault_binding_id, object_id, key, value, created_at
+                    )
+                    VALUES (%s, %s, %s, %s::jsonb, %s)
                     """,
-                    (target_id, key, json.dumps(value), created),
+                    (
+                        COMPATIBILITY_BINDING_ID,
+                        target_id,
+                        key,
+                        json.dumps(value),
+                        created,
+                    ),
                 )
                 summary.inserted += 1
 
@@ -151,7 +167,9 @@ def _log_projection_rows(vault_root: Path | None = None) -> list[tuple[str, str,
     with conn_rw() as conn:
         with conn.cursor() as cur:
             existing_ids = _existing_object_ids(cur)
-            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(conn)
+            uuid_to_id = vault_uuid_to_canonical_id_map_with_connection(
+                conn, vault_binding_id=COMPATIBILITY_BINDING_ID
+            )
     for receipt in receipts:
         key = receipt.get("key")
         if not key:
@@ -170,7 +188,11 @@ def _db_projection_rows() -> list[tuple[str, str, str, str]]:
     rows: list[tuple[str, str, str, str]] = []
     with conn_rw() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT object_id, key, value, created_at FROM decisions")
+            cur.execute(
+                "SELECT object_id, key, value, created_at FROM decisions "
+                "WHERE vault_binding_id = %s",
+                (COMPATIBILITY_BINDING_ID,),
+            )
             for r in cur.fetchall():
                 object_id = str(r["object_id"] if isinstance(r, dict) else r[0])
                 key = str(r["key"] if isinstance(r, dict) else r[1])

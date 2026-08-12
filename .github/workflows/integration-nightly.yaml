@@ -241,6 +241,11 @@ jobs:
             tests/migrations/test_file_state_adoption.py \
             tests/migrations/test_objects_adoption.py \
             tests/migrations/test_legacy_objects_fk_migration.py \
+            tests/migrations/test_store_schema_parity.py \
+            tests/integration/test_multi_vault_projection_isolation.py \
+            tests/stores/test_multi_vault_store_reset_scope.py \
+            tests/stores/test_pg_truncate_reset.py \
+            tests/services/test_audit_writer.py \
             tests/migrations/test_outbox_schema_parity.py \
             tests/migrations/test_yss01_source_registry_schema_parity.py::test_yss01_migration_bootstrap_parity_and_legacy_repair \
             tests/services/test_outbox_bootstrap_assert_only.py \

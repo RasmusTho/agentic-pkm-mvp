@@ -174,7 +174,13 @@ def _iter_object_records(store) -> Iterable[dict]:
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT object_id, payload, source_ref FROM store_objects")
+                from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+
+                cur.execute(
+                    "SELECT object_id, payload, source_ref FROM store_objects "
+                    "WHERE vault_binding_id = %s",
+                    (COMPATIBILITY_BINDING_ID,),
+                )
                 rows = cur.fetchall()
         for row in rows or []:
             oid = str(row.get("object_id") or "")

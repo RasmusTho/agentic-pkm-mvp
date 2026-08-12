@@ -56,6 +56,7 @@ from tests.architecture.durable_table_classification import (
     REBUILD_MECHANISMS,
     REPO_ROOT,
     SEPARATE_SCHEMA_PLANES,
+    _resolver,
     cutover_worklist,
     exempted_statement_sites,
     discover_durable_mutation_paths,
@@ -312,6 +313,29 @@ def test_a_durable_table_added_by_a_later_revision_fails_until_classified(
     assert unclassified_tables(discovered, classified) == frozenset()
 
 
+def test_migration_local_temp_snapshot_is_not_a_durable_table_default(
+    tmp_path: Path,
+) -> None:
+    """Only explicit TEMP syntax excludes a migration relation from the gate."""
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    (versions / "aaaa000003aa_temp_and_durable.py").write_text(
+        "from alembic import op\n\n"
+        'revision = "aaaa000003aa"\n'
+        "down_revision = None\n\n\n"
+        "def upgrade() -> None:\n"
+        "    op.execute(\"\"\"\n"
+        "        CREATE TEMP TABLE mvr05a3_fk_snapshot (id uuid);\n"
+        "        CREATE TABLE durable_control (id uuid);\n"
+        "    \"\"\")\n",
+        encoding="utf-8",
+    )
+
+    discovered = discover_durable_tables(versions)
+    assert set(discovered) == {"durable_control"}
+    assert "mvr05a3_fk_snapshot" not in discovered
+
+
 # --------------------------------------------------------------------------- #
 # The producer half
 # --------------------------------------------------------------------------- #
@@ -345,6 +369,92 @@ def test_every_durable_mutation_path_resolves_to_a_classified_producer() -> None
             for path in sorted(stale, key=lambda item: (item.table, item.module, item.verb))
         )
     )
+
+
+def test_store_object_composite_key_producer_inventory_is_exact() -> None:
+    """MVR-05A3's parent/child invariant covers every current SQL producer.
+
+    This is intentionally derived from the same scanner as the repository-wide
+    gate, narrowed to the atomic store-object mechanism so later changes cannot
+    make this acceptance test pass by editing a hand-maintained expected list in
+    only one direction.
+    """
+    mechanism_tables = {
+        "store_objects",
+        "store_vector_index",
+        "store_relations",
+        "store_relation_memberships",
+        "vector_index_meta",
+        "chunks",
+        "embeddings",
+        "relations",
+        "membership",
+        "decisions",
+        "audit",
+    }
+    manifest = load_manifest()
+    discovered = discover_durable_tables()
+    tables = discovered
+    actual = {
+        (path.table, path.module, path.verb)
+        for path in discover_durable_mutation_paths(discovered)
+        if path.table in mechanism_tables
+    }
+    declared = {
+        (table, producer["module"], operation)
+        for table in mechanism_tables
+        for producer in manifest[table]["producers"]
+        for operation in producer["operations"]
+    }
+    assert actual == declared
+
+    assert {
+        path for path in actual if path[0] in {"chunks", "embeddings"}
+    } == {
+        ("chunks", "app/stores/pg.py", "delete"),
+        ("embeddings", "app/stores/pg.py", "delete"),
+    }, "the zero-writer child tables must remain zero-writer"
+    assert not any(operation == "truncate" for _, _, operation in actual)
+    for table in mechanism_tables:
+        assert manifest[table]["binding_column"] == "vault_binding_id", table
+
+    # The module/verb inventory deliberately deduplicates identical operations,
+    # so an adjacent INSERT in an already-declared module could otherwise omit
+    # the composite namespace without changing `actual`. Inspect every resolved
+    # store_objects INSERT and pin both current writers, including the atomic
+    # create-once seam added by #4111 while this branch was under review.
+    pg_path = REPO_ROOT / "app" / "stores" / "pg.py"
+    store_object_inserts = [
+        statement
+        for statement in _resolver(pg_path).sql_statements()
+        if re.search(r"(?is)\binsert\s+into\s+store_objects\b", statement.text)
+    ]
+    assert {statement.function for statement in store_object_inserts} == {
+        "put_object_with_connection",
+        "put_object_if_absent_with_connection",
+    }
+    for statement in store_object_inserts:
+        assert re.search(
+            r"(?is)insert\s+into\s+store_objects\s*\(\s*vault_binding_id\s*,\s*object_id\b",
+            statement.text,
+        ), f"{statement.function} omits vault_binding_id from the canonical parent write"
+        assert re.search(
+            r"(?is)on\s+conflict\s*\(\s*vault_binding_id\s*,\s*object_id\s*\)",
+            statement.text,
+        ), f"{statement.function} retains a global object_id conflict target"
+
+    binding_producers = {
+        module
+        for _, module, _ in actual
+        if module
+        not in {
+            "app/stores/pg.py",
+            "app/episodes/assignment.py",
+        }
+    }
+    for module in binding_producers:
+        source = (REPO_ROOT / module).read_text(encoding="utf-8")
+        assert "vault_binding_id" in source or "COMPATIBILITY_BINDING_ID" in source, module
 
     # The producer half must also have no default: dropping any single declared
     # producer has to surface as an undeclared mutation path.
@@ -538,14 +648,14 @@ def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
       a primary-key-less ``relations`` shape that disagreed with its Alembic
       owner. Unreachability is provable — nothing names the file — so it is
       removed, and this test is the proof it cannot come back unnoticed.
-    * ``app/store/relation_index.py`` is *not* removable on the same evidence.
+        * ``app/store/relation_index.py`` is *not* removable on the same evidence.
       ``app/objects/__init__.py`` re-exports it as a compatibility shim (an
       allowlisted entry in
       ``tests/architecture/test_deprecated_store_callers.py``), so it is
       reachable from production. Its ``link()`` inserts six columns that do not
-      exist on the Alembic-owned table, which is a producer defect, not a
-      classification one. Per this slice's constraint it is therefore
-      classified, and MVR-05A4 (#4578) owns scoping or deleting it.
+          exist on the Alembic-owned table. MVR-05A3 makes that compatibility
+          seam fail before SQL so it cannot omit the new binding column;
+          MVR-05A4 (#4578) still owns replacing or deleting it.
     """
     assert not RELATIONS_INIT_SQL.exists(), (
         "app/db/sql/relations_init.sql is back. It declared `relations` without a "
@@ -581,13 +691,14 @@ def test_orphaned_relation_artifacts_are_removed_or_classified() -> None:
         "genuinely unreachable now, replace this assertion with the proof."
     )
     assert manifest["relations"]["classification"] in CLASSIFICATIONS
-    assert any(
-        producer["module"] == "app/store/relation_index.py"
+    assert all(
+        producer["module"] != "app/store/relation_index.py"
         for producer in manifest["relations"]["producers"]
-    ), (
-        "`relations` must record app/store/relation_index.py as a producer: it is the "
-        "live seam whose INSERT names six columns the Alembic-owned table does not have."
-    )
+    ), "a seam that refuses before SQL is not a durable mutation producer"
+    from app.store.relation_index import RelationIndex
+
+    with pytest.raises(RuntimeError, match=r"MVR-05A4.*before SQL"):
+        RelationIndex().link("src", "dst", "rel", 1.0, {})
     assert "relation_index" in manifest["relations"]["reason"], (
         "the `relations` classification reason must state the producer mismatch it is "
         "standing in for, so MVR-05A4 inherits the finding rather than rediscovering it."

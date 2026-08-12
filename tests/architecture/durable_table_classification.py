@@ -110,6 +110,10 @@ _DDL_VERB_PATTERNS: tuple[tuple[str, str], ...] = (
     ("drop table", r"drop\s+table\s+(?:if\s+exists\s+)?"),
 )
 
+_TEMP_TABLE_CREATE = re.compile(
+    r"(?is)\bcreate\s+(?:(?:global|local)\s+)?(?:temporary|temp)\s+table\b"
+)
+
 #: DDL that reshapes an object *attached to* a durable table rather than the
 #: table itself. An index, trigger or rule dropped and recreated against a
 #: migration-owned table is the same drop-and-re-add mechanism MVR-05A1 (#4560)
@@ -948,6 +952,20 @@ def _statement_matches(
             yield verb, match.group(1), match.start()
 
 
+def _is_provably_temporary_create(text: str, offset: int) -> bool:
+    """Whether one matched CREATE TABLE is explicitly transaction-local.
+
+    Alembic revisions may use a PostgreSQL TEMP table as an in-transaction
+    catalog snapshot.  Such a relation is dropped by PostgreSQL at session (or
+    explicitly at transaction) end and is not part of the durable schema this
+    classifier governs.  The exclusion is syntax-derived at the exact match
+    offset: a named table, revision, prefix, or allow-list cannot bypass the
+    durable population gate.
+    """
+    match = _TEMP_TABLE_CREATE.match(text, offset)
+    return match is not None
+
+
 # --------------------------------------------------------------------------- #
 # 1. The durable-table population, derived from the revision chain
 # --------------------------------------------------------------------------- #
@@ -1045,7 +1063,9 @@ def _created_tables(resolver: _ModuleResolver, node: ast.AST, path: Path) -> Ite
             if not isinstance(text, str) or len(text) < 6:
                 continue
             statement_resolved = True
-            for _, table, _offset in _statement_matches(text, _DDL_VERB_PATTERNS[:1]):
+            for _, table, offset in _statement_matches(text, _DDL_VERB_PATTERNS[:1]):
+                if _is_provably_temporary_create(text, offset):
+                    continue
                 yield _normalize(table, path, node.lineno)
     if not statement_resolved:
         # No argument reduced to a statement at all. Inspecting the raw source

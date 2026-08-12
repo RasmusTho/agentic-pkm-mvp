@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import List, Dict, Any
+from datetime import datetime
+from typing import Any, Dict, List, NoReturn
 
-from app.db import conn_rw
-from psycopg.types.json import Json
+
+
+_MVR05A4_HINT = (
+    "The legacy RelationIndex SQL does not match the Alembic-owned relations table. "
+    "MVR-05A4 (#4578) must replace or remove this producer before it can write; "
+    "refusing before SQL so no binding-less child row is attempted."
+)
+
+
+def _raise_pending_binding_key() -> NoReturn:
+    raise RuntimeError(_MVR05A4_HINT)
 
 
 @dataclass
@@ -42,24 +51,7 @@ class RelationIndex:
         weight: float,
         provenance: Dict[str, Any],
     ) -> None:
-        with conn_rw() as conn:
-            conn.execute(
-                """
-                insert into relations (
-                    src_uuid, dst_uuid, relation_type,
-                    weight, provenance, created_at
-                )
-                values (%s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    src_uuid,
-                    dst_uuid,
-                    relation_type,
-                    weight,
-                    Json(provenance),
-                    datetime.now(timezone.utc),
-                ),
-            )
+        _raise_pending_binding_key()
 
     def neighborhood(
         self,
@@ -69,47 +61,7 @@ class RelationIndex:
     ) -> GraphSlice:
         # For now we only return direct neighbors (hop=1).
         # max_hops is reserved for future expansion / graph traversal.
-        with conn_rw() as conn:
-            rows = conn.execute(
-                """
-                select src_uuid,
-                       dst_uuid,
-                       relation_type,
-                       weight,
-                       provenance,
-                       created_at
-                from relations
-                where src_uuid = %s
-                   or dst_uuid = %s
-                order by created_at desc
-                limit %s
-                """,
-                (center_uuid, center_uuid, limit),
-            ).fetchall()
-
-        edges = [
-            RelationEdge(
-                src_uuid=r[0],
-                dst_uuid=r[1],
-                relation_type=r[2],
-                weight=float(r[3]),
-                provenance=r[4],
-                created_at=r[5],
-            )
-            for r in rows
-        ]
-
-        return GraphSlice(center=center_uuid, edges=edges)
+        _raise_pending_binding_key()
 
     def has_any(self, center_uuid: str) -> bool:
-        with conn_rw() as conn:
-            row = conn.execute(
-                """
-                select 1
-                from relations
-                where src_uuid = %s or dst_uuid = %s
-                limit 1
-                """,
-                (center_uuid, center_uuid),
-            ).fetchone()
-        return bool(row)
+        _raise_pending_binding_key()

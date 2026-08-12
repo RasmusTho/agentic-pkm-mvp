@@ -68,6 +68,23 @@ class _FakeCursor:
         if normalized.startswith("select to_regclass(%s) as oid"):
             self._fetchone = (params[0],)
             return
+        if "from (values ('store_objects'), ('store_vector_index')" in normalized:
+            self._fetchall = [
+                ("store_objects", ["vault_binding_id", "object_id"], True),
+                ("store_vector_index", ["vault_binding_id", "object_id"], True),
+                (
+                    "store_relations",
+                    ["vault_binding_id", "src_id", "dst_id", "rel"],
+                    True,
+                ),
+                (
+                    "store_relation_memberships",
+                    ["vault_binding_id", "src_id", "rel", "value"],
+                    True,
+                ),
+                ("vector_index_meta", ["vault_binding_id", "id"], True),
+            ]
+            return
         if "from information_schema.columns" in normalized or "from pg_attribute" in normalized:
             self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
             return
@@ -86,7 +103,8 @@ class _FakeCursor:
                 self.rowcount = 1
             return
         if normalized.startswith("select id::text, count(*) over ()"):
-            canonical_alias, uuid_value = params
+            alias_binding, canonical_alias, object_binding, uuid_value = params
+            assert alias_binding == object_binding == vault_sync._binding_id()
             self._fetchone = (
                 (uuid_value, 1, str(canonical_alias) in self.conn.canonical_source)
                 if uuid_value in self.conn.objects_path
@@ -94,7 +112,17 @@ class _FakeCursor:
             )
             return
         if normalized.startswith("select exists(select 1 from store_objects"):
-            canonical_id, _id_value, uuid_value, expected_source, _canonical_again = params
+            (
+                canonical_binding,
+                canonical_id,
+                object_binding,
+                _id_value,
+                uuid_value,
+                expected_source,
+                locator_binding,
+                _canonical_again,
+            ) = params
+            assert canonical_binding == object_binding == locator_binding == vault_sync._binding_id()
             canonical_exists = str(canonical_id) in self.conn.canonical_source
             mirror_exists = uuid_value in self.conn.objects_path
             locator_complete = (
@@ -104,21 +132,22 @@ class _FakeCursor:
             )
             self._fetchone = (canonical_exists, mirror_exists, locator_complete)
             return
-        if normalized.startswith(
-            "select payload from store_objects where object_id = %s for update"
-        ):
-            (object_id,) = params
+        if normalized.startswith("select payload from store_objects where vault_binding_id = %s"):
+            binding_id, object_id = params
+            assert binding_id == vault_sync._binding_id()
             payload = self.conn.canonical_payload.get(str(object_id))
             self._fetchone = (payload,) if payload is not None else None
             return
         if normalized.startswith("insert into store_objects"):
-            object_id, _kind, source_ref, payload = params
+            binding_id, object_id, _kind, source_ref, payload = params
+            assert binding_id == vault_sync._binding_id()
             self.conn.canonical_source[str(object_id)] = source_ref
             self.conn.canonical_payload[str(object_id)] = payload
             self.rowcount = 1
             return
         if normalized.startswith("update store_objects"):
-            source_ref, object_id = params
+            source_ref, binding_id, object_id = params
+            assert binding_id == vault_sync._binding_id()
             key = str(object_id)
             if key in self.conn.canonical_source:
                 self.conn.canonical_source[key] = source_ref

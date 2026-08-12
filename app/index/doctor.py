@@ -335,6 +335,7 @@ def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
     if PgVectorIndex is None:
         return 0, []
 
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
     from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
@@ -344,17 +345,20 @@ def inspect_unembedded_pg_objects(*, limit: int = 5) -> tuple[int, list[str]]:
                 SELECT o.object_id AS object_id, o.payload AS payload
                 FROM store_objects AS o
                 LEFT JOIN store_vector_index AS v
-                  ON v.object_id = o.object_id
+                  ON v.vault_binding_id = o.vault_binding_id
+                 AND v.object_id = o.object_id
                  AND v.embedding IS NOT NULL
                  AND array_length(v.embedding, 1) > 0
-                WHERE v.object_id IS NULL
+                WHERE o.vault_binding_id = %s
+                  AND v.object_id IS NULL
                   AND (
                     COALESCE(o.payload->>'content', '') <> ''
                     OR COALESCE(o.payload->>'text', '') <> ''
                     OR COALESCE(o.payload->>'raw_text', '') <> ''
                   )
                 ORDER BY o.updated_at DESC
-                """
+                """,
+                (COMPATIBILITY_BINDING_ID,),
             )
             rows = cur.fetchall()
 
@@ -412,11 +416,16 @@ def inspect_vault_coverage_gap(*, limit: int = 5) -> Dict[str, Any]:
     if not vault_paths:
         return {"checked": 0, "missing_count": 0, "missing_sample_paths": []}
 
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
     from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT source_ref FROM store_objects WHERE source_ref IS NOT NULL")
+            cur.execute(
+                "SELECT DISTINCT source_ref FROM store_objects "
+                "WHERE vault_binding_id = %s AND source_ref IS NOT NULL",
+                (COMPATIBILITY_BINDING_ID,),
+            )
             indexed_refs = {str(row.get("source_ref") if isinstance(row, dict) else row[0]) for row in cur.fetchall()}
 
     missing = sorted(vault_paths - indexed_refs)
@@ -442,19 +451,24 @@ def verify_object_embedded(object_id: str) -> None:
     if PgVectorIndex is None:
         raise RuntimeError("Postgres backend is required to verify embedding drift.")
 
+    from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
     from app.stores.pg import _connect  # local import: pg backend is optional
 
     with _connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM store_objects WHERE object_id = %s LIMIT 1", (object_id,))
+            cur.execute(
+                "SELECT 1 FROM store_objects "
+                "WHERE vault_binding_id = %s AND object_id = %s LIMIT 1",
+                (COMPATIBILITY_BINDING_ID, object_id),
+            )
             if cur.fetchone() is None:
                 return
             cur.execute(
                 "SELECT 1 FROM store_vector_index "
-                "WHERE object_id = %s "
+                "WHERE vault_binding_id = %s AND object_id = %s "
                 "AND embedding IS NOT NULL AND array_length(embedding, 1) > 0 "
                 "LIMIT 1",
-                (object_id,),
+                (COMPATIBILITY_BINDING_ID, object_id),
             )
             embedded = cur.fetchone() is not None
 

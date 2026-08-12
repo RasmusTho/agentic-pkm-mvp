@@ -436,7 +436,10 @@ def _store_object_count(store: ObjectStore) -> int:
         if isinstance(store, PgObjectStore):
             with _connect() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT count(*) FROM store_objects")
+                    cur.execute(
+                        "SELECT count(*) FROM store_objects WHERE vault_binding_id = %s",
+                        (store.vault_binding_id,),
+                    )
                     row = cur.fetchone()
                     if row:
                         return int(row[0]) if isinstance(row, (list, tuple)) else int(row.get("count", 0))
