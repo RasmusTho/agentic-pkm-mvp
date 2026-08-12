@@ -166,6 +166,14 @@ def _clear_terminal_unreconciled_deletions(snapshot_path: Path) -> None:
     _save_unreconciled_deletions(snapshot_path, pending)
 
 
+def _advance_terminal_delete_observations(snapshot_path: Path) -> None:
+    """Acknowledge only terminal deletes without advancing changed-note cursors."""
+    snapshot = load_snapshot(snapshot_path)
+    for rel_path in _terminal_unreconciled_deletions(snapshot_path):
+        snapshot.pop(rel_path, None)
+    save_snapshot(snapshot_path, snapshot)
+
+
 def _scan_md_files(vault_root: Path) -> dict[str, float]:
     current: dict[str, float] = {}
     for path in iter_vault_markdown_files(vault_root):
@@ -504,12 +512,9 @@ def _emit_watcher_delete_event(
     A required enqueue that fails raises; the caller records it as an error and
     does not count a purge.
 
-    Re-observability of a deletion that produced no tombstone is deliberately
-    NOT attempted here — it needs ``vault_sync.delete_note``'s own connection
-    classified first (it raises before this function is reached in a runtime
-    that names no database), plus a decided termination policy. Carried by
-    #4468; see ``docs/DB_SCHEMA.md :: Vault-watcher delete tombstone
-    durability``.
+    An unlanded deletion is re-observable under #4468's bounded termination
+    policy. The reconciliation loop, rather than this emission helper, owns
+    the retry state and terminal receipt.
     """
     companion = find_companion_by_source_ref(vault_root, str(rel_deleted))
     companion_uuid = companion.uuid if companion else ""
@@ -631,7 +636,7 @@ def run_watcher_tick(
             for rel_path in recovered_terminal
         )
 
-    def _finish_tick() -> None:
+    def _finish_tick(*, preserve_changed_observations: bool = False) -> None:
         """Persist snapshot before its receipt, then retire reported terminals.
 
         A crash before the receipt leaves the terminal record durable and the
@@ -639,7 +644,10 @@ def run_watcher_tick(
         an at-least-once report, never a restarted retry budget.
         """
         if not dry_run:
-            watcher.refresh_snapshot()
+            if preserve_changed_observations:
+                _advance_terminal_delete_observations(watcher.snapshot_path)
+            else:
+                watcher.refresh_snapshot()
         _emit_run_event(
             summary,
             vault_root=vault_root,
@@ -804,7 +812,7 @@ def run_watcher_tick(
             f") exceed max-notes={max_notes}; aborting watcher run. "
             "Use --force to override."
         )
-        _finish_tick()
+        _finish_tick(preserve_changed_observations=True)
         return summary, messages
 
     if dry_run:

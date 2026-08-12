@@ -308,6 +308,32 @@ def test_terminal_delete_does_not_restart_after_limit_exit(
     assert next_tick["unreconciled_deletions_terminated"] == 0
 
 
+def test_limit_exit_keeps_changed_note_observable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deletion terminality must not advance skipped ingest/panel cursors."""
+    vault, note, snapshot_path = _seed(tmp_path, monkeypatch)
+    _tick(vault, snapshot_path)
+    time.sleep(0.01)
+    note.write_text("changed", encoding="utf-8")
+
+    limited, _ = vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=0,
+        force=False,
+    )
+    assert limited["limit_exceeded"] is True
+    assert limited["changed"] == 1
+
+    reobserved, _ = _tick(vault, snapshot_path)
+    assert reobserved["changed"] == 1
+
+
 def test_terminal_report_recovers_after_receipt_crash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
