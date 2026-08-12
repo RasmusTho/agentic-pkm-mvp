@@ -58,6 +58,10 @@ class DuplicateAccountBindingError(ValueError):
     """Raised when a binding for the same provider channel id already exists."""
 
 
+class AccountBindingAdmissionError(RuntimeError):
+    """The V1 one-account writer cannot admit this connect transition."""
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -461,6 +465,31 @@ class AccountBindingStore:
     def list_all(self) -> tuple[AccountBinding, ...]:
         return self._backend.list_all()
 
+    def admit_single_account_writer(
+        self, *, reconnect_binding_id: str | None
+    ) -> AccountBinding | None:
+        """Validate the V1 singleton while the caller holds writer admission.
+
+        The cross-process lease lives beside encrypted credentials; this store
+        remains the durable authority for whether the admitted transition is a
+        first connection or a reconnect of the sole existing account.
+        """
+
+        bindings = self.list_all()
+        if len(bindings) > 1:
+            raise AccountBindingAdmissionError(
+                "YouTube OAuth V1 requires exactly zero or one durable account binding"
+            )
+        if reconnect_binding_id is None:
+            if bindings:
+                raise AccountBindingAdmissionError(
+                    "YouTube OAuth V1 already has one durable account binding"
+                )
+            return None
+        if not bindings or bindings[0].account_binding_id != reconnect_binding_id:
+            raise KeyError(f"no such account binding: {reconnect_binding_id}")
+        return bindings[0]
+
     def set_state(
         self, account_binding_id: str, *, state: str, reason_code: str | None = None
     ) -> AccountBinding:
@@ -473,6 +502,7 @@ class AccountBindingStore:
 
 __all__ = [
     "AccountBinding",
+    "AccountBindingAdmissionError",
     "AccountBindingSchemaMissingError",
     "AccountBindingStore",
     "AccountBindingValidationError",

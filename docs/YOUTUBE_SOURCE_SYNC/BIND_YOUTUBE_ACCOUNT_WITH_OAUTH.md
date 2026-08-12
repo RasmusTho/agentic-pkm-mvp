@@ -107,10 +107,26 @@ Keychain-bootstrap boundary.
 
 ## Restart / Durability Posture
 
-Bindings and encrypted tokens survive restart on disk (app-local, per channel). A restart with a
-missing key degrades to `auth_key_missing` — visible, fail-closed, recoverable by re-provisioning
-the key; consent is not silently re-requested. In-flight device-flow sessions do not survive
-restart; the user simply restarts the connect step (the UI/CLI says so).
+Bindings and encrypted tokens survive restart on disk. The encrypted token file and the shared
+connect/reconnect admission lock live in a private `knowledge_acquisition/` directory under the
+canonical channel runtime-artifact root, independent of process CWD or linked worktree. The writer
+refuses path escape, symlink traversal, non-sticky shared writable runtime directories,
+non-current-user-owned/non-`0700` private directories, and non-current-user-owned/non-`0600` state
+files before credential or admission effects. The shipped sticky `1777` channel scratch mount is a
+container/bootstrap boundary only; credential and admission state stays in its private child.
+
+V1 admits one connect or reconnect transition at a time across processes and permits at most one
+durable YouTube account binding. Admission happens before provider egress and remains held through
+token and binding persistence. Tokens remain the first durable write, but only a matching durable
+account-binding row makes one positive authority: status, refresh, and reconnect fail closed on an
+unbound or identity-mismatched token. A failed or indeterminate binding write leaves its token
+non-authoritative; the next admitted start performs one bounded reconciliation pass that deletes
+only token ids proven unbound by durable binding truth and preserves every valid bound credential.
+
+A restart with a missing key degrades to `auth_key_missing` — visible, fail-closed, recoverable by
+re-provisioning the key; consent is not silently re-requested. In-flight device-flow sessions do not
+survive restart; after process-held admission is released, the user restarts the connect step (the
+UI/CLI says so).
 
 ## Related Docs
 
