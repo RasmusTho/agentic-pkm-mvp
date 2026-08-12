@@ -105,13 +105,11 @@ accepted guidance is normalized back into this capability specification before A
 
 ## How to Verify (Pre-Merge)
 
-- Before design generation or readiness, execute the full
-  `.codex/skills/yggdrasil-design-handoff/SKILL.md` preflight and workflow: select the exact live
-  **Yggdrasil Design System** ID `f2b13410-af14-4875-8029-445352123f57` and prove byte-for-byte
-  parity with `companion-ui/companion-app/colors_and_type.css` (reported SHA-256
-  `7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1`, 11027 bytes). A recorded
-  repo token digest is not a passing receipt; selection and parity remain unproven until live
-  design-system access supplies both.
+- Before design generation or readiness, execute the canonical live selection and token-parity
+  preflight in `.codex/skills/yggdrasil-design-handoff/SKILL.md`. The fresh execution receipt must
+  record the then-resolved exact design-system name and ID, binding token source, SHA-256, and
+  byte-for-byte parity. The design-system MCP is unavailable during this documentation repair, so
+  no selection, parity, readiness, or generation is proven here.
 - Walk the complete state matrix and record token SHA-256, component inputs, screenshots, and open questions.
 - Run `git diff --check` on normalized repository artifacts.
 
