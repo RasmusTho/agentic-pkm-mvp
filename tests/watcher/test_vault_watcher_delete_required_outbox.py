@@ -393,6 +393,37 @@ def test_fallback_uses_delete_note_observation_identity(
     assert captured["observation"] != str(observed_mtime)
 
 
+def test_fallback_uses_delete_note_absolute_path_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relative watcher roots retain delete_note's absolute payload identity."""
+    vault, note, _ = _seed(tmp_path, monkeypatch)
+    captured: dict[str, object] = {}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vault_watcher, "find_companion_by_source_ref", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "read_companion", lambda *_: None)
+    monkeypatch.setattr(vault_watcher, "resolve_canonical_object_id", lambda note_uuid: note_uuid)
+    monkeypatch.setattr(
+        vault_watcher,
+        "insert_object_and_outbox",
+        lambda payload, *args, **kwargs: captured.update(payload),
+    )
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_REQUIRE_DB_OUTBOX", "1")
+
+    relative_vault = Path("vault")
+    relative_note = relative_vault / "Concepts" / "D.md"
+    vault_watcher._emit_watcher_delete_event(
+        relative_note,
+        rel_deleted=Path("Concepts/D.md"),
+        vault_root=relative_vault,
+        observed_mtime=1_770_000_000.0,
+    )
+
+    assert captured["path"] == str(note.resolve())
+
+
 def test_rename_supersedes_the_tombstone(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

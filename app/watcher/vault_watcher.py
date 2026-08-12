@@ -528,7 +528,10 @@ def _emit_watcher_delete_event(
             # tick already (re)ingested -- purging would orphan it.
             return "superseded_by_rename"
     payload = {
-        "path": str(deleted_path),
+        # Match delete_note's canonical payload identity. The legacy watcher
+        # accepts a relative vault root, so `deleted_path` can otherwise be
+        # relative while delete_note resolves it before fingerprinting.
+        "path": str(deleted_path.resolve()),
         "deleted": True,
         "reason": "vault_note_deleted",
         # Match delete_note's logical producer identity. If delete_note
