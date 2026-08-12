@@ -184,8 +184,9 @@ boundaries are defined in the [System Breakdown Structure](../SYSTEM_BREAKDOWN_S
   `rolled_back`.
 - **Owning boundary:** EXE (status); GOV for the authorization.
 - **Required field:** `execution_state`.
-- **Must NOT be inferred:** authorization itself. `authorized` reflects a prior GOV grant/receipt;
-  execution cannot authorize itself.
+- **Must NOT be inferred:** authorization itself. `authorized` reflects a prior bound GOV
+  `DecisionToken`; execution cannot authorize itself. An `AuthorityReceipt` records post-effect
+  accountability only; see the [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md#invariants).
 - **Invariant:** TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)).
 
 ## 3. Dimension summary
