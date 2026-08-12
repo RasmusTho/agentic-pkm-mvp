@@ -23,3 +23,24 @@ def test_not_pg_fallback_is_documented() -> None:
     assert "companion-ui/companion-app" in text
     assert "Do not add\none-off path exports to Issue or PR handoffs." in text
     assert "uncovered shard as a validation gap" in text
+
+
+def test_local_fallback_excludes_non_test_directories() -> None:
+    """Only directories with a collectible test file become pytest shards (#4690)."""
+    text = DEV_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'collectible="$(find "$shard" -type f -name "test_*.py" -print -quit)"' in text
+    assert '[[ -n "$collectible" ]] || continue' in text
+    assert 'selected_shards+=("$shard")' in text
+    assert "helper-only directories are never passed to pytest" in text
+
+
+def test_local_fallback_preserves_discovery_pipeline_failure() -> None:
+    """Discovery errors must fail the leased command, not yield a partial receipt (#4690)."""
+    text = DEV_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "-- zsh -o pipefail -c '" in text
+    assert 'LC_ALL=C sort -z >"$shard_list"' in text
+    assert '(( discovery_status == 0 )) || exit "$discovery_status"' in text
+    assert "partial shard list can produce a receipt" in text
+    assert 'print -u2 -- "uncovered shard: $shard (pytest exit $shard_status)"' in text
