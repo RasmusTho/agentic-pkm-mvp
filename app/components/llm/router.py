@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 from app.components.embeddings import EmbeddingIdentity, resolve_embedding_identity
 from app.components.settings.models_loader import load_models
-from app.settings.models import LLMRoutingSettings
+from app.settings.models import LLMRoutingSettings, SettingsBundle
 from app.settings.env_defaults import env_default
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
 from app.settings.runtime import get_settings_bundle
@@ -16,6 +16,13 @@ from app.settings.runtime import get_settings_bundle
 _LLM_ROUTING_VAULT_ORIGIN = (
     f"vault-shared:{CANONICAL_SETTINGS_DIR_NAME}/llm_routing.md"
 )
+
+
+class _UnsetSettingsBundle:
+    pass
+
+
+_UNSET_SETTINGS_BUNDLE = _UnsetSettingsBundle()
 
 
 @dataclass(frozen=True)
@@ -183,16 +190,23 @@ def _is_shipped_default_embedding_target(
 
 
 class LLMRouter:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        settings_bundle: SettingsBundle | None | _UnsetSettingsBundle = _UNSET_SETTINGS_BUNDLE,
+    ) -> None:
         self._llm_provider_env = os.getenv("LLM_PROVIDER") if "LLM_PROVIDER" in os.environ else None
         provider, degraded, reason = _resolve_provider(self._llm_provider_env)
         self._default_provider = provider
         self._default_degraded = degraded
         self._default_reason = reason
-        try:
-            self._settings = get_settings_bundle()
-        except Exception:
-            self._settings = None
+        if isinstance(settings_bundle, _UnsetSettingsBundle):
+            try:
+                self._settings = get_settings_bundle()
+            except Exception:
+                self._settings = None
+        else:
+            self._settings = settings_bundle
 
     def _task_policy(self, intent: LLMTaskIntent) -> LLMRoutingSettings.TaskPolicy | None:
         if self._settings is None:

@@ -11,7 +11,7 @@ import os
 
 from app.settings.env_defaults import env_default
 from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
-from app.settings.models import LLMRoutingSettings
+from app.settings.models import LLMRoutingSettings, SettingsBundle
 from app.settings.runtime import get_settings_bundle
 from app.settings.tiering import is_lab_profile
 
@@ -58,14 +58,20 @@ def llm_temperature(routing: LLMRoutingSettings | None = None) -> float:
     return effective_routing.temperature
 
 
-def _reasoning_resolution() -> tuple[str, str]:
+def _reasoning_resolution(
+    settings_bundle: SettingsBundle | None = None,
+) -> tuple[str, str]:
     from app.components.llm.router import (
         LLMRouter,
         LLMTaskIntent,
         resolve_effective_reasoning_route,
     )
 
-    router = LLMRouter()
+    router = (
+        LLMRouter(settings_bundle=settings_bundle)
+        if settings_bundle is not None
+        else LLMRouter()
+    )
     selected_route = router.route(
         LLMTaskIntent(task_kind="reasoning", risk="high")
     )
@@ -80,11 +86,13 @@ def reasoning_model() -> str:
     return _reasoning_resolution()[0]
 
 
-def _reasoning_explanation() -> dict[str, object]:
+def _reasoning_explanation(
+    settings_bundle: SettingsBundle,
+) -> dict[str, object]:
     from app.components.llm.router import LLMRouteError
 
     try:
-        value, origin = _reasoning_resolution()
+        value, origin = _reasoning_resolution(settings_bundle)
     except LLMRouteError as exc:
         return {
             "value": None,
@@ -138,7 +146,8 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
     from app.retrieval.tuning import get_effective_retrieval_resolution
 
     effective_retrieval = get_effective_retrieval_resolution()
-    routing = get_settings_bundle().llm_routing
+    settings_bundle = get_settings_bundle()
+    routing = settings_bundle.llm_routing
     default_chat_value, default_chat_origin = _default_chat_resolution(routing=routing)
     return {
         "llm.timeout_seconds": {
@@ -169,7 +178,7 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
             ),
             "tier": "lab",
         },
-        "llm.reasoning_model": _reasoning_explanation(),
+        "llm.reasoning_model": _reasoning_explanation(settings_bundle),
         "llm.default_chat_model": {
             "value": default_chat_value,
             "origin": default_chat_origin,

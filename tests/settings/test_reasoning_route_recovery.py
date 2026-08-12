@@ -18,6 +18,7 @@ from app.reasoning.provider import OllamaDeliberationAgent
 from app.reasoning.schema import ReasoningInput
 from app.retrieval import tuning as retrieval_tuning
 from app.settings import compiler, wave_one
+from app.settings.models import LLMRoutingSettings, SettingsBundle
 
 
 pytestmark = pytest.mark.not_pg
@@ -349,3 +350,59 @@ def test_route_failure_keeps_registered_settings_explain_serializable(
     assert explained["origin"] == "unresolved:routing-error"
     assert explained["status"] == "error"
     assert "no routing candidate" in explained["error"]
+
+
+def test_wave_one_explain_uses_one_captured_llm_bundle_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def bundle(label: str, timeout: float) -> SettingsBundle:
+        return SettingsBundle(
+            llm_routing=LLMRoutingSettings(
+                timeout_seconds=timeout,
+                default_reasoning=LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="openai",
+                        model=f"reasoning-{label}",
+                    )
+                ),
+                default_chat=LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="mock",
+                        model=f"chat-{label}",
+                    )
+                ),
+                configured_keys=[
+                    "default_chat",
+                    "default_reasoning",
+                    "timeout_seconds",
+                ],
+            )
+        )
+
+    old_bundle = bundle("old", 17.0)
+    new_bundle = bundle("new", 29.0)
+    bundle_reads: list[SettingsBundle] = []
+    available = iter((old_bundle, new_bundle))
+
+    def sequenced_bundle() -> SettingsBundle:
+        selected = next(available)
+        bundle_reads.append(selected)
+        return selected
+
+    def unexpected_router_reload() -> SettingsBundle:
+        raise AssertionError("captured-bundle explain must not reload settings")
+
+    monkeypatch.setattr(wave_one, "get_settings_bundle", sequenced_bundle)
+    monkeypatch.setattr(llm_router, "get_settings_bundle", unexpected_router_reload)
+    monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", lambda: old_bundle)
+
+    explained = wave_one.wave_one_explain()
+
+    assert bundle_reads == [old_bundle]
+    assert explained["llm.timeout_seconds"]["value"] == 17.0
+    assert explained["llm.default_chat_model"]["value"] == "chat-old"
+    assert explained["llm.reasoning_model"] == {
+        "origin": "vault-shared:settings/llm_routing.md",
+        "tier": "operator",
+        "value": "reasoning-old",
+    }
