@@ -337,6 +337,12 @@ The required axes are production entrypoints, eligible versus terminal failure c
 provider/model identity, current and legacy success/failure resume lineage, and adjacent
 authority-isolation paths.
 
+When `scripts/review_before_ci_gate.py` prepares such work, it must receive both
+`--stateful-fallback` and `--stateful-fallback-matrix-complete`; the gate otherwise remains
+required and cannot hand off to expensive validation or CI. Those flags attest that the packet
+contains the matrix; the governing issue, packet, focused proof, current-SHA CI, and final
+independent review remain the evidence and merge authorities.
+
 | Axis | Required boundary question |
 | --- | --- |
 | Production entrypoints | Which production entrypoints can start the mechanism, and which are test-only or forbidden from selecting fallback? |

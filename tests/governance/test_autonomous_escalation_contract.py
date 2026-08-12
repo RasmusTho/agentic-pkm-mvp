@@ -89,12 +89,13 @@ def test_repair_budget_policy_is_consistent_across_governing_surfaces() -> None:
 
 def test_stateful_fallback_convergence_requires_executable_boundary_matrix() -> None:
     contract = GATE_CONTRACT.read_text(encoding="utf-8")
+    normalized = " ".join(contract.split())
 
     assert "### Stateful fallback boundary matrix" in contract
-    assert "one\nexecutable boundary matrix" in contract
+    assert "one executable boundary matrix" in normalized
     assert (
-        "production entrypoints, eligible versus terminal failure classes, effective\n"
-        "provider/model identity, current and legacy success/failure resume lineage, and adjacent\n"
+        "production entrypoints, eligible versus terminal failure classes, effective "
+        "provider/model identity, current and legacy success/failure resume lineage, and adjacent "
         "authority-isolation paths"
-    ) in contract
+    ) in normalized
     assert "does not replace current-SHA CI or the final independent review gate" in contract
