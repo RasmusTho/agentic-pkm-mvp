@@ -455,11 +455,11 @@ same exact head back to the ordinary verified-merge sequence below.
    for that head/run. Immediately re-read the PR and fail closed unless the head
    and neutralized body match the plan under the terminal-LF-only canonical digest contract above,
    the title and body contain no canonical or malformed closing attempt, and every bounded GraphQL
-   snapshot proves complete, unpaginated `closingIssuesReferences` evidence. Because the body edit triggers
+   snapshot proves complete, unpaginated evidence that `closingIssuesReferences` is empty. Because the body edit triggers
    governance again, the triggered `pr-contract` must authenticate the trusted, non-conflicting
    exact-head authority receipt against the complete neutralized body issue set; fabricated
-   `Refs`/`Verified-Closing-Issues` text is never sufficient. Wait for the latest `pr-contract` run
-   created after that authenticated body edit to finish green on the same exact head; bind its
+   `Refs`/`Verified-Closing-Issues` text is never sufficient. Wait for the latest `pr-contract` run triggered by that `edited` event,
+   whose workflow creation is at or after the authenticated body edit, to finish green on the same exact head; bind its
    authority/body/edit/default-branch identity into
    `verified-merge-closing-projection-convergence.v1`. Then run
    `scripts/await_verified_merge_projection_convergence.py`: require at least two empty admissible reads separated by bounded backoff

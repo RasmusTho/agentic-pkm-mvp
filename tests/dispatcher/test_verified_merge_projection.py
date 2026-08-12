@@ -193,6 +193,29 @@ def test_projection_convergence_requires_post_edit_pr_contract_and_empty_quorum(
     assert len(receipt["receipt_sha256"]) == 64
 
 
+def test_projection_convergence_allows_same_second_edit_and_workflow_creation() -> None:
+    authority, neutralized_body, pr_contract, _ = _projection_fixture()
+    pr_contract["created_at"] = "2026-08-12T05:00:00Z"
+    pr_contract["started_at"] = "2026-08-12T05:00:00Z"
+    pr_contract["completed_at"] = "2026-08-12T05:00:00Z"
+
+    result = verified_merge.build_verified_merge_projection_convergence(
+        authority_receipt=authority,
+        pr_contract=pr_contract,
+        observations=[
+            _observation(
+                neutralized_body, observed_at="2026-08-12T05:00:04Z"
+            ),
+            _observation(
+                neutralized_body, observed_at="2026-08-12T05:00:06Z"
+            ),
+        ],
+        minimum_backoff_seconds=1,
+    )
+
+    assert result["convergence_receipt"]["pr_contract"] == pr_contract
+
+
 def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -> None:
     plan = verified_merge.prepare_verified_merge(
         context=_context(),
@@ -310,6 +333,7 @@ def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -
 
     for field, value in (
         ("created_at", "2026-08-12T04:59:59Z"),
+        ("completed_at", "2026-08-12T05:00:05Z"),
         ("event", "workflow_dispatch"),
         ("head_sha", "c" * 40),
         ("conclusion", "cancelled"),
@@ -601,6 +625,99 @@ def test_projection_convergence_cli_is_bounded_and_read_only() -> None:
         "gh api --method DELETE",
     ):
         assert forbidden not in source
+
+
+def _github_pr_contract_records(
+    pr_contract: dict[str, object],
+    *,
+    latest_rows: list[object],
+) -> list[dict[str, object]]:
+    pull_request = {
+        "number": pr_contract["pr_number"],
+        "head": {
+            "sha": pr_contract["head_sha"],
+            "ref": pr_contract["head_ref"],
+        },
+        "base": {"ref": pr_contract["base_ref"]},
+    }
+    workflow_run_id = pr_contract["workflow_run_id"]
+    return [
+        {
+            "id": workflow_run_id,
+            "name": "Issue and PR Governance",
+            "path": ".github/workflows/issue-pr-governance.yml",
+            "event": "pull_request",
+            "head_sha": pr_contract["head_sha"],
+            "head_branch": pr_contract["head_ref"],
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": pr_contract["created_at"],
+            "check_suite_id": pr_contract["check_suite_id"],
+            "repository": {"full_name": REPOSITORY},
+            "pull_requests": [pull_request],
+        },
+        {
+            "id": pr_contract["check_run_id"],
+            "name": "pr-contract",
+            "head_sha": pr_contract["head_sha"],
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": pr_contract["started_at"],
+            "completed_at": pr_contract["completed_at"],
+            "check_suite": {"id": pr_contract["check_suite_id"]},
+            "app": {"slug": "github-actions"},
+            "details_url": (
+                f"https://github.com/{REPOSITORY}/actions/runs/"
+                f"{workflow_run_id}/job/1"
+            ),
+            "pull_requests": [pull_request],
+        },
+        {"total_count": len(latest_rows), "check_runs": latest_rows},
+    ]
+
+
+def test_pr_contract_authentication_selects_requested_id_from_multi_suite_latest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, pr_contract, _ = _projection_fixture()
+    records = _github_pr_contract_records(
+        pr_contract,
+        latest_rows=[
+            {"id": 94010509599, "check_suite": {"id": 85619125107}},
+            {
+                "id": pr_contract["check_run_id"],
+                "check_suite": {"id": pr_contract["check_suite_id"]},
+            },
+        ],
+    )
+    monkeypatch.setattr(await_projection, "_run_json", lambda *args: records.pop(0))
+
+    await_projection._authenticate_pr_contract(
+        "gh", repository=REPOSITORY, pr_contract=pr_contract
+    )
+
+
+@pytest.mark.parametrize(
+    "latest_rows",
+    (
+        [{"id": 94010509599}],
+        [{"id": 94010509600}, {"id": 94010509600}],
+    ),
+    ids=("requested-id-missing", "requested-id-duplicated"),
+)
+def test_pr_contract_authentication_rejects_missing_or_duplicate_requested_id(
+    latest_rows: list[object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, pr_contract, _ = _projection_fixture()
+    records = _github_pr_contract_records(
+        pr_contract, latest_rows=latest_rows
+    )
+    monkeypatch.setattr(await_projection, "_run_json", lambda *args: records.pop(0))
+
+    with pytest.raises(ValueError, match="stale or unauthenticated"):
+        await_projection._authenticate_pr_contract(
+            "gh", repository=REPOSITORY, pr_contract=pr_contract
+        )
 
 
 def test_projection_convergence_cli_orders_quorum_and_final_read(

@@ -239,6 +239,15 @@ def _authenticate_pr_contract(
     workflow_pull_requests = workflow.get("pull_requests")
     check_pull_requests = check.get("pull_requests")
     latest_rows = latest_checks.get("check_runs")
+    matching_latest_rows = (
+        [
+            row
+            for row in latest_rows
+            if isinstance(row, Mapping) and row.get("id") == check_run_id
+        ]
+        if isinstance(latest_rows, list)
+        else []
+    )
 
     def matching_pull_request(value: object) -> bool:
         if not isinstance(value, list) or len(value) != 1:
@@ -285,11 +294,7 @@ def _authenticate_pr_contract(
         or not isinstance(details_url, str)
         or f"/actions/runs/{workflow_run_id}" not in details_url
         or not matching_pull_request(check_pull_requests)
-        or latest_checks.get("total_count") != 1
-        or not isinstance(latest_rows, list)
-        or len(latest_rows) != 1
-        or not isinstance(latest_rows[0], Mapping)
-        or latest_rows[0].get("id") != check_run_id
+        or len(matching_latest_rows) != 1
     ):
         raise ValueError("pr-contract GitHub identity is stale or unauthenticated")
 

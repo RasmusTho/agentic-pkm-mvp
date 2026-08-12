@@ -1104,7 +1104,7 @@ def _valid_projection_pr_contract(
         )
     except (KeyError, TypeError, ValueError):
         return False
-    return edit_at < created_at <= started_at <= completed_at
+    return edit_at <= created_at <= started_at <= completed_at
 
 
 def _validated_projection_observation(
@@ -1251,7 +1251,7 @@ def _validated_projection_observation(
         or datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=timezone.utc
         )
-        <= edit_time
+        < edit_time
         or datetime.strptime(completed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=timezone.utc
         )
