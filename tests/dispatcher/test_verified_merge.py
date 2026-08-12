@@ -452,7 +452,6 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
             authority_comment=authority_comment,
         ),
     )
-
     assert prepared["phase_receipt"]["authority_sha256"] == hashlib.sha256(
         json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -520,6 +519,11 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
             authority_comment=authority_comment,
         ),
     )
+    convergence_kwargs = projection_phase_kwargs(
+        authority,
+        neutral_pr,
+        authority_comment=authority_comment,
+    )
     merged_pr = {
         **neutral_pr,
         "state": "closed",
@@ -532,6 +536,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         authority_comment=authority_comment,
         phase="merged",
         pr=merged_pr,
+        **convergence_kwargs,
     )
     reconciled = build_verified_merge_phase(
         authority_receipt=authority,
@@ -539,6 +544,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         phase="reconciled",
         pr=merged_pr,
         closed_issues=[3820, 3823],
+        **convergence_kwargs,
     )
     restored_pr = {**merged_pr, "body": original}
     restored = build_verified_merge_phase(
@@ -547,6 +553,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         phase="restored",
         pr=restored_pr,
         closed_issues=[3820, 3823],
+        **convergence_kwargs,
     )
     comments = [
         _trusted_comment(str(item["phase_receipt_comment"]))
@@ -572,6 +579,7 @@ def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() ->
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
     restored_pr = {
         **_pr(original),
         "state": "closed",
@@ -585,6 +593,7 @@ def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() ->
         phase="restored",
         pr=restored_pr,
         closed_issues=[3820, 3823],
+        **projection_phase_kwargs(authority, neutral_pr),
     )
 
     assert restored["phase_receipt"]["body_sha256"] == authority["body_sha256"]
@@ -879,6 +888,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         pr=neutral_pr,
         **projection_phase_kwargs(authority, neutral_pr),
     )
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     merged_pr = {
         **neutral_pr,
         "state": "closed",
@@ -890,6 +900,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         authority_receipt=authority,
         phase="merged",
         pr=merged_pr,
+        **convergence_kwargs,
     )
     reconciled = build_verified_merge_phase(
         authority_receipt=authority,
@@ -897,6 +908,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         pr=merged_pr,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
+        **convergence_kwargs,
     )
     restored_pr = {**merged_pr, "body": plan["original_body"]}
     restored = build_verified_merge_phase(
@@ -905,6 +917,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         pr=restored_pr,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
+        **convergence_kwargs,
     )
     comments = [
         _trusted_comment(str(item["phase_receipt_comment"]))
@@ -926,6 +939,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         phase="restored",
         pr=restored_pr,
         closed_issues=[3820, 3823],
+        **convergence_kwargs,
     )
     assert (
         resolve_verified_merge_phase(
@@ -936,6 +950,131 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         )
         is None
     )
+
+
+def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    assert isinstance(prepared, dict)
+    assert isinstance(merged, dict)
+
+    def comment(receipt: dict[str, object]) -> dict[str, object]:
+        return _trusted_comment(
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        )
+
+    assert resolve_verified_merge_phase(
+        [comment(prepared), comment(merged)],
+        authority_receipt=authority,
+        pr=merged_pr,
+    ) == merged
+
+    for phase_receipt in (prepared, merged):
+        null_projection = copy.deepcopy(phase_receipt)
+        null_projection["projection_convergence_sha256"] = None
+        null_projection["final_projection_observation_sha256"] = None
+        comments = [comment(prepared), comment(merged)]
+        comments[0 if phase_receipt is prepared else 1] = comment(
+            null_projection
+        )
+        assert (
+            resolve_verified_merge_phase(
+                comments,
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            is None
+        )
+
+    discontinuous = copy.deepcopy(merged)
+    discontinuous["projection_convergence_sha256"] = "f" * 64
+    assert (
+        resolve_verified_merge_phase(
+            [comment(prepared), comment(discontinuous)],
+            authority_receipt=authority,
+            pr=merged_pr,
+        )
+        is None
+    )
+
+
+def test_explicit_legacy_phase_field_set_remains_continuous() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    for receipt in (prepared, merged):
+        assert isinstance(receipt, dict)
+        receipt.pop("projection_convergence_sha256")
+        receipt.pop("final_projection_observation_sha256")
+
+    comments = [
+        _trusted_comment(
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        )
+        for receipt in (prepared, merged)
+    ]
+    assert resolve_verified_merge_phase(
+        comments,
+        authority_receipt=authority,
+        pr=merged_pr,
+    ) == merged
 
 
 def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> None:
@@ -1050,10 +1189,12 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         pr=neutral_pr,
         **projection_phase_kwargs(authority, neutral_pr),
     )
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     merged = build_verified_merge_phase(
         authority_receipt=authority,
         phase="merged",
         pr=merged_neutral,
+        **convergence_kwargs,
     )
     reconciled_a = build_verified_merge_phase(
         authority_receipt=authority,
@@ -1061,6 +1202,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         pr=merged_neutral,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
+        **convergence_kwargs,
     )
     reconciled_b = build_verified_merge_phase(
         authority_receipt=authority,
@@ -1068,6 +1210,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         pr=merged_neutral,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[5000],
+        **convergence_kwargs,
     )
     authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
     prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))

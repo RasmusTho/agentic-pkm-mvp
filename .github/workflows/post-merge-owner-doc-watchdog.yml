@@ -296,11 +296,17 @@ jobs:
               }
               let highest = null;
               let reconciledEvidence = null;
+              let preparedProjectionDigest = null;
               for (const phase of PHASES) {
                 const receipts = validByPhase.get(phase);
                 if (receipts.length === 0) break;
                 if (new Set(receipts.map(canonicalSha256)).size !== 1) return null;
                 highest = receipts[receipts.length - 1];
+                if (phase === "prepared") {
+                  preparedProjectionDigest = highest.projection_convergence_sha256;
+                } else if (
+                  highest.projection_convergence_sha256 !== preparedProjectionDigest
+                ) return null;
                 const evidence = canonicalJson([
                   highest.closed_issues, highest.reopened_unauthorized_issues,
                 ]);

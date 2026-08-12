@@ -507,6 +507,32 @@ def test_watchdog_target_selection_rejects_forged_stale_or_conflicting_phase_cha
         authority, phase="merged", merge_commit_sha="d" * 40
     )
 
+    discontinuous = _phase_comment(
+        authority, phase="merged", merge_commit_sha="c" * 40
+    )
+    discontinuous_payload = _receipt_payload(discontinuous)
+    discontinuous_payload["projection_convergence_sha256"] = "f" * 64
+    discontinuous["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            discontinuous_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
+
+    null_current = _phase_comment(
+        authority, phase="merged", merge_commit_sha="c" * 40
+    )
+    null_current_payload = _receipt_payload(null_current)
+    null_current_payload["projection_convergence_sha256"] = None
+    null_current["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            null_current_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
+
     reconciled = _phase_comment(
         authority, phase="reconciled", merge_commit_sha="c" * 40
     )
@@ -525,6 +551,8 @@ def test_watchdog_target_selection_rejects_forged_stale_or_conflicting_phase_cha
     cases = (
         [authority, prepared, forged],
         [authority, prepared, stale],
+        [authority, prepared, discontinuous],
+        [authority, prepared, null_current],
         [authority, prepared, merged, reconciled, conflicting],
     )
     for comments in cases:

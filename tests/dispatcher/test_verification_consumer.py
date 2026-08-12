@@ -1049,6 +1049,8 @@ def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
         "missing_phase",
         "stale_phase",
         "conflicting_phase",
+        "null_projection_phase",
+        "discontinuous_projection_phase",
         "body_digest",
         "repair_budget",
     ],
@@ -1084,6 +1086,25 @@ def test_open_neutralized_recovery_fails_closed_on_untrusted_evidence(
         )
         comments.append(
             {"author_association": "OWNER", "body": conflicting_phase}
+        )
+    elif corruption == "null_projection_phase":
+        comments[1]["body"] = re.sub(
+            r'"projection_convergence_sha256":"[0-9a-f]{64}"',
+            '"projection_convergence_sha256":null',
+            str(comments[1]["body"]),
+        )
+    elif corruption == "discontinuous_projection_phase":
+        comments.append(
+            {
+                "author_association": "OWNER",
+                "body": re.sub(
+                    r'"projection_convergence_sha256":"[0-9a-f]{64}"',
+                    '"projection_convergence_sha256":"' + "f" * 64 + '"',
+                    str(comments[1]["body"]).replace(
+                        '"phase":"prepared"', '"phase":"merged"'
+                    ),
+                ),
+            }
         )
     elif corruption == "body_digest":
         neutral_pr = {**neutral_pr, "body": f"{neutral_pr['body']}\n"}
@@ -1779,15 +1800,19 @@ def _merge_comments(
         **merged_neutral,
         "body": plan["original_body"],
     }
+    convergence_kwargs = projection_phase_kwargs(authority, neutral)
     phases = [
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="prepared",
             pr=neutral,
-            **projection_phase_kwargs(authority, neutral),
+            **convergence_kwargs,
         ),
         build_verified_merge_phase(
-            authority_receipt=authority, phase="merged", pr=merged_neutral
+            authority_receipt=authority,
+            phase="merged",
+            pr=merged_neutral,
+            **convergence_kwargs,
         ),
         build_verified_merge_phase(
             authority_receipt=authority,
@@ -1795,6 +1820,7 @@ def _merge_comments(
             pr=merged_neutral,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
+            **convergence_kwargs,
         ),
         build_verified_merge_phase(
             authority_receipt=authority,
@@ -1802,6 +1828,7 @@ def _merge_comments(
             pr=restored,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
+            **convergence_kwargs,
         ),
     ]
     phase_index = {"prepared": 1, "merged": 2, "reconciled": 3, "restored": 4}[phase]

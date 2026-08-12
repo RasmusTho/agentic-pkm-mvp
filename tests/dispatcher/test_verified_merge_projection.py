@@ -215,6 +215,23 @@ def test_projection_convergence_allows_same_second_edit_and_workflow_creation() 
 
     assert result["convergence_receipt"]["pr_contract"] == pr_contract
 
+    neutralized_pr = {**_canonical_pr(), "body": neutralized_body}
+    prepared = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutralized_pr,
+        projection_convergence_receipt=result["convergence_receipt"],
+        final_projection_observation=_observation(
+            neutralized_body, observed_at="2026-08-12T05:00:07Z"
+        ),
+    )
+    resolved = verified_merge.resolve_verified_merge_phase(
+        [_trusted_comment(str(prepared["phase_receipt_comment"]))],
+        authority_receipt=authority,
+        pr=neutralized_pr,
+    )
+    assert resolved == prepared["phase_receipt"]
+
 
 def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -> None:
     plan = verified_merge.prepare_verified_merge(

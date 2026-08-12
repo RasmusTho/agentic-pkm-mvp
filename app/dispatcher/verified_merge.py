@@ -1478,7 +1478,7 @@ def _projection_convergence_matches_authority(
         ]
     except (KeyError, TypeError, ValueError):
         return False
-    if not (edit_at < created_at <= completed_at <= observed_times[0]):
+    if not (edit_at <= created_at <= completed_at <= observed_times[0]):
         return False
     if (
         observed_times[1] - observed_times[0]
@@ -1648,15 +1648,15 @@ def build_verified_merge_phase(
         final_projection_observation_sha256 = _canonical_digest(
             cast(Mapping[str, object], final_projection_observation)
         )
-    elif projection_convergence_receipt is not None:
+    else:
         if not _projection_convergence_matches_authority(
             projection_convergence_receipt,
             authority_receipt=authority_receipt,
         ):
             raise ValueError("verified merge projection convergence is malformed")
-        projection_convergence_sha256 = projection_convergence_receipt.get(
-            "receipt_sha256"
-        )
+        projection_convergence_sha256 = cast(
+            Mapping[str, object], projection_convergence_receipt
+        ).get("receipt_sha256")
     body = pr.get("body")
     head = pr.get("head")
     merge_commit_sha = pr.get("merge_commit_sha")
@@ -1754,11 +1754,14 @@ def resolve_verified_merge_phase(
     valid_by_phase: dict[str, list[dict[str, object]]] = {
         phase: [] for phase in _PHASES
     }
+    invalid_current_projection_phase = False
     for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
         phase = candidate.get("phase")
+        candidate_fields = frozenset(candidate)
+        current_schema = candidate_fields == _PHASE_RECEIPT_FIELDS
+        legacy_schema = candidate_fields == _LEGACY_PHASE_RECEIPT_FIELDS
         if (
-            frozenset(candidate)
-            not in {_PHASE_RECEIPT_FIELDS, _LEGACY_PHASE_RECEIPT_FIELDS}
+            not (current_schema or legacy_schema)
             or candidate.get("contract") != VERIFIED_MERGE_PHASE_CONTRACT
             or phase not in _PHASES
             or candidate.get("authority_sha256") != authority_digest
@@ -1769,26 +1772,24 @@ def resolve_verified_merge_phase(
         ):
             continue
         convergence_digest = candidate.get("projection_convergence_sha256")
-        if convergence_digest is not None and (
-            not isinstance(convergence_digest, str)
-            or _DIGEST_PATTERN.fullmatch(convergence_digest) is None
-        ):
-            continue
         final_observation_digest = candidate.get(
             "final_projection_observation_sha256"
         )
-        if final_observation_digest is not None and (
-            not isinstance(final_observation_digest, str)
-            or _DIGEST_PATTERN.fullmatch(final_observation_digest) is None
+        if current_schema and (
+            not isinstance(convergence_digest, str)
+            or _DIGEST_PATTERN.fullmatch(convergence_digest) is None
+            or (
+                phase == "prepared"
+                and (
+                    not isinstance(final_observation_digest, str)
+                    or _DIGEST_PATTERN.fullmatch(final_observation_digest)
+                    is None
+                )
+            )
+            or (phase != "prepared" and final_observation_digest is not None)
         ):
+            invalid_current_projection_phase = True
             continue
-        if phase == "prepared" and (
-            convergence_digest is None or final_observation_digest is None
-        ):
-            # Historical prepared receipts are still resolvable so an already
-            # merged later-phase ledger remains recoverable. New prepared
-            # receipts can no longer be constructed without both proofs.
-            pass
         expected_digest = (
             authority_receipt.get("body_sha256")
             if phase == "restored"
@@ -1826,15 +1827,42 @@ def resolve_verified_merge_phase(
             continue
         valid_by_phase[str(phase)].append(dict(candidate))
 
+    if invalid_current_projection_phase:
+        return None
+
     highest: dict[str, object] | None = None
+    legacy_ledger: bool | None = None
+    prepared_convergence_digest: object = None
     reconciled_evidence: tuple[tuple[int, ...], tuple[int, ...]] | None = None
     for phase in _PHASES:
         candidates = valid_by_phase[phase]
         if not candidates:
+            if phase == "prepared" or any(
+                valid_by_phase[later_phase]
+                for later_phase in _PHASES[_PHASES.index(phase) + 1 :]
+            ):
+                return None
             break
         if len({_canonical_digest(candidate) for candidate in candidates}) != 1:
             return None
         highest = candidates[-1]
+        candidate_is_legacy = (
+            frozenset(highest) == _LEGACY_PHASE_RECEIPT_FIELDS
+        )
+        if phase == "prepared":
+            legacy_ledger = candidate_is_legacy
+            prepared_convergence_digest = highest.get(
+                "projection_convergence_sha256"
+            )
+        elif (
+            candidate_is_legacy != legacy_ledger
+            or (
+                legacy_ledger is False
+                and highest.get("projection_convergence_sha256")
+                != prepared_convergence_digest
+            )
+        ):
+            return None
         phase_evidence = (
             tuple(cast(Sequence[int], highest["closed_issues"])),
             tuple(
