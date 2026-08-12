@@ -241,9 +241,9 @@ def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path) -> N
     )
 
     cutover_failure, failure_events = _wrapper_run(
-        tmp_path / "cutover-failure", cutover=True, fail_cutover=43
+        tmp_path / "cutover-failure", cutover=True, fail_cutover=1
     )
-    assert cutover_failure.returncode == 43
+    assert cutover_failure.returncode == 1
     assert not any("deployment-finish" in event for event in failure_events)
     assert any("deployment-release" in event for event in failure_events)
 
@@ -253,6 +253,23 @@ def test_wrapper_runs_the_cutover_inside_the_stopped_window(tmp_path: Path) -> N
     assert ambiguous.returncode == 75
     assert not any("deployment-finish" in event for event in ambiguous_events)
     assert not any("deployment-release" in event for event in ambiguous_events)
+
+    # A killed cutover child can die after the floor commit but before the role
+    # commit, bypassing in-process compensation. Its Compose/signal status is not
+    # a clean-failure receipt, so the wrapper must preserve the stopped fence.
+    crashed, crashed_events = _wrapper_run(
+        tmp_path / "crashed-after-floor", cutover=True, fail_cutover=137
+    )
+    assert crashed.returncode == 137
+    assert not any("deployment-finish" in event for event in crashed_events)
+    assert not any("deployment-release" in event for event in crashed_events)
+
+    unclassified, unclassified_events = _wrapper_run(
+        tmp_path / "unclassified", cutover=True, fail_cutover=43
+    )
+    assert unclassified.returncode == 43
+    assert not any("deployment-finish" in event for event in unclassified_events)
+    assert not any("deployment-release" in event for event in unclassified_events)
 
 
 def test_failed_bootstrap_compensates_floor_before_window_release(

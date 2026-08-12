@@ -350,8 +350,11 @@ for compensation. If a complete matching role became durable before a later boot
 failed, it is never rolled back or reported as success. That case, an unreadable registry,
 changed lease, any other ambiguous role state, or failed compensation returns the distinct
 fail-closed status `75`; the wrapper preserves the lease/restart fence for repair instead of
-restarting old producers. A crash before the floor leaves old auth state authoritative and the
-migration untouched.
+restarting old producers. Status `1` is the only classified clean failure for which the wrapper
+may release the stopped window: the command has proved either that no floor was written or that
+its attempt-local floor was compensated. Every other nonzero child status, including a signal or
+container death after the floor write, is unclassified and preserves the lease/restart fence. A
+crash before the floor leaves old auth state authoritative and the migration untouched.
 
 **Automated, explicit activation (#4524).** `scripts/lib/instance_state_deployment.sh` invokes
 step 3 between `deployment-prove` and `deployment-finish` only when

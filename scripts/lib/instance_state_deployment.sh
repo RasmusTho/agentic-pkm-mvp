@@ -337,8 +337,10 @@ prepare_instance_state_deployment() {
   # caller-controlled flags. It consumes MVR-01B's proved lease, quiescence proof,
   # and drained owner inventory; it never adds a second drain/probe mechanism.
   # Before any role record commits, a bootstrap failure compensates only a floor
-  # advanced by this in-process attempt. Status 75 means floor/role state is
-  # ambiguous, so the durable stopped-window fence remains for governed repair.
+  # advanced by this in-process attempt. The command's status 1 is the sole
+  # compensated/pre-floor failure receipt. Every other nonzero status is
+  # unclassified (including signals/container death), so the durable
+  # stopped-window fence remains for governed repair.
   if [ "${MVR03_PRINCIPAL_CUTOVER:-0}" = "1" ]; then
     "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
       python -m app.instance.runtime principal-cutover \
@@ -354,7 +356,7 @@ prepare_instance_state_deployment() {
         ${principal_loopback_flag:+"${principal_loopback_flag}"}
     inventory_rc=$?
     if [ "${inventory_rc}" -ne 0 ]; then
-      if [ "${inventory_rc}" -eq 75 ]; then
+      if [ "${inventory_rc}" -ne 1 ]; then
         echo "instance state deployment: principal cutover requires stopped-window repair" >&2
         return "${inventory_rc}"
       fi
