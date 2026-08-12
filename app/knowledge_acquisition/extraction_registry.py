@@ -20,13 +20,9 @@ Contract points this module is responsible for:
   upstream `source_content_identity`, and a timestamp — per `REFINEMENT_PIPELINE_CONTRACT.md`
   § Lineage and replay ("stage + stage version + (for extractors) model identity").
 - **Idempotent version semantics.** Re-running the same extractor id + version over an unchanged
-  `source_content_identity` is a no-op: the prior `ExtractionResult` is returned unchanged, the
-  extractor's `run()` is not invoked again. A different (bumped) version for the same source
-  content identity always runs and replaces — the newer result becomes the retrievable result for
-  that (source_content_identity, extractor_id) pair, per REFINEMENT_PIPELINE_CONTRACT's
-  "bumped version replaces" replay invariant. Idempotency/replacement state lives in-process
-  (`_RESULTS` keyed by `(source_content_identity, extractor_id, version)`); this slice does not
-  persist extraction artifacts (see module docstring note below on scope).
+  `source_content_identity` is a no-op across process restart: the registry uses its process cache
+  first, then the durable derived-artifact store. A forced replay creates a distinct immutable
+  extraction run. A different version always runs fresh.
 - **Fail-loud, item-scoped failure.** An extractor's `run()` raising is never swallowed: the
   registry lets the exception propagate to the caller (item-scoped per
   REFINEMENT_PIPELINE_CONTRACT § Stage execution model — "loud and item-scoped: it dead-letters
@@ -34,13 +30,9 @@ Contract points this module is responsible for:
   artifact is recorded for a failed run, so a subsequent call is *not* treated as an idempotent
   no-op of a nonexistent success.
 
-**Scope note (persistence):** the task spec and `REFINEMENT_PIPELINE_CONTRACT.md` describe
-`extracted` as a refinement *level* but do not require this slice to persist extraction artifacts
-durably — `candidate` assembly/writeback is KA-05's contract. Per the narrower-reading instruction
-for ambiguous persistence scope, this registry keeps extraction results in an in-process cache
-(mirroring `normalize()`'s KA-03 precedent of a pure/non-persisting stage) rather than writing to
-`app.objects`. If KA-05 needs extraction artifacts to be durable ahead of candidate assembly, that
-is this doc's scope question to resolve, not an invention here.
+Durability is provided through `extraction_persistence`: normalized projections and successful
+extraction runs are StorePort-backed derived artifacts with raw lineage. The cache remains only an
+optimization; replay authority remains the immutable raw record.
 """
 
 from __future__ import annotations
@@ -129,6 +121,9 @@ class ExtractionResult:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     replayed: bool = False
     """True when this result was returned from the idempotent-no-op cache rather than a fresh run."""
+    artifact_id: str | None = None
+    raw_record_id: str | None = None
+    normalized_artifact_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Deterministic, JSON-serializable projection (dict/list/str/float/bool/None only)."""
@@ -141,6 +136,9 @@ class ExtractionResult:
             "output": dict(self.output),
             "created_at": self.created_at.isoformat(),
             "replayed": self.replayed,
+            "artifact_id": self.artifact_id,
+            "raw_record_id": self.raw_record_id,
+            "normalized_artifact_id": self.normalized_artifact_id,
         }
 
 
@@ -149,7 +147,7 @@ _REGISTRY: dict[str, ExtractorSpec] = {}
 # A lookup only hits the no-op path when the cached version equals the requested version; any
 # other version (bumped or otherwise) runs fresh and replaces the cache entry, per
 # REFINEMENT_PIPELINE_CONTRACT's "bumped version replaces" invariant.
-_RESULTS: dict[tuple[str, str], tuple[int, ExtractionResult]] = {}
+_RESULTS: dict[tuple[str, str, str], tuple[int, ExtractionResult]] = {}
 
 
 def register_extractor(spec: ExtractorSpec) -> None:
@@ -173,6 +171,12 @@ def registered_extractor_ids() -> tuple[str, ...]:
     return tuple(_REGISTRY.keys())
 
 
+def validate_registered_extractors(extractor_ids: tuple[str, ...] | list[str]) -> None:
+    """Resolve every selected extractor before the first extractor can produce an effect."""
+    for extractor_id in extractor_ids:
+        registered_extractor(extractor_id)
+
+
 def clear_registry() -> None:
     """Test-only: reset the process-local registry and result cache between test modules."""
     _REGISTRY.clear()
@@ -182,19 +186,21 @@ def clear_registry() -> None:
 def clear_extraction_results() -> None:
     """Drop every cached extraction result while keeping extractors registered.
 
-    The replay path's "delete every derived level" hook for the `extracted`
-    level (KA-06 #2801, `REFINEMENT_PIPELINE_CONTRACT.md` § Lineage and
-    replay): extraction artifacts are not durably persisted in this slice
-    (see module docstring scope note), so the in-process result cache IS the
-    derived level, and clearing it forces a genuine fresh re-run on the next
-    `run_extractor` call. Registered extractor specs are deliberately left
-    untouched — replay re-runs the registered pipeline, it does not
-    de-register it.
+    This clears only the in-process optimization. Durable derived artifacts remain available for
+    restart convergence, while `force_reextract=True` deliberately appends a fresh run. Registered
+    extractor specs are left untouched.
     """
     _RESULTS.clear()
 
 
-def run_extractor(extractor_id: str, normalized: Mapping[str, Any]) -> ExtractionResult:
+def run_extractor(
+    extractor_id: str,
+    normalized: Mapping[str, Any],
+    *,
+    raw_record_id: str | None = None,
+    normalized_artifact_id: str | None = None,
+    force_reextract: bool = False,
+) -> ExtractionResult:
     """Run the extractor registered under `extractor_id` against a `normalized` artifact.
 
     This is the **one production call site** the pipeline will use, once wired, to run any
@@ -222,9 +228,11 @@ def run_extractor(extractor_id: str, normalized: Mapping[str, Any]) -> Extractio
             reason="normalized artifact is missing a string source_content_identity",
         )
 
-    cache_key = (source_content_identity, extractor_id)
+    # Content hashes are not source authority. Bind the cache/no-op key to the immutable raw
+    # object so two source items with identical bytes cannot borrow each other's lineage.
+    cache_key = (raw_record_id or "legacy:no-raw", source_content_identity, extractor_id)
     cached = _RESULTS.get(cache_key)
-    if cached is not None and cached[0] == spec.version:
+    if not force_reextract and cached is not None and cached[0] == spec.version:
         _, prior_result = cached
         return ExtractionResult(
             extractor_id=prior_result.extractor_id,
@@ -234,16 +242,52 @@ def run_extractor(extractor_id: str, normalized: Mapping[str, Any]) -> Extractio
             model_identity=dict(prior_result.model_identity),
             created_at=prior_result.created_at,
             replayed=True,
+            artifact_id=prior_result.artifact_id,
+            raw_record_id=prior_result.raw_record_id,
+            normalized_artifact_id=prior_result.normalized_artifact_id,
         )
+
+    if (
+        not force_reextract
+        and cached is None
+        and raw_record_id is not None
+        and normalized_artifact_id is not None
+    ):
+        # A process restart drops only the optimization cache. The durable ObjectStore
+        # artifact remains the same-version no-op authority.
+        from app.knowledge_acquisition.extraction_persistence import load_latest_extraction
+
+        try:
+            persisted = load_latest_extraction(
+                raw_record_id=raw_record_id,
+                content_identity=source_content_identity,
+                extractor_id=extractor_id,
+                extractor_version=spec.version,
+            )
+        except Exception as exc:  # noqa: BLE001 - typed extractor failure boundary
+            raise ExtractionError(
+                extractor_id=extractor_id,
+                version=spec.version,
+                reason="durable extraction lookup failed",
+            ) from exc
+        if (
+            persisted is not None
+            and persisted.raw_record_id == raw_record_id
+            and persisted.normalized_artifact_id == normalized_artifact_id
+        ):
+            _RESULTS[cache_key] = (spec.version, persisted.result)
+            return persisted.result
 
     try:
         output = spec.run(normalized)
+        model_identity = spec.model_identity() if spec.model_identity is not None else {}
+    except ExtractionError:
+        raise
     except Exception as exc:  # noqa: BLE001 - re-raised as the typed, item-scoped failure below
         raise ExtractionError(
             extractor_id=extractor_id, version=spec.version, reason=str(exc)
         ) from exc
 
-    model_identity = spec.model_identity() if spec.model_identity is not None else {}
     result = ExtractionResult(
         extractor_id=spec.extractor_id,
         extractor_version=spec.version,
@@ -251,7 +295,33 @@ def run_extractor(extractor_id: str, normalized: Mapping[str, Any]) -> Extractio
         output=output,
         model_identity=dict(model_identity),
         replayed=False,
+        raw_record_id=raw_record_id,
+        normalized_artifact_id=normalized_artifact_id,
     )
+    if raw_record_id is not None or normalized_artifact_id is not None:
+        if raw_record_id is None or normalized_artifact_id is None:
+            raise ExtractionError(
+                extractor_id=extractor_id,
+                version=spec.version,
+                reason="durable extraction requires raw_record_id and normalized_artifact_id",
+            )
+        from app.knowledge_acquisition.extraction_persistence import persist_extraction_result
+
+        try:
+            persisted = persist_extraction_result(
+                raw_record_id=raw_record_id,
+                normalized_artifact_id=normalized_artifact_id,
+                normalized=normalized,
+                result=result,
+                force_reextract=force_reextract,
+            )
+        except Exception as exc:  # noqa: BLE001 - typed extractor failure boundary
+            raise ExtractionError(
+                extractor_id=extractor_id,
+                version=spec.version,
+                reason="durable extraction persistence failed",
+            ) from exc
+        result = persisted.result
     _RESULTS[cache_key] = (spec.version, result)
     return result
 
@@ -268,5 +338,6 @@ __all__ = [
     "register_extractor",
     "registered_extractor",
     "registered_extractor_ids",
+    "validate_registered_extractors",
     "run_extractor",
 ]

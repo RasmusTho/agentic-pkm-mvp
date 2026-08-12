@@ -42,6 +42,7 @@ from app.knowledge_acquisition.raw_record import (
 )
 from app.media.transcribe import transcribe_source
 from app.observability.log import json_log
+from app.source_egress import assert_source_egress_allowed
 
 SOURCE_KIND = "youtube_url"
 
@@ -89,6 +90,7 @@ def yt_dlp_extract_info(url: str) -> dict[str, Any]:
     internals — no real egress in CI. This is the only function in the plugin
     that talks to yt-dlp/YouTube.
     """
+    assert_source_egress_allowed("youtube_plugin.yt_dlp_extract_info")
     try:
         from yt_dlp import YoutubeDL  # type: ignore
     except ImportError as exc:  # pragma: no cover - exercised via stubbing in tests
@@ -220,6 +222,7 @@ def fetch_caption_body(track_url: str) -> str:
     `yt_dlp_extract_info` (e.g. to exercise a caption download failure without
     touching metadata extraction).
     """
+    assert_source_egress_allowed("youtube_plugin.fetch_caption_body")
     try:
         from yt_dlp.utils import sanitized_Request  # type: ignore
         from urllib.request import urlopen
@@ -330,6 +333,7 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
     never runs); miss = run ASR, persist. An ASR-chain failure returns a
     traced ``ok=False`` outcome instead of raising (see FetchOutcome).
     """
+    assert_source_egress_allowed("youtube_plugin.fetch")
     video_id = extract_video_id(item_ref_or_url)
     info = yt_dlp_extract_info(item_ref_or_url)
 

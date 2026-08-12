@@ -1,4 +1,4 @@
-State: Specification (docs-authoring; target-state framing). The `raw` level and the deterministic `normalize` stage (rolling-cue dedup, detected language, `acquisition_method` propagation, quality note) are implemented (KA-01 `#2796`, KA-03 `#2798`, `app/knowledge_acquisition/`). The open extraction registry and its one worked-example extractor (`summary`) are implemented (KA-04 `#2799`, `app/knowledge_acquisition/extraction_registry.py`, `app/knowledge_acquisition/extractors/summary_extractor.py`): register/run without pipeline or plugin edits, lineage stamping (extractor id/version/model identity), and idempotent version-replacement semantics, all in-process (no durable persistence of extraction artifacts in this slice — see KA-05). The `candidate` level is implemented (KA-05 `#2800`, `app/knowledge_acquisition/candidate_writeback.py`: assembly + governed first-write-wins `youtube_source_note` writeback). Stage events, item-scoped dead-letters, and replay are implemented (KA-06 `#2801`, `app/knowledge_acquisition/stage_events.py` + `app/knowledge_acquisition/replay.py`): every stage transition emits one standard-envelope DB-outbox event with a deterministic (stage, stage version, `content_identity`) idempotency key (KERNEL-02 substrate), stage failures dead-letter item-scoped, and `python -m app.cli acquire-replay <raw_record_id> --assert-no-source-egress` replays every derived level from `raw` with zero source egress.
+State: Current capability contract. The `raw`, deterministic `normalized`, open `extracted`, and governed first-write-wins `candidate` levels are implemented. Issue #4111 makes normalized transcript anchors and successful extraction runs durable as StorePort-backed derived artifacts, enforces declared required/optional materialization policy, and writes every fresh re-extraction against an existing candidate as a versioned create-once proposal companion. Stage events, item-scoped dead-letters, and `python -m app.cli acquire-replay <raw_record_id> --assert-no-source-egress` remain the shipped replay/receipt boundary; replay starts from immutable `raw`, never from a transcript derivative.
 Doc role: Capability contract
 Authority: Defines the machine-side refinement stages, derived-artifact levels, lineage/replay semantics, and the extraction registry for acquired content. Triage states and promotion are owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md`; state-axis semantics by `docs/CONCEPTS/STATE_AXES_CONTRACT.md`; event mechanics by `docs/EVENTS.md`. This contract must never be read as redefining any of them.
 
@@ -45,9 +45,12 @@ podcast source would declare its own, such as `publisher_transcript` / `asr`), a
 ### `extracted` — structured evidence, still source-bound
 
 Extractor outputs (see §Extraction registry): structured statements about what the source
-contains. Extractions are regenerable claims *about the source*, not knowledge: if the `raw`
-content changes or an extractor improves, the level is re-run and replaced. Every extraction
-carries the extractor id + version + model identity in lineage.
+contains. Extractions are durable, rebuildable claims *about the source*, not knowledge. Each
+fresh run is immutable and carries raw/normalized ancestors, exact transcript anchors, extractor
+id + version, model identity, output, timestamp, and provenance-event lineage. A newer run becomes
+the current proposal input without overwriting a prior run or any human-visible artifact.
+Normalized identities, ordinary extraction identities, and restart-cache keys include the
+immutable `raw_record_id`; equal content bytes from distinct source items never share lineage.
 
 ### `candidate` — queued for human triage
 
@@ -94,11 +97,9 @@ create another projector/cursor. See
   `content_identity`, below minimum duration, channel ignored) run as early as their inputs allow
   — most at discovery/metadata time, before content is fetched — and produce a trace, not silence.
 
-### YouTube Source Note v2 materialization policy (target state)
+### YouTube Source Note v2 materialization policy
 
-The shipped pipeline still withholds a candidate when any selected extractor dead-letters. The
-rules below are the contract for later YouTube Source Note v2 implementation; this documentation
-slice does not change runtime behavior:
+The shipped YouTube acquisition and queued-drain paths enforce these rules:
 
 - Before execution, the note profile declares every selected extractor as either
   `required_for_materialization` or `optional_for_materialization`. Failure never assigns or changes
@@ -119,12 +120,21 @@ slice does not change runtime behavior:
 Every derived artifact records: the `raw` record's `content_identity` it descends from, the stage
 + stage version + (for extractors) model identity that produced it, and a timestamp. Invariants:
 
-- Re-running a stage with unchanged inputs and unchanged stage version is a no-op (idempotent).
+- An ordinary stage run with unchanged inputs and unchanged stage version resolves its durable
+  result as a no-op across process restart. An explicit re-extraction appends an immutable run and
+  a versioned proposal companion.
 - Improving a stage re-runs that stage and its descendants only — never re-acquisition, never a
-  provenance rewrite.
+  provenance rewrite. A freshly executed ordinary extractor-version upgrade against an existing
+  candidate also writes a versioned proposal companion; it never disappears as an
+  `already_exists` no-op.
+- Normalized and extracted payloads are schema-valid MetadataBundles classified as derived
+  projections. Replay may persist them but never reads them as source authority.
 - Deleting every derived level and replaying from `raw` reproduces an equivalent result
   (rebuildable, consistent with the machine-mirror posture in
   `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md`).
+- Replay no-egress enforcement is context-local at canonical YouTube metadata, caption, fetch, and
+  ASR seams. Overlapping replays remain independently blocked while concurrent non-replay
+  acquisition is unaffected.
 
 ## Extraction registry
 

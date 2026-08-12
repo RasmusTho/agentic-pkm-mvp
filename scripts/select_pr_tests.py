@@ -742,7 +742,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "media",
-        ("app/media/",),
+        (
+            "app/media/",
+            # Shared no-egress authority boundary used by transcription and
+            # knowledge-acquisition replay.  A seam-only change must exercise
+            # every canonical consumer rather than fail as unowned.
+            "app/source_egress.py",
+        ),
         ("tests/test_transcribe_smoke.py",),
     ),
     (
@@ -786,6 +792,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/heimdal/",
             "app/knowledge_acquisition/",
+            "app/source_egress.py",
             "docs/HEIMDAL/",
             "docs/KARAKEEP_MIMER_ACQUISITION/",
             "docs/KNOWLEDGE_ACQUISITION/",

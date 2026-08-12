@@ -16,6 +16,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+import pytest
+
 from app.knowledge_acquisition.acquisition_requests import (
     ACQUISITION_FAILED_TOPIC,
     ACQUISITION_REQUESTED_TOPIC,
@@ -115,7 +117,11 @@ def _terminalize(q: AcquisitionRequests, conn: FakeOutboxConn, *rows: Any) -> No
         current = q.get(row.request_id)
         if current is not None and current.status in ("pending", "in_progress"):
             q.dead_letter(
-                row.request_id, reason_code="pipeline_dead_letter", error="contract cleanup", conn=conn
+                row.request_id,
+                expected_attempt=(current.attempts if current.status == "in_progress" else None),
+                reason_code="pipeline_dead_letter",
+                error="contract cleanup",
+                conn=conn,
             )
 
 
@@ -160,7 +166,11 @@ def assert_durable_completed_lifecycle(make_queue: MakeQueue) -> None:
     assert conn.rows_for(ACQUISITION_STARTED_TOPIC)
 
     done = q2.complete(
-        row.request_id, content_identity="cid-contract", artifact_path="inbox/n.md", conn=conn
+        row.request_id,
+        expected_attempt=mine.attempts,
+        content_identity="cid-contract",
+        artifact_path="inbox/n.md",
+        conn=conn,
     )
     assert done.status == "completed"
     assert done.completed_at is not None
@@ -186,7 +196,14 @@ def assert_claim_order_and_backoff_gate(make_queue: MakeQueue) -> None:
     assert order == [high.request_id, older_normal.request_id, newer_normal.request_id]
 
     # Backoff gate: a failed attempt is not claimable before next_attempt_at.
-    q.fail(high.request_id, reason_code="network_error", error="transient", now=now, conn=conn)
+    q.fail(
+        high.request_id,
+        expected_attempt=q.get(high.request_id).attempts,
+        reason_code="network_error",
+        error="transient",
+        now=now,
+        conn=conn,
+    )
     gated = q.get(high.request_id)
     assert gated.status == "pending"
     assert gated.next_attempt_at is not None
@@ -207,7 +224,14 @@ def assert_retry_then_exhaustion_dead_letter(make_queue: MakeQueue) -> None:
         t = t + timedelta(days=1)
         claimed = q.claim_batch(1, now=t, conn=conn)
         assert [c.request_id for c in claimed] == [row.request_id]
-        q.fail(row.request_id, reason_code="network_error", error="down", now=t, conn=conn)
+        q.fail(
+            row.request_id,
+            expected_attempt=claimed[0].attempts,
+            reason_code="network_error",
+            error="down",
+            now=t,
+            conn=conn,
+        )
     final = q.get(row.request_id)
     assert final.status == "dead_lettered"
     assert final.attempts == DEFAULT_MAX_ATTEMPTS
@@ -219,8 +243,14 @@ def assert_explicit_dead_letter(make_queue: MakeQueue) -> None:
     q = make_queue()
     conn = FakeOutboxConn()
     row = _enqueue(q, conn, _item())
-    q.claim_batch(1, conn=conn)
-    q.dead_letter(row.request_id, reason_code="pipeline_dead_letter", error="stage", conn=conn)
+    claimed = q.claim_batch(1, conn=conn)[0]
+    q.dead_letter(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="pipeline_dead_letter",
+        error="stage",
+        conn=conn,
+    )
     final = q.get(row.request_id)
     assert final.status == "dead_lettered"
     assert final.last_failure["reason_code"] == "pipeline_dead_letter"
@@ -249,21 +279,146 @@ def assert_terminal_states_never_reopened(make_queue: MakeQueue) -> None:
 
     # completed stays completed through a late fail().
     row = _enqueue(q, conn, _item())
-    q.claim_batch(10, conn=conn)
-    q.complete(row.request_id, content_identity="cid-terminal", conn=conn)
+    claimed = next(
+        item for item in q.claim_batch(10, conn=conn) if item.request_id == row.request_id
+    )
+    q.complete(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        content_identity="cid-terminal",
+        conn=conn,
+    )
     failed_before = len(conn.rows_for(ACQUISITION_FAILED_TOPIC))
-    after = q.fail(row.request_id, reason_code="network_error", error="stale drainer", conn=conn)
+    after = q.fail(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="network_error",
+        error="stale drainer",
+        conn=conn,
+    )
     assert after.status == "completed"
     assert after.content_identity == "cid-terminal"
     assert len(conn.rows_for(ACQUISITION_FAILED_TOPIC)) == failed_before
 
     # dead_lettered stays dead_lettered through a late complete().
     row2 = _enqueue(q, conn, _item())
-    q.claim_batch(10, conn=conn)
-    q.dead_letter(row2.request_id, reason_code="pipeline_dead_letter", error="stage", conn=conn)
-    after2 = q.complete(row2.request_id, content_identity="cid-late", conn=conn)
+    claimed2 = next(
+        item for item in q.claim_batch(10, conn=conn) if item.request_id == row2.request_id
+    )
+    q.dead_letter(
+        row2.request_id,
+        expected_attempt=claimed2.attempts,
+        reason_code="pipeline_dead_letter",
+        error="stage",
+        conn=conn,
+    )
+    after2 = q.complete(
+        row2.request_id,
+        expected_attempt=claimed2.attempts,
+        content_identity="cid-late",
+        conn=conn,
+    )
     assert after2.status == "dead_lettered"
     assert q.get(row2.request_id).content_identity is None
+
+
+def assert_stale_attempt_cannot_mutate_new_in_progress_owner(make_queue: MakeQueue) -> None:
+    """Attempt generation fences both memory and Postgres transition writers."""
+    from app.knowledge_acquisition.acquisition_requests import (
+        AcquisitionRequestValidationError,
+    )
+
+    q = make_queue()
+    conn = FakeOutboxConn()
+    row = _enqueue(q, conn, _item())
+    attempt_one = q.claim_batch(1, conn=conn)[0]
+    future = datetime.now(timezone.utc) + timedelta(hours=2)
+    assert q.reset_stale_in_progress(older_than_seconds=900, now=future) >= 1
+    attempt_two = q.claim_batch(1, now=future, conn=conn)[0]
+    assert attempt_two.attempts == attempt_one.attempts + 1
+
+    with pytest.raises(AcquisitionRequestValidationError, match="stale attempt"):
+        q.complete(
+            row.request_id,
+            expected_attempt=attempt_one.attempts,
+            content_identity="cid-stale",
+            conn=conn,
+        )
+    with pytest.raises(AcquisitionRequestValidationError, match="stale attempt"):
+        q.fail(
+            row.request_id,
+            expected_attempt=attempt_one.attempts,
+            reason_code="network_error",
+            conn=conn,
+        )
+    with pytest.raises(AcquisitionRequestValidationError, match="stale attempt"):
+        q.dead_letter(
+            row.request_id,
+            expected_attempt=attempt_one.attempts,
+            reason_code="pipeline_dead_letter",
+            conn=conn,
+        )
+
+    current = q.get(row.request_id)
+    assert current is not None
+    assert current.status == "in_progress"
+    assert current.attempts == attempt_two.attempts
+    q.dead_letter(
+        row.request_id,
+        expected_attempt=attempt_two.attempts,
+        reason_code="pipeline_dead_letter",
+        error="contract cleanup",
+        conn=conn,
+    )
+
+
+def assert_pending_dead_letter_cannot_dispose_concurrent_claim(make_queue: MakeQueue) -> None:
+    """An unowned disposition must be atomically fenced to ``pending``.
+
+    Force the claim to land after ``dead_letter()`` observes ``pending`` but
+    before the backend transition.  Both backends must reject the stale
+    unowned disposition and preserve the newly claimed attempt.
+    """
+    from app.knowledge_acquisition.acquisition_requests import (
+        AcquisitionRequestValidationError,
+    )
+
+    q = make_queue()
+    conn = FakeOutboxConn()
+    row = _enqueue(q, conn, _item())
+    backend = q._backend  # noqa: SLF001 - deterministic backend race contract
+    original = backend.set_dead_lettered
+    claimed = None
+
+    def claim_before_transition(*args: Any, **kwargs: Any):
+        nonlocal claimed
+        claimed = q.claim_batch(1, conn=conn)[0]
+        return original(*args, **kwargs)
+
+    backend.set_dead_lettered = claim_before_transition  # type: ignore[method-assign]
+    try:
+        with pytest.raises(AcquisitionRequestValidationError, match="not applicable"):
+            q.dead_letter(
+                row.request_id,
+                reason_code="pipeline_dead_letter",
+                error="unowned disposition",
+                conn=conn,
+            )
+    finally:
+        backend.set_dead_lettered = original  # type: ignore[method-assign]
+
+    current = q.get(row.request_id)
+    assert claimed is not None
+    assert current is not None
+    assert current.status == "in_progress"
+    assert current.attempts == claimed.attempts
+    q.dead_letter(
+        row.request_id,
+        expected_attempt=claimed.attempts,
+        reason_code="pipeline_dead_letter",
+        error="contract cleanup",
+        conn=conn,
+    )
 
 
 ALL_CONTRACT_ASSERTIONS = (
@@ -274,4 +429,6 @@ ALL_CONTRACT_ASSERTIONS = (
     assert_explicit_dead_letter,
     assert_reset_stale_in_progress,
     assert_terminal_states_never_reopened,
+    assert_stale_attempt_cannot_mutate_new_in_progress_owner,
+    assert_pending_dead_letter_cannot_dispose_concurrent_claim,
 )

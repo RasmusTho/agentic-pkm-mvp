@@ -16,35 +16,30 @@ collapsed into one unqualified boolean:
   receipt asserts the replayed normalized dict equals the original normalized dict.
 
 - **extracted → schema_and_lineage.** Extractor output is LLM-derived and NOT guaranteed
-  byte-identical across a fresh process (the in-process idempotency cache is cleared for a
-  genuine replay, so `run()` re-invokes). What replay guarantees is a schema-valid result
+  byte-identical across a fresh process. Every replay deliberately invokes the extractor and
+  persists a new immutable extraction version. What replay guarantees is a schema-valid result
   carrying the SAME `extractor_id` + `extractor_version` + same upstream
   `source_content_identity` lineage. The contract calls extractions "regenerable claims
   *about the source*", explicitly re-run/replaced on change — a lineage-equivalence class,
   not content identity. The receipt says `equivalence="schema_and_lineage"` and never
   claims byte-identity for this level.
 
-- **candidate → byte_identical_first_write_preserved.** KA-05's `write_candidate_note` is
-  first-write-wins: replaying candidate assembly against an EXISTING note (same
-  deterministic path derived from `content_identity`) yields `status="already_exists"` and
-  the note stays byte-identical to the original write — even if the replayed extraction
-  above produced different text. So the WRITTEN artifact is byte-identical by construction
-  of the first-write-wins path (proven by
-  `tests/knowledge_acquisition/test_candidate_writeback.py::test_rerun_with_drifted_summary_preserves_first_write`).
-  The receipt states equivalence rests on first-write preservation, not on recomputing
-  identical content.
+- **candidate → versioned_proposal_original_preserved.** KA-05's canonical candidate note is
+  first-write-wins. Replaying against an existing note preserves its bytes and writes the newly
+  extracted content to a distinct proposal companion. Repeated replays therefore remain visible
+  without overwriting either human-authored or prior candidate content.
 
 Zero source egress is a genuine RUNTIME guard, not merely an emergent property of the code
-path: `run_replay` swaps every source-egress seam (`youtube_plugin.yt_dlp_extract_info`,
-`youtube_plugin.fetch_caption_body`, `youtube_plugin.fetch`, and `transcribe_source` —
-both `app.media.transcribe`'s attribute and the plugin's imported alias) for a raiser of
-`SourceEgressBlockedError` for the duration of the replay and restores them in a
-`finally`. Replay by construction only reads
+path: `run_replay` enters a context-local no-egress policy checked by every canonical source
+seam (`youtube_plugin.yt_dlp_extract_info`, `youtube_plugin.fetch_caption_body`,
+`youtube_plugin.fetch`, and `transcribe_source`). Replay by construction only reads
 the already-persisted `raw` record and re-runs the in-process compute stages, so the guard
 never fires in the happy path — but if any future edit reached an egress seam during
 replay, the guard turns it into a loud failure instead of a silent network call. Extractor
 model routing (`app/components/llm/router.py`) is a DIFFERENT boundary and remains allowed
-(`docs/LLM_ROUTING.md`); the guard blocks only source acquisition, never the LLM.
+(`docs/LLM_ROUTING.md`); the guard blocks only source acquisition, never the LLM. Context-local
+state means overlapping replays do not replace process-global functions or block concurrent
+acquisition in another execution context.
 
 `--assert-no-source-egress` (the CLI flag) always-on: the guard is installed for every
 replay regardless of the flag, because the contract wants zero egress on every replay. The
@@ -54,10 +49,8 @@ flag additionally makes the CLI surface the guarantee explicitly in the printed 
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 # Production extractor wiring: importing the extractors package registers every
@@ -66,28 +59,37 @@ from uuid import UUID
 # process resolves "summary" without any pipeline-side import of a specific
 # extractor module.
 import app.knowledge_acquisition.extractors  # noqa: F401
-from app.knowledge_acquisition import youtube_plugin
 from app.knowledge_acquisition.candidate_writeback import (
     CandidateAssemblyError,
     CandidateWritebackError,
     CandidateWriteResult,
+    ExtractionFailure,
     assemble_candidate,
     write_candidate_note,
 )
-from app.knowledge_acquisition.extraction_registry import clear_extraction_results
+from app.knowledge_acquisition.extraction_persistence import (
+    ExtractionPersistenceError,
+    persist_normalized_transcript,
+)
+from app.knowledge_acquisition.extraction_registry import (
+    UnknownExtractorError,
+    clear_extraction_results,
+    validate_registered_extractors,
+)
 from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
-from app.knowledge_acquisition.normalize import NormalizeError, has_usable_transcript, normalize
-from app.knowledge_acquisition.raw_record import get_raw_record
+from app.knowledge_acquisition.normalize import NormalizeError, normalize
+from app.knowledge_acquisition.raw_record import RawRecordIntegrityError, get_raw_record
 from app.knowledge_acquisition.stage_events import (
-    ExtractionRunReport,
     STAGE_EVENT_SOURCE,
     emit_stage_completed,
     emit_stage_dead_letter,
+    resolve_extractor_requirements,
     run_extractors,
 )
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+from app.source_egress import SourceEgressBlockedError, block_source_egress
 
 CANDIDATE_STAGE = "candidate"
 CANDIDATE_STAGE_VERSION = 1
@@ -95,16 +97,6 @@ CANDIDATE_STAGE_VERSION = 1
 
 class ReplayError(RuntimeError):
     """A replay could not run (e.g. the raw record does not exist in the object store)."""
-
-
-class SourceEgressBlockedError(RuntimeError):
-    """A source-egress seam was reached during a replay that must contact no source.
-
-    Raised by the installed guard when `youtube_plugin.yt_dlp_extract_info`,
-    `youtube_plugin.fetch_caption_body`, or `transcribe_source` is called inside a
-    `run_replay` scope — the loud failure the contract's "acquisition hosts unreachable"
-    posture requires, instead of a silent network call.
-    """
 
 
 @dataclass(frozen=True)
@@ -154,6 +146,8 @@ class ReplayReceipt:
     stages: tuple[StageReplayReceipt, ...]
     equivalent: bool
     dead_lettered: tuple[str, ...] = field(default_factory=tuple)
+    required_dead_lettered: tuple[str, ...] = field(default_factory=tuple)
+    optional_dead_lettered: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def successful_fresh_materialization(self) -> bool:
@@ -161,16 +155,24 @@ class ReplayReceipt:
 
         A first candidate write cannot truthfully claim byte equivalence because
         there is no preserved artifact to compare. It is still a successful
-        replay outcome when every upstream stage completed and no item was
-        dead-lettered.
+        replay outcome when no required stage dead-lettered. An optional extractor failure is
+        also successful when it materialized the contract's explicitly degraded candidate.
         """
         candidate_stages = [stage for stage in self.stages if stage.stage == CANDIDATE_STAGE]
         return (
-            not self.dead_lettered
+            not self.required_dead_lettered
             and len(candidate_stages) == 1
-            and candidate_stages[0].status == "written"
-            and candidate_stages[0].equivalence == "fresh_write_not_byte_comparable"
-            and all(stage.status == "ok" for stage in self.stages if stage.stage != CANDIDATE_STAGE)
+            and candidate_stages[0].status in {"written", "written_degraded"}
+            and candidate_stages[0].equivalence
+            in {
+                "fresh_write_not_byte_comparable",
+                "fresh_degraded_write_not_byte_comparable",
+            }
+            and all(
+                stage.status in {"ok", "dead_lettered"}
+                for stage in self.stages
+                if stage.stage != CANDIDATE_STAGE
+            )
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -180,6 +182,8 @@ class ReplayReceipt:
             "source_egress": self.source_egress,
             "equivalent": self.equivalent,
             "dead_lettered": list(self.dead_lettered),
+            "required_dead_lettered": list(self.required_dead_lettered),
+            "optional_dead_lettered": list(self.optional_dead_lettered),
             "stages": [stage.as_dict() for stage in self.stages],
         }
 
@@ -210,42 +214,6 @@ class ReplayReceipt:
         return lines
 
 
-@contextlib.contextmanager
-def _source_egress_guard() -> Iterator[None]:
-    """Install a raise-on-call guard over the three source-egress seams; restore on exit.
-
-    Counts nothing itself — a call raises before it can do anything. ``run_replay`` observes
-    zero egress by construction (it never reaches these seams); the guard's job is to make a
-    regression that DID reach them fail loud instead of silently contacting a source.
-    """
-    import app.media.transcribe as transcribe_mod
-
-    saved: dict[tuple[Any, str], Any] = {
-        (youtube_plugin, "yt_dlp_extract_info"): youtube_plugin.yt_dlp_extract_info,
-        (youtube_plugin, "fetch_caption_body"): youtube_plugin.fetch_caption_body,
-        (youtube_plugin, "fetch"): youtube_plugin.fetch,
-        (transcribe_mod, "transcribe_source"): transcribe_mod.transcribe_source,
-        (youtube_plugin, "transcribe_source"): youtube_plugin.transcribe_source,
-    }
-
-    def _blocked(seam_name: str) -> Callable[..., Any]:
-        def _raise(*_args: Any, **_kwargs: Any) -> Any:
-            raise SourceEgressBlockedError(
-                f"replay reached source-egress seam {seam_name!r}: replay must reproduce "
-                "derived artifacts from the existing raw record without contacting the source"
-            )
-
-        return _raise
-
-    try:
-        for (mod, name) in saved:
-            setattr(mod, name, _blocked(name))
-        yield
-    finally:
-        for (mod, name), original in saved.items():
-            setattr(mod, name, original)
-
-
 def _resolve_raw_record(raw_record_id: str | UUID) -> tuple[UUID, dict[str, Any]]:
     if isinstance(raw_record_id, UUID):
         object_id = raw_record_id
@@ -254,7 +222,10 @@ def _resolve_raw_record(raw_record_id: str | UUID) -> tuple[UUID, dict[str, Any]
             object_id = UUID(str(raw_record_id))
         except (ValueError, AttributeError, TypeError) as exc:
             raise ReplayError(f"invalid raw_record_id {raw_record_id!r}: not a UUID") from exc
-    record = get_raw_record(object_id)
+    try:
+        record = get_raw_record(object_id)
+    except RawRecordIntegrityError as exc:
+        raise ReplayError(f"raw replay authority rejected object_id {object_id}: {exc}") from exc
     if record is None:
         raise ReplayError(
             f"no raw record found at object_id {object_id} — cannot replay a record that was "
@@ -268,6 +239,7 @@ def run_replay(
     *,
     vault_context: VaultContext,
     extractor_ids: Sequence[str] = ("summary",),
+    extractor_requirements: Mapping[str, str] | None = None,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     assert_no_source_egress: bool = True,
     trace_id: str | None = None,
@@ -278,13 +250,10 @@ def run_replay(
     Steps (all in-process, zero source egress):
 
     1. Load the raw record from the object store (never re-acquire).
-    2. Simulate "deleted all derived levels": `clear_extraction_results()` drops the
-       in-process extraction result cache so extractors genuinely re-run rather than
-       replaying a cached result (extraction artifacts are not durably persisted in this
-       slice — clearing the cache IS the deletion), WITHOUT clearing the registry itself
-       (so a test-injected stubbed extractor spec is preserved). The candidate note is NOT
-       deleted — first-write-wins means replay reproduces it as `already_exists`, and the
-       contract forbids deleting an existing artifact.
+    2. Clear only the process-local result cache, then re-run every extractor. Durable prior
+       extraction versions remain immutable; the replay creates new versioned extraction
+       artifacts. The candidate note is not deleted: first-write-wins preserves it and replay
+       writes a proposal companion containing the new extraction output.
     3. Re-run `normalize` (emit its stage event), each extractor via the item-scoped
        orchestration helper (emit per-extractor events, dead-letter failures), and
        `assemble_candidate` + `write_candidate_note` (emit the candidate stage event).
@@ -313,7 +282,7 @@ def run_replay(
         )
 
     egress_seen = 0
-    with _source_egress_guard():
+    with block_source_egress():
         # Fresh-process equivalent: wipe the in-process extraction cache so the replay
         # genuinely re-runs every derived level from raw (see step 2 above).
         clear_extraction_results()
@@ -340,6 +309,32 @@ def run_replay(
                 f"{content_identity!r}: {exc}"
             ) from exc
         normalized_dict = normalized.as_dict()
+        try:
+            resolved_requirements = resolve_extractor_requirements(
+                extractor_ids, extractor_requirements
+            )
+            validate_registered_extractors(list(extractor_ids))
+        except (ValueError, UnknownExtractorError) as exc:
+            raise ReplayError(f"invalid extractor materialization plan: {exc}") from exc
+        try:
+            normalized_artifact = persist_normalized_transcript(
+                raw_record_id=str(object_id),
+                raw_record=record,
+                normalized=normalized,
+            )
+        except ExtractionPersistenceError as exc:
+            emit_stage_dead_letter(
+                stage=NORMALIZE_STAGE,
+                stage_version=NORMALIZE_STAGE_VERSION,
+                content_identity=content_identity,
+                reason="persistence_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                conn=conn,
+            )
+            raise ReplayError(
+                f"normalized artifact persistence failed for content_identity={content_identity!r}"
+            ) from exc
         # Determinism check: a second normalize of the same raw is byte-identical.
         normalized_again = normalize(dict(record)).as_dict()
         normalize_equivalent = normalized_dict == normalized_again
@@ -362,15 +357,15 @@ def run_replay(
         )
 
         # --- extracted: schema + lineage equivalence -----------------------------------
-        report = (
-            run_extractors(
-                normalized_dict,
-                extractor_ids=extractor_ids,
-                trace_id=trace_id,
-                conn=conn,
-            )
-            if has_usable_transcript(normalized)
-            else ExtractionRunReport(successes=(), outcomes=())
+        report = run_extractors(
+            normalized_dict,
+            extractor_ids=extractor_ids,
+            trace_id=trace_id,
+            conn=conn,
+            extractor_requirements=resolved_requirements,
+            raw_record_id=str(object_id),
+            normalized_artifact_id=normalized_artifact.object_id,
+            force_reextract=True,
         )
         for outcome in report.outcomes:
             if outcome.status == "ok" and outcome.result is not None:
@@ -403,8 +398,14 @@ def run_replay(
                 )
 
         # --- candidate: byte-identical by first-write-wins preservation ----------------
-        dead_lettered = tuple(o.extractor_id for o in report.dead_lettered)
-        if dead_lettered:
+        dead_lettered = tuple(outcome.extractor_id for outcome in report.dead_lettered)
+        required_dead_lettered = tuple(
+            outcome.extractor_id for outcome in report.required_dead_lettered
+        )
+        optional_dead_lettered = tuple(
+            outcome.extractor_id for outcome in report.optional_dead_lettered
+        )
+        if required_dead_lettered:
             # The candidate depends on "the extractions the source spec selects"
             # (contract § Stage execution model); a selected extraction dead-lettered,
             # so candidate assembly for this item cannot fulfill its inputs. Skip it —
@@ -416,17 +417,42 @@ def run_replay(
                     stage=CANDIDATE_STAGE,
                     status="skipped_upstream_dead_letter",
                     equivalence="none",
-                    detail=f"extractor(s) dead-lettered: {', '.join(dead_lettered)}",
+                    detail=(
+                        "required extractor(s) dead-lettered: "
+                        + ", ".join(required_dead_lettered)
+                    ),
                 )
             )
         else:
-            # KA-05's assemble_candidate re-derives normalize + extractions in-process;
-            # the extraction cache is warm after run_extractors above, so this does NOT
-            # re-invoke the LLM (run_extractor returns the cached result, replayed=True).
+            # Assemble strictly from the raw-derived artifacts produced in this replay. The
+            # candidate path is first-write-wins; a fresh extraction run against an existing
+            # candidate therefore materializes a versioned companion proposal.
             try:
-                candidate = assemble_candidate(dict(record), extractor_ids=tuple(extractor_ids))
+                optional_failures = tuple(
+                    ExtractionFailure(
+                        extractor_id=outcome.extractor_id,
+                        requirement=outcome.materialization_requirement,
+                        rerun_handle=(
+                            outcome.rerun_handle or f"extractor:{outcome.extractor_id}"
+                        ),
+                        error=outcome.error or "extraction failed",
+                    )
+                    for outcome in report.optional_dead_lettered
+                )
+                candidate = assemble_candidate(
+                    dict(record),
+                    extractor_ids=tuple(extractor_ids),
+                    normalized=normalized,
+                    extraction_results=report.successes,
+                    raw_record_id=str(object_id),
+                    normalized_artifact_id=normalized_artifact.object_id,
+                    optional_failures=optional_failures,
+                )
                 write_result = write_candidate_note(
-                    candidate, vault_context=vault_context, write_guard=write_guard
+                    candidate,
+                    vault_context=vault_context,
+                    write_guard=write_guard,
+                    proposal_on_existing=True,
                 )
             except (CandidateAssemblyError, CandidateWritebackError) as exc:
                 emit_stage_dead_letter(
@@ -487,7 +513,7 @@ def run_replay(
             for s in stages
             if s.stage in {NORMALIZE_STAGE, "extracted", CANDIDATE_STAGE}
         )
-        and not dead_lettered
+        and not required_dead_lettered
     )
     return ReplayReceipt(
         raw_record_id=str(object_id),
@@ -496,6 +522,8 @@ def run_replay(
         stages=tuple(stages),
         equivalent=equivalent,
         dead_lettered=dead_lettered,
+        required_dead_lettered=required_dead_lettered,
+        optional_dead_lettered=optional_dead_lettered,
     )
 
 
@@ -513,6 +541,10 @@ def _candidate_equivalence(write_result: CandidateWriteResult) -> tuple[bool, st
         return True, "byte_identical_first_write_preserved"
     if write_result.status == "written":
         return False, "fresh_write_not_byte_comparable"
+    if write_result.status == "written_degraded":
+        return False, "fresh_degraded_write_not_byte_comparable"
+    if write_result.status in {"proposal_written", "proposal_already_exists"}:
+        return True, "versioned_proposal_original_preserved"
     return False, "none"
 
 

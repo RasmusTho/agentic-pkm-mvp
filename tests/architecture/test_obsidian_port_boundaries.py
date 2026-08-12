@@ -392,6 +392,13 @@ def test_create_once_stays_behind_knowledge_service_boundary() -> None:
         # a human note created in the check/write window blocks the
         # projection instead of being overwritten by a versionless write.
         ("app/heimdal/time_spend.py", "write_time_spend_note"),
+        # Extraction proposal companions (#4111): each re-extraction writes a
+        # versioned no-clobber proposal through the governed write service, so
+        # candidate and human-owned content remain byte-identical.
+        (
+            "app/knowledge_acquisition/candidate_writeback.py",
+            "_write_versioned_proposal",
+        ),
         ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note"),
     ]
     writeback_path = app_root / "knowledge_acquisition" / "candidate_writeback.py"

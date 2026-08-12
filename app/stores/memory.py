@@ -90,6 +90,14 @@ class MemoryObjectStore(ObjectStore):
             self._order.append(object_id)
         self._objects[object_id] = record
 
+    def put_if_absent(
+        self, object_id: UUID, *, kind: str, source_ref: str, payload: dict
+    ) -> bool:
+        if object_id in self._objects:
+            return False
+        self.put(object_id, kind=kind, source_ref=source_ref, payload=payload)
+        return True
+
     def list_by_kind(self, kind: str, *, limit: int = 100) -> Iterable[dict]:
         out: list[dict] = []
         for oid in self._order:
@@ -103,7 +111,9 @@ class MemoryObjectStore(ObjectStore):
                 break
         return out
 
-    def list_objects(self, kind: str | None = None, *, limit: int = 100) -> Iterable[dict]:
+    def list_objects(
+        self, kind: str | None = None, *, limit: int | None = 100
+    ) -> Iterable[dict]:
         out: list[dict] = []
         for oid in self._order:
             rec = self._objects.get(oid)
@@ -112,7 +122,7 @@ class MemoryObjectStore(ObjectStore):
             if kind is not None and rec.get("kind") != kind:
                 continue
             out.append(rec)
-            if len(out) >= limit:
+            if limit is not None and len(out) >= limit:
                 break
         return out
 
