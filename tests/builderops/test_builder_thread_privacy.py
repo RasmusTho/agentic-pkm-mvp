@@ -32,6 +32,8 @@ def _client(writer: SerializedThreadWriter) -> BuilderThreadClient:
     (
         "/root/.ssh/id_rsa",
         "C:\\Users\\operator\\.ssh\\id_rsa",
+        "\\\\server\\Users\\operator\\.ssh\\id_rsa",
+        "\\Users\\operator\\.ssh\\id_rsa",
         "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
     ),
 )
@@ -73,6 +75,7 @@ def test_rejected_text_never_reaches_external_artifact(tmp_path: Path) -> None:
     (
         "Read https://example.test/users/guide before replying.",
         "The support URL is https://example.test/home/start.",
+        "The IPv6 URL is https://[::1]/home/start.",
     ),
 )
 def test_ordinary_urls_remain_shared_non_sensitive(tmp_path: Path, ordinary_text: str) -> None:

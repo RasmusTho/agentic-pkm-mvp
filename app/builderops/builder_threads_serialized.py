@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
+from urllib.parse import urlsplit
 
 
 PRIVACY_CLASS: Literal["shared_non_sensitive"] = "shared_non_sensitive"
@@ -24,11 +25,15 @@ _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SOURCE_REF = re.compile(
     r"^(?:builderops|conversation|doc|git|github):[A-Za-z0-9._:/#@+-]{1,255}$"
 )
-_PRIVATE_HOST_PATH = re.compile(
-    r"(?i)(?:~[\\/]\.ssh(?:[\\/]|$)|"
-    r"(?<![A-Za-z0-9._-])/(?:Users|home|private|root|etc|var|opt)(?:/|$)|"
-    r"\b[A-Za-z]:\\(?:Users|home|private|root|etc|var|opt)(?:\\|$))"
+_PRIVATE_POSIX_PATH = re.compile(
+    r"(?i)(?:~[\\/]\.ssh(?:[\\/]|$)|/(?:Users|home|private|root|etc|var|opt)(?:/|$))"
 )
+_PRIVATE_WINDOWS_PATH = re.compile(
+    r"(?i)(?:\b[A-Za-z]:\\(?:Users|home|private|root|etc|var|opt)(?:\\|$)|"
+    r"\\\\[^\\\s]+\\(?:Users|home|private|root|etc|var|opt)(?:\\|$)|"
+    r"(?<!\\)\\(?:Users|home|private|root|etc|var|opt)(?:\\|$))"
+)
+_URI = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s<>()]+")
 _PRIVATE_CONTENT = re.compile(
     r"(?im)(password|secret|credential|token|api[_-]?key|bearer\s+|"
     r"^aws_(?:access_key_id|secret_access_key)\s*=|"
@@ -578,7 +583,7 @@ def _validate_identity(value: str | None, *, field: str) -> None:
 def _validate_text(value: str | None, *, field: str) -> None:
     if not isinstance(value, str) or not value.strip() or len(value) > _MAX_TEXT:
         raise BuilderThreadError(f"{field} must be bounded non-empty text")
-    if _PRIVATE_HOST_PATH.search(value) or _PRIVATE_CONTENT.search(value):
+    if _contains_private_host_path(value) or _PRIVATE_CONTENT.search(value):
         raise BuilderThreadError(f"{field} is not shared_non_sensitive")
     if _CODE_OR_PATCH.search(value):
         raise BuilderThreadError(f"{field} is not shared_non_sensitive")
@@ -590,8 +595,34 @@ def _validate_source_refs(source_refs: tuple[str, ...]) -> None:
     for source_ref in source_refs:
         if not isinstance(source_ref, str) or not _SOURCE_REF.fullmatch(source_ref):
             raise BuilderThreadError("source_ref must be typed bounded provenance")
-        if _PRIVATE_HOST_PATH.search(source_ref) or _PRIVATE_CONTENT.search(source_ref):
+        if _contains_private_host_path(source_ref) or _PRIVATE_CONTENT.search(source_ref):
             raise BuilderThreadError("source_ref is not shared_non_sensitive")
+
+
+def _contains_private_host_path(value: str) -> bool:
+    """Reject local paths while preserving a URI's ordinary path component.
+
+    A shared link can naturally contain names such as ``/home``.  URI query and
+    fragment text do not receive that exemption because they may carry a local
+    path as data rather than name the public resource being linked.
+    """
+    for match in _PRIVATE_POSIX_PATH.finditer(value):
+        if not _is_uri_path_component(value, match.start()):
+            return True
+    return _PRIVATE_WINDOWS_PATH.search(value) is not None
+
+
+def _is_uri_path_component(value: str, offset: int) -> bool:
+    for uri_match in _URI.finditer(value):
+        if not uri_match.start() <= offset < uri_match.end():
+            continue
+        parsed = urlsplit(uri_match.group())
+        if not parsed.netloc or not parsed.path:
+            return False
+        path_start = uri_match.start() + len(parsed.scheme) + 3 + len(parsed.netloc)
+        path_end = path_start + len(parsed.path)
+        return path_start <= offset < path_end
+    return False
 
 
 def _capture_key(recipient: str, subject: str, source_refs: tuple[str, ...]) -> str:
