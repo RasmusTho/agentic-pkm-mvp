@@ -7,9 +7,15 @@ sync, and sanitized status.
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
+import stat
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
+from collections.abc import Iterator
 from typing import Any
 
 import click
@@ -49,6 +55,7 @@ class YouTubeInboxDevServices:
     api_client: Any
     sync: Any | None
     account_bindings: Any | None = None
+    connect_lock_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,37 @@ class _StaticTokenProvider:
 
 def _emit(payload: dict[str, Any]) -> None:
     click.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+_CONNECT_LOCK_PATH = Path("runtime/knowledge_acquisition/youtube_inbox_dev_connect.lock")
+
+
+@contextmanager
+def _exclusive_connect_lock(lock_path: Path) -> Iterator[None]:
+    """Serialize the complete check/consent/bind transition across CLI processes."""
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise V1InboxConfigurationError("YouTube Inbox connect lease is unavailable")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise V1InboxConfigurationError(
+                "Another YouTube Inbox device connection is already active"
+            ) from None
+        try:
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
 
 
 def _require_dev_and_secrets() -> None:
@@ -111,6 +149,7 @@ def _build_youtube_inbox_dev_services(
             api_client=None,
             sync=None,
             account_bindings=binding_store,
+            connect_lock_path=_CONNECT_LOCK_PATH,
         )
 
     token_provider = TokenProvider(
@@ -170,30 +209,31 @@ def youtube_inbox_dev() -> None:
 def connect() -> None:
     try:
         services = build_youtube_inbox_dev_services()
-        if services.account_bindings is None:
+        if services.account_bindings is None or services.connect_lock_path is None:
             raise RuntimeError("incomplete YouTube account-binding composition")
-        if services.account_bindings.list_all():
-            raise V1InboxConfigurationError(
-                "V1 already has one OAuth-connected account; a second account is unavailable"
-            )
-        connection = services.binder.start_device_connection()
-        _emit({"status": "authorization_required", **connection.public_view()})
-        handle = getattr(connection, "handle", connection)
-        interval = max(1, int(getattr(handle, "interval", 5)))
-        expires_in = max(1, int(getattr(handle, "expires_in", 1800)))
-        deadline = time.monotonic() + expires_in
-        delay = interval
-        while True:
-            if time.monotonic() + delay > deadline:
-                raise DeviceAuthorizationError("expired_token")
-            time.sleep(delay)
-            try:
-                receipt = services.binder.finish_device_connection(connection)
-                _emit(receipt)
-                return
-            except DeviceAuthorizationPending as exc:
-                if exc.error_code == "slow_down":
-                    delay += 5
+        with _exclusive_connect_lock(services.connect_lock_path):
+            if services.account_bindings.list_all():
+                raise V1InboxConfigurationError(
+                    "V1 already has one OAuth-connected account; a second account is unavailable"
+                )
+            connection = services.binder.start_device_connection()
+            _emit({"status": "authorization_required", **connection.public_view()})
+            handle = getattr(connection, "handle", connection)
+            interval = max(1, int(getattr(handle, "interval", 5)))
+            expires_in = max(1, int(getattr(handle, "expires_in", 1800)))
+            deadline = time.monotonic() + expires_in
+            delay = interval
+            while True:
+                if time.monotonic() + delay > deadline:
+                    raise DeviceAuthorizationError("expired_token")
+                time.sleep(delay)
+                try:
+                    receipt = services.binder.finish_device_connection(connection)
+                    _emit(receipt)
+                    return
+                except DeviceAuthorizationPending as exc:
+                    if exc.error_code == "slow_down":
+                        delay += 5
     except click.ClickException:
         raise
     except BaseException as exc:
