@@ -126,7 +126,7 @@ def test_llm_and_rerank_lab_keys_are_inert_for_operator_profile(monkeypatch: pyt
     assert get_retrieval_tuning().rerank == "off"
 
 
-def test_retrieval_tuning_cache_invalidates_when_settings_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retrieval_tuning_cache_tracks_bundle_identity_across_reload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     first = _bundle()
     second = first.model_copy(
@@ -136,14 +136,22 @@ def test_retrieval_tuning_cache_invalidates_when_settings_reload(monkeypatch: py
             )
         }
     )
-    bundles = iter((first, second))
     monkeypatch.setattr(settings_runtime, "_CURRENT", None)
-    monkeypatch.setattr(settings_runtime, "_build_bundle", lambda: next(bundles))
+    monkeypatch.setattr(settings_runtime, "_build_bundle", lambda: first)
 
-    settings_runtime.reload_settings_bundle()
+    settings_runtime.reload_settings_bundle(notify=False)
     assert get_retrieval_tuning().rerank_top_k == 7
 
-    settings_runtime.reload_settings_bundle()
+    def invalid_bundle() -> SettingsBundle:
+        raise ValueError("invalid replacement bundle")
+
+    monkeypatch.setattr(settings_runtime, "_build_bundle", invalid_bundle)
+    with pytest.raises(ValueError, match="invalid replacement bundle"):
+        settings_runtime.reload_settings_bundle(notify=False)
+    assert get_retrieval_tuning().rerank_top_k == 7
+
+    monkeypatch.setattr(settings_runtime, "_build_bundle", lambda: second)
+    settings_runtime.reload_settings_bundle(notify=False)
     assert get_retrieval_tuning().rerank_top_k == 11
 
 

@@ -23,18 +23,20 @@ this module.
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from app.settings.models import RetrievalTuning
-from app.settings.runtime import get_settings_bundle, subscribe_settings
+from app.settings.models import RetrievalTuning, SettingsBundle
+from app.settings.runtime import get_settings_bundle
 from app.settings.tiering import is_lab_profile
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
-_CACHED: RetrievalTuning | None = None
 _CACHED_RESOLUTION: "EffectiveRetrievalResolution | None" = None
+_CACHED_BUNDLE: SettingsBundle | None = None
+_CACHE_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -74,20 +76,22 @@ class RetrievalStrategyNotImplementedError(RetrievalTuningError):
 def reset_retrieval_tuning_cache() -> None:
     """Force the next :func:`get_retrieval_tuning` call to re-resolve.
 
-    The settings-reload subscriber calls this at the bundle-swap boundary. Tests also reset between
-    cases (see the autouse fixture in ``tests/conftest.py``) so a monkeypatched env var in one test
-    never leaks a stale resolution into the next.
+    Production reads bind the cache to the runtime bundle identity, so a bundle swap refreshes on
+    the next read without a notification race. Tests also reset between cases (see the autouse
+    fixture in ``tests/conftest.py``) so a monkeypatched env var in one test never leaks a stale
+    resolution into the next.
     """
-    global _CACHED, _CACHED_RESOLUTION
-    _CACHED = None
-    _CACHED_RESOLUTION = None
+    global _CACHED_RESOLUTION, _CACHED_BUNDLE
+    with _CACHE_LOCK:
+        _CACHED_RESOLUTION = None
+        _CACHED_BUNDLE = None
 
 
-def _base_tuning() -> RetrievalTuning:
+def _base_tuning(bundle: SettingsBundle) -> RetrievalTuning:
     # The runtime settings bundle is the authoritative typed configuration
     # surface. Do not downgrade a malformed runtime file to defaults here:
     # callers of the actual retrieval resolver must fail just as startup does.
-    configured = get_settings_bundle().retrieval_tuning
+    configured = bundle.retrieval_tuning
     if is_lab_profile():
         return configured
     # Candidate depth, provider and rerank size are lab-tier tuning controls.
@@ -132,8 +136,8 @@ def _env(key: str) -> str:
     return os.getenv(key, "").strip()
 
 
-def _resolve_retrieval_tuning() -> EffectiveRetrievalResolution:
-    base = _base_tuning()
+def _resolve_retrieval_tuning(bundle: SettingsBundle) -> EffectiveRetrievalResolution:
+    base = _base_tuning(bundle)
     data = base.model_dump(exclude={"configured_keys"})
     lab = is_lab_profile()
     defaults = RetrievalTuning()
@@ -218,29 +222,27 @@ def _resolve_retrieval_tuning() -> EffectiveRetrievalResolution:
     )
 
 
-def get_retrieval_tuning() -> RetrievalTuning:
-    """Return the process-cached, env-overridden :class:`RetrievalTuning`.
+def _effective_retrieval_resolution() -> EffectiveRetrievalResolution:
+    global _CACHED_RESOLUTION, _CACHED_BUNDLE
+    bundle = get_settings_bundle()
+    with _CACHE_LOCK:
+        if _CACHED_RESOLUTION is None or _CACHED_BUNDLE is not bundle:
+            _CACHED_RESOLUTION = _resolve_retrieval_tuning(bundle)
+            _CACHED_BUNDLE = bundle
+        return _CACHED_RESOLUTION
 
-    Resolves once and caches; an invalid or unimplemented resolution is never cached (so a fixed
-    override on the next call re-resolves rather than staying stuck raising).
+
+def get_retrieval_tuning() -> RetrievalTuning:
+    """Return the bundle-bound, env-overridden :class:`RetrievalTuning`.
+
+    An invalid resolution is never cached, and a new runtime bundle identity is resolved before it
+    can be returned through this cache.
     """
-    global _CACHED, _CACHED_RESOLUTION
-    if _CACHED_RESOLUTION is None:
-        _CACHED_RESOLUTION = _resolve_retrieval_tuning()
-        _CACHED = _CACHED_RESOLUTION.tuning
-    return _CACHED
+    return _effective_retrieval_resolution().tuning
 
 
 def get_effective_retrieval_resolution() -> EffectiveRetrievalResolution:
-    get_retrieval_tuning()
-    assert _CACHED_RESOLUTION is not None
-    return _CACHED_RESOLUTION
-
-
-# A settings reload replaces the bundle atomically.  Clear this module's
-# process cache at the same boundary so the next retrieval operation observes
-# the new generation instead of retaining stale tuning until restart.
-subscribe_settings(lambda _bundle: reset_retrieval_tuning_cache(), replay=False)
+    return _effective_retrieval_resolution()
 
 
 __all__ = [
