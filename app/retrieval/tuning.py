@@ -9,8 +9,8 @@ query.
 
 Existing ``RERANK_ENABLE``/``RERANK_TOP_K``/``RERANK_PROVIDER`` env vars keep working as overrides
 into this surface (compat). ``RERANK_PROVIDER`` selects the reranker *implementation*
-(`app/retrieval/rerank/provider.py`), which is unrelated to the D3 config shape and stays read
-directly at reranker-construction time — untouched by this module.
+(`app/retrieval/rerank/provider.py`) through the same effective settings resolution as the rerank
+gate and top-k value.
 
 ``fusion="rrf"`` (weighted RRF, ``app/retrieval/hybrid.py::_rank_eligible``) and
 ``rerank="conditional"`` (deterministic BM25-margin gate, ``app/retrieval/hook_adapter.py``) are
@@ -72,11 +72,11 @@ class RetrievalStrategyNotImplementedError(RetrievalTuningError):
 
 
 def reset_retrieval_tuning_cache() -> None:
-    """Test-only: force the next :func:`get_retrieval_tuning` call to re-resolve.
+    """Force the next :func:`get_retrieval_tuning` call to re-resolve.
 
-    Production code resolves once per process and never calls this. Tests reset between cases (see
-    the autouse fixture in ``tests/conftest.py``) so a monkeypatched env var in one test never leaks
-    a stale resolution into the next.
+    The settings-reload subscriber calls this at the bundle-swap boundary. Tests also reset between
+    cases (see the autouse fixture in ``tests/conftest.py``) so a monkeypatched env var in one test
+    never leaks a stale resolution into the next.
     """
     global _CACHED, _CACHED_RESOLUTION
     _CACHED = None

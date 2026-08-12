@@ -9,9 +9,10 @@ from app.retrieval.tuning import get_retrieval_tuning, reset_retrieval_tuning_ca
 import app.retrieval.tuning as retrieval_tuning
 from app.services import llm
 from app.reasoning.provider import OllamaDeliberationAgent
+from app.settings import runtime as settings_runtime
 from app.settings import wave_one
 from app.settings.models import LLMRoutingSettings, RetrievalTuning, SettingsBundle
-from app.cli import settings_explain_key
+from app.cli import cli
 
 
 pytestmark = pytest.mark.not_pg
@@ -57,16 +58,21 @@ def test_vault_settings_reach_model_and_rerank_production_consumers(monkeypatch:
     assert wave_one.llm_temperature() == 0.7
     assert wave_one.reasoning_model() == "vault-reasoning-model"
     assert llm._default_model() == "vault-chat-model"
-    captured: dict[str, float] = {}
+    captured: dict[str, float | str] = {}
 
-    def fake_ollama(_system, _user, _model, temperature, *, timeout, **_kwargs):
+    def fake_ollama(_system, _user, model, temperature, *, timeout, **_kwargs):
+        captured["model"] = model
         captured["temperature"] = temperature
         captured["timeout"] = timeout
         return "vault-backed response"
 
     monkeypatch.setattr(llm, "_ollama_chat", fake_ollama)
     assert llm.call_llm("test", {"system": "s", "user": "u"}, provider_override="ollama") == "vault-backed response"
-    assert captured == {"temperature": 0.7, "timeout": 17.0}
+    assert captured == {
+        "model": "vault-chat-model",
+        "temperature": 0.7,
+        "timeout": 17.0,
+    }
     assert OllamaDeliberationAgent().model == "vault-reasoning-model"
     # The dedicated reranker-provider suite reloads this module. Resolve the
     # current module class here so this integration assertion remains about the
@@ -115,8 +121,30 @@ def test_llm_and_rerank_lab_keys_are_inert_for_operator_profile(monkeypatch: pyt
     monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", _bundle)
     assert wave_one.llm_temperature() == 0.0
     assert get_retrieval_tuning().rerank_top_k == 100
+    assert get_retrieval_tuning().rerank_provider == "none"
     assert wave_one.wave_one_explain()["retrieval.rerank.provider"]["origin"] == "registry default (operator profile)"
     assert get_retrieval_tuning().rerank == "off"
+
+
+def test_retrieval_tuning_cache_invalidates_when_settings_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    first = _bundle()
+    second = first.model_copy(
+        update={
+            "retrieval_tuning": first.retrieval_tuning.model_copy(
+                update={"rerank_top_k": 11}
+            )
+        }
+    )
+    bundles = iter((first, second))
+    monkeypatch.setattr(settings_runtime, "_CURRENT", None)
+    monkeypatch.setattr(settings_runtime, "_build_bundle", lambda: next(bundles))
+
+    settings_runtime.reload_settings_bundle()
+    assert get_retrieval_tuning().rerank_top_k == 7
+
+    settings_runtime.reload_settings_bundle()
+    assert get_retrieval_tuning().rerank_top_k == 11
 
 
 def test_settings_explain_key_reports_effective_origin_and_tier(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,6 +152,8 @@ def test_settings_explain_key_reports_effective_origin_and_tier(monkeypatch: pyt
         "app.cli.build_settings_explain_payload",
         lambda: {"settings": {"retrieval.rerank.top_k": {"value": 7, "origin": "vault", "tier": "lab"}}},
     )
-    result = CliRunner().invoke(settings_explain_key, ["retrieval.rerank.top_k"])
+    result = CliRunner().invoke(
+        cli, ["settings", "explain", "retrieval.rerank.top_k"]
+    )
     assert result.exit_code == 0
     assert '"tier": "lab"' in result.output
