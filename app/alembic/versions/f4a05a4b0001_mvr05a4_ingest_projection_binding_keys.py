@@ -44,9 +44,11 @@ def upgrade() -> None:
             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = key.attnum
            WHERE c.conrelid = 'public.membership'::regclass AND c.contype = 'p'
            GROUP BY conname;
-          IF membership_columns IS NULL
-             OR membership_columns <> ALL (ARRAY[ARRAY['id']::text[], ARRAY['object_id','set_id']::text[]])
-          THEN
+          IF membership_columns = ARRAY['id']::text[] THEN
+            NULL; -- fresh 202510241200 lineage
+          ELSIF membership_columns = ARRAY['object_id','set_id']::text[] THEN
+            NULL; -- retained historical a80043832e29 lineage
+          ELSE
             RAISE EXCEPTION USING
               MESSAGE = 'MVR-05A4 unsupported membership primary-key lineage',
               HINT = 'Repair to the supported fresh id or historical (object_id,set_id) shape and rerun.';
@@ -111,7 +113,7 @@ def upgrade() -> None:
 
           ALTER TABLE public.chunks ADD CONSTRAINT chunks_binding_id_key
             UNIQUE (vault_binding_id, id);
-          ALTER TABLE public.membership DROP CONSTRAINT IF EXISTS membership_pkey;
+          EXECUTE format('ALTER TABLE public.membership DROP CONSTRAINT %I', membership_pk);
           EXECUTE format('ALTER TABLE public.membership ADD CONSTRAINT %I PRIMARY KEY (vault_binding_id, %s)',
                          membership_pk, array_to_string(membership_columns, ', '));
 
