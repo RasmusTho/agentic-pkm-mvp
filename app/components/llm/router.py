@@ -9,7 +9,13 @@ from app.components.embeddings import EmbeddingIdentity, resolve_embedding_ident
 from app.components.settings.models_loader import load_models
 from app.settings.models import LLMRoutingSettings
 from app.settings.env_defaults import env_default
+from app.settings.locations import CANONICAL_SETTINGS_DIR_NAME
 from app.settings.runtime import get_settings_bundle
+
+
+_LLM_ROUTING_VAULT_ORIGIN = (
+    f"vault-shared:{CANONICAL_SETTINGS_DIR_NAME}/llm_routing.md"
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +38,7 @@ class LLMRoute:
     reason: str
     degraded: bool = False
     embedding_identity: EmbeddingIdentity | None = None
+    model_origin: str = "registry default"
 
 
 @dataclass(frozen=True)
@@ -46,7 +53,6 @@ def resolve_effective_reasoning_route(
     selected_route: LLMRoute,
     *,
     model_override: str | None = None,
-    selected_model_origin: str = "registry default",
 ) -> EffectiveReasoningRoute:
     """Apply the legacy model override without re-selecting a provider.
 
@@ -56,13 +62,18 @@ def resolve_effective_reasoning_route(
     """
     normalized_override = (model_override or "").strip()
     if normalized_override:
+        override_origin = "env:REASONING_MODEL (deprecated)"
         return EffectiveReasoningRoute(
-            route=replace(selected_route, model=normalized_override),
-            model_origin="env:REASONING_MODEL (deprecated)",
+            route=replace(
+                selected_route,
+                model=normalized_override,
+                model_origin=override_origin,
+            ),
+            model_origin=override_origin,
         )
     return EffectiveReasoningRoute(
         route=selected_route,
-        model_origin=selected_model_origin,
+        model_origin=selected_route.model_origin,
     )
 
 
@@ -108,6 +119,14 @@ def _provider_enforced() -> bool:
 
 def _default_chat_model() -> str:
     return os.getenv("LLM_MODEL", os.getenv("MERGE_LLM_MODEL", env_default("MERGE_LLM_MODEL")))
+
+
+def _default_chat_model_origin() -> str:
+    if "LLM_MODEL" in os.environ:
+        return "env:LLM_MODEL (deprecated)"
+    if "MERGE_LLM_MODEL" in os.environ:
+        return "env:MERGE_LLM_MODEL (deprecated)"
+    return "registry default"
 
 
 def _default_embed_model() -> str:
@@ -192,8 +211,31 @@ class LLMRouter:
             return routing.default_reasoning
         return routing.default_chat
 
-    def routing_key_configured(self, key: str) -> bool:
-        """Report configuration provenance from this router's captured bundle."""
+    def _task_policy_source_key(self, intent: LLMTaskIntent) -> str | None:
+        routing = (
+            getattr(self._settings, "llm_routing", None)
+            if self._settings is not None
+            else None
+        )
+        if routing is None:
+            return None
+        if intent.task_kind in routing.tasks:
+            return "tasks"
+        if intent.task_kind == "embed":
+            return "default_embedding"
+        if intent.task_kind in {"eval", "deepeval", "ragas"}:
+            return "default_eval"
+        if "reason" in intent.task_kind or intent.task_kind == "plan":
+            return "default_reasoning"
+        return "default_chat"
+
+    def _task_policy_model_origin(self, intent: LLMTaskIntent) -> str:
+        source_key = self._task_policy_source_key(intent)
+        if source_key and self._routing_key_configured(source_key):
+            return _LLM_ROUTING_VAULT_ORIGIN
+        return "registry default"
+
+    def _routing_key_configured(self, key: str) -> bool:
         routing = (
             getattr(self._settings, "llm_routing", None)
             if self._settings is not None
@@ -240,6 +282,7 @@ class LLMRouter:
         *,
         degraded: bool,
         reason: str,
+        target_model_origin: str,
     ) -> LLMRoute:
         target_provider, target_model = _resolve_target_model_id(target, expected_kind="chat")
         provider_source = None
@@ -250,17 +293,27 @@ class LLMRouter:
             model_source = target.model or target_model
         provider_candidate = provider_source or self._llm_provider_env or getattr(routing, "default_provider", None)
         provider, provider_degraded, provider_reason = _resolve_provider(provider_candidate)
-        model = (
-            model_source
-            or getattr(routing, "default_chat_model", None)
-            or _default_chat_model()
-        )
+        configured_default_model = getattr(routing, "default_chat_model", None)
+        if model_source:
+            model = model_source
+            model_origin = target_model_origin
+        elif configured_default_model:
+            model = configured_default_model
+            model_origin = (
+                _LLM_ROUTING_VAULT_ORIGIN
+                if self._routing_key_configured("default_chat_model")
+                else "registry default"
+            )
+        else:
+            model = _default_chat_model()
+            model_origin = _default_chat_model_origin()
         return LLMRoute(
             provider=provider,
             model=model,
             mode="chat",
             reason=provider_reason if provider_degraded else reason,
             degraded=degraded or provider_degraded,
+            model_origin=model_origin,
         )
 
     def _resolve_embedding_route(
@@ -392,10 +445,12 @@ class LLMRouter:
                     candidates.append(fallback_route)
             return candidates
 
+        policy_model_origin = self._task_policy_model_origin(intent)
         primary_route = self._resolve_chat_route(
             getattr(policy, "primary", None),
             degraded=self._default_degraded,
             reason="settings" if policy is not None else self._default_reason,
+            target_model_origin=policy_model_origin,
         )
         candidates = [primary_route]
         fallback_target = self._default_fallback_target(intent, policy)
@@ -405,6 +460,7 @@ class LLMRouter:
                     fallback_target,
                     degraded=True,
                     reason="fallback",
+                    target_model_origin=policy_model_origin,
                 )
             )
         elif primary_route.provider != "mock":
@@ -415,6 +471,7 @@ class LLMRouter:
                     mode=_default_mode(intent.task_kind),
                     reason="fallback",
                     degraded=True,
+                    model_origin="registry default",
                 )
             )
         return candidates
@@ -447,6 +504,7 @@ class LLMRouter:
                     mode=cand.mode,
                     reason=reason if degraded else route_reason,
                     degraded=cand.degraded or degraded,
+                    model_origin=cand.model_origin,
                 )
         if provider == "mock":
             # mock ignores the model entirely; a self-consistent deterministic route.
@@ -456,6 +514,7 @@ class LLMRouter:
                 mode=_default_mode(intent.task_kind),
                 reason=reason if degraded else ("enforced-provider:mock" if enforce else "fallback"),
                 degraded=degraded,
+                model_origin="registry default",
             )
         if enforce:
             served = ", ".join(f"{c.provider}/{c.model}" for c in candidates) or "<none>"
@@ -508,6 +567,11 @@ class LLMRouter:
                 reason=reason,
                 degraded=degraded,
                 embedding_identity=embedding_identity,
+                model_origin=(
+                    "env:LLM_FORCE_MODEL"
+                    if forced_model
+                    else _default_chat_model_origin()
+                ),
             )
 
         candidates = self._route_candidates(intent)
@@ -520,6 +584,7 @@ class LLMRouter:
                         mode=cand.mode,
                         reason="deterministic",
                         degraded=cand.degraded,
+                        model_origin=cand.model_origin,
                     )
         routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
         has_explicit_task_policy = bool(routing and intent.task_kind in routing.tasks)
@@ -605,6 +670,7 @@ class LLMRouter:
                 policy.primary,
                 degraded=self._default_degraded,
                 reason="settings",
+                target_model_origin=self._task_policy_model_origin(intent),
             )
             payload["preferred"] = self._route_to_dict(preferred_route)
 

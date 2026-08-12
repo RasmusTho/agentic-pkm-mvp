@@ -123,6 +123,7 @@ class OllamaDeliberationAgent(BaseDeliberationAgent):
                     mode="chat",
                     reason="explicit reasoning model",
                     degraded=False,
+                    model_origin="explicit constructor argument",
                 )
             )
         self.provider = self._client.route.provider

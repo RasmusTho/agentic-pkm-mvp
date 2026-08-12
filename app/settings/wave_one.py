@@ -72,19 +72,28 @@ def _reasoning_resolution() -> tuple[str, str]:
     effective = resolve_effective_reasoning_route(
         selected_route,
         model_override=_override("REASONING_MODEL"),
-        selected_model_origin=(
-            "env:LLM_FORCE_MODEL"
-            if _override("LLM_FORCE_MODEL") is not None
-            else _vault_shared_origin("llm_routing.md")
-            if router.routing_key_configured("default_reasoning")
-            else "registry default"
-        ),
     )
     return effective.route.model, effective.model_origin
 
 
 def reasoning_model() -> str:
     return _reasoning_resolution()[0]
+
+
+def _reasoning_explanation() -> dict[str, object]:
+    from app.components.llm.router import LLMRouteError
+
+    try:
+        value, origin = _reasoning_resolution()
+    except LLMRouteError as exc:
+        return {
+            "value": None,
+            "origin": "unresolved:routing-error",
+            "tier": "operator",
+            "status": "error",
+            "error": str(exc),
+        }
+    return {"value": value, "origin": origin, "tier": "operator"}
 
 
 def _default_chat_resolution(
@@ -130,7 +139,6 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
 
     effective_retrieval = get_effective_retrieval_resolution()
     routing = get_settings_bundle().llm_routing
-    reasoning_value, reasoning_origin = _reasoning_resolution()
     default_chat_value, default_chat_origin = _default_chat_resolution(routing=routing)
     return {
         "llm.timeout_seconds": {
@@ -161,11 +169,7 @@ def wave_one_explain() -> dict[str, dict[str, object]]:
             ),
             "tier": "lab",
         },
-        "llm.reasoning_model": {
-            "value": reasoning_value,
-            "origin": reasoning_origin,
-            "tier": "operator",
-        },
+        "llm.reasoning_model": _reasoning_explanation(),
         "llm.default_chat_model": {
             "value": default_chat_value,
             "origin": default_chat_origin,

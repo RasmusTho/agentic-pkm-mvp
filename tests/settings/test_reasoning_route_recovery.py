@@ -63,6 +63,34 @@ def _compile_openai_reasoning_bundle(tmp_path, monkeypatch: pytest.MonkeyPatch):
     return compiler.compile_all(vault_dir=settings_dir, auto_heal=False)
 
 
+def _compile_openai_task_reasoning_bundle(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    (settings_dir / "llm_routing.md").write_text(
+        dedent(
+            """
+            ---
+            uuid: llm-routing
+            ---
+            ## Routing
+            ```yaml settings
+            tasks:
+              reasoning:
+                primary:
+                  model_id: openai.chat.gpt_4_1
+            ```
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
+    return compiler.compile_all(vault_dir=settings_dir, auto_heal=False)
+
+
 def test_registered_cli_and_execution_share_compiled_no_env_reasoning_route(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -148,6 +176,29 @@ def test_reasoning_explain_reports_force_model_origin(
     }
 
 
+def test_task_specific_reasoning_route_preserves_vault_origin(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _compile_openai_task_reasoning_bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr(llm_router, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(wave_one, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", lambda: bundle)
+
+    result = CliRunner().invoke(
+        cli,
+        ["settings", "explain", "llm.reasoning_model"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["llm.reasoning_model"] == {
+        "origin": "vault-shared:settings/llm_routing.md",
+        "tier": "operator",
+        "value": "gpt-4.1",
+    }
+    assert OllamaDeliberationAgent().execution_identity() == ("openai", "gpt-4.1")
+
+
 def test_reasoning_route_preserves_override_execution_and_trace_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -163,17 +214,21 @@ def test_reasoning_route_preserves_override_execution_and_trace_identity(
         reason="settings",
         degraded=True,
         embedding_identity=embedding_identity,
+        model_origin="vault-shared:settings/llm_routing.md",
     )
     original_route = replace(selected_route)
 
     resolved = llm_router.resolve_effective_reasoning_route(
         selected_route,
         model_override=" legacy-reasoning ",
-        selected_model_origin="vault-shared:settings/llm_routing.md",
     )
 
     assert selected_route == original_route
-    assert resolved.route == replace(selected_route, model="legacy-reasoning")
+    assert resolved.route == replace(
+        selected_route,
+        model="legacy-reasoning",
+        model_origin="env:REASONING_MODEL (deprecated)",
+    )
     assert resolved.model_origin == "env:REASONING_MODEL (deprecated)"
 
     monkeypatch.setenv("REASONING_MODEL", "legacy-reasoning")
@@ -264,3 +319,33 @@ def test_routing_failure_keeps_provider_failure_trace_non_throwing(
     assert "no routing candidate" in (result.error or "")
     assert traced["provider"] == "ollama"
     assert traced["model"] == "declared-reasoning-model"
+
+
+def test_route_failure_keeps_registered_settings_explain_serializable(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _compile_openai_reasoning_bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr(llm_router, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(wave_one, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(retrieval_tuning, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_PROVIDER_ENFORCE", "1")
+
+    retrieval_result = CliRunner().invoke(
+        cli,
+        ["settings", "explain", "retrieval.rerank.top_k"],
+    )
+    reasoning_result = CliRunner().invoke(
+        cli,
+        ["settings", "explain", "llm.reasoning_model"],
+    )
+
+    assert retrieval_result.exit_code == 0, retrieval_result.output
+    assert "retrieval.rerank.top_k" in json.loads(retrieval_result.output)
+    assert reasoning_result.exit_code == 0, reasoning_result.output
+    explained = json.loads(reasoning_result.output)["llm.reasoning_model"]
+    assert explained["value"] is None
+    assert explained["origin"] == "unresolved:routing-error"
+    assert explained["status"] == "error"
+    assert "no routing candidate" in explained["error"]
