@@ -76,6 +76,25 @@ def test_governance_script_and_high_risk_temporal_doc_require_both_owner_docs(
     assert "temporal code/config changed" in result.stdout
 
 
+def test_review_before_ci_gate_uses_its_convergence_contract_as_owner_doc(
+    tmp_path: Path,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/review_before_ci_gate.py").write_text(
+        "# governance\n", encoding="utf-8"
+    )
+    (repo / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md").write_text(
+        "convergence writeback\n", encoding="utf-8"
+    )
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "review-gate-owner-doc"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == 0
+    assert "Docs guard: OK" in result.stdout
+
+
 def test_primary_swedish_documentation_fails_with_evidence(tmp_path: Path) -> None:
     repo = _guard_repo(tmp_path)
     (repo / "docs/SWEDISH.md").write_text(
