@@ -287,7 +287,9 @@ writer-sequenced command envelope per request so exact retries survive a writer
 restart; changed semantics under the same request ID fail closed. A thread is capped at 32 entries
 and the writer at 100 total contributions, keeping reads bounded. An unavailable
 writer returns a typed degraded failure and never enables direct client filesystem
-fallback.
+fallback. Concrete private host paths and credential-like forms are refused before
+an envelope is written, and every recovered envelope is re-admitted through the
+same privacy boundary without logging its contents.
 
 This boundary is deliberately not a distributed filesystem protocol. It has no
 vault-global claims, slot reservations, cross-device locks, hard-link/fsync race

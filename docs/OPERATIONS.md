@@ -412,6 +412,9 @@ and is never a live target.
 
 The operational boundary accepts only bounded `shared_non_sensitive` material,
 typed provenance, endpoint-bound actor identities, and named-recipient questions.
+Concrete private host paths and credential-like forms are refused before the
+serialized writer persists an envelope; recovery re-admits every envelope through
+the same privacy boundary without logging its contents.
 The writer host explicitly initializes the external root with its pinned vault
 identity from `BUILDEROPS_THREAD_WRITER_ROOT` and
 `BUILDEROPS_THREAD_WRITER_VAULT_ID`, then retains immutable, writer-sequenced

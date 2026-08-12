@@ -24,9 +24,13 @@ _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SOURCE_REF = re.compile(
     r"^(?:builderops|conversation|doc|git|github):[A-Za-z0-9._:/#@+-]{1,255}$"
 )
+_PRIVATE_HOST_PATH = re.compile(
+    r"(?i)(?:~[\\/]\.ssh(?:[\\/]|$)|"
+    r"(?<![A-Za-z0-9._-])/(?:Users|home|private|root|etc|var|opt)(?:/|$)|"
+    r"\b[A-Za-z]:\\(?:Users|home|private|root|etc|var|opt)(?:\\|$))"
+)
 _PRIVATE_CONTENT = re.compile(
     r"(?im)(password|secret|credential|token|api[_-]?key|bearer\s+|"
-    r"(?:~/.ssh|/(?:Users|home|private|root|etc|var|opt)/)|"
     r"^aws_(?:access_key_id|secret_access_key)\s*=|"
     r"^authorization:\s*(?:basic|bearer)\b|^-----begin [a-z ]+private key-----|"
     r"\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[A-Za-z0-9_]{20,}|"
@@ -574,7 +578,7 @@ def _validate_identity(value: str | None, *, field: str) -> None:
 def _validate_text(value: str | None, *, field: str) -> None:
     if not isinstance(value, str) or not value.strip() or len(value) > _MAX_TEXT:
         raise BuilderThreadError(f"{field} must be bounded non-empty text")
-    if _PRIVATE_CONTENT.search(value):
+    if _PRIVATE_HOST_PATH.search(value) or _PRIVATE_CONTENT.search(value):
         raise BuilderThreadError(f"{field} is not shared_non_sensitive")
     if _CODE_OR_PATCH.search(value):
         raise BuilderThreadError(f"{field} is not shared_non_sensitive")
@@ -586,7 +590,7 @@ def _validate_source_refs(source_refs: tuple[str, ...]) -> None:
     for source_ref in source_refs:
         if not isinstance(source_ref, str) or not _SOURCE_REF.fullmatch(source_ref):
             raise BuilderThreadError("source_ref must be typed bounded provenance")
-        if _PRIVATE_CONTENT.search(source_ref):
+        if _PRIVATE_HOST_PATH.search(source_ref) or _PRIVATE_CONTENT.search(source_ref):
             raise BuilderThreadError("source_ref is not shared_non_sensitive")
 
 
