@@ -70,8 +70,10 @@ method's contract-dominance preflight, then delegate terminal routing to the can
    `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier` and do not
    copy or redefine its route table here. Technical drift remains `blocked_technical` only when no
    authority is missing. Contradictory source authority remains `needs_owner`, as does every other
-   explicit category in that classifier. Retry exhaustion or technical uncertainty alone does not
-   change that authority boundary.
+   explicit `needs_owner` authority category in that classifier. Every non-`needs_owner` route and
+   every protected-finding, follow-up, or deferred disposition remains governed by its owning
+   contract and must not be reclassified here. Retry exhaustion or technical uncertainty alone does
+   not change that authority boundary.
 
 Contractual operator gates still fire exactly as their owning workflows define. This preflight may
 shape a discretionary escalation, but it must never retest or remove an unconditional gate.
