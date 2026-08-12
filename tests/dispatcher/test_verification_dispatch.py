@@ -27,6 +27,68 @@ CLAIM_PRE_LOCK = "2030-01-01T00:00:00.000000+00:00"
 CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
 
 
+def test_attempt_recording_remains_lease_fenced_without_numeric_repair_cap(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    context = {"head": run.head_sha}
+
+    with pytest.raises(ValueError, match="ownership mismatch"):
+        state.record_attempt(
+            run.run_id,
+            "standard_repair",
+            "wrong-lease",
+            "terra",
+            "high",
+            context,
+            "fixed",
+            holder="host",
+            lease_id="wrong-lease",
+        )
+
+    for ordinal in range(1, 7):
+        receipt = {
+            "finding_id": f"F{ordinal}",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "parser",
+            "head_sha": run.head_sha,
+        }
+        assert state.record_attempt(
+            run.run_id,
+            "standard_repair",
+            f"fix-{ordinal}",
+            "terra",
+            "high",
+            context,
+            "fixed",
+            receipt,
+            holder="host",
+            lease_id=claimed.lease_id,
+            idempotency_key=f"repair-{ordinal}",
+        ) == ordinal
+
+    assert state.record_attempt(
+        run.run_id,
+        "standard_repair",
+        "fix-1",
+        "terra",
+        "high",
+        context,
+        "fixed",
+        {
+            "finding_id": "F1",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "parser",
+            "head_sha": run.head_sha,
+        },
+        holder="host",
+        lease_id=claimed.lease_id,
+        idempotency_key="repair-1",
+    ) == 1
+
+
 def _canonical_v1_request(*, supporting_issues: list[int]) -> dict[str, object]:
     payload = request()
     payload["contract_version"] = "verification_dispatch_request.v1"

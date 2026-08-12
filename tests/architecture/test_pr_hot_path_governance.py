@@ -230,7 +230,7 @@ def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
         "restore the authenticated original PR body",
         "prepared/merged/reconciled/restored",
         "merged-but-incomplete",
-        "without resetting attempts or the 2+2 repair budget",
+        "without resetting attempts or repair accounting",
         "every and only authenticated closing issue",
     ):
         assert fragment in closure_skill
@@ -239,7 +239,7 @@ def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
         "prepared/merged/reconciled/restored phases",
         "every and only authenticated issue is closed",
         "resumes a crashed post-merge sequence idempotently",
-        "without resetting attempts or the 2+2 repair budget",
+        "without resetting attempts or repair accounting",
     ):
         assert fragment in hot_path
 
@@ -249,7 +249,7 @@ def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
     for fragment in (
         "prepared -> merged -> reconciled -> restored",
         "merged but incomplete",
-        "without resetting attempts or the 2+2 budget",
+        "without resetting attempts or repair accounting",
         "every and only the authenticated closing issues",
     ):
         assert fragment in verification_closer
